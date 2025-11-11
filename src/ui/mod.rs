@@ -10,13 +10,13 @@ use super::{
 };
 use help::get_help_docs;
 use rspotify::model::show::ResumePoint;
-use rspotify::model::PlayingItem;
-use rspotify::senum::RepeatState;
-use tui::{
+use rspotify::model::PlayableItem;
+use rspotify::model::enums::RepeatState;
+use ratatui::{
   backend::Backend,
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   style::{Modifier, Style},
-  text::{Span, Spans, Text},
+  text::{Line, Span, Text},
   widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
   Frame,
 };
@@ -103,7 +103,7 @@ where
     .iter()
     .map(|item| Row::new(item.clone()).style(help_menu_style));
 
-  let help_menu = Table::new(rows)
+  let help_menu = Table::new(rows, &[Constraint::Percentage(100)])
     .header(Row::new(header))
     .block(
       Block::default()
@@ -115,8 +115,7 @@ where
         ))
         .border_style(help_menu_style),
     )
-    .style(help_menu_style)
-    .widths(&[Constraint::Percentage(100)]);
+    .style(help_menu_style);
   f.render_widget(help_menu, chunks[0]);
 }
 
@@ -388,8 +387,8 @@ where
       .clone()
       .and_then(|context| {
         context.item.and_then(|item| match item {
-          PlayingItem::Track(track) => track.id,
-          PlayingItem::Episode(episode) => Some(episode.id),
+          PlayableItem::Track(track) => track.id,
+          PlayableItem::Episode(episode) => Some(episode.id),
         })
       })
       .unwrap_or_else(|| "".to_string());
@@ -698,7 +697,7 @@ where
                 item.track_number.to_string(),
                 item.name.to_owned(),
                 create_artist_string(&item.artists),
-                millis_to_minutes(u128::from(item.duration_ms)),
+                millis_to_minutes(item.duration.as_millis()),
               ],
             })
             .collect::<Vec<TableItem>>(),
@@ -724,7 +723,7 @@ where
               item.track_number.to_string(),
               item.name.to_owned(),
               create_artist_string(&item.artists),
-              millis_to_minutes(u128::from(item.duration_ms)),
+              millis_to_minutes(item.duration.as_millis()),
             ],
           })
           .collect::<Vec<TableItem>>(),
@@ -804,7 +803,7 @@ where
         item.name.to_owned(),
         create_artist_string(&item.artists),
         item.album.name.to_owned(),
-        millis_to_minutes(u128::from(item.duration_ms)),
+        millis_to_minutes(item.duration.as_millis()),
       ],
     })
     .collect::<Vec<TableItem>>();
@@ -883,7 +882,7 @@ where
         item.name.to_owned(),
         create_artist_string(&item.artists),
         item.album.name.to_owned(),
-        millis_to_minutes(u128::from(item.duration_ms)),
+        millis_to_minutes(item.duration.as_millis()),
       ],
     })
     .collect::<Vec<TableItem>>();
@@ -986,16 +985,16 @@ where
 
       f.render_widget(title_block, layout_chunk);
 
-      let (item_id, name, duration_ms) = match track_item {
-        PlayingItem::Track(track) => (
-          track.id.to_owned().unwrap_or_else(|| "".to_string()),
+      let (item_id, name, duration) = match track_item {
+        PlayableItem::Track(track) => (
+          track.id.as_ref().map(|id| id.to_string()).unwrap_or_default(),
           track.name.to_owned(),
-          track.duration_ms,
+          track.duration,
         ),
-        PlayingItem::Episode(episode) => (
-          episode.id.to_owned(),
+        PlayableItem::Episode(episode) => (
+          episode.id.to_string(),
           episode.name.to_owned(),
-          episode.duration_ms,
+          episode.duration,
         ),
       };
 
@@ -1006,8 +1005,8 @@ where
       };
 
       let play_bar_text = match track_item {
-        PlayingItem::Track(track) => create_artist_string(&track.artists),
-        PlayingItem::Episode(episode) => format!("{} - {}", episode.name, episode.show.name),
+        PlayableItem::Track(track) => create_artist_string(&track.artists),
+        PlayableItem::Episode(episode) => format!("{} - {}", episode.name, episode.show.name),
       };
 
       let lines = Text::from(Span::styled(
@@ -1032,9 +1031,9 @@ where
         None => app.song_progress_ms,
       };
 
-      let perc = get_track_progress_percentage(progress_ms, duration_ms);
+      let perc = get_track_progress_percentage(progress_ms, duration);
 
-      let song_progress_label = display_track_progress(progress_ms, duration_ms);
+      let song_progress_label = display_track_progress(progress_ms, duration);
       let modifier = if app.user_config.behavior.enable_text_emphasis {
         Modifier::ITALIC | Modifier::BOLD
       } else {
@@ -1068,34 +1067,34 @@ where
     .split(f.size());
 
   let playing_text = vec![
-    Spans::from(vec![
+    Line::from(vec![
       Span::raw("Api response: "),
       Span::styled(
         &app.api_error,
         Style::default().fg(app.user_config.theme.error_text),
       ),
     ]),
-    Spans::from(Span::styled(
+    Line::from(Span::styled(
       "If you are trying to play a track, please check that",
       Style::default().fg(app.user_config.theme.text),
     )),
-    Spans::from(Span::styled(
+    Line::from(Span::styled(
       " 1. You have a Spotify Premium Account",
       Style::default().fg(app.user_config.theme.text),
     )),
-    Spans::from(Span::styled(
+    Line::from(Span::styled(
       " 2. Your playback device is active and selected - press `d` to go to device selection menu",
       Style::default().fg(app.user_config.theme.text),
     )),
-    Spans::from(Span::styled(
+    Line::from(Span::styled(
       " 3. If you're using spotifyd as a playback device, your device name must not contain spaces",
       Style::default().fg(app.user_config.theme.text),
     )),
-    Spans::from(Span::styled("Hint: a playback device must be either an official spotify client or a light weight alternative such as spotifyd",
+    Line::from(Span::styled("Hint: a playback device must be either an official spotify client or a light weight alternative such as spotifyd",
         Style::default().fg(app.user_config.theme.hint)
         ),
     ),
-    Spans::from(
+    Line::from(
       Span::styled(
           "\nPress <Esc> to return",
           Style::default().fg(app.user_config.theme.inactive),
@@ -1154,8 +1153,7 @@ where
   };
 
   // Banner text with correct styling
-  let mut top_text = Text::from(BANNER);
-  top_text.patch_style(Style::default().fg(app.user_config.theme.banner));
+  let top_text = Text::from(BANNER).patch_style(Style::default().fg(app.user_config.theme.banner));
 
   let bottom_text_raw = format!(
     "{}{}",
@@ -1203,8 +1201,8 @@ where
         let mut name = String::new();
         if let Some(context) = &app.current_playback_context {
           let track_id = match &context.item {
-            Some(PlayingItem::Track(track)) => track.id.to_owned(),
-            Some(PlayingItem::Episode(episode)) => Some(episode.id.to_owned()),
+            Some(PlayableItem::Track(track)) => track.id.to_owned(),
+            Some(PlayableItem::Episode(episode)) => Some(episode.id.to_owned()),
             _ => None,
           };
 
@@ -1293,12 +1291,12 @@ where
     .margin(5)
     .split(f.size());
 
-  let device_instructions: Vec<Spans> = vec![
+  let device_instructions: Vec<Line> = vec![
         "To play tracks, please select a device. ",
         "Use `j/k` or up/down arrow keys to move up and down and <Enter> to select. ",
         "Your choice here will be cached so you can jump straight back in when you next open `spotify-tui`. ",
         "You can change the playback device at any time by pressing `d`.",
-    ].into_iter().map(|instruction| Spans::from(Span::raw(instruction))).collect();
+    ].into_iter().map(|instruction| Line::from(Span::raw(instruction))).collect();
 
   let instructions = Paragraph::new(device_instructions)
     .style(Style::default().fg(app.user_config.theme.text))
@@ -1471,12 +1469,12 @@ where
             format!(
               "{} / {}",
               millis_to_minutes(u128::from(resume_position_ms)),
-              millis_to_minutes(u128::from(episode.duration_ms))
+              millis_to_minutes(episode.duration.as_millis())
             ),
           ),
           None => (
             "".to_owned(),
-            millis_to_minutes(u128::from(episode.duration_ms)),
+            millis_to_minutes(episode.duration.as_millis()),
           ),
         };
         TableItem {
@@ -1617,7 +1615,7 @@ where
           "".to_string(),
           item.track.name.to_owned(),
           create_artist_string(&item.track.artists),
-          millis_to_minutes(u128::from(item.track.duration_ms)),
+          millis_to_minutes(item.track.duration.as_millis()),
         ],
       })
       .collect::<Vec<TableItem>>();
@@ -1704,12 +1702,12 @@ where
       // suggestion: possibly put this as part of
       // app.dialog, but would have to introduce lifetime
       let text = vec![
-        Spans::from(Span::raw("Are you sure you want to delete the playlist: ")),
-        Spans::from(Span::styled(
+        Line::from(Span::raw("Are you sure you want to delete the playlist: ")),
+        Line::from(Span::styled(
           playlist.as_str(),
           Style::default().add_modifier(Modifier::BOLD),
         )),
-        Spans::from(Span::raw("?")),
+        Line::from(Span::raw("?")),
       ];
 
       let text = Paragraph::new(text)
@@ -1765,10 +1763,10 @@ fn draw_table<B>(
 
   let track_playing_index = app.current_playback_context.to_owned().and_then(|ctx| {
     ctx.item.and_then(|item| match item {
-      PlayingItem::Track(track) => items
+      PlayableItem::Track(track) => items
         .iter()
         .position(|item| track.id.to_owned().map(|id| id == item.id).unwrap_or(false)),
-      PlayingItem::Episode(episode) => items.iter().position(|item| episode.id == item.id),
+      PlayableItem::Episode(episode) => items.iter().position(|item| episode.id == item.id),
     })
   });
 
@@ -1841,9 +1839,9 @@ fn draw_table<B>(
     .items
     .iter()
     .map(|h| Constraint::Length(h.width))
-    .collect::<Vec<tui::layout::Constraint>>();
+    .collect::<Vec<Constraint>>();
 
-  let table = Table::new(rows)
+  let table = Table::new(rows, &widths)
     .header(
       Row::new(header.items.iter().map(|h| h.text))
         .style(Style::default().fg(app.user_config.theme.header)),
@@ -1858,7 +1856,6 @@ fn draw_table<B>(
         ))
         .border_style(get_color(highlight_state, app.user_config.theme)),
     )
-    .style(Style::default().fg(app.user_config.theme.text))
-    .widths(&widths);
+    .style(Style::default().fg(app.user_config.theme.text));
   f.render_widget(table, layout_chunk);
 }

@@ -1,10 +1,10 @@
 use super::util;
 use crate::app::App;
-use tui::{
+use ratatui::{
   backend::Backend,
   layout::{Constraint, Direction, Layout},
   style::Style,
-  text::{Span, Spans},
+  text::{Line, Span},
   widgets::{BarChart, Block, Borders, Paragraph},
   Frame,
 };
@@ -69,25 +69,25 @@ where
     let segment = analysis
       .segments
       .iter()
-      .find(|segment| segment.start >= progress_seconds);
+      .find(|segment| segment.time_interval.start >= progress_seconds);
     let section = analysis
       .sections
       .iter()
-      .find(|section| section.start >= progress_seconds);
+      .find(|section| section.time_interval.start >= progress_seconds);
 
     if let (Some(segment), Some(section)) = (segment, section) {
       let texts = vec![
-        Spans::from(format!(
+        Line::from(format!(
           "Tempo: {} (confidence {:.0}%)",
           section.tempo,
           section.tempo_confidence * 100.0
         )),
-        Spans::from(format!(
+        Line::from(format!(
           "Key: {} (confidence {:.0}%)",
           PITCHES.get(section.key as usize).unwrap_or(&PITCHES[0]),
           section.key_confidence * 100.0
         )),
-        Spans::from(format!(
+        Line::from(format!(
           "Time Signature: {}/4 (confidence {:.0}%)",
           section.time_signature,
           section.time_signature_confidence * 100.0

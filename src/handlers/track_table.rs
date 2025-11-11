@@ -54,7 +54,7 @@ pub fn handler(key: Key, app: &mut App) {
                   if app.playlist_offset + app.large_search_limit < playlist_tracks.total {
                     app.playlist_offset += app.large_search_limit;
                     let playlist_id = selected_playlist.id.to_owned();
-                    app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
+                    app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
                   }
                 }
               }
@@ -80,7 +80,7 @@ pub fn handler(key: Key, app: &mut App) {
                 if app.made_for_you_offset + app.large_search_limit < playlist_tracks.total {
                   app.made_for_you_offset += app.large_search_limit;
                   let playlist_id = selected_playlist.id.to_owned();
-                  app.dispatch(IoEvent::GetMadeForYouPlaylistTracks(
+                  app.dispatch(IoEvent::GetMadeForYouPlaylistItems(
                     playlist_id,
                     app.made_for_you_offset,
                   ));
@@ -107,7 +107,7 @@ pub fn handler(key: Key, app: &mut App) {
                 playlists.items.get(selected_playlist_index.to_owned())
               {
                 let playlist_id = selected_playlist.id.to_owned();
-                app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
+                app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
               }
             };
           }
@@ -131,7 +131,7 @@ pub fn handler(key: Key, app: &mut App) {
             }
             if let Some(selected_playlist) = playlists.items.get(selected_playlist_index) {
               let playlist_id = selected_playlist.id.to_owned();
-              app.dispatch(IoEvent::GetMadeForYouPlaylistTracks(
+              app.dispatch(IoEvent::GetMadeForYouPlaylistItems(
                 playlist_id,
                 app.made_for_you_offset,
               ));
@@ -163,8 +163,8 @@ fn play_random_song(app: &mut App) {
             if let Some(selected_playlist) = playlists.items.get(selected_playlist_index.to_owned())
             {
               (
-                Some(selected_playlist.uri.to_owned()),
-                selected_playlist.tracks.get("total"),
+                Some(selected_playlist.id.to_string()),
+                Some(selected_playlist.tracks.total),
               )
             } else {
               (None, None)
@@ -293,7 +293,7 @@ fn jump_to_end(app: &mut App) {
             if app.large_search_limit < total_tracks {
               app.playlist_offset = total_tracks - (total_tracks % app.large_search_limit);
               let playlist_id = selected_playlist.id.to_owned();
-              app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
+              app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
             }
           }
         }
@@ -475,7 +475,7 @@ fn jump_to_start(app: &mut App) {
           if let Some(selected_playlist) = playlists.items.get(selected_playlist_index.to_owned()) {
             app.playlist_offset = 0;
             let playlist_id = selected_playlist.id.to_owned();
-            app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
+            app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
           }
         }
       }

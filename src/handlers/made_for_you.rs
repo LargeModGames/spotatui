@@ -50,7 +50,7 @@ pub fn handler(key: Key, app: &mut App) {
         if let Some(selected_playlist) = playlists.items.get(selected_playlist_index.to_owned()) {
           app.made_for_you_offset = 0;
           let playlist_id = selected_playlist.id.to_owned();
-          app.dispatch(IoEvent::GetMadeForYouPlaylistTracks(
+          app.dispatch(IoEvent::GetMadeForYouPlaylistItems(
             playlist_id,
             app.made_for_you_offset,
           ));

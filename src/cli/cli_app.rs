@@ -5,7 +5,7 @@ use super::util::{Flag, Format, FormatType, JumpDirection, Type};
 
 use anyhow::{anyhow, Result};
 use rand::{thread_rng, Rng};
-use rspotify::model::{context::CurrentlyPlaybackContext, PlayingItem};
+use rspotify::model::{context::CurrentPlaybackContext, PlayableItem};
 
 pub struct CliApp<'a> {
   pub net: Network<'a>,
@@ -62,16 +62,16 @@ impl<'a> CliApp<'a> {
   // Basically copy-pasted the 'copy_song_url' function
   pub async fn share_track_or_episode(&mut self) -> Result<String> {
     let app = self.net.app.lock().await;
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &app.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => Ok(format!(
+        PlayableItem::Track(track) => Ok(format!(
           "https://open.spotify.com/track/{}",
           track.id.to_owned().unwrap_or_default()
         )),
-        PlayingItem::Episode(episode) => Ok(format!(
+        PlayableItem::Episode(episode) => Ok(format!(
           "https://open.spotify.com/episode/{}",
           episode.id.to_owned()
         )),
@@ -87,16 +87,16 @@ impl<'a> CliApp<'a> {
   // Basically copy-pasted the 'copy_album_url' function
   pub async fn share_album_or_show(&mut self) -> Result<String> {
     let app = self.net.app.lock().await;
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &app.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => Ok(format!(
+        PlayableItem::Track(track) => Ok(format!(
           "https://open.spotify.com/album/{}",
           track.album.id.to_owned().unwrap_or_default()
         )),
-        PlayingItem::Episode(episode) => Ok(format!(
+        PlayableItem::Episode(episode) => Ok(format!(
           "https://open.spotify.com/show/{}",
           episode.show.id.to_owned()
         )),
@@ -285,15 +285,15 @@ impl<'a> CliApp<'a> {
         .handle_network_event(IoEvent::GetCurrentPlayback)
         .await;
       let app = self.net.app.lock().await;
-      if let Some(CurrentlyPlaybackContext {
+      if let Some(CurrentPlaybackContext {
         progress_ms: Some(ms),
         item: Some(item),
         ..
       }) = &app.current_playback_context
       {
         let duration = match item {
-          PlayingItem::Track(track) => track.duration_ms,
-          PlayingItem::Episode(episode) => episode.duration_ms,
+          PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
+          PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
         };
 
         (*ms as u32, duration)
@@ -350,8 +350,8 @@ impl<'a> CliApp<'a> {
         // Get the id of the current song
         let id = match c.item {
           Some(i) => match i {
-            PlayingItem::Track(t) => t.id.ok_or_else(|| anyhow!("item has no id")),
-            PlayingItem::Episode(_) => Err(anyhow!("saving episodes not yet implemented")),
+            PlayableItem::Track(t) => t.id.ok_or_else(|| anyhow!("item has no id")),
+            PlayableItem::Episode(_) => Err(anyhow!("saving episodes not yet implemented")),
           },
           None => Err(anyhow!("no item playing")),
         }?;
@@ -413,11 +413,11 @@ impl<'a> CliApp<'a> {
     let playing_item = context.item.ok_or_else(|| anyhow!("no track playing"))?;
 
     let mut hs = match playing_item {
-      PlayingItem::Track(track) => {
+      PlayableItem::Track(track) => {
         let id = track.id.clone().unwrap_or_default();
         let mut hs = Format::from_type(FormatType::Track(Box::new(track.clone())));
         if let Some(ms) = context.progress_ms {
-          hs.push(Format::Position((ms, track.duration_ms)))
+          hs.push(Format::Position((ms, track.duration.num_milliseconds() as u32)))
         }
         hs.push(Format::Flags((
           context.repeat_state,
@@ -426,10 +426,10 @@ impl<'a> CliApp<'a> {
         )));
         hs
       }
-      PlayingItem::Episode(episode) => {
+      PlayableItem::Episode(episode) => {
         let mut hs = Format::from_type(FormatType::Episode(Box::new(episode.clone())));
         if let Some(ms) = context.progress_ms {
-          hs.push(Format::Position((ms, episode.duration_ms)))
+          hs.push(Format::Position((ms, episode.duration.num_milliseconds() as u32)))
         }
         hs.push(Format::Flags((
           context.repeat_state,

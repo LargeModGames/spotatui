@@ -6,17 +6,17 @@ use rspotify::{
     album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
     artist::FullArtist,
     audio::AudioAnalysis,
-    context::CurrentlyPlaybackContext,
+    context::CurrentPlaybackContext,
     device::DevicePayload,
     page::{CursorBasedPage, Page},
     playing::PlayHistory,
-    playlist::{PlaylistTrack, SimplifiedPlaylist},
+    playlist::{PlaylistItem, SimplifiedPlaylist},
     show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
     track::{FullTrack, SavedTrack, SimplifiedTrack},
     user::PrivateUser,
-    PlayingItem,
+    PlayableItem,
   },
-  senum::Country,
+  model::enums::Country,
 };
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
@@ -25,7 +25,7 @@ use std::{
   collections::HashSet,
   time::{Instant, SystemTime},
 };
-use tui::layout::Rect;
+use ratatui::layout::Rect;
 
 use arboard::Clipboard;
 
@@ -267,7 +267,7 @@ pub struct App {
   pub album_table_context: AlbumTableContext,
   pub saved_album_tracks_index: usize,
   pub api_error: String,
-  pub current_playback_context: Option<CurrentlyPlaybackContext>,
+  pub current_playback_context: Option<CurrentPlaybackContext>,
   pub devices: Option<DevicePayload>,
   // Inputs:
   // input is the string for input;
@@ -286,8 +286,8 @@ pub struct App {
   pub library: Library,
   pub playlist_offset: u32,
   pub made_for_you_offset: u32,
-  pub playlist_tracks: Option<Page<PlaylistTrack>>,
-  pub made_for_you_tracks: Option<Page<PlaylistTrack>>,
+  pub playlist_tracks: Option<Page<PlaylistItem>>,
+  pub made_for_you_tracks: Option<Page<PlaylistItem>>,
   pub playlists: Option<Page<SimplifiedPlaylist>>,
   pub recently_played: SpotifyResultAndSelectedIndex<Option<CursorBasedPage<PlayHistory>>>,
   pub recommended_tracks: Vec<FullTrack>,
@@ -443,13 +443,13 @@ impl App {
   }
 
   fn apply_seek(&mut self, seek_ms: u32) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       let duration_ms = match item {
-        PlayingItem::Track(track) => track.duration_ms,
-        PlayingItem::Episode(episode) => episode.duration_ms,
+        PlayableItem::Track(track) => track.duration_ms,
+        PlayableItem::Episode(episode) => episode.duration_ms,
       };
 
       let event = if seek_ms < duration_ms {
@@ -483,7 +483,7 @@ impl App {
 
   pub fn update_on_tick(&mut self) {
     self.poll_current_playback();
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item),
       progress_ms: Some(progress_ms),
       is_playing,
@@ -502,8 +502,8 @@ impl App {
       } + u128::from(*progress_ms);
 
       let duration_ms = match item {
-        PlayingItem::Track(track) => track.duration_ms,
-        PlayingItem::Episode(episode) => episode.duration_ms,
+        PlayableItem::Track(track) => track.duration_ms,
+        PlayableItem::Episode(episode) => episode.duration_ms,
       };
 
       if elapsed < u128::from(duration_ms) {
@@ -515,13 +515,13 @@ impl App {
   }
 
   pub fn seek_forwards(&mut self) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       let duration_ms = match item {
-        PlayingItem::Track(track) => track.duration_ms,
-        PlayingItem::Episode(episode) => episode.duration_ms,
+        PlayableItem::Track(track) => track.duration_ms,
+        PlayableItem::Episode(episode) => episode.duration_ms,
       };
 
       let old_progress = match self.seek_ms {
@@ -605,7 +605,7 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       is_playing: true, ..
     }) = &self.current_playback_context
     {
@@ -678,12 +678,12 @@ impl App {
       None => return,
     };
 
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => {
+        PlayableItem::Track(track) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/track/{}",
             track.id.to_owned().unwrap_or_default()
@@ -691,7 +691,7 @@ impl App {
             self.handle_error(anyhow!("failed to set clipboard content: {}", e));
           }
         }
-        PlayingItem::Episode(episode) => {
+        PlayableItem::Episode(episode) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/episode/{}",
             episode.id.to_owned()
@@ -709,12 +709,12 @@ impl App {
       None => return,
     };
 
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => {
+        PlayableItem::Track(track) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/album/{}",
             track.album.id.to_owned().unwrap_or_default()
@@ -722,7 +722,7 @@ impl App {
             self.handle_error(anyhow!("failed to set clipboard content: {}", e));
           }
         }
-        PlayingItem::Episode(episode) => {
+        PlayableItem::Episode(episode) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/show/{}",
             episode.show.id.to_owned()
@@ -1138,19 +1138,19 @@ impl App {
   }
 
   pub fn get_audio_analysis(&mut self) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => {
+        PlayableItem::Track(track) => {
           if self.get_current_route().id != RouteId::Analysis {
             let uri = track.uri.clone();
             self.dispatch(IoEvent::GetAudioAnalysis(uri));
             self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
           }
         }
-        PlayingItem::Episode(_episode) => {
+        PlayableItem::Episode(_episode) => {
           // No audio analysis available for podcast uris, so just default to the empty analysis
           // view to avoid a 400 error code
           self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
