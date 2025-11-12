@@ -564,10 +564,18 @@ impl App {
     first_track: Option<FullTrack>,
   ) {
     let user_country = self.get_user_country();
-    let seed_artist_ids =
-      seed_artists.and_then(|ids| ids.iter().map(|id| ArtistId::from_id(id).ok()).collect());
-    let seed_track_ids =
-      seed_tracks.and_then(|ids| ids.iter().map(|id| TrackId::from_id(id).ok()).collect());
+    let seed_artist_ids = seed_artists.and_then(|ids| {
+      ids
+        .into_iter()
+        .map(|id| ArtistId::from_id(id).ok())
+        .collect()
+    });
+    let seed_track_ids = seed_tracks.and_then(|ids| {
+      ids
+        .into_iter()
+        .map(|id| TrackId::from_id(id).ok())
+        .collect()
+    });
     self.dispatch(IoEvent::GetRecommendationsForSeed(
       seed_artist_ids,
       seed_track_ids,
@@ -578,7 +586,7 @@ impl App {
 
   pub fn get_recommendations_for_track_id(&mut self, id: String) {
     let user_country = self.get_user_country();
-    if let Ok(track_id) = TrackId::from_id(&id) {
+    if let Ok(track_id) = TrackId::from_id(id) {
       self.dispatch(IoEvent::GetRecommendationsForTrackId(
         track_id,
         user_country,
