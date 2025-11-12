@@ -123,14 +123,12 @@
 
 #### Typed Spotify IDs (Network + Handlers)
 - ✅ `IoEvent` payloads and CLI dispatch now pass typed IDs end-to-end.
-- ❌ `get_current_playback` still dispatches `CurrentUserSavedTracksContains(vec![track_id.to_string()])` (`src/network.rs:333-339`); convert that to `TrackId::into_static` so it compiles again.
-- ❌ `set_tracks_to_table` continues to collect `Vec<String>` before dispatching `CurrentUserSavedTracksContains` (`src/network.rs:419-444`); convert inside the network layer instead of bouncing strings through the channel.
-- ❌ Handler modules (`track_table.rs`, `album_tracks.rs`, `recently_played.rs`, `playbar.rs`, `artist.rs`, `search_results.rs`, `input.rs`, `podcasts.rs`, `playlist.rs`) still emit string IDs when queueing IoEvents; these need the same `.from_id(...).into_static()` helpers before the playback helpers compile.
+- ✅ `get_current_playback` now dispatches `CurrentUserSavedTracksContains(vec![track_id.into_static()])`.
+- ✅ `set_tracks_to_table` converts every `FullTrack.id` into `TrackId<'static>` before dispatching `CurrentUserSavedTracksContains`.
+- 🔶 Handler modules still emit string IDs when queueing IoEvents; `playlist.rs` and `recently_played.rs` have been migrated, but `track_table.rs`, `album_tracks.rs`, `playbar.rs`, `artist.rs`, `search_results.rs`, `input.rs`, and `podcasts.rs` all need the same `.into_static()` helpers.
 
 #### Stream-returning rspotify APIs
-- 🔶 **IN PROGRESS**: `futures::StreamExt` is wired up and `get_playlist_tracks` now consumes the paginator, but we need to finish the migration.
-  - ⚠️ The new `get_playlist_tracks` eagerly collects *every* playlist item into memory and fabricates a `Page` with `total = 0`, so pagination/offset controls break and large playlists can blow past memory limits. Reimplement this using `playlist_items_manual` (limit/offset aware) so we keep the real metadata and only fetch one page at a time.
-  - ❌ `get_made_for_you_playlist_tracks` still uses the old `.playlist_items(...limit, offset)` signature and even `.await`s the stream, which fails to compile.
+- 🔶 **IN PROGRESS**: `playlist_items_manual` is now the default for both `get_playlist_tracks` and `get_made_for_you_playlist_tracks`, so we preserve Spotify's metadata and respect offset/limit without buffering entire playlists. Finish migrating the remaining callers:
   - ❌ `artist_albums` and `current_user_playlists` (the ones inside `try_join!`) still assume the pre-stream API.
   - ❌ Search endpoints need to be revisited—the `(market, limit)` arguments changed order/types in 0.12.
   - ❌ Podcast/show endpoints require the same stream treatment once we settle on the new APIs.
@@ -186,8 +184,7 @@
 ## Known Issues & Blockers
 
 ### Compilation Errors (Current)
-- **Typed-ID dispatch regressions**: `src/network.rs:333-339` and `src/network.rs:419-444` still enqueue `Vec<String>` for `IoEvent::CurrentUserSavedTracksContains`, so `cargo check` fails until those code paths emit `TrackId<'static>` values.
-- **Incomplete playlist stream migration**: `src/network.rs:456-466` still calls the pre-0.12 `.playlist_items(...limit, offset)` signature (and `.await`s the paginator), which now errors with mismatched arguments and "`Stream` is not a future".
+- **Stream migration gaps**: playlist fetchers now respect offsets, but artist/library calls still rely on the removed paginator helpers and won't compile until they're ported.
 - **Removed show endpoints**: `rspotify` 0.12 dropped `current_user_saved_shows`, so the call at `src/network.rs:480-494` no longer exists—saved-show fetching needs to be rewritten against the new endpoints before the tree compiles again.
 
 ### Design Decisions Needed
@@ -204,7 +201,7 @@
 | --------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
 | `Cargo.toml`          | ✅ Updated       | Dependencies modernized                                                                         |
 | `src/main.rs`         | ✅ Updated       | Async bootstrap, token cache handling, and UI/CLI dispatch now compile + run.                   |
-| `src/network.rs`      | 🔶 Partial       | Owns `Arc<Mutex<App>>`, unused imports removed, but Stream APIs + typed-ID dispatch need fixes. |
+| `src/network.rs`      | 🔶 Partial       | Typed track IDs now flow through `CurrentUserSavedTracksContains`; playlist fetchers use manual pagination. Still need saved-shows + artist/podcast stream rewrites. |
 | `src/redirect_uri.rs` | ✅ Updated       | Callback helper converted; unused `spotify` arg is the only warning.                            |
 | `src/config.rs`       | ⚠️ Unknown       | May need updates for new OAuth                                                                  |
 | `src/app.rs`          | ✅ Types updated | Model types renamed                                                                             |
@@ -212,7 +209,7 @@
 ### Handler Files
 | File                | Status          | Notes                                                              |
 | ------------------- | --------------- | ------------------------------------------------------------------ |
-| `src/handlers/*.rs` | ✅ Types updated | Model types renamed globally; typed-ID dispatch conversions needed |
+| `src/handlers/*.rs` | ✅ Types updated | `playlist.rs` + `recently_played.rs` emit typed IDs; rest still pending |
 
 ### UI Files
 | File                       | Status     | Notes                                                                                 |
