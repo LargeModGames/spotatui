@@ -1307,7 +1307,7 @@ impl Network {
   }
 
   async fn user_unfollow_artists(&mut self, artist_ids: Vec<ArtistId<'_>>) {
-    match self.spotify.unfollow_artists(artist_ids.clone()).await {
+    match self.spotify.user_unfollow_artists(artist_ids.clone()).await {
       Ok(_) => {
         self.get_followed_artists(None).await;
         let mut app = self.app.lock().await;
@@ -1322,7 +1322,7 @@ impl Network {
   }
 
   async fn user_follow_artists(&mut self, artist_ids: Vec<ArtistId<'_>>) {
-    match self.spotify.follow_artists(artist_ids.clone()).await {
+    match self.spotify.user_follow_artists(artist_ids.clone()).await {
       Ok(_) => {
         self.get_followed_artists(None).await;
         let mut app = self.app.lock().await;
@@ -1342,7 +1342,7 @@ impl Network {
     playlist_id: PlaylistId<'_>,
     is_public: Option<bool>,
   ) {
-    match self.spotify.follow_playlist(playlist_id, is_public).await {
+    match self.spotify.playlist_follow(playlist_id, is_public).await {
       Ok(_) => {
         self.get_current_user_playlists().await;
       }
@@ -1353,7 +1353,7 @@ impl Network {
   }
 
   async fn user_unfollow_playlist(&mut self, _user_id: UserId<'_>, playlist_id: PlaylistId<'_>) {
-    match self.spotify.unfollow_playlist(playlist_id).await {
+    match self.spotify.playlist_unfollow(playlist_id).await {
       Ok(_) => {
         self.get_current_user_playlists().await;
       }
