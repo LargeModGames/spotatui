@@ -10,7 +10,7 @@ use rspotify::{
     audio::AudioAnalysis,
     context::CurrentPlaybackContext,
     device::DevicePayload,
-    idtypes::{AlbumId, ArtistId, PlayableId, PlaylistId, ShowId, TrackId, UserId},
+    idtypes::{ArtistId, ShowId, TrackId},
     page::{CursorBasedPage, Page},
     playing::PlayHistory,
     playlist::{PlaylistItem, SimplifiedPlaylist},
@@ -19,8 +19,8 @@ use rspotify::{
     user::PrivateUser,
     PlayableItem,
   },
+  prelude::*, // Adds Id trait for .id() method
 };
-use std::str::FromStr;
 use std::sync::mpsc::Sender;
 use std::{
   cmp::{max, min},
