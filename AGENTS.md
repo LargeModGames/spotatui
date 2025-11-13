@@ -159,12 +159,13 @@
 - ❌ Update `PlaylistItem` field access (fields changed from `track` to different structure)
 - ❌ Review and fix `PlayableItem` enum matching
 - ❌ Update any code accessing changed model fields
+- ⚠️ `src/handlers/album_tracks.rs` still expects `.uri` on albums/tracks; convert to typed IDs/`external_urls` and update queue/save handlers to use `PlayableId`.
 
 ### Low Priority - Additional Updates
 
 #### CLI Module
-- ❌ **src/cli/*.rs**: Review and test CLI functionality with new API
-- ❌ Verify command-line interface still works correctly
+- ✅ `src/cli/util.rs` formats albums/artists/playlists/tracks/shows/episodes using typed IDs + Duration-aware helpers.
+- ❌ Remaining CLI commands still need smoke testing.
 
 #### Error Handling
 - ❌ Update error handling for new rspotify error types
@@ -187,8 +188,8 @@
 
 ## Known Issues & Blockers
 
-- **CLI util regressions**: `src/cli/util.rs:176-222` still references the old `.uri` fields on albums/artists/playlists/tracks/shows/episodes and passes `u32` durations into `display_track_progress`; update these helpers to use typed IDs/URIs from the new models and pass `std::time::Duration`.
-- **Input handling**: `src/event/key.rs:188-207` patterns don’t account for the new `KeyEventKind`/`KeyEventState` fields, so the `Key::Alt/Ctrl` match arms fail to compile until we add `..` (or capture the fields explicitly).
+- **Input handling**: `src/event/key.rs:188-207` patterns don’t account for the new `KeyEventKind` / `KeyEventState` fields, so the `Key::Alt/Ctrl` match arms fail to compile until we add the missing struct members (or `..`).
+- **Album track handler drift**: `src/handlers/album_tracks.rs` still relies on `.uri` fields and string IDs; update queue/save flows to typed `PlayableId`/`TrackId` and grab URIs via typed IDs or `external_urls`.
 
 ### Design Decisions Needed
 1. Do we store typed IDs (`TrackId`, `AlbumId`, …) inside `App`/UI state, or do we continue storing Strings and convert at the rspotify call sites?
@@ -232,8 +233,8 @@
 ## Next Steps
 
 ### Immediate Actions (to get it compiling)
-1. ❌ Modernize `src/cli/util.rs`: swap the deprecated `.uri` fields for whichever combination of `external_urls`, typed IDs, or helper builders we keep; pass real `Duration` values into `display_track_progress`.
-2. ❌ Fix `src/event/key.rs` to match the new `KeyEvent` struct (capture or ignore `kind`/`state`) so Ctrl/Alt shortcuts compile again.
+1. ❌ Fix `src/event/key.rs` to match the new `KeyEvent` struct (capture or ignore `kind`/`state`) so Ctrl/Alt shortcuts compile again.
+2. ❌ Update `src/handlers/album_tracks.rs` (and other handler files) to stop using `.uri`/`String` IDs—convert queue/save flows to typed `PlayableId<'static>` and fetch URIs via typed IDs or `external_urls`.
 3. ❌ Finish the typed-ID conversions in the remaining handlers (`track_table.rs`, `album_tracks.rs`, `artist.rs`, `search_results.rs`, `input.rs`, `podcasts.rs`) so every IoEvent payload carries `TrackId<'static>`/`PlayableId`.
 
 ### Short Term (to get it working)
