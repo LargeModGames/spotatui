@@ -131,7 +131,7 @@
 
 #### Stream-returning rspotify APIs
 - ✅ Playlist fetchers (`get_playlist_tracks`, `get_made_for_you_playlist_tracks`), saved-track/album lists, artist albums, show episodes, and saved shows now call the explicit `*_manual` endpoints; `StreamExt` is no longer used in `network.rs`.
-- 🔶 Need to double-check every search/podcast caller (including CLI helpers) now that `search` takes `(query, types, market, limit, offset, include_external)`; some UI handlers still expect the old ordering/shape.
+- ✅ **COMPLETE**: Search API calls in `get_search_results` and `made_for_you_search_and_add` now use correct parameter order: `(query, search_type, market, include_external, limit, offset)`.
 
 #### Show & Podcast library APIs
 - ✅ `get_current_user_saved_shows` uses `get_saved_show_manual` so pagination works again.
