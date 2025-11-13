@@ -9,7 +9,6 @@ use rspotify::model::{
   PlayableId,
 };
 use rand::{thread_rng, Rng};
-use serde_json::from_value;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
@@ -57,9 +56,8 @@ pub fn handler(key: Key, app: &mut App) {
                 if let Some(playlist_tracks) = &app.playlist_tracks {
                   if app.playlist_offset + app.large_search_limit < playlist_tracks.total {
                     app.playlist_offset += app.large_search_limit;
-                    if let Some(playlist_id) = playlist_id_static(&selected_playlist.id) {
-                      app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
-                    }
+                    let playlist_id = playlist_id_static_from_ref(&selected_playlist.id);
+                    app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
                   }
                 }
               }
@@ -84,12 +82,11 @@ pub fn handler(key: Key, app: &mut App) {
               if let Some(playlist_tracks) = &app.made_for_you_tracks {
                 if app.made_for_you_offset + app.large_search_limit < playlist_tracks.total {
                   app.made_for_you_offset += app.large_search_limit;
-                  if let Some(playlist_id) = playlist_id_static(&selected_playlist.id) {
-                    app.dispatch(IoEvent::GetMadeForYouPlaylistItems(
-                      playlist_id,
-                      app.made_for_you_offset,
-                    ));
-                  }
+                  let playlist_id = playlist_id_static_from_ref(&selected_playlist.id);
+                  app.dispatch(IoEvent::GetMadeForYouPlaylistItems(
+                    playlist_id,
+                    app.made_for_you_offset,
+                  ));
                 }
               }
             }
@@ -112,9 +109,8 @@ pub fn handler(key: Key, app: &mut App) {
               if let Some(selected_playlist) =
                 playlists.items.get(selected_playlist_index.to_owned())
               {
-                if let Some(playlist_id) = playlist_id_static(&selected_playlist.id) {
-                  app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
-                }
+                let playlist_id = playlist_id_static_from_ref(&selected_playlist.id);
+                app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
               }
             };
           }
@@ -137,12 +133,11 @@ pub fn handler(key: Key, app: &mut App) {
               app.made_for_you_offset -= app.large_search_limit;
             }
             if let Some(selected_playlist) = playlists.items.get(selected_playlist_index) {
-              if let Some(playlist_id) = playlist_id_static(&selected_playlist.id) {
-                app.dispatch(IoEvent::GetMadeForYouPlaylistItems(
-                  playlist_id,
-                  app.made_for_you_offset,
-                ));
-              }
+              let playlist_id = playlist_id_static_from_ref(&selected_playlist.id);
+              app.dispatch(IoEvent::GetMadeForYouPlaylistItems(
+                playlist_id,
+                app.made_for_you_offset,
+              ));
             }
           }
         },
@@ -171,8 +166,8 @@ fn play_random_song(app: &mut App) {
             if let Some(selected_playlist) = playlists.items.get(selected_playlist_index.to_owned())
             {
               (
-                playlist_context_id(&selected_playlist.id),
-                Some(selected_playlist.tracks.total.clone()),
+                Some(playlist_context_id_from_ref(&selected_playlist.id)),
+                Some(selected_playlist.tracks.total),
               )
             } else {
               (None, None)
@@ -182,11 +177,10 @@ fn play_random_song(app: &mut App) {
         };
 
         if let Some(val) = track_json {
-          let num_tracks: usize = from_value(val.clone()).unwrap();
           app.dispatch(IoEvent::StartPlayback(
             context_id,
             None,
-            Some(thread_rng().gen_range(0..num_tracks)),
+            Some(thread_rng().gen_range(0..val as usize)),
           ));
         }
       }
@@ -220,8 +214,8 @@ fn play_random_song(app: &mut App) {
               .get(selected_playlist_index.to_owned())
             {
               (
-                playlist_context_id(&selected_playlist.id),
-                selected_playlist.tracks.get("total"),
+                Some(playlist_context_id_from_ref(&selected_playlist.id)),
+                Some(selected_playlist.tracks.total),
               )
             } else {
               (None, None)
@@ -230,11 +224,10 @@ fn play_random_song(app: &mut App) {
           _ => (None, None),
         };
         if let Some(val) = playlist_track_json {
-          let num_tracks: usize = from_value(val.clone()).unwrap();
           app.dispatch(IoEvent::StartPlayback(
             context_id,
             None,
-            Some(thread_rng().gen_range(0..num_tracks)),
+            Some(thread_rng().gen_range(0..val as usize)),
           ))
         }
       }
@@ -245,18 +238,13 @@ fn play_random_song(app: &mut App) {
           .get_results(Some(0))
           .and_then(|playlist| playlist.items.get(app.made_for_you_index))
         {
-          if let Some(num_tracks) = &playlist
-            .tracks
-            .get("total")
-            .and_then(|total| -> Option<usize> { from_value(total.clone()).ok() })
-          {
-            let context_id = playlist_context_id(&playlist.id);
-            app.dispatch(IoEvent::StartPlayback(
-              context_id,
-              None,
-              Some(thread_rng().gen_range(0..*num_tracks)),
-            ))
-          };
+          let num_tracks = playlist.tracks.total as usize;
+          let context_id = Some(playlist_context_id_from_ref(&playlist.id));
+          app.dispatch(IoEvent::StartPlayback(
+            context_id,
+            None,
+            Some(thread_rng().gen_range(0..num_tracks)),
+          ));
         };
       }
     }
@@ -292,18 +280,12 @@ fn jump_to_end(app: &mut App) {
           (&app.playlists, &app.selected_playlist_index)
         {
           if let Some(selected_playlist) = playlists.items.get(selected_playlist_index.to_owned()) {
-            let total_tracks = selected_playlist
-              .tracks
-              .get("total")
-              .and_then(|total| total.as_u64())
-              .expect("playlist.tracks object should have a total field")
-              as u32;
+            let total_tracks = selected_playlist.tracks.total;
 
             if app.large_search_limit < total_tracks {
               app.playlist_offset = total_tracks - (total_tracks % app.large_search_limit);
-              if let Some(playlist_id) = playlist_id_static(&selected_playlist.id) {
-                app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
-              }
+              let playlist_id = playlist_id_static_from_ref(&selected_playlist.id);
+              app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
             }
           }
         }
@@ -332,7 +314,7 @@ fn on_enter(app: &mut App) {
             (Some(active_playlist_index), Some(playlists)) => playlists
               .items
               .get(active_playlist_index.to_owned())
-              .and_then(|selected_playlist| playlist_context_id(&selected_playlist.id)),
+              .map(|selected_playlist| playlist_context_id_from_ref(&selected_playlist.id)),
             _ => None,
           };
 
@@ -389,7 +371,7 @@ fn on_enter(app: &mut App) {
             (Some(selected_playlist_index), Some(playlist_result)) => playlist_result
               .items
               .get(selected_playlist_index.to_owned())
-              .and_then(|selected_playlist| playlist_context_id(&selected_playlist.id)),
+              .map(|selected_playlist| playlist_context_id_from_ref(&selected_playlist.id)),
             _ => None,
           };
 
@@ -409,7 +391,7 @@ fn on_enter(app: &mut App) {
             .unwrap()
             .items
             .get(app.made_for_you_index)
-            .and_then(|playlist| playlist_context_id(&playlist.id));
+            .map(|playlist| playlist_context_id_from_ref(&playlist.id));
 
           app.dispatch(IoEvent::StartPlayback(
             context_id,
@@ -488,9 +470,8 @@ fn jump_to_start(app: &mut App) {
         {
           if let Some(selected_playlist) = playlists.items.get(selected_playlist_index.to_owned()) {
             app.playlist_offset = 0;
-            if let Some(playlist_id) = playlist_id_static(&selected_playlist.id) {
-              app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
-            }
+            let playlist_id = playlist_id_static_from_ref(&selected_playlist.id);
+            app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
           }
         }
       }
@@ -504,8 +485,16 @@ fn jump_to_start(app: &mut App) {
   }
 }
 
+fn playlist_id_static_from_ref(id: &PlaylistId<'_>) -> PlaylistId<'static> {
+  id.clone().into_static()
+}
+
 fn playlist_id_static(id: &Option<PlaylistId<'_>>) -> Option<PlaylistId<'static>> {
   id.clone().map(|playlist_id| playlist_id.into_static())
+}
+
+fn playlist_context_id_from_ref(id: &PlaylistId<'_>) -> PlayContextId<'static> {
+  PlayContextId::Playlist(id.clone().into_static())
 }
 
 fn playlist_context_id(id: &Option<PlaylistId<'_>>) -> Option<PlayContextId<'static>> {
