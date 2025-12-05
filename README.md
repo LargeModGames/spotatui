@@ -1,10 +1,10 @@
-# Spotify TUI
+# Spotatui
 
-![Continuous Integration](https://github.com/Rigellute/spotify-tui/workflows/Continuous%20Integration/badge.svg?branch=master&event=push)
-![](https://img.shields.io/badge/license-MIT-blueviolet.svg)
-![](https://tokei.rs/b1/github/Rigellute/spotify-tui?category=code)
-[![Crates.io](https://img.shields.io/crates/v/spotify-tui.svg)](https://crates.io/crates/spotify-tui)
-![](https://img.shields.io/github/v/release/Rigellute/spotify-tui?color=%23c694ff)
+> A Spotify client for the terminal written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui).
+> 
+> **Note:** This is a fork of the original [spotify-tui](https://github.com/Rigellute/spotify-tui) by Rigellute, which is no longer maintained. This fork aims to keep the project alive with updated dependencies and fixes.
+
+
 
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-94-orange.svg?style=flat-square)](#contributors-)
@@ -18,19 +18,8 @@ A Spotify client for the terminal written in Rust.
 
 The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.com/).
 
-- [Spotify TUI](#spotify-tui)
-  - [Installation](#installation)
-    - [Homebrew](#homebrew)
-    - [Snap](#snap)
-    - [AUR](#aur)
-    - [Nix](#nix)
-    - [Void Linux](#void-linux)
-    - [Fedora/CentOS](#fedoracentos)
-    - [Cargo](#cargo)
-      - [Note on Linux](#note-on-linux)
-    - [Windows 10](#windows-10)
-      - [Scoop installer](#scoop-installer)
-    - [Manual](#manual)
+- [Spotatui](#spotatui)
+
   - [Connecting to Spotify’s API](#connecting-to-spotifys-api)
   - [Usage](#usage)
 - [Configuration](#configuration)
@@ -46,119 +35,30 @@ The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.
 
 ## Installation
 
-The binary executable is `spt`.
 
-### Homebrew
+### Building from Source
 
-For both macOS and Linux
+Ensure you have [Rust](https://www.rust-lang.org/tools/install) installed.
 
-```bash
-brew install spotify-tui
-```
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/LargeModGames/spotatui.git
+    cd spotatui
+    ```
 
-To update, run
+2.  Install using Cargo:
+    ```bash
+    cargo install --path .
+    ```
 
-```bash
-brew upgrade spotify-tui
-```
-
-### Snap
-
-For a system with Snap installed, run
-
-```bash
-snap install spt
-```
-
-The stable version will be installed for you automatically.
-
-If you want to install the nightly build, run
-
-```bash
-snap install spt --edge
-```
-
-### AUR
-
-For those on Arch Linux you can find the package on AUR [here](https://aur.archlinux.org/packages/spotify-tui/). If however you're using an AUR helper you can install directly from that, for example (in the case of [yay](https://github.com/Jguer/yay)), run
-
-```bash
-yay -S spotify-tui
-```
-
-### Nix
-
-Available as the package `spotify-tui`. To install run:
-
-```bash
-nix-env -iA nixpkgs.spotify-tui
-```
-
-Where `nixpkgs` is the channel name in your configuration. For a more up-to-date installation, use the unstable channel.
-It is also possible to add the package to `environment.systemPackages` (for NixOS), or `home.packages` when using [home-manager](https://github.com/rycee/home-manager).
-
-### Void Linux
-
-Available on the official repositories. To install, run
-
-```bash
-sudo xbps-install -Su spotify-tui
-```
-
-### Fedora/CentOS
-
-Available on the [Copr](https://copr.fedorainfracloud.org/coprs/atim/spotify-tui/) repositories. To install, run
-
-```bash
-sudo dnf copr enable atim/spotify-tui -y && sudo dnf install spotify-tui
-```
-
-### Cargo
-
-Use this option if your architecture is not supported by the pre-built binaries found on the [releases page](https://github.com/Rigellute/spotify-tui/releases).
-
-First, install [Rust](https://www.rust-lang.org/tools/install) (using the recommended `rustup` installation method) and then
-
-```bash
-cargo install spotify-tui
-```
-
-This method will build the binary from source.
-
-To update, run the same command again.
-
-#### Note on Linux
-
-For compilation on Linux the development packages for `libssl` are required.
-For basic installation instructions, see [install OpenSSL](https://docs.rs/openssl/0.10.25/openssl/#automatic).
-In order to locate dependencies, the compilation also requires `pkg-config` to be installed.
-
-If you are using the Windows Subsystem for Linux, you'll need to [install additional dependencies](#windows-subsystem-for-linux).
-
-### Windows 10
-
-#### Scoop installer
-
-First, make sure scoop installer is on your windows box, for instruction please visit [scoop.sh](https://scoop.sh)
-
-Then open powershell and run following two commands:
-
-```bash
-scoop bucket add scoop-bucket https://github.com/Rigellute/scoop-bucket
-scoop install spotify-tui
-```
-
-After that program is available as: `spt` or `spt.exe`
-
-### Manual
-
-1. Download the latest [binary](https://github.com/Rigellute/spotify-tui/releases) for your OS.
-1. `cd` to the file you just downloaded and unzip
-1. `cd` to `spotify-tui` and run with `./spt`
+    Or build and run directly:
+    ```bash
+    cargo run --release
+    ```
 
 ## Connecting to Spotify’s API
 
-`spotify-tui` needs to connect to Spotify’s API in order to find music by
+`spotatui` needs to connect to Spotify’s API in order to find music by
 name, play tracks etc.
 
 Instructions on how to set this up will be shown when you first run the app.
@@ -173,43 +73,43 @@ But here they are again:
 1. Scroll down and click `Save`
 1. You are now ready to authenticate with Spotify!
 1. Go back to the terminal
-1. Run `spt`
+1. Run `spotatui`
 1. Enter your `Client ID`
 1. Enter your `Client Secret`
 1. Press enter to confirm the default port (8888) or enter a custom port
 1. You will be redirected to an official Spotify webpage to ask you for permissions.
 1. After accepting the permissions, you'll be redirected to localhost. If all goes well, the redirect URL will be parsed automatically and now you're done. If the local webserver fails for some reason you'll be redirected to a blank webpage that might say something like "Connection Refused" since no server is running. Regardless, copy the URL and paste into the prompt in the terminal.
 
-And now you are ready to use the `spotify-tui` 🎉
+And now you are ready to use `spotatui` 🎉
 
-You can edit the config at anytime at `${HOME}/.config/spotify-tui/client.yml`. (for snap `${HOME}/snap/spt/current/.config/spotify-tui/client.yml`)
+You can edit the config at anytime at `${HOME}/.config/spotatui/client.yml`.
 
 ## Usage
 
-The binary is named `spt`.
+The binary is named `spotatui`.
 
-Running `spt` with no arguments will bring up the UI. Press `?` to bring up a help menu that shows currently implemented key events and their actions.
-There is also a CLI that is able to do most of the stuff the UI does. Use `spt --help` to learn more.
+Running `spotatui` with no arguments will bring up the UI. Press `?` to bring up a help menu that shows currently implemented key events and their actions.
+There is also a CLI that is able to do most of the stuff the UI does. Use `spotatui --help` to learn more.
 
 Here are some example to get you excited.
 ```
-spt --completions zsh # Prints shell completions for zsh to stdout (bash, power-shell and more are supported)
+spotatui --completions zsh # Prints shell completions for zsh to stdout (bash, power-shell and more are supported)
 
-spt play --name "Your Playlist" --playlist --random # Plays a random song from "Your Playlist"
-spt play --name "A cool song" --track # Plays 'A cool song'
+spotatui play --name "Your Playlist" --playlist --random # Plays a random song from "Your Playlist"
+spotatui play --name "A cool song" --track # Plays 'A cool song'
 
-spt playback --like --shuffle # Likes the current song and toggles shuffle mode
-spt playback --toggle # Plays/pauses the current playback
+spotatui playback --like --shuffle # Likes the current song and toggles shuffle mode
+spotatui playback --toggle # Plays/pauses the current playback
 
-spt list --liked --limit 50 # See your liked songs (50 is the max limit)
+spotatui list --liked --limit 50 # See your liked songs (50 is the max limit)
 
 # Looks for 'An even cooler song' and gives you the '{name} from {album}' of up to 30 matches
-spt search "An even cooler song" --tracks --format "%t from %b" --limit 30
+spotatui search "An even cooler song" --tracks --format "%t from %b" --limit 30
 ```
 
 # Configuration
 
-A configuration file is located at `${HOME}/.config/spotify-tui/config.yml`, for snap `${HOME}/snap/spt/current/.config/spotify-tui/config.yml`
+A configuration file is located at `${HOME}/.config/spotatui/config.yml`.
 (not to be confused with client.yml which handles spotify authentication)
 
 The following is a sample config.yml file:
@@ -255,7 +155,7 @@ behavior:
   repeat_context_icon: 🔁
   playing_icon: ▶
   paused_icon: ⏸
-  # Sets the window title to "spt - Spotify TUI" via ANSI escape code.
+  # Sets the window title to "spotatui - Spotify TUI" via ANSI escape code.
   set_window_title: true
 
 keybindings:
@@ -314,12 +214,12 @@ Follow the spotifyd documentation to get set up.
 After that there is not much to it.
 
 1. Start running the spotifyd daemon.
-1. Start up `spt`
+1. Start up `spotatui`
 1. Press `d` to go to the device selection menu and the spotifyd "device" should be there - if not check [these docs](https://github.com/Spotifyd/spotifyd#logging)
 
 ## Libraries used
 
-- [tui-rs](https://github.com/fdehau/tui-rs)
+- [ratatui](https://github.com/ratatui-org/ratatui)
 - [rspotify](https://github.com/ramsayleung/rspotify)
 
 ## Development
@@ -337,6 +237,12 @@ You might get a linking error. If so, you'll probably need to install additional
 ```bash
 sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
+
+## Maintainer
+
+Maintained by **LargeModGames** (<LargeModGames@gmail.com>).
+
+Original author: Alexander Keliris.
 
 ## Contributors
 
