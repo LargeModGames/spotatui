@@ -21,27 +21,22 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_prefix: linux-x86_64
             binary_postfix: ""
-            use_cross: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact_prefix: linux-musl-x86_64
             binary_postfix: ""
-            use_cross: true
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
             binary_postfix: ""
-            use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_prefix: macos-aarch64
             binary_postfix: ""
-            use_cross: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_prefix: windows-x86_64
             binary_postfix: ".exe"
-            use_cross: false
 
     steps:
       - name: Checkout sources
@@ -53,15 +48,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools (Linux musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl' && !matrix.use_cross
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Install cross
-        if: ${{ matrix.use_cross }}
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Install Linux dependencies
-        if: runner.os == 'Linux' && !matrix.use_cross
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
@@ -70,13 +61,8 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install openssl@3
 
-      - name: Build release binary (cargo)
-        if: ${{ !matrix.use_cross }}
+      - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build release binary (cross)
-        if: ${{ matrix.use_cross }}
-        run: cross build --release --target ${{ matrix.target }}
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
