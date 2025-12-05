@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.27.15] - 2025-12-05
+
+### Changed
+
+- Improved changelog display in home screen with styled markdown rendering (colored headers, bullet points, section-specific colors)
+
 ## [0.27.1] - 2025-12-05
 
 ### Fixed
