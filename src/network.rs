@@ -369,8 +369,8 @@ impl Network {
               app.liked_song_ids_set.insert(id.id().to_string());
             } else {
               // The song is not liked, so check if it should be removed
-              if app.liked_song_ids_set.contains(&id.id().to_string()) {
-                app.liked_song_ids_set.remove(&id.id().to_string());
+              if app.liked_song_ids_set.contains(id.id()) {
+                app.liked_song_ids_set.remove(id.id());
               }
             }
           };
@@ -512,8 +512,8 @@ impl Network {
               app.saved_show_ids_set.insert(id.id().to_string());
             } else {
               // The show is not saved, so check if it should be removed
-              if app.saved_show_ids_set.contains(&id.id().to_string()) {
-                app.saved_show_ids_set.remove(&id.id().to_string());
+              if app.saved_show_ids_set.contains(id.id()) {
+                app.saved_show_ids_set.remove(id.id());
               }
             }
           };
@@ -1024,7 +1024,7 @@ impl Network {
         artist_name,
         albums,
         related_artists: related_artist,
-        top_tracks: top_tracks,
+        top_tracks,
         selected_album_index: 0,
         selected_related_artist_index: 0,
         selected_top_track_index: 0,
@@ -1140,7 +1140,7 @@ impl Network {
     let track_ids = recommendations
       .tracks
       .iter()
-      .filter_map(|track| track.id.as_ref().map(|id| id.clone()))
+      .filter_map(|track| track.id.clone())
       .collect::<Vec<TrackId>>();
 
     if let Ok(result) = self.spotify.tracks(track_ids, None).await {
@@ -1180,7 +1180,7 @@ impl Network {
               {
                 Ok(()) => {
                   let mut app = self.app.lock().await;
-                  app.liked_song_ids_set.remove(&track_id.id().to_string());
+                  app.liked_song_ids_set.remove(track_id.id());
                 }
                 Err(e) => {
                   self.handle_error(anyhow!(e)).await;
@@ -1227,7 +1227,7 @@ impl Network {
                   {
                     Ok(()) => {
                       let mut app = self.app.lock().await;
-                      app.saved_show_ids_set.remove(&show_id.id().to_string());
+                      app.saved_show_ids_set.remove(show_id.id());
                     }
                     Err(e) => {
                       self.handle_error(anyhow!(e)).await;
@@ -1292,7 +1292,7 @@ impl Network {
           if is_followed {
             app.followed_artist_ids_set.insert(id.id().to_string());
           } else {
-            app.followed_artist_ids_set.remove(&id.id().to_string());
+            app.followed_artist_ids_set.remove(id.id());
           }
         });
     }
@@ -1331,7 +1331,7 @@ impl Network {
           if is_followed {
             app.saved_album_ids_set.insert(id.id().to_string());
           } else {
-            app.saved_album_ids_set.remove(&id.id().to_string());
+            app.saved_album_ids_set.remove(id.id());
           }
         });
     }
@@ -1346,7 +1346,7 @@ impl Network {
       Ok(_) => {
         self.get_current_user_saved_albums(None).await;
         let mut app = self.app.lock().await;
-        app.saved_album_ids_set.remove(&album_id.id().to_string());
+        app.saved_album_ids_set.remove(album_id.id());
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -1377,7 +1377,7 @@ impl Network {
       Ok(_) => {
         self.get_current_user_saved_shows(None).await;
         let mut app = self.app.lock().await;
-        app.saved_show_ids_set.remove(&show_id.id().to_string());
+        app.saved_show_ids_set.remove(show_id.id());
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -1404,7 +1404,7 @@ impl Network {
         self.get_followed_artists(None).await;
         let mut app = self.app.lock().await;
         artist_ids.iter().for_each(|id| {
-          app.followed_artist_ids_set.remove(&id.id().to_string());
+          app.followed_artist_ids_set.remove(id.id());
         });
       }
       Err(e) => {
