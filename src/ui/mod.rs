@@ -37,17 +37,12 @@ pub enum TableId {
   PodcastEpisodes,
 }
 
-#[derive(PartialEq)]
+#[derive(Default, PartialEq)]
 pub enum ColumnId {
+  #[default]
   None,
   Title,
   Liked,
-}
-
-impl Default for ColumnId {
-  fn default() -> Self {
-    ColumnId::None
-  }
 }
 
 pub struct TableHeader<'a> {
@@ -138,7 +133,7 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
   );
 
   let input_string: String = app.input.iter().collect();
-  let lines = Text::from((&input_string).as_str());
+  let lines = Text::from(input_string.clone());
   let input = Paragraph::new(lines).block(
     Block::default()
       .borders(Borders::ALL)
@@ -367,7 +362,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           PlayableItem::Episode(episode) => Some(episode.id.id().to_string()),
         })
       })
-      .unwrap_or_else(|| "".to_string());
+      .unwrap_or_default();
 
     let songs = match &app.search_results.tracks {
       Some(tracks) => tracks
@@ -502,7 +497,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .iter()
         .map(|item| {
           let mut show_name = String::new();
-          if app.saved_show_ids_set.contains(&item.id.id().to_string()) {
+          if app.saved_show_ids_set.contains(item.id.id()) {
             show_name.push_str(&app.user_config.padded_liked_icon());
           }
           show_name.push_str(&format!("{:} - {}", item.name, item.publisher));
@@ -1131,7 +1126,7 @@ fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
   let bottom_text_raw = format!(
     "{}{}",
-    "\nPlease report any bugs or missing features to https://github.com/Rigellute/spotify-tui\n\n",
+    "\nPlease report any bugs or missing features to https://github.com/LargeModGames/spotatui\n\n",
     clean_changelog
   );
   let bottom_text = Text::from(bottom_text_raw.as_str());
@@ -1262,7 +1257,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   let device_instructions: Vec<Line> = vec![
         "To play tracks, please select a device. ",
         "Use `j/k` or up/down arrow keys to move up and down and <Enter> to select. ",
-        "Your choice here will be cached so you can jump straight back in when you next open `spotify-tui`. ",
+        "Your choice here will be cached so you can jump straight back in when you next open `spotatui`. ",
         "You can change the playback device at any time by pressing `d`.",
     ].into_iter().map(|instruction| Line::from(Span::raw(instruction))).collect();
 
@@ -1271,7 +1266,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     .wrap(Wrap { trim: true })
     .block(
       Block::default().borders(Borders::NONE).title(Span::styled(
-        "Welcome to spotify-tui!",
+        "Welcome to spotatui!",
         Style::default()
           .fg(app.user_config.theme.active)
           .add_modifier(Modifier::BOLD),
