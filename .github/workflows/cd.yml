@@ -167,13 +167,24 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
-      - name: Update PKGBUILD version
+      - name: Update PKGBUILD version and checksum
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           VERSION=${VERSION#refs/tags/}
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" aur/PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" aur/PKGBUILD
+          
+          # Download tarball and calculate checksum
+          curl -sL "https://github.com/LargeModGames/spotatui/archive/refs/tags/v${VERSION}.tar.gz" -o /tmp/spotatui.tar.gz
+          CHECKSUM=$(sha256sum /tmp/spotatui.tar.gz | awk '{print $1}')
+          sed -i "s/^sha256sums=.*/sha256sums=('$CHECKSUM')/" aur/PKGBUILD
+          rm /tmp/spotatui.tar.gz
+          
+          echo "Updated PKGBUILD to version $VERSION with checksum $CHECKSUM"
+          cat aur/PKGBUILD
 
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
@@ -184,4 +195,4 @@ jobs:
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: Update AUR package to ${{ github.ref_name }}
-          updpkgsums: true
+          updpkgsums: false
