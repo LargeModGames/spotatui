@@ -6,7 +6,7 @@ documentation = "https://github.com/LargeModGames/spotatui"
 repository = "https://github.com/LargeModGames/spotatui"
 keywords = ["spotify", "tui", "cli", "terminal"]
 categories = ["command-line-utilities"]
-version = "0.28.3"
+version = "0.28.6"
 authors = ["LargeModGames <LargeModGames@gmail.com>"]
 edition = "2021"
 license = "MIT"
@@ -31,13 +31,13 @@ rand = "0.8.4"
 anyhow = "1.0.43"
 chrono = "0.4.42"
 open = "5.0"
-reqwest = { version = "0.12", features = ["json"], default-features = false, optional = true }
 self_update = { version = "0.41", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
+reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false, optional = true }
 openssl = { version = "0.10", optional = true }
 
 [features]
 default = ["telemetry"]
-telemetry = ["reqwest", "reqwest/rustls-tls"]
+telemetry = ["reqwest", "reqwest/native-tls"]
 
 [target.'cfg(target_env = "musl")'.dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }
