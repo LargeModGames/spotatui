@@ -467,21 +467,20 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
   #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
   let mut audio_capture: Option<audio::AudioCaptureManager> = None;
 
-  // Check for updates in background (non-blocking)
-  let app_clone = Arc::clone(app);
-  tokio::spawn(async move {
-    // Run update check in a blocking thread pool since self_update uses blocking I/O
+  // Check for updates SYNCHRONOUSLY before starting the event loop
+  // This ensures the update prompt appears before any user interaction
+  {
     let update_info = tokio::task::spawn_blocking(cli::check_for_update_silent)
       .await
       .ok()
       .flatten();
     if let Some(info) = update_info {
-      if let Ok(mut app) = app_clone.try_lock() {
-        app.update_available = Some(info);
-        app.update_notification_shown_at = Some(std::time::Instant::now());
-      }
+      let mut app = app.lock().await;
+      app.update_available = Some(info);
+      // Push the mandatory update prompt modal onto navigation stack
+      app.push_navigation_stack(RouteId::UpdatePrompt, ActiveBlock::UpdatePrompt);
     }
-  });
+  }
 
   // play music on, if not send them to the device selection view
 
@@ -536,6 +535,9 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
       }
       ActiveBlock::BasicView => {
         ui::draw_basic_view(f, &app);
+      }
+      ActiveBlock::UpdatePrompt => {
+        ui::draw_update_prompt(f, &app);
       }
       _ => {
         ui::draw_main_layout(f, &app);

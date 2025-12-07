@@ -11,6 +11,13 @@ pub struct UpdateInfo {
 /// Check for updates in the background (non-blocking)
 /// Returns Some(UpdateInfo) if an update is available, None if up to date
 pub fn check_for_update_silent() -> Option<UpdateInfo> {
+  // ============ TESTING: Uncomment below to simulate update ============
+  // return Some(UpdateInfo {
+  //   current_version: env!("CARGO_PKG_VERSION").to_string(),
+  //   latest_version: "99.0.0".to_string(),
+  // });
+  // =====================================================================
+
   let current_version = cargo_crate_version!();
 
   let status = self_update::backends::github::Update::configure()

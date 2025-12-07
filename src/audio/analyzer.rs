@@ -127,21 +127,20 @@ impl AudioAnalyzer {
       }
     }
 
-    // Per-band gain for a pleasing visual curve
-    // Creates a natural "smile curve" - moderate lows, full mids, moderate highs
+    // Per-band gain for visualization - boosted highs to compensate for low energy
     const BAND_GAINS: [f32; NUM_BANDS] = [
-      0.5,  // Sub   - reduce sub rumble
-      0.65, // Bass  - visible but not overwhelming
-      0.8,  // Low   - building up
-      0.9,  // LMid  - almost full
-      1.0,  // Mid   - peak visibility (voice frequencies)
-      1.0,  // UMid  - peak visibility
-      0.95, // High  - slightly reduce
-      0.85, // HiMid - gentle rolloff
-      0.75, // Pres  - continuing rolloff
-      0.65, // Bril  - less harsh highs
-      0.55, // Air   - subtle
-      0.45, // Ultra - very subtle
+      0.7, // Sub   - reduce sub rumble
+      0.8, // Bass  - visible but not overwhelming
+      0.9, // Low   - building up
+      1.0, // LMid  - full
+      1.0, // Mid   - peak visibility (voice frequencies)
+      1.0, // UMid  - peak visibility
+      1.1, // High  - boost slightly
+      1.2, // HiMd  - boost more
+      1.3, // Pres  - boost more
+      1.4, // Bril  - boost more
+      1.6, // Air   - significant boost
+      2.0, // Ultra - major boost (very little energy here)
     ];
 
     // Normalize and apply pleasing visual curve
@@ -160,11 +159,18 @@ impl AudioAnalyzer {
     for i in 0..NUM_BANDS {
       self.spectrum.bands[i] =
         self.spectrum.bands[i] * SMOOTHING + new_bands[i] * (1.0 - SMOOTHING);
+      // Noise gate: treat very low values as zero
+      if self.spectrum.bands[i] < 0.005 {
+        self.spectrum.bands[i] = 0.0;
+      }
     }
 
-    // Update peak with smoothing
+    // Update peak with smoothing and noise gate
     let current_peak = new_bands.iter().cloned().fold(0.0f32, f32::max);
     self.spectrum.peak = self.spectrum.peak * SMOOTHING + current_peak * (1.0 - SMOOTHING);
+    if self.spectrum.peak < 0.005 {
+      self.spectrum.peak = 0.0;
+    }
   }
 }
 

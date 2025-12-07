@@ -21,6 +21,7 @@ mod recently_played;
 mod search_results;
 mod select_device;
 mod track_table;
+mod update_prompt;
 
 use super::app::{ActiveBlock, App, ArtistBlock, RouteId, SearchResultBlock};
 use crate::event::Key;
@@ -170,6 +171,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Dialog(_) => {
       dialog::handler(key, app);
     }
+    ActiveBlock::UpdatePrompt => {
+      update_prompt::handler(key, app);
+    }
   }
 }
 
@@ -191,6 +195,8 @@ fn handle_escape(app: &mut App) {
     }
     // These are global views that have no active/inactive distinction so do nothing
     ActiveBlock::SelectDevice | ActiveBlock::Analysis => {}
+    // Update prompt must be dismissed with Enter/Esc, not global escape
+    ActiveBlock::UpdatePrompt => {}
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);
     }

@@ -2,9 +2,9 @@ use super::util;
 use crate::app::App;
 use ratatui::{
   layout::{Constraint, Direction, Layout},
-  style::Style,
+  style::{Color, Style},
   text::{Line, Span},
-  widgets::{BarChart, Block, Borders, Paragraph},
+  widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph},
   Frame,
 };
 
@@ -69,8 +69,8 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
       .style(Style::default().fg(app.user_config.theme.text));
     f.render_widget(p, chunks[0]);
 
-    // Create bar chart data from spectrum bands
-    let data: Vec<(&str, u64)> = spectrum
+    // Create bars with gradient colors based on height
+    let bars: Vec<Bar> = spectrum
       .bands
       .iter()
       .enumerate()
@@ -79,21 +79,33 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         // Scale value to u64 for display (0.0-1.0 -> 0-1000)
         // Cap at 800 so bars never hit the top (max is 1000)
         let bar_value = ((value * 1000.0) as u64).min(800);
-        (*label, bar_value)
+
+        // Gradient color based on bar height: green -> yellow -> orange -> red
+        let color = if value < 0.25 {
+          Color::Rgb(0, 200, 0) // Green
+        } else if value < 0.5 {
+          Color::Rgb(180, 200, 0) // Yellow-green
+        } else if value < 0.65 {
+          Color::Rgb(255, 200, 0) // Yellow
+        } else if value < 0.75 {
+          Color::Rgb(255, 140, 0) // Orange
+        } else {
+          Color::Rgb(255, 50, 0) // Red
+        };
+
+        Bar::default()
+          .value(bar_value)
+          .label(Line::from(*label))
+          .style(Style::default().fg(color))
+          .value_style(Style::default().fg(Color::White).bg(color))
       })
       .collect();
 
     let spectrum_bar = BarChart::default()
       .block(bar_chart_block)
-      .data(&data)
+      .data(BarGroup::default().bars(&bars))
       .bar_width(width as u16)
-      .max(1000) // Fixed max so bars are relative to this
-      .bar_style(Style::default().fg(app.user_config.theme.analysis_bar))
-      .value_style(
-        Style::default()
-          .fg(app.user_config.theme.analysis_bar_text)
-          .bg(app.user_config.theme.analysis_bar),
-      );
+      .max(1000); // Fixed max so bars are relative to this
     f.render_widget(spectrum_bar, chunks[1]);
   } else {
     // No audio capture available

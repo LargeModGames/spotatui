@@ -205,9 +205,6 @@ pub fn draw_main_layout(f: &mut Frame<'_>, app: &App) {
 
   // Possibly draw confirm dialog
   draw_dialog(f, app);
-
-  // Draw update notification if available (on top of everything)
-  draw_update_notification(f, app);
 }
 
 pub fn draw_routes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
@@ -262,6 +259,7 @@ pub fn draw_routes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     RouteId::Analysis => {} // This is handled as a "full screen" route in main.rs
     RouteId::BasicView => {} // This is handled as a "full screen" route in main.rs
     RouteId::Dialog => {} // This is handled in the draw_dialog function in mod.rs
+    RouteId::UpdatePrompt => {} // This is handled as a "full screen" route in main.rs
   };
 }
 
@@ -1886,43 +1884,51 @@ fn draw_table(
   f.render_widget(table, layout_chunk);
 }
 
-fn draw_update_notification(f: &mut Frame<'_>, app: &App) {
+/// Draw the mandatory update prompt modal
+pub fn draw_update_prompt(f: &mut Frame<'_>, app: &App) {
   if let Some(update_info) = &app.update_available {
-    // Auto-dismiss after 15 seconds
-    if let Some(shown_at) = app.update_notification_shown_at {
-      if shown_at.elapsed().as_secs() > 15 {
-        return;
-      }
-    }
-
     let bounds = f.size();
-    let width = std::cmp::min(bounds.width - 4, 55);
-    let height = 3;
-    let left = (bounds.width - width) / 2;
-    let top = 1;
+    let width = std::cmp::min(bounds.width.saturating_sub(4), 60);
+    let height = 9;
+    let left = (bounds.width.saturating_sub(width)) / 2;
+    let top = (bounds.height.saturating_sub(height)) / 2;
 
     let rect = Rect::new(left, top, width, height);
-
     f.render_widget(Clear, rect);
 
-    let text = format!(
-      " 🎵 Update available: v{} → v{} | Run: spotatui update -i ",
-      update_info.current_version, update_info.latest_version
-    );
+    let text = vec![
+      Line::from(Span::styled(
+        "🚀 Update Available!",
+        Style::default().add_modifier(Modifier::BOLD),
+      )),
+      Line::from(""),
+      Line::from(format!(
+        "Current: v{}  →  Latest: v{}",
+        update_info.current_version, update_info.latest_version
+      )),
+      Line::from(""),
+      Line::from("Run to update:"),
+      Line::from(Span::styled(
+        "  spotatui update --install",
+        Style::default().add_modifier(Modifier::ITALIC),
+      )),
+      Line::from(""),
+      Line::from(Span::styled(
+        "[Press ENTER or ESC to continue]",
+        Style::default().fg(app.user_config.theme.inactive),
+      )),
+    ];
 
-    let notification = Paragraph::new(text)
-      .style(
-        Style::default()
-          .fg(app.user_config.theme.text)
-          .bg(app.user_config.theme.active),
-      )
+    let paragraph = Paragraph::new(text)
+      .style(Style::default().fg(app.user_config.theme.text))
       .alignment(Alignment::Center)
       .block(
         Block::default()
           .borders(Borders::ALL)
-          .border_style(Style::default().fg(app.user_config.theme.active)),
+          .border_style(Style::default().fg(app.user_config.theme.active))
+          .title(" Update Available "),
       );
 
-    f.render_widget(notification, rect);
+    f.render_widget(paragraph, rect);
   }
 }

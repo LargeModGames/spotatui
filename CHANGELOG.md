@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.30.0] - 2025-12-07
+
+### Added
+
+- **Unskippable Update Prompt**: When a new version is available, users are shown a mandatory modal that must be acknowledged before using the app
+  - Displays current and latest version with update instructions
+  - Press Enter, Esc, q, or Space to dismiss
+  - Replaces the old auto-dismissing notification banner
+
+### Changed
+
+- **Audio Visualization Improvements**:
+  - Added noise gate to filter out background noise when no audio is playing
+  - Boosted high frequency bands (Air, Ultra) for better visibility
+  - Added gradient colors to spectrum bars based on bar height (green → yellow → orange → red)
+
 ## [0.29.0] - 2025-12-07
 
 ### Added

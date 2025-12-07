@@ -139,6 +139,7 @@ pub enum ActiveBlock {
   Artists,
   BasicView,
   Dialog(DialogContext),
+  UpdatePrompt,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -160,6 +161,7 @@ pub enum RouteId {
   PodcastEpisodes,
   Recommendations,
   Dialog,
+  UpdatePrompt,
 }
 
 #[derive(Debug)]
@@ -336,7 +338,7 @@ pub struct App {
   pub dialog: Option<String>,
   pub confirm: bool,
   pub update_available: Option<UpdateInfo>,
-  pub update_notification_shown_at: Option<Instant>,
+  pub update_prompt_acknowledged: bool,
 }
 
 impl Default for App {
@@ -427,7 +429,7 @@ impl Default for App {
       dialog: None,
       confirm: false,
       update_available: None,
-      update_notification_shown_at: None,
+      update_prompt_acknowledged: false,
     }
   }
 }
