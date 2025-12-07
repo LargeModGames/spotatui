@@ -66,7 +66,7 @@ impl Default for Theme {
       inactive: Color::Gray,
       playbar_background: Color::Black,
       playbar_progress: Color::LightCyan,
-      playbar_progress_text: Color::LightCyan,
+      playbar_progress_text: Color::Black,
       playbar_text: Color::Reset,
       selected: Color::LightCyan,
       text: Color::Reset,
