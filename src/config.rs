@@ -20,6 +20,27 @@ pub struct ClientConfig {
   pub device_id: Option<String>,
   // FIXME: port should be defined in `user_config` not in here
   pub port: Option<u16>,
+  // Streaming configuration
+  #[serde(default = "default_streaming_enabled")]
+  pub enable_streaming: bool,
+  #[serde(default = "default_device_name")]
+  pub streaming_device_name: String,
+  #[serde(default = "default_bitrate")]
+  pub streaming_bitrate: u16,
+  #[serde(default)]
+  pub streaming_audio_cache: bool,
+}
+
+fn default_streaming_enabled() -> bool {
+  cfg!(feature = "streaming")
+}
+
+fn default_device_name() -> String {
+  "Spotatui".to_string()
+}
+
+fn default_bitrate() -> u16 {
+  320
 }
 
 pub struct ConfigPaths {
@@ -34,6 +55,10 @@ impl ClientConfig {
       client_secret: "".to_string(),
       device_id: None,
       port: None,
+      enable_streaming: default_streaming_enabled(),
+      streaming_device_name: default_device_name(),
+      streaming_bitrate: default_bitrate(),
+      streaming_audio_cache: false,
     }
   }
 
@@ -140,6 +165,10 @@ impl ClientConfig {
         client_secret,
         device_id: None,
         port: Some(port),
+        enable_streaming: default_streaming_enabled(),
+        streaming_device_name: default_device_name(),
+        streaming_bitrate: default_bitrate(),
+        streaming_audio_cache: false,
       };
 
       let content_yml = serde_yaml::to_string(&config_yml)?;
