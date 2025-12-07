@@ -266,6 +266,20 @@ pub struct SpectrumData {
   pub peak: f32,
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum LyricsStatus {
+  NotStarted,
+  Loading,
+  Found,
+  NotFound,
+}
+
+impl Default for LyricsStatus {
+  fn default() -> Self {
+    LyricsStatus::NotStarted
+  }
+}
+
 pub struct App {
   pub instant_since_last_current_playback_poll: Instant,
   navigation_stack: Vec<Route>,
@@ -339,6 +353,8 @@ pub struct App {
   pub confirm: bool,
   pub update_available: Option<UpdateInfo>,
   pub update_prompt_acknowledged: bool,
+  pub lyrics: Option<Vec<(u128, String)>>,
+  pub lyrics_status: LyricsStatus,
 }
 
 impl Default for App {
@@ -430,6 +446,8 @@ impl Default for App {
       confirm: false,
       update_available: None,
       update_prompt_acknowledged: false,
+      lyrics: None,
+      lyrics_status: LyricsStatus::default(),
     }
   }
 }

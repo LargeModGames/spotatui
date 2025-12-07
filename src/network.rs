@@ -4,6 +4,7 @@ use crate::app::{
   TrackTableContext,
 };
 use crate::config::ClientConfig;
+use crate::ui::util::create_artist_string;
 use anyhow::anyhow;
 use chrono::TimeDelta;
 use rspotify::{
@@ -23,6 +24,7 @@ use rspotify::{
   prelude::*,
   AuthCodeSpotify,
 };
+use serde::Deserialize;
 use std::{
   sync::Arc,
   time::{Duration, Instant},
@@ -90,6 +92,7 @@ pub enum IoEvent {
   GetCurrentShowEpisodes(ShowId<'static>, Option<u32>),
   AddItemToQueue(PlayableId<'static>),
   IncrementGlobalSongCount,
+  GetLyrics(String, String, f64),
 }
 
 #[derive(Clone)]
@@ -99,6 +102,13 @@ pub struct Network {
   small_search_limit: u32,
   pub client_config: ClientConfig,
   pub app: Arc<Mutex<App>>,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(non_snake_case)]
+struct LrcResponse {
+  syncedLyrics: Option<String>,
+  plainLyrics: Option<String>,
 }
 
 impl Network {
@@ -274,6 +284,9 @@ impl Network {
       IoEvent::IncrementGlobalSongCount => {
         self.increment_global_song_count().await;
       }
+      IoEvent::GetLyrics(track, artist, duration) => {
+        self.get_lyrics(track, artist, duration).await;
+      }
     };
 
     let mut app = self.app.lock().await;
@@ -335,10 +348,18 @@ impl Network {
                 let track_id_str = track_id.id().to_string();
 
                 // Check if this is a new track and telemetry is enabled
-                if app.last_track_id.as_ref() != Some(&track_id_str)
-                  && app.user_config.behavior.enable_global_song_count
-                {
-                  app.dispatch(IoEvent::IncrementGlobalSongCount);
+                if app.last_track_id.as_ref() != Some(&track_id_str) {
+                  if app.user_config.behavior.enable_global_song_count {
+                    app.dispatch(IoEvent::IncrementGlobalSongCount);
+                  }
+
+                  // Trigger lyrics fetch
+                  let duration_secs = track.duration.num_seconds() as f64;
+                  app.dispatch(IoEvent::GetLyrics(
+                    track.name.clone(),
+                    create_artist_string(&track.artists),
+                    duration_secs,
+                  ));
                 }
 
                 app.last_track_id = Some(track_id_str);
@@ -1676,5 +1697,94 @@ impl Network {
   #[cfg(not(feature = "telemetry"))]
   async fn increment_global_song_count(&self) {
     // No-op when telemetry feature is disabled
+  }
+
+  async fn get_lyrics(&mut self, track_name: String, artist_name: String, duration_sec: f64) {
+    use crate::app::LyricsStatus;
+
+    // Set loading state
+    {
+      let mut app = self.app.lock().await;
+      app.lyrics_status = LyricsStatus::Loading;
+      app.lyrics = None;
+    }
+
+    let client = reqwest::Client::new();
+    let params = [
+      ("artist_name", artist_name),
+      ("track_name", track_name),
+      ("duration", duration_sec.to_string()),
+    ];
+
+    match client
+      .get("https://lrclib.net/api/get")
+      .query(&params)
+      .send()
+      .await
+    {
+      Ok(resp) => {
+        if let Ok(lrc_resp) = resp.json::<LrcResponse>().await {
+          if let Some(synced) = lrc_resp.syncedLyrics {
+            let parsed = self.parse_lrc(&synced);
+            let mut app = self.app.lock().await;
+            app.lyrics = Some(parsed);
+            app.lyrics_status = LyricsStatus::Found;
+          } else if let Some(plain) = lrc_resp.plainLyrics {
+            let mut app = self.app.lock().await;
+            app.lyrics = Some(vec![(0, plain)]);
+            app.lyrics_status = LyricsStatus::Found;
+          } else {
+            let mut app = self.app.lock().await;
+            app.lyrics_status = LyricsStatus::NotFound;
+          }
+        } else {
+          let mut app = self.app.lock().await;
+          app.lyrics_status = LyricsStatus::NotFound;
+        }
+      }
+      Err(_) => {
+        let mut app = self.app.lock().await;
+        app.lyrics_status = LyricsStatus::NotFound;
+      }
+    }
+  }
+
+  fn parse_lrc(&self, lrc: &str) -> Vec<(u128, String)> {
+    let mut lyrics = Vec::new();
+    for line in lrc.lines() {
+      if let Some(idx) = line.find(']') {
+        if line.starts_with('[') && idx < line.len() {
+          let time_part = &line[1..idx];
+          let text_part = line[idx + 1..].trim().to_string();
+          if let Some(time) = self.parse_time_ms(time_part) {
+            lyrics.push((time, text_part));
+          }
+        }
+      }
+    }
+    lyrics
+  }
+
+  fn parse_time_ms(&self, time_str: &str) -> Option<u128> {
+    // mm:ss.xx
+    let parts: Vec<&str> = time_str.split(':').collect();
+    if parts.len() != 2 {
+      return None;
+    }
+    let min: u128 = parts[0].parse().ok()?;
+
+    let sec_parts: Vec<&str> = parts[1].split('.').collect();
+    if sec_parts.len() != 2 {
+      return None;
+    }
+
+    let sec: u128 = sec_parts[0].parse().ok()?;
+    let ms_part = sec_parts[1];
+    let ms: u128 = ms_part.parse().ok()?;
+
+    // Detect if ms is 2 digits (centiseconds) or 3 digits
+    let ms_val = if ms_part.len() == 2 { ms * 10 } else { ms };
+
+    Some(min * 60000 + sec * 1000 + ms_val)
   }
 }
