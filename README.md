@@ -97,7 +97,7 @@ For audio visualization on Linux, you need PipeWire installed:
 sudo apt-get install libpipewire-0.3-0
 
 # Arch Linux (already included with pipewire)
-sudo pacman -S pipewire
+sudo pacman -S pipewirelibssl-dev pkg-config
 
 # Fedora (already included with pipewire)
 sudo dnf install pipewire
@@ -112,6 +112,11 @@ If you have Rust installed:
 ```bash
 cargo install spotatui
 ```
+
+> **Note (Linux/WSL):** If you get a `linker 'cc' not found` error, install build tools first:
+> ```bash
+> sudo apt install libssl-dev pkg-config
+> ```
 
 ### Building from Source
 
