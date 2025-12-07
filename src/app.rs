@@ -8,7 +8,6 @@ use rspotify::{
   model::{
     album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
     artist::FullArtist,
-    audio::AudioAnalysis,
     context::CurrentPlaybackContext,
     device::DevicePayload,
     idtypes::{ArtistId, ShowId, TrackId},
@@ -258,10 +257,18 @@ pub struct Artist {
   pub artist_selected_block: ArtistBlock,
 }
 
+/// Spectrum data for local audio visualization
+#[derive(Clone, Default)]
+pub struct SpectrumData {
+  pub bands: [f32; 12],
+  pub peak: f32,
+}
+
 pub struct App {
   pub instant_since_last_current_playback_poll: Instant,
   navigation_stack: Vec<Route>,
-  pub audio_analysis: Option<AudioAnalysis>,
+  pub spectrum_data: Option<SpectrumData>,
+  pub audio_capture_active: bool,
   pub home_scroll: u16,
   pub user_config: UserConfig,
   pub artists: Vec<FullArtist>,
@@ -335,7 +342,8 @@ pub struct App {
 impl Default for App {
   fn default() -> Self {
     App {
-      audio_analysis: None,
+      spectrum_data: None,
+      audio_capture_active: false,
       album_table_context: AlbumTableContext::Full,
       album_list_index: 0,
       made_for_you_index: 0,
@@ -1195,27 +1203,14 @@ impl App {
     ));
   }
 
+  /// Toggle the audio analysis visualization view
+  /// This now uses local FFT analysis instead of the deprecated Spotify API
   pub fn get_audio_analysis(&mut self) {
-    if let Some(CurrentPlaybackContext {
-      item: Some(item), ..
-    }) = &self.current_playback_context
-    {
-      match item {
-        PlayableItem::Track(track) => {
-          if self.get_current_route().id != RouteId::Analysis {
-            if let Some(track_id) = &track.id {
-              self.dispatch(IoEvent::GetAudioAnalysis(track_id.clone().into_static()));
-              self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
-            }
-          }
-        }
-        PlayableItem::Episode(_episode) => {
-          // No audio analysis available for podcast uris, so just default to the empty analysis
-          // view to avoid a 400 error code
-          self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
-        }
-      }
+    if self.get_current_route().id != RouteId::Analysis {
+      // Enter visualization mode
+      self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
     }
+    // Spectrum data will be updated by the audio capture system on each tick
   }
 
   pub fn repeat(&mut self) {

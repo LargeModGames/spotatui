@@ -1,4 +1,6 @@
 mod app;
+#[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+mod audio;
 mod banner;
 mod cli;
 mod config;
@@ -461,6 +463,10 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
 
   let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
 
+  // Audio capture is initialized lazily - only when entering visualization view
+  #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+  let mut audio_capture: Option<audio::AudioCaptureManager> = None;
+
   // Check for updates in background (non-blocking)
   let app_clone = Arc::clone(app);
   tokio::spawn(async move {
@@ -590,6 +596,38 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
       }
       event::Event::Tick => {
         app.update_on_tick();
+
+        // Lazy audio capture: only capture when in Analysis view
+        #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+        {
+          let in_analysis_view = app.get_current_route().active_block == ActiveBlock::Analysis;
+
+          if in_analysis_view {
+            // Start capture if not already running
+            if audio_capture.is_none() {
+              audio_capture = audio::AudioCaptureManager::new();
+              app.audio_capture_active = audio_capture.is_some();
+            }
+
+            // Update spectrum data
+            if let Some(ref capture) = audio_capture {
+              if let Some(spectrum) = capture.get_spectrum() {
+                app.spectrum_data = Some(app::SpectrumData {
+                  bands: spectrum.bands,
+                  peak: spectrum.peak,
+                });
+                app.audio_capture_active = capture.is_active();
+              }
+            }
+          } else {
+            // Stop capture when leaving Analysis view
+            if audio_capture.is_some() {
+              audio_capture = None;
+              app.audio_capture_active = false;
+              app.spectrum_data = None;
+            }
+          }
+        }
       }
     }
 

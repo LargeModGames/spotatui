@@ -70,7 +70,6 @@ pub enum IoEvent {
   UserFollowPlaylist(UserId<'static>, PlaylistId<'static>, Option<bool>),
   UserUnfollowPlaylist(UserId<'static>, PlaylistId<'static>),
   MadeForYouSearchAndAdd(String, Option<Country>),
-  GetAudioAnalysis(TrackId<'static>),
   GetUser,
   ToggleSaveTrack(PlayableId<'static>),
   GetRecommendationsForTrackId(TrackId<'static>, Option<Country>),
@@ -212,9 +211,6 @@ impl Network {
       }
       IoEvent::MadeForYouSearchAndAdd(search_term, country) => {
         self.made_for_you_search_and_add(search_term, country).await;
-      }
-      IoEvent::GetAudioAnalysis(uri) => {
-        self.get_audio_analysis(uri).await;
       }
       IoEvent::ToggleSaveTrack(track_id) => {
         self.toggle_save_track(track_id).await;
@@ -1516,22 +1512,6 @@ impl Network {
         self.handle_error(anyhow!(e)).await;
       }
       _ => {}
-    }
-  }
-
-  #[allow(deprecated)]
-  async fn get_audio_analysis(&mut self, track_id: TrackId<'_>) {
-    match self.spotify.track_analysis(track_id).await {
-      Ok(result) => {
-        let mut app = self.app.lock().await;
-        app.audio_analysis = Some(result);
-      }
-      Err(e) => {
-        self.handle_error(anyhow!(
-          "Audio Analysis is no longer available. Spotify deprecated this endpoint in November 2024. \
-          This feature only works for apps created before that date. Error: {}", e
-        )).await;
-      }
     }
   }
 
