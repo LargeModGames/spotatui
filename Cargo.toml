@@ -1,5 +1,5 @@
 [package]
-name = "Spotatui"
+name = "spotatui"
 description = "A Spotify client for the terminal written in Rust, powered by Ratatui"
 homepage = "https://github.com/LargeModGames/spotatui"
 documentation = "https://github.com/LargeModGames/spotatui"
