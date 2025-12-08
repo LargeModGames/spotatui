@@ -68,6 +68,10 @@ jobs:
 
       - name: Build release binary
         run: |
+          # For musl cross-compilation, allow pkg-config to work
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            export PKG_CONFIG_ALLOW_CROSS=1
+          fi
           if [ -z "${{ matrix.audio_features }}" ]; then
             cargo build --release --target ${{ matrix.target }} --no-default-features --features telemetry,streaming
           else
