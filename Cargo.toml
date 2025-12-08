@@ -42,9 +42,12 @@ librespot-core = { version = "0.8", optional = true }
 librespot-connect = { version = "0.8", optional = true }
 librespot-oauth = { version = "0.8", optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
 pipewire = { version = "0.9", optional = true }
 librespot-playback = { version = "0.8", optional = true, default-features = false, features = ["alsa-backend"] }
+
+[target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
+librespot-playback = { version = "0.8", optional = true, default-features = false, features = ["rodio-backend"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 librespot-playback = { version = "0.8", optional = true, default-features = false, features = ["rodio-backend"] }
