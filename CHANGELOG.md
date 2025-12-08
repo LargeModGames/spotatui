@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.33.3] - 2025-12-08
+
+### Fixed
+
+- **Critical: UI Freeze on Rapid Pause/Play**: Fixed terminal freeze that occurred when rapidly pressing pause/play
+  - Root cause: `handle_player_events` used blocking `lock().await` for every player event, creating a lock convoy with the main UI loop
+  - Fix: Changed to non-blocking `try_lock()` - if lock is busy, skip the update (UI catches up on next tick)
+- **Playbar Not Updating**: Fixed playbar only updating every 5 seconds instead of in real-time
+  - Root cause: `get_current_playback()` incorrectly overwrote API's `is_playing` state with stale local state
+  - Fix: `is_playing` is no longer preserved locally - it now comes from API responses and player events
+
 ## [0.33.2] - 2025-12-08
 
 ### Fixed

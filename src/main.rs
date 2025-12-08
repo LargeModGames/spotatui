@@ -531,14 +531,16 @@ async fn handle_player_events(
   use player::PlayerEvent;
 
   while let Some(event) = event_rx.recv().await {
+    // Use try_lock() to avoid blocking when the UI thread is busy
+    // If we can't get the lock, skip this update - the UI will catch up on the next tick
     match event {
       PlayerEvent::Playing {
         play_request_id: _,
         track_id,
         position_ms,
       } => {
-        let should_fetch_track = {
-          let mut app = app.lock().await;
+        // Try to get lock - skip if busy
+        if let Ok(mut app) = app.try_lock() {
           app.song_progress_ms = position_ms as u128;
 
           // Update is_playing state
@@ -550,19 +552,12 @@ async fn handle_player_events(
           // Reset the poll timer so we don't immediately overwrite with stale API data
           app.instant_since_last_current_playback_poll = std::time::Instant::now();
 
-          // Check if track changed
+          // Check if track changed and dispatch fetch
           let track_id_str = track_id.to_string();
-          let should_fetch = app.last_track_id.as_ref() != Some(&track_id_str);
-          if should_fetch {
+          if app.last_track_id.as_ref() != Some(&track_id_str) {
             app.last_track_id = Some(track_id_str);
+            app.dispatch(IoEvent::GetCurrentPlayback);
           }
-          should_fetch
-        }; // Lock released here
-
-        // Dispatch outside the lock to avoid deadlock
-        if should_fetch_track {
-          let mut app = app.lock().await;
-          app.dispatch(IoEvent::GetCurrentPlayback);
         }
       }
       PlayerEvent::Paused {
@@ -570,67 +565,65 @@ async fn handle_player_events(
         track_id: _,
         position_ms,
       } => {
-        let mut app = app.lock().await;
-        app.song_progress_ms = position_ms as u128;
+        if let Ok(mut app) = app.try_lock() {
+          app.song_progress_ms = position_ms as u128;
 
-        if let Some(ref mut ctx) = app.current_playback_context {
-          ctx.is_playing = false;
-          ctx.progress = Some(TimeDelta::milliseconds(position_ms as i64));
+          if let Some(ref mut ctx) = app.current_playback_context {
+            ctx.is_playing = false;
+            ctx.progress = Some(TimeDelta::milliseconds(position_ms as i64));
+          }
+          app.instant_since_last_current_playback_poll = std::time::Instant::now();
         }
-        app.instant_since_last_current_playback_poll = std::time::Instant::now();
       }
       PlayerEvent::Seeked {
         play_request_id: _,
         track_id: _,
         position_ms,
       } => {
-        let mut app = app.lock().await;
-        app.song_progress_ms = position_ms as u128;
-        app.seek_ms = None;
+        if let Ok(mut app) = app.try_lock() {
+          app.song_progress_ms = position_ms as u128;
+          app.seek_ms = None;
 
-        if let Some(ref mut ctx) = app.current_playback_context {
-          ctx.progress = Some(TimeDelta::milliseconds(position_ms as i64));
+          if let Some(ref mut ctx) = app.current_playback_context {
+            ctx.progress = Some(TimeDelta::milliseconds(position_ms as i64));
+          }
+          app.instant_since_last_current_playback_poll = std::time::Instant::now();
         }
-        app.instant_since_last_current_playback_poll = std::time::Instant::now();
       }
       PlayerEvent::TrackChanged { audio_item } => {
         // Track metadata changed - update UI
-        {
-          let mut app = app.lock().await;
+        if let Ok(mut app) = app.try_lock() {
           app.song_progress_ms = 0;
           app.last_track_id = Some(audio_item.track_id.to_string());
-        } // Lock released
-
-        // Dispatch outside the lock
-        let mut app = app.lock().await;
-        app.dispatch(IoEvent::GetCurrentPlayback);
+          app.dispatch(IoEvent::GetCurrentPlayback);
+        }
       }
       PlayerEvent::Stopped { .. } | PlayerEvent::EndOfTrack { .. } => {
         // When a track ends naturally, pre-fetch the next track's info immediately
-        // This reduces the visible lag in the playbar compared to waiting for the Playing event
-        {
-          let mut app = app.lock().await;
+        if let Ok(mut app) = app.try_lock() {
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
           }
           app.song_progress_ms = 0;
           // Clear the last track ID so the next Playing event will trigger a full refresh
           app.last_track_id = None;
-        } // Lock released
+        }
 
         // Small delay to let Spotify's backend transition to the next track
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        // Dispatch outside the lock to fetch next track info
-        let mut app = app.lock().await;
-        app.dispatch(IoEvent::GetCurrentPlayback);
+        // Try to dispatch - skip if busy
+        if let Ok(mut app) = app.try_lock() {
+          app.dispatch(IoEvent::GetCurrentPlayback);
+        }
       }
       PlayerEvent::VolumeChanged { volume } => {
-        let mut app = app.lock().await;
-        // Convert from 0-65535 to 0-100
-        let volume_percent = ((volume as f64 / 65535.0) * 100.0).round() as u32;
-        if let Some(ref mut ctx) = app.current_playback_context {
-          ctx.device.volume_percent = Some(volume_percent);
+        if let Ok(mut app) = app.try_lock() {
+          // Convert from 0-65535 to 0-100
+          let volume_percent = ((volume as f64 / 65535.0) * 100.0).round() as u32;
+          if let Some(ref mut ctx) = app.current_playback_context {
+            ctx.device.volume_percent = Some(volume_percent);
+          }
         }
       }
       _ => {
