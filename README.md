@@ -59,6 +59,7 @@ We respect your privacy. This is purely a fun community metric with zero trackin
     - [Setup](#setup)
     - [How It Works](#how-it-works)
     - [Notes](#notes)
+    - [MPRIS D-Bus Integration (Linux)](#mpris-d-bus-integration-linux)
 - [Configuration](#configuration)
   - [In-App Settings](#in-app-settings)
     - [Settings Categories](#settings-categories)
@@ -262,6 +263,30 @@ The native streaming feature uses a separate authentication flow. On first run:
 - Native streaming is **enabled by default** when built with the `streaming` feature
 - Premium account is required for playback
 - The streaming authentication uses a different client than the main app's API controls
+
+### MPRIS D-Bus Integration (Linux)
+
+When using native streaming on Linux, spotatui automatically registers with the [MPRIS D-Bus interface](https://specifications.freedesktop.org/mpris-spec/latest/), enabling:
+
+- **Media key support** - Play/pause, next, previous via keyboard media keys
+- **Desktop integration** - Track info appears in GNOME/KDE media widgets
+- **playerctl compatibility** - Control spotatui from the command line:
+
+```bash
+# Check available players
+playerctl -l
+# Should show: spotatui
+
+# Control playback
+playerctl -p spotatui play-pause
+playerctl -p spotatui next
+playerctl -p spotatui previous
+
+# View current track metadata
+playerctl -p spotatui metadata
+```
+
+MPRIS is enabled by default on Linux builds with native streaming.
 
 # Configuration
 
