@@ -22,7 +22,7 @@ jobs:
             artifact_prefix: linux-x86_64 # most Linux distros
             binary_postfix: ""
             audio_features: "audio-viz"
-          - os: macos-12 # Intel runner for x86_64 (last available Intel runner)
+          - os: macos-15-intel # Intel runner for x86_64 (available until Aug 2027)
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
             binary_postfix: ""
