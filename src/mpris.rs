@@ -28,16 +28,16 @@ pub enum MprisEvent {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // SetPosition kept for future use
 pub enum MprisCommand {
-  SetMetadata {
+  Metadata {
     title: String,
     artists: Vec<String>,
     album: String,
     duration_ms: u32,
   },
-  SetPlaybackStatus(bool), // true = playing, false = paused
-  SetPosition(u64),        // position in milliseconds (for future use)
-  SetVolume(u8),           // 0-100
-  SetStopped,
+  PlaybackStatus(bool), // true = playing, false = paused
+  Position(u64),        // position in milliseconds (for future use)
+  Volume(u8),           // 0-100
+  Stopped,
 }
 
 /// Manager for the MPRIS D-Bus server
@@ -131,7 +131,7 @@ impl MprisManager {
         // Handle commands from the main application
         while let Some(cmd) = command_rx.recv().await {
           match cmd {
-            MprisCommand::SetMetadata {
+            MprisCommand::Metadata {
               title,
               artists,
               album,
@@ -148,7 +148,7 @@ impl MprisManager {
                 eprintln!("MPRIS: Failed to set metadata: {}", e);
               }
             }
-            MprisCommand::SetPlaybackStatus(is_playing) => {
+            MprisCommand::PlaybackStatus(is_playing) => {
               let status = if is_playing {
                 PlaybackStatus::Playing
               } else {
@@ -158,16 +158,16 @@ impl MprisManager {
                 eprintln!("MPRIS: Failed to set playback status: {}", e);
               }
             }
-            MprisCommand::SetPosition(position_ms) => {
+            MprisCommand::Position(position_ms) => {
               player.set_position(Time::from_millis(position_ms as i64));
             }
-            MprisCommand::SetVolume(volume_percent) => {
+            MprisCommand::Volume(volume_percent) => {
               let volume = (volume_percent as f64) / 100.0;
               if let Err(e) = player.set_volume(volume).await {
                 eprintln!("MPRIS: Failed to set volume: {}", e);
               }
             }
-            MprisCommand::SetStopped => {
+            MprisCommand::Stopped => {
               if let Err(e) = player.set_playback_status(PlaybackStatus::Stopped).await {
                 eprintln!("MPRIS: Failed to set stopped status: {}", e);
               }
@@ -192,7 +192,7 @@ impl MprisManager {
 
   /// Update track metadata
   pub fn set_metadata(&self, title: &str, artists: &[String], album: &str, duration_ms: u32) {
-    let _ = self.command_tx.send(MprisCommand::SetMetadata {
+    let _ = self.command_tx.send(MprisCommand::Metadata {
       title: title.to_string(),
       artists: artists.to_vec(),
       album: album.to_string(),
@@ -204,24 +204,22 @@ impl MprisManager {
   pub fn set_playback_status(&self, is_playing: bool) {
     let _ = self
       .command_tx
-      .send(MprisCommand::SetPlaybackStatus(is_playing));
+      .send(MprisCommand::PlaybackStatus(is_playing));
   }
 
   /// Update playback position
   #[allow(dead_code)] // Kept for future use
   pub fn set_position(&self, position_ms: u64) {
-    let _ = self.command_tx.send(MprisCommand::SetPosition(position_ms));
+    let _ = self.command_tx.send(MprisCommand::Position(position_ms));
   }
 
   /// Update volume (0-100)
   pub fn set_volume(&self, volume_percent: u8) {
-    let _ = self
-      .command_tx
-      .send(MprisCommand::SetVolume(volume_percent));
+    let _ = self.command_tx.send(MprisCommand::Volume(volume_percent));
   }
 
   /// Mark playback as stopped
   pub fn set_stopped(&self) {
-    let _ = self.command_tx.send(MprisCommand::SetStopped);
+    let _ = self.command_tx.send(MprisCommand::Stopped);
   }
 }
