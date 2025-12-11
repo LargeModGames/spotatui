@@ -33,10 +33,14 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --no-default-features --features telemetry
+          args: --locked
 
   test:
     name: Test Suite
@@ -52,12 +56,14 @@ jobs:
           profile: minimal
           override: true
       # These dependencies are required for `clipboard`
-      - run: sudo apt-get install -y -qq libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev
       - uses: Swatinem/rust-cache@v1
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features telemetry
+          args: --locked
 
   fmt:
     name: Rustfmt
@@ -91,8 +97,12 @@ jobs:
           profile: minimal
           override: true
           components: clippy
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev
       - uses: Swatinem/rust-cache@v1
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --no-default-features --features telemetry -- -D warnings
+          args: --locked -- -D warnings
