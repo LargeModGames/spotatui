@@ -119,7 +119,7 @@ impl AudioCaptureManager {
         return Some(device);
       }
 
-      return None;
+      None
     }
 
     #[cfg(target_os = "macos")]
