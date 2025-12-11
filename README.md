@@ -61,6 +61,7 @@ We respect your privacy. This is purely a fun community metric with zero trackin
     - [How It Works](#how-it-works)
     - [Notes](#notes)
     - [MPRIS D-Bus Integration (Linux)](#mpris-d-bus-integration-linux)
+    - [macOS Now Playing Integration](#macos-now-playing-integration)
 - [Configuration](#configuration)
   - [In-App Settings](#in-app-settings)
     - [Settings Categories](#settings-categories)
@@ -518,16 +519,17 @@ After that there is not much to it.
    ```bash
    # Debian/Ubuntu
    sudo apt-get install libpipewire-0.3-dev libspa-0.2-dev
-   
+
    # Arch Linux
    sudo pacman -S pipewire
-   
+
    # Fedora
    sudo dnf install pipewire-devel
    ```
 1. Clone or fork this repo and `cd` to it
 1. And then `cargo run`
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines.
 ### Windows Subsystem for Linux
 
 You might get a linking error. If so, you'll probably need to install additional dependencies required by the clipboard package
