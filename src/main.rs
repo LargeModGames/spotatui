@@ -6,6 +6,8 @@ mod cli;
 mod config;
 mod event;
 mod handlers;
+#[cfg(all(feature = "macos-media", target_os = "macos"))]
+mod macos_media;
 #[cfg(feature = "mpris")]
 mod mpris;
 mod network;
@@ -505,6 +507,8 @@ of the app. Beware that this comes at a CPU cost!",
     let shared_is_playing_for_events = Arc::clone(&shared_is_playing);
     #[cfg(feature = "mpris")]
     let shared_is_playing_for_mpris = Arc::clone(&shared_is_playing);
+    #[cfg(all(feature = "macos-media", target_os = "macos"))]
+    let shared_is_playing_for_macos = Arc::clone(&shared_is_playing);
 
     // Initialize MPRIS D-Bus integration for desktop media control
     // This registers spotatui as a controllable media player on the session bus
@@ -527,6 +531,28 @@ of the app. Beware that this comes at a CPU cost!",
       None
     };
 
+    // Initialize macOS Now Playing integration for media key control
+    // This registers with MPRemoteCommandCenter for media key events
+    #[cfg(all(feature = "macos-media", target_os = "macos"))]
+    let macos_media_manager: Option<Arc<macos_media::MacMediaManager>> =
+      if streaming_player.is_some() {
+        match macos_media::MacMediaManager::new() {
+          Ok(mgr) => {
+            println!("macOS Now Playing interface registered - media keys enabled");
+            Some(Arc::new(mgr))
+          }
+          Err(e) => {
+            println!(
+              "Failed to initialize macOS media control: {} - media keys disabled",
+              e
+            );
+            None
+          }
+        }
+      } else {
+        None
+      };
+
     // Spawn MPRIS event handler to process external control requests (media keys, playerctl)
     #[cfg(feature = "mpris")]
     if let Some(ref mpris) = mpris_manager {
@@ -543,9 +569,32 @@ of the app. Beware that this comes at a CPU cost!",
       }
     }
 
+    // Spawn macOS media event handler to process external control requests (media keys, Control Center)
+    #[cfg(all(feature = "macos-media", target_os = "macos"))]
+    if let Some(ref macos_media) = macos_media_manager {
+      if let Some(event_rx) = macos_media.take_event_rx() {
+        let streaming_player_for_macos = streaming_player.clone();
+        tokio::spawn(async move {
+          handle_macos_media_events(
+            event_rx,
+            streaming_player_for_macos,
+            shared_is_playing_for_macos,
+          )
+          .await;
+        });
+      }
+    }
+
     // Clone MPRIS manager for player event handler
     #[cfg(feature = "mpris")]
     let mpris_for_events = mpris_manager.clone();
+
+    // Clone macOS media manager for player event handler
+    // Note: Full Now Playing metadata updates would require refactoring handle_player_events
+    // to accept both MPRIS and macOS managers. For now, media key control works without it.
+    #[cfg(all(feature = "macos-media", target_os = "macos"))]
+    #[allow(unused_variables)]
+    let macos_media_for_events = macos_media_manager.clone();
 
     // Spawn player event listener (updates app state from native player events)
     #[cfg(feature = "streaming")]
@@ -1006,6 +1055,55 @@ async fn handle_mpris_events(
         // Since we don't have the current position here easily,
         // this is a simplified implementation
         player.seek(offset_ms);
+      }
+    }
+  }
+}
+
+/// Handle macOS media events from external sources (media keys, Control Center, AirPods, etc.)
+/// Routes control requests to the native streaming player
+#[cfg(all(feature = "macos-media", target_os = "macos"))]
+async fn handle_macos_media_events(
+  mut event_rx: tokio::sync::mpsc::UnboundedReceiver<macos_media::MacMediaEvent>,
+  streaming_player: Option<Arc<player::StreamingPlayer>>,
+  shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
+) {
+  use macos_media::MacMediaEvent;
+  use std::sync::atomic::Ordering;
+
+  let Some(player) = streaming_player else {
+    // No streaming player, nothing to control
+    return;
+  };
+
+  while let Some(event) = event_rx.recv().await {
+    match event {
+      MacMediaEvent::PlayPause => {
+        // Toggle based on atomic state (lock-free, always up-to-date)
+        if shared_is_playing.load(Ordering::Relaxed) {
+          player.pause();
+        } else {
+          player.play();
+        }
+      }
+      MacMediaEvent::Play => {
+        player.play();
+      }
+      MacMediaEvent::Pause => {
+        player.pause();
+      }
+      MacMediaEvent::Next => {
+        player.next();
+        // Ensure playback continues after skip
+        player.play();
+      }
+      MacMediaEvent::Previous => {
+        player.prev();
+        // Ensure playback continues after skip
+        player.play();
+      }
+      MacMediaEvent::Stop => {
+        player.stop();
       }
     }
   }
