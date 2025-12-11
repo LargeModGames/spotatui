@@ -474,18 +474,42 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .items
         .iter()
         .map(|item| item.name.to_owned())
-        .collect(),
+        .collect::<Vec<String>>(),
       None => vec![],
     };
-    draw_selectable_list(
-      f,
-      app,
-      albums_playlist_block[1],
-      "Playlists",
-      &playlists,
-      get_search_results_highlight_state(app, SearchResultBlock::PlaylistSearch),
-      app.search_results.selected_playlists_index,
-    );
+
+    if playlists.is_empty() {
+      let warning_text = "Cannot display Spotify created playlists. Try a more specific search to find user-created playlists.";
+      let warning_paragraph = Paragraph::new(warning_text)
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(app.user_config.theme.hint))
+        .block(
+          Block::default()
+            .title(Span::styled(
+              "Playlists",
+              get_color(
+                get_search_results_highlight_state(app, SearchResultBlock::PlaylistSearch),
+                app.user_config.theme,
+              ),
+            ))
+            .borders(Borders::ALL)
+            .border_style(get_color(
+              get_search_results_highlight_state(app, SearchResultBlock::PlaylistSearch),
+              app.user_config.theme,
+            )),
+        );
+      f.render_widget(warning_paragraph, albums_playlist_block[1]);
+    } else {
+      draw_selectable_list(
+        f,
+        app,
+        albums_playlist_block[1],
+        "Playlists",
+        &playlists,
+        get_search_results_highlight_state(app, SearchResultBlock::PlaylistSearch),
+        app.search_results.selected_playlists_index,
+      );
+    }
   }
 
   {
