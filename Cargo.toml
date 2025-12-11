@@ -67,8 +67,15 @@ librespot-playback = { version = "0.8", optional = true, default-features = fals
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = { version = "0.8", optional = true }
 
+# macOS Now Playing / Media Key support
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-media-player = { version = "0.3", optional = true }
+objc2-foundation = { version = "0.3", optional = true }
+objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
+
 [features]
-default = ["telemetry", "streaming", "audio-viz-cpal", "mpris"]
+default = ["telemetry", "streaming", "audio-viz-cpal", "mpris", "macos-media"]
 telemetry = ["reqwest", "reqwest/native-tls"]
 streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata"]
 # Audio backend features
@@ -83,6 +90,7 @@ gstreamer-backend = ["streaming", "librespot-playback/gstreamer-backend"]
 audio-viz = ["realfft", "pipewire"]
 audio-viz-cpal = ["realfft", "cpal"]  # Alternative for Windows/macOS or if pipewire issues
 mpris = ["mpris-server", "streaming"]  # MPRIS D-Bus integration (Linux only, requires streaming)
+macos-media = ["objc2-media-player", "objc2-foundation", "objc2", "block2", "streaming"]  # macOS Now Playing integration
 
 [target.'cfg(target_env = "musl")'.dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }

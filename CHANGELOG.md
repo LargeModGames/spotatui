@@ -34,6 +34,15 @@
 - **Persistent Playback Device**: Saves the last used playback device (for example, `spotatui` or `spotifyd`) and re-selects it automatically on the next startup so playback resumes on the same device.
 
 
+### Added
+
+- **macOS Now Playing Integration**: Native media key support for macOS users
+  - Control spotatui via keyboard media keys (play/pause, next, previous)
+  - Control Center / Touch Bar integration
+  - AirPods and Bluetooth headphone button support
+  - Uses Apple's `MPRemoteCommandCenter` API
+  - Requires native streaming feature (enabled by default on macOS)
+
 ### Fixed
 
 - **macOS SIGSEGV Crash on Startup**: Fixed segmentation fault when launching spotatui on macOS with Bluetooth audio devices connected

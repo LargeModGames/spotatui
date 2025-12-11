@@ -331,6 +331,17 @@ playerctl -p spotatui metadata
 
 MPRIS is enabled by default on Linux builds with native streaming.
 
+### macOS Now Playing Integration
+
+When using native streaming on macOS, spotatui registers with the system's [Now Playing](https://developer.apple.com/documentation/mediaplayer/mpnowplayinginfocenter) interface, enabling:
+
+- **Media key support** - Play/pause, next, previous via keyboard media keys
+- **Control Center integration** - Control playback from macOS Control Center
+- **Touch Bar support** - Media controls on MacBook Pro Touch Bar
+- **AirPods / Headphone controls** - Play/pause and skip via Bluetooth headphone buttons
+
+This feature uses Apple's `MPRemoteCommandCenter` API and is enabled by default on macOS builds with native streaming.
+
 # Configuration
 
 A configuration file is located at `${HOME}/.config/spotatui/config.yml`.
