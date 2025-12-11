@@ -156,9 +156,8 @@ impl AudioAnalyzer {
     }
 
     // Apply smoothing for butter-smooth animation
-    for i in 0..NUM_BANDS {
-      self.spectrum.bands[i] =
-        self.spectrum.bands[i] * SMOOTHING + new_bands[i] * (1.0 - SMOOTHING);
+    for (i, new_band) in new_bands.iter().enumerate() {
+      self.spectrum.bands[i] = self.spectrum.bands[i] * SMOOTHING + *new_band * (1.0 - SMOOTHING);
       // Noise gate: treat very low values as zero
       if self.spectrum.bands[i] < 0.005 {
         self.spectrum.bands[i] = 0.0;
