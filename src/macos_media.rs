@@ -9,13 +9,11 @@
 
 use anyhow::Result;
 use block2::RcBlock;
-use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2_foundation::{NSDictionary, NSNumber, NSString};
 use objc2_media_player::{
-  MPNowPlayingInfoCenter, MPNowPlayingPlaybackState, MPRemoteCommandCenter,
+  MPNowPlayingInfoCenter, MPNowPlayingPlaybackState, MPRemoteCommandCenter, MPRemoteCommandEvent,
   MPRemoteCommandHandlerStatus,
 };
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::mpsc;
@@ -74,9 +72,11 @@ impl MacMediaManager {
 
       // Set up play command handler
       let tx = Arc::clone(&event_tx);
-      let play_handler = RcBlock::new(move |_event: &AnyObject| -> isize {
+      let play_handler: RcBlock<
+        dyn Fn(NonNull<MPRemoteCommandEvent>) -> MPRemoteCommandHandlerStatus,
+      > = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
         let _ = tx.send(MacMediaEvent::Play);
-        MPRemoteCommandHandlerStatus::Success.0 as isize
+        MPRemoteCommandHandlerStatus::Success
       });
       unsafe {
         command_center
@@ -86,9 +86,11 @@ impl MacMediaManager {
 
       // Set up pause command handler
       let tx = Arc::clone(&event_tx);
-      let pause_handler = RcBlock::new(move |_event: &AnyObject| -> isize {
+      let pause_handler: RcBlock<
+        dyn Fn(NonNull<MPRemoteCommandEvent>) -> MPRemoteCommandHandlerStatus,
+      > = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
         let _ = tx.send(MacMediaEvent::Pause);
-        MPRemoteCommandHandlerStatus::Success.0 as isize
+        MPRemoteCommandHandlerStatus::Success
       });
       unsafe {
         command_center
@@ -98,9 +100,11 @@ impl MacMediaManager {
 
       // Set up toggle play/pause command handler
       let tx = Arc::clone(&event_tx);
-      let toggle_handler = RcBlock::new(move |_event: &AnyObject| -> isize {
+      let toggle_handler: RcBlock<
+        dyn Fn(NonNull<MPRemoteCommandEvent>) -> MPRemoteCommandHandlerStatus,
+      > = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
         let _ = tx.send(MacMediaEvent::PlayPause);
-        MPRemoteCommandHandlerStatus::Success.0 as isize
+        MPRemoteCommandHandlerStatus::Success
       });
       unsafe {
         command_center
@@ -110,9 +114,11 @@ impl MacMediaManager {
 
       // Set up next track command handler
       let tx = Arc::clone(&event_tx);
-      let next_handler = RcBlock::new(move |_event: &AnyObject| -> isize {
+      let next_handler: RcBlock<
+        dyn Fn(NonNull<MPRemoteCommandEvent>) -> MPRemoteCommandHandlerStatus,
+      > = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
         let _ = tx.send(MacMediaEvent::Next);
-        MPRemoteCommandHandlerStatus::Success.0 as isize
+        MPRemoteCommandHandlerStatus::Success
       });
       unsafe {
         command_center
@@ -122,9 +128,11 @@ impl MacMediaManager {
 
       // Set up previous track command handler
       let tx = Arc::clone(&event_tx);
-      let prev_handler = RcBlock::new(move |_event: &AnyObject| -> isize {
+      let prev_handler: RcBlock<
+        dyn Fn(NonNull<MPRemoteCommandEvent>) -> MPRemoteCommandHandlerStatus,
+      > = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
         let _ = tx.send(MacMediaEvent::Previous);
-        MPRemoteCommandHandlerStatus::Success.0 as isize
+        MPRemoteCommandHandlerStatus::Success
       });
       unsafe {
         command_center
@@ -134,9 +142,11 @@ impl MacMediaManager {
 
       // Set up stop command handler
       let tx = Arc::clone(&event_tx);
-      let stop_handler = RcBlock::new(move |_event: &AnyObject| -> isize {
+      let stop_handler: RcBlock<
+        dyn Fn(NonNull<MPRemoteCommandEvent>) -> MPRemoteCommandHandlerStatus,
+      > = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
         let _ = tx.send(MacMediaEvent::Stop);
-        MPRemoteCommandHandlerStatus::Success.0 as isize
+        MPRemoteCommandHandlerStatus::Success
       });
       unsafe {
         command_center
@@ -157,40 +167,14 @@ impl MacMediaManager {
         while let Some(cmd) = command_rx.recv().await {
           match cmd {
             MacMediaCommand::SetMetadata {
-              title,
-              artists,
-              album,
-              duration_ms,
+              title: _,
+              artists: _,
+              album: _,
+              duration_ms: _,
             } => {
-              // Build the now playing info dictionary
-              // Note: This is a simplified implementation - full implementation would use
-              // proper NSMutableDictionary with correct keys
-              let _ = (title, artists, album, duration_ms);
-              unsafe {
-                // Create metadata dictionary with track info
-                let title_key = NSString::from_str("MPMediaItemPropertyTitle");
-                let title_value = NSString::from_str(&title);
-                let artist_key = NSString::from_str("MPMediaItemPropertyArtist");
-                let artist_value = NSString::from_str(&artists.join(", "));
-                let album_key = NSString::from_str("MPMediaItemPropertyAlbumTitle");
-                let album_value = NSString::from_str(&album);
-                let duration_key = NSString::from_str("MPMediaItemPropertyPlaybackDuration");
-                let duration_value = NSNumber::new_f64(duration_ms as f64 / 1000.0);
-
-                let keys: [&NSString; 4] = [&title_key, &artist_key, &album_key, &duration_key];
-                let objects: [&AnyObject; 4] = [
-                  Retained::as_ref(&title_value).as_ref(),
-                  Retained::as_ref(&artist_value).as_ref(),
-                  Retained::as_ref(&album_value).as_ref(),
-                  Retained::as_ref(&duration_value).as_ref(),
-                ];
-
-                let dict = NSDictionary::from_retained_objects(
-                  &keys as &[&NSString],
-                  &objects as &[&AnyObject],
-                );
-                info_center.setNowPlayingInfo(Some(&dict));
-              }
+              // TODO: Update Now Playing info with track metadata
+              // This requires creating an NSDictionary with the proper keys
+              // For now, media key control works without metadata display
             }
             MacMediaCommand::SetPlaybackStatus(is_playing) => unsafe {
               let state = if is_playing {
