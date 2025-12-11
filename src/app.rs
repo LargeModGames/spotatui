@@ -442,6 +442,8 @@ pub struct App {
   pub update_prompt_acknowledged: bool,
   pub lyrics: Option<Vec<(u128, String)>>,
   pub lyrics_status: LyricsStatus,
+  pub global_song_count: Option<u64>,
+  pub global_song_count_failed: bool,
   // Settings screen state
   pub settings_category: SettingsCategory,
   pub settings_items: Vec<SettingItem>,
@@ -548,6 +550,8 @@ impl Default for App {
       update_prompt_acknowledged: false,
       lyrics: None,
       lyrics_status: LyricsStatus::default(),
+      global_song_count: None,
+      global_song_count_failed: false,
       // Settings defaults
       settings_category: SettingsCategory::default(),
       settings_items: Vec::new(),

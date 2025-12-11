@@ -1273,6 +1273,31 @@ fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // Parse changelog with styling
   let changelog_lines = parse_changelog_with_style(&clean_changelog, &app.user_config.theme);
 
+  // Prepend global counter status to the changelog view
+  let mut changelog_lines = changelog_lines;
+  let counter_message = if cfg!(feature = "telemetry") {
+    if app.user_config.behavior.enable_global_song_count {
+      match app.global_song_count {
+        Some(count) => format!("Global songs played with spotatui: {}", count),
+        None if app.global_song_count_failed => {
+          "Global song counter unavailable right now.".to_string()
+        }
+        None => "Loading global song count...".to_string(),
+      }
+    } else {
+      "Global song counter disabled (Settings -> Behavior).".to_string()
+    }
+  } else {
+    "Global song counter unavailable (telemetry disabled in this build).".to_string()
+  };
+
+  let counter_style = Style::default().fg(app.user_config.theme.hint);
+  changelog_lines.lines.insert(
+    0,
+    Line::from(vec![Span::styled(counter_message, counter_style)]),
+  );
+  changelog_lines.lines.insert(1, Line::from(""));
+
   // CHANGELOG
   let bottom_text = Paragraph::new(changelog_lines)
     .block(Block::default())

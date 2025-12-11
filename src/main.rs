@@ -1322,6 +1322,9 @@ async fn start_ui(
       app.dispatch(IoEvent::GetPlaylists);
       app.dispatch(IoEvent::GetUser);
       app.dispatch(IoEvent::GetCurrentPlayback);
+      if app.user_config.behavior.enable_global_song_count {
+        app.dispatch(IoEvent::FetchGlobalSongCount);
+      }
       app.help_docs_size = ui::help::get_help_docs(&app.user_config.keys).len() as u32;
 
       is_first_render = false;

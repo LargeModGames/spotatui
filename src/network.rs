@@ -97,6 +97,7 @@ pub enum IoEvent {
   GetCurrentShowEpisodes(ShowId<'static>, Option<u32>),
   AddItemToQueue(PlayableId<'static>),
   IncrementGlobalSongCount,
+  FetchGlobalSongCount,
   GetLyrics(String, String, f64),
   /// Start playback from the user's saved tracks collection (Liked Songs)
   /// Takes the absolute position in the collection to start from
@@ -125,6 +126,11 @@ pub struct Network {
 struct LrcResponse {
   syncedLyrics: Option<String>,
   plainLyrics: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GlobalSongCountResponse {
+  count: u64,
 }
 
 impl Network {
@@ -329,6 +335,9 @@ impl Network {
       }
       IoEvent::IncrementGlobalSongCount => {
         self.increment_global_song_count().await;
+      }
+      IoEvent::FetchGlobalSongCount => {
+        self.fetch_global_song_count().await;
       }
       IoEvent::GetLyrics(track, artist, duration) => {
         self.get_lyrics(track, artist, duration).await;
@@ -2282,21 +2291,66 @@ impl Network {
 
   #[cfg(feature = "telemetry")]
   async fn increment_global_song_count(&self) {
+    self.update_global_song_count(reqwest::Method::POST).await;
+  }
+
+  #[cfg(feature = "telemetry")]
+  async fn fetch_global_song_count(&self) {
+    self.update_global_song_count(reqwest::Method::GET).await;
+  }
+
+  #[cfg(feature = "telemetry")]
+  async fn update_global_song_count(&self, method: reqwest::Method) {
     const TELEMETRY_ENDPOINT: &str = "https://spotatui-counter.spotatui.workers.dev";
 
-    // Fire-and-forget telemetry request (no PII, anonymous increment)
-    tokio::spawn(async {
-      if let Ok(client) = reqwest::Client::builder()
+    let app = Arc::clone(&self.app);
+
+    // Fire-and-forget to avoid blocking other network events
+    tokio::spawn(async move {
+      let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
       {
-        let _ = client.post(TELEMETRY_ENDPOINT).send().await;
+        Ok(client) => client,
+        Err(_) => {
+          let mut app = app.lock().await;
+          app.global_song_count_failed = true;
+          return;
+        }
+      };
+
+      let response = client
+        .request(method, TELEMETRY_ENDPOINT)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await;
+
+      let parsed_response = match response {
+        Ok(resp) => resp.json::<GlobalSongCountResponse>().await,
+        Err(e) => Err(e),
+      };
+
+      match parsed_response {
+        Ok(data) => {
+          let mut app = app.lock().await;
+          app.global_song_count = Some(data.count);
+          app.global_song_count_failed = false;
+        }
+        Err(_) => {
+          let mut app = app.lock().await;
+          app.global_song_count_failed = true;
+        }
       }
     });
   }
 
   #[cfg(not(feature = "telemetry"))]
   async fn increment_global_song_count(&self) {
+    // No-op when telemetry feature is disabled
+  }
+
+  #[cfg(not(feature = "telemetry"))]
+  async fn fetch_global_song_count(&self) {
     // No-op when telemetry feature is disabled
   }
 
