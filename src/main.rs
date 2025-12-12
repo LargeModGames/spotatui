@@ -1047,56 +1047,6 @@ async fn handle_mpris_events(
   }
 }
 
-/// Handle macOS media events from external sources (media keys, Control Center, AirPods, etc.)
-/// Routes control requests to the native streaming player
-#[cfg(all(feature = "macos-media", target_os = "macos"))]
-async fn handle_macos_media_events(
-  mut event_rx: tokio::sync::mpsc::UnboundedReceiver<macos_media::MacMediaEvent>,
-  streaming_player: Option<Arc<player::StreamingPlayer>>,
-  shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
-) {
-  use macos_media::MacMediaEvent;
-  use std::sync::atomic::Ordering;
-
-  let Some(player) = streaming_player else {
-    // No streaming player, nothing to control
-    return;
-  };
-
-  while let Some(event) = event_rx.recv().await {
-    match event {
-      MacMediaEvent::PlayPause => {
-        // Toggle based on atomic state (lock-free, always up-to-date)
-        if shared_is_playing.load(Ordering::Relaxed) {
-          player.pause();
-        } else {
-          player.play();
-        }
-      }
-      MacMediaEvent::Play => {
-        player.play();
-      }
-      MacMediaEvent::Pause => {
-        player.pause();
-      }
-      MacMediaEvent::Next => {
-        player.activate();
-        player.next();
-        // Keep Connect + audio state in sync.
-        player.play();
-      }
-      MacMediaEvent::Previous => {
-        player.activate();
-        player.prev();
-        // Keep Connect + audio state in sync.
-        player.play();
-      }
-      MacMediaEvent::Stop => {
-        player.stop();
-      }
-    }
-  }
-}
 async fn start_ui(
   user_config: UserConfig,
   app: &Arc<Mutex<App>>,
