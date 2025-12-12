@@ -810,13 +810,13 @@ async fn handle_player_events(
           app.dispatch(IoEvent::GetCurrentPlayback);
         }
       }
-      PlayerEvent::Stopped { .. } | PlayerEvent::EndOfTrack { .. } => {
+      PlayerEvent::Stopped { .. } => {
         // Update MPRIS status
         if let Some(ref mpris) = mpris_manager {
           mpris.set_stopped();
         }
 
-        // When a track ends naturally, pre-fetch the next track's info immediately
+        // When a track stops, refresh state.
         if let Ok(mut app) = app.try_lock() {
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
@@ -826,12 +826,33 @@ async fn handle_player_events(
           app.last_track_id = None;
         }
 
-        // Small delay to let Spotify's backend transition to the next track
+        // Small delay to let Spotify's backend transition
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Try to dispatch - skip if busy
         if let Ok(mut app) = app.try_lock() {
           app.dispatch(IoEvent::GetCurrentPlayback);
+        }
+      }
+      PlayerEvent::EndOfTrack { track_id, .. } => {
+        // Update MPRIS status
+        if let Some(ref mpris) = mpris_manager {
+          mpris.set_stopped();
+        }
+
+        if let Ok(mut app) = app.try_lock() {
+          if let Some(ref mut ctx) = app.current_playback_context {
+            ctx.is_playing = false;
+          }
+          app.song_progress_ms = 0;
+          app.last_track_id = None;
+        }
+
+        // Ensure we don't land on the next item paused after the track transition.
+        // (librespot Spirc will advance; we may need to resume playback.)
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Ok(mut app) = app.try_lock() {
+          app.dispatch(IoEvent::EnsurePlaybackContinues(track_id.to_string()));
         }
       }
       PlayerEvent::VolumeChanged { volume } => {
@@ -968,7 +989,7 @@ async fn handle_player_events(
           app.dispatch(IoEvent::GetCurrentPlayback);
         }
       }
-      PlayerEvent::Stopped { .. } | PlayerEvent::EndOfTrack { .. } => {
+      PlayerEvent::Stopped { .. } => {
         if let Ok(mut app) = app.try_lock() {
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
@@ -979,6 +1000,19 @@ async fn handle_player_events(
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         if let Ok(mut app) = app.try_lock() {
           app.dispatch(IoEvent::GetCurrentPlayback);
+        }
+      }
+      PlayerEvent::EndOfTrack { track_id, .. } => {
+        if let Ok(mut app) = app.try_lock() {
+          if let Some(ref mut ctx) = app.current_playback_context {
+            ctx.is_playing = false;
+          }
+          app.song_progress_ms = 0;
+          app.last_track_id = None;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Ok(mut app) = app.try_lock() {
+          app.dispatch(IoEvent::EnsurePlaybackContinues(track_id.to_string()));
         }
       }
       PlayerEvent::VolumeChanged { volume } => {
@@ -1036,13 +1070,15 @@ async fn handle_mpris_events(
         player.pause();
       }
       MprisEvent::Next => {
+        player.activate();
         player.next();
-        // Ensure playback continues after skip
+        // Keep Connect + audio state in sync.
         player.play();
       }
       MprisEvent::Previous => {
+        player.activate();
         player.prev();
-        // Ensure playback continues after skip
+        // Keep Connect + audio state in sync.
         player.play();
       }
       MprisEvent::Stop => {
@@ -1093,13 +1129,15 @@ async fn handle_macos_media_events(
         player.pause();
       }
       MacMediaEvent::Next => {
+        player.activate();
         player.next();
-        // Ensure playback continues after skip
+        // Keep Connect + audio state in sync.
         player.play();
       }
       MacMediaEvent::Previous => {
+        player.activate();
         player.prev();
-        // Ensure playback continues after skip
+        // Keep Connect + audio state in sync.
         player.play();
       }
       MacMediaEvent::Stop => {

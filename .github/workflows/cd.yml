@@ -203,6 +203,10 @@ jobs:
           sed -i "s/^pkgver=.*/pkgver=${{ steps.version.outputs.version }}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
           sed -i "s/^sha256sums=.*/sha256sums=('${{ steps.sha256.outputs.sha256 }}')/" PKGBUILD
+          # Ensure AUR builds work with default system linker (avoids LLVM bitcode/LTO linker errors).
+          if ! grep -q "CARGO_PROFILE_RELEASE_LTO=false" PKGBUILD; then
+            sed -i "/^[[:space:]]*build() {[[:space:]]*$/a\\  export CARGO_PROFILE_RELEASE_LTO=false" PKGBUILD
+          fi
 
       - name: Generate .SRCINFO
         working-directory: aur

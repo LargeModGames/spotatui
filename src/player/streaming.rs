@@ -271,11 +271,16 @@ impl StreamingPlayer {
 
   /// Pause playback
   pub fn pause(&self) {
+    // Prefer going through Spirc so Connect state stays consistent.
+    let _ = self.spirc.pause();
     self.player.pause();
   }
 
   /// Resume playback
   pub fn play(&self) {
+    // Prefer going through Spirc so Connect state stays consistent.
+    // Also call the underlying player directly as a best-effort fallback.
+    let _ = self.spirc.play();
     self.player.play();
   }
 

@@ -37,6 +37,9 @@ use crate::player::StreamingPlayer;
 
 pub enum IoEvent {
   GetCurrentPlayback,
+  /// After a track transition (e.g., EndOfTrack), ensure we don't end up paused on the next item.
+  /// The payload is the previous track identifier (either base62 id or a `spotify:track:` URI).
+  EnsurePlaybackContinues(String),
   RefreshAuthentication,
   GetPlaylists,
   GetDevices,
@@ -176,6 +179,9 @@ impl Network {
     match io_event {
       IoEvent::RefreshAuthentication => {
         self.refresh_authentication().await;
+      }
+      IoEvent::EnsurePlaybackContinues(previous_track_id) => {
+        self.ensure_playback_continues(previous_track_id).await;
       }
       IoEvent::GetPlaylists => {
         self.get_current_user_playlists().await;
@@ -1298,7 +1304,16 @@ impl Network {
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active() {
       if let Some(ref player) = self.streaming_player {
+        player.activate();
         player.next();
+        // librespot can occasionally land in a paused state after a skip.
+        // Schedule a short delayed resume to avoid racing the track transition.
+        let player = Arc::clone(player);
+        tokio::spawn(async move {
+          tokio::time::sleep(Duration::from_millis(300)).await;
+          player.activate();
+          player.play();
+        });
         // Reset progress immediately for UI feedback
         let mut app = self.app.lock().await;
         app.song_progress_ms = 0;
@@ -1308,11 +1323,18 @@ impl Network {
     }
 
     // Store the current track ID before skipping
-    let old_track_id = {
+    let (old_track_id, was_playing) = {
       let mut app = self.app.lock().await;
       // Reset progress immediately for instant UI feedback
       app.song_progress_ms = 0;
-      app.last_track_id.clone()
+      (
+        app.last_track_id.clone(),
+        app
+          .current_playback_context
+          .as_ref()
+          .map(|c| c.is_playing)
+          .unwrap_or(false),
+      )
     };
 
     // Fallback to API-based skip
@@ -1337,6 +1359,33 @@ impl Network {
             break;
           }
         }
+
+        // If we were playing before the skip but the next track lands paused, resume.
+        if was_playing {
+          let should_resume = {
+            let app = self.app.lock().await;
+            let track_changed = app.last_track_id != old_track_id;
+            let is_paused = app
+              .current_playback_context
+              .as_ref()
+              .map(|c| !c.is_playing)
+              .unwrap_or(false);
+            track_changed && is_paused
+          };
+
+          if should_resume {
+            if let Err(e) = self
+              .spotify
+              .resume_playback(self.client_config.device_id.as_deref(), None)
+              .await
+            {
+              self.handle_error(anyhow!(e)).await;
+            } else {
+              tokio::time::sleep(Duration::from_millis(250)).await;
+              self.get_current_playback().await;
+            }
+          }
+        }
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -1349,7 +1398,16 @@ impl Network {
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active() {
       if let Some(ref player) = self.streaming_player {
+        player.activate();
         player.prev();
+        // librespot can occasionally land in a paused state after a skip.
+        // Schedule a short delayed resume to avoid racing the track transition.
+        let player = Arc::clone(player);
+        tokio::spawn(async move {
+          tokio::time::sleep(Duration::from_millis(300)).await;
+          player.activate();
+          player.play();
+        });
         // Reset progress immediately for UI feedback
         let mut app = self.app.lock().await;
         app.song_progress_ms = 0;
@@ -1359,11 +1417,18 @@ impl Network {
     }
 
     // Store the current track ID before skipping
-    let old_track_id = {
+    let (old_track_id, was_playing) = {
       let mut app = self.app.lock().await;
       // Reset progress immediately for instant UI feedback
       app.song_progress_ms = 0;
-      app.last_track_id.clone()
+      (
+        app.last_track_id.clone(),
+        app
+          .current_playback_context
+          .as_ref()
+          .map(|c| c.is_playing)
+          .unwrap_or(false),
+      )
     };
 
     // Fallback to API-based skip
@@ -1386,6 +1451,33 @@ impl Network {
           if current_track_id != old_track_id {
             // Successfully got new track metadata
             break;
+          }
+        }
+
+        // If we were playing before the skip but the next track lands paused, resume.
+        if was_playing {
+          let should_resume = {
+            let app = self.app.lock().await;
+            let track_changed = app.last_track_id != old_track_id;
+            let is_paused = app
+              .current_playback_context
+              .as_ref()
+              .map(|c| !c.is_playing)
+              .unwrap_or(false);
+            track_changed && is_paused
+          };
+
+          if should_resume {
+            if let Err(e) = self
+              .spotify
+              .resume_playback(self.client_config.device_id.as_deref(), None)
+              .await
+            {
+              self.handle_error(anyhow!(e)).await;
+            } else {
+              tokio::time::sleep(Duration::from_millis(250)).await;
+              self.get_current_playback().await;
+            }
           }
         }
       }
@@ -1516,6 +1608,44 @@ impl Network {
         self.handle_error(anyhow!(e)).await;
       }
     };
+  }
+
+  async fn ensure_playback_continues(&mut self, previous_track_id: String) {
+    // Let the backend transition to the next item first.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    self.get_current_playback().await;
+
+    let (current_track_id, is_playing) = {
+      let app = self.app.lock().await;
+      let current_track_id = app
+        .current_playback_context
+        .as_ref()
+        .and_then(|ctx| ctx.item.as_ref())
+        .and_then(|item| match item {
+          PlayableItem::Track(track) => track.id.as_ref().map(|id| id.id().to_string()),
+          _ => None,
+        });
+      let is_playing = app
+        .current_playback_context
+        .as_ref()
+        .map(|ctx| ctx.is_playing)
+        .unwrap_or(false);
+      (current_track_id, is_playing)
+    };
+
+    let Some(current_id) = current_track_id else {
+      return;
+    };
+
+    let current_uri = format!("spotify:track:{current_id}");
+    let is_new_track = previous_track_id != current_id && previous_track_id != current_uri;
+    let should_resume = is_new_track && !is_playing;
+
+    if should_resume {
+      self.start_playback(None, None, None).await;
+      // Refresh state so UI/clients converge quickly.
+      self.get_current_playback().await;
+    }
   }
 
   async fn change_volume(&mut self, volume_percent: u8) {
