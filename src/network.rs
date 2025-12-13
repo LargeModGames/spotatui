@@ -165,7 +165,54 @@ impl Network {
     }
   }
 
-  /// Check if we're using native streaming (for control routing)
+  /// Check if we're using native streaming AND it's the active playback device
+  /// This ensures commands are routed correctly when user selects a different device like spotifyd
+  #[cfg(feature = "streaming")]
+  async fn is_native_streaming_active_for_playback(&self) -> bool {
+    let player_connected = self
+      .streaming_player
+      .as_ref()
+      .is_some_and(|p| p.is_connected());
+
+    if !player_connected {
+      return false;
+    }
+
+    // If user has explicitly selected a device (saved device_id), check if it matches native
+    // If device_id is set, it means user made an explicit choice - respect that
+    if let Some(ref device_id) = self.client_config.device_id {
+      // Get native player's device name from streaming player
+      if let Some(ref player) = self.streaming_player {
+        // Native streaming device name is set - if saved device_id doesn't look like it's from native,
+        // use API path. Unfortunately we don't have the device_id of native player easily,
+        // so we rely on context checking below.
+        let _ = (device_id, player); // Silence unused warnings
+      }
+    }
+
+    // Get the native streaming device name
+    let native_device_name = self
+      .streaming_player
+      .as_ref()
+      .map(|p| p.device_name().to_lowercase());
+
+    // Check if the current playback device matches the native streaming device
+    let app = self.app.lock().await;
+    if let Some(ref ctx) = app.current_playback_context {
+      if let Some(ref native_name) = native_device_name {
+        // Compare device names (case-insensitive partial match for flexibility)
+        let current_device_name = ctx.device.name.to_lowercase();
+        return current_device_name.contains(native_name)
+          || native_name.contains(&current_device_name);
+      }
+    }
+
+    // If no context yet, use API path - safer until we know which device is active
+    // This ensures spotifyd works on first button press after startup
+    false
+  }
+
+  /// Quick check if native streaming is connected (doesn't verify active device)
   #[cfg(feature = "streaming")]
   fn is_native_streaming_active(&self) -> bool {
     self
@@ -489,19 +536,50 @@ impl Network {
           c.repeat_state = repeat;
         }
 
-        // On first load with native streaming, override API shuffle with saved preference.
-        // The Web API may report stale server state before librespot catches up.
+        // On first load with native streaming AND native device is active,
+        // override API shuffle with saved preference.
+        // Skip this if using external device like spotifyd
         #[cfg(feature = "streaming")]
-        if self.is_native_streaming_active() && local_state.is_none() {
-          c.shuffle_state = app.user_config.behavior.shuffle_enabled;
-          // Proactively set native shuffle on first load to keep backend in sync
-          if let Some(ref player) = self.streaming_player {
-            player.activate();
-            let _ = player.set_shuffle(app.user_config.behavior.shuffle_enabled);
+        if local_state.is_none() {
+          // Check if the device we just got from API matches native streaming
+          let native_device_name = self
+            .streaming_player
+            .as_ref()
+            .map(|p| p.device_name().to_lowercase());
+          let current_device_name = c.device.name.to_lowercase();
+          let is_native_device = native_device_name
+            .as_ref()
+            .is_some_and(|n| current_device_name.contains(n) || n.contains(&current_device_name));
+
+          if is_native_device {
+            c.shuffle_state = app.user_config.behavior.shuffle_enabled;
+            // Proactively set native shuffle on first load to keep backend in sync
+            if let Some(ref player) = self.streaming_player {
+              let _ = player.set_shuffle(app.user_config.behavior.shuffle_enabled);
+            }
           }
         }
 
         app.current_playback_context = Some(c);
+
+        // Update is_streaming_active based on whether the current device matches native streaming
+        // This ensures correct polling interval (1s for external devices, 5s for native)
+        #[cfg(feature = "streaming")]
+        {
+          let native_device_name = self
+            .streaming_player
+            .as_ref()
+            .map(|p| p.device_name().to_lowercase());
+          if let Some(ref ctx) = app.current_playback_context {
+            if let Some(ref native_name) = native_device_name {
+              let current_device_name = ctx.device.name.to_lowercase();
+              let is_native_device = current_device_name.contains(native_name)
+                || native_name.contains(&current_device_name);
+              app.is_streaming_active = is_native_device;
+            }
+          }
+        }
+
         // Only clear native track info if API data matches the native player's track
         // This prevents stale API responses (returning old track) from clearing
         // the correct native track info we got from TrackChanged event
@@ -1301,8 +1379,9 @@ impl Network {
 
   async fn next_track(&mut self) {
     // Use native streaming player for instant skip (no network delay)
+    // BUT only if native streaming device is the active playback device
     #[cfg(feature = "streaming")]
-    if self.is_native_streaming_active() {
+    if self.is_native_streaming_active_for_playback().await {
       if let Some(ref player) = self.streaming_player {
         player.activate();
         player.next();
