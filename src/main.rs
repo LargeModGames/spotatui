@@ -458,9 +458,8 @@ of the app. Beware that this comes at a CPU cost!",
       {
         Ok(p) => {
           println!("Streaming player initialized as '{}'", p.device_name());
-          // Auto-activate spotatui as the playback device so users don't need to manually select it
-          p.activate();
-          println!("Activated '{}' as playback device", p.device_name());
+          // Note: We don't activate() here - that's handled by AutoSelectStreamingDevice
+          // which respects the user's saved device preference (e.g., spotifyd)
           Some(Arc::new(p))
         }
         Err(e) => {
@@ -583,11 +582,16 @@ of the app. Beware that this comes at a CPU cost!",
       let mut network = Network::new(spotify, client_config, &app);
 
       // Auto-select the streaming device as active playback device
+      // BUT only if user hasn't previously selected a different device (respect saved device_id)
       #[cfg(feature = "streaming")]
       if let Some(device_name) = streaming_device_name {
-        network
-          .handle_network_event(IoEvent::AutoSelectStreamingDevice(device_name))
-          .await;
+        // Only auto-select native streaming if no device_id is saved
+        // This preserves user's previous device choice (e.g., spotifyd)
+        if network.client_config.device_id.is_none() {
+          network
+            .handle_network_event(IoEvent::AutoSelectStreamingDevice(device_name))
+            .await;
+        }
       }
 
       // Apply saved shuffle preference on startup
