@@ -92,6 +92,7 @@ pub enum ThemePreset {
   SolarizedDark,
   Monokai,
   Gruvbox,
+  CatppuccinMocha,
   Custom, // When user has manually customized colors
 }
 
@@ -105,6 +106,7 @@ impl ThemePreset {
       ThemePreset::SolarizedDark,
       ThemePreset::Monokai,
       ThemePreset::Gruvbox,
+      ThemePreset::CatppuccinMocha,
     ]
   }
 
@@ -117,6 +119,7 @@ impl ThemePreset {
       ThemePreset::SolarizedDark => "Solarized Dark",
       ThemePreset::Monokai => "Monokai",
       ThemePreset::Gruvbox => "Gruvbox",
+      ThemePreset::CatppuccinMocha => "Catppuccin Mocha",
       ThemePreset::Custom => "Custom",
     }
   }
@@ -130,6 +133,7 @@ impl ThemePreset {
       "Solarized Dark" => ThemePreset::SolarizedDark,
       "Monokai" => ThemePreset::Monokai,
       "Gruvbox" => ThemePreset::Gruvbox,
+      "Catppuccin Mocha" => ThemePreset::CatppuccinMocha,
       _ => ThemePreset::Custom,
     }
   }
@@ -250,6 +254,25 @@ impl ThemePreset {
         text: Color::Rgb(235, 219, 178),              // fg
         header: Color::Rgb(254, 128, 25),             // Orange
         highlighted_lyrics: Color::Rgb(254, 128, 25), // Orange
+      },
+      ThemePreset::CatppuccinMocha => Theme {
+        analysis_bar: Color::Rgb(166, 227, 161),        // Green
+        analysis_bar_text: Color::Rgb(205, 214, 244),   // Text
+        active: Color::Rgb(180, 190, 254),              // Lavender
+        banner: Color::Rgb(180, 190, 254),              // Lavender
+        error_border: Color::Rgb(243, 139, 168),        // Red
+        error_text: Color::Rgb(243, 139, 168),          // Red
+        hint: Color::Rgb(250, 179, 135),                // Peach
+        hovered: Color::Rgb(137, 180, 250),             // Blue
+        inactive: Color::Rgb(108, 112, 134),            // Overlay 0
+        playbar_background: Color::Rgb(49, 50, 68),     // Surface 0
+        playbar_progress: Color::Rgb(180, 190, 254),    // Lavender
+        playbar_progress_text: Color::Rgb(88, 91, 112), // Surface 2
+        playbar_text: Color::Rgb(186, 194, 222),        // Subtext 1
+        selected: Color::Rgb(180, 190, 254),            // Lavender
+        text: Color::Rgb(205, 214, 244),                // Text
+        header: Color::Rgb(180, 190, 254),              // Lavender
+        highlighted_lyrics: Color::Rgb(180, 190, 254),  // Lavender
       },
       ThemePreset::Spotify => Theme {
         analysis_bar: Color::Rgb(29, 185, 84), // Spotify Green #1DB954
