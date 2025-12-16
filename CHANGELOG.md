@@ -13,6 +13,7 @@
 
 - **ALSA Warnings and Lock Contention**: Fixed ALSA warnings and lock contention issues that could cause freezing when viewing liked songs (thanks @rawcode1337 - PR #18, fixes #17)
 - **External Device Playback Controls**: Fixed play/pause, skip, and volume controls not working when using the native Spotify app as the active playback device (fixes #14)
+- **Silent Crash During Streaming Init**: Panics during Spotify Connect (Spirc) initialization no longer exit silently in release builds, and are handled by falling back to API-based playback control (fixes #15, untested).
 
 ## [0.34.2] - 2025-12-13
 
