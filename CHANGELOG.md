@@ -5,6 +5,7 @@
 ### Added
 
 - **Crash Log on Panic**: When spotatui panics, it now writes a crash log to `~/.config/spotatui/spotatui_panic.log` to help debug hard-to-reproduce issues (set `SPOTATUI_PAUSE_ON_PANIC=1` on Windows to keep the terminal open after a panic).
+- **macOS Now Playing Integration**: Native media key support on macOS via Apple's `MPRemoteCommandCenter` API (requires native streaming).
 - **Streaming Debug Overrides**: Added `SPOTATUI_STREAMING_AUDIO_BACKEND` and `SPOTATUI_STREAMING_AUDIO_DEVICE` environment variables to help debug native streaming audio output issues.
 
 ### Fixed
@@ -32,16 +33,6 @@
 ### Added
 
 - **Persistent Playback Device**: Saves the last used playback device (for example, `spotatui` or `spotifyd`) and re-selects it automatically on the next startup so playback resumes on the same device.
-
-
-### Added
-
-- **macOS Now Playing Integration**: Native media key support for macOS users
-  - Control spotatui via keyboard media keys (play/pause, next, previous)
-  - Control Center / Touch Bar integration
-  - AirPods and Bluetooth headphone button support
-  - Uses Apple's `MPRemoteCommandCenter` API
-  - Requires native streaming feature (enabled by default on macOS)
 
 ### Fixed
 
