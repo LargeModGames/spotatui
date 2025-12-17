@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.34.4] - 2025-12-17
+
+### Added
+
+- **Crash Log on Panic**: When spotatui panics, it now writes a crash log to `~/.config/spotatui/spotatui_panic.log` to help debug hard-to-reproduce issues (set `SPOTATUI_PAUSE_ON_PANIC=1` on Windows to keep the terminal open after a panic).
+- **Streaming Debug Overrides**: Added `SPOTATUI_STREAMING_AUDIO_BACKEND` and `SPOTATUI_STREAMING_AUDIO_DEVICE` environment variables to help debug native streaming audio output issues.
+
+### Fixed
+
+- **Playlist Track Selection with Shuffle**: Fixed selecting a specific track in a playlist sometimes starting playback from the first track and desyncing the shuffle indicator/state.
+- **Spirc Initialization Hangs/Crashes**: Added a startup timeout for native streaming (Spirc) initialization so spotatui can fall back to API-based playback instead of hanging indefinitely (configurable via `SPOTATUI_STREAMING_INIT_TIMEOUT_SECS`).
+
 ## [0.34.3] - 2025-12-16
 
 ### Added

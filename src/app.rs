@@ -454,6 +454,8 @@ pub struct App {
   pub native_track_info: Option<NativeTrackInfo>,
   /// Whether native streaming is active (disables API-based progress calculation)
   pub is_streaming_active: bool,
+  /// Device id for the native streaming device when known
+  pub native_device_id: Option<String>,
   /// Native playback state - updated by player events, used when streaming is active
   /// This is more reliable than current_playback_context.is_playing during native streaming
   pub native_is_playing: Option<bool>,
@@ -560,6 +562,7 @@ impl Default for App {
       settings_edit_buffer: String::new(),
       native_track_info: None,
       is_streaming_active: false,
+      native_device_id: None,
       native_is_playing: None,
     }
   }

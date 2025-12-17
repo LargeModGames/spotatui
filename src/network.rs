@@ -180,21 +180,33 @@ impl Network {
       return false;
     }
 
-    // Get the native streaming device name
-    let native_device_name = self
-      .streaming_player
-      .as_ref()
-      .map(|p| p.device_name().to_lowercase());
-
     // First, check if the current playback device matches the native streaming device
     {
       let app = self.app.lock().await;
       if let Some(ref ctx) = app.current_playback_context {
-        if let Some(ref native_name) = native_device_name {
-          // Compare device names (case-insensitive partial match for flexibility)
-          let current_device_name = ctx.device.name.to_lowercase();
-          return current_device_name.contains(native_name)
-            || native_name.contains(&current_device_name);
+        if let (Some(current_id), Some(native_id)) =
+          (ctx.device.id.as_ref(), app.native_device_id.as_ref())
+        {
+          if current_id == native_id {
+            return true;
+          }
+        }
+      }
+    }
+
+    // Fallback: strict name match (case-insensitive).
+    let native_device_name = self
+      .streaming_player
+      .as_ref()
+      .map(|p| p.device_name().to_lowercase());
+    {
+      let app = self.app.lock().await;
+      if let (Some(ref ctx), Some(ref native_name)) =
+        (&app.current_playback_context, native_device_name.as_ref())
+      {
+        let current_device_name = ctx.device.name.to_lowercase();
+        if current_device_name == native_name.as_str() {
+          return true;
         }
       }
     }
@@ -496,10 +508,21 @@ impl Network {
         // into external devices like the Spotify desktop/mobile app.
         #[cfg(feature = "streaming")]
         let is_native_device = self.streaming_player.as_ref().is_some_and(|p| {
+          if let (Some(current_id), Some(native_id)) =
+            (c.device.id.as_ref(), app.native_device_id.as_ref())
+          {
+            return current_id == native_id;
+          }
           let native_name = p.device_name().to_lowercase();
-          let current_device_name = c.device.name.to_lowercase();
-          current_device_name.contains(&native_name) || native_name.contains(&current_device_name)
+          c.device.name.to_lowercase() == native_name
         });
+
+        #[cfg(feature = "streaming")]
+        if is_native_device && app.native_device_id.is_none() {
+          if let Some(id) = c.device.id.clone() {
+            app.native_device_id = Some(id);
+          }
+        }
 
         // Process track info before storing context (avoids cloning)
         if let Some(ref item) = c.item {
@@ -1036,8 +1059,10 @@ impl Network {
         };
 
         let request = match (context_id, uris) {
-          (Some(context), Some(_track_uris)) => {
-            if let Some(i) = offset.and_then(|i| u32::try_from(i).ok()) {
+          (Some(context), Some(track_uris)) => {
+            if let Some(first_uri) = track_uris.first() {
+              options.playing_track = Some(PlayingTrack::Uri(first_uri.uri()));
+            } else if let Some(i) = offset.and_then(|i| u32::try_from(i).ok()) {
               options.playing_track = Some(PlayingTrack::Index(i));
             }
             LoadRequest::from_context_uri(context.uri(), options)
@@ -1101,9 +1126,10 @@ impl Network {
       self.client_config.device_id.as_deref()
     };
 
-    // If we're playing a specific track (with offset), temporarily disable shuffle
-    // to ensure the selected track plays first
-    let should_disable_shuffle = offset.is_some() && uris.is_some();
+    // If we're starting playback at a specific position within a context (via a numeric offset),
+    // temporarily disable shuffle to ensure the selected item plays first.
+    // (When we start by explicit track URI, we don't need to touch shuffle.)
+    let should_disable_shuffle = context_id.is_some() && uris.is_none() && offset.is_some();
     let mut original_shuffle_state = false;
 
     #[cfg(feature = "streaming")]
@@ -1134,13 +1160,7 @@ impl Network {
       let track_uris = uris.unwrap();
 
       if let Some(first_uri) = track_uris.first() {
-        // Convert PlayableId to a URI string
-        let uri_string = match first_uri {
-          PlayableId::Track(track_id) => format!("spotify:track:{}", track_id.id()),
-          PlayableId::Episode(episode_id) => format!("spotify:episode:{}", episode_id.id()),
-        };
-
-        let offset = rspotify::model::Offset::Uri(uri_string);
+        let offset = rspotify::model::Offset::Uri(first_uri.uri());
         self
           .spotify
           .start_context_playback(context, device_id, Some(offset), None)
@@ -1152,10 +1172,13 @@ impl Network {
           .await
       }
     } else if let Some(context_id) = context_id {
-      // Play from context without specifying a starting track
+      // Play from context, optionally starting at an offset within the context.
+      let offset = offset
+        .and_then(|i| i64::try_from(i).ok())
+        .map(|i| rspotify::model::Offset::Position(chrono::Duration::milliseconds(i)));
       self
         .spotify
-        .start_context_playback(context_id, device_id, None, None)
+        .start_context_playback(context_id, device_id, offset, None)
         .await
     } else if let Some(mut uris) = uris {
       // For URI-based playback, reorder the list to put the selected track first
@@ -2503,6 +2526,7 @@ impl Network {
           {
             let mut app = self.app.lock().await;
             app.is_streaming_active = true;
+            app.native_device_id = Some(device_id.clone());
           }
 
           // Refresh playback state after a brief delay to let Connect register
@@ -2533,6 +2557,7 @@ impl Network {
         {
           let mut app = self.app.lock().await;
           app.is_streaming_active = false;
+          app.native_device_id = None;
         }
         self.get_current_playback().await;
       }
@@ -2591,6 +2616,8 @@ impl Network {
               if let Some(device_id) = &device.id {
                 // Save device ID to config (don't use transfer_playback - just save the ID)
                 let _ = self.client_config.set_device_id(device_id.clone());
+                let mut app = self.app.lock().await;
+                app.native_device_id = Some(device_id.clone());
                 return;
               }
             }
@@ -2611,11 +2638,7 @@ impl Network {
   }
 
   async fn add_item_to_queue(&mut self, item: PlayableId<'_>) {
-    match self
-      .spotify
-      .add_item_to_queue(item, None)
-      .await
-    {
+    match self.spotify.add_item_to_queue(item, None).await {
       Ok(()) => (),
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
