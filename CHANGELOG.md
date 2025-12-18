@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.34.5] - 2025-12-18
+
+### Added
+
+- **Discover: Top Tracks**: View your 50 most-listened songs with time range selection
+  - Uses `[` / `]` keys to cycle time range: **4 weeks**, **6 months**, **All time**
+  - Full track table with playback, queue, and navigation support
+- **Discover: Top Artists Mix**: A shuffled playlist from your top 5 artists
+  - Fetches top tracks from each of your favorite artists
+  - Creates a unique mix every time you load it
+- **Loading Indicators**: Shows "Loading..." while fetching Discover playlists
+- **Track Counts**: Displays number of tracks loaded in the Discover menu
+
+### Fixed
+
+- **Made for You API Error**: Silenced JSON parsing error caused by Spotify's November 2024 API changes that restrict access to algorithmic playlists for apps without extended mode access
+  - Previously showed cryptic `json parse error: invalid type: null, expected struct SimplifiedPlaylist` error
+  - Now gracefully handles the API restriction without showing an error
+
+### Changed
+
+- **Renamed "Made For You" to "Discover"**: The Library's first option is now called "Discover" with a new UI for personalized music features
+
 ## [0.34.4] - 2025-12-17
 
 ### Added
