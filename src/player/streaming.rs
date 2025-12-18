@@ -205,19 +205,27 @@ impl StreamingPlayer {
     let requested_device = std::env::var("SPOTATUI_STREAMING_AUDIO_DEVICE").ok();
 
     // Create audio backend
-    let backend =
-      audio_backend::find(requested_backend.clone()).ok_or_else(|| match requested_backend {
-        Some(name) => anyhow!(
-          "Unknown audio backend '{}'. Available backends: {}",
-          name,
-          audio_backend::BACKENDS
-            .iter()
-            .map(|(n, _)| *n)
-            .collect::<Vec<_>>()
-            .join(", ")
-        ),
-        None => anyhow!("No audio backend available"),
-      })?;
+    let backend = match audio_backend::find(requested_backend.clone()) {
+      Some(backend) => Some(backend),
+      None => {
+        if let Some(name) = requested_backend.as_deref() {
+          return Err(anyhow!(
+            "Unknown audio backend '{}'. Available backends: {}",
+            name,
+            audio_backend::BACKENDS
+              .iter()
+              .map(|(n, _)| *n)
+              .collect::<Vec<_>>()
+              .join(", ")
+          ));
+        }
+        eprintln!(
+          "No audio backend available; falling back to a null sink (no audio). \
+This build may have been compiled without an audio backend feature."
+        );
+        None
+      }
+    };
 
     // Create player
     let player = Player::new(
@@ -225,8 +233,10 @@ impl StreamingPlayer {
       session.clone(),
       mixer.get_soft_volume(),
       move || {
-        let result =
-          std::panic::catch_unwind(|| backend(requested_device.clone(), AudioFormat::default()));
+        let result = std::panic::catch_unwind(|| match backend {
+          Some(factory) => factory(requested_device.clone(), AudioFormat::default()),
+          None => Box::new(NullSink::default()),
+        });
         match result {
           Ok(sink) => sink,
           Err(_) => {
