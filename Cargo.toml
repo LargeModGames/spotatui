@@ -57,8 +57,8 @@ librespot-playback = { version = "0.8", optional = true, default-features = fals
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
 librespot-playback = { version = "0.8", optional = true, default-features = false, features = ["rodio-backend"] }
 
-[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-# On Windows/macOS we default to a real audio output backend.
+[target.'cfg(target_os = "windows")'.dependencies]
+# On Windows we default to rodio for audio output.
 # Without this, librespot-playback falls back to the `pipe` sink which writes raw audio bytes
 # to stdout (breaking the TUI and producing no audible output).
 librespot-playback = { version = "0.8", optional = true, default-features = false, features = ["rodio-backend"] }
@@ -67,8 +67,12 @@ librespot-playback = { version = "0.8", optional = true, default-features = fals
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = { version = "0.8", optional = true }
 
-# macOS Now Playing / Media Key support
+# macOS: librespot-playback + Now Playing / Media Key support
+# On macOS we don't specify a default audio backend here - the CI uses portaudio-backend feature flag.
+# Rodio has compatibility issues with macOS CoreAudio and Bluetooth devices (AirPods, etc.)
+# causing SIGSEGV crashes. See Issue #9 and #20.
 [target.'cfg(target_os = "macos")'.dependencies]
+librespot-playback = { version = "0.8", optional = true, default-features = false }
 objc2-media-player = { version = "0.3", optional = true }
 objc2-foundation = { version = "0.3", optional = true }
 objc2 = { version = "0.6", optional = true }
