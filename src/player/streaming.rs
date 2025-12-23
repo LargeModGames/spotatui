@@ -127,6 +127,8 @@ impl StreamingPlayer {
   /// * `redirect_uri` - OAuth redirect URI (must match Spotify app settings)
   /// * `config` - Streaming configuration options
   pub async fn new(_client_id: &str, _redirect_uri: &str, config: StreamingConfig) -> Result<Self> {
+    println!("[streaming] Step 1/8: Setting up cache paths...");
+
     // Set up cache paths
     let cache_path = config.cache_path.clone().or_else(get_default_cache_path);
     let audio_cache_path = if config.audio_cache {
@@ -144,14 +146,15 @@ impl StreamingPlayer {
     }
 
     let cache = Cache::new(cache_path.clone(), None, audio_cache_path, None)?;
+    println!("[streaming] Step 2/8: Cache initialized");
 
     // Try to get credentials from cache first
     let credentials = if let Some(cached_creds) = cache.credentials() {
-      println!("Using cached streaming credentials");
+      println!("[streaming] Step 3/8: Using cached streaming credentials");
       cached_creds
     } else {
       // Need to authenticate with librespot-oauth using builder pattern
-      println!("Streaming authentication required - opening browser...");
+      println!("[streaming] Step 3/8: Streaming authentication required - opening browser...");
 
       // Use spotify-player's client_id and redirect_uri for OAuth (works with librespot)
       let client_builder = OAuthClientBuilder::new(
@@ -172,6 +175,8 @@ impl StreamingPlayer {
       Credentials::with_access_token(token.access_token)
     };
 
+    println!("[streaming] Step 4/8: Creating session...");
+
     // Create session configuration using spotify-player's client_id
     let session_config = SessionConfig {
       client_id: SPOTIFY_PLAYER_CLIENT_ID.to_string(),
@@ -180,6 +185,10 @@ impl StreamingPlayer {
 
     // Create session (Spirc will handle connection)
     let session = Session::new(session_config, Some(cache));
+    println!(
+      "[streaming] Step 4/8: Session created with device_id={}",
+      session.device_id()
+    );
 
     // Set up player configuration
     let player_config = PlayerConfig {
@@ -193,6 +202,8 @@ impl StreamingPlayer {
       ..Default::default()
     };
 
+    println!("[streaming] Step 5/8: Creating audio mixer...");
+
     // Create mixer using SoftMixer directly (like spotify-player does)
     let mixer =
       Arc::new(SoftMixer::open(MixerConfig::default()).context("Failed to open SoftMixer")?);
@@ -200,13 +211,48 @@ impl StreamingPlayer {
     // Convert volume from 0-100 to 0-65535
     let volume_u16 = (f64::from(config.initial_volume.min(100)) / 100.0 * 65535.0).round() as u16;
     mixer.set_volume(volume_u16);
+    println!(
+      "[streaming] Step 5/8: Mixer created, volume set to {}",
+      config.initial_volume
+    );
 
     let requested_backend = std::env::var("SPOTATUI_STREAMING_AUDIO_BACKEND").ok();
     let requested_device = std::env::var("SPOTATUI_STREAMING_AUDIO_DEVICE").ok();
 
+    println!("[streaming] Step 6/8: Probing audio backend...");
+    if let Some(ref name) = requested_backend {
+      println!("[streaming]   Requested backend: {}", name);
+    }
+    if let Some(ref device) = requested_device {
+      println!("[streaming]   Requested device: {}", device);
+    }
+
     // Create audio backend
     let backend = match audio_backend::find(requested_backend.clone()) {
-      Some(backend) => Some(backend),
+      Some(backend) => {
+        println!("[streaming] Step 6/8: Audio backend found");
+
+        // Early probe: try to create the sink NOW to catch crashes before Spirc
+        println!("[streaming]   Probing audio device (this may crash on some systems)...");
+        let probe_device = requested_device.clone();
+        let probe_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          // Create and immediately drop a test sink
+          let _test_sink = backend(probe_device, AudioFormat::default());
+          println!("[streaming]   Audio probe successful!");
+        }));
+
+        if probe_result.is_err() {
+          eprintln!(
+            "[streaming] WARNING: Audio backend probe panicked! Falling back to null sink."
+          );
+          eprintln!(
+            "[streaming] TIP: Set SPOTATUI_STREAMING_AUDIO_BACKEND=pipe to disable audio output."
+          );
+          None
+        } else {
+          Some(backend)
+        }
+      }
       None => {
         if let Some(name) = requested_backend.as_deref() {
           return Err(anyhow!(
@@ -220,12 +266,14 @@ impl StreamingPlayer {
           ));
         }
         eprintln!(
-          "No audio backend available; falling back to a null sink (no audio). \
+          "[streaming] No audio backend available; falling back to a null sink (no audio). \
 This build may have been compiled without an audio backend feature."
         );
         None
       }
     };
+
+    println!("[streaming] Step 7/8: Creating librespot Player...");
 
     // Create player
     let player = Player::new(
@@ -241,7 +289,7 @@ This build may have been compiled without an audio backend feature."
           Ok(sink) => sink,
           Err(_) => {
             eprintln!(
-              "Failed to initialize audio output backend; falling back to a null sink (no audio). \
+              "[streaming] Failed to initialize audio output backend; falling back to a null sink (no audio). \
 Set SPOTATUI_STREAMING_AUDIO_DEVICE to select an output device, or SPOTATUI_STREAMING_AUDIO_BACKEND to select a backend."
             );
             Box::new(NullSink::default())
@@ -249,6 +297,7 @@ Set SPOTATUI_STREAMING_AUDIO_DEVICE to select an output device, or SPOTATUI_STRE
         }
       },
     );
+    println!("[streaming] Step 7/8: Player created");
 
     // Create Connect configuration
     let connect_config = ConnectConfig {
@@ -260,7 +309,8 @@ Set SPOTATUI_STREAMING_AUDIO_DEVICE to select an output device, or SPOTATUI_STRE
       volume_steps: 64,
     };
 
-    println!("Initializing Spirc with device_id={}", session.device_id());
+    println!("[streaming] Step 8/8: Initializing Spirc (Spotify Connect)...");
+    println!("[streaming]   This connects to Spotify servers and may take a few seconds...");
 
     let init_timeout_secs = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
       .ok()
@@ -279,12 +329,19 @@ Set SPOTATUI_STREAMING_AUDIO_DEVICE to select an output device, or SPOTATUI_STRE
 
     let (spirc, spirc_task) = match timeout(Duration::from_secs(init_timeout_secs), spirc_new).await
     {
-      Ok(Ok(result)) => result,
+      Ok(Ok(result)) => {
+        println!("[streaming] Spirc initialized successfully");
+        result
+      }
       Ok(Err(e)) => {
-        println!("Spirc creation error: {:?}", e);
+        println!("[streaming] Spirc creation error: {:?}", e);
         return Err(anyhow!("Failed to create Spirc: {:?}", e));
       }
       Err(_) => {
+        println!(
+          "[streaming] Spirc initialization timed out after {}s",
+          init_timeout_secs
+        );
         return Err(anyhow!(
           "Spirc initialization timed out after {}s (set SPOTATUI_STREAMING_INIT_TIMEOUT_SECS to adjust)",
           init_timeout_secs
@@ -295,7 +352,7 @@ Set SPOTATUI_STREAMING_AUDIO_DEVICE to select an output device, or SPOTATUI_STRE
     // Spawn the Spirc task to run in the background
     tokio::spawn(spirc_task);
 
-    println!("Streaming connection established!");
+    println!("[streaming] Streaming connection established!");
 
     Ok(Self {
       spirc,
