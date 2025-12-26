@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.34.6] - 2025-12-26
+
+### Added
+
+- **Sorting for Playlists, Albums, and Artists**: Press `,` to open a sort menu with multiple options
+  - **Playlist Tracks**: Sort by Name, Date Added, Artist, Album, or Duration
+  - **Saved Albums**: Sort by Name, Date Added, or Artist
+  - **Saved Artists**: Sort by Name
+  - Quick keyboard shortcuts: lowercase letter for ascending (e.g., `n` for Name), uppercase for descending (`N`)
+  - Full playlist sorting fetches all tracks for proper cross-page sorting
+
 ## [0.34.5] - 2025-12-19
 
 ### Added
