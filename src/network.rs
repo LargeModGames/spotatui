@@ -1798,16 +1798,21 @@ impl Network {
       RepeatState::Track => RepeatState::Off,
     };
 
-    // When using native streaming, update UI immediately and skip API call
+    // When using native streaming, update UI immediately and send command to player
     // The Web API returns 404 for native streaming devices
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback().await {
+      if let Some(ref player) = self.streaming_player {
+        // Send the repeat command to the native player (current state, not next state)
+        if let Err(e) = player.set_repeat(repeat_state) {
+          self.handle_error(anyhow!(e)).await;
+        }
+      }
+      // Update UI after sending command
       let mut app = self.app.lock().await;
       if let Some(ctx) = &mut app.current_playback_context {
         ctx.repeat_state = next_repeat_state;
       }
-      // Note: Spirc handles repeat state internally via Spotify Connect
-      // We just update the UI - the actual state is managed by the Connect session
       return;
     }
 

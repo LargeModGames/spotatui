@@ -11,6 +11,13 @@
   - Quick keyboard shortcuts: lowercase letter for ascending (e.g., `n` for Name), uppercase for descending (`N`)
   - Full playlist sorting fetches all tracks for proper cross-page sorting
 
+### Fixed
+
+- **Track Repeat Mode**: Fixed track repeat not working with native streaming player
+  - Previously, selecting "Track" repeat mode only updated the UI but continued playing the next song
+  - Now properly sends repeat commands to the librespot Spirc player
+  - Correctly cycles through Off --> Context --> Track --> Off repeat modes
+
 ## [0.34.5] - 2025-12-19
 
 ### Added

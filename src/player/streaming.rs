@@ -379,6 +379,30 @@ Set SPOTATUI_STREAMING_AUDIO_DEVICE to select an output device, or SPOTATUI_STRE
     Ok(self.spirc.shuffle(shuffle)?)
   }
 
+  /// Set repeat mode via the underlying Spotify Connect session
+  /// Handles cycling between Off -> Context -> Track -> Off
+  pub fn set_repeat(&self, current_state: rspotify::model::enums::RepeatState) -> Result<()> {
+    use rspotify::model::enums::RepeatState;
+
+    match current_state {
+      RepeatState::Off => {
+        // Off -> Context: Enable context repeat
+        self.spirc.repeat(true)?;
+        self.spirc.repeat_track(false)?;
+      }
+      RepeatState::Context => {
+        // Context -> Track: Enable track repeat, keep context repeat
+        self.spirc.repeat_track(true)?;
+      }
+      RepeatState::Track => {
+        // Track -> Off: Disable both
+        self.spirc.repeat(false)?;
+        self.spirc.repeat_track(false)?;
+      }
+    }
+    Ok(())
+  }
+
   /// Set the volume (0-100)
   pub fn set_volume(&self, volume: u8) {
     let volume_u16 = (f64::from(volume.min(100)) / 100.0 * 65535.0).round() as u16;
