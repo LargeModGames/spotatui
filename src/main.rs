@@ -64,12 +64,18 @@ use crossterm::{
   ExecutableCommand,
 };
 use network::{IoEvent, Network};
+#[cfg(not(all(feature = "mpris", target_os = "linux")))]
+use ratatui::{
+  backend::{Backend, CrosstermBackend},
+  prelude::Style,
+  widgets::Block,
+  Terminal,
+};
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 use ratatui::{
   backend::{Backend, CrosstermBackend},
   Terminal,
 };
-#[cfg(not(all(feature = "mpris", target_os = "linux")))]
-use ratatui::{prelude::Style, widgets::Block};
 use redirect_uri::redirect_uri_web_server;
 use rspotify::{
   prelude::*,
