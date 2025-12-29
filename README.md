@@ -245,7 +245,7 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
 
 ## Upstream Contributors (spotify-tui)
 
-Thanks to all the contributors who built the original [spotify-tui](https://github.com/Rigellute/spotify-tui) that this project is forked from ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+Thanks to all the contributors who built the original [spotify-tui](https://github.com/Rigellute/spotify-tui) that this project is forked from:
 
 <table>
   <tbody>
