@@ -16,7 +16,7 @@ pub fn draw_settings(f: &mut Frame<'_>, app: &App) {
       Constraint::Length(3), // Help bar
     ])
     .margin(2)
-    .split(f.size());
+    .split(f.area());
 
   draw_category_tabs(f, app, chunks[0]);
   draw_settings_list(f, app, chunks[1]);
