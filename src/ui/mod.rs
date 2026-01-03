@@ -9,13 +9,15 @@ use super::{
   },
   banner::BANNER,
 };
+use colorgrad::{self, Gradient};
 use help::get_help_docs;
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   style::{Color, Modifier, Style},
   text::{Line, Span, Text},
   widgets::{
-    Block, Borders, Clear, LineGauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap,
+    canvas::Canvas, Block, BorderType, Borders, Clear, LineGauge, List, ListItem, ListState,
+    Paragraph, Row, Table, Wrap,
   },
   Frame,
 };
@@ -1180,7 +1182,37 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           &song_progress_label,
           Style::default().fg(app.user_config.theme.playbar_progress_text),
         ));
-      f.render_widget(song_progress, chunks[2]);
+      f.render_widget(song_progress, progress_area);
+
+      // Draw "Like" animation (heart burst) if active
+      if let Some(frame) = app.liked_song_animation_frame {
+        let progress = (10 - frame) as f64;
+        let y_base = 20.0 + progress * 5.0; // Rise up
+
+        let canvas = Canvas::default()
+          .block(Block::default()) // No border, transparent
+          .x_bounds([0.0, 100.0])
+          .y_bounds([0.0, 100.0])
+          .paint(|ctx| {
+            let color = app.user_config.theme.selected;
+            // Center heart
+            ctx.print(50.0, y_base, Span::styled("♥", Style::default().fg(color)));
+            // Left particle (lagging slightly)
+            ctx.print(
+              48.0,
+              y_base - 3.0,
+              Span::styled("♥", Style::default().fg(color)),
+            );
+            // Right particle (lagging slightly)
+            ctx.print(
+              52.0,
+              y_base - 3.0,
+              Span::styled("♥", Style::default().fg(color)),
+            );
+          });
+
+        f.render_widget(canvas, layout_chunk);
+      }
     }
   }
 }

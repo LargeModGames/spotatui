@@ -516,6 +516,8 @@ pub struct App {
   pub playlist_sort: SortState,
   pub album_sort: SortState,
   pub artist_sort: SortState,
+  /// Animation frame counter for the "Liked" heart flash effect (0-10)
+  pub liked_song_animation_frame: Option<u8>,
 }
 
 impl Default for App {
@@ -629,6 +631,7 @@ impl Default for App {
       playlist_sort: SortState::new(),
       album_sort: SortState::new(),
       artist_sort: SortState::new(),
+      liked_song_animation_frame: None,
     }
   }
 }
@@ -711,6 +714,14 @@ impl App {
   }
 
   pub fn update_on_tick(&mut self) {
+    if let Some(frame) = self.liked_song_animation_frame {
+      if frame > 0 {
+        self.liked_song_animation_frame = Some(frame - 1);
+      } else {
+        self.liked_song_animation_frame = None;
+      }
+    }
+
     self.poll_current_playback();
 
     if let Some(CurrentPlaybackContext {

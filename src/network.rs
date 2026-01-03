@@ -2174,6 +2174,8 @@ impl Network {
                 Ok(()) => {
                   let mut app = self.app.lock().await;
                   app.liked_song_ids_set.insert(track_id.id().to_string());
+                  // Trigger the "Like" animation
+                  app.liked_song_animation_frame = Some(10);
                 }
                 Err(e) => {
                   self.handle_error(anyhow!(e)).await;
