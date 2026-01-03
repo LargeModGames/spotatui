@@ -128,7 +128,6 @@ async fn load_token_from_file(spotify: &AuthCodeSpotify, path: &PathBuf) -> Resu
   Ok(true)
 }
 
-
 #[cfg(all(target_os = "linux", feature = "streaming"))]
 fn init_audio_backend() {
   alsa_silence::suppress_alsa_errors();
@@ -140,7 +139,7 @@ fn init_audio_backend() {}
 fn install_panic_hook() {
   let default_hook = panic::take_hook();
   panic::set_hook(Box::new(move |info| {
-    let _ = ratatui::restore();
+    ratatui::restore();
     let panic_log_path = dirs::home_dir().map(|home| {
       home
         .join(".config")
@@ -1445,7 +1444,6 @@ async fn start_ui(
             app.spectrum_data = None;
           }
         }
-
       }
     }
 
@@ -1644,7 +1642,6 @@ async fn start_ui(
             app.spectrum_data = None;
           }
         }
-
       }
     }
 
