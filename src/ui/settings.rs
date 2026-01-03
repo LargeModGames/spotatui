@@ -1,6 +1,6 @@
 use crate::app::{App, SettingValue, SettingsCategory};
 use ratatui::{
-  layout::{Constraint, Direction, Layout, Rect},
+  layout::{Constraint, Layout, Rect},
   style::{Modifier, Style},
   text::{Line, Span},
   widgets::{Block, Borders, List, ListItem, Paragraph, Tabs},
@@ -8,19 +8,18 @@ use ratatui::{
 };
 
 pub fn draw_settings(f: &mut Frame<'_>, app: &App) {
-  let chunks = Layout::default()
-    .direction(Direction::Vertical)
-    .constraints([
+  let [tabs_area, list_area, help_area] = f.area().layout(
+    &Layout::vertical([
       Constraint::Length(3), // Category tabs
       Constraint::Min(1),    // Settings list
       Constraint::Length(3), // Help bar
     ])
-    .margin(2)
-    .split(f.area());
+    .margin(2),
+  );
 
-  draw_category_tabs(f, app, chunks[0]);
-  draw_settings_list(f, app, chunks[1]);
-  draw_settings_help(f, app, chunks[2]);
+  draw_category_tabs(f, app, tabs_area);
+  draw_settings_list(f, app, list_area);
+  draw_settings_help(f, app, help_area);
 }
 
 fn draw_category_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
@@ -122,25 +121,26 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
     app.settings_items.len()
   );
 
-  let list = List::new(items).block(
-    Block::default()
-      .borders(Borders::ALL)
-      .title(title)
-      .style(app.user_config.theme.base_style())
-      .border_style(Style::default().fg(app.user_config.theme.inactive)),
-  )
-  .highlight_style(
-    Style::default()
-      .fg(app.user_config.theme.selected)
-      .add_modifier(Modifier::BOLD),
-  )
-  .highlight_symbol(
-    Line::from("▶ ").style(
+  let list = List::new(items)
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(app.user_config.theme.base_style())
+        .border_style(Style::default().fg(app.user_config.theme.inactive)),
+    )
+    .highlight_style(
       Style::default()
         .fg(app.user_config.theme.selected)
         .add_modifier(Modifier::BOLD),
-    ),
-  );
+    )
+    .highlight_symbol(
+      Line::from("▶ ").style(
+        Style::default()
+          .fg(app.user_config.theme.selected)
+          .add_modifier(Modifier::BOLD),
+      ),
+    );
 
   f.render_widget(list, area);
 }
