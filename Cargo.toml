@@ -29,7 +29,7 @@ serde_yaml = "0.9"
 dirs = "5.0"
 clap = { version = "4.5", features = ["cargo"] }
 clap_complete = "4.5"
-unicode-width = "0.1.8"
+unicode-width = "0.2.2"
 backtrace = "0.3.76"
 arboard = "3.4"
 crossterm = "0.29"
