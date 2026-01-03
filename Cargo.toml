@@ -30,17 +30,17 @@ dirs = "5.0"
 clap = { version = "4.5", features = ["cargo"] }
 clap_complete = "4.5"
 unicode-width = "0.1.8"
-backtrace = "0.3.57"
+backtrace = "0.3.76"
 arboard = "3.4"
 crossterm = "0.29"
 tui-equalizer = "0.2.0-alpha"
 tui-bar-graph = "0.3.1"
 colorgrad = "0.8.0"
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 rand = "0.8.4"
 anyhow = "1.0.43"
 chrono = "0.4.42"
-open = "5.0"
+open = "5.3"
 self_update = { version = "0.41", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
 reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false, optional = true }
 openssl = { version = "0.10", optional = true }
