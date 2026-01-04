@@ -2781,14 +2781,14 @@ impl Network {
     {
       Ok(resp) => {
         if let Ok(lrc_resp) = resp.json::<LrcResponse>().await {
-          if let Some(synced) = lrc_resp.syncedLyrics {
-            let parsed = self.parse_lrc(&synced);
+          if let Some(ref synced) = lrc_resp.syncedLyrics {
+            let parsed = self.parse_lrc(synced);
             let mut app = self.app.lock().await;
             app.lyrics = Some(parsed);
             app.lyrics_status = LyricsStatus::Found;
-          } else if let Some(plain) = lrc_resp.plainLyrics {
+          } else if let Some(ref plain) = lrc_resp.plainLyrics {
             let mut app = self.app.lock().await;
-            app.lyrics = Some(vec![(0, plain)]);
+            app.lyrics = Some(vec![(0, (*plain).clone())]);
             app.lyrics_status = LyricsStatus::Found;
           } else {
             let mut app = self.app.lock().await;

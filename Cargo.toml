@@ -42,7 +42,7 @@ anyhow = "1.0.43"
 chrono = "0.4.42"
 open = "5.3"
 self_update = { version = "0.41", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
-reqwest = { version = "0.13", features = ["json", "native-tls"], default-features = false, optional = true }
+reqwest = { version = "0.13", features = ["json", "query", "native-tls"], default-features = false, optional = true }
 openssl = { version = "0.10", optional = true }
 cpal = { version = "0.15", optional = true }
 realfft = { version = "3.4", optional = true }
