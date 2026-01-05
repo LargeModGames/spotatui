@@ -23,7 +23,10 @@ impl AudioCaptureManager {
     let device = Self::find_loopback_device(&host)?;
 
     // Device name is now stored internally for debugging if needed
-    let _device_name = device.name().ok();
+    let _device_name = device
+      .description()
+      .ok()
+      .map(|description| description.name().to_string());
 
     // Get a compatible config that won't interfere with playback
     let config = Self::get_compatible_config(&device)?;
@@ -82,8 +85,8 @@ impl AudioCaptureManager {
         // Scan available input devices
 
         for device in devices {
-          if let Ok(name) = device.name() {
-            let name_lower = name.to_lowercase();
+          if let Ok(description) = device.description() {
+            let name_lower = description.name().to_lowercase();
             if name_lower.contains("monitor") {
               monitors.push(device);
             }
@@ -94,17 +97,18 @@ impl AudioCaptureManager {
 
         // Sort by priority: bluetooth first, then speakers, then anything else
         monitors.sort_by_key(|d| {
-          if let Ok(name) = d.name() {
-            let name_lower = name.to_lowercase();
-            if name_lower.contains("bluez") || name_lower.contains("bluetooth") {
-              return 0; // Highest priority - likely the active wireless device
-            }
-            if name_lower.contains("speaker") || name_lower.contains("analog") {
-              return 1; // Second priority - built-in speakers
-            }
-            if name_lower.contains("hdmi") {
-              return 3; // Low priority - usually not used for music
-            }
+          let name_lower = d
+            .description()
+            .map(|description| description.name().to_lowercase())
+            .unwrap_or_default();
+          if name_lower.contains("bluez") || name_lower.contains("bluetooth") {
+            return 0; // Highest priority - likely the active wireless device
+          }
+          if name_lower.contains("speaker") || name_lower.contains("analog") {
+            return 1; // Second priority - built-in speakers
+          }
+          if name_lower.contains("hdmi") {
+            return 3; // Low priority - usually not used for music
           }
           2 // Default priority
         });
