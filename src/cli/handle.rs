@@ -70,18 +70,10 @@ pub async fn handle_matches(
       if let Some(d) = matches.get_one::<String>("transfer") {
         cli.transfer_playback(d).await?;
       }
-      // Multiple flags are possible
-      if matches.contains_id("flags") && matches.get_many::<String>("flags").is_some() {
-        let flags = Flag::from_matches(matches);
-        for f in flags {
-          cli.mark(f).await?;
-        }
-      } else {
-        // Check individual flags
-        let flags = Flag::from_matches(matches);
-        for f in flags {
-          cli.mark(f).await?;
-        }
+      // Handle flags (like, dislike, shuffle, repeat)
+      let flags = Flag::from_matches(matches);
+      for f in flags {
+        cli.mark(f).await?;
       }
       if matches.get_count("next") > 0 || matches.get_count("previous") > 0 {
         let (direction, amount) = JumpDirection::from_matches(matches);

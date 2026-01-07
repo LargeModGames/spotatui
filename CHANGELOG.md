@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.1] - 2026-01-07
+
+### Fixed
+
+- **CLI Playback Crash**: Fixed crash when using `spotatui playback --like` or `--dislike` CLI commands ([#50](https://github.com/LargeModGames/spotatui/issues/50))
+  - Root cause: Incorrect type access on clap `ArgGroup` caused type mismatch panic
+  - Other `playback` flags (`--shuffle`, `--repeat`) were also affected
+
 ## [0.35.0] - 2026-01-03
 
 ### Added
