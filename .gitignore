@@ -17,6 +17,7 @@ secrets.tar
 tags
 
 .idea
+.vscode
 
 # Local cargo config (platform-specific settings)
 .cargo/
