@@ -32,7 +32,7 @@
 - [Usage](#usage)
 - [Native Streaming](#native-streaming)
 - [Configuration](#configuration)
-- [Discord Rich Presence](#discord-rich-presence)
+  - [Discord Rich Presence](#discord-rich-presence)
 - [Limitations](#limitations)
   - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
 - [Using with spotifyd](#using-with-spotifyd)
