@@ -46,12 +46,12 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 openssl = { version = "0.10", optional = true }
 cpal = { version = "0.17", optional = true }
 realfft = { version = "3.4", optional = true }
-discord-rich-presence = { version = "1.0", optional = true }
+discord-rich-presence = { version = "1.1", optional = true }
 
 # Streaming dependencies (librespot)
 # Pin vergen crates to versions compatible with librespot-core 0.8's build.rs
 # (librespot-core expects vergen-lib 0.1.x API, not 9.x+)
-vergen = "=9.0.6"
+vergen = "=9.1.0"
 vergen-lib = "=9.1.0"
 vergen-gitcl = "=1.0.8"
 librespot-core = { version = "0.8", optional = true }
