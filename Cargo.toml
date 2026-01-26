@@ -52,7 +52,7 @@ discord-rich-presence = { version = "1.0", optional = true }
 # Pin vergen crates to versions compatible with librespot-core 0.8's build.rs
 # (librespot-core expects vergen-lib 0.1.x API, not 9.x+)
 vergen = "=9.0.6"
-vergen-lib = "=0.1.6"
+vergen-lib = "=9.1.0"
 vergen-gitcl = "=1.0.8"
 librespot-core = { version = "0.8", optional = true }
 librespot-connect = { version = "0.8", optional = true }
