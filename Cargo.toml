@@ -42,7 +42,7 @@ anyhow = "1.0.43"
 chrono = "0.4.43"
 open = "5.3"
 self_update = { version = "0.42", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 openssl = { version = "0.10", optional = true }
 cpal = { version = "0.17", optional = true }
 realfft = { version = "3.4", optional = true }
@@ -90,7 +90,7 @@ block2 = { version = "0.6", optional = true }
 
 [features]
 default = ["telemetry", "streaming", "audio-viz-cpal", "mpris", "macos-media", "discord-rpc"]
-telemetry = ["reqwest", "reqwest/rustls-tls"]
+telemetry = []
 streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata"]
 # Audio backend features
 alsa-backend = ["streaming", "librespot-playback/alsa-backend"]
