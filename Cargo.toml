@@ -78,11 +78,11 @@ librespot-playback = { version = "0.8", optional = true, default-features = fals
 mpris-server = { version = "0.9", optional = true }
 
 # macOS: librespot-playback + Now Playing / Media Key support
-# On macOS we don't specify a default audio backend here - the CI uses portaudio-backend feature flag.
+# On macOS we use portaudio-backend by default to avoid the pipe sink fallback (which outputs to stdout).
 # Rodio has compatibility issues with macOS CoreAudio and Bluetooth devices (AirPods, etc.)
 # causing SIGSEGV crashes. See Issue #9 and #20.
 [target.'cfg(target_os = "macos")'.dependencies]
-librespot-playback = { version = "0.8", optional = true, default-features = false }
+librespot-playback = { version = "0.8", optional = true, default-features = false, features = ["portaudio-backend"] }
 objc2-media-player = { version = "0.3", optional = true }
 objc2-foundation = { version = "0.3", optional = true }
 objc2 = { version = "0.6", optional = true }
