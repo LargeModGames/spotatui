@@ -799,6 +799,8 @@ of the app. Beware that this comes at a CPU cost!",
     let shared_is_playing_for_events = Arc::clone(&shared_is_playing);
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     let shared_is_playing_for_mpris = Arc::clone(&shared_is_playing);
+    #[cfg(all(feature = "mpris", target_os = "linux"))]
+    let shared_position_for_mpris = Arc::clone(&shared_position);
     #[cfg(all(feature = "macos-media", target_os = "macos"))]
     let shared_is_playing_for_macos = Arc::clone(&shared_is_playing);
 
@@ -860,11 +862,16 @@ of the app. Beware that this comes at a CPU cost!",
     if let Some(ref mpris) = mpris_manager {
       if let Some(event_rx) = mpris.take_event_rx() {
         let streaming_player_for_mpris = streaming_player.clone();
+        let mpris_for_seek = Arc::clone(mpris);
+        let app_for_mpris = Arc::clone(&app);
         tokio::spawn(async move {
           handle_mpris_events(
             event_rx,
             streaming_player_for_mpris,
             shared_is_playing_for_mpris,
+            shared_position_for_mpris,
+            mpris_for_seek,
+            app_for_mpris,
           )
           .await;
         });
@@ -1254,6 +1261,11 @@ async fn handle_player_events(
         // Use atomic store for lock-free position updates
         // This never blocks or fails, ensuring every position update is captured
         shared_position.store(position_ms as u64, Ordering::Relaxed);
+
+        // Update MPRIS position so external clients (playerctl, desktop widgets) stay in sync
+        if let Some(ref mpris) = mpris_manager {
+          mpris.set_position(position_ms as u64);
+        }
       }
       _ => {
         // Ignore other events
@@ -1422,6 +1434,9 @@ async fn handle_mpris_events(
   mut event_rx: tokio::sync::mpsc::UnboundedReceiver<mpris::MprisEvent>,
   streaming_player: Option<Arc<player::StreamingPlayer>>,
   shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
+  shared_position: Arc<AtomicU64>,
+  mpris_manager: Arc<mpris::MprisManager>,
+  app: Arc<Mutex<App>>,
 ) {
   use mpris::MprisEvent;
   use std::sync::atomic::Ordering;
@@ -1463,12 +1478,50 @@ async fn handle_mpris_events(
         player.stop();
       }
       MprisEvent::Seek(offset_micros) => {
-        // Seek by offset - convert from microseconds to milliseconds
-        // Note: This is a relative seek, not absolute position
-        let offset_ms = (offset_micros / 1000) as u32;
-        // Since we don't have the current position here easily,
-        // this is a simplified implementation
-        player.seek(offset_ms);
+        // MPRIS sends relative offset in microseconds (can be negative for rewind)
+        // We need to calculate: new_absolute_position = current_position + offset
+
+        // Get current position (stored in milliseconds)
+        let current_ms = shared_position.load(Ordering::Relaxed) as i64;
+
+        // Convert offset from microseconds to milliseconds
+        let offset_ms = offset_micros / 1000;
+
+        // Calculate new position, clamping to prevent going negative
+        let new_position_ms = (current_ms + offset_ms).max(0) as u32;
+
+        // Seek the player
+        player.seek(new_position_ms);
+
+        // Update shared position immediately so UI reflects the change
+        shared_position.store(new_position_ms as u64, Ordering::Relaxed);
+
+        // Update app's song_progress_ms so UI updates even when paused
+        if let Ok(mut app_lock) = app.try_lock() {
+          app_lock.song_progress_ms = new_position_ms as u128;
+        }
+
+        // Emit Seeked signal so external clients know position jumped
+        mpris_manager.emit_seeked(new_position_ms as u64);
+      }
+      MprisEvent::SetPosition(position_micros) => {
+        // MPRIS SetPosition sends absolute position in microseconds
+        // Convert to milliseconds and seek directly
+        let new_position_ms = (position_micros / 1000).max(0) as u32;
+
+        // Seek the player
+        player.seek(new_position_ms);
+
+        // Update shared position immediately so UI reflects the change
+        shared_position.store(new_position_ms as u64, Ordering::Relaxed);
+
+        // Update app's song_progress_ms so UI updates even when paused
+        if let Ok(mut app_lock) = app.try_lock() {
+          app_lock.song_progress_ms = new_position_ms as u128;
+        }
+
+        // Emit Seeked signal so external clients know position jumped
+        mpris_manager.emit_seeked(new_position_ms as u64);
       }
     }
   }

@@ -21,12 +21,12 @@ pub enum MprisEvent {
   Next,
   Previous,
   Stop,
-  Seek(i64), // Offset in microseconds
+  Seek(i64),        // Relative offset in microseconds
+  SetPosition(i64), // Absolute position in microseconds
 }
 
 /// Commands to send TO the MPRIS server to update its state
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // SetPosition kept for future use
 pub enum MprisCommand {
   Metadata {
     title: String,
@@ -36,7 +36,8 @@ pub enum MprisCommand {
     art_url: Option<String>,
   },
   PlaybackStatus(bool), // true = playing, false = paused
-  Position(u64),        // position in milliseconds (for future use)
+  Position(u64),        // position in milliseconds (silent update)
+  Seeked(u64),          // position in milliseconds (emits Seeked signal to notify clients)
   Volume(u8),           // 0-100
   Stopped,
 }
@@ -126,6 +127,11 @@ impl MprisManager {
           let _ = tx.send(MprisEvent::Seek(offset.as_micros()));
         });
 
+        let tx = event_tx.clone();
+        player.connect_set_position(move |_player, _track_id, position| {
+          let _ = tx.send(MprisEvent::SetPosition(position.as_micros()));
+        });
+
         // Spawn the player event loop
         tokio::task::spawn_local(player.run());
 
@@ -167,7 +173,16 @@ impl MprisManager {
               }
             }
             MprisCommand::Position(position_ms) => {
+              // Silent position update (for regular playback progress)
               player.set_position(Time::from_millis(position_ms as i64));
+            }
+            MprisCommand::Seeked(position_ms) => {
+              // Update position AND emit Seeked signal so clients know to refresh
+              let time = Time::from_millis(position_ms as i64);
+              player.set_position(time);
+              if let Err(e) = player.seeked(time).await {
+                eprintln!("MPRIS: Failed to emit Seeked signal: {}", e);
+              }
             }
             MprisCommand::Volume(volume_percent) => {
               let volume = (volume_percent as f64) / 100.0;
@@ -223,10 +238,14 @@ impl MprisManager {
       .send(MprisCommand::PlaybackStatus(is_playing));
   }
 
-  /// Update playback position
-  #[allow(dead_code)] // Kept for future use
+  /// Update playback position (silent, no signal emitted)
   pub fn set_position(&self, position_ms: u64) {
     let _ = self.command_tx.send(MprisCommand::Position(position_ms));
+  }
+
+  /// Update position AND emit Seeked signal (use when position jumps due to seeking)
+  pub fn emit_seeked(&self, position_ms: u64) {
+    let _ = self.command_tx.send(MprisCommand::Seeked(position_ms));
   }
 
   /// Update volume (0-100)
