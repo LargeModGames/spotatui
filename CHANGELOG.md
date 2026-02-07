@@ -6,6 +6,7 @@
 
 - **MPRIS Album Art Metadata (Linux)**: MPRIS metadata now includes artwork URLs so desktop media controls can show album covers.
 - **Automated Homebrew Publishing**: Added a `publish-homebrew` release job to update the Homebrew tap formula on tagged releases.
+- **Config Directory .gitignore**: Automatically creates a `.gitignore` in `~/.config/spotatui/` to protect sensitive files (`client.yml`, `streaming_cache/credentials.json`) from being accidentally committed when users sync their dotfiles.
 
 ### Fixed
 

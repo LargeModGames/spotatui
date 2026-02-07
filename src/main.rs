@@ -1803,12 +1803,14 @@ async fn start_ui(
 async fn start_ui(
   user_config: UserConfig,
   app: &Arc<Mutex<App>>,
-  _shared_position: Option<Arc<AtomicU64>>,
+  shared_position: Option<Arc<AtomicU64>>,
   _mpris_manager: Option<()>,
   discord_rpc_manager: DiscordRpcHandle,
 ) -> Result<()> {
   #[cfg(not(feature = "discord-rpc"))]
   let _ = discord_rpc_manager;
+  #[cfg(not(feature = "streaming"))]
+  let _ = shared_position;
   use ratatui::{prelude::Style, widgets::Block};
 
   // Terminal initialization
