@@ -825,6 +825,13 @@ of the app. Beware that this comes at a CPU cost!",
       None
     };
 
+    // Store MPRIS manager reference in App for emitting Seeked signals from native seeks
+    #[cfg(all(feature = "mpris", target_os = "linux"))]
+    {
+      let mut app_mut = app.lock().await;
+      app_mut.mpris_manager = mpris_manager.clone();
+    }
+
     // Initialize macOS Now Playing integration for media key control
     // This registers with MPRemoteCommandCenter for media key events
     #[cfg(all(feature = "macos-media", target_os = "macos"))]
@@ -1523,6 +1530,43 @@ async fn handle_mpris_events(
         // Emit Seeked signal so external clients know position jumped
         mpris_manager.emit_seeked(new_position_ms as u64);
       }
+      MprisEvent::SetShuffle(shuffle) => {
+        if let Err(e) = player.set_shuffle(shuffle) {
+          eprintln!("MPRIS: Failed to set shuffle: {}", e);
+        } else {
+          // Update MPRIS state so clients see the new value
+          mpris_manager.set_shuffle(shuffle);
+          // Update app UI state (use await to ensure update happens)
+          let mut app_lock = app.lock().await;
+          if let Some(ref mut ctx) = app_lock.current_playback_context {
+            ctx.shuffle_state = shuffle;
+          }
+          app_lock.user_config.behavior.shuffle_enabled = shuffle;
+        }
+      }
+      MprisEvent::SetLoopStatus(loop_status) => {
+        use mpris::LoopStatusEvent;
+        use rspotify::model::enums::RepeatState;
+
+        // Map MPRIS LoopStatus to Spotify RepeatState
+        let repeat_state = match loop_status {
+          LoopStatusEvent::None => RepeatState::Off,
+          LoopStatusEvent::Track => RepeatState::Track,
+          LoopStatusEvent::Playlist => RepeatState::Context,
+        };
+
+        if let Err(e) = player.set_repeat_mode(repeat_state) {
+          eprintln!("MPRIS: Failed to set repeat mode: {}", e);
+        } else {
+          // Update MPRIS state so clients see the new value
+          mpris_manager.set_loop_status(loop_status);
+          // Update app UI state (use await to ensure update happens)
+          let mut app_lock = app.lock().await;
+          if let Some(ref mut ctx) = app_lock.current_playback_context {
+            ctx.repeat_state = repeat_state;
+          }
+        }
+      }
     }
   }
 }
@@ -1756,6 +1800,11 @@ async fn start_ui(
         let mut app = app.lock().await;
         app.update_on_tick();
 
+        // Flush any pending seeks (throttled to avoid overwhelming player/API)
+        #[cfg(feature = "streaming")]
+        app.flush_pending_native_seek();
+        app.flush_pending_api_seek();
+
         #[cfg(feature = "discord-rpc")]
         if let Some(ref manager) = discord_rpc_manager {
           update_discord_presence(manager, &mut discord_presence_state, &app);
@@ -1768,6 +1817,23 @@ async fn start_ui(
 
         // Read position from shared atomic if native streaming is active
         // This provides lock-free real-time updates from player events
+        // Skip if we recently seeked - let the UI show our target position until the player catches up
+        #[cfg(feature = "streaming")]
+        if let Some(ref pos) = shared_position {
+          if app.is_streaming_active {
+            let recently_seeked = app
+              .last_native_seek
+              .is_some_and(|t| t.elapsed().as_millis() < app::SEEK_POSITION_IGNORE_MS);
+
+            if !recently_seeked {
+              let position_ms = pos.load(Ordering::Relaxed);
+              if position_ms > 0 {
+                app.song_progress_ms = position_ms as u128;
+              }
+            }
+          }
+        }
+        #[cfg(not(feature = "streaming"))]
         if let Some(ref pos) = shared_position {
           if app.is_streaming_active {
             let position_ms = pos.load(Ordering::Relaxed);
@@ -1999,16 +2065,29 @@ async fn start_ui(
         let mut app = app.lock().await;
         app.update_on_tick();
 
+        // Flush any pending seeks (throttled to avoid overwhelming player/API)
+        #[cfg(feature = "streaming")]
+        app.flush_pending_native_seek();
+        app.flush_pending_api_seek();
+
         #[cfg(feature = "discord-rpc")]
         if let Some(ref manager) = discord_rpc_manager {
           update_discord_presence(manager, &mut discord_presence_state, &app);
         }
 
+        // Read position from shared atomic if native streaming is active
+        // Skip if we recently seeked - let the UI show our target position until the player catches up
         #[cfg(feature = "streaming")]
         if let Some(ref pos) = shared_position {
-          let pos_ms = pos.load(Ordering::Relaxed) as u128;
-          if pos_ms > 0 && app.is_streaming_active {
-            app.song_progress_ms = pos_ms;
+          let recently_seeked = app
+            .last_native_seek
+            .is_some_and(|t| t.elapsed().as_millis() < app::SEEK_POSITION_IGNORE_MS);
+
+          if !recently_seeked {
+            let pos_ms = pos.load(Ordering::Relaxed) as u128;
+            if pos_ms > 0 && app.is_streaming_active {
+              app.song_progress_ms = pos_ms;
+            }
           }
         }
 

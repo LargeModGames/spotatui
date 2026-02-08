@@ -23,6 +23,16 @@ pub enum MprisEvent {
   Stop,
   Seek(i64),        // Relative offset in microseconds
   SetPosition(i64), // Absolute position in microseconds
+  SetShuffle(bool),
+  SetLoopStatus(LoopStatusEvent),
+}
+
+/// Loop status from MPRIS (matches mpris_server::LoopStatus)
+#[derive(Debug, Clone, Copy)]
+pub enum LoopStatusEvent {
+  None,
+  Track,
+  Playlist,
 }
 
 /// Commands to send TO the MPRIS server to update its state
@@ -35,10 +45,12 @@ pub enum MprisCommand {
     duration_ms: u32,
     art_url: Option<String>,
   },
-  PlaybackStatus(bool), // true = playing, false = paused
-  Position(u64),        // position in milliseconds (silent update)
-  Seeked(u64),          // position in milliseconds (emits Seeked signal to notify clients)
-  Volume(u8),           // 0-100
+  PlaybackStatus(bool),        // true = playing, false = paused
+  Position(u64),               // position in milliseconds (silent update)
+  Seeked(u64),                 // position in milliseconds (emits Seeked signal to notify clients)
+  Volume(u8),                  // 0-100
+  Shuffle(bool),               // shuffle state
+  LoopStatus(LoopStatusEvent), // loop/repeat state
   Stopped,
 }
 
@@ -81,6 +93,9 @@ impl MprisManager {
           .can_quit(false)
           .can_raise(false)
           .can_set_fullscreen(false)
+          // Enable shuffle and loop status support
+          .shuffle(false) // Initial state: shuffle off
+          .loop_status(mpris_server::LoopStatus::None) // Initial state: no repeat
           .build()
           .await
         {
@@ -130,6 +145,22 @@ impl MprisManager {
         let tx = event_tx.clone();
         player.connect_set_position(move |_player, _track_id, position| {
           let _ = tx.send(MprisEvent::SetPosition(position.as_micros()));
+        });
+
+        let tx = event_tx.clone();
+        player.connect_set_shuffle(move |_player, shuffle| {
+          let _ = tx.send(MprisEvent::SetShuffle(shuffle));
+        });
+
+        let tx = event_tx.clone();
+        player.connect_set_loop_status(move |_player, loop_status| {
+          use mpris_server::LoopStatus;
+          let status = match loop_status {
+            LoopStatus::None => LoopStatusEvent::None,
+            LoopStatus::Track => LoopStatusEvent::Track,
+            LoopStatus::Playlist => LoopStatusEvent::Playlist,
+          };
+          let _ = tx.send(MprisEvent::SetLoopStatus(status));
         });
 
         // Spawn the player event loop
@@ -188,6 +219,22 @@ impl MprisManager {
               let volume = (volume_percent as f64) / 100.0;
               if let Err(e) = player.set_volume(volume).await {
                 eprintln!("MPRIS: Failed to set volume: {}", e);
+              }
+            }
+            MprisCommand::Shuffle(shuffle) => {
+              if let Err(e) = player.set_shuffle(shuffle).await {
+                eprintln!("MPRIS: Failed to set shuffle: {}", e);
+              }
+            }
+            MprisCommand::LoopStatus(loop_status) => {
+              use mpris_server::LoopStatus;
+              let status = match loop_status {
+                LoopStatusEvent::None => LoopStatus::None,
+                LoopStatusEvent::Track => LoopStatus::Track,
+                LoopStatusEvent::Playlist => LoopStatus::Playlist,
+              };
+              if let Err(e) = player.set_loop_status(status).await {
+                eprintln!("MPRIS: Failed to set loop status: {}", e);
               }
             }
             MprisCommand::Stopped => {
@@ -256,5 +303,15 @@ impl MprisManager {
   /// Mark playback as stopped
   pub fn set_stopped(&self) {
     let _ = self.command_tx.send(MprisCommand::Stopped);
+  }
+
+  /// Update shuffle state
+  pub fn set_shuffle(&self, shuffle: bool) {
+    let _ = self.command_tx.send(MprisCommand::Shuffle(shuffle));
+  }
+
+  /// Update loop/repeat status
+  pub fn set_loop_status(&self, status: LoopStatusEvent) {
+    let _ = self.command_tx.send(MprisCommand::LoopStatus(status));
   }
 }

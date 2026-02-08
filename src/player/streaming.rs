@@ -403,6 +403,27 @@ Set SPOTATUI_STREAMING_AUDIO_DEVICE to select an output device, or SPOTATUI_STRE
     Ok(())
   }
 
+  /// Set repeat mode directly to a specific state (for MPRIS)
+  pub fn set_repeat_mode(&self, target_state: rspotify::model::enums::RepeatState) -> Result<()> {
+    use rspotify::model::enums::RepeatState;
+
+    match target_state {
+      RepeatState::Off => {
+        self.spirc.repeat(false)?;
+        self.spirc.repeat_track(false)?;
+      }
+      RepeatState::Context => {
+        self.spirc.repeat(true)?;
+        self.spirc.repeat_track(false)?;
+      }
+      RepeatState::Track => {
+        self.spirc.repeat(true)?;
+        self.spirc.repeat_track(true)?;
+      }
+    }
+    Ok(())
+  }
+
   /// Set the volume (0-100)
   pub fn set_volume(&self, volume: u8) {
     let volume_u16 = (f64::from(volume.min(100)) / 100.0 * 65535.0).round() as u16;

@@ -1174,6 +1174,8 @@ impl Network {
 
     // Check if we have both context and uris - this means play specific track within context
     let has_both = context_id.is_some() && uris.is_some();
+    // Track if this is a resume (no new track) vs starting new content
+    let is_resume = context_id.is_none() && uris.is_none();
 
     let result = if has_both {
       // Special case: Play a specific track within a context
@@ -1243,10 +1245,13 @@ impl Network {
           let _ = self.spotify.shuffle(true, device_id).await;
         }
 
-        // Reset progress and update playing state immediately
+        // Update playing state immediately
+        // Only reset progress for new tracks, not for resume
         {
           let mut app = self.app.lock().await;
-          app.song_progress_ms = 0;
+          if !is_resume {
+            app.song_progress_ms = 0;
+          }
           if let Some(ctx) = &mut app.current_playback_context {
             ctx.is_playing = true;
           }
@@ -1644,9 +1649,8 @@ impl Network {
     // Don't pin commands to a saved device_id; target Spotify's currently active device.
     match self.spotify.seek_track(position, None).await {
       Ok(()) => {
-        // Minimal delay for API seek (reduced from 200ms to 100ms)
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        self.get_current_playback().await;
+        // Don't immediately refresh playback - rapid seeks cause out-of-order responses
+        // that overwrite our target position. The normal polling cycle will update eventually.
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
