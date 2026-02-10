@@ -2602,8 +2602,76 @@ impl Network {
   ) {
     let max_playlists: u32 = 10_000;
 
-    // Fetch remaining playlist pages
-    let remaining_playlists_fut = async {
+    // Streaming: spawn remaining pages fetch concurrently, await rootlist first
+    // for early folder display, then collect remaining pages.
+    #[cfg(feature = "streaming")]
+    let (remaining_playlists, had_playlist_error, folder_nodes) = {
+      // Spawn remaining playlist pages as a concurrent background task
+      let remaining_handle = tokio::spawn(async move {
+        let mut remaining = Vec::new();
+        let mut offset = first_page_count;
+        let mut had_error = false;
+        while offset < total && offset < max_playlists {
+          match spotify
+            .current_user_playlists_manual(Some(limit), Some(offset))
+            .await
+          {
+            Ok(page) => {
+              let items_count = page.items.len() as u32;
+              remaining.extend(page.items);
+              if items_count < limit {
+                break;
+              }
+              offset += items_count;
+            }
+            Err(e) => {
+              had_error = true;
+              eprintln!("Failed to fetch playlist page at offset {}: {}", offset, e);
+              break;
+            }
+          }
+          tokio::task::yield_now().await;
+        }
+        (remaining, had_error)
+      });
+
+      // Fetch rootlist folders (typically fast — single API call).
+      // Runs concurrently with the remaining pages task spawned above.
+      let folder_nodes = fetch_rootlist_folders(&streaming_player).await;
+
+      // Intermediate update: apply folder structure to first-page playlists
+      // immediately so users can see and navigate folders before all pages load.
+      if folder_nodes.is_some() {
+        let mut app_guard = app.lock().await;
+        if app_guard.playlist_refresh_generation == refresh_generation {
+          let folder_items = if let Some(ref nodes) = folder_nodes {
+            structurize_playlist_folders(nodes, &app_guard.all_playlists)
+          } else {
+            build_flat_playlist_items(&app_guard.all_playlists)
+          };
+          app_guard.playlist_folder_nodes = folder_nodes.clone();
+          app_guard.playlist_folder_items = folder_items;
+          reconcile_playlist_selection(
+            &mut app_guard,
+            preferred_playlist_id.as_deref(),
+            preferred_folder_id,
+            preferred_selected_index,
+          );
+        }
+      }
+
+      // Wait for remaining playlist pages to finish
+      let (remaining, had_error) = match remaining_handle.await {
+        Ok(result) => result,
+        Err(_) => (Vec::new(), true),
+      };
+
+      (remaining, had_error, folder_nodes)
+    };
+
+    // Non-streaming: no folder structure available, just fetch remaining pages
+    #[cfg(not(feature = "streaming"))]
+    let (remaining_playlists, had_playlist_error, folder_nodes) = {
       let mut remaining = Vec::new();
       let mut offset = first_page_count;
       let mut had_error = false;
@@ -2628,20 +2696,9 @@ impl Network {
         }
         tokio::task::yield_now().await;
       }
-      (remaining, had_error)
+      let folder_nodes: Option<Vec<PlaylistFolderNode>> = None;
+      (remaining, had_error, folder_nodes)
     };
-
-    // Fetch rootlist folders concurrently with remaining pages (streaming only)
-    #[cfg(feature = "streaming")]
-    let ((remaining_playlists, had_playlist_error), folder_nodes) = tokio::join!(
-      remaining_playlists_fut,
-      fetch_rootlist_folders(&streaming_player),
-    );
-
-    #[cfg(not(feature = "streaming"))]
-    let (remaining_playlists, had_playlist_error) = remaining_playlists_fut.await;
-    #[cfg(not(feature = "streaming"))]
-    let folder_nodes: Option<Vec<PlaylistFolderNode>> = None;
 
     all_playlists.extend(remaining_playlists);
 
