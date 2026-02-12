@@ -22,6 +22,7 @@ use rspotify::{
   },
   prelude::*, // Adds Id trait for .id() method
 };
+use std::cell::Cell;
 use std::sync::mpsc::Sender;
 #[cfg(feature = "streaming")]
 use std::sync::Arc;
@@ -476,6 +477,8 @@ pub struct App {
   pub input: Vec<char>,
   pub input_idx: usize,
   pub input_cursor_position: u16,
+  /// Horizontal scroll offset for the input box, computed during rendering.
+  pub input_scroll_offset: Cell<u16>,
   pub liked_song_ids_set: HashSet<String>,
   pub followed_artist_ids_set: HashSet<String>,
   pub saved_album_ids_set: HashSet<String>,
@@ -657,6 +660,7 @@ impl Default for App {
       input: vec![],
       input_idx: 0,
       input_cursor_position: 0,
+      input_scroll_offset: Cell::new(0),
       playlist_offset: 0,
       playlist_tracks: None,
       playlists: None,

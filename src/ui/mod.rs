@@ -177,7 +177,19 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
 
   let input_string: String = app.input.iter().collect();
   let lines = Text::from(input_string.clone());
-  let input = Paragraph::new(lines).block(
+  // Compute horizontal scroll so the cursor stays visible within the input box.
+  // inner width = total width - 2 (for left and right borders)
+  let inner_width = input_area.width.saturating_sub(2);
+  let scroll_offset = if inner_width > 0 && app.input_cursor_position >= inner_width {
+    app.input_cursor_position - inner_width + 1
+  } else {
+    0
+  };
+  app.input_scroll_offset.set(scroll_offset);
+
+  let input = Paragraph::new(lines)
+    .scroll((0, scroll_offset))
+    .block(
     Block::default()
       .borders(Borders::ALL)
       .border_type(border_type)

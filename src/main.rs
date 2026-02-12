@@ -1754,7 +1754,7 @@ async fn start_ui(
 
       // Put the cursor back inside the input box
       terminal.backend_mut().execute(MoveTo(
-        cursor_offset + app.input_cursor_position,
+        cursor_offset + app.input_cursor_position - app.input_scroll_offset.get(),
         cursor_offset,
       ))?;
 
@@ -2024,7 +2024,7 @@ async fn start_ui(
         1
       };
       terminal.backend_mut().execute(MoveTo(
-        cursor_offset + app.input_cursor_position,
+        cursor_offset + app.input_cursor_position - app.input_scroll_offset.get(),
         cursor_offset,
       ))?;
 
