@@ -8,12 +8,15 @@
 - **Automatic OAuth Client Fallback**: If authentication or profile verification fails with the primary client ID, spotatui now retries automatically with `fallback_client_id` when configured.
 - **Client-Specific Token Caches**: OAuth tokens are now stored per client ID to avoid collisions when switching between primary and fallback credentials.
 - **Spotify API Compatibility Layer**: Added a raw request/normalization path for Spotify's February 2026 payload changes so responses can still map into existing models.
+- **Auth Reconfiguration Command**: Added `--reconfigure-auth` to rerun client authentication setup without deleting config files.
+- **One-Time Auth Migration Prompt**: Existing users are prompted once to update authentication setup after config format changes.
 
 ### Changed
 
 - **Authentication Flow Migrated to PKCE**: spotatui now authenticates with `AuthCodePkceSpotify` for better compatibility with current Spotify client-ID-based flows.
 - **Setup Prompt Order**: On first launch, global song counter opt-in is now prompted after client-ID setup (option 1/2), matching the onboarding sequence.
 - **ncspot Redirect URI Handling**: The shared ncspot client path now uses its expected redirect URI and callback port (`http://127.0.0.1:8989/login`).
+- **Help Text and Migration Copy**: Updated `--help` and startup migration wording to reflect the new authentication/configuration flow.
 
 ### Fixed
 
@@ -22,6 +25,7 @@
 - **Library/Follow Endpoint Migration**: Updated save/follow checks and mutations to use the new `/me/library` and `/me/library/contains` style flows for tracks, albums, shows, artists, and playlists.
 - **Startup/Discover 429 Handling**: Added Spotify rate-limit retries with `Retry-After` support, global API pacing, and non-fatal UI handling for transient 429 responses.
 - **Excess Startup API Pressure**: Reduced repeated liked-state checks on playback polling so idle startup no longer spams containment checks.
+- **Random Playback Poll Network Failures**: Transient request-send/network errors during playback polling now auto-retry with status messaging instead of forcing the blocking error modal.
 
 ## [0.35.7] - 2026-02-10
 

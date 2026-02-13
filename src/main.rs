@@ -522,7 +522,7 @@ async fn main() -> Result<()> {
     .override_usage("Press `?` while running the app to see keybindings")
     .before_help(BANNER)
     .after_help(
-      "Your spotify Client ID and Client Secret are stored in $HOME/.config/spotatui/client.yml",
+      "Client authentication settings are stored in $HOME/.config/spotatui/client.yml (use --reconfigure-auth to update them)",
     )
     .arg(
       Arg::new("tick-rate")
