@@ -7,11 +7,12 @@ use crate::config::ClientConfig;
 use crate::ui::util::create_artist_string;
 use anyhow::anyhow;
 use chrono::TimeDelta;
+use reqwest::Method;
 use rspotify::{
   model::{
     album::SimplifiedAlbum,
     artist::FullArtist,
-    enums::{AdditionalType, Country, RepeatState, SearchType},
+    enums::{Country, RepeatState, SearchType},
     idtypes::{AlbumId, ArtistId, PlayContextId, PlayableId, PlaylistId, ShowId, TrackId, UserId},
     page::Page,
     playlist::PlaylistItem,
@@ -24,9 +25,10 @@ use rspotify::{
   prelude::*,
   AuthCodeSpotify,
 };
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
+use serde_json::{json, Value};
 use std::{
-  sync::Arc,
+  sync::{Arc, OnceLock},
   time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
@@ -143,6 +145,14 @@ struct LrcResponse {
 struct GlobalSongCountResponse {
   count: u64,
 }
+
+#[derive(Deserialize, Debug)]
+struct ArtistSearchResponse {
+  artists: Page<FullArtist>,
+}
+
+static SPOTIFY_API_PACING: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+const SPOTIFY_API_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
 impl Network {
   #[cfg(feature = "streaming")]
@@ -450,6 +460,262 @@ impl Network {
     app.handle_error(e);
   }
 
+  async fn show_status_message(&self, message: String, ttl_secs: u64) {
+    let mut app = self.app.lock().await;
+    app.status_message = Some(message);
+    app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl_secs));
+  }
+
+  fn is_rate_limited_error(e: &anyhow::Error) -> bool {
+    let text = e.to_string();
+    text.contains("429") || text.contains("Too Many Requests") || text.contains("Too many requests")
+  }
+
+  async fn pace_spotify_api_call() {
+    let pacing_lock = SPOTIFY_API_PACING.get_or_init(|| Mutex::new(None));
+    let mut last_request_started_at = pacing_lock.lock().await;
+
+    if let Some(last) = *last_request_started_at {
+      let elapsed = last.elapsed();
+      if elapsed < SPOTIFY_API_MIN_INTERVAL {
+        tokio::time::sleep(SPOTIFY_API_MIN_INTERVAL - elapsed).await;
+      }
+    }
+
+    *last_request_started_at = Some(Instant::now());
+  }
+
+  async fn spotify_api_request_json_for(
+    spotify: &AuthCodeSpotify,
+    method: Method,
+    path: &str,
+    query: &[(&str, String)],
+    body: Option<Value>,
+  ) -> anyhow::Result<Value> {
+    let access_token = {
+      let token_lock = spotify.token.lock().await.expect("Failed to lock token");
+      token_lock
+        .as_ref()
+        .map(|t| t.access_token.clone())
+        .ok_or_else(|| anyhow!("No access token available"))?
+    };
+
+    let mut url = reqwest::Url::parse("https://api.spotify.com/v1/")?.join(path)?;
+    if !query.is_empty() {
+      let mut qp = url.query_pairs_mut();
+      for (k, v) in query {
+        qp.append_pair(k, v);
+      }
+    }
+
+    let client = reqwest::Client::new();
+    let mut attempt: u8 = 0;
+    let max_attempts: u8 = 4;
+
+    loop {
+      Self::pace_spotify_api_call().await;
+
+      let mut request = client
+        .request(method.clone(), url.clone())
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json");
+
+      if let Some(payload) = body.clone() {
+        request = request.json(&payload);
+      }
+
+      let response = request.send().await?;
+      if response.status().is_success() {
+        let response_body = response.text().await?;
+        if response_body.trim().is_empty() {
+          return Ok(Value::Null);
+        }
+        return Ok(serde_json::from_str(&response_body)?);
+      }
+
+      let status = response.status();
+      if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt + 1 < max_attempts {
+        let retry_after_secs = response
+          .headers()
+          .get("retry-after")
+          .and_then(|h| h.to_str().ok())
+          .and_then(|v| v.parse::<u64>().ok())
+          .unwrap_or(1);
+
+        let backoff_secs = retry_after_secs.max(1) + u64::from(attempt);
+        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        attempt += 1;
+        continue;
+      }
+
+      let body = response.text().await.unwrap_or_default();
+      return Err(anyhow!("Spotify API {} failed: {}", status, body));
+    }
+  }
+
+  fn normalize_spotify_payload(value: &mut Value) {
+    match value {
+      Value::Object(map) => {
+        if let Some(Value::Array(items)) = map.get_mut("items") {
+          items.retain(|item| !item.is_null());
+        }
+
+        if map.contains_key("snapshot_id") && map.contains_key("owner") && map.contains_key("id") {
+          if !map.contains_key("tracks") {
+            if let Some(items_obj) = map.get("items").cloned() {
+              map.insert("tracks".to_string(), items_obj);
+            } else {
+              map.insert("tracks".to_string(), json!({ "href": "", "total": 0 }));
+            }
+          }
+        }
+
+        if map.contains_key("added_at") && !map.contains_key("track") {
+          if let Some(item_obj) = map.get("item").cloned() {
+            map.insert("track".to_string(), item_obj);
+          }
+        }
+
+        if map.contains_key("album")
+          && map.contains_key("artists")
+          && map.contains_key("track_number")
+          && map.contains_key("duration_ms")
+        {
+          map
+            .entry("available_markets".to_string())
+            .or_insert_with(|| json!([]));
+          map
+            .entry("external_ids".to_string())
+            .or_insert_with(|| json!({}));
+          map.entry("linked_from".to_string()).or_insert(Value::Null);
+          map
+            .entry("popularity".to_string())
+            .or_insert_with(|| json!(0));
+        }
+
+        if map.contains_key("media_type")
+          && map.contains_key("languages")
+          && map.contains_key("description")
+          && map.contains_key("name")
+        {
+          map
+            .entry("available_markets".to_string())
+            .or_insert_with(|| json!([]));
+          map
+            .entry("publisher".to_string())
+            .or_insert_with(|| json!(""));
+        }
+
+        if map.contains_key("album_type")
+          && map.contains_key("artists")
+          && map.contains_key("images")
+          && map.contains_key("name")
+        {
+          if map.contains_key("tracks") {
+            map
+              .entry("available_markets".to_string())
+              .or_insert(Value::Null);
+            map
+              .entry("external_ids".to_string())
+              .or_insert_with(|| json!({}));
+            map
+              .entry("popularity".to_string())
+              .or_insert_with(|| json!(0));
+            map.entry("label".to_string()).or_insert(Value::Null);
+          } else {
+            map
+              .entry("available_markets".to_string())
+              .or_insert_with(|| json!([]));
+          }
+        }
+
+        let looks_like_artist = map
+          .get("type")
+          .and_then(Value::as_str)
+          .is_some_and(|t| t == "artist")
+          || (map.contains_key("external_urls")
+            && map.contains_key("name")
+            && map.contains_key("id")
+            && (map.contains_key("genres") || map.contains_key("images")));
+
+        if looks_like_artist {
+          map.entry("href".to_string()).or_insert_with(|| json!(""));
+          map.entry("genres".to_string()).or_insert_with(|| json!([]));
+          map.entry("images".to_string()).or_insert_with(|| json!([]));
+          map
+            .entry("followers".to_string())
+            .or_insert_with(|| json!({ "href": null, "total": 0 }));
+          map
+            .entry("popularity".to_string())
+            .or_insert_with(|| json!(0));
+        }
+
+        for child in map.values_mut() {
+          Self::normalize_spotify_payload(child);
+        }
+      }
+      Value::Array(values) => {
+        values.retain(|item| !item.is_null());
+        for child in values.iter_mut() {
+          Self::normalize_spotify_payload(child);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  async fn spotify_get_typed_compat_for<T: DeserializeOwned>(
+    spotify: &AuthCodeSpotify,
+    path: &str,
+    query: &[(&str, String)],
+  ) -> anyhow::Result<T> {
+    let mut value =
+      Self::spotify_api_request_json_for(spotify, Method::GET, path, query, None).await?;
+    Self::normalize_spotify_payload(&mut value);
+    Ok(serde_json::from_value(value)?)
+  }
+
+  async fn spotify_get_typed_compat<T: DeserializeOwned>(
+    &self,
+    path: &str,
+    query: &[(&str, String)],
+  ) -> anyhow::Result<T> {
+    Self::spotify_get_typed_compat_for(&self.spotify, path, query).await
+  }
+
+  async fn library_contains_uris(&self, uris: &[String]) -> anyhow::Result<Vec<bool>> {
+    Self::spotify_get_typed_compat_for(
+      &self.spotify,
+      "me/library/contains",
+      &[("uris", uris.join(","))],
+    )
+    .await
+  }
+
+  async fn library_save_uris(&self, uris: &[String]) -> anyhow::Result<()> {
+    Self::spotify_api_request_json_for(
+      &self.spotify,
+      Method::PUT,
+      "me/library",
+      &[],
+      Some(json!({ "uris": uris })),
+    )
+    .await?;
+    Ok(())
+  }
+
+  async fn library_remove_uris(&self, uris: &[String]) -> anyhow::Result<()> {
+    Self::spotify_api_request_json_for(
+      &self.spotify,
+      Method::DELETE,
+      "me/library",
+      &[],
+      Some(json!({ "uris": uris })),
+    )
+    .await?;
+    Ok(())
+  }
+
   async fn get_user(&mut self) {
     match self.spotify.me().await {
       Ok(user) => {
@@ -457,7 +723,17 @@ impl Network {
         app.user = Some(user);
       }
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        let err = anyhow!(e);
+        if Self::is_rate_limited_error(&err) {
+          self
+            .show_status_message(
+              "Spotify rate limit hit while loading profile. Retrying automatically.".to_string(),
+              6,
+            )
+            .await;
+          return;
+        }
+        self.handle_error(err).await;
       }
     }
   }
@@ -505,10 +781,9 @@ impl Network {
       };
 
     let context = self
-      .spotify
-      .current_playback(
-        None,
-        Some(&[AdditionalType::Episode, AdditionalType::Track]),
+      .spotify_get_typed_compat::<Option<rspotify::model::CurrentPlaybackContext>>(
+        "me/player",
+        &[("additional_types", "episode,track".to_string())],
       )
       .await;
 
@@ -560,12 +835,13 @@ impl Network {
                     create_artist_string(&track.artists),
                     duration_secs,
                   ));
+
+                  app.dispatch(IoEvent::CurrentUserSavedTracksContains(vec![track_id
+                    .clone()
+                    .into_static()]));
                 }
 
                 app.last_track_id = Some(track_id_str);
-                app.dispatch(IoEvent::CurrentUserSavedTracksContains(vec![track_id
-                  .clone()
-                  .into_static()]));
               };
             }
             PlayableItem::Episode(_episode) => { /*should map this to following the podcast show*/ }
@@ -636,6 +912,19 @@ impl Network {
         app.instant_since_last_current_playback_poll = Instant::now();
       }
       Err(e) => {
+        app.is_fetching_current_playback = false;
+
+        let error_text = e.to_string();
+        if error_text.contains("429") || error_text.contains("Too Many Requests") {
+          app.status_message = Some(
+            "Spotify rate limit hit. Retrying automatically; please wait a few seconds."
+              .to_string(),
+          );
+          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(6));
+          app.instant_since_last_current_playback_poll = Instant::now();
+          return;
+        }
+
         drop(app); // Release lock before error handler
         self.handle_error(anyhow!(e)).await;
         return;
@@ -647,11 +936,12 @@ impl Network {
   }
 
   async fn current_user_saved_tracks_contains(&mut self, ids: Vec<TrackId<'_>>) {
-    match self
-      .spotify
-      .current_user_saved_tracks_contains(ids.clone())
-      .await
-    {
+    let uris: Vec<String> = ids
+      .iter()
+      .map(|id| format!("spotify:track:{}", id.id()))
+      .collect();
+
+    match self.library_contains_uris(&uris).await {
       Ok(is_saved_vec) => {
         let mut app = self.app.lock().await;
         for (i, id) in ids.iter().enumerate() {
@@ -668,21 +958,22 @@ impl Network {
         }
       }
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        let mut app = self.app.lock().await;
+        app.status_message = Some(format!("Could not check liked track state: {}", e));
+        app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(5));
       }
     }
   }
 
   async fn get_playlist_tracks(&mut self, playlist_id: PlaylistId<'_>, playlist_offset: u32) {
-    // Use playlist_items_manual to fetch pages incrementally with proper metadata
+    let path = format!("playlists/{}/items", playlist_id.id());
     match self
-      .spotify
-      .playlist_items_manual(
-        playlist_id,
-        None,
-        None,
-        Some(self.large_search_limit),
-        Some(playlist_offset),
+      .spotify_get_typed_compat::<Page<PlaylistItem>>(
+        &path,
+        &[
+          ("limit", self.large_search_limit.to_string()),
+          ("offset", playlist_offset.to_string()),
+        ],
       )
       .await
     {
@@ -752,9 +1043,13 @@ impl Network {
   }
 
   async fn get_current_user_saved_shows(&mut self, offset: Option<u32>) {
+    let mut query = vec![("limit", self.large_search_limit.to_string())];
+    if let Some(offset) = offset {
+      query.push(("offset", offset.to_string()));
+    }
+
     match self
-      .spotify
-      .get_saved_show_manual(Some(self.large_search_limit), offset)
+      .spotify_get_typed_compat::<Page<rspotify::model::show::Show>>("me/shows", &query)
       .await
     {
       Ok(saved_shows) => {
@@ -771,7 +1066,11 @@ impl Network {
   }
 
   async fn current_user_saved_shows_contains(&mut self, show_ids: Vec<ShowId<'_>>) {
-    match self.spotify.check_users_saved_shows(show_ids.clone()).await {
+    let uris: Vec<String> = show_ids
+      .iter()
+      .map(|id| format!("spotify:show:{}", id.id()))
+      .collect();
+    match self.library_contains_uris(&uris).await {
       Ok(is_saved_vec) => {
         let mut app = self.app.lock().await;
         for (i, id) in show_ids.iter().enumerate() {
@@ -795,9 +1094,13 @@ impl Network {
 
   async fn get_show_episodes(&mut self, show: Box<SimplifiedShow>) {
     let show_id = show.id.clone();
+    let path = format!("shows/{}/episodes", show_id.id());
+    let query = vec![
+      ("limit", self.large_search_limit.to_string()),
+      ("offset", "0".to_string()),
+    ];
     match self
-      .spotify
-      .get_shows_episodes_manual(show_id, None, Some(self.large_search_limit), Some(0))
+      .spotify_get_typed_compat::<Page<rspotify::model::show::SimplifiedEpisode>>(&path, &query)
       .await
     {
       Ok(episodes) => {
@@ -820,7 +1123,11 @@ impl Network {
   }
 
   async fn get_show(&mut self, show_id: ShowId<'_>) {
-    match self.spotify.get_a_show(show_id, None).await {
+    let path = format!("shows/{}", show_id.id());
+    match self
+      .spotify_get_typed_compat::<rspotify::model::show::FullShow>(&path, &[])
+      .await
+    {
       Ok(show) => {
         let selected_show = SelectedFullShow { show };
 
@@ -838,9 +1145,14 @@ impl Network {
   }
 
   async fn get_current_show_episodes(&mut self, show_id: ShowId<'_>, offset: Option<u32>) {
+    let path = format!("shows/{}/episodes", show_id.id());
+    let mut query = vec![("limit", self.large_search_limit.to_string())];
+    if let Some(offset) = offset {
+      query.push(("offset", offset.to_string()));
+    }
+
     match self
-      .spotify
-      .get_shows_episodes_manual(show_id, None, Some(self.large_search_limit), offset)
+      .spotify_get_typed_compat::<Page<rspotify::model::show::SimplifiedEpisode>>(&path, &query)
       .await
     {
       Ok(episodes) => {
@@ -864,15 +1176,6 @@ impl Network {
     let search_track = self.spotify.search(
       &search_term,
       SearchType::Track,
-      None,
-      None, // include_external
-      Some(self.small_search_limit),
-      Some(0),
-    );
-
-    let search_artist = self.spotify.search(
-      &search_term,
-      SearchType::Artist,
       None,
       None, // include_external
       Some(self.small_search_limit),
@@ -906,26 +1209,35 @@ impl Network {
       Some(0),
     );
 
+    let artist_query = vec![
+      ("q", search_term.clone()),
+      ("type", "artist".to_string()),
+      ("limit", self.small_search_limit.to_string()),
+      ("offset", "0".to_string()),
+    ];
+
     // Run all futures concurrently
-    let (main_search, playlist_search) = tokio::join!(
-      async { try_join!(search_track, search_artist, search_album, search_show) },
-      search_playlist
+    let (main_search, playlist_search, artist_search) = tokio::join!(
+      async { try_join!(search_track, search_album, search_show) },
+      search_playlist,
+      self.spotify_get_typed_compat::<ArtistSearchResponse>("search", &artist_query)
     );
 
     // Handle main search results
-    let (track_result, artist_result, album_result, show_result) = match main_search {
+    let (track_result, album_result, show_result) = match main_search {
       Ok((
         SearchResult::Tracks(tracks),
-        SearchResult::Artists(artists),
         SearchResult::Albums(albums),
         SearchResult::Shows(shows),
-      )) => (Some(tracks), Some(artists), Some(albums), Some(shows)),
+      )) => (Some(tracks), Some(albums), Some(shows)),
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
         return;
       }
       _ => return,
     };
+
+    let artist_result = artist_search.ok().map(|res| res.artists);
 
     // Handle playlist search separately since it can fail with null fields from Spotify API
     // Silently ignore playlist errors - this is a known Spotify API issue
@@ -986,9 +1298,13 @@ impl Network {
   }
 
   async fn get_current_user_saved_tracks(&mut self, offset: Option<u32>) {
+    let mut query = vec![("limit", self.large_search_limit.to_string())];
+    if let Some(offset) = offset {
+      query.push(("offset", offset.to_string()));
+    }
+
     match self
-      .spotify
-      .current_user_saved_tracks_manual(None, Some(self.large_search_limit), offset)
+      .spotify_get_typed_compat::<Page<rspotify::model::SavedTrack>>("me/tracks", &query)
       .await
     {
       Ok(saved_tracks) => {
@@ -1432,9 +1748,16 @@ impl Network {
     let mut offset = tracks_loaded;
 
     while offset < current_total && offset < tracks_loaded + max_tracks_to_prefetch {
-      match spotify
-        .current_user_saved_tracks_manual(None, Some(large_search_limit), Some(offset))
-        .await
+      let query = vec![
+        ("limit", large_search_limit.to_string()),
+        ("offset", offset.to_string()),
+      ];
+      match Self::spotify_get_typed_compat_for::<Page<rspotify::model::SavedTrack>>(
+        &spotify,
+        "me/tracks",
+        &query,
+      )
+      .await
       {
         Ok(saved_tracks) => {
           {
@@ -1488,15 +1811,12 @@ impl Network {
     let mut offset = current_offset + large_search_limit;
 
     while offset < current_total && offset < current_offset + max_tracks_to_prefetch {
-      match spotify
-        .playlist_items_manual(
-          playlist_id.clone(),
-          None,
-          None,
-          Some(large_search_limit),
-          Some(offset),
-        )
-        .await
+      let path = format!("playlists/{}/items", playlist_id.id());
+      let query = vec![
+        ("limit", large_search_limit.to_string()),
+        ("offset", offset.to_string()),
+      ];
+      match Self::spotify_get_typed_compat_for::<Page<PlaylistItem>>(&spotify, &path, &query).await
       {
         Ok(playlist_page) => {
           {
@@ -1538,15 +1858,13 @@ impl Network {
     let mut offset = 0;
 
     while offset < total {
+      let path = format!("playlists/{}/items", playlist_id.id());
+      let query = vec![
+        ("limit", self.large_search_limit.to_string()),
+        ("offset", offset.to_string()),
+      ];
       match self
-        .spotify
-        .playlist_items_manual(
-          playlist_id.clone(),
-          None,
-          None,
-          Some(self.large_search_limit),
-          Some(offset),
-        )
+        .spotify_get_typed_compat::<Page<PlaylistItem>>(&path, &query)
         .await
       {
         Ok(page) => {
@@ -1822,10 +2140,23 @@ impl Network {
     // Send API request (don't block on response)
     // Don't pin commands to a saved device_id; target Spotify's currently active device.
     if let Err(e) = self.spotify.shuffle(new_shuffle_state, None).await {
+      let err = anyhow!(e);
+
+      if Self::is_rate_limited_error(&err) {
+        self
+          .show_status_message(
+            "Spotify rate limit hit while syncing shuffle. It will sync shortly.".to_string(),
+            5,
+          )
+          .await;
+        return;
+      }
+
       // On startup we try to apply the saved shuffle preference before there is any active
       // playback device. Spotify returns a 404 in this case; don't show the error screen.
       if is_startup_sync {
-        if let rspotify::ClientError::Http(http) = &e {
+        if let Some(rspotify::ClientError::Http(http)) = err.downcast_ref::<rspotify::ClientError>()
+        {
           if let rspotify::http::HttpError::StatusCode(response) = http.as_ref() {
             if response.status().as_u16() == 404 {
               let mut app = self.app.lock().await;
@@ -1836,7 +2167,7 @@ impl Network {
           }
         }
       }
-      self.handle_error(anyhow!(e)).await;
+      self.handle_error(err).await;
     }
   }
 
@@ -2000,14 +2331,14 @@ impl Network {
     input_artist_name: String,
     country: Option<Country>,
   ) {
-    // Convert Country to Market for rspotify 0.12 API
-    let market = country.map(Market::Country);
+    // Avoid passing market here; restricted API payloads can omit fields required by rspotify models.
+    let _market = country.map(Market::Country);
 
     // Use artist_albums_manual for explicit pagination control
     let albums = self.spotify.artist_albums_manual(
       artist_id.clone(),
       None,
-      market,
+      None,
       Some(self.large_search_limit),
       Some(0),
     );
@@ -2021,11 +2352,13 @@ impl Network {
     } else {
       input_artist_name
     };
-    let top_tracks = self.spotify.artist_top_tracks(artist_id.clone(), market);
-
-    // Fetch required data (albums and top_tracks)
-    match try_join!(albums, top_tracks) {
-      Ok((albums, top_tracks)) => {
+    match albums.await {
+      Ok(albums) => {
+        let top_tracks = self
+          .spotify
+          .artist_top_tracks(artist_id.clone(), None)
+          .await
+          .unwrap_or_default();
         // Try to fetch related artists, but don't fail if it's unavailable (deprecated endpoint)
         #[allow(deprecated)]
         let related_artist = self
@@ -2177,14 +2510,30 @@ impl Network {
     let track_ids = recommendations
       .tracks
       .iter()
+      .take(10)
       .filter_map(|track| track.id.clone())
       .collect::<Vec<TrackId>>();
 
-    if let Ok(result) = self.spotify.tracks(track_ids, None).await {
-      return Some(result);
+    if track_ids.is_empty() {
+      return Some(Vec::new());
     }
 
-    None
+    let mut tracks = Vec::with_capacity(track_ids.len());
+    for track_id in track_ids {
+      let path = format!("tracks/{}", track_id.id());
+      if let Ok(track) = self
+        .spotify_get_typed_compat::<rspotify::model::track::FullTrack>(&path, &[])
+        .await
+      {
+        tracks.push(track);
+      }
+    }
+
+    if tracks.is_empty() {
+      None
+    } else {
+      Some(tracks)
+    }
   }
 
   async fn get_recommendations_for_track_id(
@@ -2203,18 +2552,11 @@ impl Network {
   async fn toggle_save_track(&mut self, playable_id: PlayableId<'_>) {
     match playable_id {
       PlayableId::Track(track_id) => {
-        match self
-          .spotify
-          .current_user_saved_tracks_contains([track_id.clone()])
-          .await
-        {
+        let uri = format!("spotify:track:{}", track_id.id());
+        match self.library_contains_uris(std::slice::from_ref(&uri)).await {
           Ok(saved) => {
             if saved.first() == Some(&true) {
-              match self
-                .spotify
-                .current_user_saved_tracks_delete([track_id.clone()])
-                .await
-              {
+              match self.library_remove_uris(std::slice::from_ref(&uri)).await {
                 Ok(()) => {
                   let mut app = self.app.lock().await;
                   app.liked_song_ids_set.remove(track_id.id());
@@ -2224,11 +2566,7 @@ impl Network {
                 }
               }
             } else {
-              match self
-                .spotify
-                .current_user_saved_tracks_add([track_id.clone()])
-                .await
-              {
+              match self.library_save_uris(std::slice::from_ref(&uri)).await {
                 Ok(()) => {
                   let mut app = self.app.lock().await;
                   app.liked_song_ids_set.insert(track_id.id().to_string());
@@ -2299,14 +2637,23 @@ impl Network {
 
   async fn get_followed_artists(&mut self, after: Option<ArtistId<'_>>) {
     // Convert after ID to string for the API call
-    let after_str = after.as_ref().map(|id| id.id());
+    let mut query = vec![
+      ("type", "artist".to_string()),
+      ("limit", self.large_search_limit.to_string()),
+    ];
+    if let Some(after) = after.as_ref() {
+      query.push(("after", after.id().to_string()));
+    }
 
     match self
-      .spotify
-      .current_user_followed_artists(after_str, Some(self.large_search_limit))
+      .spotify_get_typed_compat::<rspotify::model::artist::CursorPageFullArtists>(
+        "me/following",
+        &query,
+      )
       .await
     {
-      Ok(saved_artists) => {
+      Ok(saved_artists_page) => {
+        let saved_artists = saved_artists_page.artists;
         let mut app = self.app.lock().await;
         app.artists = saved_artists.items.to_owned();
         app.library.saved_artists.add_pages(saved_artists);
@@ -2318,11 +2665,11 @@ impl Network {
   }
 
   async fn user_artist_check_follow(&mut self, artist_ids: Vec<ArtistId<'_>>) {
-    if let Ok(are_followed) = self
-      .spotify
-      .user_artist_check_follow(artist_ids.clone())
-      .await
-    {
+    let uris: Vec<String> = artist_ids
+      .iter()
+      .map(|id| format!("spotify:artist:{}", id.id()))
+      .collect();
+    if let Ok(are_followed) = self.library_contains_uris(&uris).await {
       let mut app = self.app.lock().await;
       artist_ids
         .iter()
@@ -2338,9 +2685,13 @@ impl Network {
   }
 
   async fn get_current_user_saved_albums(&mut self, offset: Option<u32>) {
+    let mut query = vec![("limit", self.large_search_limit.to_string())];
+    if let Some(offset) = offset {
+      query.push(("offset", offset.to_string()));
+    }
+
     match self
-      .spotify
-      .current_user_saved_albums_manual(None, Some(self.large_search_limit), offset)
+      .spotify_get_typed_compat::<Page<rspotify::model::SavedAlbum>>("me/albums", &query)
       .await
     {
       Ok(saved_albums) => {
@@ -2357,11 +2708,11 @@ impl Network {
   }
 
   async fn current_user_saved_albums_contains(&mut self, album_ids: Vec<AlbumId<'_>>) {
-    if let Ok(are_followed) = self
-      .spotify
-      .current_user_saved_albums_contains(album_ids.clone())
-      .await
-    {
+    let uris: Vec<String> = album_ids
+      .iter()
+      .map(|id| format!("spotify:album:{}", id.id()))
+      .collect();
+    if let Ok(are_followed) = self.library_contains_uris(&uris).await {
       let mut app = self.app.lock().await;
       album_ids
         .iter()
@@ -2377,11 +2728,8 @@ impl Network {
   }
 
   pub async fn current_user_saved_album_delete(&mut self, album_id: AlbumId<'_>) {
-    match self
-      .spotify
-      .current_user_saved_albums_delete([album_id.clone()])
-      .await
-    {
+    let uri = format!("spotify:album:{}", album_id.id());
+    match self.library_remove_uris(std::slice::from_ref(&uri)).await {
       Ok(_) => {
         self.get_current_user_saved_albums(None).await;
         let mut app = self.app.lock().await;
@@ -2394,11 +2742,8 @@ impl Network {
   }
 
   async fn current_user_saved_album_add(&mut self, album_id: AlbumId<'_>) {
-    match self
-      .spotify
-      .current_user_saved_albums_add([album_id.clone()])
-      .await
-    {
+    let uri = format!("spotify:album:{}", album_id.id());
+    match self.library_save_uris(std::slice::from_ref(&uri)).await {
       Ok(_) => {
         let mut app = self.app.lock().await;
         app.saved_album_ids_set.insert(album_id.id().to_string());
@@ -2408,11 +2753,8 @@ impl Network {
   }
 
   async fn current_user_saved_shows_delete(&mut self, show_id: ShowId<'_>) {
-    match self
-      .spotify
-      .remove_users_saved_shows([show_id.clone()], None)
-      .await
-    {
+    let uri = format!("spotify:show:{}", show_id.id());
+    match self.library_remove_uris(std::slice::from_ref(&uri)).await {
       Ok(_) => {
         self.get_current_user_saved_shows(None).await;
         let mut app = self.app.lock().await;
@@ -2425,7 +2767,8 @@ impl Network {
   }
 
   async fn current_user_saved_shows_add(&mut self, show_id: ShowId<'_>) {
-    match self.spotify.save_shows([show_id.clone()]).await {
+    let uri = format!("spotify:show:{}", show_id.id());
+    match self.library_save_uris(std::slice::from_ref(&uri)).await {
       Ok(_) => {
         self.get_current_user_saved_shows(None).await;
         let mut app = self.app.lock().await;
@@ -2438,7 +2781,11 @@ impl Network {
   }
 
   async fn user_unfollow_artists(&mut self, artist_ids: Vec<ArtistId<'_>>) {
-    match self.spotify.user_unfollow_artists(artist_ids.clone()).await {
+    let uris: Vec<String> = artist_ids
+      .iter()
+      .map(|id| format!("spotify:artist:{}", id.id()))
+      .collect();
+    match self.library_remove_uris(&uris).await {
       Ok(_) => {
         self.get_followed_artists(None).await;
         let mut app = self.app.lock().await;
@@ -2453,7 +2800,11 @@ impl Network {
   }
 
   async fn user_follow_artists(&mut self, artist_ids: Vec<ArtistId<'_>>) {
-    match self.spotify.user_follow_artists(artist_ids.clone()).await {
+    let uris: Vec<String> = artist_ids
+      .iter()
+      .map(|id| format!("spotify:artist:{}", id.id()))
+      .collect();
+    match self.library_save_uris(&uris).await {
       Ok(_) => {
         self.get_followed_artists(None).await;
         let mut app = self.app.lock().await;
@@ -2473,7 +2824,9 @@ impl Network {
     playlist_id: PlaylistId<'_>,
     is_public: Option<bool>,
   ) {
-    match self.spotify.playlist_follow(playlist_id, is_public).await {
+    let _ = is_public;
+    let uri = format!("spotify:playlist:{}", playlist_id.id());
+    match self.library_save_uris(std::slice::from_ref(&uri)).await {
       Ok(_) => {
         self.get_current_user_playlists().await;
       }
@@ -2484,7 +2837,8 @@ impl Network {
   }
 
   async fn user_unfollow_playlist(&mut self, _user_id: UserId<'_>, playlist_id: PlaylistId<'_>) {
-    match self.spotify.playlist_unfollow(playlist_id).await {
+    let uri = format!("spotify:playlist:{}", playlist_id.id());
+    match self.library_remove_uris(std::slice::from_ref(&uri)).await {
       Ok(_) => {
         self.get_current_user_playlists().await;
       }
@@ -2496,14 +2850,28 @@ impl Network {
 
   async fn get_current_user_playlists(&mut self) {
     // Step 1: Fetch ONLY the first page (single API call, fast)
+    let first_query = vec![("limit", self.large_search_limit.to_string())];
     let first_page = match self
-      .spotify
-      .current_user_playlists_manual(Some(self.large_search_limit), None)
+      .spotify_get_typed_compat::<Page<rspotify::model::playlist::SimplifiedPlaylist>>(
+        "me/playlists",
+        &first_query,
+      )
       .await
     {
       Ok(p) => p,
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        let err = anyhow!(e);
+        if Self::is_rate_limited_error(&err) {
+          self
+            .show_status_message(
+              "Spotify rate limit hit while loading playlists. Will retry on next refresh."
+                .to_string(),
+              6,
+            )
+            .await;
+          return;
+        }
+        self.handle_error(err).await;
         return;
       }
     };
@@ -2612,9 +2980,11 @@ impl Network {
         let mut offset = first_page_count;
         let mut had_error = false;
         while offset < total && offset < max_playlists {
-          match spotify
-            .current_user_playlists_manual(Some(limit), Some(offset))
-            .await
+          let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+          match Self::spotify_get_typed_compat_for::<
+            Page<rspotify::model::playlist::SimplifiedPlaylist>,
+          >(&spotify, "me/playlists", &query)
+          .await
           {
             Ok(page) => {
               let items_count = page.items.len() as u32;
@@ -2676,9 +3046,11 @@ impl Network {
       let mut offset = first_page_count;
       let mut had_error = false;
       while offset < total && offset < max_playlists {
-        match spotify
-          .current_user_playlists_manual(Some(limit), Some(offset))
-          .await
+        let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+        match Self::spotify_get_typed_compat_for::<
+          Page<rspotify::model::playlist::SimplifiedPlaylist>,
+        >(&spotify, "me/playlists", &query)
+        .await
         {
           Ok(page) => {
             let items_count = page.items.len() as u32;
@@ -2747,9 +3119,12 @@ impl Network {
   }
 
   async fn get_recently_played(&mut self) {
+    let query = vec![("limit", self.large_search_limit.to_string())];
     match self
-      .spotify
-      .current_user_recently_played(Some(self.large_search_limit), None)
+      .spotify_get_typed_compat::<rspotify::model::CursorBasedPage<rspotify::model::PlayHistory>>(
+        "me/player/recently-played",
+        &query,
+      )
       .await
     {
       Ok(result) => {
@@ -3200,7 +3575,6 @@ impl Network {
   /// Fetch user's top tracks for the Discover feature
   async fn get_user_top_tracks(&mut self, time_range: crate::app::DiscoverTimeRange) {
     use crate::app::DiscoverTimeRange;
-    use futures::stream::StreamExt;
     use rspotify::model::TimeRange;
 
     let spotify_time_range = match time_range {
@@ -3209,27 +3583,46 @@ impl Network {
       DiscoverTimeRange::Long => TimeRange::LongTerm,
     };
 
+    let spotify_time_range_param = match spotify_time_range {
+      TimeRange::ShortTerm => "short_term",
+      TimeRange::MediumTerm => "medium_term",
+      TimeRange::LongTerm => "long_term",
+    };
+
     {
       let mut app = self.app.lock().await;
       app.discover_loading = true;
     }
 
-    let spotify = self.spotify.clone();
-    let mut stream = spotify.current_user_top_tracks(Some(spotify_time_range));
-    let mut tracks = vec![];
+    let query = vec![
+      ("time_range", spotify_time_range_param.to_string()),
+      ("limit", "50".to_string()),
+      ("offset", "0".to_string()),
+    ];
 
-    while let Some(item) = stream.next().await {
-      match item {
-        Ok(track) => tracks.push(track),
-        Err(e) => {
-          self.handle_error(anyhow!(e)).await;
-          break;
+    let tracks = match self
+      .spotify_get_typed_compat::<Page<FullTrack>>("me/top/tracks", &query)
+      .await
+    {
+      Ok(page) => page.items,
+      Err(e) => {
+        let err = anyhow!(e);
+        if Self::is_rate_limited_error(&err) {
+          self
+            .show_status_message(
+              "Spotify rate limit hit while loading top tracks. Try again in a few seconds."
+                .to_string(),
+              6,
+            )
+            .await;
+        } else {
+          self.handle_error(err).await;
         }
+        let mut app = self.app.lock().await;
+        app.discover_loading = false;
+        return;
       }
-      if tracks.len() >= 50 {
-        break;
-      }
-    }
+    };
 
     let mut app = self.app.lock().await;
     app.discover_top_tracks = tracks.clone();
@@ -3247,48 +3640,85 @@ impl Network {
 
   /// Fetch Top Artists Mix - fetches top artists and then their top tracks to create a mix
   async fn get_top_artists_mix(&mut self) {
-    use futures::stream::StreamExt;
     use rand::seq::SliceRandom;
-    use rspotify::model::TimeRange;
 
     {
       let mut app = self.app.lock().await;
       app.discover_loading = true;
     }
 
-    let spotify = self.spotify.clone();
-    let mut artists_stream = spotify.current_user_top_artists(Some(TimeRange::MediumTerm));
-    let mut artists = vec![];
-
-    while let Some(item) = artists_stream.next().await {
-      match item {
-        Ok(artist) => artists.push(artist),
-        Err(e) => {
-          self.handle_error(anyhow!(e)).await;
-          break;
+    let artist_query = vec![
+      ("time_range", "medium_term".to_string()),
+      ("limit", "5".to_string()),
+      ("offset", "0".to_string()),
+    ];
+    let artists = match self
+      .spotify_get_typed_compat::<Page<FullArtist>>("me/top/artists", &artist_query)
+      .await
+    {
+      Ok(page) => page.items,
+      Err(e) => {
+        let err = anyhow!(e);
+        if Self::is_rate_limited_error(&err) {
+          self
+            .show_status_message(
+              "Spotify rate limit hit while loading top artists. Try again in a few seconds."
+                .to_string(),
+              6,
+            )
+            .await;
+        } else {
+          self.handle_error(err).await;
         }
+        let mut app = self.app.lock().await;
+        app.discover_loading = false;
+        return;
       }
-      if artists.len() >= 10 {
-        break;
-      }
-    }
-
-    let mut all_tracks = vec![];
-    let user_country = {
-      let app = self.app.lock().await;
-      app.get_user_country()
     };
-    let market = user_country.map(Market::Country);
 
-    for artist in artists {
-      if let Ok(top_tracks) = self
+    let seed_artists = artists
+      .iter()
+      .take(5)
+      .map(|artist| artist.id.clone())
+      .map(|id| id.into_static())
+      .collect::<Vec<ArtistId<'static>>>();
+
+    let mut all_tracks = if seed_artists.is_empty() {
+      Vec::new()
+    } else {
+      let seed_genres: Option<Vec<&str>> = None;
+      let seed_tracks: Option<Vec<TrackId<'static>>> = None;
+      match self
         .spotify
-        .artist_top_tracks(artist.id.clone(), market)
+        .recommendations(
+          [],
+          Some(seed_artists),
+          seed_genres,
+          seed_tracks,
+          None,
+          Some(10),
+        )
         .await
       {
-        // Take a few top tracks from each artist
-        all_tracks.extend(top_tracks.into_iter().take(3));
+        Ok(result) => self
+          .extract_recommended_tracks(&result)
+          .await
+          .unwrap_or_default(),
+        Err(_) => Vec::new(),
       }
+    };
+
+    if all_tracks.is_empty() {
+      let fallback_query = vec![
+        ("time_range", "medium_term".to_string()),
+        ("limit", "50".to_string()),
+        ("offset", "0".to_string()),
+      ];
+      all_tracks = self
+        .spotify_get_typed_compat::<Page<FullTrack>>("me/top/tracks", &fallback_query)
+        .await
+        .map(|page| page.items)
+        .unwrap_or_default();
     }
 
     // Shuffle the mix
