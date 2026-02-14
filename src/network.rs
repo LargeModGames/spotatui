@@ -2938,6 +2938,22 @@ impl Network {
     format!("Could not {}: {}", action, msg)
   }
 
+  fn playlist_items_path(playlist_id: &PlaylistId<'_>) -> String {
+    format!("playlists/{}/items", playlist_id.id())
+  }
+
+  fn add_track_to_playlist_payload(track_uri: &str) -> Value {
+    json!({
+      "uris": [track_uri]
+    })
+  }
+
+  fn replace_playlist_items_payload(uris: &[String]) -> Value {
+    json!({
+      "uris": uris
+    })
+  }
+
   async fn refresh_playlist_if_open(&mut self, playlist_id: PlaylistId<'_>) {
     let playlist_id_str = playlist_id.id().to_string();
     let mut app = self.app.lock().await;
@@ -2968,17 +2984,12 @@ impl Network {
   }
 
   async fn add_track_to_playlist(&mut self, playlist_id: PlaylistId<'_>, track_id: TrackId<'_>) {
-    let path = format!("playlists/{}/tracks", playlist_id.id());
+    let path = Self::playlist_items_path(&playlist_id);
     let track_uri = format!("spotify:track:{}", track_id.id());
+    let payload = Self::add_track_to_playlist_payload(&track_uri);
 
-    match Self::spotify_api_request_json_for(
-      &self.spotify,
-      Method::POST,
-      &path,
-      &[],
-      Some(json!({ "uris": [track_uri] })),
-    )
-    .await
+    match Self::spotify_api_request_json_for(&self.spotify, Method::POST, &path, &[], Some(payload))
+      .await
     {
       Ok(_) => {
         self
@@ -3003,25 +3014,40 @@ impl Network {
     track_id: TrackId<'_>,
     position: usize,
   ) {
-    let path = format!("playlists/{}/tracks", playlist_id.id());
     let track_uri = format!("spotify:track:{}", track_id.id());
+    let mut uris = match self.fetch_all_playlist_item_uris(&playlist_id).await {
+      Ok(uris) => uris,
+      Err(e) => {
+        self
+          .show_status_message(
+            Self::playlist_mutation_error_message(&e, "load playlist items for removal"),
+            5,
+          )
+          .await;
+        return;
+      }
+    };
 
-    match Self::spotify_api_request_json_for(
-      &self.spotify,
-      Method::DELETE,
-      &path,
-      &[],
-      Some(json!({
-        "tracks": [
-          {
-            "uri": track_uri,
-            "positions": [position]
-          }
-        ]
-      })),
-    )
-    .await
-    {
+    if position >= uris.len() {
+      self
+        .show_status_message("Cannot resolve track position for removal".to_string(), 5)
+        .await;
+      return;
+    }
+
+    if uris[position] != track_uri {
+      self
+        .show_status_message(
+          "Selected playlist row is out of sync; refresh and retry".to_string(),
+          5,
+        )
+        .await;
+      return;
+    }
+
+    uris.remove(position);
+
+    match self.replace_playlist_with_uris(&playlist_id, uris).await {
       Ok(_) => {
         self
           .show_status_message("Track removed from playlist".to_string(), 4)
@@ -3037,6 +3063,93 @@ impl Network {
           .await;
       }
     }
+  }
+
+  async fn fetch_all_playlist_item_uris(
+    &self,
+    playlist_id: &PlaylistId<'_>,
+  ) -> anyhow::Result<Vec<String>> {
+    let mut offset: u32 = 0;
+    let limit: u32 = 100;
+    let path = Self::playlist_items_path(playlist_id);
+    let mut uris: Vec<String> = Vec::new();
+
+    loop {
+      let page = self
+        .spotify_get_typed_compat::<Page<PlaylistItem>>(
+          &path,
+          &[("limit", limit.to_string()), ("offset", offset.to_string())],
+        )
+        .await?;
+
+      for item in page.items {
+        match item.track {
+          Some(PlayableItem::Track(track)) => {
+            let track_id = track
+              .id
+              .ok_or_else(|| anyhow!("Playlist contains local/unavailable track"))?;
+            uris.push(format!("spotify:track:{}", track_id.id()));
+          }
+          Some(PlayableItem::Episode(episode)) => {
+            uris.push(format!("spotify:episode:{}", episode.id.id()));
+          }
+          None => {
+            return Err(anyhow!("Playlist contains removed/unavailable item"));
+          }
+        }
+      }
+
+      offset += limit;
+      if offset >= page.total {
+        break;
+      }
+    }
+
+    Ok(uris)
+  }
+
+  async fn replace_playlist_with_uris(
+    &self,
+    playlist_id: &PlaylistId<'_>,
+    uris: Vec<String>,
+  ) -> anyhow::Result<()> {
+    let replace_path = format!("playlists/{}/tracks", playlist_id.id());
+    let add_path = Self::playlist_items_path(playlist_id);
+    let chunks: Vec<&[String]> = uris.chunks(100).collect();
+
+    if chunks.is_empty() {
+      Self::spotify_api_request_json_for(
+        &self.spotify,
+        Method::PUT,
+        &replace_path,
+        &[],
+        Some(Self::replace_playlist_items_payload(&[])),
+      )
+      .await?;
+      return Ok(());
+    }
+
+    Self::spotify_api_request_json_for(
+      &self.spotify,
+      Method::PUT,
+      &replace_path,
+      &[],
+      Some(Self::replace_playlist_items_payload(chunks[0])),
+    )
+    .await?;
+
+    for chunk in chunks.iter().skip(1) {
+      Self::spotify_api_request_json_for(
+        &self.spotify,
+        Method::POST,
+        &add_path,
+        &[],
+        Some(Self::replace_playlist_items_payload(chunk)),
+      )
+      .await?;
+    }
+
+    Ok(())
   }
 
   async fn get_current_user_playlists(&mut self) {
@@ -4240,4 +4353,46 @@ fn structurize_playlist_folders(
   }
 
   items
+}
+
+#[cfg(test)]
+mod tests {
+  use super::Network;
+  use rspotify::model::idtypes::PlaylistId;
+  use serde_json::json;
+
+  #[test]
+  fn playlist_items_path_uses_items_endpoint() {
+    let playlist_id = PlaylistId::from_id("37i9dQZF1DXcBWIGoYBM5M").expect("valid playlist id");
+    let path = Network::playlist_items_path(&playlist_id);
+    assert_eq!(path, "playlists/37i9dQZF1DXcBWIGoYBM5M/items");
+  }
+
+  #[test]
+  fn add_track_payload_uses_items_shape() {
+    let payload = Network::add_track_to_playlist_payload("spotify:track:6rqhFgbbKwnb9MLmUQDhG6");
+    assert_eq!(
+      payload,
+      json!({
+        "uris": ["spotify:track:6rqhFgbbKwnb9MLmUQDhG6"]
+      })
+    );
+  }
+
+  #[test]
+  fn replace_playlist_payload_uses_uris_shape() {
+    let payload = Network::replace_playlist_items_payload(&[
+      "spotify:track:6rqhFgbbKwnb9MLmUQDhG6".to_string(),
+      "spotify:episode:2nq8xYdQfIo2ynsY9nGbvh".to_string(),
+    ]);
+    assert_eq!(
+      payload,
+      json!({
+        "uris": [
+          "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+          "spotify:episode:2nq8xYdQfIo2ynsY9nGbvh"
+        ]
+      })
+    );
+  }
 }
