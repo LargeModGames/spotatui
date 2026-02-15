@@ -96,6 +96,7 @@ pub enum ThemePreset {
   #[default]
   Default,
   Spotify,
+  Vesper,
   Dracula,
   Nord,
   SolarizedDark,
@@ -111,6 +112,7 @@ impl ThemePreset {
     &[
       ThemePreset::Default,
       ThemePreset::Spotify,
+      ThemePreset::Vesper,
       ThemePreset::Dracula,
       ThemePreset::Nord,
       ThemePreset::SolarizedDark,
@@ -125,6 +127,7 @@ impl ThemePreset {
     match self {
       ThemePreset::Default => "Default (Cyan)",
       ThemePreset::Spotify => "Spotify",
+      ThemePreset::Vesper => "Vesper",
       ThemePreset::Dracula => "Dracula",
       ThemePreset::Nord => "Nord",
       ThemePreset::SolarizedDark => "Solarized Dark",
@@ -140,6 +143,7 @@ impl ThemePreset {
     match name {
       "Default (Cyan)" => ThemePreset::Default,
       "Spotify" => ThemePreset::Spotify,
+      "Vesper" => ThemePreset::Vesper,
       "Dracula" => ThemePreset::Dracula,
       "Nord" => ThemePreset::Nord,
       "Solarized Dark" => ThemePreset::SolarizedDark,
@@ -173,6 +177,26 @@ impl ThemePreset {
   pub fn to_theme(self) -> Theme {
     match self {
       ThemePreset::Default => Theme::default(),
+      ThemePreset::Vesper => Theme {
+        analysis_bar: Color::Rgb(153, 255, 228),     // Mint (#99FFE4)
+        analysis_bar_text: Color::Rgb(16, 16, 16),   // Near-black (#101010)
+        active: Color::Rgb(255, 199, 153),           // Accent orange (#FFC799)
+        banner: Color::Rgb(255, 199, 153),           // Accent orange
+        error_border: Color::Rgb(255, 128, 128),     // Error red (#FF8080)
+        error_text: Color::Rgb(255, 128, 128),       // Error red
+        hint: Color::Rgb(255, 199, 153),             // Accent orange
+        hovered: Color::Rgb(255, 207, 168),          // Hover orange (#FFCFA8)
+        inactive: Color::Rgb(190, 190, 190),         // Higher-contrast muted gray
+        playbar_background: Color::Rgb(22, 22, 22),  // Elevated bg (#161616)
+        playbar_progress: Color::Rgb(153, 255, 228), // Mint
+        playbar_progress_text: Color::Rgb(255, 255, 255), // White for readability
+        playbar_text: Color::Rgb(210, 210, 210),     // Higher-contrast playbar text
+        selected: Color::Rgb(255, 199, 153),         // Accent orange
+        text: Color::Rgb(255, 255, 255),             // White
+        background: Color::Rgb(16, 16, 16),          // Base bg (#101010)
+        header: Color::Rgb(255, 255, 255),           // White
+        highlighted_lyrics: Color::Rgb(153, 255, 228), // Mint
+      },
       ThemePreset::Dracula => Theme {
         analysis_bar: Color::Rgb(189, 147, 249),      // Purple
         analysis_bar_text: Color::Rgb(248, 248, 242), // Foreground
