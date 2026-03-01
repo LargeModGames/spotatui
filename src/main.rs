@@ -1398,6 +1398,14 @@ async fn handle_player_events(
             app.last_track_id = Some(track_id_str);
             app.dispatch(IoEvent::GetCurrentPlayback);
           }
+          // If stop-after-track was requested, pause now that Spirc has started the next track
+          if app.pending_stop_after_track {
+            app.pending_stop_after_track = false;
+            if let Some(ref mut ctx) = app.current_playback_context {
+              ctx.is_playing = false;
+            }
+            app.dispatch(IoEvent::PausePlayback);
+          }
         }
       }
       PlayerEvent::Paused {
@@ -1532,13 +1540,19 @@ async fn handle_player_events(
           }
           app.song_progress_ms = 0;
           app.last_track_id = None;
+          if app.user_config.behavior.stop_after_current_track {
+            // Spirc will auto-advance; flag the next Playing event to pause immediately
+            app.pending_stop_after_track = true;
+          }
         }
 
         // Ensure we don't land on the next item paused after the track transition.
         // (librespot Spirc will advance; we may need to resume playback.)
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         if let Ok(mut app) = app.try_lock() {
-          app.dispatch(IoEvent::EnsurePlaybackContinues(track_id.to_string()));
+          if !app.user_config.behavior.stop_after_current_track {
+            app.dispatch(IoEvent::EnsurePlaybackContinues(track_id.to_string()));
+          }
         }
       }
       PlayerEvent::VolumeChanged { volume } => {
@@ -1627,6 +1641,14 @@ async fn handle_player_events(
           if app.last_track_id.as_ref() != Some(&track_id_str) {
             app.last_track_id = Some(track_id_str);
             app.dispatch(IoEvent::GetCurrentPlayback);
+          }
+          // If stop-after-track was requested, pause now that Spirc has started the next track
+          if app.pending_stop_after_track {
+            app.pending_stop_after_track = false;
+            if let Some(ref mut ctx) = app.current_playback_context {
+              ctx.is_playing = false;
+            }
+            app.dispatch(IoEvent::PausePlayback);
           }
         }
       }
@@ -1747,10 +1769,16 @@ async fn handle_player_events(
           }
           app.song_progress_ms = 0;
           app.last_track_id = None;
+          if app.user_config.behavior.stop_after_current_track {
+            // Spirc will auto-advance; flag the next Playing event to pause immediately
+            app.pending_stop_after_track = true;
+          }
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         if let Ok(mut app) = app.try_lock() {
-          app.dispatch(IoEvent::EnsurePlaybackContinues(track_id.to_string()));
+          if !app.user_config.behavior.stop_after_current_track {
+            app.dispatch(IoEvent::EnsurePlaybackContinues(track_id.to_string()));
+          }
         }
       }
       PlayerEvent::VolumeChanged { volume } => {

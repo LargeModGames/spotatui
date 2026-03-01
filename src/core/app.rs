@@ -516,6 +516,9 @@ pub struct App {
   pub api_error: String,
   pub current_playback_context: Option<CurrentPlaybackContext>,
   pub last_track_id: Option<String>,
+  /// Set to true when a track ends naturally and stop_after_current_track is enabled.
+  /// The next Playing event will see this flag and immediately pause.
+  pub pending_stop_after_track: bool,
   pub devices: Option<DevicePayload>,
   pub queue: Option<CurrentUserQueue>,
   pub queue_selected_index: usize,
@@ -733,6 +736,7 @@ impl Default for App {
       api_error: String::new(),
       current_playback_context: None,
       last_track_id: None,
+      pending_stop_after_track: false,
       devices: None,
       queue: None,
       queue_selected_index: 0,
@@ -2329,6 +2333,12 @@ impl App {
           value: SettingValue::Bool(self.user_config.behavior.enable_discord_rpc),
         },
         SettingItem {
+          id: "behavior.stop_after_current_track".to_string(),
+          name: "Stop After Current Track".to_string(),
+          description: "Pause playback when the current track finishes".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.stop_after_current_track),
+        },
+        SettingItem {
           id: "behavior.enable_announcements".to_string(),
           name: "Remote Announcements".to_string(),
           description: "Show one-time announcements from remote JSON feed".to_string(),
@@ -2694,6 +2704,11 @@ impl App {
         "behavior.enable_discord_rpc" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_discord_rpc = *v;
+          }
+        }
+        "behavior.stop_after_current_track" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.stop_after_current_track = *v;
           }
         }
         "behavior.enable_announcements" => {

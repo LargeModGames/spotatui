@@ -614,6 +614,7 @@ pub struct BehaviorConfigString {
   pub visualizer_style: Option<VisualizerStyle>,
   pub dismissed_announcements: Option<Vec<String>>,
   pub relay_server_url: Option<String>,
+  pub stop_after_current_track: Option<bool>,
   #[cfg(feature = "cover-art")]
   pub draw_cover_art: Option<bool>,
   #[cfg(feature = "cover-art")]
@@ -646,6 +647,7 @@ pub struct BehaviorConfig {
   pub visualizer_style: VisualizerStyle,
   pub dismissed_announcements: Vec<String>,
   pub relay_server_url: String,
+  pub stop_after_current_track: bool,
   #[cfg(feature = "cover-art")]
   pub draw_cover_art: bool,
   #[cfg(feature = "cover-art")]
@@ -740,6 +742,7 @@ impl UserConfig {
         visualizer_style: VisualizerStyle::default(),
         dismissed_announcements: Vec::new(),
         relay_server_url: "wss://spotatui-party.spotatui.workers.dev/ws".to_string(),
+        stop_after_current_track: false,
         #[cfg(feature = "cover-art")]
         draw_cover_art: true,
         #[cfg(feature = "cover-art")]
@@ -970,6 +973,10 @@ impl UserConfig {
       }
     }
 
+    if let Some(stop_after_current_track) = behavior_config.stop_after_current_track {
+      self.behavior.stop_after_current_track = stop_after_current_track;
+    }
+
     #[cfg(feature = "cover-art")]
     if let Some(draw_cover_art) = behavior_config.draw_cover_art {
       self.behavior.draw_cover_art = draw_cover_art;
@@ -1050,6 +1057,7 @@ impl UserConfig {
       visualizer_style: Some(self.behavior.visualizer_style),
       dismissed_announcements: Some(self.behavior.dismissed_announcements.clone()),
       relay_server_url: Some(self.behavior.relay_server_url.clone()),
+      stop_after_current_track: Some(self.behavior.stop_after_current_track),
       #[cfg(feature = "cover-art")]
       draw_cover_art: Some(self.behavior.draw_cover_art),
       #[cfg(feature = "cover-art")]
