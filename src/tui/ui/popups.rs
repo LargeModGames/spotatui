@@ -19,8 +19,35 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
 
   // Create a one-column table to avoid flickering due to non-determinism when
   // resolving constraints on widths of table columns.
-  let format_row =
-    |r: Vec<String>| -> Vec<String> { vec![format!("{:50}{:40}{:20}", r[0], r[1], r[2])] };
+  // Calculate column widths based on available terminal width
+  let total_width = area.width as usize;
+  let col1_width = (total_width as f32 * 0.40) as usize;
+  let col2_width = (total_width as f32 * 0.30) as usize;
+  let col3_width = total_width.saturating_sub(col1_width + col2_width + 2);
+
+  let truncate = |s: &str, max: usize| -> String {
+    if max == 0 {
+      return String::new();
+    }
+    if s.chars().count() > max {
+      let truncated: String = s.chars().take(max.saturating_sub(1)).collect();
+      format!("{}…", truncated)
+    } else {
+      s.to_string()
+    }
+  };
+
+  let format_row = |r: Vec<String>| -> Vec<String> {
+    vec![format!(
+      "{:<w1$}  {:<w2$}  {:<w3$}",
+      truncate(&r[0], col1_width),
+      truncate(&r[1], col2_width),
+      truncate(&r[2], col3_width),
+      w1 = col1_width,
+      w2 = col2_width,
+      w3 = col3_width,
+    )]
+  };
 
   let help_menu_style = app.user_config.theme.base_style();
   let header = ["Description", "Event", "Context"];

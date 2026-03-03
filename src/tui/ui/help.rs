@@ -204,12 +204,12 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("Layout"),
     ],
     vec![
-      String::from("Decrease playbar or library height (by focused pane)"),
+      String::from("Decrease playbar or library height"),
       String::from("("),
       String::from("Layout"),
     ],
     vec![
-      String::from("Increase playbar or library height (by focused pane)"),
+      String::from("Increase playbar or library height"),
       String::from(")"),
       String::from("Layout"),
     ],
