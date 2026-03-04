@@ -296,7 +296,6 @@ fn is_main_layout_mouse_interactive(active_block: ActiveBlock) -> bool {
       | ActiveBlock::SelectDevice
       | ActiveBlock::Analysis
       | ActiveBlock::BasicView
-      | ActiveBlock::UpdatePrompt
       | ActiveBlock::AnnouncementPrompt
       | ActiveBlock::ExitPrompt
       | ActiveBlock::Settings

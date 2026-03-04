@@ -2,7 +2,7 @@ use anyhow::Result;
 use self_update::cargo_crate_version;
 
 /// Information about an available update
-#[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct UpdateInfo {
   pub current_version: String,
   pub latest_version: String,
@@ -10,6 +10,7 @@ pub struct UpdateInfo {
 
 /// Check for updates in the background (non-blocking)
 /// Returns Some(UpdateInfo) if an update is available, None if up to date
+#[allow(dead_code)]
 pub fn check_for_update_silent() -> Option<UpdateInfo> {
   // ============ TESTING: Uncomment below to simulate update ============
   // return Some(UpdateInfo {
@@ -38,6 +39,35 @@ pub fn check_for_update_silent() -> Option<UpdateInfo> {
     })
   } else {
     None
+  }
+}
+
+/// Silently check for, download, and install an update.
+/// Returns Ok(Some(version_string)) if an update was installed,
+/// Ok(None) if already up-to-date, or Err on failure.
+pub fn install_update_silent() -> Result<Option<String>> {
+  let current_version = cargo_crate_version!();
+
+  let status = self_update::backends::github::Update::configure()
+    .repo_owner("LargeModGames")
+    .repo_name("spotatui")
+    .bin_name("spotatui")
+    .show_download_progress(false)
+    .no_confirm(true)
+    .current_version(current_version)
+    .build()?;
+
+  let latest = status.get_latest_release()?;
+  let latest_version = latest.version.trim_start_matches('v');
+
+  if latest_version == current_version {
+    return Ok(None);
+  }
+
+  let result = status.update()?;
+  match result {
+    self_update::Status::UpToDate(_) => Ok(None),
+    self_update::Status::Updated(v) => Ok(Some(v)),
   }
 }
 

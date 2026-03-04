@@ -400,55 +400,6 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   f.render_widget(footer, vchunks[2]);
 }
 
-/// Draw the mandatory update prompt modal
-pub fn draw_update_prompt(f: &mut Frame<'_>, app: &App) {
-  if let Some(update_info) = &app.update_available {
-    let width = std::cmp::min(f.area().width.saturating_sub(4), 60);
-    let height = 9;
-    let rect = f
-      .area()
-      .centered(Constraint::Length(width), Constraint::Length(height));
-
-    f.render_widget(Clear, rect);
-
-    let text = vec![
-      Line::from(Span::styled(
-        "🚀 Update Available!",
-        Style::default().add_modifier(Modifier::BOLD),
-      )),
-      Line::from(""),
-      Line::from(format!(
-        "Current: v{}  →  Latest: v{}",
-        update_info.current_version, update_info.latest_version
-      )),
-      Line::from(""),
-      Line::from("Run to update:"),
-      Line::from(Span::styled(
-        "  spotatui update --install",
-        Style::default().add_modifier(Modifier::ITALIC),
-      )),
-      Line::from(""),
-      Line::from(Span::styled(
-        "[Press ENTER or ESC to continue]",
-        Style::default().fg(app.user_config.theme.inactive),
-      )),
-    ];
-
-    let paragraph = Paragraph::new(text)
-      .style(app.user_config.theme.base_style())
-      .alignment(Alignment::Center)
-      .block(
-        Block::default()
-          .borders(Borders::ALL)
-          .style(app.user_config.theme.base_style())
-          .border_style(Style::default().fg(app.user_config.theme.active))
-          .title(" Update Available "),
-      );
-
-    f.render_widget(paragraph, rect);
-  }
-}
-
 pub fn draw_announcement_prompt(f: &mut Frame<'_>, app: &App) {
   let Some(announcement) = &app.active_announcement else {
     return;

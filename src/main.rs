@@ -802,6 +802,38 @@ of the app. Beware that this comes at a CPU cost!",
     return cli::check_for_update(do_install);
   }
 
+  // Auto-update on launch: silently check, download, install, and restart.
+  // Skip if a CLI subcommand is active or SPOTATUI_SKIP_UPDATE is set (prevents restart loops).
+  if matches.subcommand_name().is_none() && std::env::var_os("SPOTATUI_SKIP_UPDATE").is_none() {
+    println!("Checking for updates...");
+    // Must use spawn_blocking because self_update uses reqwest::blocking internally,
+    // which creates its own tokio runtime and panics if called from an async context.
+    let update_result = tokio::task::spawn_blocking(cli::install_update_silent)
+      .await
+      .ok()
+      .and_then(|r| r.ok())
+      .flatten();
+    if let Some(new_version) = update_result {
+      println!("Updated to v{}! Restarting...", new_version);
+      // Re-exec the current binary with the same args, skipping the update check
+      let exe = std::env::current_exe().expect("failed to get current executable path");
+      let args: Vec<String> = std::env::args().skip(1).collect();
+      let status = std::process::Command::new(&exe)
+        .args(&args)
+        .env("SPOTATUI_SKIP_UPDATE", "1")
+        .status();
+      match status {
+        Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(0)),
+        Err(e) => {
+          eprintln!("Failed to restart after update: {}", e);
+          eprintln!("Please restart spotatui manually.");
+          std::process::exit(1);
+        }
+      }
+    }
+    // Up-to-date or check failed — continue normally
+  }
+
   let mut user_config = UserConfig::new();
   if let Some(config_file_path) = matches.get_one::<String>("config") {
     let config_file_path = PathBuf::from(config_file_path);
@@ -2167,8 +2199,6 @@ async fn start_ui(
   #[cfg(feature = "mpris")]
   let mut mpris_metadata_state: Option<MprisMetadata> = None;
 
-  // Update check will run async after first render to avoid blocking startup
-  let mut update_check_spawned = false;
   let mut is_first_render = true;
 
   loop {
@@ -2246,9 +2276,7 @@ async fn start_ui(
         ActiveBlock::BasicView => {
           ui::draw_basic_view(f, &app);
         }
-        ActiveBlock::UpdatePrompt => {
-          ui::draw_update_prompt(f, &app);
-        }
+
         ActiveBlock::AnnouncementPrompt => {
           ui::draw_announcement_prompt(f, &app);
         }
@@ -2443,24 +2471,6 @@ async fn start_ui(
 
       is_first_render = false;
     }
-
-    // Check for updates async after first render to avoid blocking startup
-    if !update_check_spawned {
-      update_check_spawned = true;
-      let app_for_update = Arc::clone(app);
-      tokio::spawn(async move {
-        if let Some(update_info) = tokio::task::spawn_blocking(cli::check_for_update_silent)
-          .await
-          .ok()
-          .flatten()
-        {
-          let mut app = app_for_update.lock().await;
-          app.update_available = Some(update_info);
-          // Push the update prompt modal onto navigation stack
-          app.push_navigation_stack(RouteId::UpdatePrompt, ActiveBlock::UpdatePrompt);
-        }
-      });
-    }
   }
 
   execute!(stdout(), DisableMouseCapture)?;
@@ -2523,19 +2533,6 @@ async fn start_ui(
 
   let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
 
-  // Check for updates SYNCHRONOUSLY before starting the event loop
-  {
-    let update_info = tokio::task::spawn_blocking(cli::check_for_update_silent)
-      .await
-      .ok()
-      .flatten();
-    if let Some(info) = update_info {
-      let mut app = app.lock().await;
-      app.update_available = Some(info);
-      app.push_navigation_stack(RouteId::UpdatePrompt, ActiveBlock::UpdatePrompt);
-    }
-  }
-
   // Lazy audio capture: only capture when in Analysis view
   #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
   let mut audio_capture: Option<audio::AudioCaptureManager> = None;
@@ -2592,7 +2589,7 @@ async fn start_ui(
           ActiveBlock::SelectDevice => ui::draw_device_list(f, &app),
           ActiveBlock::Analysis => ui::audio_analysis::draw(f, &app),
           ActiveBlock::BasicView => ui::draw_basic_view(f, &app),
-          ActiveBlock::UpdatePrompt => ui::draw_update_prompt(f, &app),
+
           ActiveBlock::AnnouncementPrompt => ui::draw_announcement_prompt(f, &app),
           ActiveBlock::ExitPrompt => ui::draw_exit_prompt(f, &app),
           ActiveBlock::Settings => ui::settings::draw_settings(f, &app),

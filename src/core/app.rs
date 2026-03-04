@@ -1,4 +1,3 @@
-use crate::cli::UpdateInfo;
 use crate::core::sort::{SortContext, SortState};
 use crate::core::user_config::UserConfig;
 use crate::infra::network::sync::{PartySession, PartyStatus};
@@ -189,7 +188,7 @@ pub enum ActiveBlock {
   Artists,
   BasicView,
   Dialog(DialogContext),
-  UpdatePrompt,
+
   AnnouncementPrompt,
   ExitPrompt,
   Settings,
@@ -217,7 +216,7 @@ pub enum RouteId {
   PodcastEpisodes,
   Recommendations,
   Dialog,
-  UpdatePrompt,
+
   AnnouncementPrompt,
   ExitPrompt,
   Settings,
@@ -632,8 +631,7 @@ pub struct App {
   pub pending_keybinding_persist: Option<PendingKeybindingPersist>,
   pub terminal_input_caps: TerminalInputCapabilities,
   pub keybinding_runtime: KeybindingRuntimeState,
-  pub update_available: Option<UpdateInfo>,
-  pub update_prompt_acknowledged: bool,
+
   pub active_announcement: Option<Announcement>,
   pub pending_announcements: Vec<Announcement>,
   pub lyrics: Option<Vec<(u128, String)>>,
@@ -840,8 +838,7 @@ impl Default for App {
       pending_keybinding_persist: None,
       terminal_input_caps: TerminalInputCapabilities::default(),
       keybinding_runtime: KeybindingRuntimeState::default(),
-      update_available: None,
-      update_prompt_acknowledged: false,
+
       active_announcement: None,
       pending_announcements: Vec::new(),
       lyrics: None,

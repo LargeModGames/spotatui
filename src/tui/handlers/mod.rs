@@ -28,7 +28,6 @@ mod select_device;
 mod settings;
 mod sort_menu;
 mod track_table;
-mod update_prompt;
 
 use crate::core::app::{ActiveBlock, App, ArtistBlock, RouteId, SearchResultBlock};
 use crate::infra::network::IoEvent;
@@ -229,7 +228,6 @@ fn is_input_mode(app: &App) -> bool {
     app.get_current_route().active_block,
     ActiveBlock::Input
       | ActiveBlock::Dialog(_)
-      | ActiveBlock::UpdatePrompt
       | ActiveBlock::AnnouncementPrompt
       | ActiveBlock::ExitPrompt
   )
@@ -305,9 +303,7 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Dialog(_) => {
       dialog::handler(key, app);
     }
-    ActiveBlock::UpdatePrompt => {
-      update_prompt::handler(key, app);
-    }
+
     ActiveBlock::AnnouncementPrompt => {
       announcement_prompt::handler(key, app);
     }
@@ -358,8 +354,7 @@ fn handle_escape(app: &mut App) {
     }
     // These are global views that have no active/inactive distinction so do nothing
     ActiveBlock::SelectDevice | ActiveBlock::Analysis => {}
-    // Update prompt must be dismissed with Enter/Esc, not global escape
-    ActiveBlock::UpdatePrompt => {}
+
     // Announcement prompt must be dismissed with Enter/Esc, not global escape
     ActiveBlock::AnnouncementPrompt => {}
     ActiveBlock::ExitPrompt => {}
