@@ -514,6 +514,8 @@ pub enum SettingValue {
   Color(String),  // Stored as "R,G,B" or color name
   Key(String),    // Key representation like "ctrl-s" or "a"
   Preset(String), // Theme preset name - cycles through available presets
+  /// A value cycling through a fixed list of options: (current, all options).
+  Cycle(String, &'static [&'static str]),
 }
 
 impl SettingValue {
@@ -526,6 +528,7 @@ impl SettingValue {
       SettingValue::Color(v) => v.clone(),
       SettingValue::Key(v) => v.clone(),
       SettingValue::Preset(v) => v.clone(),
+      SettingValue::Cycle(v, _) => v.clone(),
     }
   }
 }
@@ -2481,6 +2484,15 @@ impl App {
           value: SettingValue::Bool(self.user_config.behavior.stop_after_current_track),
         },
         SettingItem {
+          id: "behavior.startup_behavior".to_string(),
+          name: "Startup Behavior".to_string(),
+          description: "Playback state when spotatui starts: continue, play, or pause".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.startup_behavior.name().to_string(),
+            crate::core::user_config::StartupBehavior::options(),
+          ),
+        },
+        SettingItem {
           id: "behavior.enable_announcements".to_string(),
           name: "Remote Announcements".to_string(),
           description: "Show one-time announcements from remote JSON feed".to_string(),
@@ -2851,6 +2863,12 @@ impl App {
         "behavior.stop_after_current_track" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.stop_after_current_track = *v;
+          }
+        }
+        "behavior.startup_behavior" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.startup_behavior =
+              crate::core::user_config::StartupBehavior::from_name(v);
           }
         }
         "behavior.enable_announcements" => {

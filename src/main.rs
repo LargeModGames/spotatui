@@ -32,7 +32,7 @@ mod tui;
 
 use crate::core::app::{self, ActiveBlock, App, RouteId};
 use crate::core::config::{ClientConfig, NCSPOT_CLIENT_ID};
-use crate::core::user_config::{UserConfig, UserConfigPaths};
+use crate::core::user_config::{StartupBehavior, UserConfig, UserConfigPaths};
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 use crate::infra::audio;
 #[cfg(feature = "discord-rpc")]
@@ -843,6 +843,7 @@ of the app. Beware that this comes at a CPU cost!",
   user_config.load_config()?;
   info!("user config loaded successfully");
   let initial_shuffle_enabled = user_config.behavior.shuffle_enabled;
+  let initial_startup_behavior = user_config.behavior.startup_behavior;
 
   if let Some(tick_rate) = matches
     .get_one::<String>("tick-rate")
@@ -1429,6 +1430,19 @@ of the app. Beware that this comes at a CPU cost!",
       network
         .handle_network_event(IoEvent::Shuffle(initial_shuffle_enabled))
         .await;
+
+      // Apply configured startup play behavior
+      match initial_startup_behavior {
+        StartupBehavior::Continue => {}
+        StartupBehavior::Play => {
+          network
+            .handle_network_event(IoEvent::StartPlayback(None, None, None))
+            .await;
+        }
+        StartupBehavior::Pause => {
+          network.handle_network_event(IoEvent::PausePlayback).await;
+        }
+      }
 
       start_tokio(sync_io_rx, &mut network).await;
     });

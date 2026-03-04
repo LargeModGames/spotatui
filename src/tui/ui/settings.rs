@@ -103,6 +103,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
           }
           SettingValue::Color(v) => format!("■ {}", v),
           SettingValue::Preset(v) => format!("◆ {} ◆", v), // Show preset name with arrows hint
+          SettingValue::Cycle(v, _) => format!("◆ {} ◆", v),
         }
       };
 
@@ -191,6 +192,9 @@ fn draw_settings_help(f: &mut Frame<'_>, app: &App, area: Rect) {
           "↑/↓: Increment/Decrement | Type numbers | Enter: Confirm | Esc: Cancel"
         }
         SettingValue::Key(_) => "Press any key to set binding | Esc: Cancel",
+        SettingValue::Preset(_) | SettingValue::Cycle(_, _) => {
+          "Enter/→: Next | ←: Previous | Esc: Cancel"
+        }
         _ => "Type to edit | Enter: Confirm | Esc: Cancel",
       },
       None => "",

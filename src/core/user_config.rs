@@ -419,6 +419,41 @@ impl VisualizerStyle {
   }
 }
 
+/// Controls the playback state immediately after spotatui connects to a device on startup.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupBehavior {
+  /// Leave playback as-is (current Spotify state). This is the default.
+  #[default]
+  Continue,
+  /// Always resume / start playback on launch.
+  Play,
+  /// Always pause playback on launch.
+  Pause,
+}
+
+impl StartupBehavior {
+  pub fn name(self) -> &'static str {
+    match self {
+      StartupBehavior::Continue => "Continue",
+      StartupBehavior::Play => "Play",
+      StartupBehavior::Pause => "Pause",
+    }
+  }
+
+  pub fn options() -> &'static [&'static str] {
+    &["Continue", "Play", "Pause"]
+  }
+
+  pub fn from_name(name: &str) -> Self {
+    match name {
+      "Play" => StartupBehavior::Play,
+      "Pause" => StartupBehavior::Pause,
+      _ => StartupBehavior::Continue,
+    }
+  }
+}
+
 fn parse_key(key: String) -> Result<Key> {
   fn get_single_char(string: &str) -> char {
     match string.chars().next() {
@@ -618,6 +653,7 @@ pub struct BehaviorConfigString {
   pub sidebar_width_percent: Option<u8>,
   pub playbar_height_rows: Option<u16>,
   pub library_height_percent: Option<u8>,
+  pub startup_behavior: Option<StartupBehavior>,
   #[cfg(feature = "cover-art")]
   pub draw_cover_art: Option<bool>,
   #[cfg(feature = "cover-art")]
@@ -654,6 +690,7 @@ pub struct BehaviorConfig {
   pub sidebar_width_percent: u8,
   pub playbar_height_rows: u16,
   pub library_height_percent: u8,
+  pub startup_behavior: StartupBehavior,
   #[cfg(feature = "cover-art")]
   pub draw_cover_art: bool,
   #[cfg(feature = "cover-art")]
@@ -752,6 +789,7 @@ impl UserConfig {
         sidebar_width_percent: 20,
         playbar_height_rows: 6,
         library_height_percent: 30,
+        startup_behavior: StartupBehavior::Continue,
         #[cfg(feature = "cover-art")]
         draw_cover_art: true,
         #[cfg(feature = "cover-art")]
@@ -998,6 +1036,10 @@ impl UserConfig {
       self.behavior.library_height_percent = library_height_percent.min(100);
     }
 
+    if let Some(startup_behavior) = behavior_config.startup_behavior {
+      self.behavior.startup_behavior = startup_behavior;
+    }
+
     #[cfg(feature = "cover-art")]
     if let Some(draw_cover_art) = behavior_config.draw_cover_art {
       self.behavior.draw_cover_art = draw_cover_art;
@@ -1082,6 +1124,7 @@ impl UserConfig {
       sidebar_width_percent: Some(self.behavior.sidebar_width_percent),
       playbar_height_rows: Some(self.behavior.playbar_height_rows),
       library_height_percent: Some(self.behavior.library_height_percent),
+      startup_behavior: Some(self.behavior.startup_behavior),
       #[cfg(feature = "cover-art")]
       draw_cover_art: Some(self.behavior.draw_cover_art),
       #[cfg(feature = "cover-art")]
@@ -1373,5 +1416,23 @@ mod tests {
       check_reserved_keys(Key::Enter).is_err(),
       "Enter key should be reserved"
     );
+  }
+
+  #[test]
+  fn test_startup_behavior_deserialization() {
+    use super::{BehaviorConfigString, StartupBehavior};
+
+    let config: BehaviorConfigString = serde_yaml::from_str("startup_behavior: pause").unwrap();
+    assert_eq!(config.startup_behavior, Some(StartupBehavior::Pause));
+
+    let config: BehaviorConfigString = serde_yaml::from_str("startup_behavior: play").unwrap();
+    assert_eq!(config.startup_behavior, Some(StartupBehavior::Play));
+
+    let config: BehaviorConfigString = serde_yaml::from_str("startup_behavior: continue").unwrap();
+    assert_eq!(config.startup_behavior, Some(StartupBehavior::Continue));
+
+    // Missing field defaults to None (not overriding the config default)
+    let config: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
+    assert_eq!(config.startup_behavior, None);
   }
 }

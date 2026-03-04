@@ -100,6 +100,7 @@ fn handle_edit_mode(key: Key, app: &mut App) {
       SettingValue::Bool(_) => handle_bool_edit(key, app),
       SettingValue::Number(_) => handle_number_edit(key, app),
       SettingValue::Preset(_) => handle_preset_edit(key, app),
+      SettingValue::Cycle(_, _) => {} // enter_edit_mode handles Cycle without entering edit mode
       SettingValue::Key(_) => handle_key_edit(key, app),
       SettingValue::String(_) | SettingValue::Color(_) => handle_string_edit(key, app),
     }
@@ -386,18 +387,34 @@ fn enter_edit_mode(app: &mut App) {
       return;
     }
 
+    // For cycle values, advance to next option directly
+    if let SettingValue::Cycle(ref current, options) = setting.value {
+      let next = cycle_next(current, options);
+      if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
+        if let SettingValue::Cycle(ref mut cur, _) = setting_mut.value {
+          *cur = next;
+        }
+      }
+      return;
+    }
+
     // For other types, enter edit mode
     app.settings_edit_mode = true;
     // Pre-populate the edit buffer with current value
     app.settings_edit_buffer = match &setting.value {
-      SettingValue::Bool(_) => String::new(), // Shouldn't reach here
       SettingValue::Number(v) => v.to_string(),
       SettingValue::String(v) => v.clone(),
       SettingValue::Key(v) => v.clone(),
       SettingValue::Color(v) => v.clone(),
-      SettingValue::Preset(_) => String::new(), // Shouldn't reach here
+      _ => String::new(),
     };
   }
+}
+
+/// Returns the next option after `current` in `options`, wrapping around.
+fn cycle_next(current: &str, options: &[&str]) -> String {
+  let idx = options.iter().position(|o| *o == current).unwrap_or(0);
+  options[(idx + 1) % options.len()].to_string()
 }
 
 fn handle_preset_edit(key: Key, app: &mut App) {
