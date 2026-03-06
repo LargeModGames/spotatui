@@ -19,8 +19,8 @@
         packages = rec {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "spotatui";
-            version = "0.36.3-debug.1";
-            src = ./.;
+            version = "0.37.2";
+            src = self;
 
             cargoLock = {
               lockFile = ./Cargo.lock;
