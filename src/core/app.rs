@@ -587,7 +587,6 @@ pub struct App {
   pub playlist_tracks: Option<Page<PlaylistItem>>,
   pub playlists: Option<Page<SimplifiedPlaylist>>,
   pub recently_played: SpotifyResultAndSelectedIndex<Option<CursorBasedPage<PlayHistory>>>,
-  pub recommended_tracks: Vec<FullTrack>,
   pub recommendations_seed: String,
   pub recommendations_context: Option<RecommendationsContext>,
   pub search_results: SearchResult,
@@ -793,7 +792,6 @@ impl Default for App {
       playlist_offset: 0,
       playlist_tracks: None,
       playlists: None,
-      recommended_tracks: vec![],
       recommendations_context: None,
       recommendations_seed: "".to_string(),
       search_results: SearchResult {

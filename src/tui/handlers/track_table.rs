@@ -412,8 +412,7 @@ fn on_enter(app: &mut App) {
         };
       }
       TrackTableContext::RecommendedTracks => {
-        let playable_ids: Vec<PlayableId<'static>> = app
-          .recommended_tracks
+        let playable_ids: Vec<PlayableId<'static>> = tracks
           .iter()
           .filter_map(|track| track_playable_id(track.id.clone()))
           .collect();
@@ -421,7 +420,7 @@ fn on_enter(app: &mut App) {
           app.dispatch(IoEvent::StartPlayback(
             None,
             Some(playable_ids),
-            Some(app.track_table.selected_index),
+            Some(*selected_index),
           ));
         }
       }
@@ -529,8 +528,8 @@ fn on_queue(app: &mut App) {
         };
       }
       TrackTableContext::RecommendedTracks => {
-        if let Some(full_track) = app.recommended_tracks.get(app.track_table.selected_index) {
-          if let Some(playable_id) = track_playable_id(full_track.id.clone()) {
+        if let Some(track) = tracks.get(*selected_index) {
+          if let Some(playable_id) = track_playable_id(track.id.clone()) {
             app.dispatch(IoEvent::AddItemToQueue(playable_id));
           }
         }
