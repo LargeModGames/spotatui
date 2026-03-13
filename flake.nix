@@ -14,12 +14,14 @@
         pkgs = import nixpkgs {
           inherit system;
         };
+        cargoVersion = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+        commitHash = toString (self.shortRev or self.dirtyShortRev or self.lastModified or "dirty");
       in {
         # Build dependencies for rust
         packages = rec {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "spotatui";
-            version = "${(builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version}-${self.shortRev or "dirty"}";
+            version = "${cargoVersion}-${commitHash}";
             src = self;
 
             cargoLock = {
