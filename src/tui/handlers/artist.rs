@@ -307,6 +307,7 @@ pub fn handler(key: Key, app: &mut App) {
         }
       }
       Key::Char('w') => match artist.artist_selected_block {
+        ArtistBlock::TopTracks => open_add_to_playlist_for_selected_top_track(app),
         ArtistBlock::Albums => app.current_user_saved_album_add(ActiveBlock::ArtistBlock),
         ArtistBlock::RelatedArtists => app.user_follow_artists(ActiveBlock::ArtistBlock),
         _ => (),
@@ -332,6 +333,18 @@ pub fn handler(key: Key, app: &mut App) {
       _ => {}
     };
   }
+}
+
+fn open_add_to_playlist_for_selected_top_track(app: &mut App) {
+  let Some(artist) = &app.artist else {
+    return;
+  };
+  let Some(track) = artist.top_tracks.get(artist.selected_top_track_index) else {
+    return;
+  };
+
+  let track_id = track.id.clone().map(|id| id.into_static());
+  app.begin_add_track_to_playlist_flow(track_id, track.name.clone());
 }
 
 #[cfg(test)]

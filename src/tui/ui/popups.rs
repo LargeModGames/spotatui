@@ -8,6 +8,7 @@ use ratatui::{
   Frame,
 };
 use rspotify::model::PlayableItem;
+use rspotify::prelude::Id;
 
 use super::help::get_help_docs;
 use super::util::create_artist_string;
@@ -369,21 +370,33 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   f.render_widget(header, vchunks[0]);
 
   let mut list_state = ListState::default();
+  let editable_playlists = app.editable_playlists();
 
-  if app.all_playlists.is_empty() {
-    let empty_text = Paragraph::new("No playlists available")
+  if editable_playlists.is_empty() {
+    let empty_text = Paragraph::new("No editable playlists available")
       .style(Style::default().fg(app.user_config.theme.inactive))
       .alignment(Alignment::Center);
     f.render_widget(empty_text, vchunks[1]);
   } else {
-    let items: Vec<ListItem> = app
-      .all_playlists
+    let items: Vec<ListItem> = editable_playlists
       .iter()
-      .map(|playlist| ListItem::new(Span::raw(playlist.name.as_str())))
+      .map(|playlist| {
+        let owner = playlist
+          .owner
+          .display_name
+          .as_deref()
+          .unwrap_or_else(|| playlist.owner.id.id());
+        let label = if playlist.collaborative {
+          format!("{} - {} (collab)", playlist.name, owner)
+        } else {
+          format!("{} - {}", playlist.name, owner)
+        };
+        ListItem::new(Span::raw(label))
+      })
       .collect();
     let selected = app
       .playlist_picker_selected_index
-      .min(app.all_playlists.len() - 1);
+      .min(editable_playlists.len() - 1);
     list_state.select(Some(selected));
 
     let list = List::new(items)

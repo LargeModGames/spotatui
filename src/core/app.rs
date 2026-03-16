@@ -1139,23 +1139,75 @@ impl App {
     self.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl_secs));
   }
 
+  pub fn playlist_is_editable(&self, playlist: &SimplifiedPlaylist) -> bool {
+    let Some(user) = &self.user else {
+      return false;
+    };
+
+    playlist.owner.id.id() == user.id.id() || playlist.collaborative
+  }
+
+  pub fn editable_playlist_indices(&self) -> Vec<usize> {
+    self
+      .all_playlists
+      .iter()
+      .enumerate()
+      .filter_map(|(index, playlist)| self.playlist_is_editable(playlist).then_some(index))
+      .collect()
+  }
+
+  pub fn editable_playlists(&self) -> Vec<&SimplifiedPlaylist> {
+    self
+      .all_playlists
+      .iter()
+      .filter(|playlist| self.playlist_is_editable(playlist))
+      .collect()
+  }
+
+  pub fn editable_playlist_count(&self) -> usize {
+    self
+      .all_playlists
+      .iter()
+      .filter(|playlist| self.playlist_is_editable(playlist))
+      .count()
+  }
+
+  pub fn editable_playlist_at_picker_index(
+    &self,
+    picker_index: usize,
+  ) -> Option<&SimplifiedPlaylist> {
+    let editable_indices = self.editable_playlist_indices();
+    editable_indices
+      .get(picker_index)
+      .and_then(|index| self.all_playlists.get(*index))
+  }
+
   pub fn begin_add_track_to_playlist_flow(
     &mut self,
     track_id: Option<TrackId<'static>>,
     track_name: String,
   ) {
     let Some(track_id) = track_id else {
-      self.set_status_message("Track cannot be edited in playlist".to_string(), 4);
+      self.set_status_message("Track cannot be added to playlist".to_string(), 4);
       return;
     };
 
-    if self.all_playlists.is_empty() {
-      if self.playlists.is_none() {
-        self.dispatch(IoEvent::GetPlaylists);
-        self.set_status_message("Playlists loading, try again".to_string(), 4);
-      } else {
-        self.set_status_message("No playlists available".to_string(), 4);
-      }
+    let mut requested_data = false;
+    if self.user.is_none() {
+      self.dispatch(IoEvent::GetUser);
+      requested_data = true;
+    }
+    if self.playlists.is_none() {
+      self.dispatch(IoEvent::GetPlaylists);
+      requested_data = true;
+    }
+    if requested_data {
+      self.set_status_message("Playlist destinations loading, try again".to_string(), 4);
+      return;
+    }
+
+    if self.editable_playlist_count() == 0 {
+      self.set_status_message("No editable playlists available".to_string(), 4);
       return;
     }
 
@@ -2081,6 +2133,11 @@ impl App {
       .current_playlist_track_table_id()
       .as_ref()
       .is_some_and(|current_playlist_id| current_playlist_id.id() == playlist_id.id())
+  }
+
+  pub fn is_current_route_playlist_track_table_for(&self, playlist_id: &PlaylistId<'_>) -> bool {
+    self.get_current_route().id == RouteId::TrackTable
+      && self.is_playlist_track_table_active_for(playlist_id)
   }
 
   pub fn show_saved_tracks_page_at_index(&mut self, page_index: usize) {
@@ -3490,7 +3547,12 @@ impl App {
 mod tests {
   use super::*;
   use chrono::{Duration as ChronoDuration, Utc};
-  use rspotify::model::artist::SimplifiedArtist;
+  use rspotify::model::{
+    artist::SimplifiedArtist,
+    idtypes::{PlaylistId, UserId},
+    playlist::PlaylistTracksRef,
+    user::PublicUser,
+  };
   use rspotify::prelude::Id;
   use std::collections::HashMap;
   use std::sync::mpsc::channel;
@@ -3561,6 +3623,55 @@ mod tests {
       offset,
       previous: None,
       total,
+    }
+  }
+
+  fn private_user(id: &str) -> PrivateUser {
+    PrivateUser {
+      country: None,
+      display_name: Some("Test User".to_string()),
+      email: None,
+      explicit_content: None,
+      external_urls: HashMap::new(),
+      followers: None,
+      href: "https://api.spotify.com/v1/me".to_string(),
+      id: UserId::from_id(id).unwrap().into_static(),
+      images: None,
+      product: None,
+    }
+  }
+
+  fn public_user(id: &str, display_name: &str) -> PublicUser {
+    PublicUser {
+      display_name: Some(display_name.to_string()),
+      external_urls: HashMap::new(),
+      followers: None,
+      href: format!("https://api.spotify.com/v1/users/{id}"),
+      id: UserId::from_id(id).unwrap().into_static(),
+      images: Vec::new(),
+    }
+  }
+
+  fn simplified_playlist(
+    id: &str,
+    name: &str,
+    owner_id: &str,
+    collaborative: bool,
+  ) -> SimplifiedPlaylist {
+    SimplifiedPlaylist {
+      collaborative,
+      external_urls: HashMap::new(),
+      href: format!("https://api.spotify.com/v1/playlists/{id}"),
+      id: PlaylistId::from_id(id).unwrap().into_static(),
+      images: Vec::new(),
+      name: name.to_string(),
+      owner: public_user(owner_id, owner_id),
+      public: Some(false),
+      snapshot_id: "snapshot".to_string(),
+      tracks: PlaylistTracksRef {
+        href: format!("https://api.spotify.com/v1/playlists/{id}/tracks"),
+        total: 5,
+      },
     }
   }
 
@@ -3839,5 +3950,90 @@ mod tests {
       app.track_table.tracks[0].id.as_ref().unwrap().id(),
       original_track.id.as_ref().unwrap().id()
     );
+  }
+
+  #[test]
+  fn editable_playlists_include_owned_and_collaborative_only() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.user = Some(private_user("spotatui-owner"));
+    app.all_playlists = vec![
+      simplified_playlist(
+        "37i9dQZF1DXcBWIGoYBM5M",
+        "Owned",
+        "spotatui-owner",
+        false,
+      ),
+      simplified_playlist(
+        "37i9dQZF1DX4WYpdgoIcn6",
+        "Collaborative",
+        "friend-owner",
+        true,
+      ),
+      simplified_playlist(
+        "37i9dQZF1DWZqd5JICZI0u",
+        "Followed",
+        "friend-owner",
+        false,
+      ),
+    ];
+
+    let editable_names = app
+      .editable_playlists()
+      .into_iter()
+      .map(|playlist| playlist.name.clone())
+      .collect::<Vec<_>>();
+
+    assert_eq!(editable_names, vec!["Owned", "Collaborative"]);
+  }
+
+  #[test]
+  fn begin_add_track_to_playlist_flow_requires_editable_playlist() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.user = Some(private_user("spotatui-owner"));
+    app.playlists = Some(Page {
+      href: "https://api.spotify.com/v1/me/playlists".to_string(),
+      items: vec![],
+      limit: 50,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 1,
+    });
+    app.all_playlists = vec![simplified_playlist(
+      "37i9dQZF1DWZqd5JICZI0u",
+      "Followed",
+      "friend-owner",
+      false,
+    )];
+
+    app.begin_add_track_to_playlist_flow(
+      Some(TrackId::from_id("0000000000000000000001").unwrap().into_static()),
+      "Track".to_string(),
+    );
+
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("No editable playlists available")
+    );
+    assert!(app.pending_playlist_track_add.is_none());
+  }
+
+  #[test]
+  fn current_route_playlist_track_table_requires_track_table_route() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    let playlist_id = playlist_id("37i9dQZF1DXcBWIGoYBM5M");
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+
+    assert!(app.is_playlist_track_table_active_for(&playlist_id));
+    assert!(!app.is_current_route_playlist_track_table_for(&playlist_id));
+
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    assert!(app.is_current_route_playlist_track_table_for(&playlist_id));
   }
 }

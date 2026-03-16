@@ -56,6 +56,7 @@ pub fn handler(key: Key, app: &mut App) {
         };
       };
     }
+    Key::Char('w') => open_add_to_playlist_for_selected_recent_track(app),
     Key::Enter => {
       if let Some(recently_played_result) = &app.recently_played.result.clone() {
         let track_uris: Vec<PlayableId<'static>> = recently_played_result
@@ -101,6 +102,18 @@ pub fn handler(key: Key, app: &mut App) {
     }
     _ => {}
   };
+}
+
+fn open_add_to_playlist_for_selected_recent_track(app: &mut App) {
+  let Some(recently_played_result) = &app.recently_played.result else {
+    return;
+  };
+  let Some(selected_track) = recently_played_result.items.get(app.recently_played.index) else {
+    return;
+  };
+
+  let track_id = selected_track.track.id.clone().map(|id| id.into_static());
+  app.begin_add_track_to_playlist_flow(track_id, selected_track.track.name.clone());
 }
 
 #[cfg(test)]
