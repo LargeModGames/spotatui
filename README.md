@@ -498,7 +498,6 @@ This project follows the [all-contributors](https://github.com/all-contributors/
 The goal is to eventually implement almost every Spotify feature.
 
 **High-priority features:**
-- Add songs to a playlist
 - Scroll through result pages in every view
 
 See the [Roadmap Wiki](https://github.com/LargeModGames/spotatui/wiki/Roadmap) for the full API coverage table.

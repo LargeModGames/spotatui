@@ -1,5 +1,5 @@
 use super::requests::{spotify_api_request_json_for, spotify_get_typed_compat_for};
-use super::Network;
+use super::{IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
@@ -599,13 +599,31 @@ impl LibraryNetwork for Network {
   ) {
     match self
       .spotify
-      .playlist_add_items(playlist_id, vec![PlayableId::Track(track_id)], None)
+      .playlist_add_items(playlist_id.clone(), vec![PlayableId::Track(track_id)], None)
       .await
     {
       Ok(_) => {
-        self
-          .show_status_message("Added to playlist".to_string(), 3)
-          .await;
+        let status_message = {
+          let mut app = self.app.lock().await;
+          let playlist_name = app
+            .all_playlists
+            .iter()
+            .find(|playlist| playlist.id.id() == playlist_id.id())
+            .map(|playlist| playlist.name.clone());
+
+          if app.is_current_route_playlist_track_table_for(&playlist_id) {
+            let playlist_offset = app.playlist_offset;
+            app.dispatch(IoEvent::GetPlaylistItems(
+              playlist_id.clone(),
+              playlist_offset,
+            ));
+          }
+
+          playlist_name
+            .map(|name| format!("Added to {}", name))
+            .unwrap_or_else(|| "Added to playlist".to_string())
+        };
+        self.show_status_message(status_message, 3).await;
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }

@@ -505,7 +505,7 @@ pub fn handler(key: Key, app: &mut App) {
       SearchResultBlock::AlbumSearch => {
         app.current_user_saved_album_add(ActiveBlock::SearchResultBlock)
       }
-      SearchResultBlock::SongSearch => {}
+      SearchResultBlock::SongSearch => open_add_to_playlist_for_selected_search_track(app),
       SearchResultBlock::ArtistSearch => app.user_follow_artists(ActiveBlock::SearchResultBlock),
       SearchResultBlock::PlaylistSearch => {
         app.user_follow_playlist();
@@ -541,5 +541,112 @@ pub fn handler(key: Key, app: &mut App) {
     _ if key == app.user_config.keys.add_item_to_queue => handle_add_item_to_queue(app),
     // Add `s` to "see more" on each option
     _ => {}
+  }
+}
+
+fn open_add_to_playlist_for_selected_search_track(app: &mut App) {
+  let Some(tracks) = &app.search_results.tracks else {
+    return;
+  };
+  let Some(selected_index) = app.search_results.selected_tracks_index else {
+    return;
+  };
+  let Some(track) = tracks.items.get(selected_index) else {
+    return;
+  };
+
+  let track_id = track.id.clone().map(|id| id.into_static());
+  app.begin_add_track_to_playlist_flow(track_id, track.name.clone());
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::{
+    app::{ActiveBlock, RouteId},
+    test_helpers::{private_user, simplified_playlist},
+    user_config::UserConfig,
+  };
+  use chrono::Duration as ChronoDuration;
+  use rspotify::model::{
+    artist::SimplifiedArtist, idtypes::TrackId, page::Page, track::FullTrack, SimplifiedAlbum,
+  };
+  use std::{collections::HashMap, sync::mpsc::channel, time::SystemTime};
+
+  fn full_track(id: &str, name: &str) -> FullTrack {
+    FullTrack {
+      album: SimplifiedAlbum {
+        name: "Album".to_string(),
+        ..Default::default()
+      },
+      artists: vec![SimplifiedArtist {
+        name: "Artist".to_string(),
+        ..Default::default()
+      }],
+      available_markets: Vec::new(),
+      disc_number: 1,
+      duration: ChronoDuration::milliseconds(180_000),
+      explicit: false,
+      external_ids: HashMap::new(),
+      external_urls: HashMap::new(),
+      href: None,
+      id: Some(TrackId::from_id(id).unwrap().into_static()),
+      is_local: false,
+      is_playable: Some(true),
+      linked_from: None,
+      restrictions: None,
+      name: name.to_string(),
+      popularity: 50,
+      preview_url: None,
+      track_number: 1,
+    }
+  }
+
+  #[test]
+  fn pressing_w_on_search_song_opens_add_to_playlist_picker() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.user = Some(private_user("spotatui-owner"));
+    app.playlists = Some(Page {
+      href: "https://api.spotify.com/v1/me/playlists".to_string(),
+      items: vec![],
+      limit: 50,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 1,
+    });
+    app.all_playlists = vec![simplified_playlist(
+      "37i9dQZF1DXcBWIGoYBM5M",
+      "Owned Playlist",
+      "spotatui-owner",
+      false,
+    )];
+    app.search_results.tracks = Some(Page {
+      href: "https://api.spotify.com/v1/search".to_string(),
+      items: vec![full_track("0000000000000000000001", "Search Track")],
+      limit: 1,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 1,
+    });
+    app.search_results.selected_block = SearchResultBlock::SongSearch;
+    app.search_results.selected_tracks_index = Some(0);
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+
+    handler(Key::Char('w'), &mut app);
+
+    assert_eq!(
+      app
+        .pending_playlist_track_add
+        .as_ref()
+        .map(|pending| pending.track_name.as_str()),
+      Some("Search Track")
+    );
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    );
   }
 }

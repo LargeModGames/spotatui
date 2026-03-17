@@ -186,7 +186,7 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
     vec![
       String::from("Add selected track to playlist"),
       String::from("w"),
-      String::from("Track table"),
+      String::from("Track table / search songs / artist top tracks / recently played"),
     ],
     vec![
       String::from("Add currently playing track to playlist"),

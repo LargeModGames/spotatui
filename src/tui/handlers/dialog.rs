@@ -53,12 +53,13 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
 }
 
 fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
-  let playlist_count = app.all_playlists.len();
+  let editable_playlists = app.editable_playlists();
+  let playlist_count = editable_playlists.len();
   match key {
     k if common_key_events::down_event(k) => {
       if playlist_count > 0 {
         let next = common_key_events::on_down_press_handler(
-          &app.all_playlists,
+          &editable_playlists,
           Some(app.playlist_picker_selected_index),
         );
         app.playlist_picker_selected_index = next;
@@ -67,7 +68,7 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
     k if common_key_events::up_event(k) => {
       if playlist_count > 0 {
         let next = common_key_events::on_up_press_handler(
-          &app.all_playlists,
+          &editable_playlists,
           Some(app.playlist_picker_selected_index),
         );
         app.playlist_picker_selected_index = next;
@@ -81,22 +82,21 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
     k if common_key_events::middle_event(k) => {
       if playlist_count > 0 {
         app.playlist_picker_selected_index =
-          common_key_events::on_middle_press_handler(&app.all_playlists);
+          common_key_events::on_middle_press_handler(&editable_playlists);
       }
     }
     k if common_key_events::low_event(k) => {
       if playlist_count > 0 {
         app.playlist_picker_selected_index =
-          common_key_events::on_low_press_handler(&app.all_playlists);
+          common_key_events::on_low_press_handler(&editable_playlists);
       }
     }
     Key::Enter => {
       if let Some(pending_add) = app.pending_playlist_track_add.clone() {
-        if let Some(playlist) = app.all_playlists.get(
-          app
-            .playlist_picker_selected_index
-            .min(playlist_count.saturating_sub(1)),
-        ) {
+        let selected = app
+          .playlist_picker_selected_index
+          .min(playlist_count.saturating_sub(1));
+        if let Some(playlist) = editable_playlists.get(selected) {
           app.dispatch(IoEvent::AddTrackToPlaylist(
             playlist.id.clone().into_static(),
             pending_add.track_id,
@@ -138,7 +138,14 @@ fn close_dialog(app: &mut App) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::RouteId;
+  use crate::core::{
+    app::{PendingPlaylistTrackAdd, RouteId},
+    test_helpers::{private_user, simplified_playlist},
+    user_config::UserConfig,
+  };
+  use rspotify::model::{idtypes::TrackId, page::Page};
+  use rspotify::prelude::Id;
+  use std::{sync::mpsc::channel, time::SystemTime};
 
   #[test]
   fn confirmation_dialog_toggles_with_vim_hl() {
@@ -154,5 +161,52 @@ mod tests {
 
     handler(Key::Char('h'), &mut app);
     assert!(!app.confirm);
+  }
+
+  #[test]
+  fn add_to_playlist_picker_dispatches_selected_editable_playlist() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.user = Some(private_user("spotatui-owner"));
+    app.playlists = Some(Page {
+      href: "https://api.spotify.com/v1/me/playlists".to_string(),
+      items: vec![],
+      limit: 50,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 3,
+    });
+    app.all_playlists = vec![
+      simplified_playlist("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
+      simplified_playlist("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
+      simplified_playlist(
+        "37i9dQZF1DX4WYpdgoIcn6",
+        "Collaborative",
+        "friend-owner",
+        true,
+      ),
+    ];
+    app.pending_playlist_track_add = Some(PendingPlaylistTrackAdd {
+      track_id: TrackId::from_id("0000000000000000000001")
+        .unwrap()
+        .into_static(),
+      track_name: "Track".to_string(),
+    });
+    app.push_navigation_stack(
+      RouteId::Dialog,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker),
+    );
+    app.playlist_picker_selected_index = 0;
+
+    handler(Key::Enter, &mut app);
+
+    match rx.recv().unwrap() {
+      IoEvent::AddTrackToPlaylist(playlist_id, track_id) => {
+        assert_eq!(playlist_id.id(), "37i9dQZF1DXcBWIGoYBM5M");
+        assert_eq!(track_id.id(), "0000000000000000000001");
+      }
+      _ => panic!("expected add-track event"),
+    }
   }
 }
