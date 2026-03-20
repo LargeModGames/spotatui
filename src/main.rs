@@ -65,6 +65,8 @@ use crossterm::{
   ExecutableCommand,
 };
 use log::info;
+#[cfg(feature = "streaming")]
+use log::warn;
 use ratatui::backend::Backend;
 use rspotify::{
   prelude::*,
@@ -1198,26 +1200,24 @@ of the app. Beware that this comes at a CPU cost!",
       let client_id = client_config.client_id.clone();
       let redirect_uri = selected_redirect_uri.clone();
 
-      let mut init_handle = tokio::spawn(async move {
+      // Internal Spirc timeout defaults to 30s (configurable via
+      // SPOTATUI_STREAMING_INIT_TIMEOUT_SECS). The outer timeout here is a safety net
+      // that catches hangs *outside* Spirc init (e.g. OAuth callback never arriving,
+      // blocking I/O in credential retrieval). Set it above the internal timeout.
+      let internal_timeout_secs: u64 = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&v: &u64| v > 0)
+        .unwrap_or(30);
+      let outer_timeout = Duration::from_secs(internal_timeout_secs.saturating_add(15));
+
+      let init_task = tokio::spawn(async move {
         player::StreamingPlayer::new(&client_id, &redirect_uri, streaming_config).await
       });
+      let abort_handle = init_task.abort_handle();
 
-      let init_timeout_secs = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(30);
-
-      let init_result = tokio::select! {
-        res = &mut init_handle => Some(res),
-        _ = tokio::time::sleep(std::time::Duration::from_secs(init_timeout_secs)) => {
-          init_handle.abort();
-          None
-        }
-      };
-
-      match init_result {
-        Some(Ok(Ok(p))) => {
+      match tokio::time::timeout(outer_timeout, init_task).await {
+        Ok(Ok(Ok(p))) => {
           info!(
             "native streaming player initialized as '{}'",
             p.device_name()
@@ -1226,25 +1226,26 @@ of the app. Beware that this comes at a CPU cost!",
           // which respects the user's saved device preference (e.g., spotifyd)
           Some(Arc::new(p))
         }
-        Some(Ok(Err(e))) => {
+        Ok(Ok(Err(e))) => {
           info!(
             "failed to initialize streaming: {} - falling back to web api",
             e
           );
           None
         }
-        Some(Err(e)) => {
+        Ok(Err(e)) => {
           info!(
             "streaming initialization panicked: {} - falling back to web api",
             e
           );
           None
         }
-        None => {
-          info!(
-            "streaming initialization timed out after {}s - falling back to web api",
-            init_timeout_secs
-          ); //you can adjust timeout using SPOTATUI_STREAMING_INIT_TIMEOUT_SECS environment variable
+        Err(_) => {
+          abort_handle.abort();
+          warn!(
+            "streaming initialization hung unexpectedly (outer timeout {}s) - falling back to web api",
+            outer_timeout.as_secs()
+          );
           None
         }
       }
