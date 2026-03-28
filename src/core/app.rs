@@ -242,6 +242,7 @@ pub enum ActiveBlock {
   SortMenu,
   Queue,
   Party,
+  CreatePlaylistForm,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -271,6 +272,7 @@ pub enum RouteId {
   HelpMenu,
   Queue,
   Party,
+  CreatePlaylist,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -507,6 +509,23 @@ pub enum PlaylistFolderItem {
     /// Folder ID this playlist is visible in
     current_id: usize,
   },
+}
+
+/// Which stage of the "Create Playlist" form we are on
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum CreatePlaylistStage {
+  #[default]
+  Name,
+  AddTracks,
+}
+
+/// Which panel inside the AddTracks stage has focus
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum CreatePlaylistFocus {
+  #[default]
+  SearchInput,
+  SearchResults,
+  AddedTracks,
 }
 
 /// Settings screen category tabs
@@ -785,6 +804,19 @@ pub struct App {
   /// Reference to MPRIS manager for emitting Seeked signals after native seeks
   #[cfg(all(feature = "mpris", target_os = "linux"))]
   pub mpris_manager: Option<Arc<crate::mpris::MprisManager>>,
+
+  // Create Playlist form state
+  pub create_playlist_name: Vec<char>,
+  pub create_playlist_name_idx: usize,
+  pub create_playlist_name_cursor: u16,
+  pub create_playlist_stage: CreatePlaylistStage,
+  pub create_playlist_tracks: Vec<FullTrack>,
+  pub create_playlist_search_results: Vec<FullTrack>,
+  pub create_playlist_search_input: Vec<char>,
+  pub create_playlist_search_idx: usize,
+  pub create_playlist_search_cursor: u16,
+  pub create_playlist_selected_result: usize,
+  pub create_playlist_focus: CreatePlaylistFocus,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -951,6 +983,17 @@ impl Default for App {
       mpris_manager: None,
       #[cfg(feature = "cover-art")]
       cover_art: crate::tui::cover_art::CoverArt::new(),
+      create_playlist_name: Vec::new(),
+      create_playlist_name_idx: 0,
+      create_playlist_name_cursor: 0,
+      create_playlist_stage: CreatePlaylistStage::Name,
+      create_playlist_tracks: Vec::new(),
+      create_playlist_search_results: Vec::new(),
+      create_playlist_search_input: Vec::new(),
+      create_playlist_search_idx: 0,
+      create_playlist_search_cursor: 0,
+      create_playlist_selected_result: 0,
+      create_playlist_focus: CreatePlaylistFocus::SearchInput,
     }
   }
 }

@@ -64,12 +64,15 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::MyPlaylists,
   );
 
+  let mut display_list = playlist_items;
+  display_list.push("+ Add Playlist".to_string());
+
   draw_selectable_list(
     f,
     app,
     layout_chunk,
     "Playlists",
-    &playlist_items,
+    &display_list,
     highlight_state,
     app.selected_playlist_index,
   );

@@ -5,6 +5,7 @@ mod announcement_prompt;
 mod artist;
 mod artists;
 mod common_key_events;
+mod create_playlist;
 #[cfg(feature = "cover-art")]
 mod cover_art_view;
 mod dialog;
@@ -71,6 +72,13 @@ pub fn handle_app(key: Key, app: &mut App) {
 
   // When Party popup is open, all keys go to the party handler first (so 'c' and 'l' aren't stolen by global bindings).
   if app.get_current_route().active_block == ActiveBlock::Party {
+    handle_block_events(key, app);
+    return;
+  }
+
+  // When Create Playlist form is open, all keys go directly to the form handler
+  // (so typed characters aren't stolen by global bindings like 'd', space, etc.)
+  if app.get_current_route().active_block == ActiveBlock::CreatePlaylistForm {
     handle_block_events(key, app);
     return;
   }
@@ -239,6 +247,7 @@ fn is_input_mode(app: &App) -> bool {
       | ActiveBlock::Dialog(_)
       | ActiveBlock::AnnouncementPrompt
       | ActiveBlock::ExitPrompt
+      | ActiveBlock::CreatePlaylistForm
   )
 }
 
@@ -333,6 +342,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Party => {
       party::handler(key, app);
     }
+    ActiveBlock::CreatePlaylistForm => {
+      create_playlist::handler(key, app);
+    }
   }
 }
 
@@ -379,6 +391,9 @@ fn handle_escape(app: &mut App) {
       app.sort_menu_visible = false;
       app.sort_context = None;
       app.set_current_route_state(Some(ActiveBlock::Empty), None);
+    }
+    ActiveBlock::CreatePlaylistForm => {
+      create_playlist::handler(Key::Esc, app);
     }
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);

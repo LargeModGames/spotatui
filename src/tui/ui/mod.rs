@@ -1,5 +1,6 @@
 pub mod artist;
 pub mod audio_analysis;
+pub mod create_playlist;
 pub mod discover;
 pub mod help;
 pub mod home;
@@ -19,6 +20,7 @@ use ratatui::{
 };
 
 pub use self::artist::draw_artist_albums;
+pub use self::create_playlist::draw_create_playlist_form;
 pub use self::discover::draw_discover;
 pub use self::home::draw_home;
 pub use self::library::draw_user_block;
@@ -138,5 +140,6 @@ pub fn draw_routes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     | RouteId::Queue
     | RouteId::Party => {} // These are drawn outside the main routed content area.
     RouteId::Dialog => {} // This is handled in draw_dialog.
+    RouteId::CreatePlaylist => {} // This is drawn as an overlay via draw_create_playlist_form.
   };
 }

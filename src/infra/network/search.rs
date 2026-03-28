@@ -19,6 +19,7 @@ pub struct ArtistSearchResponse {
 
 pub trait SearchNetwork {
   async fn get_search_results(&mut self, search_term: String, country: Option<Country>);
+  async fn search_tracks_for_playlist(&mut self, search_term: String);
 }
 
 impl SearchNetwork for Network {
@@ -150,5 +151,32 @@ impl SearchNetwork for Network {
     app.search_results.albums = album_result;
     app.search_results.playlists = playlist_result;
     app.search_results.shows = show_result;
+  }
+
+  async fn search_tracks_for_playlist(&mut self, search_term: String) {
+    let result = self
+      .spotify
+      .search(
+        &search_term,
+        SearchType::Track,
+        None,
+        None,
+        Some(self.large_search_limit),
+        Some(0),
+      )
+      .await;
+
+    let tracks = match result {
+      Ok(SearchResult::Tracks(page)) => page
+        .items
+        .into_iter()
+        .filter_map(|t| if t.id.is_some() { Some(t) } else { None })
+        .collect::<Vec<_>>(),
+      _ => return,
+    };
+
+    let mut app = self.app.lock().await;
+    app.create_playlist_search_results = tracks;
+    app.create_playlist_selected_result = 0;
   }
 }

@@ -365,6 +365,14 @@ impl PlaybackNetwork for Network {
           return;
         }
 
+        // 404 = no active device/player; treat as idle, not an error
+        if err.to_string().contains("404") || err.to_string().contains("Not Found") {
+          app.current_playback_context = None;
+          app.instant_since_last_current_playback_poll = Instant::now();
+          app.is_fetching_current_playback = false;
+          return;
+        }
+
         app.handle_error(err);
         return;
       }

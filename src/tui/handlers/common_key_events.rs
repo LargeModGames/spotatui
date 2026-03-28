@@ -146,6 +146,7 @@ pub fn handle_right_event(app: &mut App) {
       RouteId::HelpMenu => {}
       RouteId::Queue => {}
       RouteId::Party => {}
+      RouteId::CreatePlaylist => {}
     },
     _ => {}
   };

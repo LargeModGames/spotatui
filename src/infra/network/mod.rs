@@ -140,6 +140,10 @@ pub enum IoEvent {
   /// Send a playback command to the party host (guest only, Phase 2)
   #[allow(dead_code)]
   PartyPlaybackCommand(sync::PlaybackAction),
+  /// Search tracks to add to a new playlist
+  SearchTracksForPlaylist(String),
+  /// Create a new playlist with the given name and track IDs
+  CreateNewPlaylist(String, Vec<TrackId<'static>>),
 }
 
 pub struct Network {
@@ -412,6 +416,12 @@ impl Network {
       }
       IoEvent::PartyPlaybackCommand(action) => {
         self.party_playback_command(action).await;
+      }
+      IoEvent::SearchTracksForPlaylist(query) => {
+        self.search_tracks_for_playlist(query).await;
+      }
+      IoEvent::CreateNewPlaylist(name, track_ids) => {
+        self.create_new_playlist(name, track_ids).await;
       }
     };
 

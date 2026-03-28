@@ -9,7 +9,7 @@ use reqwest::Method;
 use rspotify::model::{
   idtypes::{AlbumId, LibraryId, PlaylistId, ShowId, TrackId, UserId},
   page::Page,
-  playlist::PlaylistItem,
+  playlist::{PlaylistItem, SimplifiedPlaylist},
   track::SavedTrack,
   PlayableItem,
 };
@@ -169,6 +169,7 @@ pub trait LibraryNetwork {
   async fn toggle_save_track(&mut self, track_id: rspotify::model::idtypes::PlayableId<'static>);
   async fn current_user_saved_tracks_contains(&mut self, ids: Vec<TrackId<'static>>);
   async fn fetch_all_playlist_tracks_and_sort(&mut self, playlist_id: PlaylistId<'static>);
+  async fn create_new_playlist(&mut self, name: String, track_ids: Vec<TrackId<'static>>);
 }
 
 // Private helper methods
@@ -275,32 +276,40 @@ impl LibraryNetwork for Network {
     let mut first_page = None;
 
     loop {
-      match self
-        .spotify
-        .current_user_playlists_manual(Some(limit), Some(offset))
-        .await
+      // Always use the compat path: parses raw JSON to serde_json::Value first,
+      // which silently deduplicates keys (last-wins). This handles the known Spotify
+      // API bug where "items" appears twice in the same JSON object.
+      let page = match super::requests::spotify_get_typed_compat_for::<Page<SimplifiedPlaylist>>(
+        &self.spotify,
+        "me/playlists",
+        &[
+          ("limit", limit.to_string()),
+          ("offset", offset.to_string()),
+        ],
+      )
+      .await
       {
-        Ok(page) => {
-          if offset == 0 {
-            first_page = Some(page.clone());
-          }
-
-          if page.items.is_empty() {
-            break;
-          }
-
-          all_playlists.extend(page.items);
-
-          if page.next.is_none() {
-            break;
-          }
-          offset += limit;
-        }
+        Ok(page) => page,
         Err(e) => {
           self.handle_error(anyhow!(e)).await;
           return;
         }
+      };
+
+      if offset == 0 {
+        first_page = Some(page.clone());
       }
+
+      if page.items.is_empty() {
+        break;
+      }
+
+      all_playlists.extend(page.items);
+
+      if page.next.is_none() {
+        break;
+      }
+      offset += limit;
     }
 
     #[cfg(feature = "streaming")]
@@ -765,6 +774,91 @@ impl LibraryNetwork for Network {
     let sorter = Sorter::new(app.playlist_sort);
     sorter.sort_tracks(&mut all_tracks);
     let _ = app.apply_sorted_playlist_tracks_if_current(&playlist_id, all_tracks);
+  }
+
+  async fn create_new_playlist(&mut self, name: String, track_ids: Vec<TrackId<'static>>) {
+    let user_id = {
+      let app = self.app.lock().await;
+      app.user.as_ref().and_then(|u| Some(u.id.clone()))
+    };
+
+    let user_id = match user_id {
+      Some(id) => id,
+      None => {
+        self
+          .show_status_message("Cannot create playlist: not logged in".to_string(), 4)
+          .await;
+        return;
+      }
+    };
+
+    // Use raw API call to avoid rspotify deserializing FullPlaylist, which crashes when
+    // Spotify returns a duplicate "items" key in the response (known API migration bug).
+    let user_id_str = user_id.id().to_string();
+    let create_path = format!("users/{}/playlists", user_id_str);
+    let create_body = json!({
+      "name": name,
+      "public": false,
+      "collaborative": false,
+      "description": "Created with spotatui"
+    });
+    let playlist_value = match spotify_api_request_json_for(
+      &self.spotify,
+      Method::POST,
+      &create_path,
+      &[],
+      Some(create_body),
+    )
+    .await
+    {
+      Ok(v) => v,
+      Err(e) => {
+        self.handle_error(e).await;
+        return;
+      }
+    };
+
+    let playlist_id_str = match playlist_value.get("id").and_then(|v| v.as_str()) {
+      Some(id) => id.to_string(),
+      None => {
+        self
+          .show_status_message("Playlist created but could not get its ID".to_string(), 4)
+          .await;
+        return;
+      }
+    };
+
+    let playlist_id = match PlaylistId::from_id(playlist_id_str) {
+      Ok(id) => id.into_static(),
+      Err(e) => {
+        self.handle_error(anyhow!(e)).await;
+        return;
+      }
+    };
+
+    if !track_ids.is_empty() {
+      let items: Vec<rspotify::model::idtypes::PlayableId> = track_ids
+        .iter()
+        .map(|id| rspotify::model::idtypes::PlayableId::Track(id.clone()))
+        .collect();
+      if let Err(e) = self
+        .spotify
+        .playlist_add_items(playlist_id, items, None)
+        .await
+      {
+        self.handle_error(anyhow!(e)).await;
+        return;
+      }
+    }
+
+    // Refresh playlists
+    {
+      let mut app = self.app.lock().await;
+      app.dispatch(IoEvent::GetPlaylists);
+    }
+
+    let status = format!("Playlist \"{}\" created!", name);
+    self.show_status_message(status, 4).await;
   }
 }
 
