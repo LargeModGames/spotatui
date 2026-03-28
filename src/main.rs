@@ -1950,12 +1950,21 @@ async fn handle_player_events(
         }
 
         if let Ok(mut app) = app.try_lock() {
-          if let Some(ref mut ctx) = app.current_playback_context {
-            ctx.device.volume_percent = Some(volume_percent as u32);
+          if let Some(pending) = app.pending_volume {
+            if volume_percent == pending {
+              // Native player caught up — safe to clear pending
+              app.pending_volume = None;
+              app.last_dispatched_volume = None;
+            }
+            // If it doesn't match, the event is stale or from an external
+            // change — leave pending_volume alone so the UI stays correct.
+          } else {
+            if let Some(ref mut ctx) = app.current_playback_context {
+              ctx.device.volume_percent = Some(volume_percent as u32);
+            }
+            app.user_config.behavior.volume_percent = volume_percent.min(100);
+            let _ = app.user_config.save_config();
           }
-          // Persist the latest volume so it is restored on next launch
-          app.user_config.behavior.volume_percent = volume_percent.min(100);
-          let _ = app.user_config.save_config();
         }
       }
       PlayerEvent::PositionChanged {
@@ -2646,6 +2655,7 @@ async fn start_ui(
         #[cfg(feature = "streaming")]
         app.flush_pending_native_seek();
         app.flush_pending_api_seek();
+        app.flush_pending_volume();
 
         #[cfg(feature = "discord-rpc")]
         if let Some(ref manager) = discord_rpc_manager {
@@ -2955,6 +2965,7 @@ async fn start_ui(
         #[cfg(feature = "streaming")]
         app.flush_pending_native_seek();
         app.flush_pending_api_seek();
+        app.flush_pending_volume();
 
         #[cfg(feature = "discord-rpc")]
         if let Some(ref manager) = discord_rpc_manager {

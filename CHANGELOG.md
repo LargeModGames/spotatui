@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Volume display glitch on rapid changes**: Fixed the volume percentage briefly reverting to an old value after the user changed it, especially noticeable when spamming volume up/down. The UI now always shows the user's intended volume until Spotify's API confirms it matches.
+
 ## [v0.38.0] - 2026-03-23
 
 ### Added

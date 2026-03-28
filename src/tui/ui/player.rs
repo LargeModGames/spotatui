@@ -536,7 +536,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         current_playback_context.device.name,
         shuffle_text,
         repeat_text,
-        current_playback_context.device.volume_percent.unwrap_or(0)
+        app.desired_volume()
       );
 
       if let Some(session) = &app.party_session {

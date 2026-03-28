@@ -592,6 +592,13 @@ pub struct SettingItem {
 }
 
 pub struct App {
+  /// What the user actually wants the volume to be. We keep this around until
+  /// Spotify's API comes back with the same value — otherwise a slow poll
+  /// response can flash the old volume back on screen.
+  pub pending_volume: Option<u8>,
+  /// The last value we actually sent to the API. Lets us skip redundant
+  /// dispatches while we're just waiting for confirmation.
+  pub last_dispatched_volume: Option<u8>,
   pub instant_since_last_current_playback_poll: Instant,
   navigation_stack: Vec<Route>,
   pub spectrum_data: Option<SpectrumData>,
@@ -779,6 +786,10 @@ pub struct App {
   pub saved_tracks_prefetch_generation: u64,
   /// Incremented every time the playlist track table is reloaded to guard stale prefetch tasks
   pub playlist_tracks_prefetch_generation: u64,
+  /// Tracks whether a ChangeVolume request is on its way to Spotify.
+  /// When true, we hold off on sending another one — rapid key presses
+  /// just update `pending_volume` and the latest value wins.
+  pub is_volume_change_in_flight: bool,
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::player::StreamingPlayer>>,
@@ -945,6 +956,9 @@ impl Default for App {
       _playlist_refresh_generation: 0,
       saved_tracks_prefetch_generation: 0,
       playlist_tracks_prefetch_generation: 0,
+      is_volume_change_in_flight: false,
+      pending_volume: None,
+      last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
       streaming_player: None,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -1567,6 +1581,27 @@ impl App {
     }
   }
 
+  /// Picks up pending volume changes from the tick loop and sends them to Spotify.
+  ///
+  /// Skips dispatching if the previous request is still in flight, or if we
+  /// already sent this exact value and are just waiting for the API to confirm.
+  ///
+  /// We intentionally don't clear `pending_volume` here — it sticks around until
+  /// `get_current_playback` sees the matching value come back from the API.
+  pub fn flush_pending_volume(&mut self) {
+    if self.is_volume_change_in_flight {
+      return; // previous request still processing
+    }
+    if let Some(volume) = self.pending_volume {
+      if self.last_dispatched_volume == Some(volume) {
+        return; // already dispatched this value, waiting for API to confirm
+      }
+      self.is_volume_change_in_flight = true;
+      self.last_dispatched_volume = Some(volume);
+      self.dispatch(IoEvent::ChangeVolume(volume));
+    }
+  }
+
   pub fn get_recommendations_for_seed(
     &mut self,
     seed_artists: Option<Vec<String>>,
@@ -1604,70 +1639,99 @@ impl App {
     }
   }
 
+  /// Returns the volume the UI should show and volume-up/down should use as a base.
+  ///
+  /// If the user just pressed a volume key, we show their input (not what the API
+  /// says) because Spotify can be slow to reflect the change. Without this, you'd
+  /// see the percentage jump back to the old value for a split second before
+  /// correcting — especially noticeable when spamming volume up/down.
+  pub fn desired_volume(&self) -> u32 {
+    if let Some(pending) = self.pending_volume {
+      return pending as u32;
+    }
+    self
+      .current_playback_context
+      .as_ref()
+      .and_then(|c| c.device.volume_percent)
+      .unwrap_or(0)
+  }
+
+  /// Bump volume up. Uses `desired_volume()` as the base so rapid presses
+  /// don't accidentally calculate from a stale API value.
   pub fn increase_volume(&mut self) {
-    if let Some(context) = self.current_playback_context.clone() {
-      let current_volume = context.device.volume_percent.unwrap_or(0) as u8;
-      let next_volume = min(
-        current_volume + self.user_config.behavior.volume_increment,
-        100,
-      );
+    let current_volume = self.desired_volume() as u8;
+    let next_volume = min(
+      current_volume + self.user_config.behavior.volume_increment,
+      100,
+    );
 
-      if next_volume != current_volume {
-        info!("increasing volume: {} -> {}", current_volume, next_volume);
-        // Use native streaming player for instant control (bypasses event channel latency)
-        #[cfg(feature = "streaming")]
-        if self.is_native_streaming_active_for_playback() {
-          if let Some(ref player) = self.streaming_player {
-            player.set_volume(next_volume);
+    if next_volume != current_volume {
+      info!("increasing volume: {} -> {}", current_volume, next_volume);
+      // Use native streaming player for instant control (bypasses event channel latency)
+      #[cfg(feature = "streaming")]
+      if self.is_native_streaming_active_for_playback() {
+        if let Some(ref player) = self.streaming_player {
+          player.set_volume(next_volume);
 
-            // Update UI state immediately
-            if let Some(ctx) = &mut self.current_playback_context {
-              ctx.device.volume_percent = Some(next_volume.into());
-            }
-            self.user_config.behavior.volume_percent = next_volume;
-            let _ = self.user_config.save_config();
-            return;
+          // Update UI state immediately
+          if let Some(ctx) = &mut self.current_playback_context {
+            ctx.device.volume_percent = Some(next_volume.into());
           }
+          self.user_config.behavior.volume_percent = next_volume;
+          let _ = self.user_config.save_config();
+          self.pending_volume = Some(next_volume);
+          return;
         }
+      }
 
-        // Fallback to API-based volume control for external devices
+      // Fallback to API-based volume control for external devices
+      // Coalesce: only dispatch if no request is already in flight
+      self.pending_volume = Some(next_volume);
+      if !self.is_volume_change_in_flight {
+        self.is_volume_change_in_flight = true;
         self.dispatch(IoEvent::ChangeVolume(next_volume));
       }
     }
   }
 
+  /// Bump volume down. Uses `desired_volume()` as the base so rapid presses
+  /// don't accidentally calculate from a stale API value.
   pub fn decrease_volume(&mut self) {
-    if let Some(context) = self.current_playback_context.clone() {
-      let current_volume = context.device.volume_percent.unwrap_or(0) as i8;
-      let next_volume = max(
-        current_volume - self.user_config.behavior.volume_increment as i8,
-        0,
+    let current_volume = self.desired_volume() as i8;
+    let next_volume = max(
+      current_volume - self.user_config.behavior.volume_increment as i8,
+      0,
+    );
+
+    if next_volume != current_volume {
+      let next_volume_u8 = next_volume as u8;
+      info!(
+        "decreasing volume: {} -> {}",
+        current_volume, next_volume_u8
       );
 
-      if next_volume != current_volume {
-        let next_volume_u8 = next_volume as u8;
-        info!(
-          "decreasing volume: {} -> {}",
-          current_volume, next_volume_u8
-        );
+      // Use native streaming player for instant control (bypasses event channel latency)
+      #[cfg(feature = "streaming")]
+      if self.is_native_streaming_active_for_playback() {
+        if let Some(ref player) = self.streaming_player {
+          player.set_volume(next_volume_u8);
 
-        // Use native streaming player for instant control (bypasses event channel latency)
-        #[cfg(feature = "streaming")]
-        if self.is_native_streaming_active_for_playback() {
-          if let Some(ref player) = self.streaming_player {
-            player.set_volume(next_volume_u8);
-
-            // Update UI state immediately
-            if let Some(ctx) = &mut self.current_playback_context {
-              ctx.device.volume_percent = Some(next_volume_u8.into());
-            }
-            self.user_config.behavior.volume_percent = next_volume_u8;
-            let _ = self.user_config.save_config();
-            return;
+          // Update UI state immediately
+          if let Some(ctx) = &mut self.current_playback_context {
+            ctx.device.volume_percent = Some(next_volume_u8.into());
           }
+          self.user_config.behavior.volume_percent = next_volume_u8;
+          let _ = self.user_config.save_config();
+          self.pending_volume = Some(next_volume_u8);
+          return;
         }
+      }
 
-        // Fallback to API-based volume control for external devices
+      // Fallback to API-based volume control for external devices
+      // Coalesce: only dispatch if no request is already in flight
+      self.pending_volume = Some(next_volume_u8);
+      if !self.is_volume_change_in_flight {
+        self.is_volume_change_in_flight = true;
         self.dispatch(IoEvent::ChangeVolume(next_volume_u8));
       }
     }

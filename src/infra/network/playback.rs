@@ -246,6 +246,22 @@ impl PlaybackNetwork for Network {
           }
         }
 
+        // Check if Spotify finally caught up to the user's volume change.
+        // If the API now returns what the user asked for, we can clear pending_volume
+        // and let the API take over again. If not, this response is stale — ignore it.
+        if let Some(pending) = app.pending_volume {
+          let api_vol = c.device.volume_percent.unwrap_or(0) as u8;
+          if api_vol == pending {
+            app.pending_volume = None;
+            app.last_dispatched_volume = None;
+          } else {
+            // API hasn't caught up yet — keep showing the user's intended value
+            if let Some(ctx) = app.current_playback_context.as_ref() {
+              c.device.volume_percent = ctx.device.volume_percent;
+            }
+          }
+        }
+
         // On first load with native streaming AND native device is active,
         // override API shuffle with saved preference.
         #[cfg(feature = "streaming")]
@@ -708,6 +724,15 @@ impl PlaybackNetwork for Network {
     }
   }
 
+  /// Sends the volume change to Spotify, either through the native streaming
+  /// player or the Web API depending on which device is active.
+  ///
+  /// On success we clear the in-flight flag but keep `pending_volume` around.
+  /// It only gets cleared when `get_current_playback` comes back with a matching
+  /// volume — that's our signal that Spotify actually caught up.
+  ///
+  /// On error we bail and clear everything so the UI falls back to whatever
+  /// the API last reported.
   async fn change_volume(&mut self, volume: u8) {
     #[cfg(feature = "streaming")]
     if is_native_streaming_active_for_playback(self).await {
@@ -717,6 +742,9 @@ impl PlaybackNetwork for Network {
         if let Some(ctx) = &mut app.current_playback_context {
           ctx.device.volume_percent = Some(volume.into());
         }
+        app.is_volume_change_in_flight = false;
+        app.last_dispatched_volume = Some(volume);
+        // Keep pending_volume set — cleared when API confirms the value matches
         return;
       }
     }
@@ -727,9 +755,15 @@ impl PlaybackNetwork for Network {
         if let Some(ctx) = &mut app.current_playback_context {
           ctx.device.volume_percent = Some(volume.into());
         }
+        app.is_volume_change_in_flight = false;
+        app.last_dispatched_volume = Some(volume);
+        // Keep pending_volume set — cleared when get_current_playback confirms
       }
       Err(e) => {
         let mut app = self.app.lock().await;
+        app.is_volume_change_in_flight = false;
+        app.pending_volume = None;
+        app.last_dispatched_volume = None;
         app.handle_error(anyhow!(e));
       }
     }
