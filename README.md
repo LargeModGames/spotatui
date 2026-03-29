@@ -347,6 +347,7 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
     </tr>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/1knth"><img src="https://avatars.githubusercontent.com/u/115324660?v=4?s=100" width="100px;" alt="knth"/><br /><sub><b>knth</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=1knth" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://www.dev.arynwood.com"><img src="https://avatars.githubusercontent.com/u/64027767?v=4?s=100" width="100px;" alt="Lorelei Noble"/><br /><sub><b>Lorelei Noble</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=SkyeVault" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
