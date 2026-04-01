@@ -638,6 +638,7 @@ pub struct BehaviorConfigString {
   pub show_loading_indicator: Option<bool>,
   pub enforce_wide_search_bar: Option<bool>,
   pub enable_global_song_count: Option<bool>,
+  pub disable_mouse_inputs: Option<bool>,
   pub enable_discord_rpc: Option<bool>,
   pub discord_rpc_client_id: Option<String>,
   pub enable_announcements: Option<bool>,
@@ -677,6 +678,7 @@ pub struct BehaviorConfig {
   pub show_loading_indicator: bool,
   pub enforce_wide_search_bar: bool,
   pub enable_global_song_count: bool,
+  pub disable_mouse_inputs: bool,
   pub enable_discord_rpc: bool,
   pub discord_rpc_client_id: Option<String>,
   pub enable_announcements: bool,
@@ -786,6 +788,7 @@ impl UserConfig {
         show_loading_indicator: true,
         enforce_wide_search_bar: false,
         enable_global_song_count: true,
+        disable_mouse_inputs: false,
         enable_discord_rpc: true,
         discord_rpc_client_id: None,
         enable_announcements: true,
@@ -989,6 +992,10 @@ impl UserConfig {
       self.behavior.enable_global_song_count = enable_global_song_count;
     }
 
+    if let Some(disable_mouse_inputs) = behavior_config.disable_mouse_inputs {
+      self.behavior.disable_mouse_inputs = disable_mouse_inputs;
+    }
+
     if let Some(enable_discord_rpc) = behavior_config.enable_discord_rpc {
       self.behavior.enable_discord_rpc = enable_discord_rpc;
     }
@@ -1133,6 +1140,7 @@ impl UserConfig {
       show_loading_indicator: Some(self.behavior.show_loading_indicator),
       enforce_wide_search_bar: Some(self.behavior.enforce_wide_search_bar),
       enable_global_song_count: Some(self.behavior.enable_global_song_count),
+      disable_mouse_inputs: Some(self.behavior.disable_mouse_inputs),
       enable_discord_rpc: Some(self.behavior.enable_discord_rpc),
       discord_rpc_client_id: self.behavior.discord_rpc_client_id.clone(),
       enable_announcements: Some(self.behavior.enable_announcements),

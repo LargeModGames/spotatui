@@ -2649,7 +2649,9 @@ async fn start_ui(
       }
       event::Event::Mouse(mouse) => {
         let mut app = app.lock().await;
-        handlers::mouse_handler(mouse, &mut app);
+        if !app.user_config.behavior.disable_mouse_inputs {
+          handlers::mouse_handler(mouse, &mut app);
+        }
       }
       event::Event::Tick => {
         let mut app = app.lock().await;
@@ -2955,7 +2957,9 @@ async fn start_ui(
       }
       event::Event::Mouse(mouse) => {
         let mut app = app.lock().await;
-        handlers::mouse_handler(mouse, &mut app);
+        if !app.user_config.behavior.disable_mouse_inputs {
+          handlers::mouse_handler(mouse, &mut app);
+        }
       }
       event::Event::Tick => {
         // Tick the main run loop so macOS delivers media key events.

@@ -2938,6 +2938,12 @@ impl App {
           value: SettingValue::Bool(self.user_config.behavior.enforce_wide_search_bar),
         },
         SettingItem {
+          id: "behavior.disable_mouse_inputs".to_string(),
+          name: "Disable Mouse Inputs".to_string(),
+          description: "Disable mouse inputs for keyboard-only navigation".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.disable_mouse_inputs),
+        },
+        SettingItem {
           id: "behavior.set_window_title".to_string(),
           name: "Set Window Title".to_string(),
           description: "Update terminal window title with track info".to_string(),
@@ -3350,6 +3356,11 @@ impl App {
         "behavior.enforce_wide_search_bar" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enforce_wide_search_bar = *v;
+          }
+        }
+        "behavior.disable_mouse_inputs" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.disable_mouse_inputs = *v;
           }
         }
         "behavior.set_window_title" => {

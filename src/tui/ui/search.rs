@@ -112,23 +112,28 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
   );
   f.render_widget(help, help_area);
 
-  let settings_content = if compact_top_row {
-    ("Settings", "Open")
+  let settings_hint = if app.user_config.behavior.disable_mouse_inputs {
+    app
+      .effective_open_settings_key()
+      .to_string()
+      .trim_matches(|c| c == '<' || c == '>')
+      .to_string()
+  } else if compact_top_row {
+    "Open".to_string()
   } else {
-    ("Settings", "Click")
+    "Click".to_string()
   };
-
   let settings_color = app.user_config.theme.inactive;
   let settings_block = Block::default()
     .title(Span::styled(
-      settings_content.0,
+      "Settings",
       Style::default().fg(settings_color),
     ))
     .borders(Borders::ALL)
     .border_type(BorderType::Rounded)
     .border_style(Style::default().fg(settings_color));
 
-  let settings = Paragraph::new(settings_content.1)
+  let settings = Paragraph::new(settings_hint.as_str())
     .block(settings_block)
     .style(
       Style::default()
