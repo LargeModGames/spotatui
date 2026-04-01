@@ -16,8 +16,8 @@ use super::util::{
 };
 
 const COMPACT_TOP_ROW_THRESHOLD: u16 = 60;
-const COMPACT_HELP_WIDTH: u16 = 8;
-const COMPACT_SETTINGS_WIDTH: u16 = 12;
+const COMPACT_HELP_WIDTH: u16 = 6;
+const COMPACT_SETTINGS_WIDTH: u16 = 10;
 
 pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let compact_top_row = layout_chunk.width < COMPACT_TOP_ROW_THRESHOLD;
@@ -40,8 +40,8 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
   } else {
     [
       Constraint::Percentage(80),
-      Constraint::Percentage(10),
-      Constraint::Percentage(10),
+      Constraint::Percentage(8),
+      Constraint::Percentage(12),
     ]
   };
 
@@ -88,23 +88,20 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
   f.render_widget(input, input_area);
 
   let help_content = if show_loading {
-    (app.user_config.theme.hint, "Help", "...")
+    (app.user_config.theme.hint, "...")
   } else if compact_top_row {
-    (app.user_config.theme.inactive, "Help", "?")
+    (app.user_config.theme.inactive, "?")
   } else {
-    (app.user_config.theme.inactive, "Help", "Type ?")
+    (app.user_config.theme.inactive, "Type ?")
   };
 
   let block = Block::default()
-    .title(Span::styled(
-      help_content.1,
-      Style::default().fg(help_content.0),
-    ))
+    .title(Span::styled("Help", Style::default().fg(help_content.0)))
     .borders(Borders::ALL)
     .border_type(BorderType::Rounded)
     .border_style(Style::default().fg(help_content.0));
 
-  let lines = Text::from(help_content.2);
+  let lines = Text::from(help_content.1);
   let help = Paragraph::new(lines).block(block).style(
     Style::default()
       .fg(help_content.0)
@@ -112,16 +109,15 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
   );
   f.render_widget(help, help_area);
 
-  let settings_hint = if app.user_config.behavior.disable_mouse_inputs {
-    app
-      .effective_open_settings_key()
-      .to_string()
-      .trim_matches(|c| c == '<' || c == '>')
-      .to_string()
-  } else if compact_top_row {
-    "Open".to_string()
+  let settings_keybind_string = app
+    .effective_open_settings_key()
+    .to_string()
+    .trim_matches(|c| c == '<' || c == '>')
+    .to_string();
+  let settings_hint = if compact_top_row {
+    settings_keybind_string
   } else {
-    "Click".to_string()
+    format!("Type {}", settings_keybind_string)
   };
   let settings_color = app.user_config.theme.inactive;
   let settings_block = Block::default()
@@ -133,13 +129,11 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
     .border_type(BorderType::Rounded)
     .border_style(Style::default().fg(settings_color));
 
-  let settings = Paragraph::new(settings_hint.as_str())
-    .block(settings_block)
-    .style(
-      Style::default()
-        .fg(settings_color)
-        .bg(app.user_config.theme.background),
-    );
+  let settings = Paragraph::new(settings_hint).block(settings_block).style(
+    Style::default()
+      .fg(settings_color)
+      .bg(app.user_config.theme.background),
+  );
   f.render_widget(settings, settings_area);
 }
 
