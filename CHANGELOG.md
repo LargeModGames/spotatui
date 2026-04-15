@@ -13,6 +13,7 @@
 ### Fixed
 
 - **Followed Artists list appears empty**: Fixed Artists veiw in Library to correctly display followed artists ([#219](https://github.com/LargeModGames/spotatui/issues/219)).
+- **Startup reauthentication loop**: Fixed forced Spotify reauthentication on nearly every launch by (1) preserving refresh_token when saving updated access tokens and (2) explicitly refreshing expired tokens before validation instead of forcing re-authentication (fixes [#211](https://github.com/LargeModGames/spotatui/issues/211)).
 - **Hidden fullscreen cover-art centering**: Fixed the fullscreen cover art image rendering slightly off-center when the playbar was completely hidden.
 - **Volume display glitch on rapid changes**: Fixed the volume percentage briefly reverting to an old value after the user changed it, especially noticeable when spamming volume up/down. The UI now always shows the user's intended volume until Spotify's API confirms it matches.
 
