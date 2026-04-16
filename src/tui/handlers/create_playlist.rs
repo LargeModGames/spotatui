@@ -22,15 +22,13 @@ fn handle_name_stage(key: Key, app: &mut App) {
     Key::Esc => {
       close_form(app);
     }
-    Key::Backspace => {
-      if app.create_playlist_name_idx > 0 {
-        app.create_playlist_name_idx -= 1;
-        let removed = app
-          .create_playlist_name
-          .remove(app.create_playlist_name_idx);
-        let width = removed.width().unwrap_or(1) as u16;
-        app.create_playlist_name_cursor = app.create_playlist_name_cursor.saturating_sub(width);
-      }
+    Key::Backspace if app.create_playlist_name_idx > 0 => {
+      app.create_playlist_name_idx -= 1;
+      let removed = app
+        .create_playlist_name
+        .remove(app.create_playlist_name_idx);
+      let width = removed.width().unwrap_or(1) as u16;
+      app.create_playlist_name_cursor = app.create_playlist_name_cursor.saturating_sub(width);
     }
     Key::Char(c) => {
       app
@@ -39,21 +37,17 @@ fn handle_name_stage(key: Key, app: &mut App) {
       app.create_playlist_name_idx += 1;
       app.create_playlist_name_cursor += c.width().unwrap_or(1) as u16;
     }
-    Key::Left => {
-      if app.create_playlist_name_idx > 0 {
-        app.create_playlist_name_idx -= 1;
-        let c = app.create_playlist_name[app.create_playlist_name_idx];
-        app.create_playlist_name_cursor = app
-          .create_playlist_name_cursor
-          .saturating_sub(c.width().unwrap_or(1) as u16);
-      }
+    Key::Left if app.create_playlist_name_idx > 0 => {
+      app.create_playlist_name_idx -= 1;
+      let c = app.create_playlist_name[app.create_playlist_name_idx];
+      app.create_playlist_name_cursor = app
+        .create_playlist_name_cursor
+        .saturating_sub(c.width().unwrap_or(1) as u16);
     }
-    Key::Right => {
-      if app.create_playlist_name_idx < app.create_playlist_name.len() {
-        let c = app.create_playlist_name[app.create_playlist_name_idx];
-        app.create_playlist_name_idx += 1;
-        app.create_playlist_name_cursor += c.width().unwrap_or(1) as u16;
-      }
+    Key::Right if app.create_playlist_name_idx < app.create_playlist_name.len() => {
+      let c = app.create_playlist_name[app.create_playlist_name_idx];
+      app.create_playlist_name_idx += 1;
+      app.create_playlist_name_cursor += c.width().unwrap_or(1) as u16;
     }
     _ => {}
   }
@@ -88,21 +82,17 @@ fn handle_search_input(key: Key, app: &mut App) {
         app.create_playlist_focus = CreatePlaylistFocus::SearchResults;
       }
     }
-    Key::Down => {
-      if !app.create_playlist_search_results.is_empty() {
-        app.create_playlist_selected_result = 0;
-        app.create_playlist_focus = CreatePlaylistFocus::SearchResults;
-      }
+    Key::Down if !app.create_playlist_search_results.is_empty() => {
+      app.create_playlist_selected_result = 0;
+      app.create_playlist_focus = CreatePlaylistFocus::SearchResults;
     }
-    Key::Backspace => {
-      if app.create_playlist_search_idx > 0 {
-        app.create_playlist_search_idx -= 1;
-        let removed = app
-          .create_playlist_search_input
-          .remove(app.create_playlist_search_idx);
-        let width = removed.width().unwrap_or(1) as u16;
-        app.create_playlist_search_cursor = app.create_playlist_search_cursor.saturating_sub(width);
-      }
+    Key::Backspace if app.create_playlist_search_idx > 0 => {
+      app.create_playlist_search_idx -= 1;
+      let removed = app
+        .create_playlist_search_input
+        .remove(app.create_playlist_search_idx);
+      let width = removed.width().unwrap_or(1) as u16;
+      app.create_playlist_search_cursor = app.create_playlist_search_cursor.saturating_sub(width);
     }
     Key::Char(c) => {
       app
@@ -111,21 +101,17 @@ fn handle_search_input(key: Key, app: &mut App) {
       app.create_playlist_search_idx += 1;
       app.create_playlist_search_cursor += c.width().unwrap_or(1) as u16;
     }
-    Key::Left => {
-      if app.create_playlist_search_idx > 0 {
-        app.create_playlist_search_idx -= 1;
-        let c = app.create_playlist_search_input[app.create_playlist_search_idx];
-        app.create_playlist_search_cursor = app
-          .create_playlist_search_cursor
-          .saturating_sub(c.width().unwrap_or(1) as u16);
-      }
+    Key::Left if app.create_playlist_search_idx > 0 => {
+      app.create_playlist_search_idx -= 1;
+      let c = app.create_playlist_search_input[app.create_playlist_search_idx];
+      app.create_playlist_search_cursor = app
+        .create_playlist_search_cursor
+        .saturating_sub(c.width().unwrap_or(1) as u16);
     }
-    Key::Right => {
-      if app.create_playlist_search_idx < app.create_playlist_search_input.len() {
-        let c = app.create_playlist_search_input[app.create_playlist_search_idx];
-        app.create_playlist_search_idx += 1;
-        app.create_playlist_search_cursor += c.width().unwrap_or(1) as u16;
-      }
+    Key::Right if app.create_playlist_search_idx < app.create_playlist_search_input.len() => {
+      let c = app.create_playlist_search_input[app.create_playlist_search_idx];
+      app.create_playlist_search_idx += 1;
+      app.create_playlist_search_cursor += c.width().unwrap_or(1) as u16;
     }
     _ => {}
   }
@@ -137,23 +123,17 @@ fn handle_results_nav(key: Key, app: &mut App) {
     Key::Esc => {
       app.create_playlist_focus = CreatePlaylistFocus::SearchInput;
     }
-    Key::Up => {
-      if count > 0 && app.create_playlist_selected_result > 0 {
-        app.create_playlist_selected_result -= 1;
-      }
+    Key::Up if count > 0 && app.create_playlist_selected_result > 0 => {
+      app.create_playlist_selected_result -= 1;
     }
-    Key::Down => {
-      if count > 0 && app.create_playlist_selected_result + 1 < count {
-        app.create_playlist_selected_result += 1;
-      }
+    Key::Down if count > 0 && app.create_playlist_selected_result + 1 < count => {
+      app.create_playlist_selected_result += 1;
     }
-    Key::Enter => {
-      if count > 0 {
-        let idx = app.create_playlist_selected_result;
-        if idx < count {
-          let track = app.create_playlist_search_results[idx].clone();
-          app.create_playlist_tracks.push(track);
-        }
+    Key::Enter if count > 0 => {
+      let idx = app.create_playlist_selected_result;
+      if idx < count {
+        let track = app.create_playlist_search_results[idx].clone();
+        app.create_playlist_tracks.push(track);
       }
     }
     Key::Tab => {
@@ -177,26 +157,20 @@ fn handle_added_tracks_nav(key: Key, app: &mut App) {
     Key::Tab => {
       app.create_playlist_focus = CreatePlaylistFocus::SearchInput;
     }
-    Key::Up => {
-      if count > 0 && app.create_playlist_selected_result > 0 {
-        app.create_playlist_selected_result -= 1;
-      }
+    Key::Up if count > 0 && app.create_playlist_selected_result > 0 => {
+      app.create_playlist_selected_result -= 1;
     }
-    Key::Down => {
-      if count > 0 && app.create_playlist_selected_result + 1 < count {
-        app.create_playlist_selected_result += 1;
-      }
+    Key::Down if count > 0 && app.create_playlist_selected_result + 1 < count => {
+      app.create_playlist_selected_result += 1;
     }
-    Key::Char('d') => {
-      if count > 0 {
-        let idx = app.create_playlist_selected_result;
-        if idx < count {
-          app.create_playlist_tracks.remove(idx);
-          if app.create_playlist_selected_result >= app.create_playlist_tracks.len()
-            && !app.create_playlist_tracks.is_empty()
-          {
-            app.create_playlist_selected_result = app.create_playlist_tracks.len() - 1;
-          }
+    Key::Char('d') if count > 0 => {
+      let idx = app.create_playlist_selected_result;
+      if idx < count {
+        app.create_playlist_tracks.remove(idx);
+        if app.create_playlist_selected_result >= app.create_playlist_tracks.len()
+          && !app.create_playlist_tracks.is_empty()
+        {
+          app.create_playlist_selected_result = app.create_playlist_tracks.len() - 1;
         }
       }
     }

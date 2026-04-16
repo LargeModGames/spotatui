@@ -133,7 +133,7 @@ struct DiscordPresenceState {
   last_progress_ms: u128,
 }
 
-#[cfg(feature = "mpris")]
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 #[derive(Default, PartialEq)]
 struct MprisMetadata {
   title: String,
@@ -142,7 +142,7 @@ struct MprisMetadata {
   duration_ms: u32,
   art_url: Option<String>,
 }
-#[cfg(feature = "mpris")]
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 type MprisMetadataTuple = (String, Vec<String>, String, u32, Option<String>);
 
 #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -252,7 +252,7 @@ fn build_discord_playback(app: &App) -> Option<discord_rpc::DiscordPlayback> {
   })
 }
 
-#[cfg(feature = "mpris")]
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 fn get_mpris_metadata(app: &App) -> Option<MprisMetadataTuple> {
   use crate::tui::ui::util::create_artist_string;
   use rspotify::model::PlayableItem;

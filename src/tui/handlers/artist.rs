@@ -279,20 +279,20 @@ pub fn handler(key: Key, app: &mut App) {
         artist.artist_selected_block = ArtistBlock::Empty;
         handle_down_press_on_hovered_block(app);
       }
-      k if common_key_events::high_event(k) => {
-        if artist.artist_selected_block != ArtistBlock::Empty {
-          handle_high_press_on_selected_block(app);
-        }
+      k if common_key_events::high_event(k)
+        && artist.artist_selected_block != ArtistBlock::Empty =>
+      {
+        handle_high_press_on_selected_block(app);
       }
-      k if common_key_events::middle_event(k) => {
-        if artist.artist_selected_block != ArtistBlock::Empty {
-          handle_middle_press_on_selected_block(app);
-        }
+      k if common_key_events::middle_event(k)
+        && artist.artist_selected_block != ArtistBlock::Empty =>
+      {
+        handle_middle_press_on_selected_block(app);
       }
-      k if common_key_events::low_event(k) => {
-        if artist.artist_selected_block != ArtistBlock::Empty {
-          handle_low_press_on_selected_block(app);
-        }
+      k if common_key_events::low_event(k)
+        && artist.artist_selected_block != ArtistBlock::Empty =>
+      {
+        handle_low_press_on_selected_block(app);
       }
       Key::Enter => {
         if artist.artist_selected_block != ArtistBlock::Empty {
@@ -301,10 +301,8 @@ pub fn handler(key: Key, app: &mut App) {
           handle_enter_event_on_hovered_block(app);
         }
       }
-      Key::Char('r') => {
-        if artist.artist_selected_block != ArtistBlock::Empty {
-          handle_recommend_event_on_selected_block(app);
-        }
+      Key::Char('r') if artist.artist_selected_block != ArtistBlock::Empty => {
+        handle_recommend_event_on_selected_block(app);
       }
       Key::Char('w') => match artist.artist_selected_block {
         ArtistBlock::TopTracks => open_add_to_playlist_for_selected_top_track(app),

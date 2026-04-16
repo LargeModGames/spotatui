@@ -477,20 +477,20 @@ pub fn handler(key: Key, app: &mut App) {
         SearchResultBlock::Empty => {}
       }
     }
-    k if common_key_events::high_event(k) => {
-      if app.search_results.selected_block != SearchResultBlock::Empty {
-        handle_high_press_on_selected_block(app);
-      }
+    k if common_key_events::high_event(k)
+      && app.search_results.selected_block != SearchResultBlock::Empty =>
+    {
+      handle_high_press_on_selected_block(app);
     }
-    k if common_key_events::middle_event(k) => {
-      if app.search_results.selected_block != SearchResultBlock::Empty {
-        handle_middle_press_on_selected_block(app);
-      }
+    k if common_key_events::middle_event(k)
+      && app.search_results.selected_block != SearchResultBlock::Empty =>
+    {
+      handle_middle_press_on_selected_block(app);
     }
-    k if common_key_events::low_event(k) => {
-      if app.search_results.selected_block != SearchResultBlock::Empty {
-        handle_low_press_on_selected_block(app)
-      }
+    k if common_key_events::low_event(k)
+      && app.search_results.selected_block != SearchResultBlock::Empty =>
+    {
+      handle_low_press_on_selected_block(app)
     }
     // Handle pressing enter when block is selected to start playing track
     Key::Enter => match app.search_results.selected_block {

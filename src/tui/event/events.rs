@@ -58,26 +58,23 @@ impl Events {
         // poll for tick rate duration, if no event, sent tick event.
         if event::poll(config.tick_rate).unwrap() {
           match event::read().unwrap() {
-            CrosstermEvent::Key(key) => {
-              // Only process key press events, not release or repeat.
-              // This fixes duplicate key events on Windows where both
-              // Press and Release events are sent for each key press.
-              if key.kind == KeyEventKind::Press {
-                let key = Key::from(key);
-                // If send fails, the receiver has been dropped (app is closing)
-                if event_tx.send(Event::Input(key)).is_err() {
-                  break;
-                }
+            // Only process key press events, not release or repeat.
+            // This fixes duplicate key events on Windows where both
+            // Press and Release events are sent for each key press.
+            CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => {
+              let key = Key::from(key);
+              // If send fails, the receiver has been dropped (app is closing)
+              if event_tx.send(Event::Input(key)).is_err() {
+                break;
               }
             }
-            CrosstermEvent::Mouse(mouse) => {
+            CrosstermEvent::Mouse(mouse)
               if matches!(
                 mouse.kind,
                 MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-              ) && event_tx.send(Event::Mouse(mouse)).is_err()
-              {
-                break;
-              }
+              ) && event_tx.send(Event::Mouse(mouse)).is_err() =>
+            {
+              break;
             }
             _ => {}
           }

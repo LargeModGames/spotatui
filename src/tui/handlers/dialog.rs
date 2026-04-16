@@ -56,40 +56,30 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
   let editable_playlists = app.editable_playlists();
   let playlist_count = editable_playlists.len();
   match key {
-    k if common_key_events::down_event(k) => {
-      if playlist_count > 0 {
-        let next = common_key_events::on_down_press_handler(
-          &editable_playlists,
-          Some(app.playlist_picker_selected_index),
-        );
-        app.playlist_picker_selected_index = next;
-      }
+    k if common_key_events::down_event(k) && playlist_count > 0 => {
+      let next = common_key_events::on_down_press_handler(
+        &editable_playlists,
+        Some(app.playlist_picker_selected_index),
+      );
+      app.playlist_picker_selected_index = next;
     }
-    k if common_key_events::up_event(k) => {
-      if playlist_count > 0 {
-        let next = common_key_events::on_up_press_handler(
-          &editable_playlists,
-          Some(app.playlist_picker_selected_index),
-        );
-        app.playlist_picker_selected_index = next;
-      }
+    k if common_key_events::up_event(k) && playlist_count > 0 => {
+      let next = common_key_events::on_up_press_handler(
+        &editable_playlists,
+        Some(app.playlist_picker_selected_index),
+      );
+      app.playlist_picker_selected_index = next;
     }
-    k if common_key_events::high_event(k) => {
-      if playlist_count > 0 {
-        app.playlist_picker_selected_index = common_key_events::on_high_press_handler();
-      }
+    k if common_key_events::high_event(k) && playlist_count > 0 => {
+      app.playlist_picker_selected_index = common_key_events::on_high_press_handler();
     }
-    k if common_key_events::middle_event(k) => {
-      if playlist_count > 0 {
-        app.playlist_picker_selected_index =
-          common_key_events::on_middle_press_handler(&editable_playlists);
-      }
+    k if common_key_events::middle_event(k) && playlist_count > 0 => {
+      app.playlist_picker_selected_index =
+        common_key_events::on_middle_press_handler(&editable_playlists);
     }
-    k if common_key_events::low_event(k) => {
-      if playlist_count > 0 {
-        app.playlist_picker_selected_index =
-          common_key_events::on_low_press_handler(&editable_playlists);
-      }
+    k if common_key_events::low_event(k) && playlist_count > 0 => {
+      app.playlist_picker_selected_index =
+        common_key_events::on_low_press_handler(&editable_playlists);
     }
     Key::Enter => {
       if let Some(pending_add) = app.pending_playlist_track_add.clone() {

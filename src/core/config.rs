@@ -208,10 +208,8 @@ impl ClientConfig {
           ),
         ];
 
-        let mut number = 1;
-        for item in instructions.iter() {
-          println!("  {}. {}", number, item);
-          number += 1;
+        for (number, item) in instructions.iter().enumerate() {
+          println!("  {}. {}", number + 1, item);
         }
 
         let fallback = ClientConfig::get_client_key_from_input("Fallback Client ID")?;

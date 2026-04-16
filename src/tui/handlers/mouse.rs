@@ -253,15 +253,11 @@ fn handle_settings_tabs_mouse(mouse: MouseEvent, tabs_area: Rect, app: &mut App)
 
 fn handle_settings_list_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App) {
   match mouse.kind {
-    MouseEventKind::ScrollDown => {
-      if !selected_setting_expects_key_capture(app) {
-        settings::handler(Key::Down, app);
-      }
+    MouseEventKind::ScrollDown if !selected_setting_expects_key_capture(app) => {
+      settings::handler(Key::Down, app);
     }
-    MouseEventKind::ScrollUp => {
-      if !selected_setting_expects_key_capture(app) {
-        settings::handler(Key::Up, app);
-      }
+    MouseEventKind::ScrollUp if !selected_setting_expects_key_capture(app) => {
+      settings::handler(Key::Up, app);
     }
     MouseEventKind::Down(MouseButton::Left) => {
       select_clicked_setting(mouse.row, list_area, app);

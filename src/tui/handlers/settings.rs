@@ -44,10 +44,8 @@ fn handle_navigation(key: Key, app: &mut App) {
 
 fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
   match key {
-    Key::Char('y') | Key::Char('Y') => {
-      if save_settings(app) {
-        close_settings(app);
-      }
+    Key::Char('y') | Key::Char('Y') if save_settings(app) => {
+      close_settings(app);
     }
     Key::Char('n') | Key::Char('N') | Key::Esc => {
       close_settings(app);

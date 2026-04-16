@@ -55,10 +55,8 @@ pub fn handler(key: Key, app: &mut App) {
       _ => {}
     },
     k if common_key_events::right_event(k) => common_key_events::handle_right_event(app),
-    Key::Char('w') => {
-      if app.get_current_route().hovered_block == ActiveBlock::PlayBar {
-        super::playbar::handler(key, app);
-      }
+    Key::Char('w') if app.get_current_route().hovered_block == ActiveBlock::PlayBar => {
+      super::playbar::handler(key, app);
     }
     _ => (),
   };

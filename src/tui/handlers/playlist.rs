@@ -26,10 +26,8 @@ pub fn handler(key: Key, app: &mut App) {
         app.selected_playlist_index = Some(if current == 0 { count - 1 } else { current - 1 });
       }
     }
-    k if common_key_events::high_event(k) => {
-      if total_display_count(app) > 0 {
-        app.selected_playlist_index = Some(0);
-      }
+    k if common_key_events::high_event(k) && total_display_count(app) > 0 => {
+      app.selected_playlist_index = Some(0);
     }
     k if common_key_events::middle_event(k) => {
       let count = total_display_count(app);

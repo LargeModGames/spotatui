@@ -52,19 +52,15 @@ pub fn handler(key: Key, app: &mut App) {
       app.input_idx = 0;
       app.input_cursor_position = 0;
     }
-    Key::Left | Key::Ctrl('b') => {
-      if !app.input.is_empty() && app.input_idx > 0 {
-        let last_c = app.input[app.input_idx - 1];
-        app.input_idx -= 1;
-        app.input_cursor_position -= compute_character_width(last_c);
-      }
+    Key::Left | Key::Ctrl('b') if !app.input.is_empty() && app.input_idx > 0 => {
+      let last_c = app.input[app.input_idx - 1];
+      app.input_idx -= 1;
+      app.input_cursor_position -= compute_character_width(last_c);
     }
-    Key::Right | Key::Ctrl('f') => {
-      if app.input_idx < app.input.len() {
-        let next_c = app.input[app.input_idx];
-        app.input_idx += 1;
-        app.input_cursor_position += compute_character_width(next_c);
-      }
+    Key::Right | Key::Ctrl('f') if app.input_idx < app.input.len() => {
+      let next_c = app.input[app.input_idx];
+      app.input_idx += 1;
+      app.input_cursor_position += compute_character_width(next_c);
     }
     Key::Esc => {
       app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
@@ -79,17 +75,13 @@ pub fn handler(key: Key, app: &mut App) {
       app.input_idx += 1;
       app.input_cursor_position += compute_character_width(c);
     }
-    Key::Backspace | Key::Ctrl('h') => {
-      if !app.input.is_empty() && app.input_idx > 0 {
-        let last_c = app.input.remove(app.input_idx - 1);
-        app.input_idx -= 1;
-        app.input_cursor_position -= compute_character_width(last_c);
-      }
+    Key::Backspace | Key::Ctrl('h') if !app.input.is_empty() && app.input_idx > 0 => {
+      let last_c = app.input.remove(app.input_idx - 1);
+      app.input_idx -= 1;
+      app.input_cursor_position -= compute_character_width(last_c);
     }
-    Key::Delete | Key::Ctrl('d') => {
-      if !app.input.is_empty() && app.input_idx < app.input.len() {
-        app.input.remove(app.input_idx);
-      }
+    Key::Delete | Key::Ctrl('d') if !app.input.is_empty() && app.input_idx < app.input.len() => {
+      app.input.remove(app.input_idx);
     }
     _ => {}
   }

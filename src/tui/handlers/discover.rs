@@ -26,25 +26,19 @@ pub fn handler(key: Key, app: &mut App) {
       app.discover_selected_index = next_index;
     }
     // Left/Right to cycle time range (for Top Tracks)
-    k if common_key_events::right_event(k) => {
-      if app.discover_selected_index == 1 {
-        // Only cycle time range when Top Tracks is selected
-        app.discover_time_range = app.discover_time_range.next();
-        // Clear cache so it refetches with new time range
-        app.discover_top_tracks.clear();
-      }
+    k if common_key_events::right_event(k) && app.discover_selected_index == 1 => {
+      // Only cycle time range when Top Tracks is selected
+      app.discover_time_range = app.discover_time_range.next();
+      // Clear cache so it refetches with new time range
+      app.discover_top_tracks.clear();
     }
-    Key::Char('[') => {
-      if app.discover_selected_index == 1 {
-        app.discover_time_range = app.discover_time_range.prev();
-        app.discover_top_tracks.clear();
-      }
+    Key::Char('[') if app.discover_selected_index == 1 => {
+      app.discover_time_range = app.discover_time_range.prev();
+      app.discover_top_tracks.clear();
     }
-    Key::Char(']') => {
-      if app.discover_selected_index == 1 {
-        app.discover_time_range = app.discover_time_range.next();
-        app.discover_top_tracks.clear();
-      }
+    Key::Char(']') if app.discover_selected_index == 1 => {
+      app.discover_time_range = app.discover_time_range.next();
+      app.discover_top_tracks.clear();
     }
     Key::Enter => {
       if app.discover_loading {

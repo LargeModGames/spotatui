@@ -11,10 +11,8 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::down_event(k) => {
       app.home_scroll += SMALL_SCROLL;
     }
-    k if common_key_events::up_event(k) => {
-      if app.home_scroll > 0 {
-        app.home_scroll -= SMALL_SCROLL;
-      }
+    k if common_key_events::up_event(k) && app.home_scroll > 0 => {
+      app.home_scroll -= SMALL_SCROLL;
     }
     k if k == app.user_config.keys.next_page => {
       app.home_scroll += LARGE_SCROLL;
