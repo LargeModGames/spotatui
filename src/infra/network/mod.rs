@@ -482,14 +482,22 @@ impl Network {
     // survives a reboot. For PKCE, Spotify always rotates the refresh token,
     // so without this the on-disk token becomes invalid after the first refresh.
     {
-      let token_lock = self.spotify.token.lock().await.expect("Failed to lock token");
+      let token_lock = self
+        .spotify
+        .token
+        .lock()
+        .await
+        .expect("Failed to lock token");
       if let Some(ref token) = *token_lock {
         match serde_json::to_string_pretty(token) {
           Ok(token_json) => {
             if let Err(e) = std::fs::write(&self.token_cache_path, token_json) {
               log::warn!("Failed to persist refreshed token: {}", e);
             } else {
-              log::info!("refreshed token cached to {}", self.token_cache_path.display());
+              log::info!(
+                "refreshed token cached to {}",
+                self.token_cache_path.display()
+              );
             }
           }
           Err(e) => log::warn!("Failed to serialize refreshed token: {}", e),
