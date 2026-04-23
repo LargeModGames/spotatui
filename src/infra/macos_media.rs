@@ -7,6 +7,9 @@
 //!
 //! This module is only available on macOS with the `macos-media` feature enabled.
 
+use crate::core::app::App;
+use crate::core::playback_metadata::extract_playable_metadata;
+use crate::infra::player;
 use anyhow::Result;
 use block2::RcBlock;
 use log::info;
@@ -23,10 +26,29 @@ use objc2_media_player::{
   MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{
+  atomic::{AtomicBool, Ordering},
+  Arc,
+};
 use std::thread;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
+
+#[derive(Default, PartialEq)]
+struct MacosMetadata {
+  title: String,
+  artists: Vec<String>,
+  album: String,
+  duration_ms: u32,
+  art_url: Option<String>,
+}
+
+type MacosMetadataTuple = (String, Vec<String>, String, u32, Option<String>);
+
+#[derive(Default)]
+pub struct MacosMetadataState {
+  last_metadata: Option<MacosMetadata>,
+}
 
 /// Events that can be received from external macOS media controls (media keys, Control Center, etc.)
 #[derive(Debug, Clone)]
@@ -60,6 +82,66 @@ pub enum MacMediaCommand {
 pub struct MacMediaManager {
   event_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<MacMediaEvent>>>,
   command_tx: mpsc::UnboundedSender<MacMediaCommand>,
+}
+
+pub fn update_metadata(manager: &MacMediaManager, state: &mut MacosMetadataState, app: &App) {
+  if let Some((title, artists, album, duration_ms, art_url)) = metadata_from_app(app) {
+    let new_metadata = MacosMetadata {
+      title: title.clone(),
+      artists: artists.clone(),
+      album: album.clone(),
+      duration_ms,
+      art_url: art_url.clone(),
+    };
+
+    if state.last_metadata.as_ref() != Some(&new_metadata) {
+      manager.set_metadata(&title, &artists, &album, duration_ms, art_url);
+      state.last_metadata = Some(new_metadata);
+    }
+  } else if state.last_metadata.is_some() {
+    state.last_metadata = None;
+  }
+}
+
+pub async fn handle_events(
+  mut event_rx: mpsc::UnboundedReceiver<MacMediaEvent>,
+  app: Arc<Mutex<App>>,
+  shared_is_playing: Arc<AtomicBool>,
+) {
+  while let Some(event) = event_rx.recv().await {
+    let Some(player) = player::active_streaming_player(&app).await else {
+      continue;
+    };
+
+    match event {
+      MacMediaEvent::PlayPause => {
+        if shared_is_playing.load(Ordering::Relaxed) {
+          player.pause();
+        } else {
+          player.play();
+        }
+      }
+      MacMediaEvent::Play => {
+        player.play();
+      }
+      MacMediaEvent::Pause => {
+        player.pause();
+      }
+      MacMediaEvent::Next => {
+        player.activate();
+        player.next();
+        player.play();
+      }
+      MacMediaEvent::Previous => {
+        player.activate();
+        player.prev();
+        player.play();
+      }
+      MacMediaEvent::Stop => {
+        player.stop();
+      }
+    }
+  }
 }
 
 impl MacMediaManager {
@@ -370,5 +452,31 @@ async fn fetch_artwork_from_url(art_url: &str) -> Option<objc2::rc::Retained<MPM
       image.size(),
       &request_handler,
     ))
+  }
+}
+
+fn metadata_from_app(app: &App) -> Option<MacosMetadataTuple> {
+  if let Some(native_info) = &app.native_track_info {
+    let art_url = app
+      .current_playback_context
+      .as_ref()
+      .and_then(|context| context.item.as_ref())
+      .and_then(extract_playable_metadata)
+      .and_then(|m| m.art_url);
+    return Some((
+      native_info.name.clone(),
+      vec![native_info.artists_display.clone()],
+      native_info.album.clone(),
+      native_info.duration_ms,
+      art_url,
+    ));
+  }
+
+  if let Some(context) = &app.current_playback_context {
+    let item = context.item.as_ref()?;
+    let m = extract_playable_metadata(item)?;
+    Some((m.title, vec![m.artist], m.album, m.duration_ms, m.art_url))
+  } else {
+    None
   }
 }

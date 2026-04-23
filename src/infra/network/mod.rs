@@ -24,6 +24,7 @@ use rspotify::model::{
 };
 use rspotify::prelude::Id;
 use rspotify::AuthCodePkceSpotify;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -427,7 +428,9 @@ impl Network {
 
     {
       let mut app = self.app.lock().await;
-      app.is_loading = false;
+      if app.is_loading {
+        app.is_loading = false;
+      }
     }
   }
 
@@ -440,6 +443,21 @@ impl Network {
     let mut app = self.app.lock().await;
     app.status_message = Some(message);
     app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl_secs));
+  }
+
+  pub async fn run_event_loop(&mut self, io_rx: Receiver<IoEvent>) {
+    loop {
+      match io_rx.try_recv() {
+        Ok(io_event) => {
+          self.handle_network_event(io_event).await;
+        }
+        Err(TryRecvError::Empty) => {
+          tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        Err(TryRecvError::Disconnected) => break,
+      }
+      self.process_party_messages().await;
+    }
   }
 
   async fn refresh_authentication(&mut self) {

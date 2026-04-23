@@ -1,11 +1,31 @@
+use crate::core::app::App;
+use crate::core::playback_metadata::extract_playable_metadata;
+use crate::core::user_config::UserConfig;
 use anyhow::Result;
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const DEFAULT_DISCORD_CLIENT_ID: &str = "1464235043462447166";
 const REPO_URL: &str = "https://github.com/LargeModGames/spotatui";
 const REPO_TAGLINE: &str = "Open-source on GitHub";
+
+#[derive(Clone, Debug, PartialEq)]
+struct DiscordTrackInfo {
+  title: String,
+  artist: String,
+  album: String,
+  image_url: Option<String>,
+  duration_ms: u32,
+}
+
+#[derive(Default)]
+pub struct DiscordPresenceState {
+  last_track: Option<DiscordTrackInfo>,
+  last_is_playing: Option<bool>,
+  last_progress_ms: u128,
+}
 
 #[derive(Clone, Debug)]
 pub struct DiscordPlayback {
@@ -28,6 +48,50 @@ pub struct DiscordRpcManager {
   command_tx: Sender<DiscordRpcCommand>,
 }
 
+pub fn resolve_app_id(user_config: &UserConfig) -> Option<String> {
+  std::env::var("SPOTATUI_DISCORD_APP_ID")
+    .ok()
+    .filter(|value| !value.trim().is_empty())
+    .or_else(|| user_config.behavior.discord_rpc_client_id.clone())
+    .or_else(|| Some(DEFAULT_DISCORD_CLIENT_ID.to_string()))
+}
+
+pub fn update_presence(manager: &DiscordRpcManager, state: &mut DiscordPresenceState, app: &App) {
+  let playback = build_playback(app);
+
+  match playback {
+    Some(playback) => {
+      let track_info = DiscordTrackInfo {
+        title: playback.title.clone(),
+        artist: playback.artist.clone(),
+        album: playback.album.clone(),
+        image_url: playback.image_url.clone(),
+        duration_ms: playback.duration_ms,
+      };
+
+      let track_changed = state.last_track.as_ref() != Some(&track_info);
+      let playing_changed = state.last_is_playing != Some(playback.is_playing);
+      let progress_delta = playback.progress_ms.abs_diff(state.last_progress_ms);
+      let progress_changed = progress_delta > 5000;
+
+      if track_changed || playing_changed || progress_changed {
+        manager.set_activity(&playback);
+        state.last_track = Some(track_info);
+        state.last_is_playing = Some(playback.is_playing);
+        state.last_progress_ms = playback.progress_ms;
+      }
+    }
+    None => {
+      if state.last_track.is_some() {
+        manager.clear();
+        state.last_track = None;
+        state.last_is_playing = None;
+        state.last_progress_ms = 0;
+      }
+    }
+  }
+}
+
 impl DiscordRpcManager {
   pub fn new(app_id: String) -> Result<Self> {
     let (command_tx, command_rx) = mpsc::channel();
@@ -46,6 +110,67 @@ impl DiscordRpcManager {
   pub fn clear(&self) {
     let _ = self.command_tx.send(DiscordRpcCommand::ClearActivity);
   }
+}
+
+fn build_playback(app: &App) -> Option<DiscordPlayback> {
+  let (track_info, is_playing) = if let Some(native_info) = &app.native_track_info {
+    let is_playing = app.native_is_playing.unwrap_or(true);
+    (
+      DiscordTrackInfo {
+        title: native_info.name.clone(),
+        artist: native_info.artists_display.clone(),
+        album: native_info.album.clone(),
+        image_url: None,
+        duration_ms: native_info.duration_ms,
+      },
+      is_playing,
+    )
+  } else if let Some(context) = &app.current_playback_context {
+    let is_playing = if app.is_streaming_active {
+      app.native_is_playing.unwrap_or(context.is_playing)
+    } else {
+      context.is_playing
+    };
+
+    let item = context.item.as_ref()?;
+    let m = extract_playable_metadata(item)?;
+    (
+      DiscordTrackInfo {
+        title: m.title,
+        artist: m.artist,
+        album: m.album,
+        image_url: m.art_url,
+        duration_ms: m.duration_ms,
+      },
+      is_playing,
+    )
+  } else {
+    return None;
+  };
+
+  let base_state = if track_info.album.is_empty() {
+    track_info.artist.clone()
+  } else {
+    format!("{} - {}", track_info.artist, track_info.album)
+  };
+  let state = if is_playing {
+    base_state
+  } else if base_state.is_empty() {
+    "Paused".to_string()
+  } else {
+    format!("Paused: {}", base_state)
+  };
+
+  Some(DiscordPlayback {
+    title: track_info.title,
+    artist: track_info.artist,
+    album: track_info.album,
+    state,
+    image_url: track_info.image_url,
+    duration_ms: track_info.duration_ms,
+    progress_ms: app.song_progress_ms,
+    is_playing,
+  })
 }
 
 fn run_discord_rpc_loop(app_id: String, command_rx: Receiver<DiscordRpcCommand>) {

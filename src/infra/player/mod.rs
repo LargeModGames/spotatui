@@ -4,7 +4,13 @@
 //! It registers spotatui as a Spotify Connect device and handles audio streaming.
 
 #[cfg(feature = "streaming")]
+mod runtime;
+
+#[cfg(feature = "streaming")]
 mod streaming;
+
+#[cfg(feature = "streaming")]
+pub use runtime::*;
 
 #[cfg(feature = "streaming")]
 pub use streaming::*;

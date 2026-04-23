@@ -7,10 +7,46 @@
 //!
 //! This module is only available on Linux with the `mpris` feature enabled.
 
+use crate::core::app::App;
+use crate::core::playback_metadata::extract_playable_metadata;
+use crate::infra::network::IoEvent;
 use anyhow::Result;
 use mpris_server::{Metadata, PlaybackStatus, Player, Time};
-use std::thread;
+use rspotify::model::enums::RepeatState;
+use std::{
+  sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+  },
+  thread,
+};
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
+
+#[cfg(feature = "streaming")]
+pub type StreamingPlayerHandle = Option<Arc<crate::infra::player::StreamingPlayer>>;
+#[cfg(not(feature = "streaming"))]
+pub type StreamingPlayerHandle = Option<()>;
+
+#[derive(Default, PartialEq)]
+struct MprisMetadata {
+  title: String,
+  artists: Vec<String>,
+  album: String,
+  duration_ms: u32,
+  art_url: Option<String>,
+}
+
+type MprisMetadataTuple = (String, Vec<String>, String, u32, Option<String>);
+
+#[derive(Default)]
+pub struct MprisState {
+  last_metadata: Option<MprisMetadata>,
+  last_is_playing: Option<bool>,
+  last_shuffle: Option<bool>,
+  last_loop: Option<LoopStatusEvent>,
+  last_position_ms: u64,
+}
 
 /// Events that can be received from external MPRIS clients (e.g., media keys, playerctl)
 #[derive(Debug, Clone)]
@@ -58,6 +94,263 @@ pub enum MprisCommand {
 pub struct MprisManager {
   event_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<MprisEvent>>>,
   command_tx: mpsc::UnboundedSender<MprisCommand>,
+}
+
+pub fn update_state(manager: &MprisManager, state: &mut MprisState, app: &App) {
+  if let Some((title, artists, album, duration_ms, art_url)) = metadata_from_app(app) {
+    let new_metadata = MprisMetadata {
+      title: title.clone(),
+      artists: artists.clone(),
+      album: album.clone(),
+      duration_ms,
+      art_url: art_url.clone(),
+    };
+
+    if state.last_metadata.as_ref() != Some(&new_metadata) {
+      manager.set_metadata(&title, &artists, &album, duration_ms, art_url);
+      state.last_metadata = Some(new_metadata);
+    }
+
+    let is_playing = app.native_is_playing.unwrap_or_else(|| {
+      app
+        .current_playback_context
+        .as_ref()
+        .map(|context| context.is_playing)
+        .unwrap_or(false)
+    });
+    if state.last_is_playing != Some(is_playing) {
+      manager.set_playback_status(is_playing);
+      state.last_is_playing = Some(is_playing);
+    }
+
+    let position_ms = app.song_progress_ms as u64;
+    if position_ms.abs_diff(state.last_position_ms) > 1000 {
+      manager.set_position(position_ms);
+      state.last_position_ms = position_ms;
+    }
+
+    let shuffle = app
+      .current_playback_context
+      .as_ref()
+      .map(|context| context.shuffle_state)
+      .unwrap_or(app.user_config.behavior.shuffle_enabled);
+    if state.last_shuffle != Some(shuffle) {
+      manager.set_shuffle(shuffle);
+      state.last_shuffle = Some(shuffle);
+    }
+
+    if let Some(repeat_state) = app
+      .current_playback_context
+      .as_ref()
+      .map(|context| context.repeat_state)
+    {
+      let loop_status = match repeat_state {
+        RepeatState::Off => LoopStatusEvent::None,
+        RepeatState::Track => LoopStatusEvent::Track,
+        RepeatState::Context => LoopStatusEvent::Playlist,
+      };
+      if state.last_loop != Some(loop_status) {
+        manager.set_loop_status(loop_status);
+        state.last_loop = Some(loop_status);
+      }
+    }
+  } else if state.last_metadata.is_some() {
+    manager.set_stopped();
+    state.last_metadata = None;
+    state.last_is_playing = None;
+  }
+}
+
+pub async fn handle_events(
+  mut event_rx: mpsc::UnboundedReceiver<MprisEvent>,
+  streaming_player: StreamingPlayerHandle,
+  shared_is_playing: Arc<AtomicBool>,
+  shared_position: Arc<AtomicU64>,
+  mpris_manager: Arc<MprisManager>,
+  app: Arc<Mutex<App>>,
+) {
+  #[cfg(not(feature = "streaming"))]
+  let _ = (&streaming_player, &shared_is_playing, &shared_position);
+
+  while let Some(event) = event_rx.recv().await {
+    match event {
+      MprisEvent::PlayPause => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          if shared_is_playing.load(Ordering::Relaxed) {
+            player.pause();
+          } else {
+            player.play();
+          }
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        let is_playing = app_lock.native_is_playing.unwrap_or_else(|| {
+          app_lock
+            .current_playback_context
+            .as_ref()
+            .map(|context| context.is_playing)
+            .unwrap_or(false)
+        });
+        if is_playing {
+          app_lock.dispatch(IoEvent::PausePlayback);
+        } else {
+          app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+        }
+      }
+      MprisEvent::Play => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          player.play();
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+      }
+      MprisEvent::Pause => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          player.pause();
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        app_lock.dispatch(IoEvent::PausePlayback);
+      }
+      MprisEvent::Next => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          player.activate();
+          player.next();
+          player.play();
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        app_lock.dispatch(IoEvent::NextTrack);
+      }
+      MprisEvent::Previous => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          player.activate();
+          player.prev();
+          player.play();
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        app_lock.dispatch(IoEvent::PreviousTrack);
+      }
+      MprisEvent::Stop => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          player.stop();
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        app_lock.dispatch(IoEvent::PausePlayback);
+      }
+      MprisEvent::Seek(offset_micros) => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          let current_ms = shared_position.load(Ordering::Relaxed) as i64;
+          let offset_ms = offset_micros / 1000;
+          let new_position_ms = (current_ms + offset_ms).max(0) as u32;
+          player.seek(new_position_ms);
+          shared_position.store(new_position_ms as u64, Ordering::Relaxed);
+          if let Ok(mut app_lock) = app.try_lock() {
+            app_lock.song_progress_ms = new_position_ms as u128;
+          }
+          mpris_manager.emit_seeked(new_position_ms as u64);
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        let current_ms = app_lock.song_progress_ms as i64;
+        let offset_ms = offset_micros / 1000;
+        let new_position_ms = (current_ms + offset_ms).max(0) as u32;
+        app_lock.song_progress_ms = new_position_ms as u128;
+        app_lock.dispatch(IoEvent::Seek(new_position_ms));
+        drop(app_lock);
+        mpris_manager.emit_seeked(new_position_ms as u64);
+      }
+      MprisEvent::SetPosition(position_micros) => {
+        let new_position_ms = (position_micros / 1000).max(0) as u32;
+
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          player.seek(new_position_ms);
+          shared_position.store(new_position_ms as u64, Ordering::Relaxed);
+          if let Ok(mut app_lock) = app.try_lock() {
+            app_lock.song_progress_ms = new_position_ms as u128;
+          }
+          mpris_manager.emit_seeked(new_position_ms as u64);
+          continue;
+        }
+
+        let mut app_lock = app.lock().await;
+        app_lock.song_progress_ms = new_position_ms as u128;
+        app_lock.dispatch(IoEvent::Seek(new_position_ms));
+        drop(app_lock);
+        mpris_manager.emit_seeked(new_position_ms as u64);
+      }
+      MprisEvent::SetShuffle(shuffle) => {
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          if let Err(error) = player.set_shuffle(shuffle) {
+            eprintln!("MPRIS: Failed to set shuffle: {}", error);
+          } else {
+            mpris_manager.set_shuffle(shuffle);
+            let mut app_lock = app.lock().await;
+            if let Some(ref mut context) = app_lock.current_playback_context {
+              context.shuffle_state = shuffle;
+            }
+            app_lock.user_config.behavior.shuffle_enabled = shuffle;
+          }
+          continue;
+        }
+
+        mpris_manager.set_shuffle(shuffle);
+        let mut app_lock = app.lock().await;
+        if let Some(ref mut context) = app_lock.current_playback_context {
+          context.shuffle_state = shuffle;
+        }
+        app_lock.user_config.behavior.shuffle_enabled = shuffle;
+        app_lock.dispatch(IoEvent::Shuffle(shuffle));
+      }
+      MprisEvent::SetLoopStatus(loop_status) => {
+        let repeat_state = match loop_status {
+          LoopStatusEvent::None => RepeatState::Off,
+          LoopStatusEvent::Track => RepeatState::Track,
+          LoopStatusEvent::Playlist => RepeatState::Context,
+        };
+
+        #[cfg(feature = "streaming")]
+        if let Some(ref player) = streaming_player {
+          if let Err(error) = player.set_repeat_mode(repeat_state) {
+            eprintln!("MPRIS: Failed to set repeat mode: {}", error);
+          } else {
+            mpris_manager.set_loop_status(loop_status);
+            let mut app_lock = app.lock().await;
+            if let Some(ref mut context) = app_lock.current_playback_context {
+              context.repeat_state = repeat_state;
+            }
+          }
+          continue;
+        }
+
+        mpris_manager.set_loop_status(loop_status);
+        let mut app_lock = app.lock().await;
+        if let Some(ref mut context) = app_lock.current_playback_context {
+          context.repeat_state = repeat_state;
+        }
+        app_lock.dispatch(IoEvent::Repeat(repeat_state));
+      }
+    }
+  }
 }
 
 impl MprisManager {
@@ -313,5 +606,31 @@ impl MprisManager {
   /// Update loop/repeat status
   pub fn set_loop_status(&self, status: LoopStatusEvent) {
     let _ = self.command_tx.send(MprisCommand::LoopStatus(status));
+  }
+}
+
+fn metadata_from_app(app: &App) -> Option<MprisMetadataTuple> {
+  if let Some(native_info) = &app.native_track_info {
+    let art_url = app
+      .current_playback_context
+      .as_ref()
+      .and_then(|context| context.item.as_ref())
+      .and_then(extract_playable_metadata)
+      .and_then(|m| m.art_url);
+    return Some((
+      native_info.name.clone(),
+      vec![native_info.artists_display.clone()],
+      native_info.album.clone(),
+      native_info.duration_ms,
+      art_url,
+    ));
+  }
+
+  if let Some(context) = &app.current_playback_context {
+    let item = context.item.as_ref()?;
+    let m = extract_playable_metadata(item)?;
+    Some((m.title, vec![m.artist], m.album, m.duration_ms, m.art_url))
+  } else {
+    None
   }
 }
