@@ -1,20 +1,33 @@
 # Changelog
 
-## [Unreleased]
+## [v0.38.1] - 2026-04-24
 
 ### Added
 
+- **Create Playlist flow**: Added an in-app create-playlist screen with name entry, track search, selected-track management, and playlist creation through the Spotify API ([#193](https://github.com/LargeModGames/spotatui/pull/193)).
 - **Global like/unlike hotkey**: Added a configurable global keybinding (`F` by default) to like or unlike the currently playing track from any screen, complementing the existing context-specific `s` key.
+- **Mouse input disable mode**: Added `behavior.disable_mouse_inputs` support for users who want to run spotatui without mouse interactions enabled ([#200](https://github.com/LargeModGames/spotatui/pull/200)).
 
 ### Changed
 
 - **Fullscreen playbar resizing**: `LyricsView` and `CoverArtView` now honor the existing playbar height setting, so the lower player can be resized or fully hidden with the same keybindings used on the main screen (fixes [#208](https://github.com/LargeModGames/spotatui/issues/208)).
+- **Settings UI simplification**: Simplified settings screen block handling as part of the mouse-input disable work ([#200](https://github.com/LargeModGames/spotatui/pull/200)).
 
 ### Fixed
 
-- **Followed Artists list appears empty**: Fixed Artists veiw in Library to correctly display followed artists ([#219](https://github.com/LargeModGames/spotatui/issues/219)).
+- **PKCE refresh-token persistence**: Fixed refreshed auth tokens being written without preserving an existing refresh token, which could cause spotatui to require re-login after every reboot ([#217](https://github.com/LargeModGames/spotatui/pull/217)).
+- **Startup auth cache recovery**: Fixed startup behavior around failed token-cache loading and prevented in-memory `refresh_token = None` states from replacing a valid cached refresh token.
+- **Followed Artists list appears empty**: Fixed Artists view in Library to correctly display followed artists ([#220](https://github.com/LargeModGames/spotatui/pull/220); fixes [#219](https://github.com/LargeModGames/spotatui/issues/219)).
 - **Hidden fullscreen cover-art centering**: Fixed the fullscreen cover art image rendering slightly off-center when the playbar was completely hidden.
+- **Create Playlist results controls**: Improved keyboard focus and tab controls in the create-playlist search results and selected-track panes.
 - **Volume display glitch on rapid changes**: Fixed the volume percentage briefly reverting to an old value after the user changed it, especially noticeable when spamming volume up/down. The UI now always shows the user's intended volume until Spotify's API confirms it matches.
+
+### Internal
+
+- **Dependency maintenance**: Bumped `tui-bar-graph`, `self_update`, grouped Rust minor dependencies, `rustls-webpki`, and `openssl` ([#197](https://github.com/LargeModGames/spotatui/pull/197), [#204](https://github.com/LargeModGames/spotatui/pull/204), [#205](https://github.com/LargeModGames/spotatui/pull/205), [#213](https://github.com/LargeModGames/spotatui/pull/213), [#224](https://github.com/LargeModGames/spotatui/pull/224), [#225](https://github.com/LargeModGames/spotatui/pull/225)).
+- **CI maintenance**: Bumped `softprops/action-gh-release` from `2` to `3` in the Actions dependency group ([#212](https://github.com/LargeModGames/spotatui/pull/212)).
+- **Lint/format cleanup**: Fixed clippy errors and rustfmt issues after the post-`v0.38.0` changes ([#222](https://github.com/LargeModGames/spotatui/pull/222)).
+
 
 ## [v0.38.0] - 2026-03-23
 
