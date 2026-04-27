@@ -83,7 +83,7 @@ librespot-playback = { version = "0.8", optional = true, default-features = fals
 
 # MPRIS D-Bus support (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
-mpris-server = { version = "0.9", optional = true }
+mpris-server = { version = "0.10", optional = true }
 
 # macOS: librespot-playback + Now Playing / Media Key support
 # On macOS we use portaudio-backend by default to avoid the pipe sink fallback (which outputs to stdout).
