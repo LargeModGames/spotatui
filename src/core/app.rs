@@ -3664,8 +3664,84 @@ impl App {
             }
           }
         }
-        // Note: Individual color changes and keybindings require more complex parsing
-        // and may need restart to take full effect
+        // Individual theme color overrides
+        "theme.active" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.active = c;
+            }
+          }
+        }
+        "theme.banner" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.banner = c;
+            }
+          }
+        }
+        "theme.hint" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.hint = c;
+            }
+          }
+        }
+        "theme.hovered" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.hovered = c;
+            }
+          }
+        }
+        "theme.selected" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.selected = c;
+            }
+          }
+        }
+        "theme.inactive" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.inactive = c;
+            }
+          }
+        }
+        "theme.text" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.text = c;
+            }
+          }
+        }
+        "theme.error_text" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.error_text = c;
+            }
+          }
+        }
+        "theme.playbar_background" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.playbar_background = c;
+            }
+          }
+        }
+        "theme.playbar_progress" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.playbar_progress = c;
+            }
+          }
+        }
+        "theme.highlighted_lyrics" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+              self.user_config.theme.highlighted_lyrics = c;
+            }
+          }
+        }
         _ => {}
       }
     }

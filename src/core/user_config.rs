@@ -1327,7 +1327,7 @@ impl UserConfig {
   }
 }
 
-fn parse_theme_item(theme_item: &str) -> Result<Color> {
+pub fn parse_theme_item(theme_item: &str) -> Result<Color> {
   let color = match theme_item {
     "Reset" => Color::Reset,
     "Black" => Color::Black,
