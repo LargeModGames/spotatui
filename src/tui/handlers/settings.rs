@@ -203,8 +203,10 @@ fn handle_string_edit(key: Key, app: &mut App) {
         }
         // Editing an individual color switches the theme to Custom
         if is_color_edit {
-          if let Some(preset_setting) =
-            app.settings_items.iter_mut().find(|s| s.id == "theme.preset")
+          if let Some(preset_setting) = app
+            .settings_items
+            .iter_mut()
+            .find(|s| s.id == "theme.preset")
           {
             if let SettingValue::Preset(name) = &mut preset_setting.value {
               *name = "Custom".to_string();
@@ -448,7 +450,11 @@ fn handle_preset_edit(key: Key, app: &mut App) {
     if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
       if let SettingValue::Preset(ref preset_name) = setting.value {
         let current = ThemePreset::from_name(preset_name);
-        let next = if forward { current.next() } else { current.prev() };
+        let next = if forward {
+          current.next()
+        } else {
+          current.prev()
+        };
         if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
           setting_mut.value = SettingValue::Preset(next.name().to_string());
         }

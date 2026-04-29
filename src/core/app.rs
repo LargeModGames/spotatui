@@ -1,5 +1,5 @@
 use crate::core::sort::{SortContext, SortState};
-use crate::core::user_config::{ UserConfig, color_to_string };
+use crate::core::user_config::{color_to_string, UserConfig};
 use crate::infra::network::sync::{PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
