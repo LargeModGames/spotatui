@@ -1,5 +1,5 @@
 use crate::core::sort::{SortContext, SortState};
-use crate::core::user_config::UserConfig;
+use crate::core::user_config::{ UserConfig, color_to_string };
 use crate::infra::network::sync::{PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
@@ -3224,36 +3224,12 @@ impl App {
         },
       ],
       SettingsCategory::Theme => {
-        fn color_to_string(color: ratatui::style::Color) -> String {
-          match color {
-            ratatui::style::Color::Rgb(r, g, b) => format!("{},{},{}", r, g, b),
-            ratatui::style::Color::Reset => "Reset".to_string(),
-            ratatui::style::Color::Black => "Black".to_string(),
-            ratatui::style::Color::Red => "Red".to_string(),
-            ratatui::style::Color::Green => "Green".to_string(),
-            ratatui::style::Color::Yellow => "Yellow".to_string(),
-            ratatui::style::Color::Blue => "Blue".to_string(),
-            ratatui::style::Color::Magenta => "Magenta".to_string(),
-            ratatui::style::Color::Cyan => "Cyan".to_string(),
-            ratatui::style::Color::Gray => "Gray".to_string(),
-            ratatui::style::Color::DarkGray => "DarkGray".to_string(),
-            ratatui::style::Color::LightRed => "LightRed".to_string(),
-            ratatui::style::Color::LightGreen => "LightGreen".to_string(),
-            ratatui::style::Color::LightYellow => "LightYellow".to_string(),
-            ratatui::style::Color::LightBlue => "LightBlue".to_string(),
-            ratatui::style::Color::LightMagenta => "LightMagenta".to_string(),
-            ratatui::style::Color::LightCyan => "LightCyan".to_string(),
-            ratatui::style::Color::White => "White".to_string(),
-            _ => "Unknown".to_string(),
-          }
-        }
-
         vec![
           SettingItem {
             id: "theme.preset".to_string(),
             name: "Theme Preset".to_string(),
             description: "Choose a preset theme or customize below".to_string(),
-            value: SettingValue::Preset("Default (Cyan)".to_string()), // Default preset
+            value: SettingValue::Preset(self.user_config.current_preset.name().to_string()),
           },
           SettingItem {
             id: "theme.active".to_string(),
@@ -3330,8 +3306,10 @@ impl App {
     self.settings_unsaved_prompt_save_selected = true;
   }
 
-  /// Apply changes from settings_items back to user_config
+  // Apply changes from settings_items back to user_config
   pub fn apply_settings_changes(&mut self) {
+    use crate::core::user_config::{parse_theme_item, ThemePreset};
+
     for setting in &self.settings_items {
       match setting.id.as_str() {
         // Behavior settings
@@ -3653,92 +3631,105 @@ impl App {
             }
           }
         }
-        // Theme preset - applies all colors at once
+        // Decides whether the per-color changes following will apply.
+        // A named preset takes priority; the user's custom_theme is preserved
+        // so they can return to it later by selecting Custom.
         "theme.preset" => {
-          if let SettingValue::Preset(preset_name) = &setting.value {
-            use crate::core::user_config::ThemePreset;
-            let preset = ThemePreset::from_name(preset_name);
+          if let SettingValue::Preset(name) = &setting.value {
+            let preset = ThemePreset::from_name(name);
+            self.user_config.current_preset = preset;
             if preset != ThemePreset::Custom {
-              // Apply the preset's theme colors
               self.user_config.theme = preset.to_theme();
             }
           }
         }
-        // Individual theme color overrides
-        "theme.active" => {
+        // Individual theme color overrides only apply when on Custom; they
+        // update both the active theme and the persisted custom_theme.
+        "theme.active" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.active = c;
+              self.user_config.custom_theme.active = c;
             }
           }
         }
-        "theme.banner" => {
+        "theme.banner" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.banner = c;
+              self.user_config.custom_theme.banner = c;
             }
           }
         }
-        "theme.hint" => {
+        "theme.hint" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.hint = c;
+              self.user_config.custom_theme.hint = c;
             }
           }
         }
-        "theme.hovered" => {
+        "theme.hovered" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.hovered = c;
+              self.user_config.custom_theme.hovered = c;
             }
           }
         }
-        "theme.selected" => {
+        "theme.selected" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.selected = c;
+              self.user_config.custom_theme.selected = c;
             }
           }
         }
-        "theme.inactive" => {
+        "theme.inactive" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.inactive = c;
+              self.user_config.custom_theme.inactive = c;
             }
           }
         }
-        "theme.text" => {
+        "theme.text" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.text = c;
+              self.user_config.custom_theme.text = c;
             }
           }
         }
-        "theme.error_text" => {
+        "theme.error_text" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.error_text = c;
+              self.user_config.custom_theme.error_text = c;
             }
           }
         }
-        "theme.playbar_background" => {
+        "theme.playbar_background" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.playbar_background = c;
+              self.user_config.custom_theme.playbar_background = c;
             }
           }
         }
-        "theme.playbar_progress" => {
+        "theme.playbar_progress" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.playbar_progress = c;
+              self.user_config.custom_theme.playbar_progress = c;
             }
           }
         }
-        "theme.highlighted_lyrics" => {
+        "theme.highlighted_lyrics" if self.user_config.current_preset == ThemePreset::Custom => {
           if let SettingValue::Color(v) = &setting.value {
-            if let Ok(c) = crate::core::user_config::parse_theme_item(v) {
+            if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.highlighted_lyrics = c;
+              self.user_config.custom_theme.highlighted_lyrics = c;
             }
           }
         }

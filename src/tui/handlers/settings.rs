@@ -191,6 +191,7 @@ fn handle_string_edit(key: Key, app: &mut App) {
           }
         }
 
+        let is_color_edit = matches!(setting.value, SettingValue::Color(_));
         match &setting.value {
           SettingValue::String(_) => {
             setting.value = SettingValue::String(new_value);
@@ -199,6 +200,16 @@ fn handle_string_edit(key: Key, app: &mut App) {
             setting.value = SettingValue::Color(new_value);
           }
           _ => {}
+        }
+        // Editing an individual color switches the theme to Custom
+        if is_color_edit {
+          if let Some(preset_setting) =
+            app.settings_items.iter_mut().find(|s| s.id == "theme.preset")
+          {
+            if let SettingValue::Preset(name) = &mut preset_setting.value {
+              *name = "Custom".to_string();
+            }
+          }
         }
       }
       app.settings_edit_mode = false;

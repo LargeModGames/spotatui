@@ -13,6 +13,7 @@ const APP_CONFIG_DIR: &str = "spotatui";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct UserTheme {
+  pub preset: Option<String>,
   pub active: Option<String>,
   pub banner: Option<String>,
   pub error_border: Option<String>,
@@ -122,6 +123,7 @@ impl ThemePreset {
       ThemePreset::Gruvbox,
       ThemePreset::GruvboxLight,
       ThemePreset::CatppuccinMocha,
+      ThemePreset::Custom,
     ]
   }
 
@@ -721,6 +723,8 @@ pub struct UserConfigString {
 pub struct UserConfig {
   pub keys: KeyBindings,
   pub theme: Theme,
+  pub current_preset: ThemePreset,
+  pub custom_theme: Theme,
   pub behavior: BehaviorConfig,
   pub path_to_config: Option<UserConfigPaths>,
 }
@@ -741,6 +745,8 @@ impl UserConfig {
 
     UserConfig {
       theme: Default::default(),
+      current_preset: ThemePreset::Default,
+      custom_theme: Default::default(),
       keys: KeyBindings {
         back: Key::Char('q'),
         next_page: Key::Ctrl('d'),
@@ -898,10 +904,12 @@ impl UserConfig {
   }
 
   pub fn load_theme(&mut self, theme: UserTheme) -> Result<()> {
+    // Individual color fields populate the custom_theme — they only
+    // become the active theme when current_preset is Custom.
     macro_rules! to_theme_item {
       ($name: ident) => {
         if let Some(theme_item) = theme.$name {
-          self.theme.$name = parse_theme_item(&theme_item)?;
+          self.custom_theme.$name = parse_theme_item(&theme_item)?;
         }
       };
     }
@@ -922,6 +930,16 @@ impl UserConfig {
     to_theme_item!(background);
     to_theme_item!(header);
     to_theme_item!(highlighted_lyrics);
+
+    if let Some(preset_name) = theme.preset {
+      self.current_preset = ThemePreset::from_name(&preset_name);
+    }
+
+    self.theme = match self.current_preset {
+      ThemePreset::Custom => self.custom_theme,
+      preset => preset.to_theme(),
+    };
+
     Ok(())
   }
 
@@ -1251,22 +1269,23 @@ impl UserConfig {
 
     // Helper to build theme config from current values
     let build_theme = || UserTheme {
-      active: Some(color_to_string(self.theme.active)),
-      banner: Some(color_to_string(self.theme.banner)),
-      error_border: Some(color_to_string(self.theme.error_border)),
-      error_text: Some(color_to_string(self.theme.error_text)),
-      hint: Some(color_to_string(self.theme.hint)),
-      hovered: Some(color_to_string(self.theme.hovered)),
-      inactive: Some(color_to_string(self.theme.inactive)),
-      playbar_background: Some(color_to_string(self.theme.playbar_background)),
-      playbar_progress: Some(color_to_string(self.theme.playbar_progress)),
-      playbar_progress_text: Some(color_to_string(self.theme.playbar_progress_text)),
-      playbar_text: Some(color_to_string(self.theme.playbar_text)),
-      selected: Some(color_to_string(self.theme.selected)),
-      text: Some(color_to_string(self.theme.text)),
-      background: Some(color_to_string(self.theme.background)),
-      header: Some(color_to_string(self.theme.header)),
-      highlighted_lyrics: Some(color_to_string(self.theme.highlighted_lyrics)),
+      preset: Some(self.current_preset.name().to_string()),
+      active: Some(color_to_string(self.custom_theme.active)),
+      banner: Some(color_to_string(self.custom_theme.banner)),
+      error_border: Some(color_to_string(self.custom_theme.error_border)),
+      error_text: Some(color_to_string(self.custom_theme.error_text)),
+      hint: Some(color_to_string(self.custom_theme.hint)),
+      hovered: Some(color_to_string(self.custom_theme.hovered)),
+      inactive: Some(color_to_string(self.custom_theme.inactive)),
+      playbar_background: Some(color_to_string(self.custom_theme.playbar_background)),
+      playbar_progress: Some(color_to_string(self.custom_theme.playbar_progress)),
+      playbar_progress_text: Some(color_to_string(self.custom_theme.playbar_progress_text)),
+      playbar_text: Some(color_to_string(self.custom_theme.playbar_text)),
+      selected: Some(color_to_string(self.custom_theme.selected)),
+      text: Some(color_to_string(self.custom_theme.text)),
+      background: Some(color_to_string(self.custom_theme.background)),
+      header: Some(color_to_string(self.custom_theme.header)),
+      highlighted_lyrics: Some(color_to_string(self.custom_theme.highlighted_lyrics)),
     };
 
     // If the file exists, try to read it first to preserve keybindings
@@ -1364,7 +1383,7 @@ pub fn parse_theme_item(theme_item: &str) -> Result<Color> {
   Ok(color)
 }
 
-fn color_to_string(color: Color) -> String {
+pub fn color_to_string(color: Color) -> String {
   match color {
     Color::Reset => "Reset".to_string(),
     Color::Black => "Black".to_string(),
