@@ -13,6 +13,7 @@ const APP_CONFIG_DIR: &str = "spotatui";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct UserTheme {
+  pub preset: Option<String>,
   pub active: Option<String>,
   pub banner: Option<String>,
   pub error_border: Option<String>,
@@ -122,6 +123,7 @@ impl ThemePreset {
       ThemePreset::Gruvbox,
       ThemePreset::GruvboxLight,
       ThemePreset::CatppuccinMocha,
+      ThemePreset::Custom,
     ]
   }
 
@@ -721,6 +723,8 @@ pub struct UserConfigString {
 pub struct UserConfig {
   pub keys: KeyBindings,
   pub theme: Theme,
+  pub current_preset: ThemePreset,
+  pub custom_theme: Theme,
   pub behavior: BehaviorConfig,
   pub path_to_config: Option<UserConfigPaths>,
 }
@@ -741,6 +745,8 @@ impl UserConfig {
 
     UserConfig {
       theme: Default::default(),
+      current_preset: ThemePreset::Default,
+      custom_theme: Default::default(),
       keys: KeyBindings {
         back: Key::Char('q'),
         next_page: Key::Ctrl('d'),
@@ -898,13 +904,32 @@ impl UserConfig {
   }
 
   pub fn load_theme(&mut self, theme: UserTheme) -> Result<()> {
+    // Individual color fields populate the custom_theme — they only
+    // become the active theme when current_preset is Custom.
     macro_rules! to_theme_item {
       ($name: ident) => {
         if let Some(theme_item) = theme.$name {
-          self.theme.$name = parse_theme_item(&theme_item)?;
+          self.custom_theme.$name = parse_theme_item(&theme_item)?;
         }
       };
     }
+    // Check if any colour values exist in config already`
+    let has_color_values = theme.active.is_some()
+      || theme.banner.is_some()
+      || theme.error_border.is_some()
+      || theme.error_text.is_some()
+      || theme.hint.is_some()
+      || theme.hovered.is_some()
+      || theme.inactive.is_some()
+      || theme.playbar_background.is_some()
+      || theme.playbar_progress.is_some()
+      || theme.playbar_progress_text.is_some()
+      || theme.playbar_text.is_some()
+      || theme.selected.is_some()
+      || theme.text.is_some()
+      || theme.background.is_some()
+      || theme.header.is_some()
+      || theme.highlighted_lyrics.is_some();
 
     to_theme_item!(active);
     to_theme_item!(banner);
@@ -922,6 +947,23 @@ impl UserConfig {
     to_theme_item!(background);
     to_theme_item!(header);
     to_theme_item!(highlighted_lyrics);
+
+    // If the preset value exists in the config, we load it
+    if let Some(preset_name) = theme.preset {
+      self.current_preset = ThemePreset::from_name(&preset_name);
+    } else if has_color_values {
+      // If there is no preset value, or it is malformed,
+      // and if the config exists and has some theme colours set:
+      // we handle backwards compatibility for old theme configs.
+      // Set to Custom on first load after the upgrade.
+      self.current_preset = ThemePreset::Custom;
+    }
+
+    self.theme = match self.current_preset {
+      ThemePreset::Custom => self.custom_theme,
+      preset => preset.to_theme(),
+    };
+
     Ok(())
   }
 
@@ -1251,22 +1293,23 @@ impl UserConfig {
 
     // Helper to build theme config from current values
     let build_theme = || UserTheme {
-      active: Some(color_to_string(self.theme.active)),
-      banner: Some(color_to_string(self.theme.banner)),
-      error_border: Some(color_to_string(self.theme.error_border)),
-      error_text: Some(color_to_string(self.theme.error_text)),
-      hint: Some(color_to_string(self.theme.hint)),
-      hovered: Some(color_to_string(self.theme.hovered)),
-      inactive: Some(color_to_string(self.theme.inactive)),
-      playbar_background: Some(color_to_string(self.theme.playbar_background)),
-      playbar_progress: Some(color_to_string(self.theme.playbar_progress)),
-      playbar_progress_text: Some(color_to_string(self.theme.playbar_progress_text)),
-      playbar_text: Some(color_to_string(self.theme.playbar_text)),
-      selected: Some(color_to_string(self.theme.selected)),
-      text: Some(color_to_string(self.theme.text)),
-      background: Some(color_to_string(self.theme.background)),
-      header: Some(color_to_string(self.theme.header)),
-      highlighted_lyrics: Some(color_to_string(self.theme.highlighted_lyrics)),
+      preset: Some(self.current_preset.name().to_string()),
+      active: Some(color_to_string(self.custom_theme.active)),
+      banner: Some(color_to_string(self.custom_theme.banner)),
+      error_border: Some(color_to_string(self.custom_theme.error_border)),
+      error_text: Some(color_to_string(self.custom_theme.error_text)),
+      hint: Some(color_to_string(self.custom_theme.hint)),
+      hovered: Some(color_to_string(self.custom_theme.hovered)),
+      inactive: Some(color_to_string(self.custom_theme.inactive)),
+      playbar_background: Some(color_to_string(self.custom_theme.playbar_background)),
+      playbar_progress: Some(color_to_string(self.custom_theme.playbar_progress)),
+      playbar_progress_text: Some(color_to_string(self.custom_theme.playbar_progress_text)),
+      playbar_text: Some(color_to_string(self.custom_theme.playbar_text)),
+      selected: Some(color_to_string(self.custom_theme.selected)),
+      text: Some(color_to_string(self.custom_theme.text)),
+      background: Some(color_to_string(self.custom_theme.background)),
+      header: Some(color_to_string(self.custom_theme.header)),
+      highlighted_lyrics: Some(color_to_string(self.custom_theme.highlighted_lyrics)),
     };
 
     // If the file exists, try to read it first to preserve keybindings
@@ -1327,7 +1370,7 @@ impl UserConfig {
   }
 }
 
-fn parse_theme_item(theme_item: &str) -> Result<Color> {
+pub fn parse_theme_item(theme_item: &str) -> Result<Color> {
   let color = match theme_item {
     "Reset" => Color::Reset,
     "Black" => Color::Black,
@@ -1364,7 +1407,7 @@ fn parse_theme_item(theme_item: &str) -> Result<Color> {
   Ok(color)
 }
 
-fn color_to_string(color: Color) -> String {
+pub fn color_to_string(color: Color) -> String {
   match color {
     Color::Reset => "Reset".to_string(),
     Color::Black => "Black".to_string(),

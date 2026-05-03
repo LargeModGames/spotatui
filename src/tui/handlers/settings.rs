@@ -191,6 +191,7 @@ fn handle_string_edit(key: Key, app: &mut App) {
           }
         }
 
+        let is_color_edit = matches!(setting.value, SettingValue::Color(_));
         match &setting.value {
           SettingValue::String(_) => {
             setting.value = SettingValue::String(new_value);
@@ -199,6 +200,18 @@ fn handle_string_edit(key: Key, app: &mut App) {
             setting.value = SettingValue::Color(new_value);
           }
           _ => {}
+        }
+        // Editing an individual color switches the theme to Custom
+        if is_color_edit {
+          if let Some(preset_setting) = app
+            .settings_items
+            .iter_mut()
+            .find(|s| s.id == "theme.preset")
+          {
+            if let SettingValue::Preset(name) = &mut preset_setting.value {
+              *name = "Custom".to_string();
+            }
+          }
         }
       }
       app.settings_edit_mode = false;
@@ -392,6 +405,11 @@ fn enter_edit_mode(app: &mut App) {
       if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
         setting_mut.value = SettingValue::Preset(next.name().to_string());
       }
+      let preview_theme = match next {
+        ThemePreset::Custom => app.user_config.custom_theme,
+        p => p.to_theme(),
+      };
+      app.sync_theme_color_settings(&preview_theme);
       return;
     }
 
@@ -428,47 +446,39 @@ fn cycle_next(current: &str, options: &[&str]) -> String {
 fn handle_preset_edit(key: Key, app: &mut App) {
   use crate::core::user_config::ThemePreset;
 
+  fn cycle(app: &mut App, forward: bool) {
+    if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
+      if let SettingValue::Preset(ref preset_name) = setting.value {
+        let current = ThemePreset::from_name(preset_name);
+        let next = if forward {
+          current.next()
+        } else {
+          current.prev()
+        };
+        if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
+          setting_mut.value = SettingValue::Preset(next.name().to_string());
+        }
+        // Update theme item values when cycling through presets so that
+        // values can be previewed in real time
+        let preview_theme = match next {
+          ThemePreset::Custom => app.user_config.custom_theme,
+          p => p.to_theme(),
+        };
+        app.sync_theme_color_settings(&preview_theme);
+      }
+    }
+  }
+
   match key {
     Key::Enter | Key::Char(' ') => {
-      // Cycle to next preset
-      if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
-        if let SettingValue::Preset(ref preset_name) = setting.value {
-          let current = ThemePreset::from_name(preset_name);
-          let next = current.next();
-          if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
-            setting_mut.value = SettingValue::Preset(next.name().to_string());
-          }
-        }
-      }
+      cycle(app, true);
       app.settings_edit_mode = false;
     }
     Key::Esc => {
       app.settings_edit_mode = false;
     }
-    key if right_event(key) => {
-      // Next preset
-      if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
-        if let SettingValue::Preset(ref preset_name) = setting.value {
-          let current = ThemePreset::from_name(preset_name);
-          let next = current.next();
-          if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
-            setting_mut.value = SettingValue::Preset(next.name().to_string());
-          }
-        }
-      }
-    }
-    key if left_event(key) => {
-      // Previous preset
-      if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
-        if let SettingValue::Preset(ref preset_name) = setting.value {
-          let current = ThemePreset::from_name(preset_name);
-          let prev = current.prev();
-          if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
-            setting_mut.value = SettingValue::Preset(prev.name().to_string());
-          }
-        }
-      }
-    }
+    key if right_event(key) => cycle(app, true),
+    key if left_event(key) => cycle(app, false),
     _ => {}
   }
 }
