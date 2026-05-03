@@ -36,7 +36,7 @@ crossterm = "0.29"
 tui-equalizer = "0.2.0-alpha"
 tui-bar-graph = "0.3.3"
 colorgrad = "0.8.0"
-tokio = { version = "1.51", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 rand = "0.8.4"
 anyhow = "1.0.102"
 chrono = "0.4.44"
