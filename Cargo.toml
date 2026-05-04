@@ -49,7 +49,7 @@ openssl = { version = "0.10", optional = true }
 cpal = { version = "0.17", optional = true }
 realfft = { version = "3.4", optional = true }
 discord-rich-presence = { version = "1.1", optional = true }
-ratatui-image = { version = "10.0.6", optional = true, default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "10.0.8", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true }
 
 # Streaming dependencies (librespot)
