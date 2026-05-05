@@ -1,4 +1,4 @@
-use crate::app::{App, SettingValue, SettingsCategory};
+use crate::core::app::{App, SettingValue, SettingsCategory};
 use ratatui::{
   layout::{Alignment, Constraint, Layout, Rect},
   style::{Modifier, Style},

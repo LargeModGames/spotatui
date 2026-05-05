@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Native streaming metadata freshness**: Kept native player track metadata authoritative while Spotify's playback API is still catching up, preventing stale API responses from overwriting the current native track and suppressing duplicate song-count, lyrics, and saved-track checks for stale items.
+
+### Internal
+
+- **Runtime module split**: Moved authentication, runtime startup, TUI runner, native player event handling, and shared playback metadata extraction out of the monolithic `main.rs` into focused `core`, `infra`, and `tui` modules.
+- **Playback integration metadata sharing**: Centralized playback snapshot construction for Discord RPC, MPRIS, and macOS media integrations so native streaming and Spotify API metadata are resolved consistently.
+- **Module path cleanup**: Updated imports to use the current `core`, `infra`, and `tui` module paths after the runtime split.
+
 ## [v0.38.1] - 2026-04-24
 
 ### Added

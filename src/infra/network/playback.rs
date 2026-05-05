@@ -82,6 +82,36 @@ fn api_playback_offset(
   offset.map(|index| Offset::Position(ChronoDuration::milliseconds(index as i64)))
 }
 
+fn playable_item_id(item: &PlayableItem) -> Option<String> {
+  match item {
+    PlayableItem::Track(track) => track.id.as_ref().map(|id| id.id().to_string()),
+    PlayableItem::Episode(episode) => Some(episode.id.id().to_string()),
+    PlayableItem::Unknown(_) => None,
+  }
+}
+
+fn playable_item_name(item: &PlayableItem) -> Option<&str> {
+  match item {
+    PlayableItem::Track(track) => Some(&track.name),
+    PlayableItem::Episode(episode) => Some(&episode.name),
+    PlayableItem::Unknown(_) => None,
+  }
+}
+
+fn api_confirms_native_info_is_current(
+  native_name: &str,
+  item: &PlayableItem,
+  last_track_id: Option<&str>,
+) -> bool {
+  if playable_item_name(item) == Some(native_name) {
+    return true;
+  }
+
+  playable_item_id(item)
+    .as_deref()
+    .is_some_and(|api_id| Some(api_id) == last_track_id)
+}
+
 /// Get the currently active streaming player, if any.
 /// Note: This logic is duplicated in `main.rs` as `active_streaming_player()`.
 /// Both are identical; the difference is input type (Network vs. App Arc).
@@ -196,39 +226,57 @@ impl PlaybackNetwork for Network {
           }
         }
 
-        // Process track info before storing context (avoids cloning)
-        if let Some(ref item) = c.item {
-          match item {
-            PlayableItem::Track(track) => {
-              if let Some(ref track_id) = track.id {
-                let track_id_str = track_id.id().to_string();
+        let native_track_id_before_api = app.last_track_id.clone();
+        let api_item_confirms_native_info = app
+          .native_track_info
+          .as_ref()
+          .zip(c.item.as_ref())
+          .is_some_and(|(native_info, item)| {
+            api_confirms_native_info_is_current(
+              &native_info.name,
+              item,
+              native_track_id_before_api.as_deref(),
+            )
+          });
+        let stale_api_item_for_native =
+          app.native_track_info.is_some() && c.item.is_some() && !api_item_confirms_native_info;
 
-                // Check if this is a new track
-                if app.last_track_id.as_ref() != Some(&track_id_str) {
-                  if app.user_config.behavior.enable_global_song_count {
-                    app.dispatch(IoEvent::IncrementGlobalSongCount);
+        // Process track info before storing context (avoids cloning)
+        if !stale_api_item_for_native {
+          if let Some(ref item) = c.item {
+            match item {
+              PlayableItem::Track(track) => {
+                if let Some(ref track_id) = track.id {
+                  let track_id_str = track_id.id().to_string();
+
+                  // Check if this is a new track
+                  if app.last_track_id.as_ref() != Some(&track_id_str) {
+                    if app.user_config.behavior.enable_global_song_count {
+                      app.dispatch(IoEvent::IncrementGlobalSongCount);
+                    }
+
+                    // Trigger lyrics fetch
+                    let duration_secs = track.duration.num_seconds() as f64;
+                    app.dispatch(IoEvent::GetLyrics(
+                      track.name.clone(),
+                      create_artist_string(&track.artists),
+                      duration_secs,
+                    ));
+
+                    app.dispatch(IoEvent::CurrentUserSavedTracksContains(vec![track_id
+                      .clone()
+                      .into_static()]));
                   }
 
-                  // Trigger lyrics fetch
-                  let duration_secs = track.duration.num_seconds() as f64;
-                  app.dispatch(IoEvent::GetLyrics(
-                    track.name.clone(),
-                    create_artist_string(&track.artists),
-                    duration_secs,
-                  ));
-
-                  app.dispatch(IoEvent::CurrentUserSavedTracksContains(vec![track_id
-                    .clone()
-                    .into_static()]));
-                }
-
-                app.last_track_id = Some(track_id_str);
-              };
+                  app.last_track_id = Some(track_id_str);
+                };
+              }
+              PlayableItem::Episode(_episode) => { /*should map this to following the podcast show*/
+              }
+              _ => {}
             }
-            PlayableItem::Episode(_episode) => { /*should map this to following the podcast show*/ }
-            _ => {}
-          }
-        };
+          };
+        }
 
         // Preserve local streaming states (API returns stale server-side state)
         #[cfg(feature = "streaming")]
@@ -307,22 +355,11 @@ impl PlaybackNetwork for Network {
           }
         }
 
-        // Only clear native track info if API data matches the native player's track
-        if let Some(ref native_info) = app.native_track_info {
-          if let Some(ref ctx) = app.current_playback_context {
-            if let Some(ref item) = ctx.item {
-              let api_track_name = match item {
-                PlayableItem::Track(t) => &t.name,
-                PlayableItem::Episode(e) => &e.name,
-                _ => return,
-              };
-              // Only clear if names match (API caught up to native player)
-              if api_track_name == &native_info.name {
-                app.native_track_info = None;
-              }
-            }
-          }
-        } else {
+        // Keep native metadata authoritative while the native player is active.
+        // Spotify's playback endpoint can lag behind librespot by several seconds
+        // and report a different item; TrackChanged/Stopped events own this field.
+        #[cfg(feature = "streaming")]
+        if app.native_track_info.is_some() && (!is_native_device || api_item_confirms_native_info) {
           app.native_track_info = None;
         }
       }
@@ -967,11 +1004,45 @@ impl PlaybackNetwork for Network {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use rspotify::model::idtypes::TrackId;
+  use rspotify::model::{
+    artist::SimplifiedArtist, idtypes::TrackId, track::FullTrack, SimplifiedAlbum,
+  };
   use rspotify::prelude::Id;
+  use std::collections::HashMap;
 
   fn playable_track(id: &str) -> PlayableId<'static> {
     PlayableId::Track(TrackId::from_id(id).unwrap().into_static())
+  }
+
+  #[allow(deprecated)]
+  fn full_track(id: &str, name: &str) -> PlayableItem {
+    PlayableItem::Track(FullTrack {
+      album: SimplifiedAlbum {
+        name: "Album".to_string(),
+        ..Default::default()
+      },
+      artists: vec![SimplifiedArtist {
+        name: "Artist".to_string(),
+        ..Default::default()
+      }],
+      available_markets: Vec::new(),
+      disc_number: 1,
+      duration: TimeDelta::milliseconds(180_000),
+      explicit: false,
+      external_ids: HashMap::new(),
+      external_urls: HashMap::new(),
+      href: None,
+      id: Some(TrackId::from_id(id).unwrap().into_static()),
+      is_local: false,
+      is_playable: Some(true),
+      linked_from: None,
+      restrictions: None,
+      name: name.to_string(),
+      popularity: 50,
+      preview_url: None,
+      track_number: 1,
+      r#type: rspotify::model::Type::Track,
+    })
   }
 
   #[test]
@@ -1048,5 +1119,38 @@ mod tests {
       offset,
       Some(Offset::Position(ChronoDuration::milliseconds(3)))
     );
+  }
+
+  #[test]
+  fn api_confirms_native_info_when_names_match() {
+    let item = full_track("0000000000000000000001", "Current Song");
+
+    assert!(api_confirms_native_info_is_current(
+      "Current Song",
+      &item,
+      Some("different-id")
+    ));
+  }
+
+  #[test]
+  fn api_confirms_native_info_when_current_id_matches_even_if_name_differs() {
+    let item = full_track("0000000000000000000001", "Stranger Thing");
+
+    assert!(api_confirms_native_info_is_current(
+      "Greater Together",
+      &item,
+      Some("0000000000000000000001")
+    ));
+  }
+
+  #[test]
+  fn api_does_not_confirm_stale_api_item_for_different_native_track() {
+    let item = full_track("0000000000000000000001", "Old API Song");
+
+    assert!(!api_confirms_native_info_is_current(
+      "New Native Song",
+      &item,
+      Some("0000000000000000000002")
+    ));
   }
 }

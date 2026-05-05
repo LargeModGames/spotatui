@@ -1,4 +1,4 @@
-use crate::event::Key;
+use crate::tui::event::Key;
 use anyhow::{anyhow, Result};
 use ratatui::style::{Color, Style};
 use serde::{Deserialize, Serialize};
@@ -1436,7 +1436,7 @@ mod tests {
   #[test]
   fn test_parse_key() {
     use super::parse_key;
-    use crate::event::Key;
+    use crate::tui::event::Key;
     assert_eq!(parse_key(String::from("j")).unwrap(), Key::Char('j'));
     assert_eq!(parse_key(String::from("J")).unwrap(), Key::Char('J'));
     assert_eq!(parse_key(String::from("ctrl-j")).unwrap(), Key::Ctrl('j'));
@@ -1499,7 +1499,7 @@ mod tests {
   #[test]
   fn test_reserved_key() {
     use super::check_reserved_keys;
-    use crate::event::Key;
+    use crate::tui::event::Key;
 
     assert!(
       check_reserved_keys(Key::Enter).is_err(),
