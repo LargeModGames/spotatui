@@ -811,10 +811,10 @@ pub struct App {
   pub is_volume_change_in_flight: bool,
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
-  pub streaming_player: Option<Arc<crate::player::StreamingPlayer>>,
+  pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
   /// Reference to MPRIS manager for emitting Seeked signals after native seeks
   #[cfg(all(feature = "mpris", target_os = "linux"))]
-  pub mpris_manager: Option<Arc<crate::mpris::MprisManager>>,
+  pub mpris_manager: Option<Arc<crate::infra::mpris::MprisManager>>,
 
   // Create Playlist form state
   pub create_playlist_name: Vec<char>,
@@ -2834,7 +2834,7 @@ impl App {
           // Notify MPRIS clients of the change
           #[cfg(all(feature = "mpris", target_os = "linux"))]
           if let Some(ref mpris) = self.mpris_manager {
-            use crate::mpris::LoopStatusEvent;
+            use crate::infra::mpris::LoopStatusEvent;
             let loop_status = match next_repeat_state {
               RepeatState::Off => LoopStatusEvent::None,
               RepeatState::Context => LoopStatusEvent::Playlist,

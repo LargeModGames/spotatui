@@ -1,6 +1,6 @@
 use crate::core::app::{App, SettingValue, SettingsCategory};
-use crate::handlers::common_key_events::{down_event, left_event, right_event, up_event};
 use crate::tui::event::Key;
+use crate::tui::handlers::common_key_events::{down_event, left_event, right_event, up_event};
 
 pub fn handler(key: Key, app: &mut App) {
   if app.settings_unsaved_prompt_visible {

@@ -3,6 +3,7 @@ pub mod audio;
 pub mod discord_rpc;
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
 pub mod macos_media;
+pub mod media_metadata;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 pub mod mpris;
 pub mod network;

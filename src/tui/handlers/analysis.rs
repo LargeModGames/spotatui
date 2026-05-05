@@ -1,4 +1,4 @@
-use crate::{app::App, event::Key};
+use crate::{core::app::App, tui::event::Key};
 
 pub fn handler(key: Key, app: &mut App) {
   // Uppercase 'V' to cycle visualizer style (lowercase 'v' opens the analysis view)

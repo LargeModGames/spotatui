@@ -1,5 +1,5 @@
 use super::common_key_events;
-use crate::{app::App, event::Key};
+use crate::{core::app::App, tui::event::Key};
 
 #[derive(PartialEq)]
 enum Direction {
@@ -40,7 +40,7 @@ fn move_page(direction: Direction, app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::app::{ActiveBlock, RouteId};
-  use crate::handlers::handle_app;
+  use crate::tui::handlers::handle_app;
 
   #[test]
   fn test_help_menu_pagination() {

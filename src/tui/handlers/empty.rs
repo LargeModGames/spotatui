@@ -1,7 +1,7 @@
 use super::common_key_events;
 use crate::{
-  app::{ActiveBlock, App},
-  event::Key,
+  core::app::{ActiveBlock, App},
+  tui::event::Key,
 };
 
 // When no block is actively selected, just handle regular event

@@ -1,5 +1,5 @@
 use super::util;
-use crate::app::App;
+use crate::core::app::App;
 use crate::core::user_config::VisualizerStyle;
 use ratatui::{
   buffer::Buffer,

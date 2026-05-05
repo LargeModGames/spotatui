@@ -1,7 +1,7 @@
 use super::common_key_events;
 use crate::{
-  app::{ActiveBlock, AlbumTableContext, App, RouteId, SelectedFullAlbum},
-  event::Key,
+  core::app::{ActiveBlock, AlbumTableContext, App, RouteId, SelectedFullAlbum},
+  tui::event::Key,
 };
 
 pub fn handler(key: Key, app: &mut App) {
