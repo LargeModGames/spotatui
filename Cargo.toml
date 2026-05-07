@@ -18,6 +18,11 @@ exclude = [
     "snap/",
 ]
 
+[workspace]
+members = ["apps/desktop/src-tauri"]
+default-members = ["."]
+resolver = "2"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

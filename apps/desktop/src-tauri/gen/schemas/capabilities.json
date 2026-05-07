@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Capability for the main spotatui GUI window.","local":true,"windows":["main"],"permissions":["core:default","allow-gui-api"]}}

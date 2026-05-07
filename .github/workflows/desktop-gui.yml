@@ -1,0 +1,190 @@
+name: Desktop GUI
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-gui.yml"
+      - "apps/desktop/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - ".gitignore"
+  push:
+    branches: master
+    paths:
+      - ".github/workflows/desktop-gui.yml"
+      - "apps/desktop/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+jobs:
+  desktop-gui:
+    name: spotagui (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Detect desktop GUI scaffold
+        id: desktop
+        shell: bash
+        run: |
+          if [ -f apps/desktop/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "apps/desktop/package.json is not present yet; skipping desktop GUI checks."
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.desktop.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        if: steps.desktop.outputs.present == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Linux Tauri dependencies
+        if: steps.desktop.outputs.present == 'true' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libgtk-3-dev librsvg2-dev patchelf libayatana-appindicator3-dev
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev || sudo apt-get install -y -qq libwebkit2gtk-4.0-dev
+
+      - name: Detect package manager
+        if: steps.desktop.outputs.present == 'true'
+        id: package-manager
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            echo "name=pnpm" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            echo "name=yarn" >> "$GITHUB_OUTPUT"
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+            echo "name=bun" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=npm" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install desktop dependencies
+        if: steps.desktop.outputs.present == 'true'
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          PACKAGE_MANAGER: ${{ steps.package-manager.outputs.name }}
+        run: |
+          case "$PACKAGE_MANAGER" in
+            pnpm)
+              corepack enable
+              pnpm install --frozen-lockfile
+              ;;
+            yarn)
+              corepack enable
+              yarn install --frozen-lockfile
+              ;;
+            bun)
+              npm install -g bun
+              bun install --frozen-lockfile
+              ;;
+            npm)
+              if [ -f package-lock.json ]; then
+                npm ci
+              else
+                npm install
+              fi
+              ;;
+          esac
+
+      - name: Check desktop package scripts
+        if: steps.desktop.outputs.present == 'true'
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          PACKAGE_MANAGER: ${{ steps.package-manager.outputs.name }}
+        run: |
+          has_script() {
+            node -e "const scripts = require('./package.json').scripts || {}; process.exit(scripts[process.argv[1]] ? 0 : 1)" "$1"
+          }
+
+          run_script() {
+            local script="$1"
+            case "$PACKAGE_MANAGER" in
+              pnpm) pnpm run "$script" ;;
+              yarn) yarn run "$script" ;;
+              bun) bun run "$script" ;;
+              npm) npm run "$script" ;;
+            esac
+          }
+
+          for script in format:check fmt:check lint typecheck check; do
+            if has_script "$script"; then
+              run_script "$script"
+            else
+              echo "No '$script' script defined; skipping."
+            fi
+          done
+
+      - name: Build desktop GUI
+        if: steps.desktop.outputs.present == 'true'
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          PACKAGE_MANAGER: ${{ steps.package-manager.outputs.name }}
+        run: |
+          has_script() {
+            node -e "const scripts = require('./package.json').scripts || {}; process.exit(scripts[process.argv[1]] ? 0 : 1)" "$1"
+          }
+
+          run_script() {
+            local script="$1"
+            case "$PACKAGE_MANAGER" in
+              pnpm) pnpm run "$script" ;;
+              yarn) yarn run "$script" ;;
+              bun) bun run "$script" ;;
+              npm) npm run "$script" ;;
+            esac
+          }
+
+          if has_script tauri; then
+            case "$PACKAGE_MANAGER" in
+              pnpm) pnpm run tauri build ;;
+              yarn) yarn run tauri build ;;
+              bun) bun run tauri build ;;
+              npm) npm run tauri -- build ;;
+            esac
+          elif has_script tauri:build; then
+            run_script tauri:build
+          elif has_script build:tauri; then
+            run_script build:tauri
+          elif has_script build; then
+            run_script build
+          else
+            echo "::error::No desktop build script found. Add a 'tauri', 'tauri:build', 'build:tauri', or 'build' script to apps/desktop/package.json."
+            exit 1
+          fi
+
+      - name: Upload desktop GUI bundles
+        if: steps.desktop.outputs.present == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: spotagui-${{ matrix.os }}
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/**
+            apps/desktop/src-tauri/target/*/release/bundle/**
+          if-no-files-found: warn

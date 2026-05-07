@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "spotagui",
+  "version": "0.38.1",
+  "identifier": "com.largemodgames.spotagui",
+  "mainBinaryName": "spotagui",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "enableGTKAppId": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "spotagui",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "capabilities": ["default"],
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi", "app", "dmg", "appimage", "deb"],
+    "icon": ["icons/icon.png"],
+    "category": "Music",
+    "publisher": "LargeModGames",
+    "shortDescription": "Cross-platform desktop GUI for spotatui.",
+    "longDescription": "A cross-platform Tauri desktop shell for spotatui, backed by the local spotatui Rust crate as GUI integration lands.",
+    "copyright": "Copyright (c) 2026 LargeModGames",
+    "homepage": "https://github.com/LargeModGames/spotatui",
+    "license": "MIT",
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "deb": {
+        "depends": []
+      }
+    },
+    "macOS": {
+      "bundleName": "spotagui",
+      "minimumSystemVersion": "10.13",
+      "dmg": {
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        }
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": "en-US"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
+  }
+}

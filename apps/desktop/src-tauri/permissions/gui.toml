@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-gui-api"
+description = "Allows the spotatui desktop frontend to read snapshots and dispatch GUI commands."
+commands.allow = ["get_snapshot", "dispatch_command"]

@@ -148,6 +148,8 @@ inputs = {
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
+The cross-platform Tauri desktop app is named `spotagui`. When GUI release artifacts are available, download the OS-specific `spotagui-*` installer or app bundle for Windows, macOS, or Linux from GitHub Releases; the terminal binary remains `spotatui`.
+
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
 ## Connecting to Spotify
@@ -293,6 +295,17 @@ After that there is not much to it.
    ```
 1. Clone or fork this repo and `cd` to it
 1. And then `cargo run`
+
+Desktop GUI development lives in `apps/desktop` once the Tauri scaffold is present. Install Node.js and the platform Tauri prerequisites, use the package manager lockfile in that directory, then run the scaffold's dev/build scripts, for example:
+
+```bash
+cd apps/desktop
+npm install
+npm run tauri dev
+npm run tauri build
+```
+
+Use the equivalent `pnpm`, `yarn`, or `bun` commands when the desktop lockfile selects one of those package managers.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines.
 ### Windows Subsystem for Linux

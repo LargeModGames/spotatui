@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Tauri desktop GUI scaffold**: Started cross-platform `spotagui` planning with Windows, macOS, and Linux workflow coverage, README install/development notes, and desktop build-output ignore rules while keeping existing `spotatui` TUI/CLI release artifacts separate.
+
 ### Fixed
 
 - **Native streaming metadata freshness**: Kept native player track metadata authoritative while Spotify's playback API is still catching up, preventing stale API responses from overwriting the current native track and suppressing duplicate song-count, lyrics, and saved-track checks for stale items.

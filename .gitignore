@@ -27,3 +27,8 @@ tags
 # build artifacts from the worker-relay subproject
 worker-relay/node_modules/
 
+# build artifacts from the desktop GUI subproject
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/build/
+apps/desktop/src-tauri/target/

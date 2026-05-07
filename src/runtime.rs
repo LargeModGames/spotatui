@@ -73,15 +73,16 @@ const DEFAULT_DISCORD_CLIENT_ID: &str = "1464235043462447166";
 
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
 #[derive(Default, PartialEq)]
-struct MacosMetadata {
-  title: String,
-  artists: Vec<String>,
-  album: String,
-  duration_ms: u32,
-  art_url: Option<String>,
+pub struct MacosMetadata {
+  pub title: String,
+  pub artists: Vec<String>,
+  pub album: String,
+  pub duration_ms: u32,
+  pub art_url: Option<String>,
 }
+
 #[cfg(feature = "discord-rpc")]
-fn resolve_discord_app_id(user_config: &UserConfig) -> Option<String> {
+pub fn resolve_discord_app_id(user_config: &UserConfig) -> Option<String> {
   std::env::var("SPOTATUI_DISCORD_APP_ID")
     .ok()
     .filter(|value| !value.trim().is_empty())
@@ -90,7 +91,7 @@ fn resolve_discord_app_id(user_config: &UserConfig) -> Option<String> {
 }
 
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
-fn update_macos_metadata(
+pub fn update_macos_metadata(
   manager: &macos_media::MacMediaManager,
   last_metadata: &mut Option<MacosMetadata>,
   app: &App,
@@ -129,7 +130,7 @@ fn subscription_level_label(level: rspotify::model::SubscriptionLevel) -> &'stat
 }
 
 #[cfg(feature = "streaming")]
-async fn account_supports_native_streaming(
+pub async fn account_supports_native_streaming(
   spotify: &AuthCodePkceSpotify,
 ) -> (bool, Option<&'static str>) {
   match spotify.me().await {
@@ -186,7 +187,7 @@ fn init_audio_backend() {
 #[cfg(not(all(target_os = "linux", feature = "streaming")))]
 fn init_audio_backend() {}
 
-fn setup_logging() -> anyhow::Result<()> {
+pub fn setup_logging() -> anyhow::Result<()> {
   // Get the current Process ID
   let pid = std::process::id();
 
@@ -221,7 +222,7 @@ fn setup_logging() -> anyhow::Result<()> {
   Ok(())
 }
 
-fn install_panic_hook() {
+pub fn install_panic_hook() {
   let default_hook = panic::take_hook();
   panic::set_hook(Box::new(move |info| {
     let is_audio_backend_panic = info
@@ -372,8 +373,7 @@ of the app. Beware that this comes at a CPU cost!",
     return cli::check_for_update(do_install);
   }
 
-  // Auto-update on launch: silently check, download, install, and restart.
-  // Skip if a CLI subcommand is active or SPOTATUI_SKIP_UPDATE is set (prevents restart loops).
+  // ── Load user config for update check and TUI-specific prompts ──────
   let mut user_config = UserConfig::new();
   if let Some(config_file_path) = matches.get_one::<String>("config") {
     let config_file_path = PathBuf::from(config_file_path);
@@ -383,6 +383,7 @@ of the app. Beware that this comes at a CPU cost!",
   user_config.load_config()?;
   info!("user config loaded successfully");
 
+  // ── Auto-update check (TUI-only) ────────────────────────────────────
   if matches.subcommand_name().is_none()
     && std::env::var_os("SPOTATUI_SKIP_UPDATE").is_none()
     && !matches.get_flag("no-update")
@@ -452,6 +453,7 @@ of the app. Beware that this comes at a CPU cost!",
     }
   }
 
+  // ── Client auth config and migration prompts (TUI-only) ─────────────
   let mut client_config = ClientConfig::new();
   client_config.load_config()?;
   info!("client authentication config loaded");
@@ -562,6 +564,7 @@ of the app. Beware that this comes at a CPU cost!",
     }
   }
 
+  // ── Authenticate and create the shared session ───────────────────────
   let config_paths = client_config.get_or_build_paths()?;
   let authenticated = auth::authenticate_with_fallback(&mut client_config, &config_paths).await?;
   let spotify = authenticated.spotify;
@@ -605,6 +608,8 @@ of the app. Beware that this comes at a CPU cost!",
   // Launch the UI (async)
   } else {
     info!("launching interactive terminal ui");
+
+    // ── Streaming player ──────────────────────────────────────────────
     #[cfg(feature = "streaming")]
     let (streaming_supported_for_account, streaming_startup_status_message) =
       if client_config.enable_streaming {
@@ -634,10 +639,6 @@ of the app. Beware that this comes at a CPU cost!",
       let client_id = client_config.client_id.clone();
       let redirect_uri = selected_redirect_uri.clone();
 
-      // Internal Spirc timeout defaults to 30s (configurable via
-      // SPOTATUI_STREAMING_INIT_TIMEOUT_SECS). The outer timeout here is a safety net
-      // that catches hangs *outside* Spirc init (e.g. OAuth callback never arriving,
-      // blocking I/O in credential retrieval). Set it above the internal timeout.
       let internal_timeout_secs: u64 = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -656,8 +657,6 @@ of the app. Beware that this comes at a CPU cost!",
             "native streaming player initialized as '{}'",
             p.device_name()
           );
-          // Note: We don't activate() here - that's handled by AutoSelectStreamingDevice
-          // which respects the user's saved device preference (e.g., spotifyd)
           Some(Arc::new(p))
         }
         Ok(Ok(Err(e))) => {
@@ -706,8 +705,6 @@ of the app. Beware that this comes at a CPU cost!",
       .map(|p| p.device_name().to_string());
 
     // Create shared atomic for real-time position updates from native player
-    // This avoids lock contention - the player event handler can update position
-    // without needing to acquire the app mutex
     #[cfg(any(feature = "streaming", all(feature = "mpris", target_os = "linux")))]
     let shared_position = Arc::new(AtomicU64::new(0));
     #[cfg(feature = "streaming")]
@@ -730,8 +727,7 @@ of the app. Beware that this comes at a CPU cost!",
     let (streaming_recovery_tx, streaming_recovery_rx) =
       tokio::sync::mpsc::unbounded_channel::<player::StreamingRecoveryRequest>();
 
-    // Initialize MPRIS D-Bus integration for desktop media control
-    // This registers spotatui as a controllable media player on the session bus
+    // ── MPRIS (Linux) ────────────────────────────────────────────────
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     let mpris_manager: Option<Arc<mpris::MprisManager>> = match mpris::MprisManager::new() {
       Ok(mgr) => {
@@ -747,15 +743,13 @@ of the app. Beware that this comes at a CPU cost!",
       }
     };
 
-    // Store MPRIS manager reference in App for emitting Seeked signals from native seeks
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     {
       let mut app_mut = app.lock().await;
       app_mut.mpris_manager = mpris_manager.clone();
     }
 
-    // Initialize macOS Now Playing integration for media key control
-    // This registers with MPRemoteCommandCenter for media key events
+    // ── macOS Now Playing ────────────────────────────────────────────
     #[cfg(all(feature = "macos-media", target_os = "macos"))]
     let macos_media_manager: Option<Arc<macos_media::MacMediaManager>> =
       if streaming_player.is_some() {
@@ -776,6 +770,7 @@ of the app. Beware that this comes at a CPU cost!",
         None
       };
 
+    // ── Discord RPC ──────────────────────────────────────────────────
     #[cfg(feature = "discord-rpc")]
     let discord_rpc_manager: DiscordRpcHandle = if user_config.behavior.enable_discord_rpc {
       match resolve_discord_app_id(&user_config)
@@ -797,7 +792,7 @@ of the app. Beware that this comes at a CPU cost!",
     #[cfg(not(feature = "discord-rpc"))]
     let discord_rpc_manager: DiscordRpcHandle = None;
 
-    // Spawn MPRIS event handler to process external control requests (media keys, playerctl)
+    // ── Spawn MPRIS event handler ────────────────────────────────────
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     if let Some(ref mpris) = mpris_manager {
       if let Some(event_rx) = mpris.take_event_rx() {
@@ -820,7 +815,7 @@ of the app. Beware that this comes at a CPU cost!",
       }
     }
 
-    // Spawn macOS media event handler to process external control requests (media keys, Control Center)
+    // ── Spawn macOS media event handler ──────────────────────────────
     #[cfg(all(feature = "macos-media", target_os = "macos"))]
     if let Some(ref macos_media) = macos_media_manager {
       if let Some(event_rx) = macos_media.take_event_rx() {
@@ -831,8 +826,7 @@ of the app. Beware that this comes at a CPU cost!",
       }
     }
 
-    // Keep Now Playing metadata (including artwork URL from Web API playback state)
-    // synchronized with Control Center.
+    // ── Keep macOS Now Playing metadata synced ───────────────────────
     #[cfg(all(feature = "macos-media", target_os = "macos"))]
     if let Some(ref macos_media) = macos_media_manager {
       let macos_media_for_metadata = Arc::clone(macos_media);
@@ -862,7 +856,7 @@ of the app. Beware that this comes at a CPU cost!",
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     let mpris_for_ui = mpris_manager.clone();
 
-    // Spawn player event listener (updates app state from native player events)
+    // ── Spawn player event listener ──────────────────────────────────
     #[cfg(feature = "streaming")]
     if let Some(ref player) = streaming_player {
       player::spawn_player_event_handler(player::PlayerEventContext {
@@ -895,6 +889,7 @@ of the app. Beware that this comes at a CPU cost!",
       });
     }
 
+    // ── Spawn network event handler ──────────────────────────────────
     let cloned_app = Arc::clone(&app);
     info!("spawning spotify network event handler");
     tokio::spawn(async move {
@@ -982,7 +977,8 @@ of the app. Beware that this comes at a CPU cost!",
 
       start_tokio(sync_io_rx, &mut network).await;
     });
-    // The UI must run in the "main" thread
+
+    // ── Launch the terminal UI ───────────────────────────────────────
     info!("starting terminal ui event loop");
     #[cfg(feature = "streaming")]
     let shared_pos_for_start_ui: Option<Arc<AtomicU64>> = Some(shared_position_for_ui);
@@ -1022,7 +1018,7 @@ async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Ne
 /// Handle MPRIS events from external clients (media keys, playerctl, etc.)
 /// Routes to native streaming player when available, or dispatches IoEvents as fallback
 #[cfg(all(feature = "mpris", target_os = "linux"))]
-async fn handle_mpris_events(
+pub async fn handle_mpris_events(
   mut event_rx: tokio::sync::mpsc::UnboundedReceiver<mpris::MprisEvent>,
   #[cfg(feature = "streaming")] streaming_player: Option<Arc<player::StreamingPlayer>>,
   shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
@@ -1216,7 +1212,7 @@ async fn handle_mpris_events(
 /// Handle macOS media events from external sources (media keys, Control Center, AirPods, etc.)
 /// Routes control requests to the native streaming player
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
-async fn handle_macos_media_events(
+pub async fn handle_macos_media_events(
   mut event_rx: tokio::sync::mpsc::UnboundedReceiver<macos_media::MacMediaEvent>,
   app: Arc<Mutex<App>>,
   shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
