@@ -101,24 +101,6 @@ pub enum GuiCommand {
   TransferPlayback { device_id: String, play: bool },
 }
 
-pub struct GuiFacade<'a> {
-  app: &'a mut App,
-}
-
-impl<'a> GuiFacade<'a> {
-  pub fn new(app: &'a mut App) -> Self {
-    Self { app }
-  }
-
-  pub fn snapshot(&self) -> GuiSnapshot {
-    snapshot_app(self.app)
-  }
-
-  pub fn dispatch(&mut self, command: GuiCommand) {
-    dispatch_gui_command(self.app, command);
-  }
-}
-
 pub fn snapshot_app(app: &App) -> GuiSnapshot {
   GuiSnapshot {
     playback: GuiPlayback::from_app(app),
@@ -138,7 +120,7 @@ pub fn dispatch_gui_command(app: &mut App, command: GuiCommand) {
     GuiCommand::Play => IoEvent::StartPlayback(None, None, None),
     GuiCommand::Pause => IoEvent::PausePlayback,
     GuiCommand::TogglePlayback => {
-      if GuiPlayback::from_app(app).is_playing {
+      if is_app_playing(app) {
         IoEvent::PausePlayback
       } else {
         IoEvent::StartPlayback(None, None, None)
@@ -606,9 +588,6 @@ impl SpotatuiSession {
 
     info!("spawning spotify network event handler");
     tokio::spawn(async move {
-      #[cfg(feature = "streaming")]
-      let mut network = Network::new(spotify, client_config, &app, final_token_cache_path);
-      #[cfg(not(feature = "streaming"))]
       let mut network = Network::new(spotify, client_config, &app, final_token_cache_path);
 
       // Auto-select the saved playback device when available
@@ -708,26 +687,11 @@ impl SpotatuiSession {
     snapshot_app(&app)
   }
 
-  /// Send a `GuiCommand` to the app via its io channel.
-  pub fn dispatch(&self, command: GuiCommand) {
-    let io_event = match command {
-      GuiCommand::RefreshPlayback => IoEvent::GetCurrentPlayback,
-      GuiCommand::RefreshDevices => IoEvent::GetDevices,
-      GuiCommand::Play => IoEvent::StartPlayback(None, None, None),
-      GuiCommand::Pause => IoEvent::PausePlayback,
-      GuiCommand::TogglePlayback => {
-        // Best-effort: check current state. The handler will determine actual state.
-        IoEvent::StartPlayback(None, None, None)
-      }
-      GuiCommand::NextTrack => IoEvent::NextTrack,
-      GuiCommand::PreviousTrack => IoEvent::PreviousTrack,
-      GuiCommand::Seek { position_ms } => IoEvent::Seek(position_ms),
-      GuiCommand::ChangeVolume { volume_percent } => IoEvent::ChangeVolume(volume_percent),
-      GuiCommand::TransferPlayback { device_id, play } => {
-        IoEvent::TransferPlaybackToDevice(device_id, play)
-      }
-    };
-    let _ = self.io_tx.send(io_event);
+  /// Send a `GuiCommand` to the app. Delegates to `dispatch_gui_command` so
+  /// that toggle logic correctly reads the current playing state.
+  pub async fn dispatch(&self, command: GuiCommand) {
+    let mut app = self.app.lock().await;
+    dispatch_gui_command(&mut app, command);
   }
 
   /// Get a reference to the io event sender (for external dispatch).
@@ -786,6 +750,17 @@ async fn start_network_event_loop(
 // ---------------------------------------------------------------------------
 // Private helpers for GUI snapshot types
 // ---------------------------------------------------------------------------
+
+fn is_app_playing(app: &App) -> bool {
+  let context = app.current_playback_context.as_ref();
+  if app.is_streaming_active && app.native_track_info.is_some() {
+    app
+      .native_is_playing
+      .unwrap_or_else(|| context.map(|c| c.is_playing).unwrap_or(false))
+  } else {
+    context.map(|c| c.is_playing).unwrap_or(false)
+  }
+}
 
 impl GuiPlayback {
   pub fn from_app(app: &App) -> Self {
@@ -935,7 +910,9 @@ mod tests {
   use super::*;
   use crate::core::app::NativeTrackInfo;
   use crate::core::user_config::UserConfig;
-  use rspotify::model::{DevicePayload, DeviceType};
+  use chrono::Utc;
+  use rspotify::model::context::{Actions, CurrentPlaybackContext};
+  use rspotify::model::{CurrentlyPlayingType, Device, DevicePayload, DeviceType};
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
@@ -1000,6 +977,51 @@ mod tests {
     match rx.try_recv().unwrap() {
       IoEvent::Seek(position_ms) => assert_eq!(position_ms, 777),
       _ => panic!("expected seek event"),
+    }
+  }
+
+  #[test]
+  fn toggle_playback_uses_current_playing_state() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.current_playback_context = Some(playback_context(true));
+
+    dispatch_gui_command(&mut app, GuiCommand::TogglePlayback);
+
+    match rx.try_recv().unwrap() {
+      IoEvent::PausePlayback => {}
+      _ => panic!("expected pause event"),
+    }
+
+    app.current_playback_context = Some(playback_context(false));
+    dispatch_gui_command(&mut app, GuiCommand::TogglePlayback);
+
+    match rx.try_recv().unwrap() {
+      IoEvent::StartPlayback(None, None, None) => {}
+      _ => panic!("expected start event"),
+    }
+  }
+
+  fn playback_context(is_playing: bool) -> CurrentPlaybackContext {
+    CurrentPlaybackContext {
+      device: Device {
+        id: Some("device-1".to_string()),
+        is_active: true,
+        is_private_session: false,
+        is_restricted: false,
+        name: "Desk".to_string(),
+        _type: DeviceType::Computer,
+        volume_percent: Some(55),
+      },
+      repeat_state: rspotify::model::enums::RepeatState::Off,
+      shuffle_state: false,
+      context: None,
+      timestamp: Utc::now(),
+      progress: None,
+      is_playing,
+      item: None,
+      currently_playing_type: CurrentlyPlayingType::Track,
+      actions: Actions::default(),
     }
   }
 }

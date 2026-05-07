@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   applyLocalCommand,
+  asRecord,
   clamp,
   createMockSnapshot,
   type CoverStyle,
@@ -148,7 +149,7 @@ export default function App() {
 
   const searchResults = useMemo(
     () => searchTracks(snapshot, searchQuery),
-    [searchQuery, snapshot],
+    [searchQuery, snapshot.library],
   );
 
   const selectedPlaylist = useMemo(() => {
@@ -882,17 +883,17 @@ function totalDuration(tracks: Track[]): number {
 }
 
 function snapshotStatusMessage(snapshot: unknown): string | null {
-  const source = recordValue(snapshot);
-  const status = recordValue(source?.status);
+  const source = asRecord(snapshot);
+  const status = asRecord(source?.status);
   const message = status?.message;
 
   return typeof message === "string" && message.trim() ? message : null;
 }
 
 function hasPlaybackTrack(snapshot: unknown): boolean {
-  const source = recordValue(snapshot);
-  const playback = recordValue(source?.playback);
-  const track = recordValue(playback?.track);
+  const source = asRecord(snapshot);
+  const playback = asRecord(source?.playback);
+  const track = asRecord(playback?.track);
 
   if (!track) {
     return false;
@@ -901,14 +902,6 @@ function hasPlaybackTrack(snapshot: unknown): boolean {
   // A track is considered present if it has a non-empty title.
   const title = track.title;
   return typeof title === "string" && title.trim().length > 0;
-}
-
-function recordValue(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-
-  return value as Record<string, unknown>;
 }
 
 function toBackendCommand(

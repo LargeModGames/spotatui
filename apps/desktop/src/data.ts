@@ -304,9 +304,7 @@ export function applyLocalCommand(
       };
     }
     case "play_track": {
-      const nextTrack = allTracks(snapshot).find((track) => {
-        return track.id === payload.trackId || track.uri === payload.uri;
-      });
+      const nextTrack = findTrack(snapshot, payload.trackId, payload.uri);
 
       if (!nextTrack) {
         return snapshot;
@@ -359,14 +357,36 @@ export function applyLocalCommand(
   }
 }
 
-function allTracks(snapshot: DesktopSnapshot): Track[] {
-  const byId = new Map<string, Track>();
-  [snapshot.track, ...snapshot.library, ...snapshot.queue, ...snapshot.recentlyPlayed].forEach(
-    (track) => {
-      byId.set(track.id, track);
-    },
-  );
-  return [...byId.values()];
+function findTrack(
+  snapshot: DesktopSnapshot,
+  trackId?: string,
+  uri?: string,
+): Track | undefined {
+  const matches = (track: Track) => track.id === trackId || track.uri === uri;
+
+  if (matches(snapshot.track)) {
+    return snapshot.track;
+  }
+
+  for (const track of snapshot.library) {
+    if (matches(track)) {
+      return track;
+    }
+  }
+
+  for (const track of snapshot.queue) {
+    if (matches(track)) {
+      return track;
+    }
+  }
+
+  for (const track of snapshot.recentlyPlayed) {
+    if (matches(track)) {
+      return track;
+    }
+  }
+
+  return undefined;
 }
 
 export function normalizeSnapshot(
@@ -576,7 +596,7 @@ function normalizeList<T>(
   const list = Array.isArray(rawList) ? rawList : null;
 
   if (!list || list.length === 0) {
-    return fallback.map((item) => normalizeItem(item, item));
+    return fallback;
   }
 
   return list.map((item, index) => {
@@ -585,7 +605,7 @@ function normalizeList<T>(
   });
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return null;
   }
