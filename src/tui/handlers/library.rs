@@ -1,6 +1,6 @@
 use super::common_key_events;
-use crate::core::app::{ActiveBlock, App, RouteId, LIBRARY_OPTIONS};
-use crate::infra::network::IoEvent;
+use crate::core::app::{App, LIBRARY_OPTIONS};
+use crate::tui::actions;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -32,39 +32,7 @@ pub fn handler(key: Key, app: &mut App) {
     }
     // `library` should probably be an array of structs with enums rather than just using indexes
     // like this
-    Key::Enter => match app.library.selected_index {
-      0 => {
-        app.push_navigation_stack(RouteId::Discover, ActiveBlock::Discover);
-      }
-      // Recently Played,
-      1 => {
-        app.dispatch(IoEvent::GetRecentlyPlayed);
-        app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
-      }
-      // Liked Songs,
-      2 => {
-        app.reset_saved_tracks_view();
-        app.dispatch(IoEvent::GetCurrentSavedTracks(None));
-        app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-      }
-      // Albums,
-      3 => {
-        app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None));
-        app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
-      }
-      //  Artists,
-      4 => {
-        app.dispatch(IoEvent::GetFollowedArtists(None));
-        app.push_navigation_stack(RouteId::Artists, ActiveBlock::Artists);
-      }
-      // Podcasts,
-      5 => {
-        app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
-        app.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
-      }
-      // This is required because Rust can't tell if this pattern in exhaustive
-      _ => {}
-    },
+    Key::Enter => actions::open_library_item(app, app.library.selected_index),
     _ => (),
   };
 }

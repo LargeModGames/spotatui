@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod banner;
 #[cfg(feature = "cover-art")]
 pub mod cover_art;

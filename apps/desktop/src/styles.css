@@ -603,6 +603,11 @@ button {
   border-radius: 0;
 }
 
+.track-table-row.is-active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .track-table-row > span {
   min-width: 0;
   overflow: hidden;
@@ -841,6 +846,11 @@ input[type="range"]::-moz-range-thumb {
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.12),
     0 18px 38px rgba(0, 0, 0, 0.32);
+}
+
+.cover-art.has-image {
+  background-position: center;
+  background-size: cover;
 }
 
 .cover-art::after {

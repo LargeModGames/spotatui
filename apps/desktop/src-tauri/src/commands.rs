@@ -7,7 +7,7 @@ const BACKEND_MODE: &str = "spotatui-library";
 const BACKEND_MODE: &str = "stub";
 
 #[cfg(feature = "spotatui-backend")]
-use spotatui::gui::{dispatch_gui_command, snapshot_app, GuiCommand, GuiSnapshot};
+use spotatui::gui::{GuiAction, GuiCommand, GuiSnapshot};
 
 #[cfg(not(feature = "spotatui-backend"))]
 mod fallback {
@@ -83,6 +83,9 @@ mod fallback {
 #[cfg(not(feature = "spotatui-backend"))]
 use fallback::{GuiCommand, GuiSnapshot};
 
+#[cfg(not(feature = "spotatui-backend"))]
+type GuiAction = Value;
+
 #[cfg(feature = "spotatui-backend")]
 use crate::GuiState;
 
@@ -102,8 +105,7 @@ pub struct DispatchResult {
 #[cfg(feature = "spotatui-backend")]
 #[tauri::command]
 pub async fn get_snapshot(state: tauri::State<'_, GuiState>) -> Result<GuiSnapshot, String> {
-  let app = state.app.lock().await;
-  Ok(snapshot_app(&app))
+  state.snapshot().await
 }
 
 #[cfg(feature = "spotatui-backend")]
@@ -112,14 +114,29 @@ pub async fn dispatch_command(
   state: tauri::State<'_, GuiState>,
   command: GuiCommand,
 ) -> Result<DispatchResult, String> {
-  let mut app = state.app.lock().await;
-  dispatch_gui_command(&mut app, command.clone());
+  state.dispatch(command.clone()).await?;
 
   Ok(DispatchResult {
     backend: BACKEND_MODE,
     command: serde_json::to_value(&command).map_err(|e| e.to_string())?,
     accepted: true,
     message: "Command dispatched",
+  })
+}
+
+#[cfg(feature = "spotatui-backend")]
+#[tauri::command]
+pub async fn dispatch_action(
+  state: tauri::State<'_, GuiState>,
+  action: GuiAction,
+) -> Result<DispatchResult, String> {
+  state.dispatch(action.clone()).await?;
+
+  Ok(DispatchResult {
+    backend: BACKEND_MODE,
+    command: serde_json::to_value(&action).map_err(|e| e.to_string())?,
+    accepted: true,
+    message: "Action dispatched",
   })
 }
 
@@ -144,6 +161,18 @@ pub async fn dispatch_command(command: GuiCommand) -> Result<DispatchResult, Str
     accepted: false,
     message:
       "Command received by the desktop shell; stateful backend dispatch is pending integration.",
+  })
+}
+
+#[cfg(not(feature = "spotatui-backend"))]
+#[tauri::command]
+pub async fn dispatch_action(action: GuiAction) -> Result<DispatchResult, String> {
+  Ok(DispatchResult {
+    backend: BACKEND_MODE,
+    command: action,
+    accepted: false,
+    message:
+      "Action received by the desktop shell; stateful backend dispatch is pending integration.",
   })
 }
 

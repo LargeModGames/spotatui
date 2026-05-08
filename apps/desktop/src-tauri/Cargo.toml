@@ -25,7 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["sync"] }
-spotatui = { path = "../../..", default-features = false, features = ["telemetry"], optional = true }
+spotatui = { path = "../../..", default-features = false, features = ["telemetry", "streaming"], optional = true }
 
 [features]
 default = ["custom-protocol", "spotatui-backend"]
