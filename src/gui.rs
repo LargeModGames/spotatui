@@ -1,6 +1,7 @@
 use crate::core::app::{
-  ActiveBlock, App, CreatePlaylistFocus, CreatePlaylistStage, PlaylistFolderItem, RouteId,
-  SearchResultBlock, SettingValue, TrackTableContext, LIBRARY_OPTIONS,
+  ActiveBlock, AlbumTableContext, AnnouncementLevel, App, ArtistBlock, CreatePlaylistFocus,
+  CreatePlaylistStage, DialogContext, EpisodeTableContext, PlaylistFolderItem, RouteId,
+  SearchResultBlock, SettingValue, SettingsCategory, TrackTableContext, LIBRARY_OPTIONS,
 };
 use crate::core::auth;
 use crate::core::config::ClientConfig;
@@ -31,7 +32,7 @@ use rspotify::model::{
   idtypes::{EpisodeId, TrackId},
   page::{CursorBasedPage, Page},
   playlist::SimplifiedPlaylist,
-  show::{Show, SimplifiedShow},
+  show::{Show, SimplifiedEpisode, SimplifiedShow},
   track::{FullTrack, SimplifiedTrack},
   Device, DeviceType, PlayHistory, PlayableItem, RepeatState,
 };
@@ -48,7 +49,7 @@ use tokio::sync::Mutex;
 // GUI snapshot/command types (used by both TUI and Tauri frontends)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct GuiSnapshot {
   pub playback: GuiPlayback,
   pub devices: Vec<GuiDevice>,
@@ -59,17 +60,26 @@ pub struct GuiSnapshot {
   pub playlist_folders: Vec<GuiPlaylistFolderEntry>,
   pub track_table: GuiTrackTable,
   pub queue: Vec<GuiTrack>,
+  pub queue_view: GuiQueueView,
   pub recently_played: Vec<GuiTrack>,
   pub search: GuiSearchResults,
+  pub home: GuiHome,
+  pub artist_detail: GuiArtistDetail,
+  pub album_tracks: GuiAlbumTracks,
   pub albums: GuiAlbumList,
   pub artists: GuiArtistList,
   pub podcasts: GuiPodcastList,
+  pub podcast_episodes: GuiPodcastEpisodes,
   pub lyrics: GuiLyrics,
   pub discover: GuiDiscover,
+  pub help: GuiHelp,
+  pub analysis: GuiAnalysis,
+  pub cover_art: GuiCoverArt,
   pub settings: GuiSettings,
   pub dialog: GuiDialog,
   pub sort: GuiSort,
   pub party: GuiParty,
+  pub announcement: GuiAnnouncement,
   pub create_playlist: GuiCreatePlaylist,
 }
 
@@ -95,6 +105,7 @@ pub struct GuiTrack {
   pub album: Option<String>,
   pub image_url: Option<String>,
   pub duration_ms: u32,
+  pub saved: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,18 +127,61 @@ pub struct GuiStatus {
   pub active_block: String,
   pub is_streaming_active: bool,
   pub route_id: String,
+  pub content_route_id: String,
   pub hovered_block: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuiIndexedBlock {
+  TrackTable,
+  SearchTracks,
+  SearchAlbums,
+  SearchArtists,
+  SearchPlaylists,
+  SearchShows,
+  SavedAlbums,
+  SavedArtists,
+  SavedPodcasts,
+  AlbumTracks,
+  ArtistTopTracks,
+  ArtistAlbums,
+  ArtistRelatedArtists,
+  PodcastEpisodes,
+  RecentlyPlayed,
+  DiscoverTopTracks,
+  DiscoverArtistsMix,
+  Queue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuiSortContextId {
+  PlaylistTracks,
+  SavedAlbums,
+  SavedArtists,
+  RecentlyPlayed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuiAction {
   OpenHome,
-  OpenSearch { query: Option<String> },
-  OpenLibraryItem { index: usize },
+  OpenSearch {
+    query: Option<String>,
+  },
+  OpenLibraryItem {
+    index: usize,
+  },
   OpenSavedTracks,
-  OpenPlaylist { playlist_id: String },
+  OpenPlaylist {
+    playlist_id: String,
+  },
   OpenQueue,
+  OpenHelp,
+  OpenDevices,
+  OpenCoverArt,
+  OpenAudioAnalysis,
   OpenSettings,
   OpenParty,
   OpenLyrics,
@@ -142,14 +196,51 @@ pub enum GuiAction {
   NextTrack,
   PreviousTrack,
   ForcePreviousTrack,
-  Seek { position_ms: u32 },
-  ChangeVolume { volume_percent: u8 },
+  Seek {
+    position_ms: u32,
+  },
+  ChangeVolume {
+    volume_percent: u8,
+  },
   ToggleShuffle,
   ToggleRepeat,
-  TransferPlayback { device_id: String, play: bool },
-  Search { query: String },
-  SelectTrack { index: usize },
-  MoveTrackSelection { delta: i32 },
+  TransferPlayback {
+    device_id: String,
+    play: bool,
+  },
+  Search {
+    query: String,
+  },
+  OpenIndexedItem {
+    block: GuiIndexedBlock,
+    index: usize,
+  },
+  PlayIndexedItem {
+    block: GuiIndexedBlock,
+    index: usize,
+  },
+  QueueIndexedItem {
+    block: GuiIndexedBlock,
+    index: usize,
+  },
+  ToggleSaveIndexedItem {
+    block: GuiIndexedBlock,
+    index: usize,
+  },
+  AddIndexedItemToPlaylist {
+    block: GuiIndexedBlock,
+    index: usize,
+  },
+  RecommendIndexedItem {
+    block: GuiIndexedBlock,
+    index: usize,
+  },
+  SelectTrack {
+    index: usize,
+  },
+  MoveTrackSelection {
+    delta: i32,
+  },
   TrackTableNextPage,
   TrackTablePreviousPage,
   PlaySelectedTrack,
@@ -159,12 +250,65 @@ pub enum GuiAction {
   OpenRemoveSelectedTrackFromPlaylist,
   PlayRandomTrack,
   RecommendationsForSelectedTrack,
-  AddItemToQueue { uri: String },
-  ToggleSaveTrack { uri: String },
-  StartParty { control_mode: ControlMode },
-  JoinParty { code: String, name: String },
+  AddItemToQueue {
+    uri: String,
+  },
+  ToggleSaveTrack {
+    uri: String,
+  },
+  OpenSortMenu {
+    context: GuiSortContextId,
+  },
+  CloseSortMenu,
+  SelectSortOption {
+    index: usize,
+  },
+  ApplySortOption {
+    index: Option<usize>,
+  },
+  SelectQueueItem {
+    index: usize,
+  },
+  DialogSelectIndex {
+    index: usize,
+  },
+  DialogSetConfirm {
+    confirm: bool,
+  },
+  DialogConfirm,
+  DialogCancel,
+  DismissAnnouncement,
+  SelectSettingsCategory {
+    index: usize,
+  },
+  SelectSettingsItem {
+    index: usize,
+  },
+  ActivateSetting,
+  UpdateSettingsEditBuffer {
+    value: String,
+  },
+  CommitSettingsEdit,
+  CancelSettingsEdit,
+  SaveSettings,
+  ResolveSettingsUnsavedPrompt {
+    save: bool,
+  },
+  CycleVisualizerStyle,
+  StartParty {
+    control_mode: ControlMode,
+  },
+  JoinParty {
+    code: String,
+    name: String,
+  },
+  SetPartyControlMode {
+    control_mode: ControlMode,
+  },
   LeaveParty,
-  PartyPlaybackCommand { action: PlaybackAction },
+  PartyPlaybackCommand {
+    action: PlaybackAction,
+  },
 }
 
 pub type GuiCommand = GuiAction;
@@ -244,11 +388,48 @@ pub struct GuiSearchResults {
   pub query: String,
   pub selected_block: String,
   pub hovered_block: String,
+  pub selected_track_index: Option<usize>,
+  pub selected_album_index: Option<usize>,
+  pub selected_artist_index: Option<usize>,
+  pub selected_playlist_index: Option<usize>,
+  pub selected_show_index: Option<usize>,
   pub tracks: Vec<GuiTrack>,
   pub albums: Vec<GuiAlbum>,
   pub artists: Vec<GuiArtist>,
   pub playlists: Vec<GuiPlaylist>,
   pub shows: Vec<GuiShow>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiHome {
+  pub banner: Vec<String>,
+  pub counter_message: String,
+  pub changelog_lines: Vec<String>,
+  pub scroll: u16,
+  pub log_path: String,
+  pub report_url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiArtistDetail {
+  pub artist: Option<GuiArtist>,
+  pub selected_block: String,
+  pub hovered_block: String,
+  pub top_tracks: Vec<GuiTrack>,
+  pub selected_top_track_index: usize,
+  pub albums: Vec<GuiAlbum>,
+  pub selected_album_index: usize,
+  pub related_artists: Vec<GuiArtist>,
+  pub selected_related_artist_index: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiAlbumTracks {
+  pub album: Option<GuiAlbum>,
+  pub context: String,
+  pub tracks: Vec<GuiTrack>,
+  pub selected_index: usize,
+  pub page: GuiPageInfo,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +459,7 @@ pub struct GuiAlbum {
   pub image_url: Option<String>,
   pub release_date: Option<String>,
   pub total_tracks: Option<u32>,
+  pub saved: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +469,7 @@ pub struct GuiArtist {
   pub name: String,
   pub image_url: Option<String>,
   pub followers: Option<u32>,
+  pub saved: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +479,69 @@ pub struct GuiShow {
   pub name: String,
   pub publisher: Option<String>,
   pub description: Option<String>,
+  pub image_url: Option<String>,
+  pub saved: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiEpisode {
+  pub id: Option<String>,
+  pub uri: Option<String>,
+  pub title: String,
+  pub show: String,
+  pub description: Option<String>,
+  pub release_date: Option<String>,
+  pub image_url: Option<String>,
+  pub duration_ms: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiPodcastEpisodes {
+  pub show: Option<GuiShow>,
+  pub context: String,
+  pub episodes: Vec<GuiEpisode>,
+  pub selected_index: usize,
+  pub page: GuiPageInfo,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiQueueView {
+  pub current: Option<GuiTrack>,
+  pub items: Vec<GuiTrack>,
+  pub selected_index: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiHelp {
+  pub docs: Vec<GuiHelpItem>,
+  pub page: u32,
+  pub offset: u32,
+  pub page_size: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiHelpItem {
+  pub description: String,
+  pub binding: String,
+  pub context: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GuiAnalysis {
+  pub audio_capture_active: bool,
+  pub visualizer_style: String,
+  pub tick_rate_ms: u64,
+  pub peak: Option<f32>,
+  pub bands: Vec<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiCoverArt {
+  pub track: Option<GuiTrack>,
+  pub device_name: Option<String>,
+  pub mode: String,
+  pub enabled: bool,
+  pub forced: bool,
   pub image_url: Option<String>,
 }
 
@@ -323,10 +569,13 @@ pub struct GuiDiscover {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuiSettings {
   pub category: String,
+  pub category_index: usize,
+  pub categories: Vec<String>,
   pub selected_index: usize,
   pub edit_mode: bool,
   pub edit_buffer: String,
   pub unsaved_prompt_visible: bool,
+  pub unsaved_prompt_save_selected: bool,
   pub items: Vec<GuiSettingItem>,
 }
 
@@ -342,10 +591,16 @@ pub struct GuiSettingItem {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuiDialog {
   pub kind: Option<String>,
+  pub title: Option<String>,
   pub message: Option<String>,
   pub confirm: bool,
+  pub confirm_label: Option<String>,
+  pub cancel_label: Option<String>,
   pub pending_track_name: Option<String>,
   pub playlist_name: Option<String>,
+  pub playlist_options: Vec<GuiDialogOption>,
+  pub selected_index: usize,
+  pub effective_open_settings_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -353,6 +608,26 @@ pub struct GuiSort {
   pub visible: bool,
   pub selected_index: usize,
   pub context: Option<String>,
+  pub title: Option<String>,
+  pub current_field: Option<String>,
+  pub current_order: Option<String>,
+  pub options: Vec<GuiSortOption>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiDialogOption {
+  pub id: String,
+  pub label: String,
+  pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiSortOption {
+  pub field: String,
+  pub label: String,
+  pub shortcut: Option<String>,
+  pub selected: bool,
+  pub active: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +638,23 @@ pub struct GuiParty {
   pub host_name: Option<String>,
   pub guests: Vec<String>,
   pub control_mode: Option<String>,
+  pub code_input: String,
+  pub join_name: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiAnnouncement {
+  pub active: Option<GuiAnnouncementItem>,
+  pub pending: Vec<GuiAnnouncementItem>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuiAnnouncementItem {
+  pub id: String,
+  pub title: String,
+  pub body: String,
+  pub level: String,
+  pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,17 +683,26 @@ pub fn snapshot_app(app: &App) -> GuiSnapshot {
     playlist_folders: playlist_folders_from_app(app),
     track_table: GuiTrackTable::from_app(app),
     queue: queue_from_app(app),
+    queue_view: GuiQueueView::from_app(app),
     recently_played: recently_played_from_app(app),
     search: GuiSearchResults::from_app(app),
+    home: GuiHome::from_app(app),
+    artist_detail: GuiArtistDetail::from_app(app),
+    album_tracks: GuiAlbumTracks::from_app(app),
     albums: GuiAlbumList::from_app(app),
     artists: GuiArtistList::from_app(app),
     podcasts: GuiPodcastList::from_app(app),
+    podcast_episodes: GuiPodcastEpisodes::from_app(app),
     lyrics: GuiLyrics::from_app(app),
     discover: GuiDiscover::from_app(app),
+    help: GuiHelp::from_app(app),
+    analysis: GuiAnalysis::from_app(app),
+    cover_art: GuiCoverArt::from_app(app),
     settings: GuiSettings::from_app(app),
     dialog: GuiDialog::from_app(app),
     sort: GuiSort::from_app(app),
     party: GuiParty::from_app(app),
+    announcement: GuiAnnouncement::from_app(app),
     create_playlist: GuiCreatePlaylist::from_app(app),
   }
 }
@@ -420,6 +721,10 @@ pub fn dispatch_gui_action(app: &mut App, action: GuiAction) {
       crate::tui::actions::select_playlist_by_id(app, &playlist_id);
     }
     GuiAction::OpenQueue => crate::tui::actions::open_queue(app),
+    GuiAction::OpenHelp => crate::tui::actions::open_help(app),
+    GuiAction::OpenDevices => crate::tui::actions::open_devices(app),
+    GuiAction::OpenCoverArt => crate::tui::actions::open_cover_art(app),
+    GuiAction::OpenAudioAnalysis => crate::tui::actions::open_audio_analysis(app),
     GuiAction::OpenSettings => crate::tui::actions::open_settings(app),
     GuiAction::OpenParty => crate::tui::actions::open_party(app),
     GuiAction::OpenLyrics => crate::tui::actions::open_lyrics(app),
@@ -452,6 +757,24 @@ pub fn dispatch_gui_action(app: &mut App, action: GuiAction) {
       app.dispatch(IoEvent::GetSearchResults(query, app.get_user_country()));
       app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
     }
+    GuiAction::OpenIndexedItem { block, index } => {
+      crate::tui::actions::open_indexed_item(app, block, index);
+    }
+    GuiAction::PlayIndexedItem { block, index } => {
+      crate::tui::actions::play_indexed_item(app, block, index);
+    }
+    GuiAction::QueueIndexedItem { block, index } => {
+      crate::tui::actions::queue_indexed_item(app, block, index);
+    }
+    GuiAction::ToggleSaveIndexedItem { block, index } => {
+      crate::tui::actions::toggle_save_indexed_item(app, block, index);
+    }
+    GuiAction::AddIndexedItemToPlaylist { block, index } => {
+      crate::tui::actions::add_indexed_item_to_playlist(app, block, index);
+    }
+    GuiAction::RecommendIndexedItem { block, index } => {
+      crate::tui::actions::recommend_indexed_item(app, block, index);
+    }
     GuiAction::SelectTrack { index } => crate::tui::actions::select_track_table_row(app, index),
     GuiAction::MoveTrackSelection { delta } => {
       crate::tui::actions::move_track_selection(app, delta)
@@ -481,8 +804,44 @@ pub fn dispatch_gui_action(app: &mut App, action: GuiAction) {
         app.dispatch(IoEvent::ToggleSaveTrack(playable_id));
       }
     }
+    GuiAction::OpenSortMenu { context } => crate::tui::actions::open_sort_menu(app, context),
+    GuiAction::CloseSortMenu => crate::tui::actions::close_sort_menu(app),
+    GuiAction::SelectSortOption { index } => crate::tui::actions::select_sort_option(app, index),
+    GuiAction::ApplySortOption { index } => {
+      crate::tui::actions::apply_sort_option(app, index);
+    }
+    GuiAction::SelectQueueItem { index } => crate::tui::actions::select_queue_item(app, index),
+    GuiAction::DialogSelectIndex { index } => {
+      crate::tui::actions::select_dialog_index(app, index);
+    }
+    GuiAction::DialogSetConfirm { confirm } => {
+      crate::tui::actions::set_dialog_confirm(app, confirm)
+    }
+    GuiAction::DialogConfirm => crate::tui::actions::confirm_dialog(app),
+    GuiAction::DialogCancel => crate::tui::actions::cancel_dialog(app),
+    GuiAction::DismissAnnouncement => crate::tui::actions::dismiss_announcement(app),
+    GuiAction::SelectSettingsCategory { index } => {
+      crate::tui::actions::select_settings_category(app, index);
+    }
+    GuiAction::SelectSettingsItem { index } => {
+      crate::tui::actions::select_settings_item(app, index);
+    }
+    GuiAction::ActivateSetting => crate::tui::actions::activate_setting(app),
+    GuiAction::UpdateSettingsEditBuffer { value } => {
+      crate::tui::actions::update_settings_edit_buffer(app, value);
+    }
+    GuiAction::CommitSettingsEdit => crate::tui::actions::commit_settings_edit(app),
+    GuiAction::CancelSettingsEdit => crate::tui::actions::cancel_settings_edit(app),
+    GuiAction::SaveSettings => crate::tui::actions::save_settings(app),
+    GuiAction::ResolveSettingsUnsavedPrompt { save } => {
+      crate::tui::actions::resolve_settings_unsaved_prompt(app, save);
+    }
+    GuiAction::CycleVisualizerStyle => crate::tui::actions::cycle_visualizer_style(app),
     GuiAction::StartParty { control_mode } => crate::tui::actions::start_party(app, control_mode),
     GuiAction::JoinParty { code, name } => crate::tui::actions::join_party(app, code, name),
+    GuiAction::SetPartyControlMode { control_mode } => {
+      app.dispatch(IoEvent::SetPartyControlMode(control_mode));
+    }
     GuiAction::LeaveParty => crate::tui::actions::leave_party(app),
     GuiAction::PartyPlaybackCommand { action } => {
       crate::tui::actions::party_playback_command(app, action);
@@ -1123,9 +1482,15 @@ impl GuiPlayback {
     let snapshot = current_playback_snapshot(app);
     let context = app.current_playback_context.as_ref();
     let context_item = context.and_then(|context| context.item.as_ref());
-    let track = snapshot
-      .as_ref()
-      .map(|snapshot| GuiTrack::from_metadata_and_item(&snapshot.metadata, context_item));
+    let track = snapshot.as_ref().map(|snapshot| {
+      GuiTrack::from_metadata_and_item(
+        &snapshot.metadata,
+        context_item,
+        context_item
+          .and_then(playable_identity_id)
+          .is_some_and(|id| app.liked_song_ids_set.contains(id)),
+      )
+    });
 
     GuiPlayback {
       track,
@@ -1152,7 +1517,11 @@ impl GuiPlayback {
 }
 
 impl GuiTrack {
-  fn from_metadata_and_item(metadata: &PlaybackMetadata, item: Option<&PlayableItem>) -> Self {
+  fn from_metadata_and_item(
+    metadata: &PlaybackMetadata,
+    item: Option<&PlayableItem>,
+    saved: bool,
+  ) -> Self {
     let item_identity = item.map(playable_identity).unwrap_or_default();
 
     GuiTrack {
@@ -1164,6 +1533,7 @@ impl GuiTrack {
       album: (!metadata.album.is_empty()).then(|| metadata.album.clone()),
       image_url: metadata.image_url.clone(),
       duration_ms: metadata.duration_ms,
+      saved,
     }
   }
 }
@@ -1193,6 +1563,7 @@ impl GuiStatus {
       active_block: format!("{:?}", route.active_block),
       is_streaming_active: app.is_streaming_active,
       route_id: route_id_label(&route.id).to_string(),
+      content_route_id: content_route_label(app).to_string(),
       hovered_block: format!("{:?}", route.hovered_block),
     }
   }
@@ -1232,6 +1603,14 @@ fn playable_identity(item: &PlayableItem) -> PlayableIdentity {
         .unwrap_or("unknown")
         .to_string(),
     },
+  }
+}
+
+fn playable_identity_id(item: &PlayableItem) -> Option<&str> {
+  match item {
+    PlayableItem::Track(track) => track.id.as_ref().map(|id| id.id()),
+    PlayableItem::Episode(_) => None,
+    PlayableItem::Unknown(_) => None,
   }
 }
 
@@ -1291,6 +1670,10 @@ fn route_id_label(route_id: &RouteId) -> &'static str {
     RouteId::Party => "party",
     RouteId::CreatePlaylist => "create_playlist",
   }
+}
+
+fn content_route_label(app: &App) -> &'static str {
+  route_id_label(&app.get_content_route().id)
 }
 
 impl From<&rspotify::model::PrivateUser> for GuiUser {
@@ -1361,7 +1744,12 @@ impl GuiTrackTable {
         .as_ref()
         .map(|context| format!("{:?}", context)),
       selected_index: app.track_table.selected_index,
-      tracks: app.track_table.tracks.iter().map(GuiTrack::from).collect(),
+      tracks: app
+        .track_table
+        .tracks
+        .iter()
+        .map(|track| gui_track_from_full_track(track, app))
+        .collect(),
       page,
       playlist_name: playlist_id
         .as_ref()
@@ -1384,20 +1772,43 @@ impl GuiSearchResults {
       query: app.input.iter().collect(),
       selected_block: search_block_label(&search.selected_block).to_string(),
       hovered_block: search_block_label(&search.hovered_block).to_string(),
+      selected_track_index: search.selected_tracks_index,
+      selected_album_index: search.selected_album_index,
+      selected_artist_index: search.selected_artists_index,
+      selected_playlist_index: search.selected_playlists_index,
+      selected_show_index: search.selected_shows_index,
       tracks: search
         .tracks
         .as_ref()
-        .map(|page| page.items.iter().map(GuiTrack::from).collect())
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|track| gui_track_from_full_track(track, app))
+            .collect()
+        })
         .unwrap_or_default(),
       albums: search
         .albums
         .as_ref()
-        .map(|page| page.items.iter().map(GuiAlbum::from).collect())
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|album| gui_album_from_simplified_album(album, app))
+            .collect()
+        })
         .unwrap_or_default(),
       artists: search
         .artists
         .as_ref()
-        .map(|page| page.items.iter().map(GuiArtist::from).collect())
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|artist| gui_artist_from_full_artist(artist, app))
+            .collect()
+        })
         .unwrap_or_default(),
       playlists: search
         .playlists
@@ -1413,8 +1824,162 @@ impl GuiSearchResults {
       shows: search
         .shows
         .as_ref()
-        .map(|page| page.items.iter().map(GuiShow::from).collect())
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|show| gui_show_from_simplified_show(show, app))
+            .collect()
+        })
         .unwrap_or_default(),
+    }
+  }
+}
+
+impl GuiHome {
+  fn from_app(app: &App) -> Self {
+    let changelog = if cfg!(debug_assertions) {
+      include_str!("../CHANGELOG.md").to_string()
+    } else {
+      include_str!("../CHANGELOG.md").replace("\n## [Unreleased]\n", "")
+    };
+
+    let counter_message = if cfg!(feature = "telemetry") {
+      if app.user_config.behavior.enable_global_song_count {
+        match app.global_song_count {
+          Some(count) => format!("Global songs played with spotatui: {}", count),
+          None if app.global_song_count_failed => {
+            "Global song counter unavailable right now.".to_string()
+          }
+          None => "Loading global song count...".to_string(),
+        }
+      } else {
+        "Global song counter disabled (Settings -> Behavior).".to_string()
+      }
+    } else {
+      "Global song counter unavailable (telemetry disabled in this build).".to_string()
+    };
+
+    let mut changelog_lines = vec![
+      format!(
+        "Log located in /tmp/spotatui_logs/spotatuilog{}",
+        std::process::id()
+      ),
+      "Please report any bugs or missing features to https://github.com/LargeModGames/spotatui"
+        .to_string(),
+      String::new(),
+    ];
+    changelog_lines.extend(changelog.lines().map(ToString::to_string));
+
+    GuiHome {
+      banner: crate::tui::banner::BANNER
+        .lines()
+        .map(ToString::to_string)
+        .collect(),
+      counter_message,
+      changelog_lines,
+      scroll: app.home_scroll,
+      log_path: format!("/tmp/spotatui_logs/spotatuilog{}", std::process::id()),
+      report_url: "https://github.com/LargeModGames/spotatui".to_string(),
+    }
+  }
+}
+
+impl GuiArtistDetail {
+  fn from_app(app: &App) -> Self {
+    let Some(artist) = app.artist.as_ref() else {
+      return GuiArtistDetail::default();
+    };
+
+    GuiArtistDetail {
+      artist: artist
+        .related_artists
+        .first()
+        .map(|_| GuiArtist {
+          id: Some(artist.artist_id.clone()),
+          uri: None,
+          name: artist.artist_name.clone(),
+          image_url: None,
+          followers: None,
+          saved: app
+            .followed_artist_ids_set
+            .contains(artist.artist_id.as_str()),
+        })
+        .or_else(|| {
+          Some(GuiArtist {
+            id: Some(artist.artist_id.clone()),
+            uri: None,
+            name: artist.artist_name.clone(),
+            image_url: None,
+            followers: None,
+            saved: app
+              .followed_artist_ids_set
+              .contains(artist.artist_id.as_str()),
+          })
+        }),
+      selected_block: artist_block_label(&artist.artist_selected_block).to_string(),
+      hovered_block: artist_block_label(&artist.artist_hovered_block).to_string(),
+      top_tracks: artist
+        .top_tracks
+        .iter()
+        .map(|track| gui_track_from_full_track(track, app))
+        .collect(),
+      selected_top_track_index: artist.selected_top_track_index,
+      albums: artist
+        .albums
+        .items
+        .iter()
+        .map(|album| gui_album_from_simplified_album(album, app))
+        .collect(),
+      selected_album_index: artist.selected_album_index,
+      related_artists: artist
+        .related_artists
+        .iter()
+        .map(|artist| gui_artist_from_full_artist(artist, app))
+        .collect(),
+      selected_related_artist_index: artist.selected_related_artist_index,
+    }
+  }
+}
+
+impl GuiAlbumTracks {
+  fn from_app(app: &App) -> Self {
+    match app.album_table_context {
+      AlbumTableContext::Full => {
+        let Some(album) = app.selected_album_full.as_ref() else {
+          return GuiAlbumTracks::default();
+        };
+        GuiAlbumTracks {
+          album: Some(gui_album_from_full_album(&album.album, app)),
+          context: "full".to_string(),
+          tracks: album
+            .album
+            .tracks
+            .items
+            .iter()
+            .map(|track| gui_track_from_simplified_track(track, app))
+            .collect(),
+          selected_index: app.saved_album_tracks_index,
+          page: page_info(Some(&album.album.tracks), 0, 1),
+        }
+      }
+      AlbumTableContext::Simplified => {
+        let Some(album) = app.selected_album_simplified.as_ref() else {
+          return GuiAlbumTracks::default();
+        };
+        GuiAlbumTracks {
+          album: Some(gui_album_from_simplified_album(&album.album, app)),
+          context: "simplified".to_string(),
+          tracks: album
+            .tracks
+            .items
+            .iter()
+            .map(|track| gui_track_from_simplified_track(track, app))
+            .collect(),
+          selected_index: album.selected_index,
+          page: page_info(Some(&album.tracks), 0, 1),
+        }
+      }
     }
   }
 }
@@ -1427,7 +1992,13 @@ impl GuiAlbumList {
         .library
         .saved_albums
         .get_results(None)
-        .map(|page| page.items.iter().map(GuiAlbum::from).collect())
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|album| gui_album_from_saved_album(album, app))
+            .collect()
+        })
         .unwrap_or_default(),
     }
   }
@@ -1437,7 +2008,11 @@ impl GuiArtistList {
   fn from_app(app: &App) -> Self {
     GuiArtistList {
       selected_index: app.artists_list_index,
-      artists: app.artists.iter().map(GuiArtist::from).collect(),
+      artists: app
+        .artists
+        .iter()
+        .map(|artist| gui_artist_from_full_artist(artist, app))
+        .collect(),
     }
   }
 }
@@ -1450,8 +2025,77 @@ impl GuiPodcastList {
         .library
         .saved_shows
         .get_results(None)
-        .map(|page| page.items.iter().map(GuiShow::from).collect())
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|show| gui_show_from_saved_show(show, app))
+            .collect()
+        })
         .unwrap_or_default(),
+    }
+  }
+}
+
+impl GuiPodcastEpisodes {
+  fn from_app(app: &App) -> Self {
+    let show = match app.episode_table_context {
+      EpisodeTableContext::Full => app
+        .selected_show_full
+        .as_ref()
+        .map(|show| gui_show_from_full_show(&show.show, app)),
+      EpisodeTableContext::Simplified => app
+        .selected_show_simplified
+        .as_ref()
+        .map(|show| gui_show_from_simplified_show(&show.show, app)),
+    };
+    let show_name = show.as_ref().map(|show| show.name.clone());
+
+    GuiPodcastEpisodes {
+      show,
+      context: match app.episode_table_context {
+        EpisodeTableContext::Full => "full",
+        EpisodeTableContext::Simplified => "simplified",
+      }
+      .to_string(),
+      episodes: app
+        .library
+        .show_episodes
+        .get_results(None)
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|episode| gui_episode_from_simplified_episode(episode, show_name.as_deref()))
+            .collect()
+        })
+        .unwrap_or_default(),
+      selected_index: app.episode_list_index,
+      page: page_info(
+        app.library.show_episodes.get_results(None),
+        app.library.show_episodes.index,
+        app.library.show_episodes.pages.len(),
+      ),
+    }
+  }
+}
+
+impl GuiQueueView {
+  fn from_app(app: &App) -> Self {
+    let Some(queue) = app.queue.as_ref() else {
+      return GuiQueueView::default();
+    };
+    GuiQueueView {
+      current: queue
+        .currently_playing
+        .as_ref()
+        .map(|item| gui_track_from_playable_item(item, app)),
+      items: queue
+        .queue
+        .iter()
+        .map(|item| gui_track_from_playable_item(item, app))
+        .collect(),
+      selected_index: app.queue_selected_index,
     }
   }
 }
@@ -1483,12 +2127,93 @@ impl GuiDiscover {
       selected_index: app.discover_selected_index,
       time_range: app.discover_time_range.label().to_string(),
       loading: app.discover_loading,
-      top_tracks: app.discover_top_tracks.iter().map(GuiTrack::from).collect(),
+      top_tracks: app
+        .discover_top_tracks
+        .iter()
+        .map(|track| gui_track_from_full_track(track, app))
+        .collect(),
       artists_mix: app
         .discover_artists_mix
         .iter()
-        .map(GuiTrack::from)
+        .map(|track| gui_track_from_full_track(track, app))
         .collect(),
+    }
+  }
+}
+
+impl GuiHelp {
+  fn from_app(app: &App) -> Self {
+    GuiHelp {
+      docs: crate::tui::ui::help::get_help_docs(app)
+        .into_iter()
+        .filter_map(|row| match row.as_slice() {
+          [description, binding, context] => Some(GuiHelpItem {
+            description: description.clone(),
+            binding: binding.clone(),
+            context: context.clone(),
+          }),
+          _ => None,
+        })
+        .collect(),
+      page: app.help_menu_page,
+      offset: app.help_menu_offset,
+      page_size: app.help_menu_max_lines,
+    }
+  }
+}
+
+impl GuiAnalysis {
+  fn from_app(app: &App) -> Self {
+    GuiAnalysis {
+      audio_capture_active: app.audio_capture_active,
+      visualizer_style: app.user_config.behavior.visualizer_style.name().to_string(),
+      tick_rate_ms: app.user_config.behavior.tick_rate_milliseconds,
+      peak: app.spectrum_data.as_ref().map(|spectrum| spectrum.peak),
+      bands: app
+        .spectrum_data
+        .as_ref()
+        .map(|spectrum| spectrum.bands.to_vec())
+        .unwrap_or_default(),
+    }
+  }
+}
+
+impl GuiCoverArt {
+  fn from_app(app: &App) -> Self {
+    GuiCoverArt {
+      track: GuiPlayback::from_app(app).track,
+      device_name: app
+        .current_playback_context
+        .as_ref()
+        .map(|context| context.device.name.clone()),
+      mode: if app.is_streaming_active {
+        "native_streaming".to_string()
+      } else {
+        "spotify".to_string()
+      },
+      enabled: {
+        #[cfg(feature = "cover-art")]
+        {
+          app.user_config.behavior.draw_cover_art
+        }
+        #[cfg(not(feature = "cover-art"))]
+        {
+          false
+        }
+      },
+      forced: {
+        #[cfg(feature = "cover-art")]
+        {
+          app.user_config.behavior.draw_cover_art_forced
+        }
+        #[cfg(not(feature = "cover-art"))]
+        {
+          false
+        }
+      },
+      image_url: GuiPlayback::from_app(app)
+        .track
+        .and_then(|track| track.image_url.clone()),
     }
   }
 }
@@ -1497,10 +2222,16 @@ impl GuiSettings {
   fn from_app(app: &App) -> Self {
     GuiSettings {
       category: app.settings_category.name().to_string(),
+      category_index: app.settings_category.index(),
+      categories: SettingsCategory::all()
+        .iter()
+        .map(|category| category.name().to_string())
+        .collect(),
       selected_index: app.settings_selected_index,
       edit_mode: app.settings_edit_mode,
       edit_buffer: app.settings_edit_buffer.clone(),
       unsaved_prompt_visible: app.settings_unsaved_prompt_visible,
+      unsaved_prompt_save_selected: app.settings_unsaved_prompt_save_selected,
       items: app
         .settings_items
         .iter()
@@ -1535,14 +2266,24 @@ impl From<&crate::core::app::SettingItem> for GuiSettingItem {
 impl GuiDialog {
   fn from_app(app: &App) -> Self {
     let route = app.get_current_route();
-    let kind = match route.active_block {
-      ActiveBlock::Dialog(context) => Some(format!("{:?}", context)),
+    let dialog_context = match route.active_block {
+      ActiveBlock::Dialog(context) => Some(context),
       _ => None,
     };
+    let kind = dialog_context
+      .map(dialog_context_label)
+      .map(ToString::to_string);
     GuiDialog {
       kind,
+      title: dialog_context.map(dialog_title).map(ToString::to_string),
       message: app.dialog.clone(),
       confirm: app.confirm,
+      confirm_label: dialog_context
+        .map(dialog_confirm_label)
+        .map(ToString::to_string),
+      cancel_label: dialog_context
+        .map(dialog_cancel_label)
+        .map(ToString::to_string),
       pending_track_name: app
         .pending_playlist_track_add
         .as_ref()
@@ -1557,19 +2298,82 @@ impl GuiDialog {
         .pending_playlist_track_removal
         .as_ref()
         .map(|pending| pending.playlist_name.clone()),
+      playlist_options: match dialog_context {
+        Some(DialogContext::AddTrackToPlaylistPicker) => app
+          .editable_playlists()
+          .iter()
+          .map(|playlist| GuiDialogOption {
+            id: playlist.id.id().to_string(),
+            label: playlist.name.clone(),
+            description: Some(
+              playlist
+                .owner
+                .display_name
+                .clone()
+                .unwrap_or_else(|| playlist.owner.id.id().to_string()),
+            ),
+          })
+          .collect(),
+        _ => Vec::new(),
+      },
+      selected_index: match dialog_context {
+        Some(DialogContext::AddTrackToPlaylistPicker) => app.playlist_picker_selected_index,
+        Some(_) => usize::from(!app.confirm),
+        None => 0,
+      },
+      effective_open_settings_key: app
+        .pending_keybinding_persist
+        .as_ref()
+        .map(|persist| persist.open_settings_key.to_string()),
     }
   }
 }
 
 impl GuiSort {
   fn from_app(app: &App) -> Self {
+    let context = app.sort_context;
+    let (current_sort, title, options) = if let Some(context) = context {
+      let current_sort = match context {
+        crate::core::sort::SortContext::PlaylistTracks => app.playlist_sort,
+        crate::core::sort::SortContext::SavedAlbums => app.album_sort,
+        crate::core::sort::SortContext::SavedArtists => app.artist_sort,
+        crate::core::sort::SortContext::RecentlyPlayed => app.playlist_sort,
+      };
+      let title = match context {
+        crate::core::sort::SortContext::PlaylistTracks => "Sort Tracks",
+        crate::core::sort::SortContext::SavedAlbums => "Sort Albums",
+        crate::core::sort::SortContext::SavedArtists => "Sort Artists",
+        crate::core::sort::SortContext::RecentlyPlayed => "Sort",
+      };
+      let options = context
+        .available_fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| GuiSortOption {
+          field: sort_field_label(field).to_string(),
+          label: field.display_name().to_string(),
+          shortcut: field.shortcut().map(|shortcut| shortcut.to_string()),
+          selected: index == app.sort_menu_selected,
+          active: *field == current_sort.field,
+        })
+        .collect();
+      (Some(current_sort), Some(title.to_string()), options)
+    } else {
+      (None, None, Vec::new())
+    };
+
     GuiSort {
       visible: app.sort_menu_visible,
       selected_index: app.sort_menu_selected,
-      context: app
-        .sort_context
+      context: context.map(sort_context_label).map(ToString::to_string),
+      title,
+      current_field: current_sort
         .as_ref()
-        .map(|context| format!("{:?}", context)),
+        .map(|sort_state| sort_field_label(&sort_state.field).to_string()),
+      current_order: current_sort
+        .as_ref()
+        .map(|sort_state| sort_order_label(&sort_state.order).to_string()),
+      options,
     }
   }
 }
@@ -1589,6 +2393,24 @@ impl GuiParty {
         .map(|session| session.guests.clone())
         .unwrap_or_default(),
       control_mode: session.map(|session| session.control_mode.to_string()),
+      code_input: app.party_input.iter().collect(),
+      join_name: app.party_join_name.iter().collect(),
+    }
+  }
+}
+
+impl GuiAnnouncement {
+  fn from_app(app: &App) -> Self {
+    GuiAnnouncement {
+      active: app
+        .active_announcement
+        .as_ref()
+        .map(GuiAnnouncementItem::from_announcement),
+      pending: app
+        .pending_announcements
+        .iter()
+        .map(GuiAnnouncementItem::from_announcement)
+        .collect(),
     }
   }
 }
@@ -1660,6 +2482,7 @@ impl From<&FullTrack> for GuiTrack {
       album: Some(track.album.name.clone()),
       image_url: track.album.images.first().map(|image| image.url.clone()),
       duration_ms: track.duration.num_milliseconds().max(0) as u32,
+      saved: false,
     }
   }
 }
@@ -1675,6 +2498,7 @@ impl From<&SimplifiedTrack> for GuiTrack {
       album: None,
       image_url: None,
       duration_ms: track.duration.num_milliseconds().max(0) as u32,
+      saved: false,
     }
   }
 }
@@ -1692,6 +2516,7 @@ impl From<&PlayableItem> for GuiTrack {
         album: Some(episode.show.name.clone()),
         image_url: episode.images.first().map(|image| image.url.clone()),
         duration_ms: episode.duration.num_milliseconds().max(0) as u32,
+        saved: false,
       },
       PlayableItem::Unknown(value) => GuiTrack {
         id: value
@@ -1716,6 +2541,7 @@ impl From<&PlayableItem> for GuiTrack {
         album: None,
         image_url: None,
         duration_ms: 0,
+        saved: false,
       },
     }
   }
@@ -1731,6 +2557,7 @@ impl From<&SimplifiedAlbum> for GuiAlbum {
       image_url: album.images.first().map(|image| image.url.clone()),
       release_date: album.release_date.clone().and_then(non_empty),
       total_tracks: None,
+      saved: false,
     }
   }
 }
@@ -1746,6 +2573,7 @@ impl From<&SavedAlbum> for GuiAlbum {
       image_url: album.images.first().map(|image| image.url.clone()),
       release_date: non_empty(album.release_date.clone()),
       total_tracks: Some(album.tracks.total),
+      saved: false,
     }
   }
 }
@@ -1758,6 +2586,7 @@ impl From<&FullArtist> for GuiArtist {
       name: artist.name.clone(),
       image_url: artist.images.first().map(|image| image.url.clone()),
       followers: None,
+      saved: false,
     }
   }
 }
@@ -1771,6 +2600,7 @@ impl From<&SimplifiedShow> for GuiShow {
       publisher: None,
       description: non_empty(show.description.clone()),
       image_url: show.images.first().map(|image| image.url.clone()),
+      saved: false,
     }
   }
 }
@@ -1785,6 +2615,19 @@ impl From<&Show> for GuiShow {
       publisher: None,
       description: non_empty(show.description.clone()),
       image_url: show.images.first().map(|image| image.url.clone()),
+      saved: false,
+    }
+  }
+}
+
+impl GuiAnnouncementItem {
+  fn from_announcement(announcement: &crate::core::app::Announcement) -> Self {
+    GuiAnnouncementItem {
+      id: announcement.id.clone(),
+      title: announcement.title.clone(),
+      body: announcement.body.clone(),
+      level: announcement_level_label(&announcement.level).to_string(),
+      url: announcement.url.clone(),
     }
   }
 }
@@ -1846,7 +2689,13 @@ fn queue_from_app(app: &App) -> Vec<GuiTrack> {
   app
     .queue
     .as_ref()
-    .map(|queue| queue.queue.iter().map(GuiTrack::from).collect())
+    .map(|queue| {
+      queue
+        .queue
+        .iter()
+        .map(|item| gui_track_from_playable_item(item, app))
+        .collect()
+    })
     .unwrap_or_default()
 }
 
@@ -1855,12 +2704,18 @@ fn recently_played_from_app(app: &App) -> Vec<GuiTrack> {
     .recently_played
     .result
     .as_ref()
-    .map(|page| page.items.iter().map(play_history_track).collect())
+    .map(|page| {
+      page
+        .items
+        .iter()
+        .map(|history| play_history_track(history, app))
+        .collect()
+    })
     .unwrap_or_default()
 }
 
-fn play_history_track(history: &PlayHistory) -> GuiTrack {
-  GuiTrack::from(&history.track)
+fn play_history_track(history: &PlayHistory, app: &App) -> GuiTrack {
+  gui_track_from_full_track(&history.track, app)
 }
 
 fn page_info<T: DeserializeOwned>(
@@ -1907,6 +2762,186 @@ fn search_block_label(block: &SearchResultBlock) -> &'static str {
     SearchResultBlock::PlaylistSearch => "playlists",
     SearchResultBlock::ShowSearch => "shows",
     SearchResultBlock::Empty => "empty",
+  }
+}
+
+fn artist_block_label(block: &ArtistBlock) -> &'static str {
+  match block {
+    ArtistBlock::TopTracks => "top_tracks",
+    ArtistBlock::Albums => "albums",
+    ArtistBlock::RelatedArtists => "related_artists",
+    ArtistBlock::Empty => "empty",
+  }
+}
+
+fn dialog_context_label(context: DialogContext) -> &'static str {
+  match context {
+    DialogContext::PlaylistWindow => "playlist_window",
+    DialogContext::PlaylistSearch => "playlist_search",
+    DialogContext::AddTrackToPlaylistPicker => "add_track_to_playlist_picker",
+    DialogContext::RemoveTrackFromPlaylistConfirm => "remove_track_from_playlist_confirm",
+    DialogContext::PersistKeybindingFallback => "persist_keybinding_fallback",
+  }
+}
+
+fn dialog_title(context: DialogContext) -> &'static str {
+  match context {
+    DialogContext::PlaylistWindow => "Unfollow Playlist",
+    DialogContext::PlaylistSearch => "Unfollow Playlist",
+    DialogContext::AddTrackToPlaylistPicker => "Add Track To Playlist",
+    DialogContext::RemoveTrackFromPlaylistConfirm => "Remove Track From Playlist",
+    DialogContext::PersistKeybindingFallback => "Save Shortcut Fallback",
+  }
+}
+
+fn dialog_confirm_label(context: DialogContext) -> &'static str {
+  match context {
+    DialogContext::PersistKeybindingFallback => "Save",
+    DialogContext::AddTrackToPlaylistPicker => "Add",
+    _ => "Confirm",
+  }
+}
+
+fn dialog_cancel_label(context: DialogContext) -> &'static str {
+  match context {
+    DialogContext::PersistKeybindingFallback => "Session Only",
+    _ => "Cancel",
+  }
+}
+
+fn sort_context_label(context: crate::core::sort::SortContext) -> &'static str {
+  match context {
+    crate::core::sort::SortContext::PlaylistTracks => "playlist_tracks",
+    crate::core::sort::SortContext::SavedAlbums => "saved_albums",
+    crate::core::sort::SortContext::SavedArtists => "saved_artists",
+    crate::core::sort::SortContext::RecentlyPlayed => "recently_played",
+  }
+}
+
+fn sort_field_label(field: &crate::core::sort::SortField) -> &'static str {
+  match field {
+    crate::core::sort::SortField::Default => "default",
+    crate::core::sort::SortField::Name => "name",
+    crate::core::sort::SortField::DateAdded => "date_added",
+    crate::core::sort::SortField::Artist => "artist",
+    crate::core::sort::SortField::Duration => "duration",
+    crate::core::sort::SortField::Album => "album",
+  }
+}
+
+fn sort_order_label(order: &crate::core::sort::SortOrder) -> &'static str {
+  match order {
+    crate::core::sort::SortOrder::Ascending => "ascending",
+    crate::core::sort::SortOrder::Descending => "descending",
+  }
+}
+
+fn announcement_level_label(level: &AnnouncementLevel) -> &'static str {
+  match level {
+    AnnouncementLevel::Info => "info",
+    AnnouncementLevel::Warning => "warning",
+    AnnouncementLevel::Critical => "critical",
+  }
+}
+
+fn gui_track_from_full_track(track: &FullTrack, app: &App) -> GuiTrack {
+  let mut track_gui = GuiTrack::from(track);
+  track_gui.saved = track
+    .id
+    .as_ref()
+    .is_some_and(|id| app.liked_song_ids_set.contains(id.id()));
+  track_gui
+}
+
+fn gui_track_from_simplified_track(track: &SimplifiedTrack, app: &App) -> GuiTrack {
+  let mut track_gui = GuiTrack::from(track);
+  track_gui.saved = track
+    .id
+    .as_ref()
+    .is_some_and(|id| app.liked_song_ids_set.contains(id.id()));
+  track_gui
+}
+
+fn gui_track_from_playable_item(item: &PlayableItem, app: &App) -> GuiTrack {
+  let mut track = GuiTrack::from(item);
+  track.saved = track
+    .id
+    .as_ref()
+    .is_some_and(|id| track.item_type == "track" && app.liked_song_ids_set.contains(id.as_str()));
+  track
+}
+
+fn gui_album_from_full_album(album: &rspotify::model::album::FullAlbum, app: &App) -> GuiAlbum {
+  GuiAlbum {
+    id: Some(album.id.id().to_string()),
+    uri: Some(album.id.uri()),
+    name: album.name.clone(),
+    artists: album.artists.iter().map(artist_name).collect(),
+    image_url: album.images.first().map(|image| image.url.clone()),
+    release_date: non_empty(album.release_date.clone()),
+    total_tracks: Some(album.tracks.total),
+    saved: app.saved_album_ids_set.contains(album.id.id()),
+  }
+}
+
+fn gui_album_from_saved_album(album: &SavedAlbum, app: &App) -> GuiAlbum {
+  let mut gui_album = GuiAlbum::from(album);
+  gui_album.saved = app.saved_album_ids_set.contains(album.album.id.id());
+  gui_album
+}
+
+fn gui_album_from_simplified_album(album: &SimplifiedAlbum, app: &App) -> GuiAlbum {
+  let mut gui_album = GuiAlbum::from(album);
+  gui_album.saved = album
+    .id
+    .as_ref()
+    .is_some_and(|id| app.saved_album_ids_set.contains(id.id()));
+  gui_album
+}
+
+fn gui_artist_from_full_artist(artist: &FullArtist, app: &App) -> GuiArtist {
+  let mut gui_artist = GuiArtist::from(artist);
+  gui_artist.saved = app.followed_artist_ids_set.contains(artist.id.id());
+  gui_artist
+}
+
+fn gui_show_from_simplified_show(show: &SimplifiedShow, app: &App) -> GuiShow {
+  let mut gui_show = GuiShow::from(show);
+  gui_show.saved = app.saved_show_ids_set.contains(show.id.id());
+  gui_show
+}
+
+fn gui_show_from_saved_show(show: &Show, app: &App) -> GuiShow {
+  let mut gui_show = GuiShow::from(show);
+  gui_show.saved = app.saved_show_ids_set.contains(show.show.id.id());
+  gui_show
+}
+
+fn gui_show_from_full_show(show: &rspotify::model::show::FullShow, app: &App) -> GuiShow {
+  GuiShow {
+    id: Some(show.id.id().to_string()),
+    uri: Some(show.id.uri()),
+    name: show.name.clone(),
+    publisher: None,
+    description: non_empty(show.description.clone()),
+    image_url: show.images.first().map(|image| image.url.clone()),
+    saved: app.saved_show_ids_set.contains(show.id.id()),
+  }
+}
+
+fn gui_episode_from_simplified_episode(
+  episode: &SimplifiedEpisode,
+  show_name: Option<&str>,
+) -> GuiEpisode {
+  GuiEpisode {
+    id: Some(episode.id.id().to_string()),
+    uri: Some(episode.id.uri()),
+    title: episode.name.clone(),
+    show: show_name.unwrap_or_default().to_string(),
+    description: non_empty(episode.description.clone()),
+    release_date: non_empty(episode.release_date.clone()),
+    image_url: episode.images.first().map(|image| image.url.clone()),
+    duration_ms: episode.duration.num_milliseconds().max(0) as u32,
   }
 }
 
@@ -2042,6 +3077,109 @@ mod tests {
       IoEvent::GetCurrentSavedTracks(None) => {}
       _ => panic!("expected saved tracks load"),
     }
+  }
+
+  #[test]
+  fn snapshot_status_tracks_underlying_content_route_beneath_dialog() {
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+    app.push_navigation_stack(
+      RouteId::Dialog,
+      ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
+    );
+    app.dialog = Some("confirm".to_string());
+
+    let snapshot = snapshot_app(&app);
+
+    assert_eq!(snapshot.status.route_id, "dialog");
+    assert_eq!(snapshot.status.content_route_id, "settings");
+  }
+
+  #[test]
+  fn route_id_label_maps_every_gui_route() {
+    let cases = [
+      (RouteId::Analysis, "analysis"),
+      (RouteId::AlbumTracks, "album_tracks"),
+      (RouteId::AlbumList, "albums"),
+      (RouteId::Artist, "artist"),
+      (RouteId::LyricsView, "lyrics"),
+      (RouteId::CoverArtView, "cover_art"),
+      (RouteId::Error, "error"),
+      (RouteId::Home, "home"),
+      (RouteId::RecentlyPlayed, "recently_played"),
+      (RouteId::Search, "search"),
+      (RouteId::SelectedDevice, "devices"),
+      (RouteId::TrackTable, "track_table"),
+      (RouteId::Discover, "discover"),
+      (RouteId::Artists, "artists"),
+      (RouteId::Podcasts, "podcasts"),
+      (RouteId::PodcastEpisodes, "podcast_episodes"),
+      (RouteId::Recommendations, "recommendations"),
+      (RouteId::Dialog, "dialog"),
+      (RouteId::AnnouncementPrompt, "announcement"),
+      (RouteId::ExitPrompt, "exit"),
+      (RouteId::Settings, "settings"),
+      (RouteId::HelpMenu, "help"),
+      (RouteId::Queue, "queue"),
+      (RouteId::Party, "party"),
+      (RouteId::CreatePlaylist, "create_playlist"),
+    ];
+
+    for (route, expected) in cases {
+      assert_eq!(route_id_label(&route), expected);
+    }
+  }
+
+  #[test]
+  fn open_sort_menu_action_exposes_sort_state_to_gui() {
+    let mut app = App::default();
+
+    dispatch_gui_action(
+      &mut app,
+      GuiAction::OpenSortMenu {
+        context: GuiSortContextId::SavedArtists,
+      },
+    );
+
+    assert!(app.sort_menu_visible);
+    assert_eq!(
+      app.sort_context,
+      Some(crate::core::sort::SortContext::SavedArtists)
+    );
+    assert_eq!(
+      snapshot_app(&app).sort.context.as_deref(),
+      Some("saved_artists")
+    );
+  }
+
+  #[test]
+  fn settings_actions_switch_category_and_rebuild_items() {
+    let mut app = App::default();
+    app.load_settings_for_category();
+
+    dispatch_gui_action(&mut app, GuiAction::SelectSettingsCategory { index: 2 });
+
+    assert_eq!(app.settings_category, SettingsCategory::Theme);
+    assert_eq!(app.settings_selected_index, 0);
+    assert!(!app.settings_items.is_empty());
+    assert_eq!(snapshot_app(&app).settings.category, "Theme");
+  }
+
+  #[test]
+  fn dialog_actions_update_confirmation_state() {
+    let mut app = App::default();
+    app.push_navigation_stack(
+      RouteId::Dialog,
+      ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
+    );
+    app.dialog = Some("confirm".to_string());
+    app.confirm = false;
+
+    dispatch_gui_action(&mut app, GuiAction::DialogSelectIndex { index: 0 });
+    assert!(app.confirm);
+
+    dispatch_gui_action(&mut app, GuiAction::DialogSetConfirm { confirm: false });
+    assert!(!app.confirm);
   }
 
   #[test]

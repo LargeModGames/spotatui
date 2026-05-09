@@ -1,275 +1,57 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  startTransition,
+  type CSSProperties,
+  type ReactNode,
+  useEffect,
+  useEffectEvent,
+  useState,
+} from "react";
 import { invokeCommand } from "./tauri";
-
-type ViewId =
-  | "home"
-  | "search"
-  | "track_table"
-  | "queue"
-  | "recently_played"
-  | "albums"
-  | "artists"
-  | "podcasts"
-  | "lyrics"
-  | "discover"
-  | "settings"
-  | "party"
-  | "create_playlist";
-
-type GuiSnapshot = {
-  playback?: GuiPlayback;
-  devices?: GuiDevice[];
-  status?: GuiStatus;
-  user?: GuiUser | null;
-  library?: GuiLibrary;
-  playlists?: GuiPlaylist[];
-  playlist_folders?: GuiPlaylistFolderEntry[];
-  track_table?: GuiTrackTable;
-  queue?: GuiTrack[];
-  recently_played?: GuiTrack[];
-  search?: GuiSearchResults;
-  albums?: GuiAlbumList;
-  artists?: GuiArtistList;
-  podcasts?: GuiPodcastList;
-  lyrics?: GuiLyrics;
-  discover?: GuiDiscover;
-  settings?: GuiSettings;
-  dialog?: GuiDialog;
-  sort?: GuiSort;
-  party?: GuiParty;
-  create_playlist?: GuiCreatePlaylist;
-};
-
-type GuiPlayback = {
-  track?: GuiTrack | null;
-  progress_ms?: number;
-  is_playing?: boolean;
-  shuffle?: boolean;
-  repeat?: string | null;
-  volume_percent?: number;
-  device_id?: string | null;
-  device_name?: string | null;
-};
-
-type GuiTrack = {
-  id?: string | null;
-  uri?: string | null;
-  item_type?: string;
-  title?: string;
-  artists?: string[];
-  album?: string | null;
-  image_url?: string | null;
-  duration_ms?: number;
-};
-
-type GuiDevice = {
-  id?: string | null;
-  name?: string;
-  device_type?: string;
-  is_active?: boolean;
-  is_restricted?: boolean;
-  volume_percent?: number | null;
-};
-
-type GuiStatus = {
-  is_loading?: boolean;
-  message?: string | null;
-  error?: string | null;
-  route?: string;
-  route_id?: string;
-  active_block?: string;
-  is_streaming_active?: boolean;
-};
-
-type GuiUser = {
-  id: string;
-  display_name?: string | null;
-};
-
-type GuiLibrary = {
-  options?: string[];
-  selected_index?: number;
-};
-
-type GuiPlaylist = {
-  id: string;
-  uri?: string;
-  name: string;
-  owner?: string;
-  description?: string | null;
-  image_url?: string | null;
-  track_count?: number;
-  editable?: boolean;
-  selected?: boolean;
-};
-
-type GuiPlaylistFolderEntry = {
-  kind: string;
-  id?: string | null;
-  name: string;
-  index: number;
-  selected?: boolean;
-};
-
-type GuiTrackTable = {
-  context?: string | null;
-  selected_index?: number;
-  tracks?: GuiTrack[];
-  page?: GuiPageInfo;
-  playlist_id?: string | null;
-  playlist_name?: string | null;
-};
-
-type GuiPageInfo = {
-  offset?: number;
-  limit?: number;
-  total?: number;
-  page_index?: number;
-  page_count?: number;
-  has_previous?: boolean;
-  has_next?: boolean;
-};
-
-type GuiSearchResults = {
-  query?: string;
-  selected_block?: string;
-  tracks?: GuiTrack[];
-  albums?: GuiAlbum[];
-  artists?: GuiArtist[];
-  playlists?: GuiPlaylist[];
-  shows?: GuiShow[];
-};
-
-type GuiAlbumList = {
-  selected_index?: number;
-  albums?: GuiAlbum[];
-};
-
-type GuiArtistList = {
-  selected_index?: number;
-  artists?: GuiArtist[];
-};
-
-type GuiPodcastList = {
-  selected_index?: number;
-  shows?: GuiShow[];
-};
-
-type GuiAlbum = {
-  id?: string | null;
-  uri?: string | null;
-  name: string;
-  artists?: string[];
-  image_url?: string | null;
-  release_date?: string | null;
-  total_tracks?: number | null;
-};
-
-type GuiArtist = {
-  id?: string | null;
-  uri?: string | null;
-  name: string;
-  image_url?: string | null;
-  followers?: number | null;
-};
-
-type GuiShow = {
-  id?: string | null;
-  uri?: string | null;
-  name: string;
-  publisher?: string | null;
-  description?: string | null;
-  image_url?: string | null;
-};
-
-type GuiLyrics = {
-  status?: string;
-  lines?: Array<{ timestamp_ms: number; text: string }>;
-};
-
-type GuiDiscover = {
-  selected_index?: number;
-  time_range?: string;
-  loading?: boolean;
-  top_tracks?: GuiTrack[];
-  artists_mix?: GuiTrack[];
-};
-
-type GuiSettings = {
-  category?: string;
-  selected_index?: number;
-  edit_mode?: boolean;
-  edit_buffer?: string;
-  unsaved_prompt_visible?: boolean;
-  items?: Array<{ id: string; name: string; description: string; value: string; value_type: string }>;
-};
-
-type GuiDialog = {
-  kind?: string | null;
-  message?: string | null;
-  confirm?: boolean;
-  pending_track_name?: string | null;
-  playlist_name?: string | null;
-};
-
-type GuiSort = {
-  visible?: boolean;
-  selected_index?: number;
-  context?: string | null;
-};
-
-type GuiParty = {
-  status?: string;
-  role?: string | null;
-  code?: string | null;
-  host_name?: string | null;
-  guests?: string[];
-  control_mode?: string | null;
-};
-
-type GuiCreatePlaylist = {
-  name?: string;
-  stage?: string;
-  focus?: string;
-  search_input?: string;
-  selected_result?: number;
-  tracks?: GuiTrack[];
-  search_results?: GuiTrack[];
-};
+import {
+  fallbackSnapshot,
+  getContentRouteId,
+  getOverlayRouteId,
+  getVisibleRouteId,
+  normalizeSnapshot,
+  routeTitles,
+  type DeepPartial,
+  type GuiAlbum,
+  type GuiAnnouncement,
+  type GuiArtist,
+  type GuiCreatePlaylist,
+  type GuiDevice,
+  type GuiDialog,
+  type GuiDiscover,
+  type GuiEpisode,
+  type GuiHelp,
+  type GuiHome,
+  type GuiParty,
+  type GuiPlayback,
+  type GuiPlaylist,
+  type GuiPlaylistFolderEntry,
+  type GuiPodcastEpisodes,
+  type GuiSearchResults,
+  type GuiSettings,
+  type GuiShow,
+  type GuiSnapshot,
+  type GuiSort,
+  type GuiStatus,
+  type GuiTrack,
+  type GuiTrackTable,
+  type RouteId,
+} from "./snapshot";
 
 type BridgeState = {
   mode: "connecting" | "live" | "demo" | "error";
   message: string;
 };
 
-const refreshMs = 1200;
-
-const fallbackSnapshot: GuiSnapshot = {
-  playback: {
-    track: {
-      title: "No backend connected",
-      artists: ["Spotatui"],
-      album: "Browser demo",
-      duration_ms: 180000,
-      progress_ms: 0,
-    } as GuiTrack,
-    progress_ms: 0,
-    is_playing: false,
-    shuffle: false,
-    repeat: "off",
-    volume_percent: 60,
-  },
-  status: {
-    route_id: "home",
-    message: "Browser-only demo. Open the Tauri app for live Spotify state.",
-  },
-  devices: [],
-  playlists: [],
-  track_table: { tracks: [], selected_index: 0 },
-  queue: [],
-  recently_played: [],
-  search: { tracks: [], albums: [], artists: [], playlists: [], shows: [] },
+type ActionPayload = {
+  type: string;
+  [key: string]: unknown;
 };
+
+const refreshMs = 1200;
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<GuiSnapshot>(fallbackSnapshot);
@@ -278,588 +60,979 @@ export default function App() {
     message: "Connecting to Spotatui",
   });
   const [searchDraft, setSearchDraft] = useState("");
+  const [partyCodeDraft, setPartyCodeDraft] = useState("");
+  const [partyNameDraft, setPartyNameDraft] = useState("");
 
-  const refreshSnapshot = useCallback(async () => {
-    const result = await invokeCommand<GuiSnapshot>("get_snapshot");
+  const refreshSnapshot = useEffectEvent(async () => {
+    const result = await invokeCommand<DeepPartial<GuiSnapshot>>("get_snapshot");
 
     if (result.ok) {
-      setSnapshot(normalizeSnapshot(result.value));
-      const status = result.value.status;
-      setBridge({
-        mode: status?.error ? "error" : status?.is_loading ? "connecting" : "live",
-        message: status?.error ?? status?.message ?? (status?.is_loading ? "Starting backend" : "Live backend"),
+      const nextSnapshot = normalizeSnapshot(result.value);
+      startTransition(() => {
+        setSnapshot(nextSnapshot);
+        setBridge({
+          mode: nextSnapshot.status.error
+            ? "error"
+            : nextSnapshot.status.is_loading
+              ? "connecting"
+              : "live",
+          message:
+            nextSnapshot.status.error ??
+            nextSnapshot.status.message ??
+            (nextSnapshot.status.is_loading ? "Starting backend" : "Live backend"),
+        });
       });
       return;
     }
 
-    setSnapshot(fallbackSnapshot);
-    setBridge({
-      mode: result.reason === "missing" ? "demo" : "error",
-      message: result.reason === "missing" ? "Browser-only demo" : "Backend unavailable",
+    startTransition(() => {
+      setSnapshot(fallbackSnapshot);
+      setBridge({
+        mode: result.reason === "missing" ? "demo" : "error",
+        message: result.reason === "missing" ? "Browser-only demo" : "Backend unavailable",
+      });
     });
-  }, []);
+  });
 
   useEffect(() => {
     void refreshSnapshot();
     const timer = window.setInterval(() => void refreshSnapshot(), refreshMs);
     return () => window.clearInterval(timer);
-  }, [refreshSnapshot]);
+  }, []);
 
-  const dispatchAction = useCallback(
-    async (action: Record<string, unknown>) => {
-      const result = await invokeCommand("dispatch_action", { action });
-      if (!result.ok) {
+  useEffect(() => {
+    setSearchDraft((current) => current || snapshot.search.query);
+  }, [snapshot.search.query]);
+
+  useEffect(() => {
+    setPartyCodeDraft((current) => current || snapshot.party.code_input);
+    setPartyNameDraft((current) => current || snapshot.party.join_name);
+  }, [snapshot.party.code_input, snapshot.party.join_name]);
+
+  async function dispatchAction(action: ActionPayload) {
+    const result = await invokeCommand("dispatch_action", { action });
+    if (!result.ok) {
+      startTransition(() => {
         setBridge({
           mode: result.reason === "missing" ? "demo" : "error",
           message: result.reason === "missing" ? "Browser-only demo" : "Action failed",
         });
-        return;
-      }
-      window.setTimeout(() => void refreshSnapshot(), 120);
-    },
-    [refreshSnapshot],
-  );
+      });
+      return;
+    }
 
-  const activeView = routeToView(snapshot.status?.route_id);
-  const playback = snapshot.playback ?? fallbackSnapshot.playback!;
-  const devices = snapshot.devices ?? [];
+    window.setTimeout(() => void refreshSnapshot(), 120);
+  }
+
+  async function selectAndPlayTrack(index: number) {
+    await dispatchAction({ type: "select_track", index });
+    await dispatchAction({ type: "play_selected_track" });
+  }
+
+  const activeRoute = getContentRouteId(snapshot);
+  const visibleRoute = getVisibleRouteId(snapshot);
+  const overlayRoute = getOverlayRouteId(snapshot);
+  const playback = snapshot.playback;
   const activeDevice =
-    devices.find((device) => device.is_active) ??
-    devices.find((device) => device.id === playback.device_id);
+    snapshot.devices.find((device) => device.is_active) ??
+    snapshot.devices.find((device) => device.id === playback.device_id);
 
   return (
-    <div className="desktop-shell">
-      <Sidebar
-        activeView={activeView}
-        library={snapshot.library}
-        playlists={snapshot.playlists ?? []}
-        folders={snapshot.playlist_folders ?? []}
-        onAction={dispatchAction}
-      />
-
-      <main className="workspace">
-        <TopBar
-          activeDevice={activeDevice}
-          bridge={bridge}
-          searchDraft={searchDraft}
-          onSearchDraftChange={setSearchDraft}
-          onSearchSubmit={() => {
-            void dispatchAction({ type: "search", query: searchDraft });
-          }}
+    <div className="app-shell">
+      <div className="body-shell">
+        <Sidebar
+          activeRoute={activeRoute}
+          libraryOptions={snapshot.library.options}
+          librarySelectedIndex={snapshot.library.selected_index}
+          playback={playback}
+          playlistFolders={snapshot.playlist_folders}
+          playlists={snapshot.playlists}
+          onAction={dispatchAction}
         />
 
-        {activeView === "home" && (
-          <NowPlayingView snapshot={snapshot} onAction={dispatchAction} />
-        )}
-        {activeView === "search" && (
-          <SearchView
-            search={snapshot.search}
-            query={searchDraft || snapshot.search?.query || ""}
-            onQueryChange={setSearchDraft}
-            onSubmit={() => void dispatchAction({ type: "search", query: searchDraft })}
-            onPlayTrack={(index) => {
-              void dispatchAction({ type: "select_track", index });
-              void dispatchAction({ type: "play_selected_track" });
-            }}
+        <main className="main-pane">
+          <AppHeader
+            activeDevice={activeDevice}
+            bridge={bridge}
+            route={activeRoute}
+            snapshot={snapshot}
+            visibleRoute={visibleRoute}
+            onAction={dispatchAction}
           />
-        )}
-        {activeView === "track_table" && (
-          <TrackTableView table={snapshot.track_table} onAction={dispatchAction} />
-        )}
-        {activeView === "queue" && (
-          <SimpleTracksView title="Queue" tracks={snapshot.queue ?? []} emptyLabel="Queue is clear" />
-        )}
-        {activeView === "recently_played" && (
-          <SimpleTracksView title="Recently played" tracks={snapshot.recently_played ?? []} emptyLabel="No recent tracks loaded" />
-        )}
-        {activeView === "albums" && <AlbumsView albums={snapshot.albums?.albums ?? []} />}
-        {activeView === "artists" && <ArtistsView artists={snapshot.artists?.artists ?? []} />}
-        {activeView === "podcasts" && <PodcastsView shows={snapshot.podcasts?.shows ?? []} />}
-        {activeView === "lyrics" && <LyricsView lyrics={snapshot.lyrics} />}
-        {activeView === "discover" && <DiscoverView discover={snapshot.discover} />}
-        {activeView === "settings" && <SettingsView settings={snapshot.settings} />}
-        {activeView === "party" && <PartyView party={snapshot.party} onAction={dispatchAction} />}
-        {activeView === "create_playlist" && (
-          <CreatePlaylistView createPlaylist={snapshot.create_playlist} />
-        )}
-      </main>
 
-      <RightRail
-        bridge={bridge}
-        devices={devices}
-        queue={snapshot.queue ?? []}
+          <section className="content-pane">
+            <RouteView
+              activeRoute={activeRoute}
+              partyCodeDraft={partyCodeDraft}
+              partyNameDraft={partyNameDraft}
+              searchDraft={searchDraft}
+              snapshot={snapshot}
+              onAction={dispatchAction}
+              onPartyCodeDraftChange={setPartyCodeDraft}
+              onPartyNameDraftChange={setPartyNameDraft}
+              onSearchDraftChange={setSearchDraft}
+              onSearchSubmit={() => void dispatchAction({ type: "search", query: searchDraft })}
+              onTrackTablePlay={selectAndPlayTrack}
+            />
+          </section>
+        </main>
+      </div>
+
+      <PlayerBar
         activeDevice={activeDevice}
+        bridge={bridge}
+        playback={playback}
+        status={snapshot.status}
         onAction={dispatchAction}
       />
 
-      <PlayerBar snapshot={snapshot} onAction={dispatchAction} />
+      <OverlayStack
+        announcement={snapshot.announcement}
+        dialog={snapshot.dialog}
+        overlayRoute={overlayRoute}
+        sort={snapshot.sort}
+        status={snapshot.status}
+        onAction={dispatchAction}
+      />
     </div>
   );
 }
 
 function Sidebar({
-  activeView,
-  library,
+  activeRoute,
+  libraryOptions,
+  librarySelectedIndex,
+  playback,
+  playlistFolders,
   playlists,
-  folders,
   onAction,
 }: {
-  activeView: ViewId;
-  library?: GuiLibrary;
+  activeRoute: RouteId;
+  libraryOptions: string[];
+  librarySelectedIndex: number;
+  playback: GuiPlayback;
+  playlistFolders: GuiPlaylistFolderEntry[];
   playlists: GuiPlaylist[];
-  folders: GuiPlaylistFolderEntry[];
-  onAction: (action: Record<string, unknown>) => void;
+  onAction: (action: ActionPayload) => void;
 }) {
   const playlistRows =
-    folders.length > 0
-      ? folders
+    playlistFolders.length > 0
+      ? playlistFolders
       : playlists.map((playlist, index) => ({
           kind: "playlist",
           id: playlist.id,
           name: playlist.name,
           index,
+          depth: 0,
           selected: playlist.selected,
         }));
 
+  const libraryRoutes = [
+    { label: "Home", route: "home" as const, action: { type: "open_home" } },
+    { label: "Recently Played", route: "recently_played" as const, action: { type: "open_library_item", index: 1 } },
+    { label: "Liked Songs", route: "track_table" as const, action: { type: "open_saved_tracks" } },
+    { label: "Artists", route: "artists" as const, action: { type: "open_library_item", index: 4 } },
+    { label: "Albums", route: "albums" as const, action: { type: "open_library_item", index: 3 } },
+    { label: "Podcasts", route: "podcasts" as const, action: { type: "open_library_item", index: 5 } },
+    { label: "Devices", route: "devices" as const, action: { type: "open_devices" } },
+    { label: "Queue", route: "queue" as const, action: { type: "open_queue" } },
+  ];
+
   return (
-    <aside className="sidebar" aria-label="Library navigation">
-      <div className="brand-lockup">
-        <div className="brand-mark" aria-hidden="true">S</div>
-        <div>
+    <aside className="sidebar">
+      <div className="brand-row">
+        <span className="brand-mark" aria-hidden="true" />
+        <div className="brand-copy">
           <strong>Spotatui</strong>
-          <span>Desktop</span>
+          <span>{playback.track?.title ? "Desktop TUI parity" : "Desktop fallback"}</span>
         </div>
       </div>
 
-      <nav className="primary-nav" aria-label="Primary">
-        <NavButton active={activeView === "home"} icon="home" label="Now Playing" onClick={() => onAction({ type: "open_home" })} />
-        <NavButton active={activeView === "search"} icon="search" label="Search" onClick={() => onAction({ type: "open_search", query: null })} />
-        <NavButton active={activeView === "settings"} icon="library" label="Settings" onClick={() => onAction({ type: "open_settings" })} />
-        <NavButton active={activeView === "party"} icon="device" label="Party" onClick={() => onAction({ type: "open_party" })} />
-      </nav>
+      <div className="tool-stack">
+        <ToolButton label="Search" active={activeRoute === "search"} onClick={() => onAction({ type: "open_search", query: null })} />
+        <ToolButton label="Help" active={activeRoute === "help"} onClick={() => onAction({ type: "open_help" })} />
+        <ToolButton label="Settings" active={activeRoute === "settings"} onClick={() => onAction({ type: "open_settings" })} />
+      </div>
 
-      <div className="sidebar-section">
-        <div className="section-kicker">Library</div>
+      <SidebarSection title="Library">
+        {libraryRoutes.map((item) => (
+          <SidebarButton
+            key={item.label}
+            active={activeRoute === item.route}
+            label={item.label}
+            onClick={() => onAction(item.action)}
+          />
+        ))}
+      </SidebarSection>
+
+      <SidebarSection title="Views">
+        {libraryOptions.map((option, index) => (
+          <SidebarButton
+            key={option}
+            active={librarySelectedIndex === index}
+            label={option}
+            onClick={() => onAction({ type: "open_library_item", index })}
+            suffix={index === librarySelectedIndex ? "active" : undefined}
+          />
+        ))}
+      </SidebarSection>
+
+      <SidebarSection title="Playlists">
         <div className="playlist-list">
-          {(library?.options ?? []).map((option, index) => (
-            <button
-              className={`playlist-button ${library?.selected_index === index ? "is-active" : ""}`}
-              key={option}
-              onClick={() => onAction({ type: "open_library_item", index })}
-              type="button"
-            >
-              <CoverArt label={option.slice(0, 2).toUpperCase()} imageUrl={null} size="xs" />
-              <span>
-                <strong>{option}</strong>
-                <small>Shared TUI state</small>
-              </span>
-            </button>
-          ))}
+          {playlistRows.length === 0 ? (
+            <div className="sidebar-empty">No playlists loaded</div>
+          ) : (
+            playlistRows.map((row) => (
+              <button
+                className={`playlist-row ${row.selected ? "is-active" : ""}`}
+                key={`${row.kind}-${row.id ?? row.index}`}
+                onClick={() => {
+                  if (row.kind === "playlist" && row.id) {
+                    onAction({ type: "open_playlist", playlist_id: row.id });
+                  }
+                }}
+                style={{ "--playlist-depth": row.depth } as CSSProperties}
+                type="button"
+              >
+                <span className={`playlist-kind playlist-kind-${row.kind}`} />
+                <span className="playlist-name">{row.name}</span>
+              </button>
+            ))
+          )}
         </div>
-      </div>
-
-      <div className="sidebar-section">
-        <div className="section-kicker">Playlists</div>
-        <div className="playlist-list">
-          {playlistRows.map((row) => (
-            <button
-              className={`playlist-button ${row.selected ? "is-active" : ""}`}
-              key={`${row.kind}-${row.id ?? row.index}`}
-              onClick={() => {
-                if (row.kind === "playlist" && row.id) {
-                  onAction({ type: "open_playlist", playlist_id: row.id });
-                }
-              }}
-              type="button"
-            >
-              <CoverArt label={row.kind === "folder" ? ">" : row.name.slice(0, 2).toUpperCase()} imageUrl={null} size="xs" />
-              <span>
-                <strong>{row.name}</strong>
-                <small>{row.kind}</small>
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
+      </SidebarSection>
     </aside>
   );
 }
 
-function NavButton({
+function ToolButton({
   active,
-  icon,
   label,
   onClick,
 }: {
   active: boolean;
-  icon: "home" | "search" | "library" | "device";
   label: string;
   onClick: () => void;
 }) {
   return (
-    <button className={`nav-button ${active ? "is-active" : ""}`} onClick={onClick} type="button">
-      <span className={`ui-icon ui-icon-${icon}`} aria-hidden="true" />
+    <button className={`tool-button ${active ? "is-active" : ""}`} onClick={onClick} type="button">
       <span>{label}</span>
     </button>
   );
 }
 
-function TopBar({
+function SidebarSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="sidebar-section">
+      <div className="section-label">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function SidebarButton({
+  active,
+  label,
+  onClick,
+  suffix,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  suffix?: string;
+}) {
+  return (
+    <button className={`sidebar-button ${active ? "is-active" : ""}`} onClick={onClick} type="button">
+      <span>{label}</span>
+      {suffix ? <small>{suffix}</small> : null}
+    </button>
+  );
+}
+
+function AppHeader({
   activeDevice,
   bridge,
-  searchDraft,
-  onSearchDraftChange,
-  onSearchSubmit,
+  route,
+  snapshot,
+  visibleRoute,
+  onAction,
 }: {
   activeDevice?: GuiDevice;
   bridge: BridgeState;
-  searchDraft: string;
-  onSearchDraftChange: (value: string) => void;
-  onSearchSubmit: () => void;
+  route: RouteId;
+  snapshot: GuiSnapshot;
+  visibleRoute: RouteId;
+  onAction: (action: ActionPayload) => void;
 }) {
   return (
-    <header className="topbar">
-      <form
-        className="search-box"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSearchSubmit();
-        }}
-      >
-        <span className="ui-icon ui-icon-search" aria-hidden="true" />
-        <input
-          aria-label="Search Spotify"
-          onChange={(event) => onSearchDraftChange(event.currentTarget.value)}
-          placeholder="Search tracks, artists, albums"
-          type="search"
-          value={searchDraft}
-        />
-      </form>
+    <header className="app-header">
+      <div className="header-copy">
+        <div className="eyebrow-row">
+          <span className="route-tag">{routeTitles[route]}</span>
+          {visibleRoute !== route ? <span className="overlay-tag">overlay: {routeTitles[visibleRoute]}</span> : null}
+          <span className={`bridge-tag is-${bridge.mode}`}>{bridge.message}</span>
+        </div>
+        <h1>{routeTitles[route]}</h1>
+        <p>
+          {snapshot.status.message ??
+            snapshot.status.error ??
+            `${snapshot.status.active_block} / ${snapshot.status.hovered_block}`}
+        </p>
+      </div>
 
-      <div className="topbar-status">
-        <span className={`bridge-pill is-${bridge.mode}`}>
-          <span className="status-dot" aria-hidden="true" />
-          {bridge.message}
-        </span>
-        {activeDevice && (
-          <span className="device-pill">
-            <span className="ui-icon ui-icon-device" aria-hidden="true" />
-            {activeDevice.name}
-          </span>
-        )}
+      <div className="header-actions">
+        {snapshot.user?.display_name ? <span className="header-chip">{snapshot.user.display_name}</span> : null}
+        {activeDevice ? <span className="header-chip">{activeDevice.name}</span> : null}
+        <button className="header-button" onClick={() => onAction({ type: "refresh_playback" })} type="button">
+          Refresh
+        </button>
+        <button className="header-button" onClick={() => onAction({ type: "back" })} type="button">
+          Back
+        </button>
       </div>
     </header>
   );
 }
 
-function NowPlayingView({
+function RouteView({
+  activeRoute,
+  partyCodeDraft,
+  partyNameDraft,
+  searchDraft,
   snapshot,
   onAction,
+  onPartyCodeDraftChange,
+  onPartyNameDraftChange,
+  onSearchDraftChange,
+  onSearchSubmit,
+  onTrackTablePlay,
 }: {
+  activeRoute: RouteId;
+  partyCodeDraft: string;
+  partyNameDraft: string;
+  searchDraft: string;
   snapshot: GuiSnapshot;
-  onAction: (action: Record<string, unknown>) => void;
+  onAction: (action: ActionPayload) => void;
+  onPartyCodeDraftChange: (value: string) => void;
+  onPartyNameDraftChange: (value: string) => void;
+  onSearchDraftChange: (value: string) => void;
+  onSearchSubmit: () => void;
+  onTrackTablePlay: (index: number) => Promise<void>;
 }) {
-  const playback = snapshot.playback ?? {};
-  const track = playback.track;
-  const progress = playback.progress_ms ?? 0;
-  const duration = track?.duration_ms ?? 0;
-  const progressPercent = duration > 0 ? Math.round((progress / duration) * 100) : 0;
+  switch (activeRoute) {
+    case "home":
+      return <HomeView home={snapshot.home} status={snapshot.status} />;
+    case "search":
+      return (
+        <SearchView
+          search={snapshot.search}
+          searchDraft={searchDraft}
+          onAction={onAction}
+          onSearchDraftChange={onSearchDraftChange}
+          onSearchSubmit={onSearchSubmit}
+        />
+      );
+    case "track_table":
+    case "recommendations":
+      return (
+        <TrackTableView
+          route={activeRoute}
+          table={snapshot.track_table}
+          onAction={onAction}
+          onTrackTablePlay={onTrackTablePlay}
+        />
+      );
+    case "queue":
+      return <QueueView snapshot={snapshot} onAction={onAction} />;
+    case "recently_played":
+      return <RecentlyPlayedView tracks={snapshot.recently_played} onAction={onAction} />;
+    case "albums":
+      return <AlbumsView albums={snapshot.albums.albums} selectedIndex={snapshot.albums.selected_index} onAction={onAction} />;
+    case "album_tracks":
+      return <AlbumTracksView albumTracks={snapshot.album_tracks} onAction={onAction} />;
+    case "artists":
+      return <ArtistsView artists={snapshot.artists.artists} selectedIndex={snapshot.artists.selected_index} onAction={onAction} />;
+    case "artist":
+      return <ArtistDetailView detail={snapshot.artist_detail} onAction={onAction} />;
+    case "podcasts":
+      return <PodcastsView shows={snapshot.podcasts.shows} selectedIndex={snapshot.podcasts.selected_index} onAction={onAction} />;
+    case "podcast_episodes":
+      return <PodcastEpisodesView podcastEpisodes={snapshot.podcast_episodes} onAction={onAction} />;
+    case "lyrics":
+      return <LyricsView lyrics={snapshot.lyrics} />;
+    case "discover":
+      return <DiscoverView discover={snapshot.discover} onAction={onAction} />;
+    case "devices":
+      return <DevicesView devices={snapshot.devices} playback={snapshot.playback} onAction={onAction} />;
+    case "help":
+      return <HelpView help={snapshot.help} />;
+    case "analysis":
+      return <AnalysisView snapshot={snapshot} onAction={onAction} />;
+    case "cover_art":
+      return <CoverArtView snapshot={snapshot} />;
+    case "settings":
+      return <SettingsView settings={snapshot.settings} onAction={onAction} />;
+    case "party":
+      return (
+        <PartyView
+          party={snapshot.party}
+          partyCodeDraft={partyCodeDraft}
+          partyNameDraft={partyNameDraft}
+          onAction={onAction}
+          onPartyCodeDraftChange={onPartyCodeDraftChange}
+          onPartyNameDraftChange={onPartyNameDraftChange}
+        />
+      );
+    case "create_playlist":
+      return <CreatePlaylistView createPlaylist={snapshot.create_playlist} onAction={onAction} />;
+    case "error":
+      return <ErrorView status={snapshot.status} />;
+    case "dialog":
+    case "announcement":
+    case "exit":
+      return <HomeView home={snapshot.home} status={snapshot.status} />;
+  }
+}
 
+function HomeView({ home, status }: { home: GuiHome; status: GuiStatus }) {
   return (
-    <section className="view now-view" aria-label="Now playing">
-      <div className="now-hero">
-        <CoverArt imageUrl={track?.image_url ?? null} label={trackInitials(track)} size="hero" />
-        <div className="now-copy">
-          <div className="section-kicker">Now playing</div>
-          <h1>{track?.title ?? "Nothing playing"}</h1>
-          <p>{artistText(track)}{track?.album ? ` / ${track.album}` : ""}</p>
-
-          <div className="hero-actions">
-            <button className="primary-action" onClick={() => onAction({ type: "toggle_playback" })} type="button">
-              <span className={`transport-icon ${playback.is_playing ? "icon-pause" : "icon-play"}`} aria-hidden="true" />
-              {playback.is_playing ? "Pause" : "Play"}
-            </button>
-            <button className={`mode-chip ${playback.shuffle ? "is-active" : ""}`} onClick={() => onAction({ type: "toggle_shuffle" })} type="button">
-              Shuffle
-            </button>
-            <button className={`mode-chip ${playback.repeat && playback.repeat !== "off" ? "is-active" : ""}`} onClick={() => onAction({ type: "toggle_repeat" })} type="button">
-              Repeat {playback.repeat === "track" ? "1" : ""}
-            </button>
-          </div>
-
-          <div className="hero-meter" aria-label="Track progress">
-            <div className="meter-header">
-              <span>{formatDuration(progress)}</span>
-              <strong>{progressPercent}%</strong>
-              <span>{formatDuration(duration)}</span>
+    <div className="route-grid route-grid-home">
+      <Panel eyebrow="Status" title="Runtime" meta={status.is_streaming_active ? "Native streaming" : "Spotify API"}>
+        <div className="banner-block">
+          {home.banner.map((line, index) => (
+            <div className="banner-line" key={`${line}-${index}`}>
+              {line}
             </div>
-            <div className="meter-track"><span style={{ width: `${progressPercent}%` }} /></div>
-          </div>
+          ))}
         </div>
-      </div>
+        <div className="detail-copy">
+          <strong>{home.counter_message || "Global counter unavailable."}</strong>
+          <p>{status.message ?? "Desktop route parity shell connected to the shared TUI state."}</p>
+        </div>
+      </Panel>
 
-      <div className="content-grid">
-        <section className="track-panel">
-          <PanelHeading eyebrow="Queue" title="Up next" value={`${snapshot.queue?.length ?? 0} tracks`} />
-          <TrackList tracks={snapshot.queue ?? []} variant="queue" />
-        </section>
-        <section className="track-panel">
-          <PanelHeading eyebrow="History" title="Recently played" value={`${snapshot.recently_played?.length ?? 0} tracks`} />
-          <TrackList tracks={snapshot.recently_played ?? []} variant="compact" />
-        </section>
-      </div>
-    </section>
+      <Panel eyebrow="Changelog" title="Recent Notes" meta={`${home.changelog_lines.length}`}>
+        <ListBlock
+          emptyLabel="No changelog entries available."
+          items={home.changelog_lines.map((line) => (
+            <div className="simple-line" key={line}>
+              {line}
+            </div>
+          ))}
+        />
+      </Panel>
+
+      <Panel eyebrow="Paths" title="Runtime Files">
+        <dl className="meta-list">
+          <div>
+            <dt>Log path</dt>
+            <dd>{home.log_path || "Unavailable"}</dd>
+          </div>
+          <div>
+            <dt>Issue report</dt>
+            <dd>
+              {home.report_url ? (
+                <a href={home.report_url} rel="noreferrer" target="_blank">
+                  {home.report_url}
+                </a>
+              ) : (
+                "Unavailable"
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>Active block</dt>
+            <dd>{status.active_block}</dd>
+          </div>
+          <div>
+            <dt>Hovered block</dt>
+            <dd>{status.hovered_block}</dd>
+          </div>
+        </dl>
+      </Panel>
+    </div>
   );
 }
 
 function SearchView({
   search,
-  query,
-  onQueryChange,
-  onSubmit,
-  onPlayTrack,
+  searchDraft,
+  onAction,
+  onSearchDraftChange,
+  onSearchSubmit,
 }: {
-  search?: GuiSearchResults;
-  query: string;
-  onQueryChange: (query: string) => void;
-  onSubmit: () => void;
-  onPlayTrack: (index: number) => void;
+  search: GuiSearchResults;
+  searchDraft: string;
+  onAction: (action: ActionPayload) => void;
+  onSearchDraftChange: (value: string) => void;
+  onSearchSubmit: () => void;
 }) {
   return (
-    <section className="view list-view" aria-label="Search">
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">Search</div>
-          <h1>Find music</h1>
-        </div>
+    <div className="route-grid route-grid-search">
+      <Panel eyebrow="Search" title="Spotify Search" meta={search.query || "No query"}>
         <form
-          className="inline-search"
+          className="search-toolbar"
           onSubmit={(event) => {
             event.preventDefault();
-            onSubmit();
+            onSearchSubmit();
           }}
         >
-          <span className="ui-icon ui-icon-search" aria-hidden="true" />
-          <input aria-label="Search tracks" onChange={(event) => onQueryChange(event.currentTarget.value)} placeholder="Track, artist, album" type="search" value={query} />
+          <input
+            className="text-input"
+            onChange={(event) => onSearchDraftChange(event.currentTarget.value)}
+            placeholder="Search tracks, artists, albums, playlists, podcasts"
+            type="search"
+            value={searchDraft}
+          />
+          <button className="primary-button" type="submit">
+            Search
+          </button>
         </form>
-      </div>
+      </Panel>
 
-      <TrackTable emptyLabel="No search results loaded" onPlayTrack={onPlayTrack} tracks={search?.tracks ?? []} />
-    </section>
+      <SearchTrackPanel search={search} onAction={onAction} />
+      <SearchArtistsPanel search={search} onAction={onAction} />
+      <SearchAlbumsPanel search={search} onAction={onAction} />
+      <SearchPlaylistsPanel search={search} onAction={onAction} />
+      <SearchShowsPanel search={search} onAction={onAction} />
+    </div>
+  );
+}
+
+function SearchTrackPanel({
+  search,
+  onAction,
+}: {
+  search: GuiSearchResults;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <Panel eyebrow="Songs" title="Songs" meta={String(search.tracks.length)}>
+      <TrackTableBlock
+        block="search_tracks"
+        tracks={search.tracks}
+        selectedIndex={search.selected_track_index ?? -1}
+        onAction={onAction}
+      />
+    </Panel>
+  );
+}
+
+function SearchArtistsPanel({
+  search,
+  onAction,
+}: {
+  search: GuiSearchResults;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <Panel eyebrow="Artists" title="Artists" meta={String(search.artists.length)}>
+      <ArtistRows
+        artists={search.artists}
+        selectedIndex={search.selected_artist_index ?? -1}
+        onOpen={(index) => onAction({ type: "open_indexed_item", block: "search_artists", index })}
+        onRecommend={(index) => onAction({ type: "recommend_indexed_item", block: "search_artists", index })}
+        onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "search_artists", index })}
+      />
+    </Panel>
+  );
+}
+
+function SearchAlbumsPanel({
+  search,
+  onAction,
+}: {
+  search: GuiSearchResults;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <Panel eyebrow="Albums" title="Albums" meta={String(search.albums.length)}>
+      <AlbumRows
+        albums={search.albums}
+        selectedIndex={search.selected_album_index ?? -1}
+        onOpen={(index) => onAction({ type: "open_indexed_item", block: "search_albums", index })}
+        onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "search_albums", index })}
+      />
+    </Panel>
+  );
+}
+
+function SearchPlaylistsPanel({
+  search,
+  onAction,
+}: {
+  search: GuiSearchResults;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <Panel eyebrow="Playlists" title="Playlists" meta={String(search.playlists.length)}>
+      <PlaylistRows
+        playlists={search.playlists}
+        selectedIndex={search.selected_playlist_index ?? -1}
+        onOpen={(index) => onAction({ type: "open_indexed_item", block: "search_playlists", index })}
+      />
+    </Panel>
+  );
+}
+
+function SearchShowsPanel({
+  search,
+  onAction,
+}: {
+  search: GuiSearchResults;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <Panel eyebrow="Podcasts" title="Podcasts" meta={String(search.shows.length)}>
+      <ShowRows
+        shows={search.shows}
+        selectedIndex={search.selected_show_index ?? -1}
+        onOpen={(index) => onAction({ type: "open_indexed_item", block: "search_shows", index })}
+        onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "search_shows", index })}
+      />
+    </Panel>
   );
 }
 
 function TrackTableView({
+  route,
   table,
   onAction,
+  onTrackTablePlay,
 }: {
-  table?: GuiTrackTable;
-  onAction: (action: Record<string, unknown>) => void;
+  route: RouteId;
+  table: GuiTrackTable;
+  onAction: (action: ActionPayload) => void;
+  onTrackTablePlay: (index: number) => Promise<void>;
 }) {
-  const title = table?.playlist_name ?? table?.context ?? "Tracks";
   return (
-    <section className="view list-view" aria-label="Tracks">
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">{table?.context ?? "Track table"}</div>
-          <h1>{title}</h1>
-        </div>
-        <div className="hero-actions">
-          <button className="mode-chip" onClick={() => onAction({ type: "track_table_previous_page" })} type="button">Previous</button>
-          <button className="mode-chip" onClick={() => onAction({ type: "track_table_next_page" })} type="button">Next</button>
-          <button className="mode-chip" onClick={() => onAction({ type: "queue_selected_track" })} type="button">Queue</button>
-          <button className="mode-chip" onClick={() => onAction({ type: "toggle_save_selected_track" })} type="button">Save</button>
-        </div>
-      </div>
-      <TrackTable
-        emptyLabel="No tracks loaded"
-        selectedIndex={table?.selected_index ?? 0}
-        onPlayTrack={(index) => {
-          onAction({ type: "select_track", index });
-          onAction({ type: "play_selected_track" });
-        }}
-        tracks={table?.tracks ?? []}
-      />
-    </section>
+    <div className="route-grid">
+      <Panel
+        eyebrow={table.context ?? route}
+        title={table.playlist_name ?? routeTitles[route]}
+        meta={pageMeta(table.page)}
+        actions={
+          <>
+            <button className="panel-button" onClick={() => onAction({ type: "track_table_previous_page" })} type="button">
+              Prev
+            </button>
+            <button className="panel-button" onClick={() => onAction({ type: "track_table_next_page" })} type="button">
+              Next
+            </button>
+            <button className="panel-button" onClick={() => onAction({ type: "open_sort_menu", context: mapSortContext(table.context) })} type="button">
+              Sort
+            </button>
+            <button className="panel-button" onClick={() => onAction({ type: "play_random_track" })} type="button">
+              Random
+            </button>
+          </>
+        }
+      >
+        <TrackTableBlock
+          block="track_table"
+          selectedIndex={table.selected_index}
+          tracks={table.tracks}
+          onAction={onAction}
+          onPlay={onTrackTablePlay}
+        />
+      </Panel>
+    </div>
   );
 }
 
-function SimpleTracksView({ title, tracks, emptyLabel }: { title: string; tracks: GuiTrack[]; emptyLabel: string }) {
-  return (
-    <section className="view list-view" aria-label={title}>
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">Spotify</div>
-          <h1>{title}</h1>
-        </div>
-      </div>
-      <TrackTable emptyLabel={emptyLabel} tracks={tracks} />
-    </section>
-  );
-}
-
-function AlbumsView({ albums }: { albums: GuiAlbum[] }) {
-  return <CollectionView title="Albums" emptyLabel="No albums loaded" items={albums.map((album) => ({ title: album.name, subtitle: (album.artists ?? []).join(", "), imageUrl: album.image_url }))} />;
-}
-
-function ArtistsView({ artists }: { artists: GuiArtist[] }) {
-  return <CollectionView title="Artists" emptyLabel="No artists loaded" items={artists.map((artist) => ({ title: artist.name, subtitle: artist.followers ? `${artist.followers} followers` : "", imageUrl: artist.image_url }))} />;
-}
-
-function PodcastsView({ shows }: { shows: GuiShow[] }) {
-  return <CollectionView title="Podcasts" emptyLabel="No podcasts loaded" items={shows.map((show) => ({ title: show.name, subtitle: show.publisher ?? "", imageUrl: show.image_url }))} />;
-}
-
-function CollectionView({ title, emptyLabel, items }: { title: string; emptyLabel: string; items: Array<{ title: string; subtitle?: string; imageUrl?: string | null }> }) {
-  return (
-    <section className="view list-view" aria-label={title}>
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">Library</div>
-          <h1>{title}</h1>
-        </div>
-      </div>
-      {items.length === 0 ? <div className="empty-state">{emptyLabel}</div> : (
-        <div className="track-list">
-          {items.map((item) => (
-            <div className="track-row" key={`${item.title}-${item.subtitle}`}>
-              <CoverArt imageUrl={item.imageUrl ?? null} label={item.title.slice(0, 2).toUpperCase()} size="xs" />
-              <span className="track-row-copy">
-                <strong>{item.title}</strong>
-                <small>{item.subtitle}</small>
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function LyricsView({ lyrics }: { lyrics?: GuiLyrics }) {
-  return (
-    <section className="view list-view" aria-label="Lyrics">
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">{lyrics?.status ?? "Lyrics"}</div>
-          <h1>Lyrics</h1>
-        </div>
-      </div>
-      <div className="track-list">
-        {(lyrics?.lines ?? []).map((line) => (
-          <div className="track-row" key={`${line.timestamp_ms}-${line.text}`}>
-            <span className="track-index">{formatDuration(line.timestamp_ms)}</span>
-            <span className="track-row-copy"><strong>{line.text}</strong></span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function DiscoverView({ discover }: { discover?: GuiDiscover }) {
-  const tracks = [...(discover?.top_tracks ?? []), ...(discover?.artists_mix ?? [])];
-  return <SimpleTracksView title={`Discover ${discover?.time_range ?? ""}`} tracks={tracks} emptyLabel={discover?.loading ? "Loading discover data" : "No discover data loaded"} />;
-}
-
-function SettingsView({ settings }: { settings?: GuiSettings }) {
-  return (
-    <section className="view list-view" aria-label="Settings">
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">{settings?.category ?? "Settings"}</div>
-          <h1>Settings</h1>
-        </div>
-      </div>
-      <div className="track-table">
-        {(settings?.items ?? []).map((item, index) => (
-          <div className={`track-table-row ${settings?.selected_index === index ? "is-active" : ""}`} key={item.id}>
-            <span className="track-index">{index + 1}</span>
-            <span className="table-track-cell"><span><strong>{item.name}</strong><small>{item.description}</small></span></span>
-            <span>{item.value_type}</span>
-            <span>{item.value}</span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function PartyView({ party, onAction }: { party?: GuiParty; onAction: (action: Record<string, unknown>) => void }) {
-  return (
-    <section className="view list-view" aria-label="Party">
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">{party?.status ?? "Disconnected"}</div>
-          <h1>Listening Party</h1>
-        </div>
-        <div className="hero-actions">
-          <button className="mode-chip" onClick={() => onAction({ type: "start_party", control_mode: "host_only" })} type="button">Host</button>
-          <button className="mode-chip" onClick={() => onAction({ type: "leave_party" })} type="button">Leave</button>
-        </div>
-      </div>
-      <div className="status-card">
-        <span className="status-dot large" />
-        <div>
-          <strong>{party?.code ? `Code ${party.code}` : "No active party"}</strong>
-          <span>{party?.guests?.length ? `${party.guests.length} guests` : party?.control_mode ?? "Disconnected"}</span>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function CreatePlaylistView({ createPlaylist }: { createPlaylist?: GuiCreatePlaylist }) {
-  return (
-    <section className="view list-view" aria-label="Create playlist">
-      <div className="view-header">
-        <div>
-          <div className="section-kicker">{createPlaylist?.stage ?? "Name"}</div>
-          <h1>{createPlaylist?.name || "Create Playlist"}</h1>
-        </div>
-      </div>
-      <TrackTable emptyLabel="No tracks added" tracks={createPlaylist?.tracks ?? []} />
-    </section>
-  );
-}
-
-function RightRail({
-  bridge,
-  devices,
-  queue,
-  activeDevice,
+function QueueView({
+  snapshot,
   onAction,
 }: {
-  bridge: BridgeState;
-  devices: GuiDevice[];
-  queue: GuiTrack[];
-  activeDevice?: GuiDevice;
-  onAction: (action: Record<string, unknown>) => void;
+  snapshot: GuiSnapshot;
+  onAction: (action: ActionPayload) => void;
 }) {
   return (
-    <aside className="right-rail" aria-label="Playback status">
-      <section className="rail-section">
-        <PanelHeading eyebrow="Status" title="Playback" value={bridge.mode} />
-        <div className="status-card">
-          <span className={`status-dot large is-${bridge.mode}`} />
-          <div>
-            <strong>{bridge.message}</strong>
-            <span>{activeDevice ? `${activeDevice.name} at ${activeDevice.volume_percent ?? 0}%` : "No active device"}</span>
-          </div>
-        </div>
-      </section>
+    <div className="route-grid route-grid-two">
+      <Panel eyebrow="Now Playing" title="Current Item">
+        {snapshot.queue_view.current ? (
+          <NowCard track={snapshot.queue_view.current} />
+        ) : (
+          <EmptyState label="Nothing is currently queued as playing." />
+        )}
+      </Panel>
 
-      <section className="rail-section">
-        <PanelHeading eyebrow="Devices" title="Connect" value={`${devices.length}`} />
-        <div className="device-list">
-          {devices.map((device) => (
+      <Panel eyebrow="Queue" title="Up Next" meta={String(snapshot.queue_view.items.length)}>
+        <TrackTableBlock
+          block="queue"
+          selectedIndex={snapshot.queue_view.selected_index}
+          tracks={snapshot.queue_view.items}
+          onAction={onAction}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function RecentlyPlayedView({
+  tracks,
+  onAction,
+}: {
+  tracks: GuiTrack[];
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow="History" title="Recently Played" meta={String(tracks.length)}>
+        <TrackTableBlock block="recently_played" selectedIndex={-1} tracks={tracks} onAction={onAction} />
+      </Panel>
+    </div>
+  );
+}
+
+function AlbumsView({
+  albums,
+  selectedIndex,
+  onAction,
+}: {
+  albums: GuiAlbum[];
+  selectedIndex: number;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow="Library" title="Saved Albums" meta={String(albums.length)}>
+        <AlbumRows
+          albums={albums}
+          selectedIndex={selectedIndex}
+          onOpen={(index) => onAction({ type: "open_indexed_item", block: "saved_albums", index })}
+          onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "saved_albums", index })}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function AlbumTracksView({
+  albumTracks,
+  onAction,
+}: {
+  albumTracks: GuiTrackTable | { album: GuiAlbum | null; context: string; tracks: GuiTrack[]; selected_index: number; page: { offset: number; limit: number; total: number; page_index: number; page_count: number; has_previous: boolean; has_next: boolean } };
+  onAction: (action: ActionPayload) => void;
+}) {
+  const current = albumTracks as {
+    album: GuiAlbum | null;
+    context: string;
+    tracks: GuiTrack[];
+    selected_index: number;
+    page: { offset: number; limit: number; total: number; page_index: number; page_count: number; has_previous: boolean; has_next: boolean };
+  };
+
+  return (
+    <div className="route-grid">
+      <Panel eyebrow={current.context} title={current.album?.name || "Album Tracks"} meta={pageMeta(current.page)}>
+        {current.album ? <AlbumHero album={current.album} /> : null}
+        <TrackTableBlock
+          block="album_tracks"
+          selectedIndex={current.selected_index}
+          tracks={current.tracks}
+          onAction={onAction}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function ArtistsView({
+  artists,
+  selectedIndex,
+  onAction,
+}: {
+  artists: GuiArtist[];
+  selectedIndex: number;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow="Library" title="Followed Artists" meta={String(artists.length)}>
+        <ArtistRows
+          artists={artists}
+          selectedIndex={selectedIndex}
+          onOpen={(index) => onAction({ type: "open_indexed_item", block: "saved_artists", index })}
+          onRecommend={(index) => onAction({ type: "recommend_indexed_item", block: "saved_artists", index })}
+          onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "saved_artists", index })}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function ArtistDetailView({
+  detail,
+  onAction,
+}: {
+  detail: GuiSnapshot["artist_detail"];
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid route-grid-three">
+      <Panel eyebrow="Artist" title={detail.artist?.name || "Artist Detail"} meta={detail.selected_block}>
+        {detail.artist ? <ArtistHero artist={detail.artist} /> : <EmptyState label="No artist selected." />}
+      </Panel>
+
+      <Panel eyebrow="Top Tracks" title="Top Tracks" meta={String(detail.top_tracks.length)}>
+        <TrackTableBlock
+          block="artist_top_tracks"
+          selectedIndex={detail.selected_top_track_index}
+          tracks={detail.top_tracks}
+          onAction={onAction}
+        />
+      </Panel>
+
+      <Panel eyebrow="Albums" title="Albums" meta={String(detail.albums.length)}>
+        <AlbumRows
+          albums={detail.albums}
+          selectedIndex={detail.selected_album_index}
+          onOpen={(index) => onAction({ type: "open_indexed_item", block: "artist_albums", index })}
+          onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "artist_albums", index })}
+        />
+      </Panel>
+
+      <Panel eyebrow="Related Artists" title="Related Artists" meta={String(detail.related_artists.length)}>
+        <ArtistRows
+          artists={detail.related_artists}
+          selectedIndex={detail.selected_related_artist_index}
+          onOpen={(index) => onAction({ type: "open_indexed_item", block: "artist_related_artists", index })}
+          onRecommend={(index) => onAction({ type: "recommend_indexed_item", block: "artist_related_artists", index })}
+          onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "artist_related_artists", index })}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function PodcastsView({
+  shows,
+  selectedIndex,
+  onAction,
+}: {
+  shows: GuiShow[];
+  selectedIndex: number;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow="Library" title="Saved Podcasts" meta={String(shows.length)}>
+        <ShowRows
+          shows={shows}
+          selectedIndex={selectedIndex}
+          onOpen={(index) => onAction({ type: "open_indexed_item", block: "saved_podcasts", index })}
+          onSave={(index) => onAction({ type: "toggle_save_indexed_item", block: "saved_podcasts", index })}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function PodcastEpisodesView({
+  podcastEpisodes,
+  onAction,
+}: {
+  podcastEpisodes: GuiPodcastEpisodes;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid">
+      <Panel
+        eyebrow={podcastEpisodes.context}
+        title={podcastEpisodes.show?.name || "Podcast Episodes"}
+        meta={pageMeta(podcastEpisodes.page)}
+        actions={
+          <button className="panel-button" onClick={() => onAction({ type: "toggle_save_indexed_item", block: "podcast_episodes", index: podcastEpisodes.selected_index })} type="button">
+            Save Show
+          </button>
+        }
+      >
+        {podcastEpisodes.show ? <ShowHero show={podcastEpisodes.show} /> : null}
+        <EpisodeRows
+          episodes={podcastEpisodes.episodes}
+          selectedIndex={podcastEpisodes.selected_index}
+          onPlay={(index) => onAction({ type: "play_indexed_item", block: "podcast_episodes", index })}
+          onQueue={(index) => onAction({ type: "queue_indexed_item", block: "podcast_episodes", index })}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function LyricsView({ lyrics }: { lyrics: GuiSnapshot["lyrics"] }) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow={lyrics.status} title="Lyrics" meta={String(lyrics.lines.length)}>
+        <ListBlock
+          emptyLabel="No synced lyrics available."
+          items={lyrics.lines.map((line) => (
+            <div className="lyric-row" key={`${line.timestamp_ms}-${line.text}`}>
+              <span>{formatDuration(line.timestamp_ms)}</span>
+              <strong>{line.text}</strong>
+            </div>
+          ))}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function DiscoverView({
+  discover,
+  onAction,
+}: {
+  discover: GuiDiscover;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid route-grid-two">
+      <Panel eyebrow={discover.time_range} title="Top Tracks" meta={discover.loading ? "Loading" : String(discover.top_tracks.length)}>
+        <TrackTableBlock
+          block="discover_top_tracks"
+          selectedIndex={discover.selected_index}
+          tracks={discover.top_tracks}
+          onAction={onAction}
+        />
+      </Panel>
+
+      <Panel eyebrow="Mix" title="Artists Mix" meta={String(discover.artists_mix.length)}>
+        <TrackTableBlock
+          block="discover_artists_mix"
+          selectedIndex={discover.selected_index}
+          tracks={discover.artists_mix}
+          onAction={onAction}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function DevicesView({
+  devices,
+  playback,
+  onAction,
+}: {
+  devices: GuiDevice[];
+  playback: GuiPlayback;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow="Devices" title="Playback Targets" meta={String(devices.length)}>
+        <ListBlock
+          emptyLabel="No devices available."
+          items={devices.map((device) => (
             <button
-              className={`device-row ${device.is_active ? "is-active" : ""}`}
+              className={`device-card ${device.is_active ? "is-active" : ""}`}
               key={device.id ?? device.name}
-              onClick={() => device.id && onAction({ type: "transfer_playback", device_id: device.id, play: true })}
+              onClick={() => {
+                if (device.id) {
+                  onAction({ type: "transfer_playback", device_id: device.id, play: playback.is_playing });
+                }
+              }}
               type="button"
             >
-              <span className="ui-icon ui-icon-device" aria-hidden="true" />
               <div>
                 <strong>{device.name}</strong>
                 <span>{device.device_type}</span>
@@ -867,132 +1040,1005 @@ function RightRail({
               <small>{device.volume_percent ?? 0}%</small>
             </button>
           ))}
-        </div>
-      </section>
-
-      <section className="rail-section rail-queue">
-        <PanelHeading eyebrow="Queue" title="Next" value={`${queue.length}`} />
-        <TrackList tracks={queue} variant="rail" />
-      </section>
-    </aside>
+        />
+      </Panel>
+    </div>
   );
 }
 
-function PlayerBar({
+function HelpView({ help }: { help: GuiHelp }) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow={`Page ${help.page + 1}`} title="Help" meta={`${help.docs.length} bindings`}>
+        <ListBlock
+          emptyLabel="Help index unavailable."
+          items={help.docs.map((item) => (
+            <div className="help-row" key={`${item.binding}-${item.description}`}>
+              <strong>{item.description}</strong>
+              <span>{item.context}</span>
+              <code>{item.binding}</code>
+            </div>
+          ))}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function AnalysisView({
   snapshot,
   onAction,
 }: {
   snapshot: GuiSnapshot;
-  onAction: (action: Record<string, unknown>) => void;
+  onAction: (action: ActionPayload) => void;
 }) {
-  const playback = snapshot.playback ?? {};
-  const track = playback.track;
-  const progress = playback.progress_ms ?? 0;
-  const duration = track?.duration_ms ?? 0;
+  return (
+    <div className="route-grid route-grid-two">
+      <Panel
+        eyebrow={snapshot.analysis.audio_capture_active ? "Capture Active" : "Capture Idle"}
+        title="Audio Analysis"
+        meta={snapshot.analysis.visualizer_style}
+        actions={
+          <button className="panel-button" onClick={() => onAction({ type: "cycle_visualizer_style" })} type="button">
+            Cycle Style
+          </button>
+        }
+      >
+        <div className="analysis-metrics">
+          <div>
+            <dt>Tick rate</dt>
+            <dd>{snapshot.analysis.tick_rate_ms} ms</dd>
+          </div>
+          <div>
+            <dt>Peak</dt>
+            <dd>{snapshot.analysis.peak?.toFixed(3) ?? "n/a"}</dd>
+          </div>
+          <div>
+            <dt>Bars</dt>
+            <dd>{snapshot.analysis.bands.length}</dd>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel eyebrow="Spectrum" title="Bands" meta={String(snapshot.analysis.bands.length)}>
+        <SpectrumBars bands={snapshot.analysis.bands} />
+      </Panel>
+    </div>
+  );
+}
+
+function CoverArtView({ snapshot }: { snapshot: GuiSnapshot }) {
+  return (
+    <div className="route-grid route-grid-two">
+      <Panel eyebrow={snapshot.cover_art.mode} title="Cover Art" meta={snapshot.cover_art.device_name ?? "No device"}>
+        <div className="cover-stage">
+          <CoverArt imageUrl={snapshot.cover_art.image_url} label={trackInitials(snapshot.cover_art.track)} size="xl" />
+        </div>
+      </Panel>
+
+      <Panel eyebrow={snapshot.cover_art.enabled ? "Enabled" : "Disabled"} title={snapshot.cover_art.track?.title || "No track"}>
+        <div className="detail-copy">
+          <strong>{artistLine(snapshot.cover_art.track)}</strong>
+          <p>{snapshot.cover_art.track?.album || "No album metadata available."}</p>
+        </div>
+        <dl className="meta-list">
+          <div>
+            <dt>Mode</dt>
+            <dd>{snapshot.cover_art.mode}</dd>
+          </div>
+          <div>
+            <dt>Forced</dt>
+            <dd>{snapshot.cover_art.forced ? "Yes" : "No"}</dd>
+          </div>
+          <div>
+            <dt>Device</dt>
+            <dd>{snapshot.cover_art.device_name || "Unavailable"}</dd>
+          </div>
+        </dl>
+      </Panel>
+    </div>
+  );
+}
+
+function SettingsView({
+  settings,
+  onAction,
+}: {
+  settings: GuiSettings;
+  onAction: (action: ActionPayload) => void;
+}) {
+  const selectedItem = settings.items[settings.selected_index];
 
   return (
-    <footer className="player-bar" aria-label="Player controls">
-      <div className="player-track">
-        <CoverArt imageUrl={track?.image_url ?? null} label={trackInitials(track)} size="sm" />
-        <div>
-          <strong>{track?.title ?? "Nothing playing"}</strong>
-          <span>{artistText(track)}</span>
+    <div className="route-grid route-grid-settings">
+      <Panel eyebrow="Categories" title="Settings" meta={settings.category}>
+        <div className="category-list">
+          {settings.categories.map((category, index) => (
+            <button
+              className={`category-pill ${index === settings.category_index ? "is-active" : ""}`}
+              key={category}
+              onClick={() => onAction({ type: "select_settings_category", index })}
+              type="button"
+            >
+              {category}
+            </button>
+          ))}
+        </div>
+
+        <div className="settings-list">
+          {settings.items.map((item, index) => (
+            <button
+              className={`settings-row ${index === settings.selected_index ? "is-active" : ""}`}
+              key={item.id}
+              onClick={() => onAction({ type: "select_settings_item", index })}
+              type="button"
+            >
+              <strong>{item.name}</strong>
+              <span>{item.value}</span>
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel
+        eyebrow={settings.edit_mode ? "Edit Mode" : selectedItem?.value_type || "Setting"}
+        title={selectedItem?.name || "Select a setting"}
+        actions={
+          <>
+            <button className="panel-button" onClick={() => onAction({ type: "activate_setting" })} type="button">
+              Activate
+            </button>
+            <button className="panel-button" onClick={() => onAction({ type: "save_settings" })} type="button">
+              Save
+            </button>
+          </>
+        }
+      >
+        {selectedItem ? (
+          <>
+            <div className="detail-copy">
+              <strong>{selectedItem.value}</strong>
+              <p>{selectedItem.description}</p>
+            </div>
+            {settings.edit_mode ? (
+              <div className="editor-stack">
+                <input
+                  className="text-input"
+                  onChange={(event) => onAction({ type: "update_settings_edit_buffer", value: event.currentTarget.value })}
+                  type="text"
+                  value={settings.edit_buffer}
+                />
+                <div className="button-row">
+                  <button className="primary-button" onClick={() => onAction({ type: "commit_settings_edit" })} type="button">
+                    Commit
+                  </button>
+                  <button className="panel-button" onClick={() => onAction({ type: "cancel_settings_edit" })} type="button">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <EmptyState label="No setting selected." />
+        )}
+
+        {settings.unsaved_prompt_visible ? (
+          <div className="prompt-banner">
+            <span>Unsaved changes detected.</span>
+            <div className="button-row">
+              <button
+                className={`panel-button ${settings.unsaved_prompt_save_selected ? "is-primary-alt" : ""}`}
+                onClick={() => onAction({ type: "resolve_settings_unsaved_prompt", save: true })}
+                type="button"
+              >
+                Save
+              </button>
+              <button
+                className={`panel-button ${!settings.unsaved_prompt_save_selected ? "is-primary-alt" : ""}`}
+                onClick={() => onAction({ type: "resolve_settings_unsaved_prompt", save: false })}
+                type="button"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </Panel>
+    </div>
+  );
+}
+
+function PartyView({
+  party,
+  partyCodeDraft,
+  partyNameDraft,
+  onAction,
+  onPartyCodeDraftChange,
+  onPartyNameDraftChange,
+}: {
+  party: GuiParty;
+  partyCodeDraft: string;
+  partyNameDraft: string;
+  onAction: (action: ActionPayload) => void;
+  onPartyCodeDraftChange: (value: string) => void;
+  onPartyNameDraftChange: (value: string) => void;
+}) {
+  return (
+    <div className="route-grid route-grid-two">
+      <Panel
+        eyebrow={party.status}
+        title="Listening Party"
+        meta={party.code || "No room"}
+        actions={
+          <>
+            <button className="panel-button" onClick={() => onAction({ type: "leave_party" })} type="button">
+              Leave
+            </button>
+            <button className="panel-button" onClick={() => onAction({ type: "set_party_control_mode", control_mode: "shared_control" })} type="button">
+              Shared
+            </button>
+          </>
+        }
+      >
+        <div className="party-grid">
+          <button className="primary-button" onClick={() => onAction({ type: "start_party", control_mode: "host_only" })} type="button">
+            Host Only
+          </button>
+          <button className="panel-button" onClick={() => onAction({ type: "start_party", control_mode: "shared_control" })} type="button">
+            Host Shared
+          </button>
+        </div>
+        <dl className="meta-list">
+          <div>
+            <dt>Role</dt>
+            <dd>{party.role || "None"}</dd>
+          </div>
+          <div>
+            <dt>Host</dt>
+            <dd>{party.host_name || "Unavailable"}</dd>
+          </div>
+          <div>
+            <dt>Control</dt>
+            <dd>{party.control_mode || "Unavailable"}</dd>
+          </div>
+          <div>
+            <dt>Guests</dt>
+            <dd>{party.guests.length}</dd>
+          </div>
+        </dl>
+      </Panel>
+
+      <Panel eyebrow="Join" title="Join Room" meta="Relay">
+        <div className="editor-stack">
+          <input
+            className="text-input"
+            onChange={(event) => onPartyCodeDraftChange(event.currentTarget.value)}
+            placeholder="Room code"
+            type="text"
+            value={partyCodeDraft}
+          />
+          <input
+            className="text-input"
+            onChange={(event) => onPartyNameDraftChange(event.currentTarget.value)}
+            placeholder="Display name"
+            type="text"
+            value={partyNameDraft}
+          />
+          <div className="button-row">
+            <button
+              className="primary-button"
+              onClick={() => onAction({ type: "join_party", code: partyCodeDraft, name: partyNameDraft })}
+              type="button"
+            >
+              Join
+            </button>
+            <button className="panel-button" onClick={() => onAction({ type: "party_playback_command", action: { play: null } })} disabled type="button">
+              Sync via route
+            </button>
+          </div>
+        </div>
+
+        <ListBlock
+          emptyLabel="No guests connected."
+          items={party.guests.map((guest) => (
+            <div className="simple-line" key={guest}>
+              {guest}
+            </div>
+          ))}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function CreatePlaylistView({
+  createPlaylist,
+  onAction,
+}: {
+  createPlaylist: GuiCreatePlaylist;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="route-grid route-grid-two">
+      <Panel eyebrow={createPlaylist.stage} title={createPlaylist.name || "Create Playlist"} meta={createPlaylist.focus}>
+        <TrackTableBlock block="track_table" selectedIndex={-1} tracks={createPlaylist.tracks} onAction={onAction} />
+      </Panel>
+
+      <Panel eyebrow="Search" title="Candidate Tracks" meta={createPlaylist.search_input || "No query"}>
+        <TrackTableBlock block="track_table" selectedIndex={createPlaylist.selected_result} tracks={createPlaylist.search_results} onAction={onAction} />
+      </Panel>
+    </div>
+  );
+}
+
+function ErrorView({ status }: { status: GuiStatus }) {
+  return (
+    <div className="route-grid">
+      <Panel eyebrow="Error" title="Backend Error">
+        <div className="detail-copy">
+          <strong>{status.error || "Unknown error"}</strong>
+          <p>{status.message || "The backend reported an error while serving the snapshot."}</p>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function OverlayStack({
+  announcement,
+  dialog,
+  overlayRoute,
+  sort,
+  status,
+  onAction,
+}: {
+  announcement: GuiAnnouncement;
+  dialog: GuiDialog;
+  overlayRoute: RouteId | null;
+  sort: GuiSort;
+  status: GuiStatus;
+  onAction: (action: ActionPayload) => void;
+}) {
+  const showDialog = overlayRoute === "dialog" && dialog.kind;
+  const showAnnouncement = overlayRoute === "announcement" && announcement.active;
+  const showExit = overlayRoute === "exit";
+
+  if (!showDialog && !showAnnouncement && !showExit && !sort.visible) {
+    return null;
+  }
+
+  return (
+    <div className="overlay-root">
+      {showDialog ? <DialogOverlay dialog={dialog} onAction={onAction} /> : null}
+      {showAnnouncement ? <AnnouncementOverlay announcement={announcement} onAction={onAction} /> : null}
+      {showExit ? <ExitOverlay status={status} onAction={onAction} /> : null}
+      {sort.visible ? <SortOverlay sort={sort} onAction={onAction} /> : null}
+    </div>
+  );
+}
+
+function DialogOverlay({
+  dialog,
+  onAction,
+}: {
+  dialog: GuiDialog;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="overlay-card">
+      <div className="overlay-eyebrow">{dialog.kind || "dialog"}</div>
+      <h2>{dialog.title || "Dialog"}</h2>
+      <p>{dialog.message || "A TUI dialog is active."}</p>
+
+      {dialog.pending_track_name ? <div className="overlay-note">Track: {dialog.pending_track_name}</div> : null}
+      {dialog.playlist_name ? <div className="overlay-note">Playlist: {dialog.playlist_name}</div> : null}
+
+      {dialog.playlist_options.length > 0 ? (
+        <div className="overlay-list">
+          {dialog.playlist_options.map((option, index) => (
+            <button
+              className={`overlay-row ${index === dialog.selected_index ? "is-active" : ""}`}
+              key={option.id || `${option.label}-${index}`}
+              onClick={() => onAction({ type: "dialog_select_index", index })}
+              type="button"
+            >
+              <strong>{option.label}</strong>
+              <span>{option.description || option.id}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="button-row">
+        <button className="primary-button" onClick={() => onAction({ type: "dialog_confirm" })} type="button">
+          {dialog.confirm_label || "Confirm"}
+        </button>
+        <button className="panel-button" onClick={() => onAction({ type: "dialog_cancel" })} type="button">
+          {dialog.cancel_label || "Cancel"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AnnouncementOverlay({
+  announcement,
+  onAction,
+}: {
+  announcement: GuiAnnouncement;
+  onAction: (action: ActionPayload) => void;
+}) {
+  const active = announcement.active;
+  if (!active) {
+    return null;
+  }
+
+  return (
+    <div className="overlay-card">
+      <div className="overlay-eyebrow">{active.level}</div>
+      <h2>{active.title}</h2>
+      <p>{active.body}</p>
+      {active.url ? (
+        <a className="overlay-link" href={active.url} rel="noreferrer" target="_blank">
+          {active.url}
+        </a>
+      ) : null}
+      <div className="overlay-note">{announcement.pending.length} pending announcements in queue.</div>
+      <div className="button-row">
+        <button className="primary-button" onClick={() => onAction({ type: "dismiss_announcement" })} type="button">
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExitOverlay({
+  status,
+  onAction,
+}: {
+  status: GuiStatus;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="overlay-card">
+      <div className="overlay-eyebrow">exit prompt</div>
+      <h2>Exit Prompt Active</h2>
+      <p>{status.message || "The TUI backend has opened its exit prompt. Return to the previous content route to continue."}</p>
+      <div className="button-row">
+        <button className="primary-button" onClick={() => onAction({ type: "back" })} type="button">
+          Return
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SortOverlay({
+  sort,
+  onAction,
+}: {
+  sort: GuiSort;
+  onAction: (action: ActionPayload) => void;
+}) {
+  return (
+    <div className="overlay-card is-compact">
+      <div className="overlay-eyebrow">{sort.context || "sort"}</div>
+      <h2>{sort.title || "Sort Menu"}</h2>
+      <p>
+        {sort.current_field || "No field"} / {sort.current_order || "No order"}
+      </p>
+      <div className="overlay-list">
+        {sort.options.map((option, index) => (
+          <button
+            className={`overlay-row ${option.active ? "is-active" : ""}`}
+            key={`${option.field}-${option.label}`}
+            onClick={() => onAction({ type: "apply_sort_option", index })}
+            type="button"
+          >
+            <strong>{option.label}</strong>
+            <span>{option.shortcut || option.field}</span>
+          </button>
+        ))}
+      </div>
+      <div className="button-row">
+        <button className="primary-button" onClick={() => onAction({ type: "close_sort_menu" })} type="button">
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlayerBar({
+  activeDevice,
+  bridge,
+  playback,
+  status,
+  onAction,
+}: {
+  activeDevice?: GuiDevice;
+  bridge: BridgeState;
+  playback: GuiPlayback;
+  status: GuiStatus;
+  onAction: (action: ActionPayload) => void;
+}) {
+  const progressPercent = toPercent(playback.progress_ms, playback.track?.duration_ms ?? 0);
+
+  return (
+    <footer className="player-bar">
+      <div className="playbar-track">
+        <CoverArt imageUrl={playback.track?.image_url} label={trackInitials(playback.track)} size="md" />
+        <div className="playbar-copy">
+          <strong>{playback.track?.title || "Nothing playing"}</strong>
+          <span>{artistLine(playback.track)}</span>
+          <small>{playback.track?.album || bridge.message}</small>
         </div>
       </div>
 
-      <div className="transport">
-        <div className="transport-controls">
-          <button aria-label="Shuffle" className={`icon-button ${playback.shuffle ? "is-active" : ""}`} onClick={() => onAction({ type: "toggle_shuffle" })} type="button"><span className="transport-icon icon-shuffle" /></button>
-          <button aria-label="Previous track" className="icon-button" onClick={() => onAction({ type: "previous_track" })} type="button"><span className="transport-icon icon-prev" /></button>
-          <button aria-label={playback.is_playing ? "Pause" : "Play"} className="play-button" onClick={() => onAction({ type: "toggle_playback" })} type="button"><span className={`transport-icon ${playback.is_playing ? "icon-pause" : "icon-play"}`} /></button>
-          <button aria-label="Next track" className="icon-button" onClick={() => onAction({ type: "next_track" })} type="button"><span className="transport-icon icon-next" /></button>
-          <button aria-label="Repeat" className={`icon-button ${playback.repeat && playback.repeat !== "off" ? "is-active" : ""}`} onClick={() => onAction({ type: "toggle_repeat" })} type="button"><span className="transport-icon icon-repeat" /></button>
+      <div className="playbar-center">
+        <div className="transport-row">
+          <button className={`transport-button ${playback.shuffle ? "is-active" : ""}`} onClick={() => onAction({ type: "toggle_shuffle" })} type="button">
+            Shuffle
+          </button>
+          <button className="transport-icon-button" onClick={() => onAction({ type: "previous_track" })} type="button">
+            <span className="glyph glyph-prev" />
+          </button>
+          <button className="transport-play" onClick={() => onAction({ type: "toggle_playback" })} type="button">
+            <span className={`glyph ${playback.is_playing ? "glyph-pause" : "glyph-play"}`} />
+          </button>
+          <button className="transport-icon-button" onClick={() => onAction({ type: "next_track" })} type="button">
+            <span className="glyph glyph-next" />
+          </button>
+          <button
+            className={`transport-button ${playback.repeat && playback.repeat !== "off" ? "is-active" : ""}`}
+            onClick={() => onAction({ type: "toggle_repeat" })}
+            type="button"
+          >
+            Repeat
+          </button>
         </div>
-        <div className="progress-row">
-          <span>{formatDuration(progress)}</span>
-          <input aria-label="Seek" max={duration} min={0} onChange={(event) => onAction({ type: "seek", position_ms: Number(event.currentTarget.value) })} style={rangeFillStyle(progress, duration)} type="range" value={Math.min(progress, duration)} />
-          <span>{formatDuration(duration)}</span>
+
+        <div className="seek-row">
+          <span>{formatDuration(playback.progress_ms)}</span>
+          <input
+            aria-label="Seek position"
+            className="range-input"
+            max={playback.track?.duration_ms ?? 0}
+            min={0}
+            onChange={(event) => onAction({ type: "seek", position_ms: Number(event.currentTarget.value) })}
+            style={{ "--range-fill": `${progressPercent}%` } as CSSProperties}
+            type="range"
+            value={Math.min(playback.progress_ms, playback.track?.duration_ms ?? 0)}
+          />
+          <span>{formatDuration(playback.track?.duration_ms ?? 0)}</span>
         </div>
       </div>
 
-      <div className="volume-control">
-        <span className="ui-icon ui-icon-volume" aria-hidden="true" />
-        <input aria-label="Volume" max={100} min={0} onChange={(event) => onAction({ type: "change_volume", volume_percent: Number(event.currentTarget.value) })} style={rangeFillStyle(playback.volume_percent ?? 0, 100)} type="range" value={playback.volume_percent ?? 0} />
+      <div className="playbar-meta">
+        <div className="meta-pill-row">
+          <button
+            className={`meta-pill ${playback.track?.saved ? "is-active" : ""}`}
+            onClick={() => {
+              if (playback.track?.uri) {
+                onAction({ type: "toggle_save_track", uri: playback.track.uri });
+              }
+            }}
+            type="button"
+          >
+            Save
+          </button>
+          <button className="meta-pill" onClick={() => onAction({ type: "open_devices" })} type="button">
+            {activeDevice?.name || "Devices"}
+          </button>
+          <span className={`meta-pill is-static is-${bridge.mode}`}>{status.message || bridge.message}</span>
+        </div>
+        <div className="volume-row">
+          <span>{playback.volume_percent}%</span>
+          <input
+            aria-label="Volume"
+            className="range-input"
+            max={100}
+            min={0}
+            onChange={(event) => onAction({ type: "change_volume", volume_percent: Number(event.currentTarget.value) })}
+            style={{ "--range-fill": `${playback.volume_percent}%` } as CSSProperties}
+            type="range"
+            value={playback.volume_percent}
+          />
+        </div>
       </div>
     </footer>
   );
 }
 
-function TrackTable({
-  tracks,
-  emptyLabel,
-  selectedIndex,
-  onPlayTrack,
+function Panel({
+  eyebrow,
+  title,
+  meta,
+  actions,
+  children,
 }: {
-  tracks: GuiTrack[];
-  emptyLabel: string;
-  selectedIndex?: number;
-  onPlayTrack?: (index: number) => void;
+  eyebrow: string;
+  title: string;
+  meta?: string;
+  actions?: ReactNode;
+  children: ReactNode;
 }) {
-  if (tracks.length === 0) {
-    return <div className="empty-state">{emptyLabel}</div>;
-  }
-
   return (
-    <div className="track-table" role="table" aria-label="Tracks">
-      <div className="track-table-head" role="row">
-        <span>#</span>
-        <span>Title</span>
-        <span>Album</span>
-        <span>Time</span>
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <div className="panel-eyebrow">{eyebrow}</div>
+          <h2>{title}</h2>
+        </div>
+        <div className="panel-header-right">
+          {meta ? <span className="panel-meta">{meta}</span> : null}
+          {actions ? <div className="panel-actions">{actions}</div> : null}
+        </div>
       </div>
-      {tracks.map((track, index) => (
-        <button className={`track-table-row ${selectedIndex === index ? "is-active" : ""}`} key={`${track.uri ?? track.id ?? track.title}-${index}`} onClick={() => onPlayTrack?.(index)} role="row" type="button">
-          <span className="track-index">{index + 1}</span>
-          <span className="table-track-cell">
-            <CoverArt imageUrl={track.image_url ?? null} label={trackInitials(track)} size="xs" />
-            <span>
-              <strong>{track.title ?? "Unknown"}</strong>
-              <small>{artistText(track)}</small>
-            </span>
-          </span>
-          <span>{track.album ?? ""}</span>
-          <span>{formatDuration(track.duration_ms ?? 0)}</span>
-        </button>
-      ))}
-    </div>
+      <div className="panel-body">{children}</div>
+    </section>
   );
 }
 
-function TrackList({ tracks, variant }: { tracks: GuiTrack[]; variant: "queue" | "compact" | "rail" }) {
+function TrackTableBlock({
+  block,
+  tracks,
+  selectedIndex,
+  onAction,
+  onPlay,
+}: {
+  block: string;
+  tracks: GuiTrack[];
+  selectedIndex: number;
+  onAction: (action: ActionPayload) => void;
+  onPlay?: (index: number) => Promise<void>;
+}) {
   if (tracks.length === 0) {
-    return <div className="empty-state compact">No tracks loaded</div>;
+    return <EmptyState label="No tracks available." />;
   }
 
   return (
-    <div className={`track-list is-${variant}`}>
+    <div className="data-table">
+      <div className="data-head track-grid">
+        <span>#</span>
+        <span>Title</span>
+        <span>Artist</span>
+        <span>Album</span>
+        <span>Time</span>
+        <span className="data-actions-head">Actions</span>
+      </div>
+
       {tracks.map((track, index) => (
-        <div className="track-row" key={`${variant}-${track.uri ?? track.id ?? index}`}>
-          <CoverArt imageUrl={track.image_url ?? null} label={trackInitials(track)} size="xs" />
-          <span className="track-row-copy">
-            <strong>{track.title ?? "Unknown"}</strong>
-            <small>{artistText(track)}{variant !== "rail" && track.album ? ` / ${track.album}` : ""}</small>
-          </span>
-          {variant !== "rail" && <span>{formatDuration(track.duration_ms ?? 0)}</span>}
+        <div className={`data-row track-grid ${selectedIndex === index ? "is-active" : ""}`} key={`${track.uri ?? track.id ?? track.title}-${index}`}>
+          <button
+            className="row-main track-grid"
+            onClick={() => {
+              if (block === "track_table") {
+                onAction({ type: "select_track", index });
+              } else {
+                onAction({ type: "open_indexed_item", block, index });
+              }
+            }}
+            type="button"
+          >
+            <span>{index + 1}</span>
+            <span className="row-title-cell">
+              <CoverArt imageUrl={track.image_url} label={trackInitials(track)} size="smol" />
+              <strong>{track.title || "Unknown"}</strong>
+            </span>
+            <span>{artistLine(track)}</span>
+            <span>{track.album || "-"}</span>
+            <span>{formatDuration(track.duration_ms)}</span>
+          </button>
+          <div className="row-actions">
+            <button className="table-action" onClick={() => (onPlay ? void onPlay(index) : onAction({ type: "play_indexed_item", block, index }))} type="button">
+              Play
+            </button>
+            <button className="table-action" onClick={() => onAction({ type: "queue_indexed_item", block, index })} type="button">
+              Queue
+            </button>
+            <button className={`table-action ${track.saved ? "is-active" : ""}`} onClick={() => onAction({ type: "toggle_save_indexed_item", block, index })} type="button">
+              Save
+            </button>
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function PanelHeading({ eyebrow, title, value }: { eyebrow: string; title: string; value: string }) {
+function AlbumRows({
+  albums,
+  selectedIndex,
+  onOpen,
+  onSave,
+}: {
+  albums: GuiAlbum[];
+  selectedIndex: number;
+  onOpen: (index: number) => void;
+  onSave: (index: number) => void;
+}) {
   return (
-    <div className="panel-heading">
-      <div>
-        <span className="section-kicker">{eyebrow}</span>
-        <h2>{title}</h2>
+    <MediaList
+      emptyLabel="No albums available."
+      items={albums.map((album, index) => (
+        <MediaRow
+          key={`${album.id ?? album.name}-${index}`}
+          active={selectedIndex === index}
+          cover={<CoverArt imageUrl={album.image_url} label={album.name.slice(0, 2).toUpperCase()} size="smol" />}
+          meta={album.release_date || ""}
+          subtitle={album.artists.join(", ")}
+          title={album.name}
+          tools={
+            <button className={`table-action ${album.saved ? "is-active" : ""}`} onClick={() => onSave(index)} type="button">
+              Save
+            </button>
+          }
+          onClick={() => onOpen(index)}
+        />
+      ))}
+    />
+  );
+}
+
+function ArtistRows({
+  artists,
+  selectedIndex,
+  onOpen,
+  onRecommend,
+  onSave,
+}: {
+  artists: GuiArtist[];
+  selectedIndex: number;
+  onOpen: (index: number) => void;
+  onRecommend: (index: number) => void;
+  onSave: (index: number) => void;
+}) {
+  return (
+    <MediaList
+      emptyLabel="No artists available."
+      items={artists.map((artist, index) => (
+        <MediaRow
+          key={`${artist.id ?? artist.name}-${index}`}
+          active={selectedIndex === index}
+          cover={<CoverArt imageUrl={artist.image_url} label={artist.name.slice(0, 2).toUpperCase()} size="smol" />}
+          meta={artist.followers ? formatNumber(artist.followers) : ""}
+          subtitle={artist.followers ? "followers" : ""}
+          title={artist.name}
+          tools={
+            <>
+              <button className="table-action" onClick={() => onRecommend(index)} type="button">
+                Mix
+              </button>
+              <button className={`table-action ${artist.saved ? "is-active" : ""}`} onClick={() => onSave(index)} type="button">
+                Save
+              </button>
+            </>
+          }
+          onClick={() => onOpen(index)}
+        />
+      ))}
+    />
+  );
+}
+
+function PlaylistRows({
+  playlists,
+  selectedIndex,
+  onOpen,
+}: {
+  playlists: GuiPlaylist[];
+  selectedIndex: number;
+  onOpen: (index: number) => void;
+}) {
+  return (
+    <MediaList
+      emptyLabel="No playlists available."
+      items={playlists.map((playlist, index) => (
+        <MediaRow
+          key={`${playlist.id}-${index}`}
+          active={selectedIndex === index}
+          cover={<CoverArt imageUrl={playlist.image_url} label={playlist.name.slice(0, 2).toUpperCase()} size="smol" />}
+          meta={String(playlist.track_count)}
+          subtitle={playlist.owner}
+          title={playlist.name}
+          onClick={() => onOpen(index)}
+        />
+      ))}
+    />
+  );
+}
+
+function ShowRows({
+  shows,
+  selectedIndex,
+  onOpen,
+  onSave,
+}: {
+  shows: GuiShow[];
+  selectedIndex: number;
+  onOpen: (index: number) => void;
+  onSave: (index: number) => void;
+}) {
+  return (
+    <MediaList
+      emptyLabel="No podcasts available."
+      items={shows.map((show, index) => (
+        <MediaRow
+          key={`${show.id ?? show.name}-${index}`}
+          active={selectedIndex === index}
+          cover={<CoverArt imageUrl={show.image_url} label={show.name.slice(0, 2).toUpperCase()} size="smol" />}
+          meta={show.publisher || ""}
+          subtitle={show.description || ""}
+          title={show.name}
+          tools={
+            <button className={`table-action ${show.saved ? "is-active" : ""}`} onClick={() => onSave(index)} type="button">
+              Save
+            </button>
+          }
+          onClick={() => onOpen(index)}
+        />
+      ))}
+    />
+  );
+}
+
+function EpisodeRows({
+  episodes,
+  selectedIndex,
+  onPlay,
+  onQueue,
+}: {
+  episodes: GuiEpisode[];
+  selectedIndex: number;
+  onPlay: (index: number) => void;
+  onQueue: (index: number) => void;
+}) {
+  return (
+    <MediaList
+      emptyLabel="No episodes available."
+      items={episodes.map((episode, index) => (
+        <MediaRow
+          key={`${episode.id ?? episode.title}-${index}`}
+          active={selectedIndex === index}
+          cover={<CoverArt imageUrl={episode.image_url} label={episode.title.slice(0, 2).toUpperCase()} size="smol" />}
+          meta={formatDuration(episode.duration_ms)}
+          subtitle={`${episode.show}${episode.release_date ? ` / ${episode.release_date}` : ""}`}
+          title={episode.title}
+          tools={
+            <>
+              <button className="table-action" onClick={() => onPlay(index)} type="button">
+                Play
+              </button>
+              <button className="table-action" onClick={() => onQueue(index)} type="button">
+                Queue
+              </button>
+            </>
+          }
+          onClick={() => onPlay(index)}
+        />
+      ))}
+    />
+  );
+}
+
+function MediaList({
+  emptyLabel,
+  items,
+}: {
+  emptyLabel: string;
+  items: ReactNode[];
+}) {
+  return <div className="media-list">{items.length > 0 ? items : <EmptyState label={emptyLabel} />}</div>;
+}
+
+function MediaRow({
+  active,
+  cover,
+  meta,
+  subtitle,
+  title,
+  tools,
+  onClick,
+}: {
+  active: boolean;
+  cover: ReactNode;
+  meta?: string;
+  subtitle?: string;
+  title: string;
+  tools?: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <div className={`media-row ${active ? "is-active" : ""}`}>
+      <button className="media-row-main" onClick={onClick} type="button">
+        {cover}
+        <span className="media-row-copy">
+          <strong>{title}</strong>
+          <span>{subtitle || meta || ""}</span>
+        </span>
+        {meta ? <small>{meta}</small> : null}
+      </button>
+      {tools ? <div className="row-actions">{tools}</div> : null}
+    </div>
+  );
+}
+
+function ListBlock({ emptyLabel, items }: { emptyLabel: string; items: ReactNode[] }) {
+  return <div className="stack-list">{items.length > 0 ? items : <EmptyState label={emptyLabel} />}</div>;
+}
+
+function EmptyState({ label }: { label: string }) {
+  return <div className="empty-state">{label}</div>;
+}
+
+function NowCard({ track }: { track: GuiTrack }) {
+  return (
+    <div className="hero-card">
+      <CoverArt imageUrl={track.image_url} label={trackInitials(track)} size="lg" />
+      <div className="detail-copy">
+        <strong>{track.title}</strong>
+        <p>{artistLine(track)}</p>
+        <p>{track.album || "No album metadata available."}</p>
       </div>
-      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function AlbumHero({ album }: { album: GuiAlbum }) {
+  return (
+    <div className="hero-card is-compact">
+      <CoverArt imageUrl={album.image_url} label={album.name.slice(0, 2).toUpperCase()} size="lg" />
+      <div className="detail-copy">
+        <strong>{album.name}</strong>
+        <p>{album.artists.join(", ")}</p>
+        <p>{album.release_date || "Release date unavailable"}</p>
+      </div>
+    </div>
+  );
+}
+
+function ArtistHero({ artist }: { artist: GuiArtist }) {
+  return (
+    <div className="hero-card is-compact">
+      <CoverArt imageUrl={artist.image_url} label={artist.name.slice(0, 2).toUpperCase()} size="lg" />
+      <div className="detail-copy">
+        <strong>{artist.name}</strong>
+        <p>{artist.followers ? `${formatNumber(artist.followers)} followers` : "Follower count unavailable"}</p>
+      </div>
+    </div>
+  );
+}
+
+function ShowHero({ show }: { show: GuiShow }) {
+  return (
+    <div className="hero-card is-compact">
+      <CoverArt imageUrl={show.image_url} label={show.name.slice(0, 2).toUpperCase()} size="lg" />
+      <div className="detail-copy">
+        <strong>{show.name}</strong>
+        <p>{show.publisher || "Publisher unavailable"}</p>
+        <p>{show.description || "No description available."}</p>
+      </div>
+    </div>
+  );
+}
+
+function SpectrumBars({ bands }: { bands: number[] }) {
+  if (bands.length === 0) {
+    return <EmptyState label="No analysis bands captured yet." />;
+  }
+
+  return (
+    <div className="spectrum-bars">
+      {bands.map((band, index) => (
+        <span
+          className="spectrum-bar"
+          key={`${band}-${index}`}
+          style={{ "--bar-height": `${Math.max(6, Math.min(100, band * 100))}%` } as CSSProperties}
+        />
+      ))}
     </div>
   );
 }
@@ -1002,9 +2048,9 @@ function CoverArt({
   label,
   size,
 }: {
-  imageUrl?: string | null;
+  imageUrl: string | null | undefined;
   label: string;
-  size: "xs" | "sm" | "hero";
+  size: "smol" | "md" | "lg" | "xl";
 }) {
   const style = imageUrl
     ? ({ backgroundImage: `url("${cssUrl(imageUrl)}")` } as CSSProperties)
@@ -1012,61 +2058,30 @@ function CoverArt({
   return <span className={`cover-art cover-${size} ${imageUrl ? "has-image" : ""}`} data-label={imageUrl ? "" : label} style={style} />;
 }
 
-function normalizeSnapshot(snapshot: GuiSnapshot): GuiSnapshot {
-  return {
-    ...fallbackSnapshot,
-    ...snapshot,
-    playback: { ...fallbackSnapshot.playback, ...snapshot.playback },
-    devices: snapshot.devices ?? [],
-    playlists: snapshot.playlists ?? [],
-    queue: snapshot.queue ?? [],
-    recently_played: snapshot.recently_played ?? [],
-    track_table: { ...fallbackSnapshot.track_table, ...snapshot.track_table },
-    search: { ...fallbackSnapshot.search, ...snapshot.search },
-  };
+function pageMeta(page: { page_index: number; page_count: number; total: number }): string {
+  const currentPage = page.page_count > 0 ? page.page_index + 1 : 0;
+  return `${currentPage}/${page.page_count || 0} pages • ${page.total} total`;
 }
 
-function routeToView(route?: string): ViewId {
-  switch (route) {
-    case "search":
-      return "search";
-    case "track_table":
-    case "recommendations":
-      return "track_table";
-    case "queue":
-      return "queue";
+function mapSortContext(context: string | null): string {
+  switch (context) {
+    case "saved_albums":
+      return "saved_albums";
+    case "artists":
+      return "saved_artists";
     case "recently_played":
       return "recently_played";
-    case "albums":
-    case "album_tracks":
-      return "albums";
-    case "artists":
-    case "artist":
-      return "artists";
-    case "podcasts":
-    case "podcast_episodes":
-      return "podcasts";
-    case "lyrics":
-      return "lyrics";
-    case "discover":
-      return "discover";
-    case "settings":
-      return "settings";
-    case "party":
-      return "party";
-    case "create_playlist":
-      return "create_playlist";
     default:
-      return "home";
+      return "playlist_tracks";
   }
 }
 
-function artistText(track?: GuiTrack | null): string {
-  return track?.artists?.filter(Boolean).join(", ") || "Unknown artist";
+function artistLine(track?: GuiTrack | null): string {
+  return track?.artists.join(", ") || "Unknown artist";
 }
 
 function trackInitials(track?: GuiTrack | null): string {
-  const title = track?.title ?? "ST";
+  const title = track?.title || "ST";
   return title
     .split(/\s+/)
     .filter(Boolean)
@@ -1077,27 +2092,35 @@ function trackInitials(track?: GuiTrack | null): string {
 }
 
 function formatDuration(ms: number): string {
-  const safeMs = Number.isFinite(ms) ? Math.max(0, ms) : 0;
-  const totalSeconds = Math.floor(safeMs / 1000);
+  const safe = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  const totalSeconds = Math.floor(safe / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function rangeFillStyle(value: number, max: number): CSSProperties {
-  const fill = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
-  return { "--range-fill": `${fill}%` } as CSSProperties;
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat().format(value);
+}
+
+function toPercent(value: number, total: number): number {
+  if (total <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, (value / total) * 100));
 }
 
 function coverGradient(seed: string): CSSProperties {
-  const hash = seed.split("").reduce((total, char) => total + char.charCodeAt(0), 0);
-  const colors = [
-    ["#1db954", "#7afad0", "#101011"],
-    ["#00d4ff", "#7c7cff", "#10141c"],
-    ["#ffb000", "#ff5c33", "#15110f"],
-    ["#68727f", "#c4cad2", "#101112"],
+  const palette = [
+    ["#0f2615", "#1db954", "#0a0f0b"],
+    ["#173022", "#3de17c", "#0a0e0c"],
+    ["#1f2c1d", "#86e370", "#0b0d0b"],
+    ["#172726", "#5cc98a", "#0a0d0d"],
   ];
-  const [from, via, to] = colors[hash % colors.length];
+  const index =
+    seed.split("").reduce((total, character) => total + character.charCodeAt(0), 0) %
+    palette.length;
+  const [from, via, to] = palette[index];
   return {
     "--cover-from": from,
     "--cover-via": via,

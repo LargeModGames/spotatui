@@ -1,14 +1,14 @@
 mod album_list;
 mod album_tracks;
-mod analysis;
-mod announcement_prompt;
+pub(crate) mod analysis;
+pub(crate) mod announcement_prompt;
 mod artist;
 mod artists;
 mod common_key_events;
 #[cfg(feature = "cover-art")]
 mod cover_art_view;
 mod create_playlist;
-mod dialog;
+pub(crate) mod dialog;
 mod discover;
 mod empty;
 mod episode_table;
@@ -28,8 +28,8 @@ mod recently_played;
 pub mod resize;
 mod search_results;
 mod select_device;
-mod settings;
-mod sort_menu;
+pub(crate) mod settings;
+pub(crate) mod sort_menu;
 mod track_table;
 
 use crate::core::app::{ActiveBlock, App, ArtistBlock, RouteId, SearchResultBlock};

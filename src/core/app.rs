@@ -2014,6 +2014,20 @@ impl App {
     self.navigation_stack.last().unwrap_or(&DEFAULT_ROUTE)
   }
 
+  pub fn get_content_route(&self) -> &Route {
+    self
+      .navigation_stack
+      .iter()
+      .rev()
+      .find(|route| {
+        !matches!(
+          route.id,
+          RouteId::Dialog | RouteId::AnnouncementPrompt | RouteId::ExitPrompt
+        )
+      })
+      .unwrap_or(&DEFAULT_ROUTE)
+  }
+
   fn get_current_route_mut(&mut self) -> &mut Route {
     self.navigation_stack.last_mut().unwrap()
   }
