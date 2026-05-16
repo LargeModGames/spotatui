@@ -9,9 +9,9 @@ pub mod user;
 pub mod utils;
 
 use crate::core::app::App;
+use crate::core::auth;
 use crate::core::config::ClientConfig;
 use anyhow::anyhow;
-use rspotify::clients::BaseClient;
 use rspotify::model::{
   album::SimplifiedAlbum,
   artist::FullArtist,
@@ -199,6 +199,12 @@ impl Network {
 
   #[allow(clippy::cognitive_complexity)]
   pub async fn handle_network_event(&mut self, io_event: IoEvent) {
+    if !matches!(io_event, IoEvent::RefreshAuthentication)
+      && !self.ensure_authentication_fresh(false).await
+    {
+      return;
+    }
+
     match io_event {
       IoEvent::RefreshAuthentication => {
         self.refresh_authentication().await;
@@ -449,66 +455,24 @@ impl Network {
   }
 
   async fn refresh_authentication(&mut self) {
-    // refresh_token() calls refetch_token() AND stores the result in self.spotify.token.
-    // Using refetch_token() directly would return the new token without storing it.
-    if let Err(e) = self.spotify.refresh_token().await {
-      self.handle_error(anyhow!(e)).await;
-      return;
-    }
+    self.ensure_authentication_fresh(true).await;
+  }
 
-    // Update app.spotify_token_expiry so the main loop doesn't keep dispatching
-    // RefreshAuthentication on every tick after the original token expires.
-    let new_expiry = {
-      let token_lock = self
-        .spotify
-        .token
-        .lock()
-        .await
-        .expect("Failed to lock token");
-      token_lock.as_ref().map(|t| {
-        let secs = t.expires_in.num_seconds().max(0) as u64;
-        std::time::SystemTime::now()
-          .checked_add(Duration::from_secs(secs))
-          .unwrap_or_else(std::time::SystemTime::now)
-      })
-    };
-
-    if let Some(expiry) = new_expiry {
-      let mut app = self.app.lock().await;
-      app.spotify_token_expiry = expiry;
-    }
-
-    // Persist the refreshed token so it survives a reboot.
-    // If Spotify did not return a new refresh_token, carry over the one already
-    // on disk so we never overwrite a valid refresh_token with null.
-    {
-      let mut token_lock = self
-        .spotify
-        .token
-        .lock()
-        .await
-        .expect("Failed to lock token");
-      if let Some(ref mut token) = *token_lock {
-        if token.refresh_token.is_none() && self.token_cache_path.exists() {
-          if let Ok(old_json) = std::fs::read_to_string(&self.token_cache_path) {
-            if let Ok(old_token) = serde_json::from_str::<rspotify::Token>(&old_json) {
-              token.refresh_token = old_token.refresh_token;
-            }
-          }
+  async fn ensure_authentication_fresh(&mut self, force: bool) -> bool {
+    match auth::refresh_token_and_cache(&self.spotify, &self.token_cache_path, force).await {
+      Ok(expiry) => {
+        let mut app = self.app.lock().await;
+        app.spotify_token_expiry = expiry;
+        app.auth_refresh_in_progress = false;
+        true
+      }
+      Err(e) => {
+        {
+          let mut app = self.app.lock().await;
+          app.auth_refresh_in_progress = false;
         }
-        match serde_json::to_string_pretty(token) {
-          Ok(token_json) => {
-            if let Err(e) = std::fs::write(&self.token_cache_path, token_json) {
-              log::warn!("Failed to persist refreshed token: {}", e);
-            } else {
-              log::info!(
-                "refreshed token cached to {}",
-                self.token_cache_path.display()
-              );
-            }
-          }
-          Err(e) => log::warn!("Failed to serialize refreshed token: {}", e),
-        }
+        self.handle_error(anyhow!(e)).await;
+        false
       }
     }
   }
