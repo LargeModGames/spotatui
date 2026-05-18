@@ -469,47 +469,15 @@ mod tests {
   use super::*;
   #[cfg(target_os = "macos")]
   use crate::core::app::TrackTableContext;
+  use crate::core::test_helpers::full_track;
   use crate::core::user_config::UserConfig;
-  use chrono::{Duration as ChronoDuration, Utc};
+  use chrono::Utc;
   use rspotify::model::{
-    artist::SimplifiedArtist,
     context::{Actions, CurrentPlaybackContext},
     enums::{DeviceType, RepeatState},
-    idtypes::TrackId,
-    CurrentlyPlayingType, Device, FullTrack, PlayableId, PlayableItem, SimplifiedAlbum,
+    CurrentlyPlayingType, Device, PlayableId, PlayableItem,
   };
-  use std::{collections::HashMap, sync::mpsc::channel, time::SystemTime};
-
-  #[allow(deprecated)]
-  fn full_track(id: &str, name: &str) -> FullTrack {
-    FullTrack {
-      album: SimplifiedAlbum {
-        name: "Album".to_string(),
-        ..Default::default()
-      },
-      artists: vec![SimplifiedArtist {
-        name: "Artist".to_string(),
-        ..Default::default()
-      }],
-      available_markets: Vec::new(),
-      disc_number: 1,
-      duration: ChronoDuration::milliseconds(180_000),
-      explicit: false,
-      external_ids: HashMap::new(),
-      external_urls: HashMap::new(),
-      href: None,
-      id: Some(TrackId::from_id(id).unwrap().into_static()),
-      is_local: false,
-      is_playable: Some(true),
-      linked_from: None,
-      restrictions: None,
-      name: name.to_string(),
-      popularity: 50,
-      preview_url: None,
-      track_number: 1,
-      r#type: rspotify::model::Type::Track,
-    }
-  }
+  use std::{sync::mpsc::channel, time::SystemTime};
 
   #[test]
   fn global_shift_w_adds_current_track_from_anywhere() {

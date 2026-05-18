@@ -588,48 +588,12 @@ fn saved_tracks_playback_request(app: &App) -> Option<(Vec<PlayableId<'static>>,
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::test_helpers::full_track;
   use crate::core::user_config::UserConfig;
-  use chrono::{Duration as ChronoDuration, Utc};
-  use rspotify::model::{
-    artist::SimplifiedArtist,
-    page::Page,
-    track::{FullTrack, SavedTrack},
-  };
-  use rspotify::prelude::Id;
-  use std::collections::HashMap;
+  use chrono::Utc;
+  use rspotify::model::{page::Page, track::SavedTrack};
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
-
-  #[allow(deprecated)]
-  fn full_track(id: &str, name: &str) -> FullTrack {
-    FullTrack {
-      album: rspotify::model::album::SimplifiedAlbum {
-        name: "Album".to_string(),
-        ..Default::default()
-      },
-      artists: vec![SimplifiedArtist {
-        name: "Artist".to_string(),
-        ..Default::default()
-      }],
-      available_markets: Vec::new(),
-      disc_number: 1,
-      duration: ChronoDuration::milliseconds(180_000),
-      explicit: false,
-      external_ids: HashMap::new(),
-      external_urls: HashMap::new(),
-      href: None,
-      id: Some(TrackId::from_id(id).unwrap().into_static()),
-      is_local: false,
-      is_playable: Some(true),
-      linked_from: None,
-      restrictions: None,
-      name: name.to_string(),
-      popularity: 50,
-      preview_url: None,
-      track_number: 1,
-      r#type: rspotify::model::Type::Track,
-    }
-  }
 
   fn saved_track(id: &str, name: &str) -> SavedTrack {
     SavedTrack {

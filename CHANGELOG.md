@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Mouse song selection**: Changed song-table left clicks so the first click highlights a row and a second click on the highlighted row selects/plays it, matching arrow-key plus Enter behavior ([#258](https://github.com/LargeModGames/spotatui/issues/258)).
+
 ## [v0.38.2] - 2026-05-10
 
 ### Added

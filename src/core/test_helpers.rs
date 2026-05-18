@@ -1,10 +1,12 @@
 #![cfg(test)]
 
+use chrono::Duration;
 use rspotify::model::{
   idtypes::{PlaylistId, UserId},
   playlist::PlaylistTracksRef,
+  track::FullTrack,
   user::{PrivateUser, PublicUser},
-  SimplifiedPlaylist,
+  SimplifiedAlbum, SimplifiedArtist, SimplifiedPlaylist, TrackId,
 };
 use std::collections::HashMap;
 
@@ -59,5 +61,36 @@ pub fn simplified_playlist(
     snapshot_id: "snapshot".to_string(),
     tracks: tracks.clone(),
     items: tracks,
+  }
+}
+
+#[allow(deprecated)]
+pub fn full_track(id: &str, name: &str) -> FullTrack {
+  FullTrack {
+    album: SimplifiedAlbum {
+      name: "Test Album".to_string(),
+      ..Default::default()
+    },
+    artists: vec![SimplifiedArtist {
+      name: "Test Artist".to_string(),
+      ..Default::default()
+    }],
+    available_markets: Vec::new(),
+    disc_number: 1,
+    duration: Duration::milliseconds(180_000),
+    explicit: false,
+    external_ids: HashMap::new(),
+    external_urls: HashMap::new(),
+    href: None,
+    id: Some(TrackId::from_id(id).unwrap().into_static()),
+    is_local: false,
+    is_playable: Some(true),
+    linked_from: None,
+    restrictions: None,
+    name: name.to_string(),
+    popularity: 50,
+    preview_url: None,
+    track_number: 1,
+    r#type: rspotify::model::Type::Track,
   }
 }

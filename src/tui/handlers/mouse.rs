@@ -1,4 +1,4 @@
-use super::{common_key_events, library, playbar, playlist, settings, track_table};
+use super::{common_key_events, library, playbar, playlist, settings};
 use crate::core::app::{
   ActiveBlock, App, RouteId, SettingValue, SettingsCategory, LIBRARY_OPTIONS,
 };
@@ -124,28 +124,6 @@ fn handle_playlist_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App) {
   }
 }
 
-fn handle_song_table_mouse(mouse: MouseEvent, table_area: Rect, app: &mut App) {
-  if app.track_table.tracks.is_empty() {
-    return;
-  }
-
-  match mouse.kind {
-    MouseEventKind::ScrollDown => {
-      focus_song_table(app);
-      track_table::handler(Key::Down, app);
-    }
-    MouseEventKind::ScrollUp => {
-      focus_song_table(app);
-      track_table::handler(Key::Up, app);
-    }
-    MouseEventKind::Down(MouseButton::Left) => {
-      focus_song_table(app);
-      select_clicked_song(mouse.row, table_area, app);
-    }
-    _ => {}
-  }
-}
-
 fn handle_content_table_mouse(
   mouse: MouseEvent,
   table_area: Rect,
@@ -155,11 +133,6 @@ fn handle_content_table_mouse(
   let Some(active_block) = common_key_events::content_active_block_for_route(&route_id) else {
     return;
   };
-
-  if active_block == ActiveBlock::TrackTable {
-    handle_song_table_mouse(mouse, table_area, app);
-    return;
-  }
 
   if !matches!(
     mouse.kind,
@@ -406,10 +379,6 @@ fn focus_library(app: &mut App) {
   app.set_current_route_state(Some(ActiveBlock::Library), Some(ActiveBlock::Library));
 }
 
-fn focus_song_table(app: &mut App) {
-  app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
-}
-
 fn focus_content_table(active_block: ActiveBlock, app: &mut App) {
   app.set_current_route_state(Some(active_block), Some(active_block));
 }
@@ -488,24 +457,6 @@ fn select_clicked_playlist(mouse_row: u16, list_area: Rect, app: &mut App) {
   }
 }
 
-fn select_clicked_song(mouse_row: u16, table_area: Rect, app: &mut App) {
-  let item_count = app.track_table.tracks.len();
-  let selected_index = app
-    .track_table
-    .selected_index
-    .min(item_count.saturating_sub(1));
-
-  let Some(clicked_index) =
-    table_item_index_from_click(table_area, mouse_row, selected_index, item_count)
-  else {
-    return;
-  };
-
-  app.track_table.selected_index = clicked_index;
-  // Song clicks should behave like immediate selection + play.
-  track_table::handler(Key::Enter, app);
-}
-
 fn select_clicked_content_table_item(
   active_block: ActiveBlock,
   mouse_row: u16,
@@ -537,6 +488,7 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
       .get_results(None)
       .map(|albums| albums.items.len())
       .unwrap_or(0),
+    ActiveBlock::TrackTable => app.track_table.tracks.len(),
     ActiveBlock::AlbumTracks => match app.album_table_context {
       crate::core::app::AlbumTableContext::Full => app
         .selected_album_full
@@ -580,6 +532,7 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
 fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
   match active_block {
     ActiveBlock::AlbumList => app.album_list_index,
+    ActiveBlock::TrackTable => app.track_table.selected_index,
     ActiveBlock::AlbumTracks => match app.album_table_context {
       crate::core::app::AlbumTableContext::Full => app.saved_album_tracks_index,
       crate::core::app::AlbumTableContext::Simplified => app
@@ -599,6 +552,7 @@ fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
 fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app: &mut App) {
   match active_block {
     ActiveBlock::AlbumList => app.album_list_index = index,
+    ActiveBlock::TrackTable => app.track_table.selected_index = index,
     ActiveBlock::AlbumTracks => match app.album_table_context {
       crate::core::app::AlbumTableContext::Full => app.saved_album_tracks_index = index,
       crate::core::app::AlbumTableContext::Simplified => {
@@ -983,7 +937,9 @@ mod tests {
   use super::*;
   use crate::core::app::{
     AlbumTableContext, PlaylistFolderItem, RouteId, SelectedAlbum, SettingValue, SettingsCategory,
+    TrackTableContext,
   };
+  use crate::core::test_helpers::full_track;
   use crate::tui::ui::player::PlaybarControl;
   use chrono::{Duration, Utc};
   use crossterm::event::{KeyModifiers, MouseEvent};
@@ -1651,6 +1607,42 @@ mod tests {
     assert_eq!(app.album_list_index, 1);
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::AlbumList);
+  }
+
+  #[test]
+  fn click_in_song_table_first_highlights_second_plays() {
+    let mut app = App::default();
+    app.size = Size {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.track_table.context = Some(TrackTableContext::RecommendedTracks);
+    app.track_table.tracks = vec![
+      full_track("0000000000000000000001", "Track 1"),
+      full_track("0000000000000000000002", "Track 2"),
+    ];
+    app.track_table.selected_index = 0;
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let x = areas.content.x + 1;
+    let y = areas.content.y + 3;
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+
+    assert_eq!(app.track_table.selected_index, 1);
+    assert!(!app.is_loading);
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+
+    assert_eq!(app.track_table.selected_index, 1);
+    assert!(app.is_loading);
   }
 
   #[test]
