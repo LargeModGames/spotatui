@@ -1,4 +1,6 @@
-use super::requests::{spotify_api_request_json_for, spotify_get_typed_compat_for};
+use super::requests::{
+  spotify_api_request_json_for_with_refresh, spotify_get_typed_compat_for_with_refresh,
+};
 use super::{IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
@@ -47,6 +49,7 @@ fn populate_liked_song_ids_from_saved_tracks(
 pub async fn prefetch_saved_tracks_page_task(
   spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
+  token_cache_path: std::path::PathBuf,
   limit: u32,
   offset: u32,
   generation: u64,
@@ -66,10 +69,12 @@ pub async fn prefetch_saved_tracks_page_task(
   }
 
   let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-  let Ok(page) = spotify_get_typed_compat_for::<Page<rspotify::model::SavedTrack>>(
+  let Ok(page) = spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::SavedTrack>>(
     &spotify,
     "me/tracks",
     &query,
+    &token_cache_path,
+    &app,
   )
   .await
   else {
@@ -92,6 +97,7 @@ pub async fn prefetch_saved_tracks_page_task(
 pub async fn prefetch_playlist_tracks_page_task(
   spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
+  token_cache_path: std::path::PathBuf,
   limit: u32,
   playlist_id: PlaylistId<'static>,
   offset: u32,
@@ -113,7 +119,14 @@ pub async fn prefetch_playlist_tracks_page_task(
 
   let path = format!("playlists/{}/items", playlist_id.id());
   let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-  let Ok(page) = spotify_get_typed_compat_for::<Page<PlaylistItem>>(&spotify, &path, &query).await
+  let Ok(page) = spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    &spotify,
+    &path,
+    &query,
+    &token_cache_path,
+    &app,
+  )
+  .await
   else {
     return;
   };
@@ -181,10 +194,12 @@ impl Network {
 
     let mut all_results = Vec::with_capacity(uris.len());
     for batch in uri_batches(uris) {
-      let batch_results = spotify_get_typed_compat_for::<Vec<bool>>(
+      let batch_results = spotify_get_typed_compat_for_with_refresh::<Vec<bool>>(
         &self.spotify,
         "me/library/contains",
         &[("uris", batch.join(","))],
+        &self.token_cache_path,
+        &self.app,
       )
       .await?;
       all_results.extend(batch_results);
@@ -199,12 +214,14 @@ impl Network {
     }
 
     let query = vec![("uris", uris.join(","))];
-    spotify_api_request_json_for(
+    spotify_api_request_json_for_with_refresh(
       &self.spotify,
       Method::PUT,
       "me/library",
       &query,
       Some(json!({ "uris": uris })),
+      Some(&self.token_cache_path),
+      Some(&self.app),
     )
     .await?;
     Ok(())
@@ -216,12 +233,14 @@ impl Network {
     }
 
     let query = vec![("uris", uris.join(","))];
-    spotify_api_request_json_for(
+    spotify_api_request_json_for_with_refresh(
       &self.spotify,
       Method::DELETE,
       "me/library",
       &query,
       Some(json!({ "uris": uris })),
+      Some(&self.token_cache_path),
+      Some(&self.app),
     )
     .await?;
     Ok(())
@@ -230,9 +249,18 @@ impl Network {
   pub fn spawn_saved_tracks_prefetch(&self, offset: u32, generation: u64) {
     let spotify = self.spotify.clone();
     let app = self.app.clone();
+    let token_cache_path = self.token_cache_path.clone();
     let large_search_limit = self.large_search_limit;
     tokio::spawn(async move {
-      prefetch_saved_tracks_page_task(spotify, app, large_search_limit, offset, generation).await;
+      prefetch_saved_tracks_page_task(
+        spotify,
+        app,
+        token_cache_path,
+        large_search_limit,
+        offset,
+        generation,
+      )
+      .await;
     });
   }
 
@@ -244,11 +272,13 @@ impl Network {
   ) {
     let spotify = self.spotify.clone();
     let app = self.app.clone();
+    let token_cache_path = self.token_cache_path.clone();
     let large_search_limit = self.large_search_limit;
     tokio::spawn(async move {
       prefetch_playlist_tracks_page_task(
         spotify,
         app,
+        token_cache_path,
         large_search_limit,
         playlist_id,
         offset,
@@ -279,10 +309,12 @@ impl LibraryNetwork for Network {
       // Always use the compat path: parses raw JSON to serde_json::Value first,
       // which silently deduplicates keys (last-wins). This handles the known Spotify
       // API bug where "items" appears twice in the same JSON object.
-      let page = match super::requests::spotify_get_typed_compat_for::<Page<SimplifiedPlaylist>>(
+      let page = match spotify_get_typed_compat_for_with_refresh::<Page<SimplifiedPlaylist>>(
         &self.spotify,
         "me/playlists",
         &[("limit", limit.to_string()), ("offset", offset.to_string())],
+        &self.token_cache_path,
+        &self.app,
       )
       .await
       {
@@ -346,13 +378,15 @@ impl LibraryNetwork for Network {
     };
 
     let path = format!("playlists/{}/items", playlist_id.id());
-    match spotify_get_typed_compat_for::<Page<PlaylistItem>>(
+    match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
       &self.spotify,
       &path,
       &[
         ("limit", self.large_search_limit.to_string()),
         ("offset", playlist_offset.to_string()),
       ],
+      &self.token_cache_path,
+      &self.app,
     )
     .await
     {
@@ -395,10 +429,12 @@ impl LibraryNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_compat_for::<Page<rspotify::model::SavedTrack>>(
+    match spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::SavedTrack>>(
       &self.spotify,
       "me/tracks",
       &query,
+      &self.token_cache_path,
+      &self.app,
     )
     .await
     {
@@ -432,10 +468,12 @@ impl LibraryNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_compat_for::<Page<rspotify::model::SavedAlbum>>(
+    match spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::SavedAlbum>>(
       &self.spotify,
       "me/albums",
       &query,
+      &self.token_cache_path,
+      &self.app,
     )
     .await
     {
@@ -553,10 +591,12 @@ impl LibraryNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_compat_for::<Page<rspotify::model::show::Show>>(
+    match spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::show::Show>>(
       &self.spotify,
       "me/shows",
       &query,
+      &self.token_cache_path,
+      &self.app,
     )
     .await
     {
@@ -657,12 +697,14 @@ impl LibraryNetwork for Network {
         }]
     });
 
-    match spotify_api_request_json_for(
+    match spotify_api_request_json_for_with_refresh(
       &self.spotify,
       Method::DELETE,
       &format!("playlists/{}/tracks", playlist_id.id()),
       &[],
       Some(body),
+      Some(&self.token_cache_path),
+      Some(&self.app),
     )
     .await
     {
@@ -740,7 +782,15 @@ impl LibraryNetwork for Network {
 
     loop {
       let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-      match spotify_get_typed_compat_for::<Page<PlaylistItem>>(&self.spotify, &path, &query).await {
+      match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+        &self.spotify,
+        &path,
+        &query,
+        &self.token_cache_path,
+        &self.app,
+      )
+      .await
+      {
         Ok(page) => {
           if page.items.is_empty() {
             break;
@@ -799,12 +849,14 @@ impl LibraryNetwork for Network {
       "collaborative": false,
       "description": "Created with spotatui"
     });
-    let playlist_value = match spotify_api_request_json_for(
+    let playlist_value = match spotify_api_request_json_for_with_refresh(
       &self.spotify,
       Method::POST,
       &create_path,
       &[],
       Some(create_body),
+      Some(&self.token_cache_path),
+      Some(&self.app),
     )
     .await
     {

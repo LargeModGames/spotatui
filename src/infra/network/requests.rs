@@ -1,10 +1,12 @@
+use crate::core::{app::App, auth};
 use anyhow::anyhow;
 use reqwest::Method;
-use rspotify::clients::BaseClient;
 use rspotify::AuthCodePkceSpotify;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
+  path::Path,
+  sync::Arc,
   sync::OnceLock,
   time::{Duration, Instant},
 };
@@ -33,6 +35,18 @@ pub async fn spotify_api_request_json_for(
   path: &str,
   query: &[(&str, String)],
   body: Option<Value>,
+) -> anyhow::Result<Value> {
+  spotify_api_request_json_for_with_refresh(spotify, method, path, query, body, None, None).await
+}
+
+pub async fn spotify_api_request_json_for_with_refresh(
+  spotify: &AuthCodePkceSpotify,
+  method: Method,
+  path: &str,
+  query: &[(&str, String)],
+  body: Option<Value>,
+  token_cache_path: Option<&Path>,
+  app: Option<&Arc<Mutex<App>>>,
 ) -> anyhow::Result<Value> {
   let mut url = reqwest::Url::parse("https://api.spotify.com/v1/")?.join(path)?;
   if !query.is_empty() {
@@ -90,20 +104,37 @@ pub async fn spotify_api_request_json_for(
     let status = response.status();
 
     if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed_after_unauthorized {
-      match spotify.refresh_token().await {
-        Ok(_) => {
-          refreshed_after_unauthorized = true;
-          continue;
+      if let Some(token_cache_path) = token_cache_path {
+        match auth::refresh_token_and_cache(spotify, token_cache_path, true).await {
+          Ok(expiry) => {
+            if let Some(app) = app {
+              let mut app = app.lock().await;
+              app.spotify_token_expiry = expiry;
+              app.auth_refresh_in_progress = false;
+            }
+            refreshed_after_unauthorized = true;
+            continue;
+          }
+          Err(refresh_err) => {
+            if let Some(app) = app {
+              app.lock().await.auth_refresh_in_progress = false;
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+              "Spotify API {} failed: {} (token refresh failed: {})",
+              status,
+              body,
+              refresh_err
+            ));
+          }
         }
-        Err(refresh_err) => {
-          let body = response.text().await.unwrap_or_default();
-          return Err(anyhow!(
-            "Spotify API {} failed: {} (token refresh failed: {})",
-            status,
-            body,
-            refresh_err
-          ));
-        }
+      } else {
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!(
+          "Spotify API {} failed: {} (token refresh unavailable for this request)",
+          status,
+          body
+        ));
       }
     }
 
@@ -261,6 +292,27 @@ pub async fn spotify_get_typed_compat_for<T: DeserializeOwned>(
   query: &[(&str, String)],
 ) -> anyhow::Result<T> {
   let mut value = spotify_api_request_json_for(spotify, Method::GET, path, query, None).await?;
+  normalize_spotify_payload(&mut value);
+  Ok(serde_json::from_value(value)?)
+}
+
+pub async fn spotify_get_typed_compat_for_with_refresh<T: DeserializeOwned>(
+  spotify: &AuthCodePkceSpotify,
+  path: &str,
+  query: &[(&str, String)],
+  token_cache_path: &Path,
+  app: &Arc<Mutex<App>>,
+) -> anyhow::Result<T> {
+  let mut value = spotify_api_request_json_for_with_refresh(
+    spotify,
+    Method::GET,
+    path,
+    query,
+    None,
+    Some(token_cache_path),
+    Some(app),
+  )
+  .await?;
   normalize_spotify_payload(&mut value);
   Ok(serde_json::from_value(value)?)
 }

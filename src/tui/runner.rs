@@ -1,4 +1,5 @@
 use crate::core::app::{self, ActiveBlock, App, RouteId};
+use crate::core::auth;
 use crate::core::user_config::UserConfig;
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 use crate::infra::audio;
@@ -393,7 +394,10 @@ pub async fn start_ui(
         cursor_offset,
       ))?;
 
-      if SystemTime::now() > app.spotify_token_expiry {
+      if auth::should_refresh_token_at(app.spotify_token_expiry, SystemTime::now())
+        && !app.auth_refresh_in_progress
+      {
+        app.auth_refresh_in_progress = true;
         app.dispatch(IoEvent::RefreshAuthentication);
       }
     }
