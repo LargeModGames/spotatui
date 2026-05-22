@@ -276,8 +276,8 @@ impl PlaybackNetwork for Network {
             )
           });
         #[cfg(feature = "streaming")]
-        let stale_api_item_for_native = stale_api_item_should_preserve_native_context(
-          StaleApiItemContext {
+        let stale_api_item_for_native =
+          stale_api_item_should_preserve_native_context(StaleApiItemContext {
             native_info_present: app.native_track_info.is_some(),
             api_item_present: c.item.is_some(),
             api_confirms_native_info: api_item_confirms_native_info,
@@ -286,8 +286,7 @@ impl PlaybackNetwork for Network {
             native_streaming_was_active,
             native_activation_pending: native_activation_was_pending,
             api_device_is_native: is_native_device,
-          },
-        );
+          });
         #[cfg(not(feature = "streaming"))]
         let stale_api_item_for_native =
           app.native_track_info.is_some() && c.item.is_some() && !api_item_confirms_native_info;
