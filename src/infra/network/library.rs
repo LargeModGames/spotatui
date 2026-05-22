@@ -71,10 +71,12 @@ pub async fn prefetch_saved_tracks_page_task(
     }
 
     let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    let Ok(page) = spotify_get_typed_compat_for::<Page<rspotify::model::SavedTrack>>(
+    let Ok(page) = spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::SavedTrack>>(
       &spotify,
       "me/tracks",
       &query,
+      &token_cache_path,
+      &app,
     )
     .await
     else {
@@ -147,8 +149,14 @@ pub async fn prefetch_playlist_tracks_page_task(
 
     let path = format!("playlists/{}/items", playlist_id.id());
     let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    let Ok(page) =
-      spotify_get_typed_compat_for::<Page<PlaylistItem>>(&spotify, &path, &query).await
+    let Ok(page) = spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+      &spotify,
+      &path,
+      &query,
+      &token_cache_path,
+      &app,
+    )
+    .await
     else {
       let mut app_guard = app.lock().await;
       app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
