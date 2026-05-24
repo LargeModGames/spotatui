@@ -386,12 +386,38 @@ jobs:
     runs-on: windows-latest
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Install komac
+        shell: pwsh
+        run: cargo binstall komac@2.15.0 -y
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
       - name: Submit to winget-pkgs
-        uses: vedantmgoyal9/winget-releaser@v2
-        with:
-          identifier: LargeModGames.spotatui
-          installers-regex: '-windows-x86_64\.zip$'
-          token: ${{ secrets.WINGET_TOKEN }}
+        shell: pwsh
+        run: |
+          $ReleaseInfo = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" `
+            -Headers @{ Authorization = "token $env:GITHUB_TOKEN" }
+
+          $Version = "${{ github.ref_name }}" -replace '^v'
+          $Urls = $ReleaseInfo.assets.Where({ $_.name -match '-windows-x86_64\.zip$' }).browser_download_url -join ' '
+
+          if ([string]::IsNullOrWhiteSpace($Urls)) {
+            Write-Error "No Windows x86_64 zip release asset found"
+            exit 1
+          }
+
+          komac update 'LargeModGames.spotatui' --version "$Version" --submit --urls $Urls
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          KOMAC_FORK_OWNER: LargeModGames
+          KOMAC_CREATED_WITH: spotatui CD workflow
+          KOMAC_CREATED_WITH_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   publish-homebrew:
     name: Publish to Homebrew
