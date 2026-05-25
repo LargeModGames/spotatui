@@ -525,7 +525,26 @@ impl PlaybackNetwork for Network {
 
     // Check if we should use native streaming for playback
     #[cfg(feature = "streaming")]
-    if is_native_streaming_active_for_playback(self).await {
+    let use_native = {
+      let is_active = is_native_streaming_active_for_playback(self).await;
+      if is_active {
+        true
+      } else {
+        let app = self.app.lock().await;
+        let has_active_device = app
+          .current_playback_context
+          .as_ref()
+          .is_some_and(|ctx| ctx.device.is_active);
+        let player_connected = app
+          .streaming_player
+          .as_ref()
+          .is_some_and(|p| p.is_connected());
+        !has_active_device && player_connected
+      }
+    };
+
+    #[cfg(feature = "streaming")]
+    if use_native {
       if let Some(player) = current_streaming_player(self).await {
         let activation_time = Instant::now();
         let should_transfer = {
