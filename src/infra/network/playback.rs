@@ -149,6 +149,15 @@ async fn current_streaming_player(
 }
 
 #[cfg(feature = "streaming")]
+fn should_fallback_to_native_playback(
+  is_native_active: bool,
+  has_active_device: bool,
+  player_connected: bool,
+) -> bool {
+  is_native_active || (!has_active_device && player_connected)
+}
+
+#[cfg(feature = "streaming")]
 async fn is_native_streaming_active_for_playback(network: &Network) -> bool {
   let app = network.app.lock().await;
   let streaming_player = app.streaming_player.clone();
@@ -527,20 +536,16 @@ impl PlaybackNetwork for Network {
     #[cfg(feature = "streaming")]
     let use_native = {
       let is_active = is_native_streaming_active_for_playback(self).await;
-      if is_active {
-        true
-      } else {
-        let app = self.app.lock().await;
-        let has_active_device = app
-          .current_playback_context
-          .as_ref()
-          .is_some_and(|ctx| ctx.device.is_active);
-        let player_connected = app
-          .streaming_player
-          .as_ref()
-          .is_some_and(|p| p.is_connected());
-        !has_active_device && player_connected
-      }
+      let app = self.app.lock().await;
+      let has_active_device = app
+        .current_playback_context
+        .as_ref()
+        .is_some_and(|ctx| ctx.device.is_active);
+      let player_connected = app
+        .streaming_player
+        .as_ref()
+        .is_some_and(|p| p.is_connected());
+      should_fallback_to_native_playback(is_active, has_active_device, player_connected)
     };
 
     #[cfg(feature = "streaming")]
@@ -1351,5 +1356,22 @@ mod tests {
         api_device_is_native: false,
       },
     ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn test_should_fallback_to_native_playback() {
+    // Case 1: Native streaming is already active
+    assert!(should_fallback_to_native_playback(true, true, true));
+    assert!(should_fallback_to_native_playback(true, false, true));
+
+    // Case 2: Native streaming not active, no other active device, native player connected
+    assert!(should_fallback_to_native_playback(false, false, true));
+
+    // Case 3: Native streaming not active, but another device IS active
+    assert!(!should_fallback_to_native_playback(false, true, true));
+
+    // Case 4: Native streaming not active, no active device, but native player NOT connected
+    assert!(!should_fallback_to_native_playback(false, false, false));
   }
 }
