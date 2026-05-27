@@ -54,10 +54,28 @@ fn preserve_refresh_token_from_file(token: &mut Token, path: &Path) {
   }
 }
 
+#[cfg(unix)]
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+  use std::io::Write;
+  use std::os::unix::fs::OpenOptionsExt;
+  std::fs::OpenOptions::new()
+    .write(true)
+    .create(true)
+    .truncate(true)
+    .mode(0o600)
+    .open(path)?
+    .write_all(contents)
+}
+
+#[cfg(not(unix))]
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+  std::fs::write(path, contents)
+}
+
 fn persist_token_to_file(mut token: Token, path: &Path) -> Result<()> {
   preserve_refresh_token_from_file(&mut token, path);
   let token_json = serde_json::to_string_pretty(&token)?;
-  fs::write(path, token_json)?;
+  write_private_file(path, token_json.as_bytes()).map_err(|e| anyhow!(e))?;
   info!("token cached to {}", path.display());
   Ok(())
 }

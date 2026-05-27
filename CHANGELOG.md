@@ -4,17 +4,20 @@
 
 ### Added
 
+- **Miniplayer view**: Added a new full-screen miniplayer mode that centers the playbar, accessible via a configurable keybinding (`M` by default), with full keyboard and mouse playbar control and proper navigation stack integration ([#278](https://github.com/LargeModGames/spotatui/pull/278)).
 - **Friends screen**: Added a new Library entry and full Friends screen backed by spotatui.com, including friend-code display, online filtering, inline name search, and live now-playing status for followed users.
 - **Friend management flows**: Added add-friend support by friend code or username search, plus unfollow actions and periodic background refresh while the Friends screen is open.
 - **Wayland clipboard support**: Enabled Linux `arboard` Wayland data-control support so clipboard operations like copying the friend code work reliably on Wayland sessions.
+
+### Security
+
+- **Token cache file permissions**: OAuth token cache is now written with mode `0600` (owner read/write only) on Unix, preventing other local users from reading the Spotify refresh token.
+- **Self-update checksum verification**: The auto-update and `spotatui update --install` flows now download and verify the SHA-256 sidecar published alongside each release asset before replacing the binary, so a compromised release asset is rejected before installation.
 
 ### Fixed
 
 - **Friends key handling**: Friends-specific keys and inline input now take precedence over conflicting global shortcuts, so add/search/copy/filter actions stay local to the Friends UI.
 - **Playlist track search**: Added playlist-internal track search from playlist track tables with `<Ctrl+f>`, client-side matching across track title, artists, and album, loading feedback while large playlists are scanned, and `q`/the configured back key to clear the active playlist filter and restore the cached playlist view ([#198](https://github.com/LargeModGames/spotatui/issues/198)).
-
-### Fixed
-
 - **Spotify auth retry path**: Centralized authenticated Spotify API requests behind a shared refresh-and-retry flow so expired access tokens are handled consistently across playback, library, search, recommendation, metadata, and user calls.
 
 ## [v0.38.4] 2026-05-26

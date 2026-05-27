@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use self_update::cargo_crate_version;
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +69,93 @@ pub fn check_for_update_silent() -> Option<UpdateInfo> {
   }
 }
 
+/// Returns the artifact prefix used in release asset names for the current platform.
+/// Mirrors the `artifact_prefix` matrix in `.github/workflows/cd.yml`.
+fn current_platform_prefix() -> Option<&'static str> {
+  match (std::env::consts::OS, std::env::consts::ARCH) {
+    ("linux", "x86_64") => Some("linux-x86_64"),
+    ("macos", "x86_64") => Some("macos-x86_64"),
+    ("macos", "aarch64") => Some("macos-aarch64"),
+    ("windows", "x86_64") => Some("windows-x86_64"),
+    _ => None,
+  }
+}
+
+/// Downloads the release asset for this platform, verifies its SHA-256 against the
+/// published `.sha256` sidecar, and returns `Err` if the hash does not match or the
+/// sidecar is missing.  Called before `status.update()` so a compromised asset is
+/// rejected before the binary is replaced.
+fn verify_release_checksum(release: &self_update::update::Release) -> Result<()> {
+  use sha2::Digest;
+
+  let prefix = current_platform_prefix()
+    .ok_or_else(|| anyhow!("unsupported platform, cannot verify update checksum"))?;
+
+  let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
+  let asset_name = format!("spotatui-{}.{}", prefix, ext);
+  let checksum_name = format!("{}.sha256", asset_name);
+
+  let asset = release
+    .assets
+    .iter()
+    .find(|a| a.name == asset_name)
+    .ok_or_else(|| anyhow!("release asset '{}' not found", asset_name))?;
+
+  let checksum_asset = release
+    .assets
+    .iter()
+    .find(|a| a.name == checksum_name)
+    .ok_or_else(|| {
+      anyhow!(
+        "checksum asset '{}' not found — skipping update",
+        checksum_name
+      )
+    })?;
+
+  let client = reqwest::blocking::Client::builder()
+    .timeout(std::time::Duration::from_secs(60))
+    .build()?;
+
+  let checksum_text = client
+    .get(&checksum_asset.download_url)
+    .send()?
+    .error_for_status()?
+    .text()?;
+
+  // Extract the hex digest: shasum/sha256sum produces "<hash>  <filename>",
+  // certutil (Windows) produces just the hash on a line by itself.
+  let expected_hash = checksum_text
+    .lines()
+    .find_map(|line| {
+      let token = line.split_whitespace().next()?;
+      if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(token.to_string())
+      } else {
+        None
+      }
+    })
+    .ok_or_else(|| anyhow!("could not parse SHA-256 hash from checksum file"))?;
+
+  let binary_bytes = client
+    .get(&asset.download_url)
+    .send()?
+    .error_for_status()?
+    .bytes()?;
+
+  let actual_hash = hex::encode(sha2::Sha256::digest(&binary_bytes));
+
+  if actual_hash != expected_hash {
+    bail!(
+      "checksum mismatch for '{}': expected {}, got {}",
+      asset_name,
+      expected_hash,
+      actual_hash
+    );
+  }
+
+  Ok(())
+}
+
 /// Convert self_update::Status to UpdateOutcome
 fn status_to_outcome(status: self_update::Status) -> UpdateOutcome {
   match status {
@@ -106,7 +193,8 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
 
   // New version available — apply delay logic
   if delay_secs == 0 {
-    // No delay: install immediately
+    // No delay: verify checksum then install immediately
+    verify_release_checksum(&latest)?;
     let result = status.update()?;
     return Ok(status_to_outcome(result));
   }
@@ -154,7 +242,8 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
 
   let elapsed = now_secs.saturating_sub(state.detected_at_secs);
   if elapsed >= delay_secs {
-    // Delay elapsed — install
+    // Delay elapsed — verify checksum then install
+    verify_release_checksum(&latest)?;
     let result = status.update()?;
     // Clean up state file
     if let Some(ref path) = state_path {
@@ -199,8 +288,9 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
   println!("New version available: v{}", latest_version);
 
   if do_update {
-    println!("\nDownloading and installing update...");
+    println!("\nVerifying checksum and installing update...");
 
+    verify_release_checksum(&latest)?;
     let result = status.update()?;
     match result {
       self_update::Status::UpToDate(_) => {
