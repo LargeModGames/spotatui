@@ -1,6 +1,6 @@
 use crate::core::{
   app::{ActiveBlock, App},
-  layout::fullscreen_view_layout,
+  layout::{fullscreen_view_layout, miniplayer_playbar_area},
 };
 use ratatui::{
   layout::{Alignment, Constraint, Layout, Position, Rect},
@@ -433,6 +433,11 @@ pub fn draw_cover_art_view(f: &mut Frame<'_>, app: &App) {
   }
 }
 
+pub fn draw_miniplayer(f: &mut Frame<'_>, app: &App) {
+  let area = miniplayer_playbar_area(f.area());
+  draw_playbar(f, app, area);
+}
+
 #[cfg(feature = "cover-art")]
 fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
   use ratatui::widgets::Clear;
@@ -711,8 +716,14 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
       let current_route = app.get_current_route();
       let highlight_state = (
-        current_route.active_block == ActiveBlock::PlayBar,
-        current_route.hovered_block == ActiveBlock::PlayBar,
+        matches!(
+          current_route.active_block,
+          ActiveBlock::PlayBar | ActiveBlock::MiniPlayer
+        ),
+        matches!(
+          current_route.hovered_block,
+          ActiveBlock::PlayBar | ActiveBlock::MiniPlayer
+        ),
       );
 
       let title_block = Block::default()

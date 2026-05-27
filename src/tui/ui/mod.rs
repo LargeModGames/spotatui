@@ -26,6 +26,7 @@ pub use self::home::draw_home;
 pub use self::library::draw_user_block;
 #[cfg(feature = "cover-art")]
 pub use self::player::draw_cover_art_view;
+pub use self::player::draw_miniplayer;
 pub use self::player::{draw_device_list, draw_lyrics_view, draw_playbar};
 pub use self::popups::{
   draw_announcement_prompt, draw_dialog, draw_error_screen, draw_exit_prompt, draw_help_menu,
@@ -133,6 +134,7 @@ pub fn draw_routes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     | RouteId::Analysis
     | RouteId::LyricsView
     | RouteId::CoverArtView
+    | RouteId::MiniPlayer
     | RouteId::AnnouncementPrompt
     | RouteId::ExitPrompt
     | RouteId::Settings

@@ -663,6 +663,7 @@ pub struct KeyBindingsString {
   audio_analysis: Option<String>,
   #[serde(alias = "basic_view")]
   lyrics_view: Option<String>,
+  miniplayer_view: Option<String>,
   cover_art_view: Option<String>,
   add_item_to_queue: Option<String>,
   show_queue: Option<String>,
@@ -701,6 +702,7 @@ pub struct KeyBindings {
   pub copy_album_url: Key,
   pub audio_analysis: Key,
   pub lyrics_view: Key,
+  pub miniplayer_view: Key,
   pub cover_art_view: Key,
   pub add_item_to_queue: Key,
   pub show_queue: Key,
@@ -864,6 +866,7 @@ impl UserConfig {
         copy_album_url: Key::Char('C'),
         audio_analysis: Key::Char('v'),
         lyrics_view: Key::Char('B'),
+        miniplayer_view: Key::Char('T'),
         cover_art_view: Key::Char('G'),
         add_item_to_queue: Key::Char('z'),
         show_queue: Key::Char('Q'),
@@ -988,6 +991,7 @@ impl UserConfig {
     to_keys!(copy_album_url);
     to_keys!(audio_analysis);
     to_keys!(lyrics_view);
+    to_keys!(miniplayer_view);
     to_keys!(cover_art_view);
     to_keys!(add_item_to_queue);
     to_keys!(show_queue);
@@ -1422,6 +1426,7 @@ impl UserConfig {
       copy_album_url: Some(key_to_config_string(self.keys.copy_album_url)),
       audio_analysis: Some(key_to_config_string(self.keys.audio_analysis)),
       lyrics_view: Some(key_to_config_string(self.keys.lyrics_view)),
+      miniplayer_view: Some(key_to_config_string(self.keys.miniplayer_view)),
       cover_art_view: Some(key_to_config_string(self.keys.cover_art_view)),
       add_item_to_queue: Some(key_to_config_string(self.keys.add_item_to_queue)),
       show_queue: Some(key_to_config_string(self.keys.show_queue)),

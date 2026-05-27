@@ -3,7 +3,8 @@ use crate::core::app::{
   ActiveBlock, App, RouteId, SettingValue, SettingsCategory, LIBRARY_OPTIONS,
 };
 use crate::core::layout::{
-  fullscreen_view_layout, library_constraints, playbar_constraint, sidebar_constraints,
+  fullscreen_view_layout, library_constraints, miniplayer_playbar_area, playbar_constraint,
+  sidebar_constraints,
 };
 use crate::tui::event::Key;
 use crate::tui::ui::player::playbar_control_at;
@@ -30,12 +31,32 @@ pub fn handler(mouse: MouseEvent, app: &mut App) {
   }
 
   if current_route_id == RouteId::LyricsView {
-    handle_fullscreen_view_mouse(ActiveBlock::LyricsView, mouse, app);
+    handle_fullscreen_playbar_mouse(
+      ActiveBlock::LyricsView,
+      fullscreen_view_playbar_area(app),
+      mouse,
+      app,
+    );
     return;
   }
 
   if current_route_id == RouteId::CoverArtView {
-    handle_fullscreen_view_mouse(ActiveBlock::CoverArtView, mouse, app);
+    handle_fullscreen_playbar_mouse(
+      ActiveBlock::CoverArtView,
+      fullscreen_view_playbar_area(app),
+      mouse,
+      app,
+    );
+    return;
+  }
+
+  if current_route_id == RouteId::MiniPlayer {
+    handle_fullscreen_playbar_mouse(
+      ActiveBlock::MiniPlayer,
+      miniplayer_view_playbar_area(app),
+      mouse,
+      app,
+    );
     return;
   }
 
@@ -185,8 +206,13 @@ fn handle_settings_mouse(mouse: MouseEvent, app: &mut App) {
   }
 }
 
-fn handle_fullscreen_view_mouse(focus_block: ActiveBlock, mouse: MouseEvent, app: &mut App) {
-  let Some(playbar_area) = fullscreen_view_playbar_area(app) else {
+fn handle_fullscreen_playbar_mouse(
+  focus_block: ActiveBlock,
+  playbar_area: Option<Rect>,
+  mouse: MouseEvent,
+  app: &mut App,
+) {
+  let Some(playbar_area) = playbar_area else {
     return;
   };
 
@@ -359,6 +385,7 @@ fn is_main_layout_mouse_interactive(active_block: ActiveBlock) -> bool {
       | ActiveBlock::Analysis
       | ActiveBlock::LyricsView
       | ActiveBlock::CoverArtView
+      | ActiveBlock::MiniPlayer
       | ActiveBlock::AnnouncementPrompt
       | ActiveBlock::ExitPrompt
       | ActiveBlock::Settings
@@ -815,6 +842,19 @@ fn fullscreen_view_playbar_area(app: &App) -> Option<Rect> {
   playbar_area
 }
 
+fn miniplayer_view_playbar_area(app: &App) -> Option<Rect> {
+  if app.size.width == 0 || app.size.height == 0 {
+    return None;
+  }
+
+  Some(miniplayer_playbar_area(Rect::new(
+    0,
+    0,
+    app.size.width,
+    app.size.height,
+  )))
+}
+
 fn main_layout_areas(app: &App) -> Option<MainLayoutAreas> {
   if app.size.width == 0 || app.size.height == 0 {
     return None;
@@ -1249,6 +1289,32 @@ mod tests {
     assert_eq!(route.id, RouteId::LyricsView);
     assert_eq!(route.active_block, ActiveBlock::LyricsView);
     assert_eq!(route.hovered_block, ActiveBlock::LyricsView);
+  }
+
+  #[test]
+  fn click_miniplayer_control_triggers_action_and_keeps_miniplayer_focus() {
+    let mut app = App::default();
+    app.size = Size {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::MiniPlayer, ActiveBlock::MiniPlayer);
+    with_playbar_context(&mut app);
+
+    let playbar_area = miniplayer_playbar_area(Rect::new(0, 0, app.size.width, app.size.height));
+    let (x, y) = find_playbar_control_click(&app, playbar_area, PlaybarControl::PlayPause);
+    assert!(!app.is_loading);
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+
+    assert!(app.is_loading);
+    let route = app.get_current_route();
+    assert_eq!(route.id, RouteId::MiniPlayer);
+    assert_eq!(route.active_block, ActiveBlock::MiniPlayer);
+    assert_eq!(route.hovered_block, ActiveBlock::MiniPlayer);
   }
 
   #[test]

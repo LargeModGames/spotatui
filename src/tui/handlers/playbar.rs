@@ -10,14 +10,24 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::up_event(k) => {
       app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
     }
-    Key::Char('s') => {
+    k => {
+      handle_action_key(k, app);
+    }
+  };
+}
+
+pub(crate) fn handle_action_key(key: Key, app: &mut App) -> bool {
+  match key {
+    k if k == app.user_config.keys.like_track => {
       handle_control(PlaybarControl::Like, app);
+      true
     }
     Key::Char('w') => {
       add_currently_playing_track_to_playlist(app);
+      true
     }
-    _ => {}
-  };
+    _ => false,
+  }
 }
 
 pub(crate) fn handle_control(control: PlaybarControl, app: &mut App) {

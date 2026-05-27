@@ -48,6 +48,30 @@ pub fn fullscreen_view_layout(behavior: &BehaviorConfig, area: Rect) -> (Rect, O
   (content_area, Some(playbar_area))
 }
 
+/// Returns the compact playbar area used by the full-screen miniplayer.
+///
+/// The normal playbar layout is optimized for a short strip. Miniplayer keeps
+/// that same playbar renderer, but constrains it to a centered stage so wide
+/// terminals do not stretch track metadata across a mostly empty full screen.
+pub fn miniplayer_playbar_area(area: Rect) -> Rect {
+  let horizontal_margin = if area.width >= 100 { 4 } else { 1 };
+  let vertical_margin = if area.height >= 30 { 4 } else { 1 };
+
+  let available_width = area.width.saturating_sub(horizontal_margin * 2);
+  let available_height = area.height.saturating_sub(vertical_margin * 2);
+  let width = available_width.min(120).max(available_width.min(1));
+  let height = available_height.min(18).max(available_height.min(1));
+
+  Rect {
+    x: area.x.saturating_add(area.width.saturating_sub(width) / 2),
+    y: area
+      .y
+      .saturating_add(area.height.saturating_sub(height) / 2),
+    width,
+    height,
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -160,5 +184,19 @@ mod tests {
 
     assert_eq!(content, Rect::new(2, 4, 80, 18));
     assert_eq!(playbar, Some(Rect::new(2, 22, 80, 6)));
+  }
+
+  #[test]
+  fn miniplayer_playbar_area_is_compact_and_centered_on_large_terminals() {
+    let area = Rect::new(0, 0, 180, 50);
+
+    assert_eq!(miniplayer_playbar_area(area), Rect::new(30, 16, 120, 18));
+  }
+
+  #[test]
+  fn miniplayer_playbar_area_uses_available_space_on_small_terminals() {
+    let area = Rect::new(0, 0, 60, 12);
+
+    assert_eq!(miniplayer_playbar_area(area), Rect::new(1, 1, 58, 10));
   }
 }

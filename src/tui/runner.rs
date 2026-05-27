@@ -525,6 +525,7 @@ pub async fn start_ui(
           ActiveBlock::SelectDevice => ui::draw_device_list(f, &app),
           ActiveBlock::Analysis => ui::audio_analysis::draw(f, &app),
           ActiveBlock::LyricsView => ui::draw_lyrics_view(f, &app),
+          ActiveBlock::MiniPlayer => ui::draw_miniplayer(f, &app),
           #[cfg(feature = "cover-art")]
           ActiveBlock::CoverArtView => ui::draw_cover_art_view(f, &app),
           ActiveBlock::AnnouncementPrompt => ui::draw_announcement_prompt(f, &app),

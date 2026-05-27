@@ -153,6 +153,11 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       key_bindings.lyrics_view.to_string(),
       String::from("General"),
     ],
+    vec![
+      String::from("Toggle miniplayer view"),
+      key_bindings.miniplayer_view.to_string(),
+      String::from("General"),
+    ],
     #[cfg(feature = "cover-art")]
     vec![
       String::from("Go to cover art view"),

@@ -234,6 +234,7 @@ pub enum ActiveBlock {
   Artists,
   LyricsView,
   CoverArtView,
+  MiniPlayer,
   Dialog(DialogContext),
 
   AnnouncementPrompt,
@@ -260,6 +261,7 @@ pub enum RouteId {
   Artist,
   LyricsView,
   CoverArtView,
+  MiniPlayer,
   Error,
   Home,
   RecentlyPlayed,
@@ -3402,6 +3404,12 @@ impl App {
           description: "Open lyrics view".to_string(),
           value: SettingValue::Key(key_to_string(&self.user_config.keys.lyrics_view)),
         },
+        SettingItem {
+          id: "keys.miniplayer_view".to_string(),
+          name: "Miniplayer View".to_string(),
+          description: "Toggle full-screen playbar view".to_string(),
+          value: SettingValue::Key(key_to_string(&self.user_config.keys.miniplayer_view)),
+        },
         #[cfg(feature = "cover-art")]
         SettingItem {
           id: "keys.cover_art_view".to_string(),
@@ -3874,6 +3882,13 @@ impl App {
           if let SettingValue::Key(v) = &setting.value {
             if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
               self.user_config.keys.lyrics_view = key;
+            }
+          }
+        }
+        "keys.miniplayer_view" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.miniplayer_view = key;
             }
           }
         }

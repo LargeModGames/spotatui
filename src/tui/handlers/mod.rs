@@ -18,6 +18,7 @@ mod home;
 mod input;
 mod library;
 mod lyrics_view;
+mod miniplayer;
 mod mouse;
 mod party;
 mod playbar;
@@ -187,6 +188,13 @@ pub fn handle_app(key: Key, app: &mut App) {
     }
     _ if key == app.user_config.keys.lyrics_view => {
       app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView);
+    }
+    _ if key == app.user_config.keys.miniplayer_view => {
+      if is_input_mode(app) {
+        handle_block_events(key, app);
+      } else {
+        toggle_miniplayer(app);
+      }
     }
     #[cfg(feature = "cover-art")]
     _ if key == app.user_config.keys.cover_art_view => {
@@ -373,6 +381,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::LyricsView => {
       lyrics_view::handler(key, app);
     }
+    ActiveBlock::MiniPlayer => {
+      miniplayer::handler(key, app);
+    }
     ActiveBlock::CoverArtView => {
       #[cfg(feature = "cover-art")]
       cover_art_view::handler(key, app);
@@ -432,7 +443,7 @@ fn handle_escape(app: &mut App) {
     ActiveBlock::Party => {
       app.pop_navigation_stack();
     }
-    ActiveBlock::LyricsView | ActiveBlock::CoverArtView => {
+    ActiveBlock::LyricsView | ActiveBlock::CoverArtView | ActiveBlock::MiniPlayer => {
       app.pop_navigation_stack();
     }
     // These are global views that have no active/inactive distinction so do nothing
@@ -453,6 +464,14 @@ fn handle_escape(app: &mut App) {
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);
     }
+  }
+}
+
+fn toggle_miniplayer(app: &mut App) {
+  if app.get_current_route().id == RouteId::MiniPlayer {
+    app.pop_navigation_stack();
+  } else {
+    app.push_navigation_stack(RouteId::MiniPlayer, ActiveBlock::MiniPlayer);
   }
 }
 
