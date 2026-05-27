@@ -11,7 +11,6 @@
 [![spotatui Contributors](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/LargeModGames/spotatui/main/.all-contributorsrc&query=%24.contributors.length&label=spotatui%20contributors&color=1ed760&style=flat-square)](#spotatui-contributors)
 [![Upstream Contributors](https://img.shields.io/badge/upstream_contributors-94-orange.svg?style=flat-square)](#upstream-contributors-spotify-tui)
 
-[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/ccff995e-61d7-4ede-96ed-8e7fa0e48515.svg)](https://oosmetrics.com/repo/LargeModGames/spotatui)
 
 
 

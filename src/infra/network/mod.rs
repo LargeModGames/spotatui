@@ -50,6 +50,7 @@ pub enum IoEvent {
   GetDevices,
   GetSearchResults(String, Option<Country>),
   GetPlaylistItems(PlaylistId<'static>, u32),
+  SearchPlaylistTracks(PlaylistId<'static>, String),
   GetCurrentSavedTracks(Option<u32>),
   StartPlayback(
     Option<PlayContextId<'static>>,
@@ -232,6 +233,9 @@ impl Network {
 
       IoEvent::GetPlaylistItems(playlist_id, playlist_offset) => {
         self.get_playlist_tracks(playlist_id, playlist_offset).await;
+      }
+      IoEvent::SearchPlaylistTracks(playlist_id, query) => {
+        self.search_playlist_tracks(playlist_id, query).await;
       }
       IoEvent::GetCurrentSavedTracks(offset) => {
         self.get_current_user_saved_tracks(offset).await;

@@ -211,10 +211,20 @@ fn reset_window_title(state: &mut WindowTitleState) -> Result<()> {
   Ok(())
 }
 
+fn back_key_clears_playlist_filter(app: &mut App, active_block: ActiveBlock) -> bool {
+  if active_block == ActiveBlock::TrackTable && app.is_playlist_track_filter_active() {
+    app.clear_playlist_track_filter();
+    true
+  } else {
+    false
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::NativeTrackInfo;
+  use crate::core::app::{NativeTrackInfo, TrackTableContext};
+  use rspotify::model::idtypes::PlaylistId;
   use std::{sync::mpsc::channel, time::SystemTime};
 
   fn app() -> App {
@@ -276,6 +286,27 @@ mod tests {
       Some(DEFAULT_WINDOW_TITLE)
     );
     assert_eq!(next_window_title(&mut state, &app), None);
+  }
+
+  #[test]
+  fn back_key_clears_playlist_filter_before_navigation_pop() {
+    let mut app = app();
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(
+      PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+        .unwrap()
+        .into_static(),
+    );
+    app.active_playlist_track_filter = Some("query".to_string());
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+
+    assert!(back_key_clears_playlist_filter(
+      &mut app,
+      ActiveBlock::TrackTable
+    ));
+
+    assert!(app.active_playlist_track_filter.is_none());
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   }
 }
 
@@ -563,30 +594,32 @@ pub async fn start_ui(
         } else if current_active_block == ActiveBlock::Input {
           handlers::input_handler(key, &mut app);
         } else if key == app.user_config.keys.back {
-          if current_active_block == ActiveBlock::Settings {
-            handlers::handle_app(key, &mut app);
-          } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
-            if let Some(dismissed_id) = app.dismiss_active_announcement() {
-              app.user_config.mark_announcement_seen(dismissed_id);
-              if let Err(error) = app.user_config.save_config() {
-                app.handle_error(anyhow!(
-                  "Failed to persist dismissed announcement: {}",
-                  error
-                ));
+          if !back_key_clears_playlist_filter(&mut app, current_active_block) {
+            if current_active_block == ActiveBlock::Settings {
+              handlers::handle_app(key, &mut app);
+            } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
+              if let Some(dismissed_id) = app.dismiss_active_announcement() {
+                app.user_config.mark_announcement_seen(dismissed_id);
+                if let Err(error) = app.user_config.save_config() {
+                  app.handle_error(anyhow!(
+                    "Failed to persist dismissed announcement: {}",
+                    error
+                  ));
+                }
               }
-            }
 
-            if app.active_announcement.is_none() {
-              app.pop_navigation_stack();
-            }
-          } else if app.get_current_route().active_block != ActiveBlock::Input {
-            let pop_result = match app.pop_navigation_stack() {
-              Some(ref x) if x.id == RouteId::Search => app.pop_navigation_stack(),
-              Some(x) => Some(x),
-              None => None,
-            };
-            if pop_result.is_none() {
-              app.push_navigation_stack(RouteId::ExitPrompt, ActiveBlock::ExitPrompt);
+              if app.active_announcement.is_none() {
+                app.pop_navigation_stack();
+              }
+            } else if app.get_current_route().active_block != ActiveBlock::Input {
+              let pop_result = match app.pop_navigation_stack() {
+                Some(ref x) if x.id == RouteId::Search => app.pop_navigation_stack(),
+                Some(x) => Some(x),
+                None => None,
+              };
+              if pop_result.is_none() {
+                app.push_navigation_stack(RouteId::ExitPrompt, ActiveBlock::ExitPrompt);
+              }
             }
           }
         } else {

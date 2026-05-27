@@ -388,6 +388,7 @@ fn focus_playbar(block: ActiveBlock, app: &mut App) {
 }
 
 fn focus_input(app: &mut App) {
+  app.input_context = crate::core::app::InputContext::GlobalSearch;
   app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
 }
 

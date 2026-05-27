@@ -38,6 +38,8 @@ use crate::infra::discord_rpc;
 use crate::infra::macos_media;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::infra::mpris;
+#[cfg(feature = "streaming")]
+use crate::infra::network::requests::spotify_get_typed_compat_for_with_refresh;
 use crate::infra::network::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::infra::player;
@@ -51,9 +53,9 @@ use log::info;
 #[cfg(feature = "streaming")]
 use log::warn;
 #[cfg(feature = "streaming")]
-use rspotify::prelude::*;
+use rspotify::{model::user::PrivateUser, AuthCodePkceSpotify};
 #[cfg(feature = "streaming")]
-use rspotify::AuthCodePkceSpotify;
+use std::path::Path;
 #[cfg(feature = "streaming")]
 use std::time::Duration;
 use std::{
@@ -133,8 +135,18 @@ fn subscription_level_label(level: rspotify::model::SubscriptionLevel) -> &'stat
 #[cfg(feature = "streaming")]
 async fn account_supports_native_streaming(
   spotify: &AuthCodePkceSpotify,
+  token_cache_path: &Path,
+  app: &Arc<Mutex<App>>,
 ) -> (bool, Option<&'static str>) {
-  match spotify.me().await {
+  match spotify_get_typed_compat_for_with_refresh::<PrivateUser>(
+    spotify,
+    "me",
+    &[],
+    token_cache_path,
+    app,
+  )
+  .await
+  {
     #[allow(deprecated)]
     Ok(user) => match user.product {
       Some(rspotify::model::SubscriptionLevel::Premium) => (true, None),
@@ -725,10 +737,8 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   #[cfg(feature = "streaming")]
   let selected_redirect_uri = authenticated.redirect_uri;
 
-  // Persist whatever token is now in memory. rspotify's auto_reauth (token_refreshing=true)
-  // silently refreshes the token during the spotify.me() probe in ensure_auth_token, rotating
-  // the refresh_token but never writing the result to disk (token_cached=false by default).
-  // Saving here ensures the on-disk token is always the current one, not the original stale one.
+  // Persist whatever token is now in memory. All later Spotify requests go through
+  // spotatui's refresh-and-cache path so the on-disk token stays current.
   if let Err(e) = auth::save_token_to_file(&spotify, &final_token_cache_path).await {
     log::warn!("Failed to cache token on startup: {}", e);
   }
@@ -765,7 +775,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     #[cfg(feature = "streaming")]
     let (streaming_supported_for_account, streaming_startup_status_message) =
       if client_config.enable_streaming {
-        account_supports_native_streaming(&spotify).await
+        account_supports_native_streaming(&spotify, &final_token_cache_path, &app).await
       } else {
         (false, None)
       };
@@ -1066,7 +1076,11 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         let saved_device_id = network.client_config.device_id.clone();
         let mut devices_snapshot = None;
 
-        if let Ok(devices_vec) = network.spotify.device().await {
+        if let Ok(devices) = network
+          .spotify_get_typed::<rspotify::model::device::DevicePayload>("me/player/devices", &[])
+          .await
+        {
+          let devices_vec = devices.devices;
           let mut app = network.app.lock().await;
           app.devices = Some(rspotify::model::device::DevicePayload {
             devices: devices_vec.clone(),

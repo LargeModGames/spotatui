@@ -1,4 +1,4 @@
-use crate::core::sort::{SortContext, SortState};
+use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
 use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
 use crate::infra::network::sync::{PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
@@ -247,6 +247,13 @@ pub enum ActiveBlock {
   Friends,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum InputContext {
+  #[default]
+  GlobalSearch,
+  PlaylistTrackSearch,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum RouteId {
   Analysis,
@@ -437,6 +444,42 @@ pub struct TrackTable {
   pub tracks: Vec<FullTrack>,
   pub selected_index: usize,
   pub context: Option<TrackTableContext>,
+}
+
+fn sort_playlist_track_matches(matches: &mut [(FullTrack, usize)], sort_state: SortState) {
+  if sort_state.field == SortField::Default {
+    return;
+  }
+
+  matches.sort_by(|(track_a, position_a), (track_b, position_b)| {
+    let order = match sort_state.field {
+      SortField::Name => track_a.name.cmp(&track_b.name),
+      SortField::Duration => track_a.duration.cmp(&track_b.duration),
+      SortField::Artist => {
+        let empty_string = String::new();
+        let artist_a = track_a
+          .artists
+          .first()
+          .map(|artist| &artist.name)
+          .unwrap_or(&empty_string);
+        let artist_b = track_b
+          .artists
+          .first()
+          .map(|artist| &artist.name)
+          .unwrap_or(&empty_string);
+        artist_a.cmp(artist_b)
+      }
+      SortField::Album => track_a.album.name.cmp(&track_b.album.name),
+      SortField::DateAdded => position_a.cmp(position_b),
+      SortField::Default => std::cmp::Ordering::Equal,
+    };
+
+    if sort_state.order == SortOrder::Descending {
+      order.reverse()
+    } else {
+      order
+    }
+  });
 }
 
 #[derive(Clone)]
@@ -715,6 +758,7 @@ pub struct App {
   pub input: Vec<char>,
   pub input_idx: usize,
   pub input_cursor_position: u16,
+  pub input_context: InputContext,
   /// Horizontal scroll offset for the input box, computed during rendering.
   pub input_scroll_offset: Cell<u16>,
   pub liked_song_ids_set: HashSet<String>,
@@ -726,6 +770,8 @@ pub struct App {
   pub playlist_tracks: Option<Page<PlaylistItem>>,
   pub playlist_track_pages: ScrollableResultPages<Page<PlaylistItem>>,
   pub playlist_track_table_id: Option<PlaylistId<'static>>,
+  pub active_playlist_track_filter: Option<String>,
+  pub pending_playlist_track_search: Option<String>,
   pub playlists: Option<Page<SimplifiedPlaylist>>,
   pub recently_played: SpotifyResultAndSelectedIndex<Option<CursorBasedPage<PlayHistory>>>,
   pub recommendations_seed: String,
@@ -986,11 +1032,14 @@ impl Default for App {
       input: vec![],
       input_idx: 0,
       input_cursor_position: 0,
+      input_context: InputContext::GlobalSearch,
       input_scroll_offset: Cell::new(0),
       playlist_offset: 0,
       playlist_tracks: None,
       playlist_track_pages: ScrollableResultPages::new(),
       playlist_track_table_id: None,
+      active_playlist_track_filter: None,
+      pending_playlist_track_search: None,
       playlists: None,
       recommendations_context: None,
       recommendations_seed: "".to_string(),
@@ -2359,6 +2408,8 @@ impl App {
       self.playlist_tracks_prefetch_generation.wrapping_add(1);
     self.playlist_tracks_prefetch_in_flight.clear();
     self.playlist_track_table_id = Some(playlist_id);
+    self.active_playlist_track_filter = None;
+    self.pending_playlist_track_search = None;
     self.playlist_track_pages.clear();
     self.playlist_tracks = None;
     self.playlist_offset = 0;
@@ -2389,6 +2440,50 @@ impl App {
     }
 
     self.track_table.tracks = tracks;
+  }
+
+  pub fn is_playlist_track_filter_active(&self) -> bool {
+    self.active_playlist_track_filter.is_some()
+  }
+
+  pub fn clear_playlist_track_filter(&mut self) {
+    self.active_playlist_track_filter = None;
+    self.pending_playlist_track_search = None;
+    self.input_context = InputContext::GlobalSearch;
+    if self.playlist_track_pages.pages.is_empty() {
+      self.track_table.tracks.clear();
+      self.track_table.selected_index = 0;
+      self.playlist_track_positions = None;
+      return;
+    }
+    self.set_playlist_tracks_to_table_continuous();
+  }
+
+  pub fn apply_playlist_track_search_results(
+    &mut self,
+    playlist_id: &PlaylistId<'_>,
+    query: String,
+    mut matches: Vec<(FullTrack, usize)>,
+  ) -> bool {
+    if !self.is_playlist_track_table_active_for(playlist_id) {
+      return false;
+    }
+
+    sort_playlist_track_matches(&mut matches, self.playlist_sort);
+
+    let track_ids = matches
+      .iter()
+      .filter_map(|(track, _)| track.id.clone().map(|id| id.into_static()))
+      .collect();
+    let (tracks, positions): (Vec<_>, Vec<_>) = matches.into_iter().unzip();
+
+    self.active_playlist_track_filter = Some(query);
+    self.pending_playlist_track_search = None;
+    self.track_table.selected_index = 0;
+    self.track_table.tracks = tracks;
+    self.playlist_track_positions = Some(positions);
+    self.dispatch(IoEvent::CurrentUserSavedTracksContains(track_ids));
+    true
   }
 
   pub fn is_playlist_track_table_context(&self) -> bool {
@@ -2475,6 +2570,10 @@ impl App {
   }
 
   pub fn current_playlist_has_more_tracks(&self) -> bool {
+    if self.is_playlist_track_filter_active() {
+      return false;
+    }
+
     self
       .playlist_tracks
       .as_ref()
@@ -2561,6 +2660,10 @@ impl App {
   }
 
   pub fn get_playlist_tracks_next(&mut self) {
+    if self.is_playlist_track_filter_active() {
+      return;
+    }
+
     let Some(playlist_id) = self.current_playlist_track_table_id() else {
       return;
     };
@@ -4458,6 +4561,67 @@ mod tests {
     assert_eq!(app.track_table.tracks.len(), 4);
     assert_eq!(app.track_table.selected_index, 2);
     assert_eq!(app.playlist_track_positions, Some(vec![0, 1, 2, 3]));
+  }
+
+  #[test]
+  fn playlist_search_results_preserve_source_positions_and_handle_no_matches() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.pending_playlist_track_search = Some("track".to_string());
+
+    assert!(app.apply_playlist_track_search_results(
+      &playlist_id,
+      "track".to_string(),
+      vec![
+        (full_track("0000000000000000000002", "Second"), 8),
+        (full_track("0000000000000000000004", "Fourth"), 11),
+      ],
+    ));
+
+    assert_eq!(app.active_playlist_track_filter, Some("track".to_string()));
+    assert!(app.pending_playlist_track_search.is_none());
+    assert_eq!(app.track_table.tracks.len(), 2);
+    assert_eq!(app.playlist_track_positions, Some(vec![8, 11]));
+    match rx.recv().unwrap() {
+      IoEvent::CurrentUserSavedTracksContains(track_ids) => {
+        assert_eq!(track_ids.len(), 2);
+      }
+      _ => panic!("unexpected event"),
+    }
+
+    assert!(app.apply_playlist_track_search_results(&playlist_id, "none".to_string(), vec![]));
+    assert!(app.track_table.tracks.is_empty());
+    assert_eq!(app.playlist_track_positions, Some(vec![]));
+  }
+
+  #[test]
+  fn clearing_playlist_search_restores_cached_continuous_view() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+    let page = playlist_page(
+      0,
+      2,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    );
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id);
+    app.playlist_track_pages.upsert_page_by_offset(page);
+    app.active_playlist_track_filter = Some("second".to_string());
+    app.track_table.tracks = vec![full_track("0000000000000000000002", "Second")];
+    app.playlist_track_positions = Some(vec![1]);
+
+    app.clear_playlist_track_filter();
+
+    assert!(app.active_playlist_track_filter.is_none());
+    assert_eq!(app.track_table.tracks.len(), 2);
+    assert_eq!(app.playlist_track_positions, Some(vec![0, 1]));
   }
 
   #[test]

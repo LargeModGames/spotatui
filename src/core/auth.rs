@@ -145,6 +145,7 @@ fn build_pkce_spotify_client(
   }));
   let config = Config {
     cache_path,
+    token_refreshing: false,
     token_callback_fn: Arc::new(Some(token_callback)),
     ..Default::default()
   };
@@ -634,7 +635,7 @@ mod tests {
   }
 
   #[test]
-  fn test_pkce_client_keeps_rspotify_auto_refresh_with_cache_callback() {
+  fn test_pkce_client_disables_rspotify_auto_refresh_with_cache_callback() {
     let spotify = build_pkce_spotify_client(
       "test_client_id",
       "http://localhost:8888/callback".to_string(),
@@ -642,8 +643,8 @@ mod tests {
     );
 
     assert!(
-      spotify.config.token_refreshing,
-      "rspotify auto-refresh should remain available for direct client calls"
+      !spotify.config.token_refreshing,
+      "authenticated requests should use spotatui's shared refresh-and-retry path"
     );
     assert!(
       spotify.config.token_callback_fn.as_ref().is_some(),

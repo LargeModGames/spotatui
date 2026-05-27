@@ -1,6 +1,6 @@
 extern crate unicode_width;
 
-use crate::core::app::{ActiveBlock, App, RouteId};
+use crate::core::app::{ActiveBlock, App, InputContext, RouteId};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use rspotify::model::idtypes::{AlbumId, PlaylistId, ShowId, TrackId};
@@ -62,9 +62,15 @@ pub fn handler(key: Key, app: &mut App) {
       app.input_idx += 1;
       app.input_cursor_position += compute_character_width(next_c);
     }
-    Key::Esc => {
-      app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
-    }
+    Key::Esc => match app.input_context {
+      InputContext::PlaylistTrackSearch => {
+        app.input_context = InputContext::GlobalSearch;
+        app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+      }
+      InputContext::GlobalSearch => {
+        app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+      }
+    },
     Key::Enter => {
       let input_str: String = app.input.iter().collect();
 
@@ -88,6 +94,11 @@ pub fn handler(key: Key, app: &mut App) {
 }
 
 fn process_input(app: &mut App, input: String) {
+  if app.input_context == InputContext::PlaylistTrackSearch {
+    process_playlist_track_search(app, input);
+    return;
+  }
+
   // Don't do anything if there is no input
   if input.is_empty() {
     return;
@@ -105,6 +116,23 @@ fn process_input(app: &mut App, input: String) {
   // Default fallback behavior: treat the input as a raw search phrase.
   app.dispatch(IoEvent::GetSearchResults(input, app.get_user_country()));
   app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+}
+
+fn process_playlist_track_search(app: &mut App, input: String) {
+  let query = input.trim().to_string();
+  app.input_context = InputContext::GlobalSearch;
+  app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+
+  if query.is_empty() {
+    app.clear_playlist_track_filter();
+    return;
+  }
+
+  if let Some(playlist_id) = app.current_playlist_track_table_id() {
+    app.pending_playlist_track_search = Some(query.clone());
+    app.set_status_message(format!("Searching playlist for \"{query}\"..."), 60);
+    app.dispatch(IoEvent::SearchPlaylistTracks(playlist_id, query));
+  }
 }
 
 fn spotify_resource_id(base: &str, uri: &str, sep: &str, resource_type: &str) -> (String, bool) {
@@ -174,6 +202,7 @@ fn compute_character_width(character: char) -> u16 {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use rspotify::prelude::Id;
 
   fn str_to_vec_char(s: &str) -> Vec<char> {
     String::from(s).chars().collect()
@@ -279,6 +308,85 @@ mod tests {
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::Empty);
+  }
+
+  #[test]
+  fn playlist_search_esc_returns_focus_to_track_table() {
+    let mut app = App::default();
+    app.input_context = InputContext::PlaylistTrackSearch;
+
+    handler(Key::Esc, &mut app);
+
+    let current_route = app.get_current_route();
+    assert_eq!(current_route.active_block, ActiveBlock::TrackTable);
+    assert_eq!(current_route.hovered_block, ActiveBlock::TrackTable);
+    assert_eq!(app.input_context, InputContext::GlobalSearch);
+  }
+
+  #[test]
+  fn playlist_search_enter_dispatches_playlist_search() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      std::time::SystemTime::now(),
+    );
+    let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static();
+
+    app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.input_context = InputContext::PlaylistTrackSearch;
+    app.input = str_to_vec_char("queen rock");
+    app.input_idx = app.input.len();
+    app.input_cursor_position = app.input.len() as u16;
+
+    handler(Key::Enter, &mut app);
+
+    match rx.recv().unwrap() {
+      IoEvent::SearchPlaylistTracks(id, query) => {
+        assert_eq!(id.id(), playlist_id.id());
+        assert_eq!(query, "queen rock");
+      }
+      _ => panic!("unexpected event"),
+    }
+    assert_eq!(app.input_context, InputContext::GlobalSearch);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::TrackTable
+    );
+    assert_eq!(
+      app.pending_playlist_track_search,
+      Some("queen rock".to_string())
+    );
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Searching playlist for \"queen rock\"...")
+    );
+  }
+
+  #[test]
+  fn empty_playlist_search_clears_filter_without_dispatching() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      std::time::SystemTime::now(),
+    );
+    let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static();
+
+    app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id);
+    app.input_context = InputContext::PlaylistTrackSearch;
+    app.active_playlist_track_filter = Some("old".to_string());
+
+    handler(Key::Enter, &mut app);
+
+    assert!(app.active_playlist_track_filter.is_none());
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]

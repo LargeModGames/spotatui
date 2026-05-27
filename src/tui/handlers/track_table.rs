@@ -119,6 +119,9 @@ pub fn handler(key: Key, app: &mut App) {
     }
     Key::Char('w') => open_add_to_playlist_dialog(app),
     Key::Char('x') => open_remove_from_playlist_dialog(app),
+    Key::Char('q') if app.is_playlist_track_filter_active() => {
+      app.clear_playlist_track_filter();
+    }
     Key::Char('s') => handle_save_track_event(app),
     Key::Char('S') => play_random_song(app),
     k if k == app.user_config.keys.jump_to_end => jump_to_end(app),
@@ -487,7 +490,7 @@ mod tests {
   use crate::core::test_helpers::full_track;
   use crate::core::user_config::UserConfig;
   use chrono::Utc;
-  use rspotify::model::{page::Page, track::SavedTrack};
+  use rspotify::model::{page::Page, playlist::PlaylistItem, track::SavedTrack, PlayableItem};
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
@@ -495,6 +498,18 @@ mod tests {
     SavedTrack {
       added_at: Utc::now(),
       track: full_track(id, name),
+    }
+  }
+
+  #[allow(deprecated)]
+  fn playlist_item(id: &str, name: &str) -> PlaylistItem {
+    let track = PlayableItem::Track(full_track(id, name));
+    PlaylistItem {
+      added_at: Some(Utc::now()),
+      added_by: None,
+      is_local: false,
+      track: None,
+      item: Some(track),
     }
   }
 
@@ -629,6 +644,72 @@ mod tests {
       }
       other => panic!("unexpected event: {:?}", event_name(&other)),
     }
+  }
+
+  #[test]
+  fn filtered_playlist_down_wraps_without_fetching_next_page() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(
+      PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+        .unwrap()
+        .into_static(),
+    );
+    app.playlist_tracks = Some(Page {
+      href: "https://example.com/playlists/test/items".to_string(),
+      items: vec![],
+      limit: 2,
+      next: Some("https://example.com/playlists/test/items?next".to_string()),
+      offset: 0,
+      previous: None,
+      total: 4,
+    });
+    app.active_playlist_track_filter = Some("track".to_string());
+    app.track_table.tracks = vec![
+      full_track("0000000000000000000001", "Track 1"),
+      full_track("0000000000000000000002", "Track 2"),
+    ];
+    app.track_table.selected_index = 1;
+
+    handler(Key::Down, &mut app);
+
+    assert_eq!(app.track_table.selected_index, 0);
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn q_clears_playlist_filter_and_restores_cached_rows() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static();
+    let first_page = Page {
+      href: "https://example.com/playlists/test/items".to_string(),
+      items: vec![
+        playlist_item("0000000000000000000001", "Track 1"),
+        playlist_item("0000000000000000000002", "Track 2"),
+      ],
+      limit: 2,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 2,
+    };
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id);
+    app.playlist_track_pages.upsert_page_by_offset(first_page);
+    app.active_playlist_track_filter = Some("track 2".to_string());
+    app.track_table.tracks = vec![full_track("0000000000000000000002", "Track 2")];
+    app.playlist_track_positions = Some(vec![1]);
+
+    handler(Key::Char('q'), &mut app);
+
+    assert!(app.active_playlist_track_filter.is_none());
+    assert_eq!(app.track_table.tracks.len(), 2);
+    assert_eq!(app.playlist_track_positions, Some(vec![0, 1]));
   }
 
   #[test]

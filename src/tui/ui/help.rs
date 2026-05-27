@@ -111,7 +111,7 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
     vec![
       String::from("Move selection right"),
       String::from("l | <Right Arrow Key> | <Ctrl+f>"),
-      String::from("General"),
+      String::from("General (Ctrl+f searches inside playlist track tables)"),
     ],
     vec![
       String::from("Move selection to top of list"),
@@ -233,6 +233,16 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("Remove selected track from current playlist"),
       String::from("x"),
       String::from("Track table (playlist views)"),
+    ],
+    vec![
+      String::from("Search tracks in current playlist"),
+      String::from("<Ctrl+f>"),
+      String::from("Track table (playlist views)"),
+    ],
+    vec![
+      String::from("Clear playlist track search filter"),
+      key_bindings.back.to_string(),
+      String::from("Track table (filtered playlist views)"),
     ],
     vec![
       String::from("Start playback or enter album/artist/playlist"),

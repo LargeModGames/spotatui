@@ -1,14 +1,28 @@
 use super::Network;
 use crate::core::app::{ActiveBlock, RouteId, TrackTableContext};
 use anyhow::anyhow;
-use futures::future;
 use rspotify::model::{
   enums::Country,
   idtypes::{ArtistId, TrackId},
-  track::FullTrack,
-  Market,
+  track::{FullTrack, SimplifiedTrack},
 };
 use rspotify::prelude::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct RecommendationsResponse {
+  tracks: Vec<SimplifiedTrack>,
+}
+
+#[derive(Deserialize)]
+struct TracksResponse {
+  tracks: Vec<FullTrack>,
+}
+
+fn country_code(country: Country) -> String {
+  let code: &'static str = country.into();
+  code.to_string()
+}
 
 pub trait RecommendationNetwork {
   async fn get_recommendations_for_seed(
@@ -33,19 +47,34 @@ impl RecommendationNetwork for Network {
     first_track: Box<Option<FullTrack>>,
     country: Option<Country>,
   ) {
-    let _market = country.map(Market::Country);
     let limit = self.large_search_limit;
+    let mut query = vec![("limit", limit.to_string())];
+    if let Some(country) = country {
+      query.push(("market", country_code(country)));
+    }
+    if let Some(seed_artists) = seed_artists.as_ref() {
+      query.push((
+        "seed_artists",
+        seed_artists
+          .iter()
+          .map(|id| id.id().to_string())
+          .collect::<Vec<_>>()
+          .join(","),
+      ));
+    }
+    if let Some(seed_tracks) = seed_tracks.as_ref() {
+      query.push((
+        "seed_tracks",
+        seed_tracks
+          .iter()
+          .map(|id| id.id().to_string())
+          .collect::<Vec<_>>()
+          .join(","),
+      ));
+    }
 
     match self
-      .spotify
-      .recommendations(
-        std::iter::empty(),
-        seed_artists,
-        None::<Vec<&str>>, // seed_genres
-        seed_tracks,
-        _market,
-        Some(limit),
-      )
+      .spotify_get_typed::<RecommendationsResponse>("recommendations", &query)
       .await
     {
       Ok(recommendations) => {
@@ -54,8 +83,6 @@ impl RecommendationNetwork for Network {
         // This is tricky. Recommendations usually return SimplifiedTracks.
         // We probably need to fetch FullTracks or fake it.
         // For now, let's map what we can and use a dummy album or fail.
-        // Better: use spotify.tracks() to fetch full details if possible.
-
         // Actually, we can fetch the full tracks using the IDs.
         let track_ids: Vec<TrackId> = recommendations
           .tracks
@@ -63,10 +90,25 @@ impl RecommendationNetwork for Network {
           .filter_map(|t| t.id.clone())
           .collect();
 
-        let fetch_futures = track_ids.into_iter().map(|id| self.spotify.track(id, None));
-
-        let results = future::join_all(fetch_futures).await;
-        let full_tracks: Vec<_> = results.into_iter().filter_map(|res| res.ok()).collect();
+        let ids = track_ids
+          .iter()
+          .map(|id| id.id().to_string())
+          .collect::<Vec<_>>()
+          .join(",");
+        let full_tracks = if ids.is_empty() {
+          Vec::new()
+        } else {
+          match self
+            .spotify_get_typed::<TracksResponse>("tracks", &[("ids", ids)])
+            .await
+          {
+            Ok(res) => res.tracks,
+            Err(e) => {
+              self.handle_error(anyhow!(e)).await;
+              return;
+            }
+          }
+        };
 
         let mut app = self.app.lock().await;
         app.track_table.tracks = full_tracks;

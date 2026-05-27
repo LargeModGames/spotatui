@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, App, SearchResultBlock};
+use crate::core::app::{ActiveBlock, App, InputContext, SearchResultBlock};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   style::Style,
@@ -74,12 +74,17 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
   };
   app.input_scroll_offset.set(scroll_offset);
 
+  let input_title = match app.input_context {
+    InputContext::PlaylistTrackSearch => "Search Playlist",
+    InputContext::GlobalSearch => "Search",
+  };
+
   let input = Paragraph::new(lines).scroll((0, scroll_offset)).block(
     Block::default()
       .borders(Borders::ALL)
       .border_type(border_type)
       .title(Span::styled(
-        "Search",
+        input_title,
         get_color(highlight_state, app.user_config.theme),
       ))
       .style(app.user_config.theme.base_style())

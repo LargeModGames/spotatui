@@ -1,12 +1,25 @@
-use super::requests::{is_rate_limited_error, spotify_get_typed_compat_for};
+use super::requests::is_rate_limited_error;
 use super::Network;
 use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId};
 use anyhow::anyhow;
 
 use rand::seq::SliceRandom;
-use rspotify::model::{artist::FullArtist, page::Page, track::FullTrack};
+use rspotify::model::{
+  artist::FullArtist,
+  device::DevicePayload,
+  page::{CursorBasedPage, Page},
+  playing::PlayHistory,
+  track::FullTrack,
+  user::PrivateUser,
+};
 use rspotify::prelude::*;
+use serde::Deserialize;
 use std::time::{Duration, Instant};
+
+#[derive(Deserialize)]
+struct ArtistTopTracksResponse {
+  tracks: Vec<FullTrack>,
+}
 
 pub trait UserNetwork {
   async fn get_user(&mut self);
@@ -19,7 +32,7 @@ pub trait UserNetwork {
 
 impl UserNetwork for Network {
   async fn get_user(&mut self) {
-    match self.spotify.me().await {
+    match self.spotify_get_typed::<PrivateUser>("me", &[]).await {
       Ok(user) => {
         let mut app = self.app.lock().await;
         app.user = Some(user);
@@ -40,14 +53,13 @@ impl UserNetwork for Network {
   }
 
   async fn get_devices(&mut self) {
-    if let Ok(devices_vec) = self.spotify.device().await {
+    if let Ok(result) = self
+      .spotify_get_typed::<DevicePayload>("me/player/devices", &[])
+      .await
+    {
       let mut app = self.app.lock().await;
       app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
-      if !devices_vec.is_empty() {
-        // Wrap Vec<Device> in DevicePayload
-        let result = rspotify::model::device::DevicePayload {
-          devices: devices_vec,
-        };
+      if !result.devices.is_empty() {
         app.devices = Some(result);
         // Select the first device in the list
         app.selected_device_index = Some(0);
@@ -68,15 +80,15 @@ impl UserNetwork for Network {
       app.discover_loading = true;
     }
 
-    match spotify_get_typed_compat_for::<Page<FullTrack>>(
-      &self.spotify,
-      "me/top/tracks",
-      &[
-        ("time_range", range_str.to_string()),
-        ("limit", "50".to_string()),
-      ],
-    )
-    .await
+    match self
+      .spotify_get_typed::<Page<FullTrack>>(
+        "me/top/tracks",
+        &[
+          ("time_range", range_str.to_string()),
+          ("limit", "50".to_string()),
+        ],
+      )
+      .await
     {
       Ok(page) => {
         let mut app = self.app.lock().await;
@@ -99,12 +111,12 @@ impl UserNetwork for Network {
     }
 
     // 1. Get top artists
-    let artists_res = spotify_get_typed_compat_for::<Page<FullArtist>>(
-      &self.spotify,
-      "me/top/artists",
-      &[("limit", "5".to_string())], // Get top 5 artists
-    )
-    .await;
+    let artists_res = self
+      .spotify_get_typed::<Page<FullArtist>>(
+        "me/top/artists",
+        &[("limit", "5".to_string())], // Get top 5 artists
+      )
+      .await;
 
     let artists = match artists_res {
       Ok(page) => page.items,
@@ -120,9 +132,12 @@ impl UserNetwork for Network {
 
     // 2. Get top tracks for each artist
     for artist in artists {
-      #[allow(deprecated)]
-      if let Ok(tracks) = self.spotify.artist_top_tracks(artist.id, None).await {
-        all_tracks.extend(tracks);
+      let path = format!("artists/{}/top-tracks", artist.id.id());
+      if let Ok(res) = self
+        .spotify_get_typed::<ArtistTopTracksResponse>(&path, &[])
+        .await
+      {
+        all_tracks.extend(res.tracks);
       }
     }
 
@@ -141,8 +156,10 @@ impl UserNetwork for Network {
   async fn get_recently_played(&mut self) {
     let limit = self.large_search_limit;
     match self
-      .spotify
-      .current_user_recently_played(Some(limit), None)
+      .spotify_get_typed::<CursorBasedPage<PlayHistory>>(
+        "me/player/recently-played",
+        &[("limit", limit.to_string())],
+      )
       .await
     {
       Ok(recently_played) => {

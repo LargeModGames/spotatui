@@ -46,6 +46,31 @@ fn populate_liked_song_ids_from_saved_tracks(
   }
 }
 
+fn playlist_track_search_terms(query: &str) -> Vec<String> {
+  query
+    .split_whitespace()
+    .map(|term| term.to_lowercase())
+    .filter(|term| !term.is_empty())
+    .collect()
+}
+
+fn playlist_track_search_haystack(track: &rspotify::model::track::FullTrack) -> String {
+  let mut haystack = format!("{} {}", track.name, track.album.name);
+  for artist in &track.artists {
+    haystack.push(' ');
+    haystack.push_str(&artist.name);
+  }
+  haystack.to_lowercase()
+}
+
+fn playlist_track_matches_terms(
+  track: &rspotify::model::track::FullTrack,
+  terms: &[String],
+) -> bool {
+  let haystack = playlist_track_search_haystack(track);
+  terms.iter().all(|term| haystack.contains(term))
+}
+
 pub async fn prefetch_saved_tracks_page_task(
   spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
@@ -203,6 +228,7 @@ pub async fn prefetch_playlist_tracks_page_task(
 pub trait LibraryNetwork {
   async fn get_current_user_playlists(&mut self);
   async fn get_playlist_tracks(&mut self, playlist_id: PlaylistId<'static>, playlist_offset: u32);
+  async fn search_playlist_tracks(&mut self, playlist_id: PlaylistId<'static>, query: String);
   async fn get_current_user_saved_tracks(&mut self, offset: Option<u32>);
   async fn get_current_user_saved_albums(&mut self, offset: Option<u32>);
   async fn current_user_saved_albums_contains(&mut self, album_ids: Vec<AlbumId<'static>>);
@@ -275,8 +301,8 @@ impl Network {
       "me/library",
       &query,
       Some(json!({ "uris": uris })),
-      Some(&self.token_cache_path),
-      Some(&self.app),
+      &self.token_cache_path,
+      &self.app,
     )
     .await?;
     Ok(())
@@ -294,8 +320,8 @@ impl Network {
       "me/library",
       &query,
       Some(json!({ "uris": uris })),
-      Some(&self.token_cache_path),
-      Some(&self.app),
+      &self.token_cache_path,
+      &self.app,
     )
     .await?;
     Ok(())
@@ -375,6 +401,9 @@ impl LibraryNetwork for Network {
       {
         Ok(page) => page,
         Err(e) => {
+          let mut app = self.app.lock().await;
+          app.pending_playlist_track_search = None;
+          drop(app);
           self.handle_error(anyhow!(e)).await;
           return;
         }
@@ -478,6 +507,66 @@ impl LibraryNetwork for Network {
         drop(app);
         self.handle_error(anyhow!(e)).await;
       }
+    }
+  }
+
+  async fn search_playlist_tracks(&mut self, playlist_id: PlaylistId<'static>, query: String) {
+    let terms = playlist_track_search_terms(&query);
+    if terms.is_empty() {
+      let mut app = self.app.lock().await;
+      app.clear_playlist_track_filter();
+      return;
+    }
+
+    let limit = self.large_search_limit;
+    let mut offset = 0u32;
+    let mut matches = Vec::new();
+
+    loop {
+      let path = format!("playlists/{}/items", playlist_id.id());
+      let page = match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+        &self.spotify,
+        &path,
+        &[("limit", limit.to_string()), ("offset", offset.to_string())],
+        &self.token_cache_path,
+        &self.app,
+      )
+      .await
+      {
+        Ok(page) => page,
+        Err(e) => {
+          self.handle_error(anyhow!(e)).await;
+          return;
+        }
+      };
+
+      if page.items.is_empty() {
+        break;
+      }
+
+      for (index, item) in page.items.iter().enumerate() {
+        if let Some(PlayableItem::Track(track)) = item.item.as_ref() {
+          if playlist_track_matches_terms(track, &terms) {
+            matches.push((track.clone(), page.offset as usize + index));
+          }
+        }
+      }
+
+      if page.next.is_none() {
+        break;
+      }
+      offset = page.offset.saturating_add(page.limit);
+    }
+
+    let match_count = matches.len();
+    let mut app = self.app.lock().await;
+    if app.apply_playlist_track_search_results(&playlist_id, query.clone(), matches) {
+      app.set_status_message(
+        format!("{match_count} playlist tracks match \"{query}\""),
+        3,
+      );
+    } else {
+      app.pending_playlist_track_search = None;
     }
   }
 
@@ -775,8 +864,8 @@ impl LibraryNetwork for Network {
       &format!("playlists/{}/tracks", playlist_id.id()),
       &[],
       Some(body),
-      Some(&self.token_cache_path),
-      Some(&self.app),
+      &self.token_cache_path,
+      &self.app,
     )
     .await
     {
@@ -927,8 +1016,8 @@ impl LibraryNetwork for Network {
       &create_path,
       &[],
       Some(create_body),
-      Some(&self.token_cache_path),
-      Some(&self.app),
+      &self.token_cache_path,
+      &self.app,
     )
     .await
     {
@@ -1081,6 +1170,48 @@ mod tests {
     assert!(liked_song_ids_set.contains("0000000000000000000001"));
     assert!(liked_song_ids_set.contains("0000000000000000000002"));
     assert!(!liked_song_ids_set.contains("spotify:track:0000000000000000000001"));
+  }
+
+  #[test]
+  fn playlist_track_filter_matches_title_artist_album_case_insensitively() {
+    let mut track = full_track("0000000000000000000001");
+    track.name = "Midnight City".to_string();
+    track.artists[0].name = "M83".to_string();
+    track.album.name = "Hurry Up".to_string();
+
+    assert!(playlist_track_matches_terms(
+      &track,
+      &playlist_track_search_terms("midnight")
+    ));
+    assert!(playlist_track_matches_terms(
+      &track,
+      &playlist_track_search_terms("m83")
+    ));
+    assert!(playlist_track_matches_terms(
+      &track,
+      &playlist_track_search_terms("hurry")
+    ));
+    assert!(playlist_track_matches_terms(
+      &track,
+      &playlist_track_search_terms("MIDNIGHT m83")
+    ));
+  }
+
+  #[test]
+  fn playlist_track_filter_requires_every_query_term() {
+    let mut track = full_track("0000000000000000000001");
+    track.name = "Midnight City".to_string();
+    track.artists[0].name = "M83".to_string();
+    track.album.name = "Hurry Up".to_string();
+
+    assert!(playlist_track_matches_terms(
+      &track,
+      &playlist_track_search_terms("city hurry")
+    ));
+    assert!(!playlist_track_matches_terms(
+      &track,
+      &playlist_track_search_terms("city missing")
+    ));
   }
 }
 

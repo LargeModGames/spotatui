@@ -1,22 +1,41 @@
-use super::requests::spotify_get_typed_compat_for;
 use super::Network;
 use crate::core::app::{
   ActiveBlock, Artist, ArtistBlock, EpisodeTableContext, RouteId, ScrollableResultPages,
   SelectedFullShow, SelectedShow,
 };
 use anyhow::anyhow;
-use futures::stream::StreamExt;
+use reqwest::Method;
 use rspotify::model::{
-  album::SimplifiedAlbum,
+  album::{FullAlbum, SimplifiedAlbum},
   artist::FullArtist,
   enums::Country,
-  idtypes::{AlbumId, ArtistId, LibraryId, ShowId, TrackId},
-  page::Page,
+  idtypes::{AlbumId, ArtistId, ShowId, TrackId},
+  page::{CursorBasedPage, Page},
   show::SimplifiedShow,
-  Market,
+  track::FullTrack,
 };
 use rspotify::prelude::*;
-use tokio::try_join;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct ArtistTopTracksResponse {
+  tracks: Vec<FullTrack>,
+}
+
+#[derive(Deserialize)]
+struct RelatedArtistsResponse {
+  artists: Vec<FullArtist>,
+}
+
+#[derive(Deserialize)]
+struct FollowedArtistsResponse {
+  artists: CursorBasedPage<FullArtist>,
+}
+
+fn country_code(country: Country) -> String {
+  let code: &'static str = country.into();
+  code.to_string()
+}
 
 pub trait MetadataNetwork {
   async fn get_artist(
@@ -47,57 +66,84 @@ impl MetadataNetwork for Network {
     country: Option<Country>,
   ) {
     let artist_id_str = artist_id.id().to_string();
-    let market = country.map(Market::Country);
-    #[allow(deprecated)]
-    let top_tracks_req = self.spotify.artist_top_tracks(artist_id.clone(), market);
-    #[allow(deprecated)]
-    let related_artists_req = self.spotify.artist_related_artists(artist_id.clone());
-    let albums_req = self.spotify.artist_albums(artist_id.clone(), None, market);
+    let artist_path = format!("artists/{}", artist_id.id());
+    let top_tracks_path = format!("{}/top-tracks", artist_path);
+    let related_artists_path = format!("{}/related-artists", artist_path);
+    let mut top_tracks_query = Vec::new();
+    if let Some(country) = country {
+      top_tracks_query.push(("market", country_code(country)));
+    }
 
-    // Note: artist_albums returns a Paginator (Stream), we need to collect it.
-    // However try_join! expects futures. We wrap stream collection in async block.
-    let albums_fut = async {
-      let stream = albums_req;
-      let items: Vec<_> = stream.collect().await;
+    let (top_tracks_res, related_artists_res) = tokio::join!(
+      self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
+      self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
+    );
 
-      // Flatten results and collect SimplifiedAlbum
-      let albums: Vec<SimplifiedAlbum> = items.into_iter().filter_map(|r| r.ok()).collect();
-
-      // Wrap in Page
-      Ok(Page {
-        items: albums,
-        href: String::new(),
-        limit: 50,
-        next: None,
-        offset: 0,
-        previous: None,
-        total: 0,
-      })
-    };
-
-    let res = try_join!(top_tracks_req, related_artists_req, albums_fut);
-
-    match res {
-      Ok((top_tracks, related_artists, albums)) => {
-        let mut app = self.app.lock().await;
-        app.artist = Some(Artist {
-          artist_id: artist_id_str,
-          artist_name: input_artist_name,
-          albums,
-          related_artists,
-          top_tracks,
-          selected_album_index: 0,
-          selected_related_artist_index: 0,
-          selected_top_track_index: 0,
-          artist_selected_block: ArtistBlock::TopTracks,
-          artist_hovered_block: ArtistBlock::TopTracks,
-        });
-        app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
-      }
+    let top_tracks = match top_tracks_res {
+      Ok(res) => res.tracks,
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
+        return;
       }
+    };
+    let related_artists = match related_artists_res {
+      Ok(res) => res.artists,
+      Err(e) => {
+        self.handle_error(anyhow!(e)).await;
+        return;
+      }
+    };
+
+    let mut album_items = Vec::new();
+    let mut offset = 0u32;
+    let limit = 50u32;
+    loop {
+      let mut query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+      if let Some(country) = country {
+        query.push(("market", country_code(country)));
+      }
+      let page = match self
+        .spotify_get_typed::<Page<SimplifiedAlbum>>(&format!("{}/albums", artist_path), &query)
+        .await
+      {
+        Ok(page) => page,
+        Err(e) => {
+          self.handle_error(anyhow!(e)).await;
+          return;
+        }
+      };
+      let next = page.next.is_some();
+      album_items.extend(page.items);
+      if !next {
+        break;
+      }
+      offset += limit;
     }
+
+    let albums = Page {
+      items: album_items,
+      href: String::new(),
+      limit,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 0,
+    };
+
+    let mut app = self.app.lock().await;
+    app.artist = Some(Artist {
+      artist_id: artist_id_str,
+      artist_name: input_artist_name,
+      albums,
+      related_artists,
+      top_tracks,
+      selected_album_index: 0,
+      selected_related_artist_index: 0,
+      selected_top_track_index: 0,
+      artist_selected_block: ArtistBlock::TopTracks,
+      artist_hovered_block: ArtistBlock::TopTracks,
+    });
+    app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
   }
 
   async fn get_album_tracks(&mut self, album: Box<SimplifiedAlbum>) {
@@ -105,12 +151,12 @@ impl MetadataNetwork for Network {
     if let Some(id) = album_id {
       let path = format!("albums/{}/tracks", id.id());
       // TODO: Handle pagination for albums with > 50 tracks
-      match spotify_get_typed_compat_for::<Page<rspotify::model::track::SimplifiedTrack>>(
-        &self.spotify,
-        &path,
-        &[("limit", "50".to_string()), ("offset", "0".to_string())],
-      )
-      .await
+      match self
+        .spotify_get_typed::<Page<rspotify::model::track::SimplifiedTrack>>(
+          &path,
+          &[("limit", "50".to_string()), ("offset", "0".to_string())],
+        )
+        .await
       {
         Ok(tracks) => {
           let mut app = self.app.lock().await;
@@ -128,7 +174,10 @@ impl MetadataNetwork for Network {
   }
 
   async fn get_album(&mut self, album_id: AlbumId<'static>) {
-    match self.spotify.album(album_id, None).await {
+    match self
+      .spotify_get_typed::<FullAlbum>(&format!("albums/{}", album_id.id()), &[])
+      .await
+    {
       Ok(album) => {
         let mut app = self.app.lock().await;
         app.selected_album_full = Some(crate::core::app::SelectedFullAlbum {
@@ -149,12 +198,9 @@ impl MetadataNetwork for Network {
       ("limit", self.large_search_limit.to_string()),
       ("offset", "0".to_string()),
     ];
-    match spotify_get_typed_compat_for::<Page<rspotify::model::show::SimplifiedEpisode>>(
-      &self.spotify,
-      &path,
-      &query,
-    )
-    .await
+    match self
+      .spotify_get_typed::<Page<rspotify::model::show::SimplifiedEpisode>>(&path, &query)
+      .await
     {
       Ok(episodes) => {
         if !episodes.items.is_empty() {
@@ -177,7 +223,8 @@ impl MetadataNetwork for Network {
 
   async fn get_show(&mut self, show_id: ShowId<'static>) {
     let path = format!("shows/{}", show_id.id());
-    match spotify_get_typed_compat_for::<rspotify::model::show::FullShow>(&self.spotify, &path, &[])
+    match self
+      .spotify_get_typed::<rspotify::model::show::FullShow>(&path, &[])
       .await
     {
       Ok(show) => {
@@ -203,12 +250,9 @@ impl MetadataNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_compat_for::<Page<rspotify::model::show::SimplifiedEpisode>>(
-      &self.spotify,
-      &path,
-      &query,
-    )
-    .await
+    match self
+      .spotify_get_typed::<Page<rspotify::model::show::SimplifiedEpisode>>(&path, &query)
+      .await
     {
       Ok(episodes) => {
         if !episodes.items.is_empty() {
@@ -224,29 +268,36 @@ impl MetadataNetwork for Network {
 
   async fn get_followed_artists(&mut self, after: Option<ArtistId<'static>>) {
     let limit = self.large_search_limit;
-    let after_id = after.as_ref().map(|id| id.id());
+    let mut query = vec![("type", "artist".to_string()), ("limit", limit.to_string())];
+    if let Some(after) = after.as_ref() {
+      query.push(("after", after.id().to_string()));
+    }
+
     match self
-      .spotify
-      .current_user_followed_artists(after_id, Some(limit))
+      .spotify_get_typed::<FollowedArtistsResponse>("me/following", &query)
       .await
     {
-      Ok(artists_page) => {
+      Ok(res) => {
         let mut app = self.app.lock().await;
-        // Error: add_pages expects CursorBasedPage<FullArtist>, but items is Vec<FullArtist>
-        // Check add_pages definition. It takes T.
-        // artists_page is CursorBasedPage<FullArtist>.
-        // So we should pass the whole page if add_pages handles it.
-        // App definition: saved_artists: ScrollableResultPages<CursorBasedPage<FullArtist>>
-        app.library.saved_artists.add_pages(artists_page);
+        app.library.saved_artists.add_pages(res.artists);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
   }
 
   async fn user_unfollow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>) {
+    let ids = artist_ids
+      .iter()
+      .map(|id| id.id().to_string())
+      .collect::<Vec<_>>()
+      .join(",");
     match self
-      .spotify
-      .library_remove(artist_ids.into_iter().map(LibraryId::Artist))
+      .spotify_api_request_json(
+        Method::DELETE,
+        "me/following",
+        &[("type", "artist".to_string()), ("ids", ids)],
+        None,
+      )
       .await
     {
       Ok(_) => {
@@ -257,9 +308,18 @@ impl MetadataNetwork for Network {
   }
 
   async fn user_follow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>) {
+    let ids = artist_ids
+      .iter()
+      .map(|id| id.id().to_string())
+      .collect::<Vec<_>>()
+      .join(",");
     match self
-      .spotify
-      .library_add(artist_ids.into_iter().map(LibraryId::Artist))
+      .spotify_api_request_json(
+        Method::PUT,
+        "me/following",
+        &[("type", "artist".to_string()), ("ids", ids)],
+        None,
+      )
       .await
     {
       Ok(_) => {
@@ -271,8 +331,20 @@ impl MetadataNetwork for Network {
 
   async fn user_artist_check_follow(&mut self, artist_ids: Vec<ArtistId<'static>>) {
     match self
-      .spotify
-      .library_contains(artist_ids.iter().map(|id| LibraryId::Artist(id.as_ref())))
+      .spotify_get_typed::<Vec<bool>>(
+        "me/following/contains",
+        &[
+          ("type", "artist".to_string()),
+          (
+            "ids",
+            artist_ids
+              .iter()
+              .map(|id| id.id().to_string())
+              .collect::<Vec<_>>()
+              .join(","),
+          ),
+        ],
+      )
       .await
     {
       Ok(is_following) => {
@@ -295,7 +367,10 @@ impl MetadataNetwork for Network {
   }
 
   async fn get_album_for_track(&mut self, track_id: TrackId<'static>) {
-    match self.spotify.track(track_id, None).await {
+    match self
+      .spotify_get_typed::<FullTrack>(&format!("tracks/{}", track_id.id()), &[])
+      .await
+    {
       Ok(track) => {
         // FullTrack.album is SimplifiedAlbum (not Option) in rspotify 0.14
         let album = track.album;

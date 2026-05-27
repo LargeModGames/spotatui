@@ -415,11 +415,25 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     })
     .collect::<Vec<TableItem>>();
 
+  let title = if app.is_playlist_track_table_context() {
+    if let Some(query) = app.pending_playlist_track_search.as_ref() {
+      format!("Songs (searching: {query}...)")
+    } else {
+      app
+        .active_playlist_track_filter
+        .as_ref()
+        .map(|query| format!("Songs (filtered: {query})"))
+        .unwrap_or_else(|| "Songs".to_string())
+    }
+  } else {
+    "Songs".to_string()
+  };
+
   draw_table(
     f,
     app,
     layout_chunk,
-    ("Songs", &header),
+    (&title, &header),
     &items,
     app.track_table.selected_index,
     highlight_state,

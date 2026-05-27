@@ -8,9 +8,9 @@ use rand::{thread_rng, Rng};
 use rspotify::model::{
   context::CurrentPlaybackContext,
   idtypes::{Id, PlayContextId, PlayableId},
+  playlist::FullPlaylist,
   PlayableItem,
 };
-use rspotify::prelude::*;
 
 pub struct CliApp {
   pub net: Network,
@@ -490,7 +490,11 @@ impl CliApp {
       if uri.contains("spotify:playlist:") {
         let id_str = uri.split(':').next_back().unwrap();
         if let Ok(playlist_id) = rspotify::model::idtypes::PlaylistId::from_id(id_str) {
-          match self.net.spotify.playlist(playlist_id, None, None).await {
+          match self
+            .net
+            .spotify_get_typed::<FullPlaylist>(&format!("playlists/{}", playlist_id.id()), &[])
+            .await
+          {
             Ok(p) => {
               let num = p.items.total;
               Some(thread_rng().gen_range(0..num) as usize)
