@@ -18,6 +18,7 @@ pub mod radio;
 pub mod redirect_uri;
 #[cfg(feature = "scripting")]
 pub mod scripting;
+pub mod sonos;
 #[cfg(feature = "subsonic")]
 pub mod subsonic;
 #[cfg(feature = "youtube")]
