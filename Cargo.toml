@@ -38,8 +38,8 @@ colorgrad = "0.8.0"
 tokio = { version = "1.52", features = ["full"] }
 rand = "0.8.4"
 anyhow = "1.0.102"
-chrono = "0.4.44"
-log = "0.4.30"
+chrono = "0.4.45"
+log = "0.4.32"
 fern = "0.7.1"
 open = "5.3"
 self_update = { version = "0.44", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"], optional = true }
@@ -50,7 +50,7 @@ openssl = { version = "0.10", optional = true }
 cpal = { version = "0.17", optional = true }
 realfft = { version = "3.4", optional = true }
 discord-rich-presence = { version = "1.1", optional = true }
-ratatui-image = { version = "11.0.2", optional = true, default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "11.0.4", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true }
 
 # Streaming dependencies (librespot)
