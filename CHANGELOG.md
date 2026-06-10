@@ -4,6 +4,7 @@
 
 ### Added
 
+- **SMTC Integration**: System Media Transport Controls is now integrated with the app for Windows users. Users can now control playback state using media keys and check playback state in media flyouts ([#229](https://github.com/LargeModGames/spotatui/issues/229)).
 - **Click and drag to seek on the playbar**: The progress bar is now interactive. Click anywhere on the gauge to jump to that position, or click and drag to scrub. Control buttons keep priority, the time label stays non-clickable, and seeks reuse the existing native and throttled-API paths ([#157](https://github.com/LargeModGames/spotatui/issues/157)).
 
 ### Fixed
