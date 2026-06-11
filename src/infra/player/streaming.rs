@@ -343,10 +343,15 @@ impl StreamingPlayer {
       resolve_streaming_credentials(&cache, auth_mode)?;
 
     // Create session configuration using spotify-player's client_id
-    let session_config = SessionConfig {
+    let mut session_config = SessionConfig {
       client_id: SPOTIFY_PLAYER_CLIENT_ID.to_string(),
       ..Default::default()
     };
+    // Reuse a persisted device id so every launch and recovery registers as the
+    // same Spotify Connect device instead of accumulating ghost entries (#297).
+    if let Some(device_id) = get_or_create_device_id(cache_path.as_deref()) {
+      session_config.device_id = device_id;
+    }
 
     // Create session (Spirc will handle connection)
     let session = Session::new(session_config, Some(cache));
@@ -674,6 +679,15 @@ impl StreamingPlayer {
   }
 }
 
+impl Drop for StreamingPlayer {
+  fn drop(&mut self) {
+    // Backstop: stop the spirc when the last reference drops so a replaced
+    // player can't linger as a ghost Connect device (#297). Idempotent.
+    self.spirc_alive.store(false, Ordering::Relaxed);
+    let _ = self.spirc.shutdown();
+  }
+}
+
 // Re-export PlayerEvent for use in other modules
 pub use librespot_playback::player::PlayerEvent;
 
@@ -687,9 +701,54 @@ fn should_retry_with_fresh_credentials(
   auth_error && used_cached && !already_retried
 }
 
+/// Stable Connect device id, persisted in the streaming cache dir so every
+/// launch and every in-app recovery registers as the same device (#297).
+fn get_or_create_device_id(cache_path: Option<&std::path::Path>) -> Option<String> {
+  let cache_path = cache_path?;
+  let id_file = cache_path.join("device_id");
+  if let Ok(existing) = std::fs::read_to_string(&id_file) {
+    let trimmed = existing.trim();
+    if !trimmed.is_empty() {
+      return Some(trimmed.to_string());
+    }
+  }
+  let id = new_device_id_string();
+  let _ = std::fs::create_dir_all(cache_path);
+  let _ = std::fs::write(&id_file, &id);
+  Some(id)
+}
+
+/// Hyphenated UUID-v4-shaped string, matching librespot's default device id format.
+fn new_device_id_string() -> String {
+  use rand::RngCore;
+  let mut b = [0u8; 16];
+  rand::thread_rng().fill_bytes(&mut b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  format!(
+    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+    b[0],
+    b[1],
+    b[2],
+    b[3],
+    b[4],
+    b[5],
+    b[6],
+    b[7],
+    b[8],
+    b[9],
+    b[10],
+    b[11],
+    b[12],
+    b[13],
+    b[14],
+    b[15]
+  )
+}
+
 #[cfg(test)]
 mod tests {
-  use super::should_retry_with_fresh_credentials;
+  use super::{get_or_create_device_id, new_device_id_string, should_retry_with_fresh_credentials};
 
   #[test]
   fn auth_failure_with_cached_creds_triggers_retry() {
@@ -719,6 +778,43 @@ mod tests {
   #[test]
   fn success_never_triggers_retry() {
     assert!(!should_retry_with_fresh_credentials(false, true, false));
+  }
+
+  #[test]
+  fn device_id_string_is_uuid_v4_shaped() {
+    let id = new_device_id_string();
+    assert_eq!(id.len(), 36);
+    for (i, c) in id.char_indices() {
+      match i {
+        8 | 13 | 18 | 23 => assert_eq!(c, '-'),
+        14 => assert_eq!(c, '4'),
+        19 => assert!(matches!(c, '8' | '9' | 'a' | 'b')),
+        _ => assert!(c.is_ascii_hexdigit()),
+      }
+    }
+  }
+
+  #[test]
+  fn device_id_persists_across_calls() {
+    let dir = std::env::temp_dir().join(format!("spotatui_device_id_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let first = get_or_create_device_id(Some(&dir)).unwrap();
+    let second = get_or_create_device_id(Some(&dir)).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(
+      std::fs::read_to_string(dir.join("device_id"))
+        .unwrap()
+        .trim(),
+      first
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn device_id_none_without_cache_path() {
+    assert!(get_or_create_device_id(None).is_none());
   }
 }
 

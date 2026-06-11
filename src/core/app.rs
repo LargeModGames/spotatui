@@ -1403,6 +1403,9 @@ impl App {
       return false;
     }
 
+    // Stop the old spirc before dropping our reference so the dead session
+    // doesn't linger as a ghost Connect device (#297).
+    player.shutdown();
     self.streaming_player = None;
     self.is_streaming_active = false;
     self.native_activation_pending = false;

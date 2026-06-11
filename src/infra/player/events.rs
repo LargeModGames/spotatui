@@ -92,6 +92,13 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         let recovered_player = Arc::new(recovered_player);
         {
           let mut app = ctx.app.lock().await;
+          // A disconnected old player may still be referenced here; shut its
+          // spirc down before replacing it so it can't leave a ghost device (#297).
+          if let Some(old) = app.streaming_player.take() {
+            if !Arc::ptr_eq(&old, &recovered_player) {
+              old.shutdown();
+            }
+          }
           app.streaming_player = Some(Arc::clone(&recovered_player));
           app.set_status_message("Native streaming recovered.", 6);
           if request.reselect_device {
@@ -633,6 +640,8 @@ async fn disconnect_streaming_player(
   let reselect_device = allow_reselect_device && current_playback_matches_native(&app_lock, player);
 
   app_lock.streaming_player = None;
+  // Stop the old Connect session so it doesn't linger as a ghost device (#297).
+  player.shutdown();
   app_lock.is_streaming_active = false;
   app_lock.native_activation_pending = false;
   app_lock.native_device_id = None;
