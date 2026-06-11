@@ -1324,3 +1324,167 @@ fn diff_queue_change() {
   let events = diff_events(&old, &old_q, &new, &new_q);
   assert_eq!(events, vec![ScriptEvent::QueueChange]);
 }
+
+// --- directory plugin loading (spotatui plugin add) ---
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Fresh, unique temp directory to act as a config dir.
+fn temp_config_dir() -> PathBuf {
+  let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+  let dir = std::env::temp_dir().join(format!("spotatui_lua_load_{}_{}", std::process::id(), n));
+  let _ = std::fs::remove_dir_all(&dir);
+  std::fs::create_dir_all(&dir).unwrap();
+  dir
+}
+
+fn write_file(path: &Path, contents: &str) {
+  std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+  std::fs::write(path, contents).unwrap();
+}
+
+/// True if any queued effect is a successful Notify carrying `needle`.
+fn has_notify(engine: &ScriptEngine, needle: &str) -> bool {
+  drain(engine).into_iter().any(|e| match e {
+    ScriptEffect::Notify(msg, _) => msg.contains(needle),
+    _ => false,
+  })
+}
+
+#[test]
+fn dir_plugin_main_lua_is_loaded() {
+  let cfg = temp_config_dir();
+  write_file(
+    &cfg.join("plugins").join("foo").join("main.lua"),
+    r#"spotatui.notify("loaded foo", 1)"#,
+  );
+
+  let mut engine = ScriptEngine::new().unwrap();
+  let loaded = engine.load_user_scripts(&cfg);
+
+  assert_eq!(loaded, 1);
+  assert!(has_notify(&engine, "loaded foo"));
+  std::fs::remove_dir_all(&cfg).unwrap();
+}
+
+#[test]
+fn dir_plugin_init_lua_is_used_as_fallback() {
+  let cfg = temp_config_dir();
+  write_file(
+    &cfg.join("plugins").join("bar").join("init.lua"),
+    r#"spotatui.notify("loaded bar", 1)"#,
+  );
+
+  let mut engine = ScriptEngine::new().unwrap();
+  let loaded = engine.load_user_scripts(&cfg);
+
+  assert_eq!(loaded, 1);
+  assert!(has_notify(&engine, "loaded bar"));
+  std::fs::remove_dir_all(&cfg).unwrap();
+}
+
+#[test]
+fn dir_plugin_without_entry_point_is_skipped() {
+  let cfg = temp_config_dir();
+  // Directory exists but has no main.lua/init.lua, plus a hidden dir that must be ignored.
+  std::fs::create_dir_all(cfg.join("plugins").join("empty")).unwrap();
+  write_file(
+    &cfg.join("plugins").join(".hidden").join("main.lua"),
+    r#"spotatui.notify("should not load", 1)"#,
+  );
+
+  let mut engine = ScriptEngine::new().unwrap();
+  let loaded = engine.load_user_scripts(&cfg);
+
+  assert_eq!(loaded, 0);
+  assert!(drain(&engine).is_empty());
+  std::fs::remove_dir_all(&cfg).unwrap();
+}
+
+#[test]
+fn dir_plugin_can_require_sibling_module() {
+  let cfg = temp_config_dir();
+  let plugin = cfg.join("plugins").join("qux");
+  write_file(
+    &plugin.join("helper.lua"),
+    r#"return { msg = "from helper" }"#,
+  );
+  write_file(
+    &plugin.join("main.lua"),
+    r#"
+      local helper = require("helper")
+      spotatui.notify(helper.msg, 1)
+    "#,
+  );
+
+  let mut engine = ScriptEngine::new().unwrap();
+  let loaded = engine.load_user_scripts(&cfg);
+
+  // A successful load proves `require` resolved the sibling module via package.path.
+  assert_eq!(loaded, 1);
+  assert!(has_notify(&engine, "from helper"));
+  std::fs::remove_dir_all(&cfg).unwrap();
+}
+
+#[test]
+fn single_file_and_directory_plugins_both_load() {
+  let cfg = temp_config_dir();
+  write_file(
+    &cfg.join("plugins").join("flat.lua"),
+    r#"spotatui.notify("flat", 1)"#,
+  );
+  write_file(
+    &cfg.join("plugins").join("nested").join("main.lua"),
+    r#"spotatui.notify("nested", 1)"#,
+  );
+
+  let mut engine = ScriptEngine::new().unwrap();
+  let loaded = engine.load_user_scripts(&cfg);
+
+  assert_eq!(loaded, 2);
+  std::fs::remove_dir_all(&cfg).unwrap();
+}
+
+#[test]
+fn directory_named_with_lua_extension_loads_once_without_error() {
+  // A directory literally named `weird.lua` must be treated only as a directory plugin,
+  // not also fed to the single-file path (which would raise a spurious load error).
+  let cfg = temp_config_dir();
+  write_file(
+    &cfg.join("plugins").join("weird.lua").join("main.lua"),
+    r#"spotatui.notify("weird ok", 1)"#,
+  );
+
+  let mut engine = ScriptEngine::new().unwrap();
+  let loaded = engine.load_user_scripts(&cfg);
+
+  assert_eq!(loaded, 1);
+  let effects = drain(&engine);
+  assert!(
+    !effects
+      .iter()
+      .any(|e| matches!(e, ScriptEffect::NotifyError(_, _))),
+    "a .lua-named directory must not produce a load error"
+  );
+  std::fs::remove_dir_all(&cfg).unwrap();
+}
+
+#[test]
+fn hidden_single_file_plugin_is_skipped() {
+  // Hidden files (e.g. macOS `._foo.lua` cruft) must be ignored, matching the directory branch.
+  let cfg = temp_config_dir();
+  write_file(
+    &cfg.join("plugins").join(".secret.lua"),
+    r#"spotatui.notify("should not load", 1)"#,
+  );
+
+  let mut engine = ScriptEngine::new().unwrap();
+  let loaded = engine.load_user_scripts(&cfg);
+
+  assert_eq!(loaded, 0);
+  assert!(drain(&engine).is_empty());
+  std::fs::remove_dir_all(&cfg).unwrap();
+}

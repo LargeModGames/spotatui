@@ -67,9 +67,10 @@ impl ScriptEngine {
     })
   }
 
-  /// Load `init.lua` then `plugins/*.lua` (sorted by filename). Missing files/dir are fine.
-  /// A failing file logs an error and queues a Notify effect but never aborts the others.
-  /// Returns the number of files loaded successfully.
+  /// Load `init.lua`, then single-file `plugins/*.lua`, then directory plugins
+  /// `plugins/<name>/main.lua` (falling back to `init.lua`). Each group is sorted by filename.
+  /// Missing files/dir are fine. A failing file logs an error and queues a Notify effect but
+  /// never aborts the others. Returns the number of plugins loaded successfully.
   pub fn load_user_scripts(&mut self, config_dir: &Path) -> usize {
     let mut loaded = 0;
 
@@ -80,12 +81,26 @@ impl ScriptEngine {
 
     let plugins_dir = config_dir.join("plugins");
     if plugins_dir.is_dir() {
-      let mut files: Vec<_> = std::fs::read_dir(&plugins_dir)
+      let entries: Vec<_> = std::fs::read_dir(&plugins_dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
+        .collect();
+
+      // Single-file plugins: plugins/<name>.lua. Real files only (a directory named
+      // `foo.lua` is handled by the directory branch below), and hidden files are skipped to
+      // match the directory branch and avoid loading OS cruft like `._foo.lua`.
+      let mut files: Vec<_> = entries
+        .iter()
+        .filter(|p| p.is_file())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("lua"))
+        .filter(|p| {
+          p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| !n.starts_with('.'))
+        })
+        .cloned()
         .collect();
       files.sort();
       for path in files {
@@ -98,9 +113,60 @@ impl ScriptEngine {
           loaded += 1;
         }
       }
+
+      // Directory plugins: plugins/<name>/main.lua (or init.lua). These are how git-installed
+      // plugins (`spotatui plugin add`) ship. Hidden dirs (e.g. dotfiles) are ignored.
+      let mut dirs: Vec<_> = entries
+        .iter()
+        .filter(|p| p.is_dir())
+        .filter(|p| {
+          p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| !n.starts_with('.'))
+        })
+        .cloned()
+        .collect();
+      dirs.sort();
+      for dir in dirs {
+        let name = dir
+          .file_name()
+          .and_then(|n| n.to_str())
+          .unwrap_or("plugin")
+          .to_string();
+        let entry = ["main.lua", "init.lua"]
+          .iter()
+          .map(|f| dir.join(f))
+          .find(|p| p.is_file());
+        let Some(entry) = entry else {
+          continue;
+        };
+        if let Err(e) = self.add_plugin_module_path(&dir) {
+          log::warn!("[lua] failed to extend package.path for plugin '{name}': {e}");
+        }
+        if self.load_file(&entry, &name) {
+          loaded += 1;
+        }
+      }
     }
 
     loaded
+  }
+
+  /// Prepend a directory plugin's own folder to Lua's `package.path` so it can `require` its
+  /// sibling modules (`require("foo")` -> `<dir>/foo.lua` or `<dir>/foo/init.lua`). `package.path`
+  /// and the module cache are shared across all plugins: if two plugins both `require("util")`,
+  /// Lua caches the first-loaded plugin's `util.lua` under that name and silently hands the same
+  /// module to the later plugin. Give helper modules distinctive (e.g. plugin-prefixed) names.
+  fn add_plugin_module_path(&self, dir: &Path) -> mlua::Result<()> {
+    let package: mlua::Table = self.lua.globals().get("package")?;
+    let current: String = package.get("path").unwrap_or_default();
+    let dir = dir.to_string_lossy();
+    let sep = std::path::MAIN_SEPARATOR;
+    package.set(
+      "path",
+      format!("{dir}{sep}?.lua;{dir}{sep}?{sep}init.lua;{current}"),
+    )?;
+    Ok(())
   }
 
   /// Read and load a single file. Returns true on success. On any failure logs and queues a

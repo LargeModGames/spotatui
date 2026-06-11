@@ -611,6 +611,11 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     .subcommand(cli::search_subcommand()),
   );
 
+  #[cfg(feature = "scripting")]
+  {
+    clap_app = clap_app.subcommand(cli::plugin_subcommand());
+  }
+
   let matches = clap_app.clone().get_matches();
 
   // Shell completions don't need any spotify work
@@ -634,6 +639,13 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
 
   if let Some(history_matches) = matches.subcommand_matches("history") {
     println!("{}", cli::handle_history_matches(history_matches)?);
+    return Ok(());
+  }
+
+  // Plugin management is pure git + filesystem work; it must not require Spotify auth.
+  #[cfg(feature = "scripting")]
+  if let Some(plugin_matches) = matches.subcommand_matches("plugin") {
+    cli::handle_plugin_command(plugin_matches)?;
     return Ok(());
   }
 

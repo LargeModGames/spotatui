@@ -35,6 +35,7 @@
 - [Usage](#usage)
 - [Native Streaming](#native-streaming)
 - [Configuration](#configuration)
+- [Plugins](#plugins)
   - [Discord Rich Presence](#discord-rich-presence)
 - [Limitations](#limitations)
   - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
@@ -226,6 +227,23 @@ behavior:
 ```
 
 You can also override via `SPOTATUI_DISCORD_APP_ID` or disable in the setting or by setting `behavior.enable_discord_rpc: false` in ~/.config/spotatui/config.yml.
+
+## Plugins
+
+spotatui runs user-written Lua plugins. They react to playback events, add commands and key
+bindings, draw popups and playbar segments, restyle the theme, and make async HTTP requests.
+
+Install a plugin published as a git repository (requires `git`):
+
+```bash
+spotatui plugin add owner/repo
+spotatui plugin list
+spotatui plugin update
+spotatui plugin remove <name>
+```
+
+See [`PLUGINS.md`](PLUGINS.md) for the ecosystem overview, [`examples/plugins/`](examples/plugins)
+for runnable examples, and [`docs/scripting.md`](docs/scripting.md) for the full API reference.
 
 ## Limitations
 

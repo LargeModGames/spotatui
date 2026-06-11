@@ -6,13 +6,63 @@ feature, which is enabled in the default build.
 
 ## File locations
 
-Plugins are loaded from your config directory (`~/.config/spotatui/`) at startup:
+Plugins are loaded from your config directory (`~/.config/spotatui/`) at startup, in this order:
 
-- `init.lua` is loaded first, if present.
-- Every `plugins/*.lua` file is then loaded, sorted by filename.
+1. `init.lua`, if present.
+2. Single-file plugins: every `plugins/*.lua` file, sorted by filename.
+3. Directory plugins: every `plugins/<name>/` folder, sorted by name. The entry point is
+   `main.lua`, falling back to `init.lua`. A directory with neither is skipped, and directories
+   whose name starts with `.` are ignored.
+
+A directory plugin's own folder is added to Lua's `package.path`, so it can split itself across
+files and load them with `require("module")` (resolving to `plugins/<name>/module.lua`).
+`package.path` and the module cache are shared across all plugins: if two plugins both
+`require("util")`, the first-loaded plugin's `util.lua` is cached under that name and silently
+handed to the later plugin as well. Give helper modules distinctive (e.g. plugin-prefixed) names.
+
+Directory plugins are how the `spotatui plugin` installer (below) lays out git-cloned plugins.
 
 Missing files or a missing `plugins/` directory are fine. If a file fails to load, the error
-is logged and shown as a status message, and the remaining files still load.
+is logged and shown as a status message, and the remaining plugins still load.
+
+## Installing and managing plugins
+
+A plugin published as a git repository can be installed with the `spotatui plugin` command. This
+requires `git` on your PATH and does not need Spotify authentication.
+
+```bash
+spotatui plugin add owner/repo      # GitHub shorthand
+spotatui plugin add https://gitlab.com/owner/repo.git
+spotatui plugin add owner/repo --force   # reinstall over an existing copy
+
+spotatui plugin list                # show installed plugins
+spotatui plugin update              # update every plugin to its latest commit
+spotatui plugin update <name>       # update just one
+spotatui plugin remove <name>       # uninstall
+```
+
+`add` clones the repository into `~/.config/spotatui/plugins/<name>/` (a shallow clone) and
+records it in `~/.config/spotatui/plugins.lock`. `update` fast-forwards each clone to the remote's
+latest commit. Restart spotatui after installing or updating for changes to take effect, and bind
+any commands the plugin registers under `plugin_commands` in `config.yml`.
+
+Single-file plugins you drop into `plugins/` by hand are not tracked in the lockfile; `plugin list`
+shows them under "untracked".
+
+## Publishing a plugin
+
+A shareable plugin is a git repository with a `main.lua` (or `init.lua`) entry point at its root:
+
+```
+my-plugin/
+  main.lua        -- entry point; runs at startup
+  lib.lua         -- optional helper module, loaded with require("lib")
+  README.md       -- document the command(s) and a suggested key binding
+```
+
+The repository name becomes the local plugin name (its last path segment, minus `.git`). Ship a
+*suggested* key binding in your README rather than writing to the user's `config.yml`; command
+names are decoupled from keys by design.
 
 ## The `spotatui` API
 
