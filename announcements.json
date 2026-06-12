@@ -2,6 +2,15 @@
   "version": 1,
   "announcements": [
     {
+      "id": "2026-06-12-lua-scripting",
+      "title": "New: Lua plugin scripting",
+      "body": "spotatui now supports Lua plugins, letting you extend and automate the app with your own scripts. Use `spotatui plugin new` to scaffold a plugin, then hook into the plugin API to add custom behavior. See the docs to get started, and share what you build with the spotatui-plugin topic on GitHub.",
+      "level": "info",
+      "url": "https://github.com/LargeModGames/spotatui/pull/302",
+      "starts_at": "2026-06-12T00:00:00Z",
+      "ends_at": null
+    },
+    {
       "id": "2026-05-19-sonos-help-wanted",
       "title": "Help wanted: Sonos integration",
       "body": "Sonos support was requested in Discussion #247 and is now tracked in Issue #251. I started a WIP branch named sonosWIP, but discovery currently only sees a Sonos speaker for a few seconds before it disappears. My test speaker broke, so I cannot continue debugging locally. If you have Sonos speakers and know Rust, help testing or completing the integration would be very welcome.",
