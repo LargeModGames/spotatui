@@ -85,10 +85,10 @@ pub fn handle_app(key: Key, app: &mut App) {
         app.plugin_popup = None;
         app.plugin_popup_scroll = 0;
       }
-      Key::Up | Key::Char('k') => {
+      k if common_key_events::up_event(k, &app.user_config.keys) => {
         app.plugin_popup_scroll = app.plugin_popup_scroll.saturating_sub(1);
       }
-      Key::Down | Key::Char('j') => {
+      k if common_key_events::down_event(k, &app.user_config.keys) => {
         let max_scroll = app
           .plugin_popup
           .as_ref()

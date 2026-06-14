@@ -7,7 +7,7 @@ use rspotify::model::{context::CurrentPlaybackContext, PlayableId, PlayableItem}
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
     }
     k => {

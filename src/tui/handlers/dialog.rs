@@ -46,8 +46,8 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
       }
       close_dialog(app);
     }
-    k if common_key_events::right_event(k) => app.confirm = !app.confirm,
-    k if common_key_events::left_event(k) => app.confirm = !app.confirm,
+    k if common_key_events::right_event(k, &app.user_config.keys) => app.confirm = !app.confirm,
+    k if common_key_events::left_event(k, &app.user_config.keys) => app.confirm = !app.confirm,
     _ => {}
   }
 }
@@ -56,14 +56,14 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
   let editable_playlists = app.editable_playlists();
   let playlist_count = editable_playlists.len();
   match key {
-    k if common_key_events::down_event(k) && playlist_count > 0 => {
+    k if common_key_events::down_event(k, &app.user_config.keys) && playlist_count > 0 => {
       let next = common_key_events::on_down_press_handler(
         &editable_playlists,
         Some(app.playlist_picker_selected_index),
       );
       app.playlist_picker_selected_index = next;
     }
-    k if common_key_events::up_event(k) && playlist_count > 0 => {
+    k if common_key_events::up_event(k, &app.user_config.keys) && playlist_count > 0 => {
       let next = common_key_events::on_up_press_handler(
         &editable_playlists,
         Some(app.playlist_picker_selected_index),

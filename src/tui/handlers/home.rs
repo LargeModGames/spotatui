@@ -7,11 +7,13 @@ const SMALL_SCROLL: u16 = 1;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k) => common_key_events::handle_left_event(app),
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
+      common_key_events::handle_left_event(app)
+    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       app.home_scroll += SMALL_SCROLL;
     }
-    k if common_key_events::up_event(k) && app.home_scroll > 0 => {
+    k if common_key_events::up_event(k, &app.user_config.keys) && app.home_scroll > 0 => {
       app.home_scroll -= SMALL_SCROLL;
     }
     k if k == app.user_config.keys.next_page => {

@@ -5,7 +5,7 @@ use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       if let Some(p) = &app.devices {
         if let Some(selected_device_index) = app.selected_device_index {
           let next_index =
@@ -14,7 +14,7 @@ pub fn handler(key: Key, app: &mut App) {
         }
       };
     }
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       if let Some(p) = &app.devices {
         if let Some(selected_device_index) = app.selected_device_index {
           let next_index =

@@ -4,10 +4,10 @@ use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       move_selection(1, app);
     }
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       move_selection(-1, app);
     }
     _ => {}

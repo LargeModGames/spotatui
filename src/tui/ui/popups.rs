@@ -415,9 +415,12 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
     f.render_stateful_widget(list, vchunks[1], &mut list_state);
   }
 
-  let footer = Paragraph::new("Enter add | q cancel | j/k or arrows move | H/M/L jump")
-    .style(Style::default().fg(app.user_config.theme.inactive))
-    .alignment(Alignment::Center);
+  let footer = Paragraph::new(format!(
+    "Enter add | q cancel | {}/{} or arrows move | H/M/L jump",
+    app.user_config.keys.move_down, app.user_config.keys.move_up,
+  ))
+  .style(Style::default().fg(app.user_config.theme.inactive))
+  .alignment(Alignment::Center);
   f.render_widget(footer, vchunks[2]);
 }
 

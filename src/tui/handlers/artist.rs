@@ -248,21 +248,21 @@ pub fn handler(key: Key, app: &mut App) {
       Key::Esc => {
         artist.artist_selected_block = ArtistBlock::Empty;
       }
-      k if common_key_events::down_event(k) => {
+      k if common_key_events::down_event(k, &app.user_config.keys) => {
         if artist.artist_selected_block != ArtistBlock::Empty {
           handle_down_press_on_selected_block(app);
         } else {
           handle_down_press_on_hovered_block(app);
         }
       }
-      k if common_key_events::up_event(k) => {
+      k if common_key_events::up_event(k, &app.user_config.keys) => {
         if artist.artist_selected_block != ArtistBlock::Empty {
           handle_up_press_on_selected_block(app);
         } else {
           handle_up_press_on_hovered_block(app);
         }
       }
-      k if common_key_events::left_event(k) => {
+      k if common_key_events::left_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
         match artist.artist_hovered_block {
           ArtistBlock::TopTracks => common_key_events::handle_left_event(app),
@@ -275,7 +275,7 @@ pub fn handler(key: Key, app: &mut App) {
           ArtistBlock::Empty => {}
         }
       }
-      k if common_key_events::right_event(k) => {
+      k if common_key_events::right_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
         handle_down_press_on_hovered_block(app);
       }

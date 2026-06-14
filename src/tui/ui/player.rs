@@ -1000,12 +1000,22 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     .area()
     .layout(&Layout::vertical([Constraint::Percentage(20), Constraint::Percentage(80)]).margin(5));
 
+  let move_instructions = format!(
+    "Use `{}`/`{}` or up/down arrow keys to move up and down and <Enter> to select. ",
+    app.user_config.keys.move_down, app.user_config.keys.move_up,
+  );
   let device_instructions: Vec<Line> = vec![
-        "To play tracks, please select a device. ",
-        "Use `j/k` or up/down arrow keys to move up and down and <Enter> to select. ",
-        "Your choice here will be cached so you can jump straight back in when you next open `spotatui`. ",
-        "You can change the playback device at any time by pressing `d`.",
-    ].into_iter().map(|instruction| Line::from(Span::raw(instruction))).collect();
+    Line::from(Span::raw(
+      "To play tracks, please select a device. ",
+    )),
+    Line::from(Span::raw(move_instructions)),
+    Line::from(Span::raw(
+      "Your choice here will be cached so you can jump straight back in when you next open `spotatui`. ",
+    )),
+    Line::from(Span::raw(
+      "You can change the playback device at any time by pressing `d`.",
+    )),
+  ];
 
   let instructions = Paragraph::new(device_instructions)
     .style(Style::default().fg(app.user_config.theme.text))

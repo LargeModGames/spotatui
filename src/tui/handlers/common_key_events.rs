@@ -1,20 +1,21 @@
 use crate::core::app::{ActiveBlock, App, RouteId};
+use crate::core::user_config::KeyBindings;
 use crate::tui::event::Key;
 
-pub fn down_event(key: Key) -> bool {
-  matches!(key, Key::Down | Key::Char('j') | Key::Ctrl('n'))
+pub fn down_event(key: Key, keys: &KeyBindings) -> bool {
+  matches!(key, Key::Down | Key::Ctrl('n')) || key == keys.move_down
 }
 
-pub fn up_event(key: Key) -> bool {
-  matches!(key, Key::Up | Key::Char('k') | Key::Ctrl('p'))
+pub fn up_event(key: Key, keys: &KeyBindings) -> bool {
+  matches!(key, Key::Up | Key::Ctrl('p')) || key == keys.move_up
 }
 
-pub fn left_event(key: Key) -> bool {
-  matches!(key, Key::Left | Key::Char('h') | Key::Ctrl('b'))
+pub fn left_event(key: Key, keys: &KeyBindings) -> bool {
+  matches!(key, Key::Left | Key::Ctrl('b')) || key == keys.move_left
 }
 
-pub fn right_event(key: Key) -> bool {
-  matches!(key, Key::Right | Key::Char('l') | Key::Ctrl('f'))
+pub fn right_event(key: Key, keys: &KeyBindings) -> bool {
+  matches!(key, Key::Right | Key::Ctrl('f')) || key == keys.move_right
 }
 
 pub fn high_event(key: Key) -> bool {

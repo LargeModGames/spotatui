@@ -36,8 +36,8 @@ pub fn handler(key: Key, app: &mut App) {
 
   match key {
     // Navigation
-    k if common_key_events::down_event(k) => move_down(app),
-    k if common_key_events::up_event(k) => move_up(app),
+    k if common_key_events::down_event(k, &app.user_config.keys) => move_down(app),
+    k if common_key_events::up_event(k, &app.user_config.keys) => move_up(app),
     k if common_key_events::high_event(k) => app.friend_selected_index = 0,
     k if common_key_events::low_event(k) => {
       let count = filtered_count(app);
@@ -137,7 +137,9 @@ fn handle_add_dialog(key: Key, app: &mut App) {
     },
 
     // Navigate search results
-    k if app.friend_add_mode == FriendAddMode::Search && common_key_events::down_event(k) => {
+    k if app.friend_add_mode == FriendAddMode::Search
+      && common_key_events::down_event(k, &app.user_config.keys) =>
+    {
       let count = app.friend_user_search_results.len();
       if count > 0 {
         app.friend_user_search_selected = (app.friend_user_search_selected + 1).min(count - 1);
@@ -145,7 +147,7 @@ fn handle_add_dialog(key: Key, app: &mut App) {
     }
 
     k if app.friend_add_mode == FriendAddMode::Search
-      && common_key_events::up_event(k)
+      && common_key_events::up_event(k, &app.user_config.keys)
       && app.friend_user_search_selected > 0 =>
     {
       app.friend_user_search_selected -= 1;

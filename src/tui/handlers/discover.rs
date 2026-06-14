@@ -8,8 +8,10 @@ const DISCOVER_OPTIONS_COUNT: usize = 2;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k) => common_key_events::handle_left_event(app),
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
+      common_key_events::handle_left_event(app)
+    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       let next_index = if app.discover_selected_index >= DISCOVER_OPTIONS_COUNT - 1 {
         0
       } else {
@@ -17,7 +19,7 @@ pub fn handler(key: Key, app: &mut App) {
       };
       app.discover_selected_index = next_index;
     }
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       let next_index = if app.discover_selected_index == 0 {
         DISCOVER_OPTIONS_COUNT - 1
       } else {
@@ -26,7 +28,9 @@ pub fn handler(key: Key, app: &mut App) {
       app.discover_selected_index = next_index;
     }
     // Left/Right to cycle time range (for Top Tracks)
-    k if common_key_events::right_event(k) && app.discover_selected_index == 1 => {
+    k if common_key_events::right_event(k, &app.user_config.keys)
+      && app.discover_selected_index == 1 =>
+    {
       // Only cycle time range when Top Tracks is selected
       app.discover_time_range = app.discover_time_range.next();
       // Clear cache so it refetches with new time range

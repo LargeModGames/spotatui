@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Configurable movement keybindings**: `h`/`j`/`k`/`l` keys (traditionally left/down/up/right) are now configurable via `move_left`, `move_down`, `move_up`, and `move_right` under `keybindings` in `config.yml` and via the Settings screen. Defaults match the previous hard-coded bindings, and the arrow key(s) fallbacks still work.
+
 ## [v0.39.1] 2026-06-12
 
 ### Fixed

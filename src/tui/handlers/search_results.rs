@@ -423,21 +423,21 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Esc => {
       app.search_results.selected_block = SearchResultBlock::Empty;
     }
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       if app.search_results.selected_block != SearchResultBlock::Empty {
         handle_down_press_on_selected_block(app);
       } else {
         handle_down_press_on_hovered_block(app);
       }
     }
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       if app.search_results.selected_block != SearchResultBlock::Empty {
         handle_up_press_on_selected_block(app);
       } else {
         handle_up_press_on_hovered_block(app);
       }
     }
-    k if common_key_events::left_event(k) => {
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
       app.search_results.selected_block = SearchResultBlock::Empty;
       match app.search_results.hovered_block {
         SearchResultBlock::AlbumSearch => {
@@ -458,7 +458,7 @@ pub fn handler(key: Key, app: &mut App) {
         SearchResultBlock::Empty => {}
       }
     }
-    k if common_key_events::right_event(k) => {
+    k if common_key_events::right_event(k, &app.user_config.keys) => {
       app.search_results.selected_block = SearchResultBlock::Empty;
       match app.search_results.hovered_block {
         SearchResultBlock::AlbumSearch => {

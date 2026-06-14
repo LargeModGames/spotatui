@@ -3532,6 +3532,30 @@ impl App {
           value: SettingValue::Key(key_to_string(&self.user_config.keys.back)),
         },
         SettingItem {
+          id: "keys.move_up".to_string(),
+          name: "Move Up".to_string(),
+          description: "Move selection up".to_string(),
+          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_up)),
+        },
+        SettingItem {
+          id: "keys.move_down".to_string(),
+          name: "Move Down".to_string(),
+          description: "Move selection down".to_string(),
+          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_down)),
+        },
+        SettingItem {
+          id: "keys.move_left".to_string(),
+          name: "Move Left".to_string(),
+          description: "Move selection left".to_string(),
+          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_left)),
+        },
+        SettingItem {
+          id: "keys.move_right".to_string(),
+          name: "Move Right".to_string(),
+          description: "Move selection right".to_string(),
+          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_right)),
+        },
+        SettingItem {
           id: "keys.next_page".to_string(),
           name: "Next Page".to_string(),
           description: "Navigate to next page".to_string(),
@@ -3982,6 +4006,34 @@ impl App {
           if let SettingValue::Key(v) = &setting.value {
             if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
               self.user_config.keys.back = key;
+            }
+          }
+        }
+        "keys.move_up" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.move_up = key;
+            }
+          }
+        }
+        "keys.move_down" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.move_down = key;
+            }
+          }
+        }
+        "keys.move_left" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.move_left = key;
+            }
+          }
+        }
+        "keys.move_right" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.move_right = key;
             }
           }
         }

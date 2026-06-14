@@ -95,22 +95,22 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
     ],
     vec![
       String::from("Move selection left"),
-      String::from("h | <Left Arrow Key> | <Ctrl+b>"),
+      format!("{} | <Left Arrow Key> | <Ctrl+b>", key_bindings.move_left),
       String::from("General"),
     ],
     vec![
       String::from("Move selection down"),
-      String::from("j | <Down Arrow Key> | <Ctrl+n>"),
+      format!("{} | <Down Arrow Key> | <Ctrl+n>", key_bindings.move_down),
       String::from("General"),
     ],
     vec![
       String::from("Move selection up"),
-      String::from("k | <Up Arrow Key> | <Ctrl+p>"),
+      format!("{} | <Up Arrow Key> | <Ctrl+p>", key_bindings.move_up),
       String::from("General"),
     ],
     vec![
       String::from("Move selection right"),
-      String::from("l | <Right Arrow Key> | <Ctrl+f>"),
+      format!("{} | <Right Arrow Key> | <Ctrl+f>", key_bindings.move_right),
       String::from("General (Ctrl+f searches inside playlist track tables)"),
     ],
     vec![

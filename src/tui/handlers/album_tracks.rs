@@ -9,8 +9,10 @@ use rspotify::{
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k) => common_key_events::handle_left_event(app),
-    k if common_key_events::down_event(k) => match app.album_table_context {
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
+      common_key_events::handle_left_event(app)
+    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => match app.album_table_context {
       AlbumTableContext::Full => {
         if let Some(selected_album) = &app.selected_album_full {
           let next_index = common_key_events::on_down_press_handler(
@@ -30,7 +32,7 @@ pub fn handler(key: Key, app: &mut App) {
         }
       }
     },
-    k if common_key_events::up_event(k) => match app.album_table_context {
+    k if common_key_events::up_event(k, &app.user_config.keys) => match app.album_table_context {
       AlbumTableContext::Full => {
         if let Some(selected_album) = &app.selected_album_full {
           let next_index = common_key_events::on_up_press_handler(

@@ -6,15 +6,17 @@ use rspotify::prelude::*;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k) => common_key_events::handle_left_event(app),
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
+      common_key_events::handle_left_event(app)
+    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       if let Some(artists) = &mut app.library.saved_artists.get_results(None) {
         let next_index =
           common_key_events::on_down_press_handler(&artists.items, Some(app.artists_list_index));
         app.artists_list_index = next_index;
       }
     }
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       if let Some(artists) = &mut app.library.saved_artists.get_results(None) {
         let next_index =
           common_key_events::on_up_press_handler(&artists.items, Some(app.artists_list_index));

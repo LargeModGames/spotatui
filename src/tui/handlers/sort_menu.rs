@@ -2,6 +2,7 @@
 //!
 //! Handles keyboard input for the sort menu popup
 
+use super::common_key_events;
 use crate::core::app::{ActiveBlock, App};
 use crate::core::sort::{SortContext, SortField};
 use crate::tui::event::Key;
@@ -21,14 +22,14 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Esc | Key::Char(',') => {
       close_sort_menu(app);
     }
-    Key::Up | Key::Char('k') => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       if app.sort_menu_selected > 0 {
         app.sort_menu_selected -= 1;
       } else {
         app.sort_menu_selected = available_fields.len().saturating_sub(1);
       }
     }
-    Key::Down | Key::Char('j') => {
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       if app.sort_menu_selected < available_fields.len().saturating_sub(1) {
         app.sort_menu_selected += 1;
       } else {

@@ -18,12 +18,12 @@ pub fn handler(key: Key, app: &mut App) {
 fn handle_navigation(key: Key, app: &mut App) {
   match key {
     // Category switching with left/right (only when not in edit mode)
-    key if left_event(key) => switch_category_left(app),
-    key if right_event(key) => switch_category_right(app),
+    key if left_event(key, &app.user_config.keys) => switch_category_left(app),
+    key if right_event(key, &app.user_config.keys) => switch_category_right(app),
 
     // Item selection with up/down
-    key if down_event(key) => select_next_item(app),
-    key if up_event(key) => select_previous_item(app),
+    key if down_event(key, &app.user_config.keys) => select_next_item(app),
+    key if up_event(key, &app.user_config.keys) => select_previous_item(app),
 
     // Enter edit mode
     Key::Enter => enter_edit_mode(app),
@@ -59,7 +59,7 @@ fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
         close_settings(app);
       }
     }
-    key if left_event(key) || right_event(key) => {
+    key if left_event(key, &app.user_config.keys) || right_event(key, &app.user_config.keys) => {
       app.settings_unsaved_prompt_save_selected = !app.settings_unsaved_prompt_save_selected;
     }
     key if key == app.user_config.keys.back => {
@@ -119,7 +119,7 @@ fn handle_bool_edit(key: Key, app: &mut App) {
     Key::Esc => {
       app.settings_edit_mode = false;
     }
-    key if left_event(key) || right_event(key) => {
+    key if left_event(key, &app.user_config.keys) || right_event(key, &app.user_config.keys) => {
       // Toggle on left/right as well for better UX
       if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
         if let SettingValue::Bool(v) = setting.value {
@@ -153,7 +153,7 @@ fn handle_number_edit(key: Key, app: &mut App) {
     Key::Backspace => {
       app.settings_edit_buffer.pop();
     }
-    key if up_event(key) => {
+    key if up_event(key, &app.user_config.keys) => {
       // Increment value
       if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
         if let SettingValue::Number(v) = setting.value {
@@ -163,7 +163,7 @@ fn handle_number_edit(key: Key, app: &mut App) {
         }
       }
     }
-    key if down_event(key) => {
+    key if down_event(key, &app.user_config.keys) => {
       // Decrement value
       if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
         if let SettingValue::Number(v) = setting.value {
@@ -478,8 +478,8 @@ fn handle_preset_edit(key: Key, app: &mut App) {
     Key::Esc => {
       app.settings_edit_mode = false;
     }
-    key if right_event(key) => cycle(app, true),
-    key if left_event(key) => cycle(app, false),
+    key if right_event(key, &app.user_config.keys) => cycle(app, true),
+    key if left_event(key, &app.user_config.keys) => cycle(app, false),
     _ => {}
   }
 }

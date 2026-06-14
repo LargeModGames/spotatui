@@ -14,8 +14,10 @@ use rspotify::prelude::Id;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k) => common_key_events::handle_left_event(app),
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
+      common_key_events::handle_left_event(app)
+    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       let current_index = app.track_table.selected_index;
       let tracks_len = app.track_table.tracks.len();
 
@@ -57,7 +59,7 @@ pub fn handler(key: Key, app: &mut App) {
       );
       app.track_table.selected_index = next_index;
     }
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       if app.track_table.tracks.is_empty() {
         return;
       }

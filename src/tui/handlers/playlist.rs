@@ -11,15 +11,17 @@ fn total_display_count(app: &App) -> usize {
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::right_event(k) => common_key_events::handle_right_event(app),
-    k if common_key_events::down_event(k) => {
+    k if common_key_events::right_event(k, &app.user_config.keys) => {
+      common_key_events::handle_right_event(app)
+    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
       let count = total_display_count(app);
       if count > 0 {
         let current = app.selected_playlist_index.unwrap_or(0);
         app.selected_playlist_index = Some((current + 1) % count);
       }
     }
-    k if common_key_events::up_event(k) => {
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
       let count = total_display_count(app);
       if count > 0 {
         let current = app.selected_playlist_index.unwrap_or(0);

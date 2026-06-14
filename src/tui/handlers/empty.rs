@@ -11,50 +11,58 @@ pub fn handler(key: Key, app: &mut App) {
       let current_hovered = app.get_current_route().hovered_block;
       app.set_current_route_state(Some(current_hovered), None);
     }
-    k if common_key_events::down_event(k) => match app.get_current_route().hovered_block {
-      ActiveBlock::Library => {
-        app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
+      match app.get_current_route().hovered_block {
+        ActiveBlock::Library => {
+          app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
+        }
+        ActiveBlock::ArtistBlock
+        | ActiveBlock::AlbumList
+        | ActiveBlock::AlbumTracks
+        | ActiveBlock::Artists
+        | ActiveBlock::Podcasts
+        | ActiveBlock::EpisodeTable
+        | ActiveBlock::Home
+        | ActiveBlock::Discover
+        | ActiveBlock::MyPlaylists
+        | ActiveBlock::RecentlyPlayed
+        | ActiveBlock::TrackTable => {
+          app.set_current_route_state(None, Some(ActiveBlock::PlayBar));
+        }
+        _ => {}
       }
-      ActiveBlock::ArtistBlock
-      | ActiveBlock::AlbumList
-      | ActiveBlock::AlbumTracks
-      | ActiveBlock::Artists
-      | ActiveBlock::Podcasts
-      | ActiveBlock::EpisodeTable
-      | ActiveBlock::Home
-      | ActiveBlock::Discover
-      | ActiveBlock::MyPlaylists
-      | ActiveBlock::RecentlyPlayed
-      | ActiveBlock::TrackTable => {
-        app.set_current_route_state(None, Some(ActiveBlock::PlayBar));
+    }
+    k if common_key_events::up_event(k, &app.user_config.keys) => {
+      match app.get_current_route().hovered_block {
+        ActiveBlock::MyPlaylists => {
+          app.set_current_route_state(None, Some(ActiveBlock::Library));
+        }
+        ActiveBlock::PlayBar => {
+          app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
+        }
+        _ => {}
       }
-      _ => {}
-    },
-    k if common_key_events::up_event(k) => match app.get_current_route().hovered_block {
-      ActiveBlock::MyPlaylists => {
-        app.set_current_route_state(None, Some(ActiveBlock::Library));
+    }
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
+      match app.get_current_route().hovered_block {
+        ActiveBlock::ArtistBlock
+        | ActiveBlock::AlbumList
+        | ActiveBlock::AlbumTracks
+        | ActiveBlock::Artists
+        | ActiveBlock::Podcasts
+        | ActiveBlock::EpisodeTable
+        | ActiveBlock::Home
+        | ActiveBlock::Discover
+        | ActiveBlock::RecentlyPlayed
+        | ActiveBlock::TrackTable => {
+          app.set_current_route_state(None, Some(ActiveBlock::Library));
+        }
+        _ => {}
       }
-      ActiveBlock::PlayBar => {
-        app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
-      }
-      _ => {}
-    },
-    k if common_key_events::left_event(k) => match app.get_current_route().hovered_block {
-      ActiveBlock::ArtistBlock
-      | ActiveBlock::AlbumList
-      | ActiveBlock::AlbumTracks
-      | ActiveBlock::Artists
-      | ActiveBlock::Podcasts
-      | ActiveBlock::EpisodeTable
-      | ActiveBlock::Home
-      | ActiveBlock::Discover
-      | ActiveBlock::RecentlyPlayed
-      | ActiveBlock::TrackTable => {
-        app.set_current_route_state(None, Some(ActiveBlock::Library));
-      }
-      _ => {}
-    },
-    k if common_key_events::right_event(k) => common_key_events::handle_right_event(app),
+    }
+    k if common_key_events::right_event(k, &app.user_config.keys) => {
+      common_key_events::handle_right_event(app)
+    }
     Key::Char('w') if app.get_current_route().hovered_block == ActiveBlock::PlayBar => {
       super::playbar::handler(key, app);
     }
