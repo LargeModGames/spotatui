@@ -35,9 +35,33 @@ pub struct PopupLine {
 pub struct TrackInfo {
   pub uri: Option<String>,
   pub name: String,
+  /// Display artist names. Mirrors `artist_refs[*].name`; retained for the
+  /// `api_version = 4` scripting contract (plugins read `track.artists`).
   pub artists: Vec<String>,
+  /// Display album name. Retained for the scripting contract.
   pub album: String,
   pub duration_ms: u64,
+  // --- Fields below are additive (post-Phase-0). They only ever ADD keys to the
+  // serialized snapshot, so the `api_version = 4` plugin contract is preserved. ---
+  /// Spotify base62 track id (`None` for local/unknown tracks).
+  #[serde(default)]
+  pub id: Option<String>,
+  /// Spotify base62 id of the track's album, when known.
+  #[serde(default)]
+  pub album_id: Option<String>,
+  /// Structured, navigable artist references (id + name). Populated when the
+  /// source provides per-artist data; empty when only a combined display string
+  /// is available (e.g. native-playback snapshots).
+  #[serde(default)]
+  pub artist_refs: Vec<ArtistRef>,
+  #[serde(default = "default_true")]
+  pub is_playable: bool,
+  #[serde(default)]
+  pub is_local: bool,
+  #[serde(default)]
+  pub track_number: u32,
+  #[serde(default)]
+  pub explicit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +92,114 @@ pub struct PlaylistInfo {
   pub name: String,
   pub owner: String,
   pub track_count: u32,
+  // --- Additive fields (post-Phase-0); see TrackInfo note above. ---
+  /// Spotify base62 playlist id, when known.
+  #[serde(default)]
+  pub id: Option<String>,
+  #[serde(default)]
+  pub collaborative: bool,
+  #[serde(default)]
+  pub public: Option<bool>,
+  #[serde(default)]
+  pub image_url: Option<String>,
+}
+
+/// A navigable reference to an artist: optional Spotify id plus display name.
+///
+/// Reused by [`TrackInfo`], [`AlbumInfo`], and [`ArtistInfo`]. `id` is `None`
+/// for local/unknown sources or when the API omits it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ArtistRef {
+  pub id: Option<String>,
+  pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ArtistInfo {
+  pub id: Option<String>,
+  pub uri: Option<String>,
+  pub name: String,
+  #[serde(default)]
+  pub image_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AlbumInfo {
+  pub id: Option<String>,
+  pub uri: Option<String>,
+  pub name: String,
+  #[serde(default)]
+  pub artists: Vec<ArtistRef>,
+  /// One of `"album"`, `"single"`, `"compilation"` (lowercased), when known.
+  #[serde(default)]
+  pub album_type: Option<String>,
+  #[serde(default)]
+  pub release_date: Option<String>,
+  #[serde(default)]
+  pub total_tracks: Option<u32>,
+  #[serde(default)]
+  pub image_url: Option<String>,
+  /// Populated when mapped from a full album; empty for simplified albums.
+  #[serde(default)]
+  pub tracks: Vec<TrackInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ShowInfo {
+  pub id: Option<String>,
+  pub uri: Option<String>,
+  pub name: String,
+  #[serde(default)]
+  pub description: String,
+  #[serde(default)]
+  pub image_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EpisodeInfo {
+  pub id: Option<String>,
+  pub uri: Option<String>,
+  pub name: String,
+  pub duration_ms: u64,
+  #[serde(default)]
+  pub description: String,
+  #[serde(default)]
+  pub release_date: String,
+  #[serde(default = "default_true")]
+  pub is_playable: bool,
+  #[serde(default)]
+  pub image_url: Option<String>,
+}
+
+/// A playable item in a queue or playlist: either a music track or a podcast
+/// episode. Maps from rspotify's `PlayableItem` (the `Unknown` variant maps to
+/// `None`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PlayableInfo {
+  Track(TrackInfo),
+  Episode(EpisodeInfo),
+}
+
+/// Aggregated, source-agnostic search results. Sources without a given
+/// capability simply leave the corresponding vector empty.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SearchResults {
+  #[serde(default)]
+  pub tracks: Vec<TrackInfo>,
+  #[serde(default)]
+  pub albums: Vec<AlbumInfo>,
+  #[serde(default)]
+  pub artists: Vec<ArtistInfo>,
+  #[serde(default)]
+  pub playlists: Vec<PlaylistInfo>,
+  #[serde(default)]
+  pub shows: Vec<ShowInfo>,
+}
+
+/// Default for serde `is_playable` fields: a track/episode is assumed playable
+/// unless the API explicitly says otherwise.
+fn default_true() -> bool {
+  true
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +241,10 @@ impl PlaylistInfo {
       name: p.name.clone(),
       owner,
       track_count: p.items.total,
+      id: Some(p.id.id().to_string()),
+      collaborative: p.collaborative,
+      public: p.public,
+      image_url: p.images.first().map(|img| img.url.clone()),
     }
   }
 }
@@ -131,6 +267,16 @@ pub fn playback_state(app: &App) -> Option<PlaybackState> {
     artists: s.metadata.artists.clone(),
     album: s.metadata.album.clone(),
     duration_ms: s.metadata.duration_ms as u64,
+    id: s.item_id.clone(),
+    album_id: None,
+    // The native-playback snapshot carries a single combined artist display
+    // string (see `media_metadata`), not structured per-artist data, so there
+    // are no navigable refs to populate here.
+    artist_refs: Vec::new(),
+    is_playable: true,
+    is_local: false,
+    track_number: 0,
+    explicit: false,
   });
 
   let (is_playing, shuffle, repeat, device) = if let Some(s) = &snapshot {

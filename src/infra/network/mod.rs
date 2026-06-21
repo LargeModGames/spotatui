@@ -1,5 +1,6 @@
 pub mod friends;
 pub mod library;
+pub mod mapping;
 pub mod metadata;
 pub mod playback;
 pub mod recommend;
