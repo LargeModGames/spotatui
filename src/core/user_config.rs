@@ -760,6 +760,7 @@ pub struct BehaviorConfigString {
   #[cfg(feature = "cover-art")]
   pub playbar_cover_art_size_percent: Option<u16>,
   pub keepawake_enabled: Option<bool>,
+  pub enable_media_keys: Option<bool>,
   pub sync_token: Option<String>,
 }
 
@@ -805,6 +806,10 @@ pub struct BehaviorConfig {
   #[cfg(feature = "cover-art")]
   pub playbar_cover_art_size_percent: u16,
   pub keepawake_enabled: bool,
+  /// When false, spotatui ignores OS media-control commands (headphone
+  /// play/pause/skip buttons, media keys, MPRIS/SMTC/Now Playing, playerctl).
+  /// It still publishes track metadata to the OS; it just stops reacting.
+  pub enable_media_keys: bool,
   pub sync_token: Option<String>,
 }
 
@@ -936,6 +941,7 @@ impl UserConfig {
         #[cfg(feature = "cover-art")]
         playbar_cover_art_size_percent: 100,
         keepawake_enabled: true,
+        enable_media_keys: true,
         sync_token: None,
       },
       path_to_config: None,
@@ -1288,6 +1294,9 @@ impl UserConfig {
     if let Some(keepawake_enabled) = behavior_config.keepawake_enabled {
       self.behavior.keepawake_enabled = keepawake_enabled;
     }
+    if let Some(enable_media_keys) = behavior_config.enable_media_keys {
+      self.behavior.enable_media_keys = enable_media_keys;
+    }
     Ok(())
   }
 
@@ -1451,6 +1460,7 @@ impl UserConfig {
       #[cfg(feature = "cover-art")]
       playbar_cover_art_size_percent: Some(self.behavior.playbar_cover_art_size_percent),
       keepawake_enabled: Some(self.behavior.keepawake_enabled),
+      enable_media_keys: Some(self.behavior.enable_media_keys),
     };
 
     // Helper to convert Key to config string

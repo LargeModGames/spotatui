@@ -3479,6 +3479,14 @@ impl App {
           value: SettingValue::Bool(self.user_config.behavior.keepawake_enabled),
         },
         SettingItem {
+          id: "behavior.enable_media_keys".to_string(),
+          name: "Media Key Controls".to_string(),
+          description:
+            "Let OS media keys, headphone buttons, and remote controls (playerctl, Now Playing) control playback"
+              .to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.enable_media_keys),
+        },
+        SettingItem {
           id: "behavior.startup_behavior".to_string(),
           name: "Startup Behavior".to_string(),
           description: "Playback state when spotatui starts: continue, play, or pause".to_string(),
@@ -3985,6 +3993,11 @@ impl App {
         "behavior.keepawake_enabled" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.keepawake_enabled = *v;
+          }
+        }
+        "behavior.enable_media_keys" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.enable_media_keys = *v;
           }
         }
         "behavior.enable_announcements" => {

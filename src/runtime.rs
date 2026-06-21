@@ -1319,6 +1319,9 @@ async fn handle_mpris_events(
   use std::sync::atomic::Ordering;
 
   while let Some(event) = event_rx.recv().await {
+    if !app.lock().await.user_config.behavior.enable_media_keys {
+      continue;
+    }
     match event {
       MprisEvent::PlayPause => {
         #[cfg(feature = "streaming")]
@@ -1509,6 +1512,9 @@ async fn handle_macos_media_events(
   use std::sync::atomic::Ordering;
 
   while let Some(event) = event_rx.recv().await {
+    if !app.lock().await.user_config.behavior.enable_media_keys {
+      continue;
+    }
     let Some(player) = player::active_streaming_player(&app).await else {
       continue;
     };
@@ -1555,6 +1561,9 @@ async fn handle_windows_media_events(
   use smtc_tokio::WindowsMediaEvent;
 
   while let Some(event) = event_rx.recv().await {
+    if !app.lock().await.user_config.behavior.enable_media_keys {
+      continue;
+    }
     let player_opt = player::active_streaming_player(&app).await;
 
     let is_native_loaded = app.lock().await.native_track_info.is_some();
