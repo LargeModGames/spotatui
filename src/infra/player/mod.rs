@@ -4,10 +4,14 @@
 //! It registers spotatui as a Spotify Connect device and handles audio streaming.
 
 #[cfg(feature = "streaming")]
+pub mod backend;
+#[cfg(feature = "streaming")]
 mod events;
 #[cfg(feature = "streaming")]
 mod streaming;
 
+#[cfg(feature = "streaming")]
+pub use backend::{select_native, PlaybackBackend};
 #[cfg(feature = "streaming")]
 pub use events::*;
 #[cfg(feature = "streaming")]
