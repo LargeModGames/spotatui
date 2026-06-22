@@ -14,7 +14,6 @@ use rspotify::{
     device::DevicePayload,
     idtypes::{ArtistId, PlaylistId, ShowId, TrackId},
     page::{CursorBasedPage, Page},
-    playing::PlayHistory,
     playlist::{PlaylistItem, SimplifiedPlaylist},
     show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
     track::{FullTrack, SavedTrack, SimplifiedTrack},
@@ -787,7 +786,9 @@ pub struct App {
   pub active_playlist_track_filter: Option<String>,
   pub pending_playlist_track_search: Option<String>,
   pub playlists: Option<Page<SimplifiedPlaylist>>,
-  pub recently_played: SpotifyResultAndSelectedIndex<Option<CursorBasedPage<PlayHistory>>>,
+  pub recently_played: SpotifyResultAndSelectedIndex<
+    Option<crate::core::pagination::CursorPaged<crate::core::plugin_api::TrackInfo>>,
+  >,
   pub recommendations_seed: String,
   pub recommendations_context: Option<RecommendationsContext>,
   pub search_results: SearchResult,

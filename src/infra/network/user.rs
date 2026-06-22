@@ -3,6 +3,8 @@ use super::Network;
 use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId};
 use anyhow::anyhow;
 
+use crate::core::plugin_api::TrackInfo;
+use crate::infra::network::mapping::map_cursor_page;
 use rand::seq::SliceRandom;
 use rspotify::model::{
   artist::FullArtist,
@@ -223,8 +225,9 @@ impl UserNetwork for Network {
       .await
     {
       Ok(recently_played) => {
+        let domain_page = map_cursor_page(&recently_played, |ph| TrackInfo::from(&ph.track));
         let mut app = self.app.lock().await;
-        app.recently_played.result = Some(recently_played);
+        app.recently_played.result = Some(domain_page);
         app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
       }
       Err(e) => {

@@ -652,17 +652,12 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
       .items
       .iter()
       .map(|item| TableItem {
-        id: item
-          .track
-          .id
-          .as_ref()
-          .map(|id| id.id().to_string())
-          .unwrap_or_else(|| "".to_string()),
+        id: item.id.clone().unwrap_or_default(),
         format: vec![
           "".to_string(),
-          item.track.name.to_owned(),
-          create_artist_string(&item.track.artists),
-          millis_to_minutes(item.track.duration.num_milliseconds() as u128),
+          item.name.clone(),
+          item.artists.join(", "),
+          millis_to_minutes(item.duration_ms as u128),
         ],
       })
       .collect::<Vec<TableItem>>();
