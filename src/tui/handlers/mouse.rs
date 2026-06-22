@@ -1075,7 +1075,7 @@ mod tests {
   }
 
   fn with_saved_albums(app: &mut App, count: usize) {
-    app.library.saved_albums.add_pages(Page {
+    let page = Page {
       href: "https://example.com/me/albums".to_string(),
       items: (0..count).map(saved_album).collect(),
       limit: count as u32,
@@ -1083,7 +1083,12 @@ mod tests {
       offset: 0,
       previous: None,
       total: count as u32,
-    });
+    };
+    let domain_page = crate::infra::network::mapping::map_page(
+      &page,
+      crate::infra::network::mapping::saved_album_info,
+    );
+    app.library.saved_albums.add_pages(domain_page);
   }
 
   fn open_settings(app: &mut App) {

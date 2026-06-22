@@ -13,16 +13,14 @@ pub mod utils;
 use crate::core::app::App;
 use crate::core::auth;
 use crate::core::config::ClientConfig;
-use crate::core::plugin_api::TrackInfo;
+use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use anyhow::anyhow;
 use rspotify::model::{
   album::SimplifiedAlbum,
-  artist::FullArtist,
   enums::{Country, RepeatState},
   idtypes::{
     AlbumId, ArtistId, EpisodeId, PlayContextId, PlayableId, PlaylistId, ShowId, TrackId, UserId,
   },
-  show::SimplifiedShow,
 };
 use rspotify::prelude::Id;
 use rspotify::AuthCodePkceSpotify;
@@ -90,7 +88,6 @@ pub enum IoEvent {
   GetRecommendationsForTrackId(TrackId<'static>, Option<Country>),
   GetRecentlyPlayed,
   GetFollowedArtists(Option<ArtistId<'static>>),
-  SetArtistsToTable(Vec<FullArtist>),
   UserArtistFollowCheck(Vec<ArtistId<'static>>),
   GetAlbum(AlbumId<'static>),
   TransferPlaybackToDevice(String, bool),
@@ -102,7 +99,7 @@ pub enum IoEvent {
   CurrentUserSavedShowsContains(Vec<ShowId<'static>>),
   CurrentUserSavedShowDelete(ShowId<'static>),
   CurrentUserSavedShowAdd(ShowId<'static>),
-  GetShowEpisodes(Box<SimplifiedShow>),
+  GetShowEpisodes(Box<ShowInfo>),
   GetShow(ShowId<'static>),
   GetCurrentShowEpisodes(ShowId<'static>, Option<u32>),
   AddItemToQueue(PlayableId<'static>),
@@ -328,9 +325,6 @@ impl Network {
       }
       IoEvent::GetFollowedArtists(after) => {
         self.get_followed_artists(after).await;
-      }
-      IoEvent::SetArtistsToTable(full_artists) => {
-        self.set_artists_to_table(full_artists).await;
       }
       IoEvent::UserArtistFollowCheck(artist_ids) => {
         self.user_artist_check_follow(artist_ids).await;

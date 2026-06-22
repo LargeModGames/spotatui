@@ -337,9 +337,11 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
         app.search_results.selected_shows_index,
         &app.search_results.shows,
       ) {
-        if let Some(show) = shows_result.items.get(index).cloned() {
+        if let Some(show) = shows_result.items.get(index) {
           // Go to show tracks table
-          app.dispatch(IoEvent::GetShowEpisodes(Box::new(show)));
+          app.dispatch(IoEvent::GetShowEpisodes(Box::new(
+            crate::core::plugin_api::ShowInfo::from(show),
+          )));
         };
       }
     }

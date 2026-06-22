@@ -2,7 +2,7 @@ use super::common_key_events;
 use crate::core::app::{ActiveBlock, App, RecommendationsContext};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::prelude::*;
+use rspotify::model::ArtistId;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
@@ -44,7 +44,14 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Enter => {
       if let Some(artists) = app.library.saved_artists.get_results(None) {
         if let Some(artist) = artists.items.get(app.artists_list_index) {
-          app.get_artist(artist.id.as_ref().into_static(), artist.name.clone());
+          if let Some(artist_id) = artist
+            .id
+            .as_deref()
+            .and_then(|id| ArtistId::from_id(id).ok())
+          {
+            let artist_name = artist.name.clone();
+            app.get_artist(artist_id.into_static(), artist_name);
+          }
         }
       }
     }
@@ -52,25 +59,33 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('e') => {
       if let Some(artists) = app.library.saved_artists.get_results(None) {
         if let Some(artist) = artists.items.get(app.artists_list_index) {
-          app.dispatch(IoEvent::StartPlayback(
-            Some(rspotify::model::PlayContextId::Artist(
-              artist.id.clone().into_static(),
-            )),
-            None,
-            None,
-          ));
+          if let Some(artist_id) = artist
+            .id
+            .as_deref()
+            .and_then(|id| ArtistId::from_id(id).ok())
+          {
+            app.dispatch(IoEvent::StartPlayback(
+              Some(rspotify::model::PlayContextId::Artist(
+                artist_id.into_static(),
+              )),
+              None,
+              None,
+            ));
+          }
         }
       }
     }
     Key::Char('r') => {
       if let Some(artists) = app.library.saved_artists.get_results(None) {
         if let Some(artist) = artists.items.get(app.artists_list_index) {
-          let artist_name = artist.name.clone();
-          let artist_id_list: Option<Vec<String>> = Some(vec![artist.id.id().to_string()]);
+          if let Some(artist_id) = artist.id.clone() {
+            let artist_name = artist.name.clone();
+            let artist_id_list: Option<Vec<String>> = Some(vec![artist_id]);
 
-          app.recommendations_context = Some(RecommendationsContext::Artist);
-          app.recommendations_seed = artist_name;
-          app.get_recommendations_for_seed(artist_id_list, None, None);
+            app.recommendations_context = Some(RecommendationsContext::Artist);
+            app.recommendations_seed = artist_name;
+            app.get_recommendations_for_seed(artist_id_list, None, None);
+          }
         }
       }
     }

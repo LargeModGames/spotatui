@@ -144,6 +144,19 @@ pub struct AlbumInfo {
   pub tracks: Vec<TrackInfo>,
 }
 
+/// An album as it appears in the user's saved-albums library: the album itself
+/// plus the saved-relationship metadata (`added_at`). `added_at` is a property
+/// of the *save*, not the album, so it lives here rather than on [`AlbumInfo`]
+/// (which is also reused for search results and discographies). Carried so the
+/// "Date Added" sort on the saved-albums screen keeps working.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SavedAlbumInfo {
+  pub album: AlbumInfo,
+  /// RFC 3339 UTC timestamp; sorts lexicographically == chronologically.
+  #[serde(default)]
+  pub added_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ShowInfo {
   pub id: Option<String>,
@@ -151,8 +164,20 @@ pub struct ShowInfo {
   pub name: String,
   #[serde(default)]
   pub description: String,
+  /// Show publisher (the "by …" attribution rendered in the podcast list).
+  #[serde(default)]
+  pub publisher: String,
   #[serde(default)]
   pub image_url: Option<String>,
+}
+
+/// Where playback of an episode was last left off. Mirrors rspotify's
+/// `ResumePoint`; carried so the episode list can render the "fully played"
+/// marker and resume position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumePointInfo {
+  pub fully_played: bool,
+  pub resume_position_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +197,10 @@ pub struct EpisodeInfo {
   pub release_date: String,
   #[serde(default = "default_true")]
   pub is_playable: bool,
+  /// Resume/played state, when the source provides it (e.g. the show-episodes
+  /// list). Drives the "fully played" marker and resume-position display.
+  #[serde(default)]
+  pub resume_point: Option<ResumePointInfo>,
   #[serde(default)]
   pub image_url: Option<String>,
 }

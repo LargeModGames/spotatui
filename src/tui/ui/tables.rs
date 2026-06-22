@@ -8,13 +8,10 @@ use ratatui::{
   widgets::{Block, Borders, Row, Table},
   Frame,
 };
-use rspotify::model::show::ResumePoint;
 use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
-use super::util::{
-  create_artist_string, get_color, get_percentage_width, join_artist_names, millis_to_minutes,
-};
+use super::util::{get_color, get_percentage_width, join_artist_names, millis_to_minutes};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TableId {
@@ -85,7 +82,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .items
       .iter()
       .map(|item| TableItem {
-        id: item.id.id().to_string(),
+        id: item.id.clone().unwrap_or_default(),
         format: vec![item.name.to_owned()],
       })
       .collect::<Vec<TableItem>>();
@@ -140,13 +137,9 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items = saved_shows
       .items
       .iter()
-      .map(|show_page| {
-        #[allow(deprecated)]
-        let publisher = show_page.show.publisher.to_owned();
-        TableItem {
-          id: show_page.show.id.id().to_string(),
-          format: vec![show_page.show.name.to_owned(), publisher],
-        }
+      .map(|show| TableItem {
+        id: show.id.clone().unwrap_or_default(),
+        format: vec![show.name.to_owned(), show.publisher.to_owned()],
       })
       .collect::<Vec<TableItem>>();
 
@@ -460,16 +453,16 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items = saved_albums
       .items
       .iter()
-      .map(|album_page| TableItem {
-        id: album_page.album.id.id().to_string(),
+      .map(|saved_album| TableItem {
+        id: saved_album.album.id.clone().unwrap_or_default(),
         format: vec![
           format!(
             "{}{}",
             app.user_config.padded_liked_icon(),
-            &album_page.album.name
+            &saved_album.album.name
           ),
-          create_artist_string(&album_page.album.artists),
-          album_page.album.release_date.to_owned(),
+          join_artist_names(&saved_album.album.artists),
+          saved_album.album.release_date.clone().unwrap_or_default(),
         ],
       })
       .collect::<Vec<TableItem>>();
@@ -526,29 +519,24 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .items
       .iter()
       .map(|episode| {
-        let (played_str, time_str) = match episode.resume_point {
-          Some(ResumePoint {
-            fully_played,
-            resume_position,
-          }) => (
-            if fully_played {
+        let duration_ms = episode.duration_ms as u128;
+        let (played_str, time_str) = match &episode.resume_point {
+          Some(resume_point) => (
+            if resume_point.fully_played {
               " ✔".to_owned()
             } else {
               "".to_owned()
             },
             format!(
               "{} / {}",
-              millis_to_minutes(resume_position.num_milliseconds() as u128),
-              millis_to_minutes(episode.duration.num_milliseconds() as u128)
+              millis_to_minutes(resume_point.resume_position_ms as u128),
+              millis_to_minutes(duration_ms)
             ),
           ),
-          None => (
-            "".to_owned(),
-            millis_to_minutes(episode.duration.num_milliseconds() as u128),
-          ),
+          None => ("".to_owned(), millis_to_minutes(duration_ms)),
         };
         TableItem {
-          id: episode.id.id().to_string(),
+          id: episode.id.clone().unwrap_or_default(),
           format: vec![
             played_str,
             episode.release_date.to_owned(),
@@ -559,14 +547,12 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       })
       .collect::<Vec<TableItem>>();
 
-    #[allow(deprecated)]
     let title = match &app.episode_table_context {
       EpisodeTableContext::Simplified => match &app.selected_show_simplified {
         Some(selected_show) => {
           format!(
             "{} by {}",
-            selected_show.show.name.to_owned(),
-            selected_show.show.publisher
+            selected_show.show.name, selected_show.show.publisher
           )
         }
         None => "Episodes".to_owned(),
@@ -575,8 +561,7 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         Some(selected_show) => {
           format!(
             "{} by {}",
-            selected_show.show.name.to_owned(),
-            selected_show.show.publisher
+            selected_show.show.name, selected_show.show.publisher
           )
         }
         None => "Episodes".to_owned(),

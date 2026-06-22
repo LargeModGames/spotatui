@@ -43,7 +43,7 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Enter => {
       if let Some(shows) = app.library.saved_shows.get_results(None) {
         if let Some(selected_show) = shows.items.get(app.shows_list_index).cloned() {
-          app.dispatch(IoEvent::GetShowEpisodes(Box::new(selected_show.show)));
+          app.dispatch(IoEvent::GetShowEpisodes(Box::new(selected_show)));
         };
       }
     }

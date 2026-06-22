@@ -19,8 +19,8 @@
 
 use crate::core::pagination::{CursorPaged, Paged};
 use crate::core::plugin_api::{
-  AlbumInfo, ArtistInfo, ArtistRef, EpisodeInfo, PlayableInfo, PlaylistInfo, SearchResults,
-  ShowInfo, TrackInfo,
+  AlbumInfo, ArtistInfo, ArtistRef, EpisodeInfo, PlayableInfo, PlaylistInfo, ResumePointInfo,
+  SavedAlbumInfo, SearchResults, ShowInfo, TrackInfo,
 };
 use rspotify::model::{
   album::{FullAlbum, SimplifiedAlbum},
@@ -186,26 +186,42 @@ impl From<&FullAlbum> for AlbumInfo {
 // --- Shows / episodes ------------------------------------------------------
 
 impl From<&SimplifiedShow> for ShowInfo {
+  // `publisher` is `#[deprecated]` in rspotify (a field Spotify dropped), but the
+  // podcast list still renders it as the "by …" attribution, so we read it here
+  // behind the boundary rather than dropping a column.
+  #[allow(deprecated)]
   fn from(s: &SimplifiedShow) -> Self {
     ShowInfo {
       id: Some(s.id.id().to_string()),
       uri: Some(s.id.uri()),
       name: s.name.clone(),
       description: s.description.clone(),
+      publisher: s.publisher.clone(),
       image_url: first_image(&s.images),
     }
   }
 }
 
 impl From<&FullShow> for ShowInfo {
+  #[allow(deprecated)]
   fn from(s: &FullShow) -> Self {
     ShowInfo {
       id: Some(s.id.id().to_string()),
       uri: Some(s.id.uri()),
       name: s.name.clone(),
       description: s.description.clone(),
+      publisher: s.publisher.clone(),
       image_url: first_image(&s.images),
     }
+  }
+}
+
+/// Map rspotify's `ResumePoint` (chrono `Duration` position) to the domain
+/// [`ResumePointInfo`] (ms).
+fn resume_point_info(rp: &rspotify::model::show::ResumePoint) -> ResumePointInfo {
+  ResumePointInfo {
+    fully_played: rp.fully_played,
+    resume_position_ms: duration_ms(rp.resume_position),
   }
 }
 
@@ -222,6 +238,7 @@ impl From<&SimplifiedEpisode> for EpisodeInfo {
       description: e.description.clone(),
       release_date: e.release_date.clone(),
       is_playable: e.is_playable,
+      resume_point: e.resume_point.as_ref().map(resume_point_info),
       image_url: first_image(&e.images),
     }
   }
@@ -238,8 +255,18 @@ impl From<&FullEpisode> for EpisodeInfo {
       description: e.description.clone(),
       release_date: e.release_date.clone(),
       is_playable: e.is_playable,
+      resume_point: e.resume_point.as_ref().map(resume_point_info),
       image_url: first_image(&e.images),
     }
+  }
+}
+
+/// Map a rspotify `SavedAlbum` to the domain [`SavedAlbumInfo`], preserving
+/// `added_at` (as an RFC 3339 UTC string) for the "Date Added" sort.
+pub fn saved_album_info(sa: &rspotify::model::album::SavedAlbum) -> SavedAlbumInfo {
+  SavedAlbumInfo {
+    album: AlbumInfo::from(&sa.album),
+    added_at: sa.added_at.to_rfc3339(),
   }
 }
 

@@ -563,7 +563,9 @@ fn handle_jump_to_album(app: &mut App) {
         app.dispatch(IoEvent::GetAlbumTracks(Box::new(track.album)));
       }
       PlayableItem::Episode(episode) => {
-        app.dispatch(IoEvent::GetShowEpisodes(Box::new(episode.show)));
+        app.dispatch(IoEvent::GetShowEpisodes(Box::new(
+          crate::core::plugin_api::ShowInfo::from(&episode.show),
+        )));
       }
       _ => {}
     };

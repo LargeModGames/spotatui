@@ -6,6 +6,7 @@ use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
 };
+use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
@@ -124,7 +125,12 @@ pub async fn prefetch_saved_tracks_page_task(
     }
 
     populate_liked_song_ids_from_saved_tracks(&mut app_guard.liked_song_ids_set, &page);
-    app_guard.library.saved_tracks.upsert_page_by_offset(page);
+    let domain_page =
+      crate::infra::network::mapping::map_page(&page, |st| TrackInfo::from(&st.track));
+    app_guard
+      .library
+      .saved_tracks
+      .upsert_page_by_offset(domain_page);
     app_guard.set_saved_tracks_to_table_continuous();
     let Some(candidate_next_offset) = next_offset else {
       return;
@@ -601,7 +607,9 @@ impl LibraryNetwork for Network {
         }
 
         populate_liked_song_ids_from_saved_tracks(&mut app.liked_song_ids_set, &saved_tracks);
-        let saved_tracks_index = app.library.saved_tracks.upsert_page_by_offset(saved_tracks);
+        let domain_page =
+          crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
+        let saved_tracks_index = app.library.saved_tracks.upsert_page_by_offset(domain_page);
         app.set_saved_tracks_to_table_continuous();
 
         let next_offset = app.next_missing_saved_tracks_offset(saved_tracks_index);
@@ -640,8 +648,12 @@ impl LibraryNetwork for Network {
     {
       Ok(saved_albums) => {
         if !saved_albums.items.is_empty() {
+          let domain_page = crate::infra::network::mapping::map_page(
+            &saved_albums,
+            crate::infra::network::mapping::saved_album_info,
+          );
           let mut app = self.app.lock().await;
-          app.library.saved_albums.add_pages(saved_albums);
+          app.library.saved_albums.add_pages(domain_page);
         }
       }
       Err(e) => {
@@ -763,8 +775,10 @@ impl LibraryNetwork for Network {
     {
       Ok(saved_shows) => {
         if !saved_shows.items.is_empty() {
+          let domain_page =
+            crate::infra::network::mapping::map_page(&saved_shows, |s| ShowInfo::from(&s.show));
           let mut app = self.app.lock().await;
-          app.library.saved_shows.add_pages(saved_shows);
+          app.library.saved_shows.add_pages(domain_page);
         }
       }
       Err(e) => {
