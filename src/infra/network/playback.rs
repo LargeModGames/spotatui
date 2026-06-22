@@ -1747,8 +1747,17 @@ impl PlaybackNetwork for Network {
       .await
     {
       Ok(q) => {
+        use crate::core::app::QueueState;
+        use crate::infra::network::mapping;
+        let domain_queue = QueueState {
+          currently_playing: q
+            .currently_playing
+            .as_ref()
+            .and_then(mapping::playable_info),
+          queue: q.queue.iter().filter_map(mapping::playable_info).collect(),
+        };
         let mut app = self.app.lock().await;
-        app.queue = Some(q);
+        app.queue = Some(domain_queue);
       }
       Err(e) => {
         let mut app = self.app.lock().await;

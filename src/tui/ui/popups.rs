@@ -1,4 +1,5 @@
 use crate::core::app::{ActiveBlock, AnnouncementLevel, App, DialogContext};
+use crate::core::plugin_api::PlayableInfo;
 use crate::core::plugin_api::PopupLine;
 use crate::infra::network::sync::PartyStatus;
 use ratatui::{
@@ -8,11 +9,9 @@ use ratatui::{
   widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
   Frame,
 };
-use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
 use super::help::get_help_docs;
-use super::util::create_artist_string;
 
 pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   let [area] = f
@@ -82,15 +81,10 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   f.render_widget(help_menu, area);
 }
 
-fn queue_item_line(item: &PlayableItem) -> String {
+fn queue_item_line(item: &PlayableInfo) -> String {
   match item {
-    PlayableItem::Track(track) => {
-      format!("{} - {}", track.name, create_artist_string(&track.artists))
-    }
-    PlayableItem::Episode(episode) => {
-      format!("{} - {}", episode.name, episode.show.name)
-    }
-    _ => String::from("Unknown item"),
+    PlayableInfo::Track(t) => format!("{} - {}", t.name, t.artists.join(", ")),
+    PlayableInfo::Episode(e) => format!("{} - {}", e.name, e.show_name),
   }
 }
 

@@ -1,4 +1,4 @@
-use crate::core::plugin_api::TrackInfo;
+use crate::core::plugin_api::{PlayableInfo, TrackInfo};
 use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
 use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
 use crate::infra::network::sync::{PartySession, PartyStatus};
@@ -11,7 +11,7 @@ use rspotify::{
   model::{
     album::{SavedAlbum, SimplifiedAlbum},
     artist::FullArtist,
-    context::{CurrentPlaybackContext, CurrentUserQueue},
+    context::CurrentPlaybackContext,
     device::DevicePayload,
     idtypes::{AlbumId, ArtistId, PlaylistId, ShowId, TrackId},
     page::{CursorBasedPage, Page},
@@ -733,6 +733,14 @@ pub struct SettingItem {
   pub value: SettingValue,
 }
 
+/// Domain-level representation of the playback queue.
+/// Replaces `rspotify::model::CurrentUserQueue` in `App` state.
+#[derive(Debug, Clone)]
+pub struct QueueState {
+  pub currently_playing: Option<PlayableInfo>,
+  pub queue: Vec<PlayableInfo>,
+}
+
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
   /// Spotify's API comes back with the same value — otherwise a slow poll
@@ -759,7 +767,7 @@ pub struct App {
   #[allow(dead_code)]
   pub pending_stop_after_track: bool,
   pub devices: Option<DevicePayload>,
-  pub queue: Option<CurrentUserQueue>,
+  pub queue: Option<QueueState>,
   pub queue_selected_index: usize,
   #[cfg(feature = "cover-art")]
   pub cover_art: crate::tui::cover_art::CoverArt,
