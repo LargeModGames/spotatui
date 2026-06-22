@@ -17,6 +17,7 @@
 // binary itself.
 #![allow(dead_code)]
 
+use crate::core::pagination::{CursorPaged, Paged};
 use crate::core::plugin_api::{
   AlbumInfo, ArtistInfo, ArtistRef, EpisodeInfo, PlayableInfo, PlaylistInfo, SearchResults,
   ShowInfo, TrackInfo,
@@ -24,7 +25,7 @@ use crate::core::plugin_api::{
 use rspotify::model::{
   album::{FullAlbum, SimplifiedAlbum},
   artist::{FullArtist, SimplifiedArtist},
-  page::Page,
+  page::{CursorBasedPage, Page},
   playlist::SimplifiedPlaylist,
   show::{FullEpisode, FullShow, SimplifiedEpisode, SimplifiedShow},
   track::{FullTrack, SimplifiedTrack},
@@ -280,6 +281,41 @@ pub fn search_results_from_pages(
   }
 }
 
+// --- Pagination ------------------------------------------------------------
+
+/// Convert an rspotify offset-based [`Page<U>`] into a domain
+/// [`Paged<T>`], mapping each item with `f`. Drops the API `href`.
+///
+/// Pass a **closure**, not a bare `From::from` fn-item — e.g.
+/// `map_page(&page, |t| TrackInfo::from(t))`. A bare `TrackInfo::from` trips
+/// Rust's higher-ranked-lifetime inference (`Fn` not general enough).
+pub fn map_page<U, T>(page: &Page<U>, f: impl Fn(&U) -> T) -> Paged<T>
+where
+  U: serde::de::DeserializeOwned,
+{
+  Paged {
+    items: page.items.iter().map(f).collect(),
+    offset: page.offset,
+    limit: page.limit,
+    total: page.total,
+    next: page.next.clone(),
+    previous: page.previous.clone(),
+  }
+}
+
+/// Convert an rspotify [`CursorBasedPage<U>`] into a domain
+/// [`CursorPaged<T>`], mapping each item with `f`. Pass a closure (see
+/// [`map_page`]).
+pub fn map_cursor_page<U, T>(page: &CursorBasedPage<U>, f: impl Fn(&U) -> T) -> CursorPaged<T> {
+  CursorPaged {
+    items: page.items.iter().map(f).collect(),
+    limit: page.limit,
+    next: page.next.clone(),
+    cursor_after: page.cursors.as_ref().and_then(|c| c.after.clone()),
+    total: page.total,
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -368,6 +404,30 @@ mod tests {
     assert!(results.artists.is_empty());
     assert!(results.playlists.is_empty());
     assert!(results.shows.is_empty());
+  }
+
+  #[test]
+  fn map_page_converts_items_and_preserves_paging() {
+    let page = Page {
+      href: "https://api/x".to_string(),
+      items: vec![
+        full_track("4uLU6hMCjMI75M1A2tKUQC", "A"),
+        full_track("1301WleyT98MSxVHPZCA6M", "B"),
+      ],
+      limit: 20,
+      next: Some("https://api/x?offset=20".to_string()),
+      offset: 0,
+      previous: None,
+      total: 42,
+    };
+    let mapped = map_page(&page, |t| TrackInfo::from(t));
+    assert_eq!(mapped.items.len(), 2);
+    assert_eq!(mapped.items[0].name, "A");
+    assert_eq!(mapped.items[1].name, "B");
+    assert_eq!(mapped.offset, 0);
+    assert_eq!(mapped.limit, 20);
+    assert_eq!(mapped.total, 42);
+    assert!(mapped.has_next());
   }
 
   #[test]
