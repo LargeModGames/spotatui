@@ -13,7 +13,7 @@ use rspotify::{
     artist::FullArtist,
     context::{CurrentPlaybackContext, CurrentUserQueue},
     device::DevicePayload,
-    idtypes::{ArtistId, PlaylistId, ShowId, TrackId},
+    idtypes::{AlbumId, ArtistId, PlaylistId, ShowId, TrackId},
     page::{CursorBasedPage, Page},
     playlist::{PlaylistItem, SimplifiedPlaylist},
     show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
@@ -540,9 +540,9 @@ pub struct SelectedFullAlbum {
 pub struct Artist {
   pub artist_id: String,
   pub artist_name: String,
-  pub albums: Page<SimplifiedAlbum>,
-  pub related_artists: Vec<FullArtist>,
-  pub top_tracks: Vec<FullTrack>,
+  pub albums: crate::core::pagination::Paged<crate::core::plugin_api::AlbumInfo>,
+  pub related_artists: Vec<crate::core::plugin_api::ArtistInfo>,
+  pub top_tracks: Vec<crate::core::plugin_api::TrackInfo>,
   pub selected_album_index: usize,
   pub selected_related_artist_index: usize,
   pub selected_top_track_index: usize,
@@ -747,7 +747,7 @@ pub struct App {
   pub audio_capture_active: bool,
   pub home_scroll: u16,
   pub user_config: UserConfig,
-  pub artists: Vec<FullArtist>,
+  pub artists: Vec<crate::core::plugin_api::ArtistInfo>,
   pub artist: Option<Artist>,
   pub album_table_context: AlbumTableContext,
   pub saved_album_tracks_index: usize,
@@ -3029,8 +3029,10 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.into_static()));
+            if let Some(id_str) = &selected_album.id {
+              if let Ok(album_id) = AlbumId::from_id(id_str.as_str()) {
+                self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.into_static()));
+              }
             }
           }
         }
@@ -3055,8 +3057,10 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.into_static()));
+            if let Some(id_str) = &selected_album.id {
+              if let Ok(album_id) = AlbumId::from_id(id_str.as_str()) {
+                self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.into_static()));
+              }
             }
           }
         }
@@ -3140,10 +3144,11 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          self.dispatch(IoEvent::UserUnfollowArtists(vec![selected_artis
-            .id
-            .clone()
-            .into_static()]));
+          if let Some(id_str) = &selected_artis.id {
+            if let Ok(artist_id) = ArtistId::from_id(id_str.as_str()) {
+              self.dispatch(IoEvent::UserUnfollowArtists(vec![artist_id.into_static()]));
+            }
+          }
         }
       }
       _ => (),
@@ -3167,10 +3172,11 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          self.dispatch(IoEvent::UserFollowArtists(vec![selected_artis
-            .id
-            .clone()
-            .into_static()]));
+          if let Some(id_str) = &selected_artis.id {
+            if let Ok(artist_id) = ArtistId::from_id(id_str.as_str()) {
+              self.dispatch(IoEvent::UserFollowArtists(vec![artist_id.into_static()]));
+            }
+          }
         }
       }
       _ => (),

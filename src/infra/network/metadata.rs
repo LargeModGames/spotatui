@@ -3,6 +3,7 @@ use crate::core::app::{
   ActiveBlock, Artist, ArtistBlock, EpisodeTableContext, RouteId, ScrollableResultPages,
   SelectedFullShow, SelectedShow,
 };
+use crate::core::plugin_api::{AlbumInfo, ArtistInfo, TrackInfo};
 use crate::infra::network::mapping::map_page;
 use anyhow::anyhow;
 use reqwest::Method;
@@ -121,7 +122,9 @@ impl MetadataNetwork for Network {
       offset += limit;
     }
 
-    let albums = Page {
+    // Convert rspotify types to domain types before storing — conversion stays
+    // inside infra/network per the multi-source boundary contract.
+    let albums_rspotify_page = Page {
       items: album_items,
       href: String::new(),
       limit,
@@ -130,14 +133,18 @@ impl MetadataNetwork for Network {
       previous: None,
       total: 0,
     };
+    let albums = map_page(&albums_rspotify_page, |a| AlbumInfo::from(a));
+    let domain_related_artists: Vec<ArtistInfo> =
+      related_artists.iter().map(ArtistInfo::from).collect();
+    let domain_top_tracks: Vec<TrackInfo> = top_tracks.iter().map(TrackInfo::from).collect();
 
     let mut app = self.app.lock().await;
     app.artist = Some(Artist {
       artist_id: artist_id_str,
       artist_name: input_artist_name,
       albums,
-      related_artists,
-      top_tracks,
+      related_artists: domain_related_artists,
+      top_tracks: domain_top_tracks,
       selected_album_index: 0,
       selected_related_artist_index: 0,
       selected_top_track_index: 0,
@@ -366,8 +373,9 @@ impl MetadataNetwork for Network {
   }
 
   async fn set_artists_to_table(&mut self, artists: Vec<FullArtist>) {
+    let domain_artists: Vec<ArtistInfo> = artists.iter().map(ArtistInfo::from).collect();
     let mut app = self.app.lock().await;
-    app.artists = artists;
+    app.artists = domain_artists;
   }
 
   async fn get_album_for_track(&mut self, track_id: TrackId<'static>) {
