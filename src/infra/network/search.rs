@@ -1,5 +1,6 @@
 use super::{IoEvent, Network};
-use crate::core::plugin_api::TrackInfo;
+use crate::core::plugin_api::{AlbumInfo, ArtistInfo, PlaylistInfo, ShowInfo, TrackInfo};
+use crate::infra::network::mapping::map_page;
 use anyhow::anyhow;
 use rspotify::model::{
   artist::FullArtist, enums::Country, idtypes::AlbumId, page::Page, playlist::SimplifiedPlaylist,
@@ -103,6 +104,7 @@ impl SearchNetwork for Network {
 
     let mut app = self.app.lock().await;
 
+    // Extract ids for follow/saved checks from raw rspotify pages before conversion.
     if let Some(ref album_results) = album_result {
       let artist_ids = album_results
         .items
@@ -144,11 +146,22 @@ impl SearchNetwork for Network {
       app.dispatch(IoEvent::CurrentUserSavedShowsContains(show_ids));
     }
 
-    app.search_results.tracks = track_result;
-    app.search_results.artists = artist_result;
-    app.search_results.albums = album_result;
-    app.search_results.playlists = playlist_result;
-    app.search_results.shows = show_result;
+    // Convert rspotify pages to domain Paged<T> before storing on App.
+    app.search_results.tracks = track_result
+      .as_ref()
+      .map(|p| map_page(p, |t| TrackInfo::from(t)));
+    app.search_results.artists = artist_result
+      .as_ref()
+      .map(|p| map_page(p, |a| ArtistInfo::from(a)));
+    app.search_results.albums = album_result
+      .as_ref()
+      .map(|p| map_page(p, |a| AlbumInfo::from(a)));
+    app.search_results.playlists = playlist_result
+      .as_ref()
+      .map(|p| map_page(p, PlaylistInfo::from_simplified));
+    app.search_results.shows = show_result
+      .as_ref()
+      .map(|p| map_page(p, |s| ShowInfo::from(s)));
   }
 
   async fn search_tracks_for_playlist(&mut self, search_term: String) {

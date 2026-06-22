@@ -3,8 +3,7 @@ use rspotify::{
   model::enums::RepeatState,
   model::idtypes::Id,
   model::{
-    album::SimplifiedAlbum, artist::FullArtist, artist::SimplifiedArtist,
-    playlist::SimplifiedPlaylist, show::FullEpisode, show::SimplifiedShow, track::FullTrack,
+    artist::SimplifiedArtist, show::FullEpisode, track::FullTrack,
   },
 };
 use std::time::Duration;
@@ -152,12 +151,8 @@ impl JumpDirection {
 // Boxing was proposed by cargo clippy
 // to reduce the size of this enum
 pub enum FormatType {
-  Album(Box<SimplifiedAlbum>),
-  Artist(Box<FullArtist>),
-  Playlist(Box<SimplifiedPlaylist>),
-  /// Domain playlist (used by sources already migrated off rspotify, e.g. the
-  /// user's library playlists). The rspotify `Playlist` variant remains for
-  /// not-yet-migrated CLI paths (search results).
+  /// Domain playlist (the playlist CLI paths — library list and search — are
+  /// fully migrated off rspotify).
   PlaylistInfo(Box<crate::core::plugin_api::PlaylistInfo>),
   Track(Box<FullTrack>),
   /// Domain track (used by sources already migrated off rspotify, e.g. the
@@ -165,7 +160,10 @@ pub enum FormatType {
   /// CLI paths (current-playback item, search results).
   TrackInfo(Box<crate::core::plugin_api::TrackInfo>),
   Episode(Box<FullEpisode>),
-  Show(Box<SimplifiedShow>),
+  /// Domain variants — used by search results and other migrated paths.
+  AlbumInfo(Box<crate::core::plugin_api::AlbumInfo>),
+  ArtistInfo(Box<crate::core::plugin_api::ArtistInfo>),
+  ShowInfo(Box<crate::core::plugin_api::ShowInfo>),
 }
 
 // Types that can be formatted
@@ -197,23 +195,6 @@ impl Format {
   // Extract important information from types
   pub fn from_type(t: FormatType) -> Vec<Self> {
     match t {
-      FormatType::Album(a) => {
-        let joined_artists = join_artists(a.artists.clone());
-        let uri = get_uri_or_fallback(&a.id, &a.external_urls);
-        vec![
-          Self::Album(a.name),
-          Self::Artist(joined_artists),
-          Self::Uri(uri),
-        ]
-      }
-      FormatType::Artist(a) => {
-        let uri = a.id.uri();
-        vec![Self::Artist(a.name), Self::Uri(uri)]
-      }
-      FormatType::Playlist(p) => {
-        let uri = p.id.uri();
-        vec![Self::Playlist(p.name), Self::Uri(uri)]
-      }
       FormatType::PlaylistInfo(p) => {
         vec![Self::Playlist(p.name), Self::Uri(p.uri)]
       }
@@ -236,12 +217,6 @@ impl Format {
           Self::Uri(t.uri.unwrap_or_default()),
         ]
       }
-      FormatType::Show(r) => {
-        let uri = r.id.uri();
-        #[allow(deprecated)]
-        let publisher = r.publisher;
-        vec![Self::Artist(publisher), Self::Show(r.name), Self::Uri(uri)]
-      }
       FormatType::Episode(e) => {
         let uri = e.id.uri();
         #[allow(deprecated)]
@@ -252,6 +227,28 @@ impl Format {
           Self::Track(e.name),
           Self::Uri(uri),
         ]
+      }
+      FormatType::AlbumInfo(a) => {
+        let joined_artists = a
+          .artists
+          .iter()
+          .map(|r| r.name.clone())
+          .collect::<Vec<_>>()
+          .join(", ");
+        let uri = a.uri.clone().unwrap_or_default();
+        vec![
+          Self::Album(a.name),
+          Self::Artist(joined_artists),
+          Self::Uri(uri),
+        ]
+      }
+      FormatType::ArtistInfo(a) => {
+        let uri = a.uri.clone().unwrap_or_default();
+        vec![Self::Artist(a.name), Self::Uri(uri)]
+      }
+      FormatType::ShowInfo(s) => {
+        let uri = s.uri.clone().unwrap_or_default();
+        vec![Self::Show(s.name), Self::Uri(uri)]
       }
     }
   }

@@ -11,7 +11,7 @@ use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
 use super::util::{
-  create_artist_string, draw_selectable_list, get_color, get_search_results_highlight_state,
+  draw_selectable_list, get_color, get_search_results_highlight_state, join_artist_names,
   SMALL_TERMINAL_WIDTH,
 };
 
@@ -174,11 +174,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .iter()
         .map(|item| {
           let mut song_name = "".to_string();
-          let id = item
-            .clone()
-            .id
-            .map(|id| id.id().to_string())
-            .unwrap_or_else(|| "".to_string());
+          let id = item.id.clone().unwrap_or_default();
           if currently_playing_id == id {
             song_name += "▶ "
           }
@@ -187,7 +183,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           }
 
           song_name += &item.name;
-          song_name += &format!(" - {}", &create_artist_string(&item.artists));
+          song_name += &format!(" - {}", item.artists.join(", "));
           song_name
         })
         .collect(),
@@ -210,10 +206,12 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .iter()
         .map(|item| {
           let mut artist = String::new();
-          if app.followed_artist_ids_set.contains(item.id.id()) {
-            artist.push_str(&app.user_config.padded_liked_icon());
+          if let Some(ref id) = item.id {
+            if app.followed_artist_ids_set.contains(id.as_str()) {
+              artist.push_str(&app.user_config.padded_liked_icon());
+            }
           }
-          artist.push_str(&item.name.to_owned());
+          artist.push_str(&item.name);
           artist
         })
         .collect(),
@@ -243,15 +241,15 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .iter()
         .map(|item| {
           let mut album_artist = String::new();
-          if let Some(album_id) = &item.id {
-            if app.saved_album_ids_set.contains(album_id.id()) {
+          if let Some(ref id) = item.id {
+            if app.saved_album_ids_set.contains(id.as_str()) {
               album_artist.push_str(&app.user_config.padded_liked_icon());
             }
           }
           album_artist.push_str(&format!(
             "{} - {} ({})",
-            item.name.to_owned(),
-            create_artist_string(&item.artists),
+            item.name,
+            join_artist_names(&item.artists),
             item.album_type.as_deref().unwrap_or("unknown")
           ));
           album_artist
@@ -325,12 +323,12 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           .iter()
           .map(|item| {
             let mut show_name = String::new();
-            if app.saved_show_ids_set.contains(item.id.id()) {
-              show_name.push_str(&app.user_config.padded_liked_icon());
+            if let Some(ref id) = item.id {
+              if app.saved_show_ids_set.contains(id.as_str()) {
+                show_name.push_str(&app.user_config.padded_liked_icon());
+              }
             }
-            #[allow(deprecated)]
-            let publisher = &item.publisher;
-            show_name.push_str(&format!("{:} - {}", item.name, publisher));
+            show_name.push_str(&item.name);
             show_name
           })
           .collect(),

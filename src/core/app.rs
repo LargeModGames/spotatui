@@ -10,13 +10,12 @@ use ratatui::layout::Size;
 use rspotify::{
   model::enums::Country,
   model::{
-    album::{SavedAlbum, SimplifiedAlbum},
+    album::SavedAlbum,
     artist::FullArtist,
     context::CurrentPlaybackContext,
     device::DevicePayload,
     idtypes::{AlbumId, ArtistId, PlaylistId, ShowId, TrackId, UserId},
     page::{CursorBasedPage, Page},
-    playlist::SimplifiedPlaylist,
     show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
     track::{FullTrack, SavedTrack},
     PlayableItem,
@@ -491,11 +490,11 @@ pub enum RecommendationsContext {
 }
 
 pub struct SearchResult {
-  pub albums: Option<Page<SimplifiedAlbum>>,
-  pub artists: Option<Page<FullArtist>>,
-  pub playlists: Option<Page<SimplifiedPlaylist>>,
-  pub tracks: Option<Page<FullTrack>>,
-  pub shows: Option<Page<SimplifiedShow>>,
+  pub albums: Option<crate::core::pagination::Paged<crate::core::plugin_api::AlbumInfo>>,
+  pub artists: Option<crate::core::pagination::Paged<crate::core::plugin_api::ArtistInfo>>,
+  pub playlists: Option<crate::core::pagination::Paged<crate::core::plugin_api::PlaylistInfo>>,
+  pub tracks: Option<crate::core::pagination::Paged<crate::core::plugin_api::TrackInfo>>,
+  pub shows: Option<crate::core::pagination::Paged<crate::core::plugin_api::ShowInfo>>,
   pub selected_album_index: Option<usize>,
   pub selected_artists_index: Option<usize>,
   pub selected_playlists_index: Option<usize>,
@@ -3078,8 +3077,10 @@ impl App {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
             let selected_album = &albums.items[selected_index];
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.into_static()));
+            if let Some(ref id_str) = selected_album.id {
+              if let Ok(album_id) = AlbumId::from_id(id_str.as_str()) {
+                self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.into_static()));
+              }
             }
           }
         }
@@ -3114,8 +3115,10 @@ impl App {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
             let selected_album = &albums.items[selected_index];
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.into_static()));
+            if let Some(ref id_str) = selected_album.id {
+              if let Ok(album_id) = AlbumId::from_id(id_str.as_str()) {
+                self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.into_static()));
+              }
             }
           }
         }
@@ -3189,11 +3192,12 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
-            let selected_artist: &FullArtist = &artists.items[selected_index];
-            self.dispatch(IoEvent::UserUnfollowArtists(vec![selected_artist
-              .id
-              .clone()
-              .into_static()]));
+            let selected_artist = &artists.items[selected_index];
+            if let Some(ref id_str) = selected_artist.id {
+              if let Ok(artist_id) = ArtistId::from_id(id_str.as_str()) {
+                self.dispatch(IoEvent::UserUnfollowArtists(vec![artist_id.into_static()]));
+              }
+            }
           }
         }
       }
@@ -3227,11 +3231,12 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
-            let selected_artist: &FullArtist = &artists.items[selected_index];
-            self.dispatch(IoEvent::UserFollowArtists(vec![selected_artist
-              .id
-              .clone()
-              .into_static()]));
+            let selected_artist = &artists.items[selected_index];
+            if let Some(ref id_str) = selected_artist.id {
+              if let Ok(artist_id) = ArtistId::from_id(id_str.as_str()) {
+                self.dispatch(IoEvent::UserFollowArtists(vec![artist_id.into_static()]));
+              }
+            }
           }
         }
       }
@@ -3257,15 +3262,26 @@ impl App {
       ..
     } = self.search_results
     {
-      let selected_playlist: &SimplifiedPlaylist = &playlists.items[selected_index];
-      let selected_id = selected_playlist.id.clone();
+      let selected_playlist = &playlists.items[selected_index];
       let selected_public = selected_playlist.public;
-      let selected_owner_id = selected_playlist.owner.id.clone();
-      self.dispatch(IoEvent::UserFollowPlaylist(
-        selected_owner_id.into_static(),
-        selected_id.into_static(),
-        selected_public,
-      ));
+      if let Some(ref playlist_id_str) = selected_playlist.id {
+        if let Ok(playlist_id) = PlaylistId::from_id(playlist_id_str.as_str()) {
+          // owner_id carries the Spotify user id (populated in PlaylistInfo::from_simplified).
+          // The network handler ignores this param (_playlist_owner_id), so a fallback
+          // empty string is harmless — but we use the real id when available.
+          let owner_id_str = selected_playlist
+            .owner_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+          if let Ok(owner_id) = UserId::from_id(owner_id_str.as_str()) {
+            self.dispatch(IoEvent::UserFollowPlaylist(
+              owner_id.into_static(),
+              playlist_id.into_static(),
+              selected_public,
+            ));
+          }
+        }
+      }
     }
   }
 
@@ -3297,13 +3313,17 @@ impl App {
       &self.user,
     ) {
       let selected_playlist = &playlists.items[selected_index];
-      let selected_id = selected_playlist.id.clone();
-      // `user.id` is the domain string id; re-parse it into an rspotify UserId.
+      // `user.id` is the domain string id (UserInfo) and `selected_playlist.id`
+      // is an Option<String> (PlaylistInfo); re-parse both into rspotify ids.
       if let Ok(user_id) = UserId::from_id(user.id.as_str()) {
-        self.dispatch(IoEvent::UserUnfollowPlaylist(
-          user_id.into_static(),
-          selected_id.into_static(),
-        ));
+        if let Some(ref id_str) = selected_playlist.id {
+          if let Ok(playlist_id) = PlaylistId::from_id(id_str.as_str()) {
+            self.dispatch(IoEvent::UserUnfollowPlaylist(
+              user_id.into_static(),
+              playlist_id.into_static(),
+            ));
+          }
+        }
       }
     }
   }
@@ -3314,8 +3334,12 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(shows) = &self.search_results.shows {
           if let Some(selected_index) = self.search_results.selected_shows_index {
-            if let Some(show_id) = shows.items.get(selected_index).map(|item| item.id.clone()) {
-              self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id.into_static()));
+            if let Some(show) = shows.items.get(selected_index) {
+              if let Some(ref id_str) = show.id {
+                if let Ok(show_id) = ShowId::from_id(id_str.as_str()) {
+                  self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id.into_static()));
+                }
+              }
             }
           }
         }
@@ -3352,8 +3376,11 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(shows) = &self.search_results.shows {
           if let Some(selected_index) = self.search_results.selected_shows_index {
-            let show_id = shows.items[selected_index].id.clone();
-            self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id.into_static()));
+            if let Some(ref id_str) = shows.items[selected_index].id {
+              if let Ok(show_id) = ShowId::from_id(id_str.as_str()) {
+                self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id.into_static()));
+              }
+            }
           }
         }
       }
@@ -4587,7 +4614,7 @@ mod tests {
   use super::*;
   use crate::core::test_helpers::{playlist_info, user_info};
   use chrono::{Duration as ChronoDuration, Utc};
-  use rspotify::model::{artist::SimplifiedArtist, idtypes::PlaylistId};
+  use rspotify::model::{artist::SimplifiedArtist, idtypes::PlaylistId, SimplifiedAlbum};
   use rspotify::prelude::Id;
   use std::collections::HashMap;
   use std::sync::mpsc::channel;

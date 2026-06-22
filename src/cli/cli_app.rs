@@ -588,8 +588,8 @@ impl CliApp {
       match item {
         Type::Track => {
           if let Some(r) = &results.tracks {
-            if let Some(id) = &r.items[0].id {
-              format!("spotify:track:{}", id.id())
+            if let Some(ref id) = r.items[0].id {
+              format!("spotify:track:{}", id)
             } else {
               return Err(anyhow!("track has no id"));
             }
@@ -600,8 +600,8 @@ impl CliApp {
         Type::Album => {
           if let Some(r) = &results.albums {
             let album = &r.items[0];
-            if let Some(id) = &album.id {
-              format!("spotify:album:{}", id.id())
+            if let Some(ref id) = album.id {
+              format!("spotify:album:{}", id)
             } else {
               return Err(anyhow!("album {} has no id", album.name));
             }
@@ -611,14 +611,22 @@ impl CliApp {
         }
         Type::Artist => {
           if let Some(r) = &results.artists {
-            format!("spotify:artist:{}", r.items[0].id.id())
+            if let Some(ref id) = r.items[0].id {
+              format!("spotify:artist:{}", id)
+            } else {
+              return Err(anyhow!("artist has no id"));
+            }
           } else {
             return Err(anyhow!("no artists with name '{}'", name));
           }
         }
         Type::Show => {
           if let Some(r) = &results.shows {
-            format!("spotify:show:{}", r.items[0].id.id())
+            if let Some(ref id) = r.items[0].id {
+              format!("spotify:show:{}", id)
+            } else {
+              return Err(anyhow!("show has no id"));
+            }
           } else {
             return Err(anyhow!("no shows with name '{}'", name));
           }
@@ -626,7 +634,11 @@ impl CliApp {
         Type::Playlist => {
           if let Some(r) = &results.playlists {
             let p = &r.items[0];
-            format!("spotify:playlist:{}", p.id.id())
+            if let Some(ref id) = p.id {
+              format!("spotify:playlist:{}", id)
+            } else {
+              return Err(anyhow!("playlist has no id"));
+            }
           } else {
             return Err(anyhow!("no playlists with name '{}'", name));
           }
@@ -658,7 +670,7 @@ impl CliApp {
             .map(|r| {
               self.format_output(
                 format.clone(),
-                Format::from_type(FormatType::Playlist(Box::new(r.clone()))),
+                Format::from_type(FormatType::PlaylistInfo(Box::new(r.clone()))),
               )
             })
             .collect::<Vec<String>>()
@@ -675,7 +687,7 @@ impl CliApp {
             .map(|r| {
               self.format_output(
                 format.clone(),
-                Format::from_type(FormatType::Track(Box::new(r.clone()))),
+                Format::from_type(FormatType::TrackInfo(Box::new(r.clone()))),
               )
             })
             .collect::<Vec<String>>()
@@ -692,7 +704,7 @@ impl CliApp {
             .map(|r| {
               self.format_output(
                 format.clone(),
-                Format::from_type(FormatType::Artist(Box::new(r.clone()))),
+                Format::from_type(FormatType::ArtistInfo(Box::new(r.clone()))),
               )
             })
             .collect::<Vec<String>>()
@@ -709,7 +721,7 @@ impl CliApp {
             .map(|r| {
               self.format_output(
                 format.clone(),
-                Format::from_type(FormatType::Show(Box::new(r.clone()))),
+                Format::from_type(FormatType::ShowInfo(Box::new(r.clone()))),
               )
             })
             .collect::<Vec<String>>()
@@ -726,7 +738,7 @@ impl CliApp {
             .map(|r| {
               self.format_output(
                 format.clone(),
-                Format::from_type(FormatType::Album(Box::new(r.clone()))),
+                Format::from_type(FormatType::AlbumInfo(Box::new(r.clone()))),
               )
             })
             .collect::<Vec<String>>()

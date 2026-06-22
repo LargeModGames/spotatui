@@ -463,7 +463,7 @@ fn playlist_name_for_id(app: &App, playlist_id: &PlaylistId<'_>) -> Option<Strin
           playlists
             .items
             .iter()
-            .find(|playlist| playlist.id.id() == playlist_id.id())
+            .find(|playlist| playlist.id.as_deref() == Some(playlist_id.id()))
         })
         .map(|playlist| playlist.name.clone())
     })

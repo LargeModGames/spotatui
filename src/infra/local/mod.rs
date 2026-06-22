@@ -120,6 +120,7 @@ impl MediaSource for LocalSource {
         collaborative: false,
         public: None,
         image_url: None,
+        owner_id: None,
       });
     }
 

@@ -5,7 +5,11 @@ use crate::core::app::{
 };
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::{model::PlayableId, prelude::*};
+use rspotify::model::{
+  idtypes::{AlbumId, ArtistId, PlaylistId, ShowId, TrackId},
+  show::SimplifiedShow,
+  PlayableId,
+};
 
 fn handle_down_press_on_selected_block(app: &mut App) {
   // Start selecting within the selected block
@@ -269,10 +273,12 @@ fn handle_add_item_to_queue(app: &mut App) {
         &app.search_results.tracks,
       ) {
         if let Some(track) = tracks.items.get(index) {
-          if let Some(track_id) = &track.id {
-            app.dispatch(IoEvent::AddItemToQueue(PlayableId::Track(
-              track_id.clone().into_static(),
-            )));
+          if let Some(ref id_str) = track.id {
+            if let Ok(track_id) = TrackId::from_id(id_str.as_str()) {
+              app.dispatch(IoEvent::AddItemToQueue(PlayableId::Track(
+                track_id.into_static(),
+              )));
+            }
           }
         }
       }
@@ -289,32 +295,46 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
   match &app.search_results.selected_block {
     SearchResultBlock::AlbumSearch => {
       if let (Some(index), Some(albums_result)) = (
-        &app.search_results.selected_album_index,
+        app.search_results.selected_album_index,
         &app.search_results.albums,
       ) {
-        if let Some(album) = albums_result.items.get(index.to_owned()).cloned() {
-          app.track_table.context = Some(TrackTableContext::AlbumSearch);
-          app.dispatch(IoEvent::GetAlbumTracks(Box::new(album)));
+        if let Some(album) = albums_result.items.get(index) {
+          if let Some(ref id_str) = album.id {
+            if let Ok(album_id) = AlbumId::from_id(id_str.as_str()) {
+              app.track_table.context = Some(TrackTableContext::AlbumSearch);
+              app.dispatch(IoEvent::GetAlbum(album_id.into_static()));
+            }
+          }
         };
       }
     }
     SearchResultBlock::SongSearch => {
       let index = app.search_results.selected_tracks_index;
-      let tracks = app.search_results.tracks.clone();
-      let track_ids: Option<Vec<PlayableId<'static>>> = tracks.map(|tracks| {
-        tracks
-          .items
-          .into_iter()
-          .filter_map(|track| track.id.map(|id| PlayableId::Track(id.into_static())))
-          .collect()
-      });
+      let track_ids: Option<Vec<PlayableId<'static>>> =
+        app.search_results.tracks.as_ref().map(|paged| {
+          paged
+            .items
+            .iter()
+            .filter_map(|track| {
+              track.id.as_ref().and_then(|id_str| {
+                TrackId::from_id(id_str.as_str())
+                  .ok()
+                  .map(|id| PlayableId::Track(id.into_static()))
+              })
+            })
+            .collect()
+        });
       app.dispatch(IoEvent::StartPlayback(None, track_ids, index));
     }
     SearchResultBlock::ArtistSearch => {
-      if let Some(index) = &app.search_results.selected_artists_index {
-        if let Some(result) = app.search_results.artists.clone() {
-          if let Some(artist) = result.items.get(index.to_owned()) {
-            app.get_artist(artist.id.as_ref().into_static(), artist.name.clone());
+      if let Some(index) = app.search_results.selected_artists_index {
+        if let Some(result) = &app.search_results.artists {
+          if let Some(artist) = result.items.get(index) {
+            if let Some(ref id_str) = artist.id {
+              if let Ok(artist_id) = ArtistId::from_id(id_str.as_str()) {
+                app.get_artist(artist_id.into_static(), artist.name.clone());
+              }
+            }
           };
         };
       };
@@ -325,10 +345,15 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
         &app.search_results.playlists,
       ) {
         if let Some(playlist) = playlists_result.items.get(index) {
-          // Go to playlist tracks table
-          let playlist_id = playlist.id.clone().into_static();
-          app.reset_playlist_tracks_view(playlist_id.clone(), TrackTableContext::PlaylistSearch);
-          app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
+          if let Some(ref id_str) = playlist.id {
+            if let Ok(playlist_id) = PlaylistId::from_id(id_str.as_str()) {
+              // Go to playlist tracks table
+              let playlist_id = playlist_id.into_static();
+              app
+                .reset_playlist_tracks_view(playlist_id.clone(), TrackTableContext::PlaylistSearch);
+              app.dispatch(IoEvent::GetPlaylistItems(playlist_id, app.playlist_offset));
+            }
+          }
         };
       }
     }
@@ -337,9 +362,34 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
         app.search_results.selected_shows_index,
         &app.search_results.shows,
       ) {
-        if let Some(show) = shows_result.items.get(index).cloned() {
-          // Go to show tracks table
-          app.dispatch(IoEvent::GetShowEpisodes(Box::new(show)));
+        if let Some(show) = shows_result.items.get(index) {
+          if let Some(ref id_str) = show.id {
+            if let Ok(show_id) = ShowId::from_id(id_str.as_str()) {
+              // Reconstruct a minimal SimplifiedShow from the domain id.
+              // GetShowEpisodes uses show.id to fetch episodes and sets
+              // EpisodeTableContext::Simplified, which the episode table reads
+              // from app.library.show_episodes (populated by add_pages).
+              // Using GetShow would set EpisodeTableContext::Full but NOT populate
+              // show_episodes, resulting in a blank episode list.
+              #[allow(deprecated)]
+              let minimal_show = SimplifiedShow {
+                id: show_id.into_static(),
+                name: show.name.clone(),
+                description: show.description.clone(),
+                explicit: false,
+                external_urls: std::collections::HashMap::new(),
+                href: String::new(),
+                images: Vec::new(),
+                is_externally_hosted: None,
+                languages: Vec::new(),
+                media_type: String::new(),
+                copyrights: Vec::new(),
+                available_markets: Vec::new(),
+                publisher: String::new(),
+              };
+              app.dispatch(IoEvent::GetShowEpisodes(Box::new(minimal_show)));
+            }
+          }
         };
       }
     }
@@ -387,32 +437,34 @@ fn handle_recommended_tracks(app: &mut App) {
   match app.search_results.selected_block {
     SearchResultBlock::AlbumSearch => {}
     SearchResultBlock::SongSearch => {
-      if let Some(index) = &app.search_results.selected_tracks_index {
-        if let Some(result) = app.search_results.tracks.clone() {
-          if let Some(track) = result.items.get(index.to_owned()) {
-            let track_id_list: Option<Vec<String>> =
-              track.id.as_ref().map(|id| vec![id.id().to_string()]);
+      if let Some(index) = app.search_results.selected_tracks_index {
+        if let Some(track) = app
+          .search_results
+          .tracks
+          .as_ref()
+          .and_then(|paged| paged.items.get(index))
+          .cloned()
+        {
+          let track_id_list: Option<Vec<String>> = track.id.as_ref().map(|id| vec![id.clone()]);
 
-            app.recommendations_context = Some(RecommendationsContext::Song);
-            app.recommendations_seed = track.name.clone();
-            app.get_recommendations_for_seed(
-              None,
-              track_id_list,
-              Some(crate::core::plugin_api::TrackInfo::from(track)),
-            );
-          };
+          app.recommendations_context = Some(RecommendationsContext::Song);
+          app.recommendations_seed = track.name.clone();
+          app.get_recommendations_for_seed(None, track_id_list, Some(track));
         };
       };
     }
     SearchResultBlock::ArtistSearch => {
-      if let Some(index) = &app.search_results.selected_artists_index {
-        if let Some(result) = app.search_results.artists.clone() {
-          if let Some(artist) = result.items.get(index.to_owned()) {
-            let artist_id_list: Option<Vec<String>> = Some(vec![artist.id.id().to_string()]);
-            app.recommendations_context = Some(RecommendationsContext::Artist);
-            app.recommendations_seed = artist.name.clone();
-            app.get_recommendations_for_seed(artist_id_list, None, None);
-          };
+      if let Some(index) = app.search_results.selected_artists_index {
+        if let Some(artist) = app
+          .search_results
+          .artists
+          .as_ref()
+          .and_then(|paged| paged.items.get(index))
+        {
+          let artist_id_list: Option<Vec<String>> = artist.id.as_ref().map(|id| vec![id.clone()]);
+          app.recommendations_context = Some(RecommendationsContext::Artist);
+          app.recommendations_seed = artist.name.clone();
+          app.get_recommendations_for_seed(artist_id_list, None, None);
         };
       };
     }
@@ -559,7 +611,11 @@ fn open_add_to_playlist_for_selected_search_track(app: &mut App) {
     return;
   };
 
-  let track_id = track.id.clone().map(|id| id.into_static());
+  let track_id = track
+    .id
+    .as_ref()
+    .and_then(|id_str| TrackId::from_id(id_str.as_str()).ok())
+    .map(|id| id.into_static());
   app.begin_add_track_to_playlist_flow(track_id, track.name.clone());
 }
 
@@ -569,10 +625,10 @@ mod tests {
   use crate::core::{
     app::{ActiveBlock, RouteId},
     pagination::Paged,
+    plugin_api::TrackInfo,
     test_helpers::{full_track, playlist_info, user_info},
     user_config::UserConfig,
   };
-  use rspotify::model::page::Page;
   use std::{sync::mpsc::channel, time::SystemTime};
 
   #[test]
@@ -590,14 +646,16 @@ mod tests {
       "spotatui-owner",
       false,
     )];
-    app.search_results.tracks = Some(Page {
-      href: "https://api.spotify.com/v1/search".to_string(),
-      items: vec![full_track("0000000000000000000001", "Search Track")],
-      limit: 1,
-      next: None,
+    app.search_results.tracks = Some(Paged {
+      items: vec![TrackInfo::from(&full_track(
+        "0000000000000000000001",
+        "Search Track",
+      ))],
       offset: 0,
-      previous: None,
+      limit: 1,
       total: 1,
+      next: None,
+      previous: None,
     });
     app.search_results.selected_block = SearchResultBlock::SongSearch;
     app.search_results.selected_tracks_index = Some(0);
