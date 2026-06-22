@@ -53,6 +53,7 @@ discord-rich-presence = { version = "1.1", optional = true }
 ratatui-image = { version = "11.0.4", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true }
 mlua = { version = "0.11", features = ["lua54", "vendored", "serde"], optional = true }
+md-5 = { version = "0.10", optional = true }
 
 # Streaming dependencies (librespot)
 librespot-core = { version = "0.8", optional = true }
@@ -122,6 +123,7 @@ windows-media = ["smtc-tokio", "streaming"] # windows SMTC integration
 discord-rpc = ["discord-rich-presence"]
 cover-art = ["ratatui-image", "image"]
 scripting = ["dep:mlua"]
+subsonic = ["dep:md-5"]
 
 [target.'cfg(target_env = "musl")'.dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }
