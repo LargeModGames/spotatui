@@ -12,7 +12,9 @@ use rspotify::model::show::ResumePoint;
 use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
-use super::util::{create_artist_string, get_color, get_percentage_width, millis_to_minutes};
+use super::util::{
+  create_artist_string, get_color, get_percentage_width, join_artist_names, millis_to_minutes,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TableId {
@@ -209,24 +211,20 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             .items
             .iter()
             .map(|item| TableItem {
-              id: item
-                .id
-                .as_ref()
-                .map(|id| id.id().to_string())
-                .unwrap_or_else(|| "".to_string()),
+              id: item.id.clone().unwrap_or_default(),
               format: vec![
                 "".to_string(),
                 item.track_number.to_string(),
                 item.name.to_owned(),
-                create_artist_string(&item.artists),
-                millis_to_minutes(item.duration.num_milliseconds() as u128),
+                item.artists.join(", "),
+                millis_to_minutes(item.duration_ms as u128),
               ],
             })
             .collect::<Vec<TableItem>>(),
           title: format!(
             "{} by {}",
             selected_album_simplified.album.name,
-            create_artist_string(&selected_album_simplified.album.artists)
+            join_artist_names(&selected_album_simplified.album.artists)
           ),
           selected_index: selected_album_simplified.selected_index,
         })
@@ -236,27 +234,22 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         items: selected_album
           .album
           .tracks
-          .items
           .iter()
           .map(|item| TableItem {
-            id: item
-              .id
-              .as_ref()
-              .map(|id| id.id().to_string())
-              .unwrap_or_else(|| "".to_string()),
+            id: item.id.clone().unwrap_or_default(),
             format: vec![
               "".to_string(),
               item.track_number.to_string(),
               item.name.to_owned(),
-              create_artist_string(&item.artists),
-              millis_to_minutes(item.duration.num_milliseconds() as u128),
+              item.artists.join(", "),
+              millis_to_minutes(item.duration_ms as u128),
             ],
           })
           .collect::<Vec<TableItem>>(),
         title: format!(
           "{} by {}",
           selected_album.album.name,
-          create_artist_string(&selected_album.album.artists)
+          join_artist_names(&selected_album.album.artists)
         ),
         selected_index: app.saved_album_tracks_index,
       }),

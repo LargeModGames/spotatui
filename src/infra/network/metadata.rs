@@ -3,6 +3,7 @@ use crate::core::app::{
   ActiveBlock, Artist, ArtistBlock, EpisodeTableContext, RouteId, ScrollableResultPages,
   SelectedFullShow, SelectedShow,
 };
+use crate::infra::network::mapping::map_page;
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
@@ -159,10 +160,12 @@ impl MetadataNetwork for Network {
         .await
       {
         Ok(tracks) => {
+          let album_info = crate::core::plugin_api::AlbumInfo::from(album.as_ref());
+          let tracks_domain = map_page(&tracks, |t| crate::core::plugin_api::TrackInfo::from(t));
           let mut app = self.app.lock().await;
           app.selected_album_simplified = Some(crate::core::app::SelectedAlbum {
-            album: *album,
-            tracks,
+            album: album_info,
+            tracks: tracks_domain,
             selected_index: 0,
           });
           app.album_table_context = crate::core::app::AlbumTableContext::Simplified;
@@ -179,9 +182,10 @@ impl MetadataNetwork for Network {
       .await
     {
       Ok(album) => {
+        let album_info = crate::core::plugin_api::AlbumInfo::from(&album);
         let mut app = self.app.lock().await;
         app.selected_album_full = Some(crate::core::app::SelectedFullAlbum {
-          album,
+          album: album_info,
           selected_index: 0,
         });
         app.album_table_context = crate::core::app::AlbumTableContext::Full;

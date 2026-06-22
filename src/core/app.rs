@@ -8,7 +8,7 @@ use ratatui::layout::Size;
 use rspotify::{
   model::enums::Country,
   model::{
-    album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
+    album::{SavedAlbum, SimplifiedAlbum},
     artist::FullArtist,
     context::{CurrentPlaybackContext, CurrentUserQueue},
     device::DevicePayload,
@@ -17,7 +17,7 @@ use rspotify::{
     playing::PlayHistory,
     playlist::{PlaylistItem, SimplifiedPlaylist},
     show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
-    track::{FullTrack, SavedTrack, SimplifiedTrack},
+    track::{FullTrack, SavedTrack},
     user::PrivateUser,
     PlayableItem,
   },
@@ -523,15 +523,15 @@ pub struct SelectedFullShow {
 
 #[derive(Clone)]
 pub struct SelectedAlbum {
-  pub album: SimplifiedAlbum,
-  pub tracks: Page<SimplifiedTrack>,
+  pub album: crate::core::plugin_api::AlbumInfo,
+  pub tracks: crate::core::pagination::Paged<crate::core::plugin_api::TrackInfo>,
   pub selected_index: usize,
 }
 
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct SelectedFullAlbum {
-  pub album: FullAlbum,
+  pub album: crate::core::plugin_api::AlbumInfo,
   pub selected_index: usize,
 }
 

@@ -539,7 +539,7 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
       crate::core::app::AlbumTableContext::Full => app
         .selected_album_full
         .as_ref()
-        .map(|album| album.album.tracks.items.len())
+        .map(|album| album.album.tracks.len())
         .unwrap_or(0),
       crate::core::app::AlbumTableContext::Simplified => app
         .selected_album_simplified
@@ -1943,19 +1943,11 @@ mod tests {
     let mut app = App::default();
     app.album_table_context = AlbumTableContext::Simplified;
     app.selected_album_simplified = Some(SelectedAlbum {
-      album: SimplifiedAlbum {
+      album: crate::core::plugin_api::AlbumInfo {
         name: "Album".to_string(),
         ..Default::default()
       },
-      tracks: Page {
-        href: "https://example.com/albums/1/tracks".to_string(),
-        items: Vec::<SimplifiedTrack>::new(),
-        limit: 0,
-        next: None,
-        offset: 0,
-        previous: None,
-        total: 0,
-      },
+      tracks: crate::core::pagination::Paged::default(),
       selected_index: 1,
     });
 
