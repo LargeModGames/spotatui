@@ -58,6 +58,12 @@ md-5 = { version = "0.10", optional = true }
 # Local-files media source dependencies
 symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "wav", "aiff", "isomp4", "mkv", "pcm", "vorbis"], optional = true, default-features = false }
 lofty = { version = "0.22", optional = true }
+# Local-files audio output. Defaults pull in cpal `playback` plus the common
+# codecs (flac/mp3/mp4-aac/vorbis/wav) via symphonia. Project-validated on
+# Linux and Windows (librespot uses rodio-backend on both); the macOS output
+# path is gated off in `LocalPlayer` because rodio crashes on CoreAudio/
+# Bluetooth (see the portaudio note above and issues #9/#20).
+rodio = { version = "0.21", optional = true }
 
 # Streaming dependencies (librespot)
 librespot-core = { version = "0.8", optional = true }
@@ -127,7 +133,7 @@ windows-media = ["smtc-tokio", "streaming"] # windows SMTC integration
 discord-rpc = ["discord-rich-presence"]
 cover-art = ["ratatui-image", "image"]
 scripting = ["dep:mlua"]
-local-files = ["dep:symphonia", "dep:lofty"]
+local-files = ["dep:symphonia", "dep:lofty", "dep:rodio"]
 subsonic = ["dep:md-5"]
 
 [dev-dependencies]
