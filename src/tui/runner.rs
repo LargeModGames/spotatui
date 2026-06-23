@@ -704,9 +704,12 @@ pub async fn start_ui(
           }
         }
 
+        // Skip the native-streaming progress poll while a local file owns the
+        // session: librespot is paused, so its (frozen) shared_position would
+        // otherwise clobber the local progress set just above.
         #[cfg(feature = "streaming")]
         if let Some(ref pos) = shared_position {
-          if app.is_streaming_active {
+          if app.is_streaming_active && !app.is_local_playback_active {
             let recently_seeked = app
               .last_native_seek
               .is_some_and(|t| t.elapsed().as_millis() < app::SEEK_POSITION_IGNORE_MS);
@@ -721,7 +724,7 @@ pub async fn start_ui(
         }
         #[cfg(not(feature = "streaming"))]
         if let Some(ref pos) = shared_position {
-          if app.is_streaming_active {
+          if app.is_streaming_active && !app.is_local_playback_active {
             let position_ms = pos.load(std::sync::atomic::Ordering::Relaxed);
             if position_ms > 0 {
               app.song_progress_ms = position_ms as u128;

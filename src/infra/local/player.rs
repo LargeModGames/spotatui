@@ -250,4 +250,31 @@ mod tests {
       "stop should clear the source so the sink reports finished"
     );
   }
+
+  #[test]
+  #[ignore = "requires an audio output device"]
+  #[cfg(not(target_os = "macos"))]
+  fn position_advances_while_playing() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("sample.wav");
+    write_wav(&wav, 44_100, 44_100 * 3); // ~3s
+
+    let player = LocalPlayer::new().expect("open default output device");
+    let start = player.position();
+    eprintln!("position at start: {start:?}");
+    player.play_file(&wav).expect("play wav");
+
+    std::thread::sleep(Duration::from_millis(600));
+    let after = player.position();
+    eprintln!("position after ~600ms: {after:?}");
+
+    assert!(
+      after >= Duration::from_millis(300),
+      "position should advance to roughly playback time, got {after:?}"
+    );
+    assert!(
+      after < Duration::from_secs(3),
+      "position should not exceed the track duration, got {after:?}"
+    );
+  }
 }
