@@ -210,6 +210,14 @@ async fn handle_player_events(
       continue;
     }
 
+    // While a local file owns the playback session, librespot is paused and its
+    // events (notably `Stopped`, which clears `native_track_info` and zeroes the
+    // progress) must not clobber the local now-playing state.
+    #[cfg(feature = "local-files")]
+    if app.lock().await.is_local_playback_active {
+      continue;
+    }
+
     match event {
       PlayerEvent::Playing {
         play_request_id: _,

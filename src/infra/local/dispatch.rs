@@ -118,6 +118,12 @@ async fn start_local(app: &Arc<Mutex<App>>, uri: &str) {
     }
   };
 
+  // Claim the session *before* pausing librespot: pausing fires a (possibly
+  // delayed) `Stopped` event whose handler would otherwise clear the local
+  // now-playing state. The event loop suppresses librespot events while this
+  // flag is set (see infra::player::events).
+  app.lock().await.is_local_playback_active = true;
+
   // Pause native Spotify so librespot releases the output device.
   #[cfg(feature = "streaming")]
   {
@@ -129,7 +135,11 @@ async fn start_local(app: &Arc<Mutex<App>>, uri: &str) {
 
   let player = match ensure_player(app).await {
     Some(player) => player,
-    None => return, // error already surfaced
+    None => {
+      // Failed to open the output device: relinquish the session we claimed.
+      app.lock().await.is_local_playback_active = false;
+      return; // error already surfaced
+    }
   };
 
   // Tag reading and decoder construction are blocking file I/O — keep them off
@@ -162,8 +172,14 @@ async fn start_local(app: &Arc<Mutex<App>>, uri: &str) {
       });
       app.set_status_message(format!("\u{266a} {display_name}"), 4);
     }
-    Ok(Err(e)) => set_error(app, format!("Cannot play local file: {e}")).await,
-    Err(e) => set_error(app, format!("Local playback task failed: {e}")).await,
+    Ok(Err(e)) => {
+      app.lock().await.is_local_playback_active = false;
+      set_error(app, format!("Cannot play local file: {e}")).await;
+    }
+    Err(e) => {
+      app.lock().await.is_local_playback_active = false;
+      set_error(app, format!("Local playback task failed: {e}")).await;
+    }
   }
 }
 
