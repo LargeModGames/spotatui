@@ -89,6 +89,34 @@ impl Source {
   pub fn supports_playlist_write(&self) -> bool {
     matches!(self, Source::Spotify)
   }
+
+  /// Whether this source supports liking / saving the currently-playing track
+  /// (requires a [`LibraryProvider`] that can accept writes). Currently
+  /// equivalent to [`supports_library`](Self::supports_library).
+  pub fn supports_like(&self) -> bool {
+    matches!(self, Source::Spotify)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn spotify_supports_all_capabilities() {
+    assert!(Source::Spotify.supports_search());
+    assert!(Source::Spotify.supports_library());
+    assert!(Source::Spotify.supports_playlist_write());
+    assert!(Source::Spotify.supports_like());
+  }
+
+  #[test]
+  fn local_supports_no_spotify_only_capabilities() {
+    assert!(!Source::Local.supports_search());
+    assert!(!Source::Local.supports_library());
+    assert!(!Source::Local.supports_playlist_write());
+    assert!(!Source::Local.supports_like());
+  }
 }
 
 /// The required minimum every media source implements: browse playlists and the

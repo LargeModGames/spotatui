@@ -249,7 +249,11 @@ pub fn handle_app(key: Key, app: &mut App) {
       }
     }
     _ if key == app.user_config.keys.copy_song_url => {
-      app.copy_song_url();
+      if app.active_source.supports_library() {
+        app.copy_song_url();
+      } else {
+        app.set_status_message("Copy URL isn't available for Local Files", 4);
+      }
     }
     _ if key == app.user_config.keys.copy_album_url => {
       app.copy_album_url();
@@ -277,8 +281,10 @@ pub fn handle_app(key: Key, app: &mut App) {
     _ if key == app.user_config.keys.like_track => {
       if is_input_mode(app) {
         handle_block_events(key, app);
-      } else {
+      } else if app.active_source.supports_like() {
         playbar::toggle_like_currently_playing_item(app);
+      } else {
+        app.set_status_message("Like isn't available for Local Files", 4);
       }
     }
     #[cfg(feature = "scripting")]
@@ -950,5 +956,68 @@ mod tests {
     handle_app(Key::Char(','), &mut app);
 
     assert_eq!(app.get_current_route().active_block, ActiveBlock::SortMenu);
+  }
+
+  // --- U5: source-gate tests ---
+
+  #[test]
+  fn like_track_shows_hint_when_local_source() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    // Default like_track key is 'F' (Shift+F)
+    handle_app(app.user_config.keys.like_track, &mut app);
+
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Like isn't available for Local Files")
+    );
+  }
+
+  #[test]
+  fn like_track_does_not_show_hint_when_spotify_source() {
+    // No io_tx here so dispatch is a no-op; we just verify no status is set.
+    let mut app = App::default();
+    app.active_source = Source::Spotify;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.like_track, &mut app);
+
+    // No playback context, so toggle_like returns early with a different message
+    // (or nothing). The important thing is it's NOT the Local-gate message.
+    assert_ne!(
+      app.status_message.as_deref(),
+      Some("Like isn't available for Local Files")
+    );
+  }
+
+  #[test]
+  fn copy_song_url_shows_hint_when_local_source() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.copy_song_url, &mut app);
+
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Copy URL isn't available for Local Files")
+    );
+  }
+
+  #[test]
+  fn copy_song_url_proceeds_when_spotify_source() {
+    // No clipboard in default App, so copy_song_url exits early; but no Local gate message.
+    let mut app = App::default();
+    app.active_source = Source::Spotify;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.copy_song_url, &mut app);
+
+    assert_ne!(
+      app.status_message.as_deref(),
+      Some("Copy URL isn't available for Local Files")
+    );
   }
 }
