@@ -762,6 +762,9 @@ struct LocalPlaybarView {
   position_ms: u128,
   duration_ms: u64,
   volume_percent: u8,
+  /// 1-based position in the local queue and total length, e.g. `(3, 12)` =>
+  /// "3/12". `None` hides the indicator (e.g. a one-track session).
+  queue_position: Option<(usize, usize)>,
 }
 
 /// Render the playbar for an active local-file playback session.
@@ -781,6 +784,8 @@ fn draw_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     position_ms: local.player.position().as_millis(),
     duration_ms: local.duration_ms,
     volume_percent: app.user_config.behavior.volume_percent,
+    // Only show the indicator for multi-track queues; a single file is noise.
+    queue_position: (local.queue.len() > 1).then(|| (local.index + 1, local.queue.len())),
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -803,9 +808,13 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     ),
   );
 
+  let queue_label = match view.queue_position {
+    Some((current, total)) => format!(" | {current}/{total}"),
+    None => String::new(),
+  };
   let title = format!(
-    "{:-7} (Local | Volume: {:-2}%)",
-    play_title, view.volume_percent
+    "{:-7} (Local{} | Volume: {:-2}%)",
+    play_title, queue_label, view.volume_percent
   );
   let mut title_spans = vec![Span::styled(
     title,
@@ -1558,6 +1567,7 @@ mod tests {
       position_ms: 60_000,  // 1:00
       duration_ms: 311_811, // 5:11
       volume_percent: 80,
+      queue_position: Some((3, 12)),
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
 
@@ -1577,6 +1587,10 @@ mod tests {
       content.contains("5:11"),
       "total duration should show 5:11: {content}"
     );
+    assert!(
+      content.contains("3/12"),
+      "queue position should render for a multi-track queue: {content}"
+    );
   }
 
   #[cfg(feature = "local-files")]
@@ -1589,9 +1603,14 @@ mod tests {
       position_ms: 0,
       duration_ms: 200_000,
       volume_percent: 50,
+      queue_position: None,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
     assert!(content.contains("Paused"), "should show Paused: {content}");
+    assert!(
+      !content.contains('/') || !content.contains("1/1"),
+      "a single-track session should not show a queue indicator: {content}"
+    );
   }
 
   fn render_picker(app: &App, w: u16, h: u16) -> String {

@@ -23,7 +23,7 @@
 //!
 //! ## Publish-once
 //!
-//! `local_playback` is set exactly once, in the success arm of [`start_local`],
+//! `local_playback` is set exactly once, in the success arm of [`start_local_queue`],
 //! *after* the source is decoding. While it is `None` neither the playbar nor
 //! the runtime tick touch local state, so the brief "opening" window is simply
 //! invisible — there is no half-initialised state for a tick to misread.
@@ -34,7 +34,9 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use super::player::LocalPlayer;
-use super::{file_uri_to_path, track_info_from_path, LocalPlaybackState, LocalSource};
+use super::{
+  file_uri_to_path, next_index, prev_index, track_info_from_path, LocalPlaybackState, LocalSource,
+};
 use crate::core::app::{App, TrackTableContext};
 use crate::core::source::MediaSource;
 use crate::infra::network::IoEvent;
@@ -59,9 +61,19 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       load_local_tracks(app, uri).await;
       true
     }
-    // Start playing a local file.
+    // Start playing a folder of local files: queue every track and start at the
+    // selected offset. `on_enter` for a LocalPlaylist sends the whole folder
+    // this way so Next/Previous/auto-advance have a queue to move through.
+    IoEvent::StartPlayback(None, Some(uris), offset)
+      if uris.first().is_some_and(|u| is_file_uri(u)) =>
+    {
+      start_local_queue(app, uris.clone(), offset.unwrap_or(0)).await;
+      true
+    }
+    // Start playing a single local file (no surrounding folder context): a
+    // one-track queue.
     IoEvent::StartPlayback(Some(uri), _, _) if is_file_uri(uri) => {
-      start_local(app, uri).await;
+      start_local_queue(app, vec![uri.clone()], 0).await;
       true
     }
     // Bare "resume current" — ours only while a local file owns the session.
@@ -103,13 +115,61 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       }
       None => false,
     },
-    // Single-file local playback has no queue yet; swallow skips so they don't
-    // reach (and disturb) Spotify.
-    IoEvent::NextTrack | IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => {
-      app.lock().await.local_playback.is_some()
-    }
+    // Skip forward in the local queue. Also the target of the runner tick's
+    // auto-advance dispatch and (via U3) OS media-key Next. Consumed whenever a
+    // local file owns the session so it never reaches Spotify.
+    IoEvent::NextTrack => skip(app, Direction::Next).await,
+    // Skip backward. `ForcePreviousTrack` (restart-or-previous) behaves the same
+    // here: there is no "restart current vs go back" distinction for local files.
+    IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => skip(app, Direction::Prev).await,
     _ => false,
   }
+}
+
+/// Skip direction within the local queue.
+#[derive(Clone, Copy)]
+enum Direction {
+  Next,
+  Prev,
+}
+
+/// Move the local queue index in `direction` and play the new track.
+///
+/// Returns `true` if a local file owns the session (so the event is consumed
+/// and never reaches Spotify), `false` otherwise. At a queue boundary the index
+/// is clamped — the skip is a no-op but the event is still consumed.
+async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
+  // Read the target index under a short lock, then release it before the
+  // blocking decode in `play_index`.
+  let target = {
+    let mut guard = app.lock().await;
+    let Some(local) = guard.local_playback.as_mut() else {
+      return false; // not ours — let Spotify handle it
+    };
+    // Mark a track change in progress so the runner tick does not mistake the
+    // empty sink during the upcoming decode for end-of-track and fire a spurious
+    // auto-advance. Cleared in `play_index`'s commit once the new source is in
+    // the sink. (We can't unqueue an already-dispatched auto-advance, so a Next
+    // pressed mid-advance may skip one extra track — benign and accepted.)
+    local.advancing = true;
+    match direction {
+      Direction::Next => next_index(local.index, local.queue.len()),
+      Direction::Prev => prev_index(local.index, local.queue.len()),
+    }
+  };
+
+  match target {
+    Some(idx) => play_index(app, idx).await,
+    None => {
+      // Boundary hit: the skip clamps to a no-op. Clear the guard we optimistically
+      // set so it does not wedge auto-advance off for the rest of the track.
+      if let Some(local) = app.lock().await.local_playback.as_mut() {
+        local.advancing = false;
+      }
+    }
+  }
+  // Either way the event is ours and must not fall through to Spotify.
+  true
 }
 
 /// The live local player, if a local file currently owns the session.
@@ -122,9 +182,17 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
     .map(|local| Arc::clone(&local.player))
 }
 
-/// Begin playing the local file at `uri`, taking over the playback session.
-async fn start_local(app: &Arc<Mutex<App>>, uri: &str) {
-  let path = match file_uri_to_path(uri) {
+/// Begin playing a queue of local files, taking over the playback session and
+/// starting at `start_idx` (clamped into range). Subsequent skips and
+/// auto-advance reuse [`play_index`] against the queue published here.
+async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx: usize) {
+  if queue.is_empty() {
+    set_error(app, "No local tracks to play".to_string()).await;
+    return;
+  }
+  let index = start_idx.min(queue.len() - 1);
+
+  let path = match file_uri_to_path(&queue[index]) {
     Ok(path) => path,
     Err(e) => {
       set_error(app, format!("Invalid local file URI: {e}")).await;
@@ -162,14 +230,19 @@ async fn start_local(app: &Arc<Mutex<App>>, uri: &str) {
       player.set_volume(volume as f32 / 100.0);
 
       // Publish the session exactly once, now that the source is decoding.
+      // Publish-once covers the empty-sink race here: `local_playback` is `None`
+      // throughout the decode above, so `advancing` starts `false`.
       let display_name = info.name.clone();
       let mut app = app.lock().await;
       app.local_playback = Some(LocalPlaybackState {
         player,
+        queue,
+        index,
         name: info.name,
         artists: info.artists.join(", "),
         album: info.album,
         duration_ms: info.duration_ms,
+        advancing: false,
       });
       app.set_status_message(format!("\u{266a} {display_name}"), 4);
     }
@@ -178,10 +251,98 @@ async fn start_local(app: &Arc<Mutex<App>>, uri: &str) {
   }
 }
 
+/// Play the queued track at `target`, reusing the already-published session's
+/// player and queue. Used by Next/Previous and the runner tick's auto-advance.
+///
+/// The index is committed to `target` in **both** the success and failure arms:
+/// on a decode failure the sink drains and the runner tick auto-advances from
+/// `target` to the *following* track, so a single corrupt file is skipped past
+/// rather than retried forever. `advancing` is cleared in both arms once the new
+/// source is in the sink (or the play failed), reopening auto-advance.
+async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
+  // Snapshot the player + URI under a short lock.
+  let (player, uri) = {
+    let mut guard = app.lock().await;
+    let Some(local) = guard.local_playback.as_mut() else {
+      return; // session torn down between dispatch and here
+    };
+    match local.queue.get(target) {
+      Some(uri) => (Arc::clone(&local.player), uri.clone()),
+      None => {
+        // Out of range — nothing to play. The caller (skip/auto-advance)
+        // optimistically set `advancing`; clear it here so this dead-end does
+        // not wedge auto-advance off for the rest of the session.
+        local.advancing = false;
+        return;
+      }
+    }
+  };
+
+  let path = match file_uri_to_path(&uri) {
+    Ok(path) => path,
+    Err(e) => {
+      // Commit the index so the tick advances past this entry, then surface.
+      commit_index(app, target, None).await;
+      set_error(app, format!("Invalid local file URI: {e}")).await;
+      return;
+    }
+  };
+
+  // Blocking tag read + decode off the executor.
+  let decode_path = path.clone();
+  let decode_player = Arc::clone(&player);
+  let result = tokio::task::spawn_blocking(move || {
+    let info = track_info_from_path(&decode_path);
+    decode_player.play_file(&decode_path).map(|()| info)
+  })
+  .await;
+
+  match result {
+    Ok(Ok(info)) => {
+      let display_name = info.name.clone();
+      commit_index(app, target, Some(info)).await;
+      app
+        .lock()
+        .await
+        .set_status_message(format!("\u{266a} {display_name}"), 4);
+    }
+    Ok(Err(e)) => {
+      commit_index(app, target, None).await;
+      set_error(app, format!("Cannot play local file: {e}")).await;
+    }
+    Err(e) => {
+      commit_index(app, target, None).await;
+      set_error(app, format!("Local playback task failed: {e}")).await;
+    }
+  }
+}
+
+/// Commit `target` as the live index and clear the auto-advance guard. On a
+/// successful play, also refresh the displayed track metadata; on failure leave
+/// the previous metadata in place (the empty sink + moved index lets the tick
+/// carry on past the bad track).
+async fn commit_index(
+  app: &Arc<Mutex<App>>,
+  target: usize,
+  info: Option<crate::core::plugin_api::TrackInfo>,
+) {
+  let mut guard = app.lock().await;
+  if let Some(local) = guard.local_playback.as_mut() {
+    local.index = target;
+    local.advancing = false;
+    if let Some(info) = info {
+      local.name = info.name;
+      local.artists = info.artists.join(", ");
+      local.album = info.album;
+      local.duration_ms = info.duration_ms;
+    }
+  }
+}
+
 /// Reuse the live player if a local file is already playing, otherwise open the
 /// output device for a fresh one. A freshly opened player is **not** published
-/// to `App` here — [`start_local`] publishes it only on success, so there is no
-/// window where `local_playback` is `Some` with an empty sink.
+/// to `App` here — [`start_local_queue`] publishes it only on success, so there
+/// is no window where `local_playback` is `Some` with an empty sink.
 async fn acquire_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
   if let Some(player) = player(app).await {
     return Some(player);

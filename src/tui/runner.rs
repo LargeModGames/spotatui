@@ -688,15 +688,40 @@ pub async fn start_ui(
         }
 
         // Local-file playback reads its progress live from the player at render
-        // time; the only state it self-manages here is end-of-track: when the
-        // sink drains, drop the session (which releases the output device).
+        // time; the only state it self-manages here is end-of-track. When the
+        // sink drains and no track change is already in flight (`!advancing`):
+        //   - if a next queued track exists, mark the advance in flight (atomic
+        //     check-and-set under this single borrow, so two ticks can't both
+        //     dispatch) and dispatch `NextTrack`, which `route_local_event`
+        //     turns into a `play_index` of the next file;
+        //   - otherwise the queue is exhausted, so drop the session (which
+        //     releases the output device).
+        //
+        // The `advancing` guard also protects the brief empty-sink window during
+        // a track change's decode — the same class of guard as the
+        // "don't treat the pre-playback empty sink as end-of-track" invariant.
         #[cfg(feature = "local-files")]
-        if app
-          .local_playback
-          .as_ref()
-          .is_some_and(|local| local.player.is_finished())
         {
-          app.local_playback = None;
+          // Decide under one borrow whether to advance (true), tear down
+          // (false), or do nothing (None) — then act after the borrow ends so
+          // the teardown's `app.local_playback = None` doesn't overlap it.
+          let advance = app.local_playback.as_mut().and_then(|local| {
+            if local.player.is_finished() && !local.advancing {
+              if crate::infra::local::next_index(local.index, local.queue.len()).is_some() {
+                local.advancing = true; // atomic check-and-set: one dispatch only
+                Some(true)
+              } else {
+                Some(false)
+              }
+            } else {
+              None
+            }
+          });
+          match advance {
+            Some(true) => app.dispatch(crate::infra::network::IoEvent::NextTrack),
+            Some(false) => app.local_playback = None,
+            None => {}
+          }
         }
 
         #[cfg(feature = "streaming")]

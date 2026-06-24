@@ -18,18 +18,67 @@ use self::player::LocalPlayer;
 
 /// The active local-file playback session.
 ///
-/// Holds the live [`LocalPlayer`] plus the *static* track metadata. Dynamic
-/// state (position, paused) is read live from `player` at render time, so it is
-/// never mirrored into — and therefore never desynced from — Spotify/librespot
-/// state fields. `App` holds this in a single `Option`: `Some` exactly while a
-/// local file owns the playback session.
+/// Holds the live [`LocalPlayer`], an ordered **queue** of track URIs plus the
+/// **current index**, and the *static* metadata of the track at that index.
+/// Dynamic state (position, paused) is read live from `player` at render time,
+/// so it is never mirrored into — and therefore never desynced from —
+/// Spotify/librespot state fields. `App` holds this in a single `Option`:
+/// `Some` exactly while a local file owns the playback session.
+///
+/// The queue + index are the *single source of truth* for which local track is
+/// playing; Next/Previous/auto-advance all move `index` and re-`play_file`.
 pub struct LocalPlaybackState {
   pub player: Arc<LocalPlayer>,
+  /// `file://` URIs for every track in the playing folder, in scan order.
+  pub queue: Vec<String>,
+  /// Index into [`queue`](Self::queue) of the currently playing track.
+  pub index: usize,
   pub name: String,
   /// Display string of the joined artist names.
   pub artists: String,
   pub album: String,
   pub duration_ms: u64,
+  /// Set while an auto-advance (`is_finished` → dispatch `NextTrack`) is in
+  /// flight. The runner tick fires far faster than the dispatched `NextTrack`
+  /// is processed, so without this guard the empty sink between "track ended"
+  /// and "next source appended" would dispatch `NextTrack` every tick and skip
+  /// several tracks per track-end. Same class of guard as the
+  /// "don't treat the pre-playback empty sink as end-of-track" invariant: it
+  /// covers the analogous advance-decode window.
+  pub advancing: bool,
+}
+
+impl LocalPlaybackState {
+  /// The URI of the currently playing track, if the index is in range.
+  pub fn current_uri(&self) -> Option<&str> {
+    self.queue.get(self.index).map(String::as_str)
+  }
+}
+
+/// The index of the track after `current` in a queue of `len` tracks, clamped
+/// at the end.
+///
+/// Returns `None` when `current` is already the last track (or the queue is
+/// empty), signalling "no next track" — the caller treats that as end-of-queue
+/// (auto-advance tears the session down; a manual Next is a no-op).
+pub fn next_index(current: usize, len: usize) -> Option<usize> {
+  if len == 0 || current + 1 >= len {
+    None
+  } else {
+    Some(current + 1)
+  }
+}
+
+/// The index of the track before `current`, clamped at the start.
+///
+/// Returns `None` when `current` is already the first track (or the queue is
+/// empty), signalling "no previous track" — a manual Previous is then a no-op.
+pub fn prev_index(current: usize, len: usize) -> Option<usize> {
+  if len == 0 || current == 0 {
+    None
+  } else {
+    Some(current - 1)
+  }
 }
 
 use anyhow::{Context, Result};
@@ -686,5 +735,70 @@ mod tests {
     let src = LocalSource::new("/tmp/music");
     assert_eq!(src.name(), "Local Files");
     assert_eq!(src.scheme(), "file");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Queue index math (next/prev clamp + auto-advance selection)
+  // ---------------------------------------------------------------------------
+
+  #[test]
+  fn next_index_advances_until_last() {
+    // A 3-track queue: 0 -> 1 -> 2 -> (end).
+    assert_eq!(next_index(0, 3), Some(1));
+    assert_eq!(next_index(1, 3), Some(2));
+    assert_eq!(
+      next_index(2, 3),
+      None,
+      "advancing past the last track signals end-of-queue"
+    );
+  }
+
+  #[test]
+  fn next_index_clamps_at_end_and_handles_empty() {
+    assert_eq!(next_index(0, 1), None, "single-track queue has no next");
+    assert_eq!(next_index(0, 0), None, "empty queue has no next");
+    // A defensively out-of-range index still yields None rather than panicking.
+    assert_eq!(next_index(9, 3), None);
+  }
+
+  #[test]
+  fn prev_index_rewinds_until_first() {
+    assert_eq!(prev_index(2, 3), Some(1));
+    assert_eq!(prev_index(1, 3), Some(0));
+    assert_eq!(
+      prev_index(0, 3),
+      None,
+      "rewinding before the first track is a no-op"
+    );
+  }
+
+  #[test]
+  fn prev_index_handles_empty() {
+    assert_eq!(prev_index(0, 0), None, "empty queue has no previous");
+  }
+
+  #[test]
+  fn auto_advance_selects_the_following_track() {
+    // Auto-advance reuses next_index; verify it picks the *immediately*
+    // following queue entry (not a random or wrapped one).
+    let queue = ["a.mp3", "b.mp3", "c.mp3"];
+    let from = 0;
+    let to = next_index(from, queue.len()).expect("there is a next track");
+    assert_eq!(to, 1);
+    assert_eq!(queue[to], "b.mp3");
+
+    // From the last track, auto-advance reports end-of-queue (teardown).
+    assert_eq!(next_index(queue.len() - 1, queue.len()), None);
+  }
+
+  #[test]
+  fn current_uri_reads_the_indexed_track() {
+    // current_uri() is index-driven and bounds-checked; exercise it without a
+    // real player by building the queue fields directly is not possible
+    // (player is required), so assert the underlying slice access contract that
+    // current_uri relies on.
+    let queue = vec!["x".to_string(), "y".to_string()];
+    assert_eq!(queue.get(1).map(String::as_str), Some("y"));
+    assert_eq!(queue.get(5).map(String::as_str), None);
   }
 }

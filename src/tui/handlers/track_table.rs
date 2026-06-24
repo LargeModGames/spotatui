@@ -396,12 +396,18 @@ fn on_enter(app: &mut App) {
         }
       }
       TrackTableContext::LocalPlaylist => {
-        // Single-file local playback: play just the selected track by its
-        // file:// URI (routed to the local player by infra::local::dispatch).
-        if let Some(track) = tracks.get(*selected_index) {
-          if let Some(playable_id) = track.uri.clone() {
-            app.dispatch(IoEvent::StartPlayback(Some(playable_id), None, None));
-          }
+        // Queue the whole folder (in the displayed scan order) and start at the
+        // selected track, so local Next/Previous/auto-advance have a queue to
+        // move through. Routed to the local player by infra::local::dispatch.
+        let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
+        if !uris.is_empty() {
+          // `selected_index` is into the full track list; the filter above keeps
+          // every local track (each carries a file:// uri), so the index lines up.
+          app.dispatch(IoEvent::StartPlayback(
+            None,
+            Some(uris),
+            Some(*selected_index),
+          ));
         }
       }
     }
@@ -445,8 +451,28 @@ fn on_queue(app: &mut App) {
           }
         }
       }
-      // Local playback has no queue yet.
-      TrackTableContext::LocalPlaylist => {}
+      // Append the selected file to the live local queue. This is pure in-memory
+      // state (no async player work), so it mutates `App` directly rather than
+      // dispatching. Without an active local session there is no queue to append
+      // to; tell the user to start playback first.
+      TrackTableContext::LocalPlaylist => {
+        #[cfg(feature = "local-files")]
+        if let Some(uri) = tracks.get(*selected_index).and_then(|t| t.uri.clone()) {
+          let name = tracks
+            .get(*selected_index)
+            .map(|t| t.name.clone())
+            .unwrap_or_default();
+          match app.local_playback.as_mut() {
+            Some(local) => {
+              local.queue.push(uri);
+              app.set_status_message(format!("Added to queue: {name}"), 3);
+            }
+            None => {
+              app.set_status_message("Play a local track first to start a queue", 3);
+            }
+          }
+        }
+      }
     }
   };
 }
