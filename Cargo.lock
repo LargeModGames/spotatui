@@ -166,9 +166,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "approx"
@@ -2442,7 +2442,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -3212,9 +3212,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "loop9"
@@ -4620,9 +4620,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui"
-version = "0.30.1"
+version = "0.30.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1695748e3a735b34968c887ceea5a380b43545903868ae8f5b666593100f6b68"
+checksum = "3274ba0a2c5e1bcad2a2005d20f4dc59dad26b2eb0940fb094500dba4099d57d"
 dependencies = [
  "instability",
  "ratatui-core",
@@ -4633,15 +4633,14 @@ dependencies = [
 
 [[package]]
 name = "ratatui-core"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42d3603f354bba8c595fa47860e60142d7372b7210c27044c6a7d0e1a4336b44"
+checksum = "cbb175c433c8e28a809d1f5773a2ae96e68c0ce40db865cbab1020bf33ae479c"
 dependencies = [
  "bitflags 2.13.0",
  "compact_str",
  "critical-section",
  "hashbrown 0.17.1",
- "indoc",
  "itertools 0.14.0",
  "kasuari",
  "lru",
@@ -4656,9 +4655,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-crossterm"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b2867bedcbd6a690ca4f8672a687b730ec07660c79844517b084311b529980c"
+checksum = "567584a3b0e6a8203c23de40b4861497266725eb5363dbfd18a1edd603cca9f0"
 dependencies = [
  "cfg-if",
  "crossterm",
@@ -4668,9 +4667,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-image"
-version = "11.0.4"
+version = "11.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f522f51185b7f2a2a76658dfb3f3995d35a85908afa559595c468b48f30ed6de"
+checksum = "e000b7a22eae639460bc6ec8bb1cc689ecae5b0ed21935cd7d7dd52d38270c86"
 dependencies = [
  "base64-simd",
  "icy_sixel",
@@ -4685,9 +4684,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-widgets"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef4f17dd7ac3abf5adc2b920a03c61eee4bfe6a88fa5191936895525371d79c"
+checksum = "66e3d19bcc9130ca376277d93b60767ff121ace3be06f5f95f81dd68956407d1"
 dependencies = [
  "bitflags 2.13.0",
  "hashbrown 0.17.1",
@@ -6320,9 +6319,9 @@ dependencies = [
 
 [[package]]
 name = "tui-equalizer"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f700ba65fd0f572f4f695d2d781a1711add32444804f745b504bbca6056902b8"
+checksum = "51ca8635ed2249ea0a6d3fd83e2644f738179e742fc03721d1df91e3828f5b93"
 dependencies = [
  "ratatui-core",
 ]
