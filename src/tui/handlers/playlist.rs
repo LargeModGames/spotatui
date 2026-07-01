@@ -14,6 +14,8 @@ fn total_display_count(app: &App) -> usize {
     Source::Local => app.local_playlists.len(),
     Source::Subsonic => app.subsonic_playlists.len(),
     Source::Radio => app.radio_stations.len(),
+    // Local YouTube playlists + the "+ New Playlist" entry.
+    Source::YouTube => app.youtube_playlists.len() + 1,
     Source::Spotify => app.get_playlist_display_count() + 1,
   }
 }
@@ -45,6 +47,29 @@ fn open_subsonic_folder(app: &mut App) {
     app.track_table.selected_index = 0;
     app.track_table.context = Some(TrackTableContext::SubsonicPlaylist);
     app.dispatch(IoEvent::GetSubsonicTracks(uri));
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+  }
+}
+
+/// YouTube: open the highlighted local playlist's saved videos in the shared
+/// track table, or the create-playlist form on the trailing "+ New Playlist"
+/// entry.
+fn open_youtube_playlist(app: &mut App) {
+  let Some(idx) = app.selected_playlist_index else {
+    return;
+  };
+  if idx == app.youtube_playlists.len() {
+    // "+ New Playlist" — reuse the create form; its name stage dispatches
+    // CreateYouTubePlaylist under the YouTube source.
+    app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
+    return;
+  }
+  if let Some(playlist) = app.youtube_playlists.get(idx) {
+    let uri = playlist.uri.clone();
+    app.track_table.tracks = Vec::new();
+    app.track_table.selected_index = 0;
+    app.track_table.context = Some(TrackTableContext::YouTubePlaylist);
+    app.dispatch(IoEvent::GetYouTubeTracks(uri));
     app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
   }
 }
@@ -108,6 +133,23 @@ pub fn handler(key: Key, app: &mut App) {
     }
     Key::Enter if app.active_source == Source::Radio => {
       play_radio_station(app);
+    }
+    Key::Enter if app.active_source == Source::YouTube => {
+      open_youtube_playlist(app);
+    }
+    // Deleting a local YouTube playlist: same confirm dialog UX as Spotify.
+    Key::Char('D') if app.active_source == Source::YouTube => {
+      if let Some(playlist) = app
+        .selected_playlist_index
+        .and_then(|idx| app.youtube_playlists.get(idx))
+      {
+        app.dialog = Some(playlist.name.clone());
+        app.confirm = false;
+        app.push_navigation_stack(
+          RouteId::Dialog,
+          ActiveBlock::Dialog(DialogContext::YouTubePlaylistWindow),
+        );
+      }
     }
     Key::Enter => {
       if let Some(selected_idx) = app.selected_playlist_index {

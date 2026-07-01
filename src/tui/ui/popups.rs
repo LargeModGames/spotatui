@@ -209,7 +209,9 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
   };
 
   match dialog_context {
-    DialogContext::PlaylistWindow | DialogContext::PlaylistSearch => {
+    DialogContext::PlaylistWindow
+    | DialogContext::PlaylistSearch
+    | DialogContext::YouTubePlaylistWindow => {
       if let Some(playlist) = app.dialog.as_ref() {
         let text = vec![
           Line::from(Span::raw("Are you sure you want to delete the playlist: ")),
@@ -365,7 +367,10 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   f.render_widget(header, vchunks[0]);
 
   let mut list_state = ListState::default();
-  let editable_playlists = app.editable_playlists();
+  // Destinations follow the active source: local YouTube playlists under the
+  // YouTube source, editable Spotify playlists otherwise (must stay in sync
+  // with the picker's key handler).
+  let editable_playlists = app.playlist_picker_items();
 
   if editable_playlists.is_empty() {
     let empty_text = Paragraph::new("No editable playlists available")
@@ -374,10 +379,13 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
     f.render_widget(empty_text, vchunks[1]);
   } else {
     let is_own_playlist = |playlist: &crate::core::plugin_api::PlaylistInfo| -> bool {
-      app
-        .user
-        .as_ref()
-        .is_some_and(|user| Some(user.id.as_str()) == playlist.owner_id.as_deref())
+      // Local YouTube playlists carry no owner id — they are always the
+      // user's own (no "(collab)" suffix).
+      playlist.owner_id.is_none()
+        || app
+          .user
+          .as_ref()
+          .is_some_and(|user| Some(user.id.as_str()) == playlist.owner_id.as_deref())
     };
     let items: Vec<ListItem> = editable_playlists
       .iter()

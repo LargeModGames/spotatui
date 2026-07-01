@@ -800,6 +800,30 @@ pub async fn start_ui(
           }
         }
 
+        // YouTube auto-advance — same check-and-set as Subsonic; the yt-dlp
+        // download window is even longer, so the `advancing` guard matters
+        // just as much here.
+        #[cfg(feature = "youtube")]
+        {
+          let advance = app.youtube_playback.as_mut().and_then(|youtube| {
+            if youtube.player.is_finished() && !youtube.advancing {
+              if crate::infra::youtube::next_index(youtube.index, youtube.tracks.len()).is_some() {
+                youtube.advancing = true; // atomic check-and-set: one dispatch only
+                Some(true)
+              } else {
+                Some(false)
+              }
+            } else {
+              None
+            }
+          });
+          match advance {
+            Some(true) => app.dispatch(crate::infra::network::IoEvent::NextTrack),
+            Some(false) => app.youtube_playback = None,
+            None => {}
+          }
+        }
+
         #[cfg(feature = "streaming")]
         if let Some(ref pos) = shared_position {
           if app.is_streaming_active {
@@ -858,6 +882,15 @@ pub async fn start_ui(
       app.dispatch(IoEvent::GetCurrentPlayback);
       app.dispatch(IoEvent::GetPlaylists);
       app.dispatch(IoEvent::GetUser);
+      // A persisted non-Spotify active source needs its sidebar data loaded
+      // too (all of these are inert no-ops when the feature is off).
+      match app.active_source {
+        crate::core::source::Source::Local => app.dispatch(IoEvent::GetLocalPlaylists),
+        crate::core::source::Source::Subsonic => app.dispatch(IoEvent::GetSubsonicPlaylists),
+        crate::core::source::Source::Radio => app.dispatch(IoEvent::GetRadioStations),
+        crate::core::source::Source::YouTube => app.dispatch(IoEvent::GetYouTubePlaylists),
+        crate::core::source::Source::Spotify => {}
+      }
       if app.user_config.behavior.enable_global_song_count {
         app.dispatch(IoEvent::FetchGlobalSongCount);
       }

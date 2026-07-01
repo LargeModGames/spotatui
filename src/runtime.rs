@@ -1394,7 +1394,17 @@ async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Ne
           && crate::infra::radio::dispatch::route_radio_event(&network.app, &io_event).await;
         #[cfg(not(feature = "internet-radio"))]
         let handled_radio = false;
-        if !handled_locally && !handled_subsonic && !handled_radio {
+        // YouTube is intercepted last before the Spotify network. A `youtube:`
+        // URI falls through the three earlier dispatches and is caught here
+        // (see infra::youtube::dispatch). Skipped when already consumed.
+        #[cfg(feature = "youtube")]
+        let handled_youtube = !handled_locally
+          && !handled_subsonic
+          && !handled_radio
+          && crate::infra::youtube::dispatch::route_youtube_event(&network.app, &io_event).await;
+        #[cfg(not(feature = "youtube"))]
+        let handled_youtube = false;
+        if !handled_locally && !handled_subsonic && !handled_radio && !handled_youtube {
           network.handle_network_event(io_event).await;
         }
       }

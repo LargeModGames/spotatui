@@ -96,8 +96,10 @@ pub fn handler(key: Key, app: &mut App) {
           }
           TrackTableContext::AlbumSearch => {}
           TrackTableContext::DiscoverPlaylist => {}
-          // Local folders and Subsonic playlists have no pagination.
-          TrackTableContext::LocalPlaylist | TrackTableContext::SubsonicPlaylist => {}
+          // Local folders and Subsonic/YouTube playlists have no pagination.
+          TrackTableContext::LocalPlaylist
+          | TrackTableContext::SubsonicPlaylist
+          | TrackTableContext::YouTubePlaylist => {}
         }
       };
     }
@@ -114,8 +116,10 @@ pub fn handler(key: Key, app: &mut App) {
           }
           TrackTableContext::AlbumSearch => {}
           TrackTableContext::DiscoverPlaylist => {}
-          // Local folders and Subsonic playlists have no pagination.
-          TrackTableContext::LocalPlaylist | TrackTableContext::SubsonicPlaylist => {}
+          // Local folders and Subsonic/YouTube playlists have no pagination.
+          TrackTableContext::LocalPlaylist
+          | TrackTableContext::SubsonicPlaylist
+          | TrackTableContext::YouTubePlaylist => {}
         }
       };
     }
@@ -153,6 +157,43 @@ fn open_add_to_playlist_dialog(app: &mut App) {
 }
 
 fn open_remove_from_playlist_dialog(app: &mut App) {
+  // Local YouTube playlist: same confirm dialog, routed (by the
+  // `youtube:playlist:` prefix in the pending target) to the local file edit
+  // instead of the Spotify API. No snapshot position — removal is by video id.
+  if app.track_table.context == Some(TrackTableContext::YouTubePlaylist) {
+    let Some(playlist_uri) = app.youtube_open_playlist.clone() else {
+      app.set_status_message("No YouTube playlist is open".to_string(), 4);
+      return;
+    };
+    let playlist_name = app
+      .youtube_playlists
+      .iter()
+      .find(|p| p.uri == playlist_uri)
+      .map(|p| p.name.clone())
+      .unwrap_or_else(|| "YouTube playlist".to_string());
+    let Some(track) = app.track_table.tracks.get(app.track_table.selected_index) else {
+      return;
+    };
+    let Some(track_id) = track.id.clone() else {
+      app.set_status_message("Track cannot be edited in playlist".to_string(), 4);
+      return;
+    };
+    let track_name = track.name.clone();
+    app.clear_dialog_state();
+    app.pending_playlist_track_removal = Some(PendingPlaylistTrackRemoval {
+      playlist_id: playlist_uri,
+      playlist_name,
+      track_id,
+      track_name,
+      position: 0, // unused for local YouTube playlists
+    });
+    app.push_navigation_stack(
+      RouteId::Dialog,
+      ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
+    );
+    return;
+  }
+
   let playlist_context = match current_playlist_target_for_track_table_context(app) {
     Some(context) => context,
     None => {
@@ -270,6 +311,24 @@ fn play_random_song(app: &mut App) {
             Some(playable_ids[rand_idx].clone()),
             None,
             None,
+          ));
+        }
+      }
+      TrackTableContext::YouTubePlaylist => {
+        // Queue the whole playlist and start at a random offset, so
+        // Next/Previous keep working within the playlist.
+        let playable_ids: Vec<String> = app
+          .track_table
+          .tracks
+          .iter()
+          .filter_map(|track| track.uri.clone())
+          .collect();
+        if !playable_ids.is_empty() {
+          let rand_idx = thread_rng().gen_range(0..playable_ids.len());
+          app.dispatch(IoEvent::StartPlayback(
+            None,
+            Some(playable_ids),
+            Some(rand_idx),
           ));
         }
       }
@@ -395,11 +454,13 @@ fn on_enter(app: &mut App) {
           ));
         }
       }
-      TrackTableContext::LocalPlaylist | TrackTableContext::SubsonicPlaylist => {
+      TrackTableContext::LocalPlaylist
+      | TrackTableContext::SubsonicPlaylist
+      | TrackTableContext::YouTubePlaylist => {
         // Queue the whole folder/playlist (in displayed order) and start at the
         // selected track, so Next/Previous/auto-advance have a queue to move
-        // through. Routed to the local or subsonic player by URI scheme
-        // (infra::local::dispatch / infra::subsonic::dispatch).
+        // through. Routed to the local, subsonic or youtube player by URI
+        // scheme (infra::local / infra::subsonic / infra::youtube dispatch).
         let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
         if !uris.is_empty() {
           // `selected_index` is into the full track list; the filter above keeps
@@ -476,6 +537,9 @@ fn on_queue(app: &mut App) {
       }
       // Subsonic queue-append needs an active subsonic session (wired in M3).
       TrackTableContext::SubsonicPlaylist => {}
+      // YouTube queue-append would need to splice the live download queue;
+      // start playback from the row instead (Enter). Tracked follow-up.
+      TrackTableContext::YouTubePlaylist => {}
     }
   };
 }

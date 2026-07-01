@@ -778,6 +778,7 @@ pub struct BehaviorConfigString {
   pub subsonic_username: Option<String>,
   pub subsonic_password: Option<String>,
   pub radio_stations: Option<Vec<RadioStationConfig>>,
+  pub ytdlp_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -845,6 +846,9 @@ pub struct BehaviorConfig {
   /// Radio source is active. Stations found via the in-app directory search
   /// are not persisted here (yet) — this list is hand-maintained in the config.
   pub radio_stations: Vec<RadioStationConfig>,
+  /// Path to the `yt-dlp` binary used by the YouTube source. `None` resolves
+  /// plain `yt-dlp` through `$PATH`.
+  pub ytdlp_path: Option<String>,
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -983,6 +987,7 @@ impl UserConfig {
         subsonic_username: None,
         subsonic_password: None,
         radio_stations: Vec::new(),
+        ytdlp_path: None,
       },
       path_to_config: None,
     }
@@ -1377,6 +1382,9 @@ impl UserConfig {
         .filter(|s| !s.name.trim().is_empty() && !s.url.trim().is_empty())
         .collect();
     }
+    if let Some(ytdlp_path) = trim_to_none(behavior_config.ytdlp_path) {
+      self.behavior.ytdlp_path = Some(ytdlp_path);
+    }
     Ok(())
   }
 
@@ -1536,6 +1544,7 @@ impl UserConfig {
       } else {
         Some(self.behavior.radio_stations.clone())
       },
+      ytdlp_path: self.behavior.ytdlp_path.clone(),
       stop_after_current_track: Some(self.behavior.stop_after_current_track),
       sidebar_width_percent: Some(self.behavior.sidebar_width_percent),
       playbar_height_rows: Some(self.behavior.playbar_height_rows),

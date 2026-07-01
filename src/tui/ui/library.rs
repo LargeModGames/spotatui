@@ -109,6 +109,28 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     return;
   }
 
+  // YouTube: the sidebar Playlists panel lists the user's *local* YouTube
+  // playlists (youtube_playlists.yml — no Google account), plus a create
+  // entry. Videos are found via search and added with `w`.
+  if app.active_source == Source::YouTube {
+    let mut items: Vec<String> = app
+      .youtube_playlists
+      .iter()
+      .map(|p| format!("\u{1F4FC} {} ({})", p.name, p.track_count))
+      .collect();
+    items.push("+ New Playlist".to_string());
+    draw_selectable_list(
+      f,
+      app,
+      layout_chunk,
+      "YouTube Playlists",
+      &items,
+      highlight_state,
+      app.selected_playlist_index,
+    );
+    return;
+  }
+
   let display_items = app.get_playlist_display_items();
 
   let playlist_items: Vec<String> = if app.playlist_folder_items.is_empty() {
@@ -160,10 +182,13 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     return;
   }
 
-  // Subsonic and Radio support search but have no Spotify-style saved library,
-  // so keep the search input and show the source's list, but hide the Library
-  // panel.
-  if app.active_source == Source::Subsonic || app.active_source == Source::Radio {
+  // Subsonic, Radio and YouTube support search but have no Spotify-style saved
+  // library, so keep the search input and show the source's list, but hide the
+  // Library panel.
+  if app.active_source == Source::Subsonic
+    || app.active_source == Source::Radio
+    || app.active_source == Source::YouTube
+  {
     if app.size.width >= SMALL_TERMINAL_WIDTH && !app.user_config.behavior.enforce_wide_search_bar {
       let [input_area, playlist_area] = layout_chunk.layout(&Layout::vertical([
         Constraint::Length(3),

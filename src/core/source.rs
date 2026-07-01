@@ -42,15 +42,17 @@ pub enum Source {
   Local,
   Subsonic,
   Radio,
+  YouTube,
 }
 
 impl Source {
   /// Every selectable source, in display order. Add new sources here.
-  pub const ALL: [Source; 4] = [
+  pub const ALL: [Source; 5] = [
     Source::Spotify,
     Source::Local,
     Source::Subsonic,
     Source::Radio,
+    Source::YouTube,
   ];
 
   /// Human-readable label shown in the source picker.
@@ -60,6 +62,7 @@ impl Source {
       Source::Local => "Local Files",
       Source::Subsonic => "Subsonic",
       Source::Radio => "Internet Radio",
+      Source::YouTube => "YouTube",
     }
   }
 
@@ -72,6 +75,7 @@ impl Source {
       Source::Local => "Local",
       Source::Subsonic => "Subsonic",
       Source::Radio => "Radio",
+      Source::YouTube => "YouTube",
     }
   }
 
@@ -83,13 +87,17 @@ impl Source {
       "Local" => Source::Local,
       "Subsonic" => Source::Subsonic,
       "Radio" => Source::Radio,
+      "YouTube" => Source::YouTube,
       _ => Source::Spotify,
     }
   }
 
   /// Whether this source can search its catalog (implements [`Searcher`]).
   pub fn supports_search(&self) -> bool {
-    matches!(self, Source::Spotify | Source::Subsonic | Source::Radio)
+    matches!(
+      self,
+      Source::Spotify | Source::Subsonic | Source::Radio | Source::YouTube
+    )
   }
 
   /// Whether this source exposes a saved library — liked songs, saved albums,
@@ -150,6 +158,16 @@ mod tests {
     assert!(!Source::Radio.supports_library());
     assert!(!Source::Radio.supports_playlist_write());
     assert!(!Source::Radio.supports_like());
+  }
+
+  #[test]
+  fn youtube_supports_search_only() {
+    // yt-dlp searches the catalog; there is no library, no writable playlists,
+    // and no like/star concept without a Google account.
+    assert!(Source::YouTube.supports_search());
+    assert!(!Source::YouTube.supports_library());
+    assert!(!Source::YouTube.supports_playlist_write());
+    assert!(!Source::YouTube.supports_like());
   }
 
   #[test]

@@ -149,6 +149,11 @@ audio-decode = ["dep:rodio"]
 local-files = ["audio-decode", "dep:lofty", "dep:symphonia"]
 subsonic = ["dep:md-5", "audio-decode", "dep:tempfile"]
 internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
+# YouTube via an external `yt-dlp` binary (no new crates): search with
+# `--flat-playlist --dump-json`, download the AAC/M4A audio (format 140, which
+# rodio's default `mp4` feature decodes) to a tempfile, play through the shared
+# LocalPlayer. Unofficial-fragile by design — see plan-multi-source.md.
+youtube = ["audio-decode", "dep:tempfile"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -172,6 +177,9 @@ maintainer = "LargeModGames <LargeModGames@gmail.com>"
 copyright = "2025, LargeModGames"
 license-file = ["LICENSE", "4"]
 depends = "$auto"
+# The YouTube source shells out to yt-dlp at runtime (ffmpeg improves the
+# downloaded audio container); both are optional — spotatui works without them.
+suggests = "yt-dlp, ffmpeg"
 section = "utils"
 priority = "optional"
 

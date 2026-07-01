@@ -183,6 +183,31 @@ pub enum IoEvent {
   /// `internet-radio` feature.
   #[cfg_attr(not(feature = "internet-radio"), allow(dead_code))]
   GetRadioSearchResults(String),
+  /// Run a YouTube search (via yt-dlp) and populate `app.search_results`.
+  /// Only read by `infra::youtube::dispatch`; an inert no-op without the
+  /// `youtube` feature.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  GetYouTubeSearchResults(String),
+  /// Load the local YouTube playlists file into the sidebar (handled by
+  /// `infra::youtube::dispatch`; a no-op on the Spotify network).
+  GetYouTubePlaylists,
+  /// Open a local YouTube playlist's tracks in the shared track table,
+  /// identified by its `youtube:playlist:` URI.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  GetYouTubeTracks(String),
+  /// Create a local YouTube playlist with the given name.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  CreateYouTubePlaylist(String),
+  /// Delete the local YouTube playlist with the given `youtube:playlist:` URI.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  DeleteYouTubePlaylist(String),
+  /// Add a video (bare id or `youtube:` URI; metadata resolved from the browse
+  /// views) to a local YouTube playlist (URI or bare id).
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  AddTrackToYouTubePlaylist(String, String),
+  /// Remove a video (bare id or `youtube:` URI) from a local YouTube playlist.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  RemoveTrackFromYouTubePlaylist(String, String),
 }
 
 pub struct Network {
@@ -547,6 +572,16 @@ impl Network {
       // Radio browse/search events are handled by infra::radio::dispatch before
       // reaching the network; they only arrive here when the feature is off.
       IoEvent::GetRadioStations | IoEvent::GetRadioSearchResults(_) => {}
+      // YouTube search/playlist events are handled by infra::youtube::dispatch
+      // before reaching the network; they only arrive here when the feature is
+      // off.
+      IoEvent::GetYouTubeSearchResults(_)
+      | IoEvent::GetYouTubePlaylists
+      | IoEvent::GetYouTubeTracks(_)
+      | IoEvent::CreateYouTubePlaylist(_)
+      | IoEvent::DeleteYouTubePlaylist(_)
+      | IoEvent::AddTrackToYouTubePlaylist(..)
+      | IoEvent::RemoveTrackFromYouTubePlaylist(..) => {}
     };
 
     {

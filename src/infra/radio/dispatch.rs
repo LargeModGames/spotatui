@@ -225,6 +225,15 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
       subsonic.player.stop();
     }
   }
+  // Tear down any YouTube session (the pump's short-circuit means the YouTube
+  // dispatch never sees this radio: start).
+  #[cfg(feature = "youtube")]
+  {
+    let youtube = app.lock().await.youtube_playback.take();
+    if let Some(youtube) = youtube {
+      youtube.player.stop();
+    }
+  }
 }
 
 /// Reuse the live radio player, or open a fresh output device for one. A

@@ -19,3 +19,5 @@ pub mod redirect_uri;
 pub mod scripting;
 #[cfg(feature = "subsonic")]
 pub mod subsonic;
+#[cfg(feature = "youtube")]
+pub mod youtube;

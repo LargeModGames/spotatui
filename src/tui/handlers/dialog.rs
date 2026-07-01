@@ -14,9 +14,8 @@ pub fn handler(key: Key, app: &mut App) {
     DialogContext::PlaylistWindow
     | DialogContext::PlaylistSearch
     | DialogContext::RemoveTrackFromPlaylistConfirm
-    | DialogContext::PersistKeybindingFallback => {
-      handle_confirmation_dialog(key, app, dialog_context)
-    }
+    | DialogContext::PersistKeybindingFallback
+    | DialogContext::YouTubePlaylistWindow => handle_confirmation_dialog(key, app, dialog_context),
   }
 }
 
@@ -33,6 +32,7 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
           DialogContext::PersistKeybindingFallback => {
             app.persist_open_settings_fallback();
           }
+          DialogContext::YouTubePlaylistWindow => handle_youtube_playlist_dialog(app),
           DialogContext::AddTrackToPlaylistPicker => {}
         }
       } else if dialog_context == DialogContext::PersistKeybindingFallback {
@@ -53,7 +53,9 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
 }
 
 fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
-  let editable_playlists = app.editable_playlists();
+  // Destinations follow the active source: local YouTube playlists under
+  // YouTube, editable Spotify playlists otherwise.
+  let editable_playlists = app.playlist_picker_items();
   let playlist_count = editable_playlists.len();
   match key {
     k if common_key_events::down_event(k, &app.user_config.keys) && playlist_count > 0 => {
@@ -89,11 +91,19 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
         let playlist_id = editable_playlists
           .get(selected)
           .and_then(|playlist| playlist.id.clone());
+        let is_youtube = app.active_source == crate::core::source::Source::YouTube;
         if let Some(playlist_id) = playlist_id {
-          app.dispatch(IoEvent::AddTrackToPlaylist(
-            playlist_id,
-            pending_add.track_id,
-          ));
+          if is_youtube {
+            app.dispatch(IoEvent::AddTrackToYouTubePlaylist(
+              playlist_id,
+              pending_add.track_id,
+            ));
+          } else {
+            app.dispatch(IoEvent::AddTrackToPlaylist(
+              playlist_id,
+              pending_add.track_id,
+            ));
+          }
         }
       }
       close_dialog(app);
@@ -113,13 +123,33 @@ fn handle_playlist_search_dialog(app: &mut App) {
   app.user_unfollow_playlist_search_result()
 }
 
+/// Confirmed deletion of the sidebar-selected local YouTube playlist.
+fn handle_youtube_playlist_dialog(app: &mut App) {
+  let uri = app
+    .selected_playlist_index
+    .and_then(|idx| app.youtube_playlists.get(idx))
+    .map(|playlist| playlist.uri.clone());
+  if let Some(uri) = uri {
+    app.dispatch(IoEvent::DeleteYouTubePlaylist(uri));
+  }
+}
+
 fn handle_remove_track_from_playlist_confirm(app: &mut App) {
   if let Some(pending_remove) = app.pending_playlist_track_removal.clone() {
-    app.dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(
-      pending_remove.playlist_id,
-      pending_remove.track_id,
-      pending_remove.position,
-    ));
+    // A `youtube:playlist:` target is a local YouTube playlist edit; anything
+    // else is the Spotify remove (which needs the snapshot position).
+    if pending_remove.playlist_id.starts_with("youtube:playlist:") {
+      app.dispatch(IoEvent::RemoveTrackFromYouTubePlaylist(
+        pending_remove.playlist_id,
+        pending_remove.track_id,
+      ));
+    } else {
+      app.dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(
+        pending_remove.playlist_id,
+        pending_remove.track_id,
+        pending_remove.position,
+      ));
+    }
   }
 }
 

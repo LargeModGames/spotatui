@@ -757,7 +757,8 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
-  feature = "internet-radio"
+  feature = "internet-radio",
+  feature = "youtube"
 ))]
 struct LocalPlaybarView {
   /// Source name shown in the playbar title, e.g. `"Local"` or `"Subsonic"`.
@@ -824,6 +825,28 @@ fn draw_subsonic_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   render_local_playbar(f, app, layout_chunk, &view);
 }
 
+/// Render the playbar for an active YouTube playback session, reading
+/// progress/pause live from the player just like the Subsonic path.
+#[cfg(feature = "youtube")]
+fn draw_youtube_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let Some(youtube) = app.youtube_playback.as_ref() else {
+    return;
+  };
+  let track = youtube.current();
+  let view = LocalPlaybarView {
+    source_label: "YouTube",
+    name: track.map(|t| t.name.clone()).unwrap_or_default(),
+    artists: track.map(|t| t.artists.join(", ")).unwrap_or_default(),
+    is_playing: !youtube.player.is_paused(),
+    position_ms: youtube.player.position().as_millis(),
+    duration_ms: track.map(|t| t.duration_ms).unwrap_or(0),
+    volume_percent: app.user_config.behavior.volume_percent,
+    queue_position: (youtube.tracks.len() > 1).then(|| (youtube.index + 1, youtube.tracks.len())),
+    live: false,
+  };
+  render_local_playbar(f, app, layout_chunk, &view);
+}
+
 /// Render the playbar for an active internet-radio session. The station name is
 /// the title line and the ICY now-playing text (when the stream sends it) the
 /// subtitle; elapsed time renders as a LIVE indicator since a stream is
@@ -859,7 +882,8 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
-  feature = "internet-radio"
+  feature = "internet-radio",
+  feature = "youtube"
 ))]
 fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: &LocalPlaybarView) {
   let playbar_areas = playbar_layout_areas(app, layout_chunk);
@@ -988,6 +1012,13 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   #[cfg(feature = "internet-radio")]
   if app.radio_playback.is_some() {
     draw_radio_playbar(f, app, layout_chunk);
+    return;
+  }
+
+  // YouTube likewise renders from its own session state.
+  #[cfg(feature = "youtube")]
+  if app.youtube_playback.is_some() {
+    draw_youtube_playbar(f, app, layout_chunk);
     return;
   }
 

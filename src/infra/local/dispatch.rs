@@ -229,6 +229,15 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
     }
   }
 
+  // Tear down any YouTube session, for the same short-circuit reason.
+  #[cfg(feature = "youtube")]
+  {
+    let youtube = app.lock().await.youtube_playback.take();
+    if let Some(youtube) = youtube {
+      youtube.player.stop();
+    }
+  }
+
   let player = match acquire_player(app).await {
     Some(player) => player,
     None => return, // error already surfaced

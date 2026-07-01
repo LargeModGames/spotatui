@@ -119,6 +119,8 @@ fn process_input(app: &mut App, input: String) {
     app.dispatch(IoEvent::GetSubsonicSearchResults(input));
   } else if app.active_source == crate::core::source::Source::Radio {
     app.dispatch(IoEvent::GetRadioSearchResults(input));
+  } else if app.active_source == crate::core::source::Source::YouTube {
+    app.dispatch(IoEvent::GetYouTubeSearchResults(input));
   } else {
     app.dispatch(IoEvent::GetSearchResults(input, app.get_user_country()));
   }

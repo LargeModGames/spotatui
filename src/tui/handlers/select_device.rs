@@ -114,6 +114,10 @@ fn select_source(app: &mut App) {
         app.radio_stations_index = 0;
         app.dispatch(IoEvent::GetRadioStations);
       }
+      Source::YouTube => {
+        // Populate the sidebar with the local YouTube playlists file.
+        app.dispatch(IoEvent::GetYouTubePlaylists);
+      }
       Source::Spotify => {}
     }
   }

@@ -170,7 +170,7 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("General"),
     ],
     vec![
-      String::from("Select device to play music on"),
+      String::from("Switch music source / select playback device"),
       key_bindings.manage_devices.to_string(),
       String::from("General"),
     ],

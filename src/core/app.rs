@@ -205,6 +205,9 @@ pub enum DialogContext {
   AddTrackToPlaylistPicker,
   RemoveTrackFromPlaylistConfirm,
   PersistKeybindingFallback,
+  /// Confirm deleting a local YouTube playlist (sidebar `D` under the
+  /// YouTube source).
+  YouTubePlaylistWindow,
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -404,6 +407,7 @@ pub enum TrackTableContext {
   DiscoverPlaylist,
   LocalPlaylist,
   SubsonicPlaylist,
+  YouTubePlaylist,
 }
 
 // Is it possible to compose enums?
@@ -884,6 +888,13 @@ pub struct App {
   /// unconditional `Source::Radio` variant even in the slim build.
   pub radio_stations: Vec<TrackInfo>,
   pub radio_stations_index: usize,
+  /// The user's local YouTube playlists (from `youtube_playlists.yml`), shown
+  /// by the sidebar when the YouTube source is active. Unconditional for the
+  /// same slim-build reason as [`radio_stations`](Self::radio_stations).
+  pub youtube_playlists: Vec<PlaylistInfo>,
+  /// The `youtube:playlist:` URI currently open in the shared track table, so
+  /// the remove-track flow knows which playlist to edit.
+  pub youtube_open_playlist: Option<String>,
   /// The source the UI is currently scoped to (sidebar, search, capability
   /// gating). Browse-scope only — never changes playback routing.
   pub active_source: Source,
@@ -1044,6 +1055,11 @@ pub struct App {
   /// a station is one infinite stream.
   #[cfg(feature = "internet-radio")]
   pub radio_playback: Option<crate::infra::radio::RadioPlaybackState>,
+  /// The active YouTube playback session (multi-source, yt-dlp backed), or
+  /// `None` when another backend owns playback. Same decoupling contract as
+  /// [`subsonic_playback`](Self::subsonic_playback).
+  #[cfg(feature = "youtube")]
+  pub youtube_playback: Option<crate::infra::youtube::YouTubePlaybackState>,
   /// Sender used to recover native streaming when a stale/disconnected player is detected.
   #[cfg(feature = "streaming")]
   pub streaming_recovery_tx:
@@ -1126,6 +1142,8 @@ impl Default for App {
       subsonic_playlists_index: 0,
       radio_stations: Vec::new(),
       radio_stations_index: 0,
+      youtube_playlists: Vec::new(),
+      youtube_open_playlist: None,
       active_source: Source::default(),
       source_list_index: 0,
       source_device_focus: SourceFocus::default(),
@@ -1289,6 +1307,8 @@ impl Default for App {
       subsonic_playback: None,
       #[cfg(feature = "internet-radio")]
       radio_playback: None,
+      #[cfg(feature = "youtube")]
+      youtube_playback: None,
       #[cfg(feature = "streaming")]
       streaming_recovery_tx: None,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -1611,11 +1631,48 @@ impl App {
       .collect()
   }
 
+  /// The destination playlists offered by the add-track picker dialog for the
+  /// active source: local YouTube playlists under YouTube, the user's editable
+  /// Spotify playlists otherwise.
+  pub fn playlist_picker_items(&self) -> Vec<&PlaylistInfo> {
+    if self.active_source == Source::YouTube {
+      self.youtube_playlists.iter().collect()
+    } else {
+      self.editable_playlists()
+    }
+  }
+
   pub fn begin_add_track_to_playlist_flow(&mut self, track_id: Option<String>, track_name: String) {
     let Some(track_id) = track_id else {
       self.set_status_message("Track cannot be added to playlist".to_string(), 4);
       return;
     };
+
+    // Under the YouTube source the destinations are the *local* playlists
+    // (youtube_playlists.yml), not the Spotify ones — no user/playlist
+    // fetches apply. The picker's Enter routes by source too.
+    if self.active_source == Source::YouTube {
+      if self.youtube_playlists.is_empty() {
+        // Kick a (re)load in case the file changed on disk; if it is
+        // genuinely empty the user needs to create a playlist first.
+        self.dispatch(IoEvent::GetYouTubePlaylists);
+        self.set_status_message(
+          "No YouTube playlists yet — create one from the sidebar".to_string(),
+          4,
+        );
+        return;
+      }
+      self.clear_dialog_state();
+      self.pending_playlist_track_add = Some(PendingPlaylistTrackAdd {
+        track_id,
+        track_name,
+      });
+      self.push_navigation_stack(
+        RouteId::Dialog,
+        ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker),
+      );
+      return;
+    }
 
     let mut requested_data = false;
     if self.user.is_none() {
@@ -2394,6 +2451,17 @@ impl App {
         subsonic.player.resume();
       } else {
         subsonic.player.pause();
+      }
+      return;
+    }
+
+    // YouTube playback owns the session the same way: toggle its sink directly.
+    #[cfg(feature = "youtube")]
+    if let Some(youtube) = &self.youtube_playback {
+      if youtube.player.is_paused() {
+        youtube.player.resume();
+      } else {
+        youtube.player.pause();
       }
       return;
     }
