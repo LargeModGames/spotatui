@@ -1496,6 +1496,10 @@ async fn handle_mpris_events(
         }
         app_lock.dispatch(IoEvent::Repeat(repeat_state));
       }
+      MprisEvent::SetVolume(volume_percent) => {
+        let mut app_lock = app.lock().await;
+        app_lock.set_volume_percent(volume_percent);
+      }
     }
   }
 }

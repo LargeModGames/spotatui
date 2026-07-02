@@ -6,6 +6,7 @@
 
 - **Native streaming silent playback (HTTP 530)**: Native audio no longer fails silently when Spotify's CDN returns HTTP 530 for the first of the candidate URLs it hands out. spotatui now builds librespot from a maintained fork ([spotatui-librespot](https://github.com/LargeModGames/spotatui-librespot)) that backports upstream [PR #1722](https://github.com/librespot-org/librespot/pull/1722) ([#1725](https://github.com/librespot-org/librespot/issues/1725)), falling back to the next CDN URL on any non-206 response. Repeated unavailable tracks now also halt playback instead of stampeding the queue and risking a rate-limit.
 - **Native streaming startup device recovery**: Startup now trusts the local `spotatui` Connect device id, preserves saved external devices, activates the native device when Spotify reports no active playback, and renders an actionable idle playbar so paused native sessions restore without manually opening the device selector ([#301](https://github.com/LargeModGames/spotatui/issues/301)).
+- **MPRIS volume control**: `playerctl volume` (and other MPRIS clients) can now actually set spotatui's volume — previously only reads worked, since no `connect_set_volume` handler was ever registered. Volume changes made via the native streaming fast path (keyboard, Lua) now also sync back to the MPRIS `Volume` property immediately, so relative adjustments like `playerctl volume 0.05+` no longer compute from a stale cached value ([#327](https://github.com/LargeModGames/spotatui/issues/327)).
 
 ### Added
 

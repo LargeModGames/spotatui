@@ -25,6 +25,7 @@ pub enum MprisEvent {
   SetPosition(i64), // Absolute position in microseconds
   SetShuffle(bool),
   SetLoopStatus(LoopStatusEvent),
+  SetVolume(u8), // 0-100
 }
 
 /// Loop status from MPRIS (matches mpris_server::LoopStatus)
@@ -150,6 +151,12 @@ impl MprisManager {
         let tx = event_tx.clone();
         player.connect_set_shuffle(move |_player, shuffle| {
           let _ = tx.send(MprisEvent::SetShuffle(shuffle));
+        });
+
+        let tx = event_tx.clone();
+        player.connect_set_volume(move |_player, volume| {
+          let percent = (volume * 100.0).round().clamp(0.0, 100.0) as u8;
+          let _ = tx.send(MprisEvent::SetVolume(percent));
         });
 
         let tx = event_tx.clone();
