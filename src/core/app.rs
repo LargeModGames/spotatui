@@ -1378,6 +1378,58 @@ impl App {
     }
   }
 
+  /// Snapshot the currently-playing non-Spotify session for persistence, or
+  /// `None` when Spotify (or nothing) owns playback. Reads the live position and
+  /// pause state straight from whichever source's player is active, mirroring
+  /// the source-ownership order the runner tick uses. Spotify playback is not
+  /// persisted here — its resume is handled by `startup_behavior` device logic.
+  pub fn current_persisted_playback(
+    &self,
+  ) -> Option<crate::core::persisted_playback::PersistedPlayback> {
+    #[cfg(any(
+      feature = "youtube",
+      feature = "subsonic",
+      feature = "local-files",
+      feature = "internet-radio"
+    ))]
+    use crate::core::persisted_playback::PersistedPlayback;
+    #[cfg(feature = "youtube")]
+    if let Some(s) = self.youtube_playback.as_ref() {
+      return Some(PersistedPlayback::YouTube {
+        tracks: s.tracks.clone(),
+        index: s.index,
+        position_ms: s.player.position().as_millis() as u64,
+        paused: s.player.is_paused(),
+      });
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(s) = self.subsonic_playback.as_ref() {
+      return Some(PersistedPlayback::Subsonic {
+        tracks: s.tracks.clone(),
+        index: s.index,
+        position_ms: s.player.position().as_millis() as u64,
+        paused: s.player.is_paused(),
+      });
+    }
+    #[cfg(feature = "local-files")]
+    if let Some(s) = self.local_playback.as_ref() {
+      return Some(PersistedPlayback::Local {
+        queue: s.queue.clone(),
+        index: s.index,
+        position_ms: s.player.position().as_millis() as u64,
+        paused: s.player.is_paused(),
+      });
+    }
+    #[cfg(feature = "internet-radio")]
+    if let Some(s) = self.radio_playback.as_ref() {
+      return Some(PersistedPlayback::Radio {
+        station: s.station.clone(),
+        paused: s.player.is_paused(),
+      });
+    }
+    None
+  }
+
   #[allow(dead_code)]
   pub fn enqueue_announcements(&mut self, announcements: Vec<Announcement>) {
     if announcements.is_empty() {

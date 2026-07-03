@@ -30,7 +30,7 @@ use std::{
   cmp::{max, min},
   io::stdout,
   sync::{atomic::AtomicU64, Arc},
-  time::SystemTime,
+  time::{Duration, Instant, SystemTime},
 };
 use tokio::sync::Mutex;
 
@@ -506,6 +506,15 @@ pub async fn start_ui(
   let mut window_title_state = WindowTitleState::default();
   let mut is_first_render = true;
 
+  // Throttled persistence of the active non-Spotify playback session, so it can
+  // resume the exact song/position on the next launch (see
+  // `core::persisted_playback`). `last_session_save` throttles the periodic
+  // writes; `session_was_present` lets a Some -> None transition (queue ended,
+  // switched to Spotify) clear the file so a stale session is never resurrected.
+  let mut last_session_save: Option<Instant> = None;
+  let mut session_was_present = false;
+  const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(3);
+
   // Tracks whether the active internet-radio stream has produced audio yet, so
   // the tick can tell "stream just started, sink not filled" apart from "stream
   // died / drained" — both of which report `is_finished()` (empty sink).
@@ -880,6 +889,43 @@ pub async fn start_ui(
           app.song_progress_ms = position_ms;
         }
 
+        // Persist the active non-Spotify session so it resumes on next launch.
+        // Throttled to avoid churning the file every tick; a Some -> None
+        // transition (queue ended, or switched to Spotify) clears it instead.
+        match app.current_persisted_playback() {
+          Some(session) => {
+            let due = last_session_save
+              .map(|t| t.elapsed() >= SESSION_SAVE_INTERVAL)
+              .unwrap_or(true);
+            if due {
+              last_session_save = Some(Instant::now());
+              // Fire-and-forget on the blocking pool: file I/O never blocks the
+              // UI tick, and a dropped handle still runs to completion.
+              tokio::task::spawn_blocking(move || {
+                if let Ok(path) = crate::core::persisted_playback::default_session_path() {
+                  if let Err(e) = crate::core::persisted_playback::save(&path, &session) {
+                    log::warn!("[session] failed to persist playback session: {e}");
+                  }
+                }
+              });
+            }
+            session_was_present = true;
+          }
+          None => {
+            if session_was_present {
+              last_session_save = None;
+              tokio::task::spawn_blocking(|| {
+                if let Ok(path) = crate::core::persisted_playback::default_session_path() {
+                  if let Err(e) = crate::core::persisted_playback::clear(&path) {
+                    log::warn!("[session] failed to clear playback session: {e}");
+                  }
+                }
+              });
+            }
+            session_was_present = false;
+          }
+        }
+
         #[cfg(feature = "streaming")]
         if !source_owns_playback {
           if let Some(ref pos) = shared_position {
@@ -968,6 +1014,20 @@ pub async fn start_ui(
       }
 
       is_first_render = false;
+    }
+  }
+
+  // Capture the exact final position of a non-Spotify session on a graceful
+  // quit (the throttled in-loop save is up to a few seconds stale). Done
+  // synchronously before teardown so the player is still alive to read from.
+  {
+    let session = app.lock().await.current_persisted_playback();
+    if let Some(session) = session {
+      if let Ok(path) = crate::core::persisted_playback::default_session_path() {
+        if let Err(e) = crate::core::persisted_playback::save(&path, &session) {
+          log::warn!("[session] failed to persist playback session on exit: {e}");
+        }
+      }
     }
   }
 

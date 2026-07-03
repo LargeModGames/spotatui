@@ -728,6 +728,24 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   let initial_shuffle_enabled = user_config.behavior.shuffle_enabled;
   let initial_startup_behavior = user_config.behavior.startup_behavior;
 
+  // Load the persisted non-Spotify playback session so the last song can resume
+  // on launch. The file's mere existence means a non-Spotify source was playing
+  // at the last save: the runner clears it whenever playback stops or switches
+  // to Spotify, so a present file is always something worth resuming — even when
+  // the browse source was later switched to Spotify while the song kept playing
+  // (browse-source and playback-source are deliberately decoupled). A session
+  // whose source feature isn't compiled into this build is a no-op on restore.
+  let restore_session: Option<crate::core::persisted_playback::PersistedPlayback> =
+    match crate::core::persisted_playback::default_session_path()
+      .and_then(|path| crate::core::persisted_playback::load(&path))
+    {
+      Ok(session) => session,
+      Err(e) => {
+        log::warn!("[session] ignoring unreadable playback session: {e}");
+        None
+      }
+    };
+
   if let Some(tick_rate) = matches
     .get_one::<String>("tick-rate")
     .and_then(|tick_rate| tick_rate.parse().ok())
@@ -1302,8 +1320,17 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
           devices_snapshot = Some(devices_vec);
         }
 
+        // When resuming a non-Spotify session, never transfer Spotify playback
+        // to a device on startup — that would fight the restored source for the
+        // audio output. Treat the device decision as passive (Continue); the
+        // device list is still fetched above for the UI.
+        let device_startup_behavior = if restore_session.is_some() {
+          StartupBehavior::Continue
+        } else {
+          initial_startup_behavior
+        };
         let startup_decision = startup_device_decision(
-          initial_startup_behavior,
+          device_startup_behavior,
           saved_device_id,
           devices_snapshot.as_deref(),
           &device_name,
@@ -1319,20 +1346,34 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         }
       }
 
-      // Apply configured startup play behavior. Continue is passive and must not
+      // Resume a persisted non-Spotify session if there is one; it honors the
+      // startup behavior for its own play/pause decision. Otherwise fall back to
+      // the Spotify startup play behavior. Continue is passive and must not
       // transfer devices, change shuffle, or otherwise activate Spotatui.
-      match initial_startup_behavior {
-        StartupBehavior::Continue => {}
-        StartupBehavior::Play => {
-          network
-            .handle_network_event(IoEvent::Shuffle(initial_shuffle_enabled))
-            .await;
-          network
-            .handle_network_event(IoEvent::StartPlayback(None, None, None))
-            .await;
-        }
-        StartupBehavior::Pause => {
-          network.handle_network_event(IoEvent::PausePlayback).await;
+      if let Some(session) = restore_session {
+        // Resume off the event pump: a slow source (yt-dlp download, remote
+        // fetch) must not stall the Spotify startup events the UI's first render
+        // queues (user, playlists, current playback). The restore drives the
+        // source's own start path, which serializes on the `App` lock like every
+        // other event, so running it concurrently is safe.
+        let restore_app = Arc::clone(&network.app);
+        tokio::spawn(async move {
+          restore_playback_session(&restore_app, session, initial_startup_behavior).await;
+        });
+      } else {
+        match initial_startup_behavior {
+          StartupBehavior::Continue => {}
+          StartupBehavior::Play => {
+            network
+              .handle_network_event(IoEvent::Shuffle(initial_shuffle_enabled))
+              .await;
+            network
+              .handle_network_event(IoEvent::StartPlayback(None, None, None))
+              .await;
+          }
+          StartupBehavior::Pause => {
+            network.handle_network_event(IoEvent::PausePlayback).await;
+          }
         }
       }
 
@@ -1358,6 +1399,148 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   }
 
   Ok(())
+}
+
+/// Resume a persisted non-Spotify playback session at launch.
+///
+/// Drives the source's existing, tested start path (seeding the browse table
+/// with the persisted metadata so the snapshot resolves, then dispatching the
+/// same `StartPlayback` the keyboard would), and afterwards applies the saved
+/// position and the play/pause decision. That decision follows `startup_behavior`:
+/// `Play` forces playing, `Pause` forces paused, and `Continue` restores the
+/// exact state the session had when it was saved.
+///
+/// A failed start (removed video, dead network, macOS local playback, missing
+/// yt-dlp) publishes no session, so the resume step simply finds nothing and
+/// no-ops — startup is never blocked or crashed by a stale session. Any variant
+/// whose source feature is disabled in this build is a no-op.
+#[allow(unused_variables)]
+async fn restore_playback_session(
+  app: &Arc<Mutex<App>>,
+  session: crate::core::persisted_playback::PersistedPlayback,
+  startup_behavior: StartupBehavior,
+) {
+  #[cfg(any(
+    feature = "youtube",
+    feature = "subsonic",
+    feature = "local-files",
+    feature = "internet-radio"
+  ))]
+  use crate::core::persisted_playback::PersistedPlayback;
+
+  // Resolve whether the restored track should end up paused.
+  let resolve_paused = |saved_paused: bool| match startup_behavior {
+    StartupBehavior::Play => false,
+    StartupBehavior::Pause => true,
+    StartupBehavior::Continue => saved_paused,
+  };
+
+  match session {
+    #[cfg(feature = "local-files")]
+    PersistedPlayback::Local {
+      queue,
+      index,
+      position_ms,
+      paused,
+    } => {
+      if queue.is_empty() {
+        return;
+      }
+      // Local reads tags from disk, so the URI queue alone drives the start.
+      crate::infra::local::dispatch::route_local_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(queue), Some(index)),
+      )
+      .await;
+      let guard = app.lock().await;
+      if let Some(s) = guard.local_playback.as_ref() {
+        if position_ms > 0 {
+          let _ = s.player.seek(Duration::from_millis(position_ms));
+        }
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    #[cfg(feature = "subsonic")]
+    PersistedPlayback::Subsonic {
+      tracks,
+      index,
+      position_ms,
+      paused,
+    } => {
+      let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
+      if uris.is_empty() {
+        return;
+      }
+      // Seed the browse table so the start path's snapshot resolves metadata.
+      app.lock().await.track_table.tracks = tracks;
+      crate::infra::subsonic::dispatch::route_subsonic_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(uris), Some(index)),
+      )
+      .await;
+      let guard = app.lock().await;
+      if let Some(s) = guard.subsonic_playback.as_ref() {
+        if position_ms > 0 {
+          let _ = s.player.seek(Duration::from_millis(position_ms));
+        }
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    #[cfg(feature = "youtube")]
+    PersistedPlayback::YouTube {
+      tracks,
+      index,
+      position_ms,
+      paused,
+    } => {
+      let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
+      if uris.is_empty() {
+        return;
+      }
+      app.lock().await.track_table.tracks = tracks;
+      crate::infra::youtube::dispatch::route_youtube_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(uris), Some(index)),
+      )
+      .await;
+      let guard = app.lock().await;
+      if let Some(s) = guard.youtube_playback.as_ref() {
+        if position_ms > 0 {
+          let _ = s.player.seek(Duration::from_millis(position_ms));
+        }
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    #[cfg(feature = "internet-radio")]
+    PersistedPlayback::Radio { station, paused } => {
+      let Some(uri) = station.uri.clone() else {
+        return;
+      };
+      // Seed the browse table so the start path's station snapshot resolves.
+      app.lock().await.track_table.tracks = vec![station];
+      crate::infra::radio::dispatch::route_radio_event(
+        app,
+        &IoEvent::StartPlayback(Some(uri), None, None),
+      )
+      .await;
+      // A live stream has no seekable position; only apply the pause decision.
+      let guard = app.lock().await;
+      if let Some(s) = guard.radio_playback.as_ref() {
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    // Any variant whose source feature is disabled in this build.
+    #[allow(unreachable_patterns)]
+    _ => {}
+  }
 }
 
 async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Network) {
