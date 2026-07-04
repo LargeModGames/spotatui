@@ -70,11 +70,7 @@ pub enum Key {
 impl Key {
   /// Returns the function key corresponding to the given number
   ///
-  /// 1 -> F1, etc...
-  ///
-  /// # Panics
-  ///
-  /// If `n == 0 || n > 12`
+  /// 1 -> F1, etc... Unmapped keys (F13+) return `Unknown`.
   pub fn from_f(n: u8) -> Key {
     match n {
       0 => Key::F0,
@@ -90,7 +86,7 @@ impl Key {
       10 => Key::F10,
       11 => Key::F11,
       12 => Key::F12,
-      _ => panic!("unknown function key: F{}", n),
+      _ => Key::Unknown,
     }
   }
 }
