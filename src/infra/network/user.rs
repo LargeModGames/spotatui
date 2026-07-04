@@ -1,8 +1,10 @@
 use super::requests::is_rate_limited_error;
 use super::Network;
-use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId};
+use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId, UserInfo};
+use crate::core::plugin_api::TrackInfo;
 use anyhow::anyhow;
 
+use crate::infra::network::mapping::map_cursor_page;
 use rand::seq::SliceRandom;
 use rspotify::model::{
   artist::FullArtist,
@@ -75,7 +77,17 @@ impl UserNetwork for Network {
     match self.spotify_get_typed::<PrivateUser>("me", &[]).await {
       Ok(user) => {
         let mut app = self.app.lock().await;
-        app.user = Some(user);
+        // `PrivateUser::country` is deprecated upstream but still the only
+        // market signal available; mirror the existing read in `get_user_country`.
+        #[allow(deprecated)]
+        let country = user.country.map(|c| <&'static str>::from(c).to_string());
+        app.user = Some(UserInfo {
+          id: user.id.id().to_string(),
+          display_name: user.display_name.clone(),
+          // Store the ISO 3166-1 alpha-2 code as a plain string so no rspotify
+          // type leaks into App state; `App::get_user_country` re-derives it.
+          country,
+        });
       }
       Err(e) => {
         let err = anyhow!(e);
@@ -152,7 +164,7 @@ impl UserNetwork for Network {
     {
       Ok(page) => {
         let mut app = self.app.lock().await;
-        app.discover_top_tracks = page.items;
+        app.discover_top_tracks = page.items.iter().map(TrackInfo::from).collect();
         app.discover_loading = false;
       }
       Err(e) => {
@@ -209,7 +221,7 @@ impl UserNetwork for Network {
 
     // 4. Update state
     let mut app = self.app.lock().await;
-    app.discover_artists_mix = all_tracks;
+    app.discover_artists_mix = all_tracks.iter().map(TrackInfo::from).collect();
     app.discover_loading = false;
   }
 
@@ -223,8 +235,9 @@ impl UserNetwork for Network {
       .await
     {
       Ok(recently_played) => {
+        let domain_page = map_cursor_page(&recently_played, |ph| TrackInfo::from(&ph.track));
         let mut app = self.app.lock().await;
-        app.recently_played.result = Some(recently_played);
+        app.recently_played.result = Some(domain_page);
         app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
       }
       Err(e) => {

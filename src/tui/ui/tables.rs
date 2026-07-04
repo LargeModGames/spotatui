@@ -8,11 +8,10 @@ use ratatui::{
   widgets::{Block, Borders, Row, Table},
   Frame,
 };
-use rspotify::model::show::ResumePoint;
 use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
-use super::util::{create_artist_string, get_color, get_percentage_width, millis_to_minutes};
+use super::util::{get_color, get_percentage_width, join_artist_names, millis_to_minutes};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TableId {
@@ -62,6 +61,44 @@ struct AlbumUi {
   title: String,
 }
 
+/// Render the Local Files folder browser: a selectable list of folders (one per
+/// subdirectory of the configured music directory), each with its track count.
+pub fn draw_local_browser(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let current_route = app.get_current_route();
+  let highlight_state = (
+    current_route.active_block == ActiveBlock::LocalBrowser,
+    current_route.hovered_block == ActiveBlock::LocalBrowser,
+  );
+
+  let items: Vec<String> = app
+    .local_playlists
+    .iter()
+    .map(|folder| {
+      if folder.track_count > 0 {
+        format!("{} ({} tracks)", folder.name, folder.track_count)
+      } else {
+        folder.name.clone()
+      }
+    })
+    .collect();
+
+  let title = if app.local_playlists.is_empty() {
+    "Local Files (no folders — set behavior.local_music_path)"
+  } else {
+    "Local Files"
+  };
+
+  super::util::draw_selectable_list(
+    f,
+    app,
+    layout_chunk,
+    title,
+    &items,
+    highlight_state,
+    Some(app.local_playlists_index),
+  );
+}
+
 pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let header = TableHeader {
     id: TableId::Artist,
@@ -83,7 +120,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .items
       .iter()
       .map(|item| TableItem {
-        id: item.id.id().to_string(),
+        id: item.id.clone().unwrap_or_default(),
         format: vec![item.name.to_owned()],
       })
       .collect::<Vec<TableItem>>();
@@ -138,13 +175,9 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items = saved_shows
       .items
       .iter()
-      .map(|show_page| {
-        #[allow(deprecated)]
-        let publisher = show_page.show.publisher.to_owned();
-        TableItem {
-          id: show_page.show.id.id().to_string(),
-          format: vec![show_page.show.name.to_owned(), publisher],
-        }
+      .map(|show| TableItem {
+        id: show.id.clone().unwrap_or_default(),
+        format: vec![show.name.to_owned(), show.publisher.to_owned()],
       })
       .collect::<Vec<TableItem>>();
 
@@ -209,24 +242,20 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             .items
             .iter()
             .map(|item| TableItem {
-              id: item
-                .id
-                .as_ref()
-                .map(|id| id.id().to_string())
-                .unwrap_or_else(|| "".to_string()),
+              id: item.id.clone().unwrap_or_default(),
               format: vec![
                 "".to_string(),
                 item.track_number.to_string(),
                 item.name.to_owned(),
-                create_artist_string(&item.artists),
-                millis_to_minutes(item.duration.num_milliseconds() as u128),
+                item.artists.join(", "),
+                millis_to_minutes(item.duration_ms as u128),
               ],
             })
             .collect::<Vec<TableItem>>(),
           title: format!(
             "{} by {}",
             selected_album_simplified.album.name,
-            create_artist_string(&selected_album_simplified.album.artists)
+            join_artist_names(&selected_album_simplified.album.artists)
           ),
           selected_index: selected_album_simplified.selected_index,
         })
@@ -236,27 +265,22 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         items: selected_album
           .album
           .tracks
-          .items
           .iter()
           .map(|item| TableItem {
-            id: item
-              .id
-              .as_ref()
-              .map(|id| id.id().to_string())
-              .unwrap_or_else(|| "".to_string()),
+            id: item.id.clone().unwrap_or_default(),
             format: vec![
               "".to_string(),
               item.track_number.to_string(),
               item.name.to_owned(),
-              create_artist_string(&item.artists),
-              millis_to_minutes(item.duration.num_milliseconds() as u128),
+              item.artists.join(", "),
+              millis_to_minutes(item.duration_ms as u128),
             ],
           })
           .collect::<Vec<TableItem>>(),
         title: format!(
           "{} by {}",
           selected_album.album.name,
-          create_artist_string(&selected_album.album.artists)
+          join_artist_names(&selected_album.album.artists)
         ),
         selected_index: app.saved_album_tracks_index,
       }),
@@ -320,17 +344,13 @@ pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
     .tracks
     .iter()
     .map(|item| TableItem {
-      id: item
-        .id
-        .as_ref()
-        .map(|id| id.id().to_string())
-        .unwrap_or_else(|| "".to_string()),
+      id: item.id.clone().unwrap_or_default(),
       format: vec![
         "".to_string(),
         item.name.to_owned(),
-        create_artist_string(&item.artists),
-        item.album.name.to_owned(),
-        millis_to_minutes(item.duration.num_milliseconds() as u128),
+        item.artists.join(", "),
+        item.album.clone(),
+        millis_to_minutes(item.duration_ms as u128),
       ],
     })
     .collect::<Vec<TableItem>>();
@@ -400,17 +420,13 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     .tracks
     .iter()
     .map(|item| TableItem {
-      id: item
-        .id
-        .as_ref()
-        .map(|id| id.id().to_string())
-        .unwrap_or_else(|| "".to_string()),
+      id: item.id.clone().unwrap_or_default(),
       format: vec![
         "".to_string(),
         item.name.to_owned(),
-        create_artist_string(&item.artists),
-        item.album.name.to_owned(),
-        millis_to_minutes(item.duration.num_milliseconds() as u128),
+        item.artists.join(", "),
+        item.album.clone(),
+        millis_to_minutes(item.duration_ms as u128),
       ],
     })
     .collect::<Vec<TableItem>>();
@@ -475,16 +491,16 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items = saved_albums
       .items
       .iter()
-      .map(|album_page| TableItem {
-        id: album_page.album.id.id().to_string(),
+      .map(|saved_album| TableItem {
+        id: saved_album.album.id.clone().unwrap_or_default(),
         format: vec![
           format!(
             "{}{}",
             app.user_config.padded_liked_icon(),
-            &album_page.album.name
+            &saved_album.album.name
           ),
-          create_artist_string(&album_page.album.artists),
-          album_page.album.release_date.to_owned(),
+          join_artist_names(&saved_album.album.artists),
+          saved_album.album.release_date.clone().unwrap_or_default(),
         ],
       })
       .collect::<Vec<TableItem>>();
@@ -541,29 +557,24 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .items
       .iter()
       .map(|episode| {
-        let (played_str, time_str) = match episode.resume_point {
-          Some(ResumePoint {
-            fully_played,
-            resume_position,
-          }) => (
-            if fully_played {
+        let duration_ms = episode.duration_ms as u128;
+        let (played_str, time_str) = match &episode.resume_point {
+          Some(resume_point) => (
+            if resume_point.fully_played {
               " ✔".to_owned()
             } else {
               "".to_owned()
             },
             format!(
               "{} / {}",
-              millis_to_minutes(resume_position.num_milliseconds() as u128),
-              millis_to_minutes(episode.duration.num_milliseconds() as u128)
+              millis_to_minutes(resume_point.resume_position_ms as u128),
+              millis_to_minutes(duration_ms)
             ),
           ),
-          None => (
-            "".to_owned(),
-            millis_to_minutes(episode.duration.num_milliseconds() as u128),
-          ),
+          None => ("".to_owned(), millis_to_minutes(duration_ms)),
         };
         TableItem {
-          id: episode.id.id().to_string(),
+          id: episode.id.clone().unwrap_or_default(),
           format: vec![
             played_str,
             episode.release_date.to_owned(),
@@ -574,14 +585,12 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       })
       .collect::<Vec<TableItem>>();
 
-    #[allow(deprecated)]
     let title = match &app.episode_table_context {
       EpisodeTableContext::Simplified => match &app.selected_show_simplified {
         Some(selected_show) => {
           format!(
             "{} by {}",
-            selected_show.show.name.to_owned(),
-            selected_show.show.publisher
+            selected_show.show.name, selected_show.show.publisher
           )
         }
         None => "Episodes".to_owned(),
@@ -590,8 +599,7 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         Some(selected_show) => {
           format!(
             "{} by {}",
-            selected_show.show.name.to_owned(),
-            selected_show.show.publisher
+            selected_show.show.name, selected_show.show.publisher
           )
         }
         None => "Episodes".to_owned(),
@@ -652,17 +660,12 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
       .items
       .iter()
       .map(|item| TableItem {
-        id: item
-          .track
-          .id
-          .as_ref()
-          .map(|id| id.id().to_string())
-          .unwrap_or_else(|| "".to_string()),
+        id: item.id.clone().unwrap_or_default(),
         format: vec![
           "".to_string(),
-          item.track.name.to_owned(),
-          create_artist_string(&item.track.artists),
-          millis_to_minutes(item.track.duration.num_milliseconds() as u128),
+          item.name.clone(),
+          item.artists.join(", "),
+          millis_to_minutes(item.duration_ms as u128),
         ],
       })
       .collect::<Vec<TableItem>>();
@@ -808,4 +811,56 @@ pub fn table_scroll_offset(selected_index: usize, visible_rows: usize) -> usize 
   }
 
   selected_index.saturating_sub(visible_rows.saturating_sub(1))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::plugin_api::PlaylistInfo;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  fn rendered(app: &App, area: Rect) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal.draw(|f| draw_local_browser(f, app, area)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..area.height)
+      .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect()
+  }
+
+  fn folder(name: &str, track_count: u32) -> PlaylistInfo {
+    PlaylistInfo {
+      uri: format!("file:///music/{name}"),
+      name: name.to_string(),
+      owner: "local".to_string(),
+      track_count,
+      id: None,
+      owner_id: None,
+      collaborative: false,
+      public: None,
+      image_url: None,
+    }
+  }
+
+  #[test]
+  fn local_browser_lists_folders_with_track_counts() {
+    let mut app = App::default();
+    app.local_playlists = vec![folder("MyAlbum", 3)];
+    let content = rendered(&app, Rect::new(0, 0, 60, 6));
+    assert!(
+      content.contains("MyAlbum (3 tracks)"),
+      "folder name and track count should render: {content}"
+    );
+  }
+
+  #[test]
+  fn local_browser_empty_shows_config_hint() {
+    let app = App::default();
+    let content = rendered(&app, Rect::new(0, 0, 80, 6));
+    assert!(
+      content.contains("local_music_path"),
+      "empty browser should hint at the config key: {content}"
+    );
+  }
 }

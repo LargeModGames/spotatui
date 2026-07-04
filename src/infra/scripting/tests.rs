@@ -1,4 +1,4 @@
-use crate::core::plugin_api::{PlaybackState, TrackInfo};
+use crate::core::plugin_api::{ArtistRef, PlaybackState, TrackInfo};
 
 use super::effects::ScriptEffect;
 use super::engine::ScriptEngine;
@@ -12,6 +12,17 @@ fn track(uri: &str, name: &str) -> TrackInfo {
     artists: vec!["Artist".to_string()],
     album: "Album".to_string(),
     duration_ms: 200_000,
+    id: None,
+    album_id: None,
+    artist_refs: vec![ArtistRef {
+      id: None,
+      name: "Artist".to_string(),
+    }],
+    is_playable: true,
+    is_local: false,
+    track_number: 0,
+    explicit: false,
+    image_url: None,
   }
 }
 

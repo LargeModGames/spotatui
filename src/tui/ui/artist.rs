@@ -6,7 +6,7 @@ use ratatui::{
 use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
-use super::util::{create_artist_string, draw_selectable_list, get_artist_highlight_state};
+use super::util::{draw_selectable_list, get_artist_highlight_state, join_artist_names};
 
 pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let [tracks_area, albums_area, related_artists_area] =
@@ -29,7 +29,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             _ => None,
           };
 
-          if track_id == top_track.id.as_ref().map(|id| id.id().to_string()) {
+          if track_id.is_some() && track_id == top_track.id {
             name.push_str("▶ ");
           }
         };
@@ -55,14 +55,14 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .map(|item| {
         let mut album_artist = String::new();
         if let Some(album_id) = &item.id {
-          if app.saved_album_ids_set.contains(album_id.id()) {
+          if app.saved_album_ids_set.contains(album_id.as_str()) {
             album_artist.push_str(&app.user_config.padded_liked_icon());
           }
         }
         album_artist.push_str(&format!(
           "{} - {} ({})",
           item.name.to_owned(),
-          create_artist_string(&item.artists),
+          join_artist_names(&item.artists),
           item.album_type.as_deref().unwrap_or("unknown")
         ));
         album_artist
@@ -84,8 +84,10 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .iter()
       .map(|item| {
         let mut artist = String::new();
-        if app.followed_artist_ids_set.contains(item.id.id()) {
-          artist.push_str(&app.user_config.padded_liked_icon());
+        if let Some(artist_id) = &item.id {
+          if app.followed_artist_ids_set.contains(artist_id.as_str()) {
+            artist.push_str(&app.user_config.padded_liked_icon());
+          }
         }
         artist.push_str(&item.name.to_owned());
         artist

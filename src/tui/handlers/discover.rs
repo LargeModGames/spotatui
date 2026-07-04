@@ -2,7 +2,6 @@ use super::common_key_events;
 use crate::core::app::{ActiveBlock, App, RouteId, TrackTableContext};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::model::PlayableId;
 
 const DISCOVER_OPTIONS_COUNT: usize = 2;
 
@@ -84,10 +83,8 @@ pub fn handler(key: Key, app: &mut App) {
         _ => return,
       };
       if let Some(track) = tracks.first() {
-        if let Some(track_id) = &track.id {
-          app.dispatch(IoEvent::AddItemToQueue(PlayableId::Track(
-            track_id.clone_static(),
-          )));
+        if let Some(uri) = track.uri.clone() {
+          app.dispatch(IoEvent::AddItemToQueue(uri));
         }
       }
     }

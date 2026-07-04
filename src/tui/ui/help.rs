@@ -170,7 +170,7 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("General"),
     ],
     vec![
-      String::from("Select device to play music on"),
+      String::from("Switch music source / select playback device"),
       key_bindings.manage_devices.to_string(),
       String::from("General"),
     ],
@@ -325,6 +325,11 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("Playlist"),
     ],
     vec![
+      String::from("Remove favorite radio station"),
+      String::from("D"),
+      String::from("Radio"),
+    ],
+    vec![
       String::from("Follow an artist/playlist"),
       String::from("w"),
       String::from("Search result"),
@@ -358,6 +363,11 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("Toggle saved state for currently playing track/episode"),
       key_bindings.like_track.to_string(),
       String::from("General"),
+    ],
+    vec![
+      String::from("Favorite highlighted/playing radio station"),
+      key_bindings.like_track.to_string(),
+      String::from("Radio"),
     ],
     vec![
       String::from("Generate 30-day listening recap card"),

@@ -1,7 +1,7 @@
 on:
   pull_request:
   push:
-    branches: master
+    branches: [main]
 
 name: Continuous Integration
 
@@ -24,9 +24,24 @@ jobs:
           MESSAGE
 
   check:
-    name: Check
+    name: Check (${{ matrix.name }})
     runs-on: ubuntu-latest
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Default `cargo run` build.
+          - name: default
+            args: "--locked"
+          # The exact feature set shipped for Linux by cd.yml, so every new
+          # source subsystem (local-files, subsonic, internet-radio, youtube)
+          # and cover-art is compiled and tested in CI.
+          - name: all-sources
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+          # Slim build used for fast local iteration (matches CLAUDE.md).
+          - name: slim
+            args: "--locked --no-default-features --features telemetry"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -39,16 +54,27 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --locked
+          args: ${{ matrix.args }}
 
   test:
-    name: Test Suite
+    name: Test Suite (${{ matrix.name }})
     runs-on: ubuntu-latest
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            args: "--locked"
+          - name: all-sources
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+          - name: slim
+            args: "--locked --no-default-features --features telemetry"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -58,15 +84,15 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
-      # These dependencies are required for `clipboard`
+      # These dependencies are required for `clipboard` and the audio backends.
       - run: |
           sudo apt-get update
-          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --locked
+          args: ${{ matrix.args }}
 
   fmt:
     name: Rustfmt
@@ -87,9 +113,19 @@ jobs:
           args: --all -- --check
 
   clippy:
-    name: Clippy
+    name: Clippy (${{ matrix.name }})
     runs-on: ubuntu-latest
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            args: "--locked"
+          - name: all-sources
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+          - name: slim
+            args: "--locked --no-default-features --features telemetry"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -103,9 +139,9 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --locked -- -D warnings
+          args: ${{ matrix.args }} -- -D warnings

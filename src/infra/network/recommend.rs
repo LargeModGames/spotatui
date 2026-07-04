@@ -1,5 +1,6 @@
 use super::Network;
 use crate::core::app::{ActiveBlock, RouteId, TrackTableContext};
+use crate::core::plugin_api::TrackInfo;
 use anyhow::anyhow;
 use rspotify::model::{
   enums::Country,
@@ -29,7 +30,7 @@ pub trait RecommendationNetwork {
     &mut self,
     seed_artists: Option<Vec<ArtistId<'static>>>,
     seed_tracks: Option<Vec<TrackId<'static>>>,
-    first_track: Box<Option<FullTrack>>,
+    first_track: Box<Option<TrackInfo>>,
     country: Option<Country>,
   );
   async fn get_recommendations_for_track_id(
@@ -44,7 +45,7 @@ impl RecommendationNetwork for Network {
     &mut self,
     seed_artists: Option<Vec<ArtistId<'static>>>,
     seed_tracks: Option<Vec<TrackId<'static>>>,
-    first_track: Box<Option<FullTrack>>,
+    first_track: Box<Option<TrackInfo>>,
     country: Option<Country>,
   ) {
     let limit = self.large_search_limit;
@@ -111,7 +112,7 @@ impl RecommendationNetwork for Network {
         };
 
         let mut app = self.app.lock().await;
-        app.track_table.tracks = full_tracks;
+        app.track_table.tracks = full_tracks.iter().map(TrackInfo::from).collect();
 
         // Prepend the seed track if available so user knows context
         if let Some(track) = *first_track {
@@ -132,7 +133,7 @@ impl RecommendationNetwork for Network {
     country: Option<Country>,
   ) {
     let seed_tracks = Some(vec![track_id.clone()]);
-    let first_track: Box<Option<FullTrack>> = Box::new(None);
+    let first_track: Box<Option<TrackInfo>> = Box::new(None);
 
     self
       .get_recommendations_for_seed(None, seed_tracks, first_track, country)

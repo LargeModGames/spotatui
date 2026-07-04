@@ -3,7 +3,6 @@ use crate::core::app::ActiveBlock;
 use crate::core::app::{App, EpisodeTableContext};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::{model::PlayableId, prelude::*};
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
@@ -67,15 +66,23 @@ fn jump_to_end(app: &mut App) {
 
 fn on_enter(app: &mut App) {
   if let Some(episodes) = app.library.show_episodes.get_results(None) {
-    let episode_ids: Vec<PlayableId<'static>> = episodes
-      .items
-      .iter()
-      .map(|episode| PlayableId::Episode(episode.id.clone().into_static()))
-      .collect();
+    // Episodes without a parseable id are skipped, so the playback offset must
+    // count only the kept rows up to the selected index (mirrors the saved-track
+    // playback path); otherwise dropping an earlier row would shift the offset.
+    let mut episode_ids: Vec<String> = Vec::with_capacity(episodes.items.len());
+    let mut selected_offset = None;
+    for (row_index, episode) in episodes.items.iter().enumerate() {
+      if let Some(uri) = episode.uri.clone() {
+        if row_index == app.episode_list_index {
+          selected_offset = Some(episode_ids.len());
+        }
+        episode_ids.push(uri);
+      }
+    }
     app.dispatch(IoEvent::StartPlayback(
       None,
       Some(episode_ids),
-      Some(app.episode_list_index),
+      selected_offset,
     ));
   }
 }
@@ -85,19 +92,18 @@ fn handle_prev_event(app: &mut App) {
 }
 
 fn handle_next_event(app: &mut App) {
-  match app.episode_table_context {
-    EpisodeTableContext::Full => {
-      if let Some(selected_episode) = app.selected_show_full.clone() {
-        let show_id = selected_episode.show.id.id().to_string();
-        app.get_episode_table_next(show_id)
-      }
-    }
-    EpisodeTableContext::Simplified => {
-      if let Some(selected_episode) = app.selected_show_simplified.clone() {
-        let show_id = selected_episode.show.id.id().to_string();
-        app.get_episode_table_next(show_id)
-      }
-    }
+  let show_id = match app.episode_table_context {
+    EpisodeTableContext::Full => app
+      .selected_show_full
+      .as_ref()
+      .and_then(|s| s.show.id.clone()),
+    EpisodeTableContext::Simplified => app
+      .selected_show_simplified
+      .as_ref()
+      .and_then(|s| s.show.id.clone()),
+  };
+  if let Some(show_id) = show_id {
+    app.get_episode_table_next(show_id)
   }
 }
 

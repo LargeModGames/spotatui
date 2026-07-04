@@ -539,7 +539,7 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
       crate::core::app::AlbumTableContext::Full => app
         .selected_album_full
         .as_ref()
-        .map(|album| album.album.tracks.items.len())
+        .map(|album| album.album.tracks.len())
         .unwrap_or(0),
       crate::core::app::AlbumTableContext::Simplified => app
         .selected_album_simplified
@@ -1075,7 +1075,7 @@ mod tests {
   }
 
   fn with_saved_albums(app: &mut App, count: usize) {
-    app.library.saved_albums.add_pages(Page {
+    let page = Page {
       href: "https://example.com/me/albums".to_string(),
       items: (0..count).map(saved_album).collect(),
       limit: count as u32,
@@ -1083,7 +1083,12 @@ mod tests {
       offset: 0,
       previous: None,
       total: count as u32,
-    });
+    };
+    let domain_page = crate::infra::network::mapping::map_page(
+      &page,
+      crate::infra::network::mapping::saved_album_info,
+    );
+    app.library.saved_albums.add_pages(domain_page);
   }
 
   fn open_settings(app: &mut App) {
@@ -1843,8 +1848,8 @@ mod tests {
     app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
     app.track_table.context = Some(TrackTableContext::RecommendedTracks);
     app.track_table.tracks = vec![
-      full_track("0000000000000000000001", "Track 1"),
-      full_track("0000000000000000000002", "Track 2"),
+      crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+      crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
     app.track_table.selected_index = 0;
 
@@ -1943,19 +1948,11 @@ mod tests {
     let mut app = App::default();
     app.album_table_context = AlbumTableContext::Simplified;
     app.selected_album_simplified = Some(SelectedAlbum {
-      album: SimplifiedAlbum {
+      album: crate::core::plugin_api::AlbumInfo {
         name: "Album".to_string(),
         ..Default::default()
       },
-      tracks: Page {
-        href: "https://example.com/albums/1/tracks".to_string(),
-        items: Vec::<SimplifiedTrack>::new(),
-        limit: 0,
-        next: None,
-        offset: 0,
-        previous: None,
-        total: 0,
-      },
+      tracks: crate::core::pagination::Paged::default(),
       selected_index: 1,
     });
 

@@ -18,6 +18,7 @@ mod help_menu;
 mod home;
 mod input;
 mod library;
+mod local_browser;
 mod lyrics_view;
 mod miniplayer;
 mod mouse;
@@ -34,11 +35,14 @@ mod settings;
 mod sort_menu;
 mod track_table;
 
-use crate::core::app::{ActiveBlock, App, ArtistBlock, InputContext, RouteId, SearchResultBlock};
+use crate::core::app::{
+  ActiveBlock, App, ArtistBlock, InputContext, RouteId, SearchResultBlock, SourceFocus,
+};
+use crate::core::source::Source;
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::model::idtypes::PlaylistId;
 use rspotify::model::{context::CurrentPlaybackContext, PlayableItem};
+use rspotify::prelude::Id;
 
 pub use input::handler as input_handler;
 pub use mouse::handler as mouse_handler;
@@ -62,6 +66,21 @@ fn key_matches_open_settings_binding(key: Key, binding: Key) -> bool {
 fn open_settings(app: &mut App) {
   app.load_settings_for_category();
   app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+}
+
+/// The `radio:` URI scheme shared across handlers. The canonical parser in
+/// `crate::infra::radio` lives behind the `internet-radio` feature, so the
+/// favoriting handlers (which persist config even in slim builds) keep this one
+/// ungated copy rather than duplicating it per file.
+pub(super) const RADIO_URI_PREFIX: &str = "radio:";
+
+/// Strip the `radio:` prefix off a station URI and return the trimmed,
+/// non-empty stream URL.
+pub(super) fn radio_stream_url(uri: &str) -> Option<&str> {
+  uri
+    .strip_prefix(RADIO_URI_PREFIX)
+    .map(str::trim)
+    .filter(|url| !url.is_empty())
 }
 
 fn should_route_friends_before_globals(key: Key, app: &App) -> bool {
@@ -166,7 +185,24 @@ pub fn handle_app(key: Key, app: &mut App) {
       handle_jump_to_context(app);
     }
     _ if key == app.user_config.keys.manage_devices => {
-      app.dispatch(IoEvent::GetDevices);
+      // Open the combined Source & Device picker immediately so it is reachable
+      // even offline / when Local is the active source. Initial focus is the
+      // Source panel under Local (devices are Spotify Connect only), else Devices.
+      app.source_list_index = Source::ALL
+        .iter()
+        .position(|s| *s == app.active_source)
+        .unwrap_or(0);
+      app.source_device_focus = if app.active_source == Source::Spotify {
+        SourceFocus::Devices
+      } else {
+        SourceFocus::Source
+      };
+      app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+      // Only Spotify needs a `me/player/devices` fetch; skip it under Local so an
+      // unauthenticated/offline session doesn't surface a spurious error.
+      if app.active_source == Source::Spotify {
+        app.dispatch(IoEvent::GetDevices);
+      }
     }
     _ if key == app.user_config.keys.decrease_volume => {
       app.decrease_volume();
@@ -218,11 +254,27 @@ pub fn handle_app(key: Key, app: &mut App) {
       app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
     }
     _ if key == app.user_config.keys.search => {
-      app.input_context = InputContext::GlobalSearch;
-      app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
+      // Search is gated on the active source's capability (no `Searcher` impl
+      // for Local Files), so it's a no-op with a hint there.
+      if app.active_source.supports_search() {
+        app.input_context = InputContext::GlobalSearch;
+        app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
+      } else {
+        app.set_status_message(
+          format!("Search isn't available for {}", app.active_source.label()),
+          4,
+        );
+      }
     }
     _ if key == app.user_config.keys.copy_song_url => {
-      app.copy_song_url();
+      if app.active_source.supports_library() {
+        app.copy_song_url();
+      } else {
+        app.set_status_message(
+          format!("Copy URL isn't available for {}", app.active_source.label()),
+          4,
+        );
+      }
     }
     _ if key == app.user_config.keys.copy_album_url => {
       app.copy_album_url();
@@ -250,8 +302,19 @@ pub fn handle_app(key: Key, app: &mut App) {
     _ if key == app.user_config.keys.like_track => {
       if is_input_mode(app) {
         handle_block_events(key, app);
-      } else {
+      } else if app.active_source == Source::Radio {
+        if app.get_current_route().active_block == ActiveBlock::SearchResultBlock {
+          handle_block_events(key, app);
+        } else if !search_results::favorite_current_radio_station(app) {
+          app.set_status_message("No radio station selected or playing".to_string(), 4);
+        }
+      } else if app.active_source.supports_like() {
         playbar::toggle_like_currently_playing_item(app);
+      } else {
+        app.set_status_message(
+          format!("Like isn't available for {}", app.active_source.label()),
+          4,
+        );
       }
     }
     #[cfg(feature = "scripting")]
@@ -421,6 +484,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Artists => {
       artists::handler(key, app);
     }
+    ActiveBlock::LocalBrowser => {
+      local_browser::handler(key, app);
+    }
     ActiveBlock::Discover => {
       discover::handler(key, app);
     }
@@ -543,9 +609,7 @@ fn handle_jump_to_context(app: &mut App) {
         rspotify::model::enums::Type::Album => handle_jump_to_album(app),
         rspotify::model::enums::Type::Artist => handle_jump_to_artist_album(app),
         rspotify::model::enums::Type::Playlist => {
-          if let Ok(playlist_id) = PlaylistId::from_uri(&play_context.uri) {
-            app.dispatch(IoEvent::GetPlaylistItems(playlist_id.into_static(), 0));
-          }
+          app.dispatch(IoEvent::GetPlaylistItems(play_context.uri.clone(), 0));
         }
         _ => {}
       }
@@ -563,7 +627,9 @@ fn handle_jump_to_album(app: &mut App) {
         app.dispatch(IoEvent::GetAlbumTracks(Box::new(track.album)));
       }
       PlayableItem::Episode(episode) => {
-        app.dispatch(IoEvent::GetShowEpisodes(Box::new(episode.show)));
+        app.dispatch(IoEvent::GetShowEpisodes(Box::new(
+          crate::core::plugin_api::ShowInfo::from(&episode.show),
+        )));
       }
       _ => {}
     };
@@ -580,7 +646,7 @@ fn handle_jump_to_artist_album(app: &mut App) {
       PlayableItem::Track(track) => {
         if let Some(artist) = track.artists.first() {
           if let Some(artist_id) = &artist.id {
-            app.get_artist(artist_id.as_ref().into_static(), artist.name.clone());
+            app.get_artist(artist_id.id().to_string(), artist.name.clone());
           }
         }
       }
@@ -604,7 +670,7 @@ mod tests {
     device::DevicePayload,
     enums::{DeviceType, RepeatState},
     idtypes::PlaylistId,
-    CurrentlyPlayingType, Device, PlayableId, PlayableItem,
+    CurrentlyPlayingType, Device, PlayableItem,
   };
   use std::{
     sync::mpsc::{channel, TryRecvError},
@@ -737,8 +803,8 @@ mod tests {
     handle_app(Key::Char('F'), &mut app);
 
     match rx.recv().unwrap() {
-      IoEvent::ToggleSaveTrack(PlayableId::Track(track_id)) => {
-        assert_eq!(track_id, expected_track_id);
+      IoEvent::ToggleSaveTrack(track_id) => {
+        assert_eq!(track_id, expected_track_id.uri());
       }
       _ => panic!("unexpected event"),
     }
@@ -920,5 +986,116 @@ mod tests {
     handle_app(Key::Char(','), &mut app);
 
     assert_eq!(app.get_current_route().active_block, ActiveBlock::SortMenu);
+  }
+
+  // --- U5: source-gate tests ---
+
+  #[test]
+  fn like_track_shows_hint_when_local_source() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    // Default like_track key is 'F' (Shift+F)
+    handle_app(app.user_config.keys.like_track, &mut app);
+
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Like isn't available for Local Files")
+    );
+  }
+
+  #[test]
+  fn like_track_does_not_show_hint_when_spotify_source() {
+    // No io_tx here so dispatch is a no-op; we just verify no status is set.
+    let mut app = App::default();
+    app.active_source = Source::Spotify;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.like_track, &mut app);
+
+    // No playback context, so toggle_like returns early with a different message
+    // (or nothing). The important thing is it's NOT the Local-gate message.
+    assert_ne!(
+      app.status_message.as_deref(),
+      Some("Like isn't available for Local Files")
+    );
+  }
+
+  #[test]
+  fn global_like_key_favorites_radio_search_station() {
+    use crate::core::pagination::Paged;
+    use crate::core::plugin_api::TrackInfo;
+    use crate::core::user_config::UserConfigPaths;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::default();
+    app.active_source = Source::Radio;
+    app.user_config.path_to_config = Some(UserConfigPaths {
+      config_file_path: dir.path().join("config.yml"),
+    });
+    app.search_results.tracks = Some(Paged {
+      items: vec![TrackInfo {
+        uri: Some("radio:https://example.com/stream".to_string()),
+        name: "Example FM".to_string(),
+        artists: vec![],
+        album: String::new(),
+        duration_ms: 0,
+        id: None,
+        album_id: None,
+        artist_refs: vec![],
+        is_playable: true,
+        is_local: false,
+        track_number: 0,
+        explicit: false,
+        image_url: None,
+      }],
+      total: 1,
+      ..Default::default()
+    });
+    app.search_results.selected_tracks_index = Some(0);
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+
+    let favorite_key = app.user_config.keys.like_track;
+    handle_app(favorite_key, &mut app);
+
+    assert_eq!(app.user_config.behavior.radio_stations.len(), 1);
+    assert_eq!(
+      app.user_config.behavior.radio_stations[0].url,
+      "https://example.com/stream"
+    );
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Favorited radio station: Example FM")
+    );
+  }
+
+  #[test]
+  fn copy_song_url_shows_hint_when_local_source() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.copy_song_url, &mut app);
+
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Copy URL isn't available for Local Files")
+    );
+  }
+
+  #[test]
+  fn copy_song_url_proceeds_when_spotify_source() {
+    // No clipboard in default App, so copy_song_url exits early; but no Local gate message.
+    let mut app = App::default();
+    app.active_source = Source::Spotify;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.copy_song_url, &mut app);
+
+    assert_ne!(
+      app.status_message.as_deref(),
+      Some("Copy URL isn't available for Local Files")
+    );
   }
 }

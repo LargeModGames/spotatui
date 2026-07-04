@@ -3,6 +3,8 @@ use crate::core::app::{
   ActiveBlock, Artist, ArtistBlock, EpisodeTableContext, RouteId, ScrollableResultPages,
   SelectedFullShow, SelectedShow,
 };
+use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
+use crate::infra::network::mapping::map_page;
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
@@ -11,7 +13,6 @@ use rspotify::model::{
   enums::Country,
   idtypes::{AlbumId, ArtistId, ShowId, TrackId},
   page::{CursorBasedPage, Page},
-  show::SimplifiedShow,
   track::FullTrack,
 };
 use rspotify::prelude::*;
@@ -46,14 +47,13 @@ pub trait MetadataNetwork {
   );
   async fn get_album_tracks(&mut self, album: Box<SimplifiedAlbum>);
   async fn get_album(&mut self, album_id: AlbumId<'static>);
-  async fn get_show_episodes(&mut self, show: Box<SimplifiedShow>);
+  async fn get_show_episodes(&mut self, show: Box<ShowInfo>);
   async fn get_show(&mut self, show_id: ShowId<'static>);
   async fn get_current_show_episodes(&mut self, show_id: ShowId<'static>, offset: Option<u32>);
   async fn get_followed_artists(&mut self, after: Option<ArtistId<'static>>);
   async fn user_unfollow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>);
   async fn user_follow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>);
   async fn user_artist_check_follow(&mut self, artist_ids: Vec<ArtistId<'static>>);
-  async fn set_artists_to_table(&mut self, artists: Vec<FullArtist>);
   #[allow(dead_code)]
   async fn get_album_for_track(&mut self, track_id: TrackId<'static>);
 }
@@ -120,7 +120,9 @@ impl MetadataNetwork for Network {
       offset += limit;
     }
 
-    let albums = Page {
+    // Convert rspotify types to domain types before storing — conversion stays
+    // inside infra/network per the multi-source boundary contract.
+    let albums_rspotify_page = Page {
       items: album_items,
       href: String::new(),
       limit,
@@ -129,14 +131,18 @@ impl MetadataNetwork for Network {
       previous: None,
       total: 0,
     };
+    let albums = map_page(&albums_rspotify_page, |a| AlbumInfo::from(a));
+    let domain_related_artists: Vec<ArtistInfo> =
+      related_artists.iter().map(ArtistInfo::from).collect();
+    let domain_top_tracks: Vec<TrackInfo> = top_tracks.iter().map(TrackInfo::from).collect();
 
     let mut app = self.app.lock().await;
     app.artist = Some(Artist {
       artist_id: artist_id_str,
       artist_name: input_artist_name,
       albums,
-      related_artists,
-      top_tracks,
+      related_artists: domain_related_artists,
+      top_tracks: domain_top_tracks,
       selected_album_index: 0,
       selected_related_artist_index: 0,
       selected_top_track_index: 0,
@@ -159,10 +165,12 @@ impl MetadataNetwork for Network {
         .await
       {
         Ok(tracks) => {
+          let album_info = crate::core::plugin_api::AlbumInfo::from(album.as_ref());
+          let tracks_domain = map_page(&tracks, |t| crate::core::plugin_api::TrackInfo::from(t));
           let mut app = self.app.lock().await;
           app.selected_album_simplified = Some(crate::core::app::SelectedAlbum {
-            album: *album,
-            tracks,
+            album: album_info,
+            tracks: tracks_domain,
             selected_index: 0,
           });
           app.album_table_context = crate::core::app::AlbumTableContext::Simplified;
@@ -179,9 +187,10 @@ impl MetadataNetwork for Network {
       .await
     {
       Ok(album) => {
+        let album_info = crate::core::plugin_api::AlbumInfo::from(&album);
         let mut app = self.app.lock().await;
         app.selected_album_full = Some(crate::core::app::SelectedFullAlbum {
-          album,
+          album: album_info,
           selected_index: 0,
         });
         app.album_table_context = crate::core::app::AlbumTableContext::Full;
@@ -191,8 +200,10 @@ impl MetadataNetwork for Network {
     }
   }
 
-  async fn get_show_episodes(&mut self, show: Box<SimplifiedShow>) {
-    let show_id = show.id.clone();
+  async fn get_show_episodes(&mut self, show: Box<ShowInfo>) {
+    let Some(show_id) = show.id.as_deref().and_then(|id| ShowId::from_id(id).ok()) else {
+      return;
+    };
     let path = format!("shows/{}/episodes", show_id.id());
     let query = vec![
       ("limit", self.large_search_limit.to_string()),
@@ -204,9 +215,10 @@ impl MetadataNetwork for Network {
     {
       Ok(episodes) => {
         if !episodes.items.is_empty() {
+          let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
           let mut app = self.app.lock().await;
           app.library.show_episodes = ScrollableResultPages::new();
-          app.library.show_episodes.add_pages(episodes);
+          app.library.show_episodes.add_pages(domain_page);
 
           app.selected_show_simplified = Some(SelectedShow { show: *show });
 
@@ -228,7 +240,9 @@ impl MetadataNetwork for Network {
       .await
     {
       Ok(show) => {
-        let selected_show = SelectedFullShow { show };
+        let selected_show = SelectedFullShow {
+          show: ShowInfo::from(&show),
+        };
 
         let mut app = self.app.lock().await;
 
@@ -256,8 +270,9 @@ impl MetadataNetwork for Network {
     {
       Ok(episodes) => {
         if !episodes.items.is_empty() {
+          let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
           let mut app = self.app.lock().await;
-          app.library.show_episodes.add_pages(episodes);
+          app.library.show_episodes.add_pages(domain_page);
         }
       }
       Err(e) => {
@@ -278,8 +293,10 @@ impl MetadataNetwork for Network {
       .await
     {
       Ok(res) => {
+        let domain_page =
+          crate::infra::network::mapping::map_cursor_page(&res.artists, |a| ArtistInfo::from(a));
         let mut app = self.app.lock().await;
-        app.library.saved_artists.add_pages(res.artists);
+        app.library.saved_artists.add_pages(domain_page);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -359,11 +376,6 @@ impl MetadataNetwork for Network {
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
-  }
-
-  async fn set_artists_to_table(&mut self, artists: Vec<FullArtist>) {
-    let mut app = self.app.lock().await;
-    app.artists = artists;
   }
 
   async fn get_album_for_track(&mut self, track_id: TrackId<'static>) {

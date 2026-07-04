@@ -92,6 +92,23 @@ pub fn create_artist_string(artists: &[SimplifiedArtist]) -> String {
     .join(", ")
 }
 
+/// Join a domain artist list's display names with `", "` for rendering.
+///
+/// Source-agnostic counterpart to [`create_artist_string`] (which takes the
+/// rspotify `SimplifiedArtist`). Use this once a screen's data is domain-typed
+/// ([`crate::core::plugin_api::ArtistRef`], e.g. `AlbumInfo::artists`), so the
+/// renderer needs no rspotify types. Note `TrackInfo::artists` is already
+/// `Vec<String>` and can be `.join(", ")` directly.
+// Wired up by the per-screen migration slices, not yet by the binary.
+#[allow(dead_code)]
+pub fn join_artist_names(artists: &[crate::core::plugin_api::ArtistRef]) -> String {
+  artists
+    .iter()
+    .map(|artist| artist.name.as_str())
+    .collect::<Vec<&str>>()
+    .join(", ")
+}
+
 pub fn millis_to_minutes(millis: u128) -> String {
   let minutes = millis / 60000;
   let seconds = (millis % 60000) / 1000;
@@ -153,6 +170,23 @@ pub fn get_main_layout_margin(app: &App) -> u16 {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn join_artist_names_test() {
+    use crate::core::plugin_api::ArtistRef;
+    let artists = vec![
+      ArtistRef {
+        id: None,
+        name: "Daft Punk".to_string(),
+      },
+      ArtistRef {
+        id: Some("abc".to_string()),
+        name: "Pharrell".to_string(),
+      },
+    ];
+    assert_eq!(join_artist_names(&artists), "Daft Punk, Pharrell");
+    assert_eq!(join_artist_names(&[]), "");
+  }
 
   #[test]
   fn millis_to_minutes_test() {

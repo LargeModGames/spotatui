@@ -3,7 +3,8 @@ use crate::core::app::{ActiveBlock, App};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use crate::tui::ui::player::PlaybarControl;
-use rspotify::model::{context::CurrentPlaybackContext, PlayableId, PlayableItem};
+use rspotify::model::{context::CurrentPlaybackContext, PlayableItem};
+use rspotify::prelude::Id;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
@@ -51,15 +52,11 @@ pub(crate) fn toggle_like_currently_playing_item(app: &mut App) {
     match item {
       PlayableItem::Track(track) => {
         if let Some(track_id) = track.id {
-          app.dispatch(IoEvent::ToggleSaveTrack(PlayableId::Track(
-            track_id.into_static(),
-          )));
+          app.dispatch(IoEvent::ToggleSaveTrack(track_id.uri()));
         }
       }
       PlayableItem::Episode(episode) => {
-        app.dispatch(IoEvent::ToggleSaveTrack(PlayableId::Episode(
-          episode.id.into_static(),
-        )));
+        app.dispatch(IoEvent::ToggleSaveTrack(episode.id.uri()));
       }
       _ => {}
     };
@@ -73,7 +70,7 @@ pub(crate) fn add_currently_playing_track_to_playlist(app: &mut App) {
   {
     match item {
       PlayableItem::Track(track) => {
-        let track_id = track.id.map(|id| id.into_static());
+        let track_id = track.id.map(|id| id.uri());
         app.begin_add_track_to_playlist_flow(track_id, track.name);
       }
       PlayableItem::Episode(_) => {

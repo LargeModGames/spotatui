@@ -14,9 +14,8 @@ pub fn handler(key: Key, app: &mut App) {
     DialogContext::PlaylistWindow
     | DialogContext::PlaylistSearch
     | DialogContext::RemoveTrackFromPlaylistConfirm
-    | DialogContext::PersistKeybindingFallback => {
-      handle_confirmation_dialog(key, app, dialog_context)
-    }
+    | DialogContext::PersistKeybindingFallback
+    | DialogContext::YouTubePlaylistWindow => handle_confirmation_dialog(key, app, dialog_context),
   }
 }
 
@@ -33,6 +32,7 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
           DialogContext::PersistKeybindingFallback => {
             app.persist_open_settings_fallback();
           }
+          DialogContext::YouTubePlaylistWindow => handle_youtube_playlist_dialog(app),
           DialogContext::AddTrackToPlaylistPicker => {}
         }
       } else if dialog_context == DialogContext::PersistKeybindingFallback {
@@ -53,7 +53,9 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
 }
 
 fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
-  let editable_playlists = app.editable_playlists();
+  // Destinations follow the active source: local YouTube playlists under
+  // YouTube, editable Spotify playlists otherwise.
+  let editable_playlists = app.playlist_picker_items();
   let playlist_count = editable_playlists.len();
   match key {
     k if common_key_events::down_event(k, &app.user_config.keys) && playlist_count > 0 => {
@@ -86,11 +88,22 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
         let selected = app
           .playlist_picker_selected_index
           .min(playlist_count.saturating_sub(1));
-        if let Some(playlist) = editable_playlists.get(selected) {
-          app.dispatch(IoEvent::AddTrackToPlaylist(
-            playlist.id.clone().into_static(),
-            pending_add.track_id,
-          ));
+        let playlist_id = editable_playlists
+          .get(selected)
+          .and_then(|playlist| playlist.id.clone());
+        let is_youtube = app.active_source == crate::core::source::Source::YouTube;
+        if let Some(playlist_id) = playlist_id {
+          if is_youtube {
+            app.dispatch(IoEvent::AddTrackToYouTubePlaylist(
+              playlist_id,
+              pending_add.track_id,
+            ));
+          } else {
+            app.dispatch(IoEvent::AddTrackToPlaylist(
+              playlist_id,
+              pending_add.track_id,
+            ));
+          }
         }
       }
       close_dialog(app);
@@ -110,13 +123,33 @@ fn handle_playlist_search_dialog(app: &mut App) {
   app.user_unfollow_playlist_search_result()
 }
 
+/// Confirmed deletion of the sidebar-selected local YouTube playlist.
+fn handle_youtube_playlist_dialog(app: &mut App) {
+  let uri = app
+    .selected_playlist_index
+    .and_then(|idx| app.youtube_playlists.get(idx))
+    .map(|playlist| playlist.uri.clone());
+  if let Some(uri) = uri {
+    app.dispatch(IoEvent::DeleteYouTubePlaylist(uri));
+  }
+}
+
 fn handle_remove_track_from_playlist_confirm(app: &mut App) {
   if let Some(pending_remove) = app.pending_playlist_track_removal.clone() {
-    app.dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(
-      pending_remove.playlist_id,
-      pending_remove.track_id,
-      pending_remove.position,
-    ));
+    // A `youtube:playlist:` target is a local YouTube playlist edit; anything
+    // else is the Spotify remove (which needs the snapshot position).
+    if pending_remove.playlist_id.starts_with("youtube:playlist:") {
+      app.dispatch(IoEvent::RemoveTrackFromYouTubePlaylist(
+        pending_remove.playlist_id,
+        pending_remove.track_id,
+      ));
+    } else {
+      app.dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(
+        pending_remove.playlist_id,
+        pending_remove.track_id,
+        pending_remove.position,
+      ));
+    }
   }
 }
 
@@ -130,11 +163,10 @@ mod tests {
   use super::*;
   use crate::core::{
     app::{PendingPlaylistTrackAdd, RouteId},
-    test_helpers::{private_user, simplified_playlist},
+    pagination::Paged,
+    test_helpers::{playlist_info, user_info},
     user_config::UserConfig,
   };
-  use rspotify::model::{idtypes::TrackId, page::Page};
-  use rspotify::prelude::Id;
   use std::{sync::mpsc::channel, time::SystemTime};
 
   #[test]
@@ -157,20 +189,15 @@ mod tests {
   fn add_to_playlist_picker_dispatches_selected_editable_playlist() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
-    app.user = Some(private_user("spotatui-owner"));
-    app.playlists = Some(Page {
-      href: "https://api.spotify.com/v1/me/playlists".to_string(),
-      items: vec![],
-      limit: 50,
-      next: None,
-      offset: 0,
-      previous: None,
+    app.user = Some(user_info("spotatui-owner"));
+    app.playlists = Some(Paged {
       total: 3,
+      ..Default::default()
     });
     app.all_playlists = vec![
-      simplified_playlist("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
-      simplified_playlist("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
-      simplified_playlist(
+      playlist_info("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
+      playlist_info("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
+      playlist_info(
         "37i9dQZF1DX4WYpdgoIcn6",
         "Collaborative",
         "friend-owner",
@@ -178,9 +205,7 @@ mod tests {
       ),
     ];
     app.pending_playlist_track_add = Some(PendingPlaylistTrackAdd {
-      track_id: TrackId::from_id("0000000000000000000001")
-        .unwrap()
-        .into_static(),
+      track_id: "0000000000000000000001".to_string(),
       track_name: "Track".to_string(),
     });
     app.push_navigation_stack(
@@ -193,8 +218,8 @@ mod tests {
 
     match rx.recv().unwrap() {
       IoEvent::AddTrackToPlaylist(playlist_id, track_id) => {
-        assert_eq!(playlist_id.id(), "37i9dQZF1DXcBWIGoYBM5M");
-        assert_eq!(track_id.id(), "0000000000000000000001");
+        assert_eq!(playlist_id, "37i9dQZF1DXcBWIGoYBM5M");
+        assert_eq!(track_id, "0000000000000000000001");
       }
       _ => panic!("expected add-track event"),
     }

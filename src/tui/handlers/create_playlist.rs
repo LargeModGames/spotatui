@@ -15,6 +15,14 @@ fn handle_name_stage(key: Key, app: &mut App) {
     Key::Enter => {
       let name: String = app.create_playlist_name.iter().collect();
       if !name.trim().is_empty() {
+        // Under the YouTube source the playlist is a local file — create it
+        // right away; there is no Spotify-search stage (videos are added later
+        // via search + `w`).
+        if app.active_source == crate::core::source::Source::YouTube {
+          app.dispatch(IoEvent::CreateYouTubePlaylist(name.trim().to_string()));
+          close_form(app);
+          return;
+        }
         app.create_playlist_stage = CreatePlaylistStage::AddTracks;
         app.create_playlist_focus = CreatePlaylistFocus::SearchInput;
       }
@@ -183,7 +191,7 @@ fn handle_added_tracks_nav(key: Key, app: &mut App) {
 
 fn submit_playlist(app: &mut App) {
   let name: String = app.create_playlist_name.iter().collect();
-  let track_ids: Vec<rspotify::model::idtypes::TrackId<'static>> = app
+  let track_ids: Vec<String> = app
     .create_playlist_tracks
     .iter()
     .filter_map(|t| t.id.clone())

@@ -136,11 +136,7 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .create_playlist_search_results
     .iter()
     .map(|t| {
-      let artist = t
-        .artists
-        .first()
-        .map(|a| a.name.as_str())
-        .unwrap_or("Unknown");
+      let artist = t.artists.first().map(|a| a.as_str()).unwrap_or("Unknown");
       ListItem::new(format!("{} — {}", t.name, artist)).style(theme.base_style())
     })
     .collect();
@@ -181,11 +177,7 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .create_playlist_tracks
     .iter()
     .map(|t| {
-      let artist = t
-        .artists
-        .first()
-        .map(|a| a.name.as_str())
-        .unwrap_or("Unknown");
+      let artist = t.artists.first().map(|a| a.as_str()).unwrap_or("Unknown");
       ListItem::new(format!("{} — {}", t.name, artist)).style(theme.base_style())
     })
     .collect();

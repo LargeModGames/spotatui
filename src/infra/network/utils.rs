@@ -72,7 +72,7 @@ pub trait UtilsNetwork {
 
 impl UtilsNetwork for Network {
   async fn get_lyrics(&mut self, track: String, artist: String, duration: f64) {
-    let client = reqwest::Client::new();
+    let client = super::requests::shared_http_client();
     let query = vec![
       ("track_name", track.clone()),
       ("artist_name", artist.clone()),
@@ -95,61 +95,32 @@ impl UtilsNetwork for Network {
       Ok(resp) => {
         if resp.status().is_success() {
           if let Ok(lrc_resp) = resp.json::<LrcResponse>().await {
-            let lyrics_text = lrc_resp
+            // Prefer timestamped ("synced") lyrics. If LRCLIB only has plain
+            // (unsynced) lyrics, still show them as static text rather than
+            // reporting "not found" — many tracks only have plain lyrics.
+            let synced = lrc_resp
               .syncedLyrics
-              .or(lrc_resp.plainLyrics)
+              .as_deref()
+              .map(parse_synced_lyrics)
               .unwrap_or_default();
 
-            if !lyrics_text.is_empty() {
-              let mut app = self.app.lock().await;
-              // Simple LRC parser
-              let parsed: Vec<(u128, String)> = lyrics_text
-                .lines()
-                .filter_map(|line| {
-                  // [mm:ss.xx] text
-                  if let Some(idx) = line.find(']') {
-                    if idx > 1 && line.starts_with('[') {
-                      let timestamp = &line[1..idx];
-                      let content = line[idx + 1..].trim().to_string();
-
-                      // Parse timestamp
-                      let parts: Vec<&str> = timestamp.split(':').collect();
-                      if parts.len() == 2 {
-                        let mins = parts[0].parse::<u64>().unwrap_or(0);
-                        let secs_parts: Vec<&str> = parts[1].split('.').collect();
-                        let secs = secs_parts[0].parse::<u64>().unwrap_or(0);
-                        let ms = if secs_parts.len() > 1 {
-                          // Handle 2 or 3 digit ms
-                          let ms_str = secs_parts[1];
-                          let ms_val = ms_str.parse::<u64>().unwrap_or(0);
-                          if ms_str.len() == 2 {
-                            ms_val * 10
-                          } else {
-                            ms_val
-                          }
-                        } else {
-                          0
-                        };
-
-                        let total_ms = (mins * 60 * 1000) + (secs * 1000) + ms;
-                        return Some((total_ms as u128, content));
-                      }
-                    }
-                  }
-                  None
-                })
-                .collect();
-
-              if !parsed.is_empty() {
-                app.lyrics = Some(parsed);
-                app.lyrics_status = LyricsStatus::Found;
-              } else {
-                app.lyrics_status = LyricsStatus::NotFound;
-              }
+            let mut app = self.app.lock().await;
+            if !synced.is_empty() {
+              app.lyrics = Some(synced);
+              app.lyrics_status = LyricsStatus::Found;
+            } else if let Some(plain) = lrc_resp
+              .plainLyrics
+              .as_deref()
+              .filter(|text| !text.trim().is_empty())
+            {
+              app.lyrics = Some(synthesize_plain_lyrics(plain, duration));
+              app.lyrics_status = LyricsStatus::Found;
             } else {
-              let mut app = self.app.lock().await;
               app.lyrics_status = LyricsStatus::NotFound;
             }
+          } else {
+            let mut app = self.app.lock().await;
+            app.lyrics_status = LyricsStatus::NotFound;
           }
         } else {
           let mut app = self.app.lock().await;
@@ -164,7 +135,7 @@ impl UtilsNetwork for Network {
   }
 
   async fn increment_global_song_count(&mut self) {
-    let client = reqwest::Client::new();
+    let client = super::requests::shared_http_client();
     // Fire and forget
     let _ = client
       .post(TELEMETRY_ENDPOINT)
@@ -175,7 +146,7 @@ impl UtilsNetwork for Network {
   }
 
   async fn fetch_global_song_count(&mut self) {
-    let client = reqwest::Client::new();
+    let client = super::requests::shared_http_client();
     match client
       .get(TELEMETRY_ENDPOINT)
       .header(reqwest::header::ACCEPT, "application/json")
@@ -348,6 +319,69 @@ impl UtilsNetwork for Network {
   }
 }
 
+/// Parse LRC-format synced lyrics (`[mm:ss.xx] text` lines) into `(ms, line)`
+/// pairs. Lines without a valid leading timestamp are dropped, so a body of
+/// plain (unsynced) lyrics parses to an empty vec.
+fn parse_synced_lyrics(text: &str) -> Vec<(u128, String)> {
+  text
+    .lines()
+    .filter_map(|line| {
+      let idx = line.find(']')?;
+      if idx <= 1 || !line.starts_with('[') {
+        return None;
+      }
+      let timestamp = &line[1..idx];
+      let content = line[idx + 1..].trim().to_string();
+
+      let parts: Vec<&str> = timestamp.split(':').collect();
+      if parts.len() != 2 {
+        return None;
+      }
+      let mins = parts[0].parse::<u64>().unwrap_or(0);
+      let secs_parts: Vec<&str> = parts[1].split('.').collect();
+      let secs = secs_parts[0].parse::<u64>().unwrap_or(0);
+      let ms = if secs_parts.len() > 1 {
+        // Handle 2- or 3-digit fractional seconds.
+        let ms_str = secs_parts[1];
+        let ms_val = ms_str.parse::<u64>().unwrap_or(0);
+        if ms_str.len() == 2 {
+          ms_val * 10
+        } else {
+          ms_val
+        }
+      } else {
+        0
+      };
+
+      let total_ms = (mins * 60 * 1000) + (secs * 1000) + ms;
+      Some((total_ms as u128, content))
+    })
+    .collect()
+}
+
+/// Turn plain (unsynced) lyrics into `(ms, line)` pairs with synthetic,
+/// evenly-spaced timestamps across the track duration. This lets the existing
+/// synced-lyrics renderer display them as static text that scrolls approximately
+/// in time. With an unknown duration (e.g. `0.0`), every line gets timestamp `0`
+/// so the text simply renders from the top.
+fn synthesize_plain_lyrics(text: &str, duration_secs: f64) -> Vec<(u128, String)> {
+  let lines: Vec<String> = text.lines().map(|line| line.trim().to_string()).collect();
+  let line_count = lines.len().max(1) as f64;
+  let total_ms = if duration_secs > 0.0 {
+    duration_secs * 1000.0
+  } else {
+    0.0
+  };
+  lines
+    .into_iter()
+    .enumerate()
+    .map(|(idx, line)| {
+      let ts = ((idx as f64 / line_count) * total_ms) as u128;
+      (ts, line)
+    })
+    .collect()
+}
+
 fn parse_announcement_datetime(value: &str) -> Option<DateTime<Utc>> {
   DateTime::parse_from_rfc3339(value)
     .ok()
@@ -359,5 +393,50 @@ fn parse_announcement_level(level: Option<&str>) -> AnnouncementLevel {
     Some("critical") => AnnouncementLevel::Critical,
     Some("warning") => AnnouncementLevel::Warning,
     _ => AnnouncementLevel::Info,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{parse_synced_lyrics, synthesize_plain_lyrics};
+
+  #[test]
+  fn parses_timestamped_lyric_lines_and_drops_untimed_ones() {
+    let text = "[00:12.34] Hello\n[01:05.00] World\nno timestamp here";
+    let parsed = parse_synced_lyrics(text);
+    assert_eq!(
+      parsed,
+      vec![
+        (12_340u128, "Hello".to_string()),
+        (65_000, "World".to_string())
+      ]
+    );
+  }
+
+  #[test]
+  fn plain_unsynced_lyrics_parse_to_empty_synced() {
+    // A body of plain lyrics (no timestamps) yields no synced lines, which is
+    // what triggers the plain-lyrics fallback in `get_lyrics`.
+    assert!(parse_synced_lyrics("just\nplain\nwords").is_empty());
+  }
+
+  #[test]
+  fn synthesizes_evenly_spaced_timestamps_across_duration() {
+    let parsed = synthesize_plain_lyrics("a\nb\nc\nd", 4.0);
+    assert_eq!(
+      parsed,
+      vec![
+        (0u128, "a".to_string()),
+        (1_000, "b".to_string()),
+        (2_000, "c".to_string()),
+        (3_000, "d".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn synthesizes_zero_timestamps_when_duration_unknown() {
+    let parsed = synthesize_plain_lyrics("a\nb", 0.0);
+    assert_eq!(parsed, vec![(0u128, "a".to_string()), (0, "b".to_string())]);
   }
 }

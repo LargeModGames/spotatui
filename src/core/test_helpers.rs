@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+use crate::core::app::UserInfo;
+use crate::core::plugin_api::PlaylistInfo;
 use chrono::Duration;
 use rspotify::model::{
   idtypes::{PlaylistId, UserId},
@@ -10,7 +12,34 @@ use rspotify::model::{
 };
 use std::collections::HashMap;
 
-#[allow(deprecated)]
+/// Domain [`UserInfo`] for tests. `display_name` mirrors `private_user`.
+pub fn user_info(id: &str) -> UserInfo {
+  UserInfo {
+    id: id.to_string(),
+    display_name: Some("Test User".to_string()),
+    country: None,
+  }
+}
+
+/// Domain [`PlaylistInfo`] mirroring [`simplified_playlist`] (owner display name
+/// equals the owner id, matching `PlaylistInfo::from_simplified` on that fixture).
+pub fn playlist_info(id: &str, name: &str, owner_id: &str, collaborative: bool) -> PlaylistInfo {
+  PlaylistInfo {
+    uri: format!("spotify:playlist:{id}"),
+    name: name.to_string(),
+    owner: owner_id.to_string(),
+    track_count: 5,
+    id: Some(id.to_string()),
+    owner_id: Some(owner_id.to_string()),
+    collaborative,
+    public: Some(false),
+    image_url: None,
+  }
+}
+
+// Superseded by `user_info` after the playlist slice migrated `App.user` to the
+// domain `UserInfo`; kept until the remaining slices that may still reference it land.
+#[allow(deprecated, dead_code)]
 pub fn private_user(id: &str) -> PrivateUser {
   PrivateUser {
     country: None,

@@ -55,18 +55,16 @@ pub(super) const SEEK_FORWARD_MS: i64 = 6500;
 
 /// Collect the queue item uris from `App` (currently-playing first, then upcoming).
 pub(super) fn queue_uris(app: &App) -> Vec<String> {
-  use rspotify::model::PlayableItem;
-  use rspotify::prelude::Id;
+  use crate::core::plugin_api::PlayableInfo;
 
   let Some(queue) = app.queue.as_ref() else {
     return Vec::new();
   };
 
-  let item_uri = |item: &PlayableItem| -> Option<String> {
+  let item_uri = |item: &PlayableInfo| -> Option<String> {
     match item {
-      PlayableItem::Track(t) => t.id.as_ref().map(|i| i.uri()),
-      PlayableItem::Episode(e) => Some(e.id.uri()),
-      _ => None,
+      PlayableInfo::Track(t) => t.uri.clone(),
+      PlayableInfo::Episode(e) => e.uri.clone(),
     }
   };
 

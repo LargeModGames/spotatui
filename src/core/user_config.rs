@@ -1,3 +1,4 @@
+use crate::core::source::Source;
 use crate::tui::event::Key;
 use anyhow::{anyhow, Result};
 use ratatui::style::{Color, Style};
@@ -499,16 +500,20 @@ impl VisualizerStyle {
   }
 }
 
-/// Controls the playback state immediately after spotatui connects to a device on startup.
+/// Controls the playback state on startup, both for Spotify and for a persisted
+/// non-Spotify session (local/Subsonic/radio/YouTube) that spotatui resumes on
+/// launch.
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartupBehavior {
-  /// Leave playback as-is (current Spotify state). This is the default.
+  /// Restore the last state: leave Spotify playback as-is, and resume a persisted
+  /// non-Spotify session to the exact play/pause state it had when spotatui last
+  /// closed (a track playing at exit resumes playing). This is the default.
   #[default]
   Continue,
-  /// Always resume / start playback on launch.
+  /// Always start playing on launch (Spotify, or the restored session).
   Play,
-  /// Always pause playback on launch.
+  /// Always pause on launch (Spotify, or the restored session).
   Pause,
 }
 
@@ -718,6 +723,21 @@ pub struct KeyBindings {
   pub generate_recap: Key,
 }
 
+/// One internet-radio station in the config file: a display name plus the
+/// direct stream URL. The same shape is used in `BehaviorConfigString` (file)
+/// and `BehaviorConfig` (in-memory) — there is nothing to convert.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RadioStationConfig {
+  pub name: String,
+  pub url: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadioStationAddOutcome {
+  Added,
+  AlreadyExists,
+}
+
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BehaviorConfigString {
   pub seek_milliseconds: Option<u32>,
@@ -736,6 +756,7 @@ pub struct BehaviorConfigString {
   pub announcement_feed_url: Option<String>,
   pub seen_announcement_ids: Option<Vec<String>>,
   pub shuffle_enabled: Option<bool>,
+  pub active_source: Option<String>,
   pub liked_icon: Option<String>,
   pub shuffle_icon: Option<String>,
   pub repeat_track_icon: Option<String>,
@@ -762,6 +783,12 @@ pub struct BehaviorConfigString {
   pub keepawake_enabled: Option<bool>,
   pub enable_media_keys: Option<bool>,
   pub sync_token: Option<String>,
+  pub local_music_path: Option<String>,
+  pub subsonic_url: Option<String>,
+  pub subsonic_username: Option<String>,
+  pub subsonic_password: Option<String>,
+  pub radio_stations: Option<Vec<RadioStationConfig>>,
+  pub ytdlp_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -782,6 +809,8 @@ pub struct BehaviorConfig {
   pub announcement_feed_url: Option<String>,
   pub seen_announcement_ids: Vec<String>,
   pub shuffle_enabled: bool,
+  /// The last active source — persisted so it survives restarts.
+  pub active_source: Source,
   pub liked_icon: String,
   pub shuffle_icon: String,
   pub repeat_track_icon: String,
@@ -811,6 +840,25 @@ pub struct BehaviorConfig {
   /// It still publishes track metadata to the OS; it just stops reacting.
   pub enable_media_keys: bool,
   pub sync_token: Option<String>,
+  /// Filesystem path to the local music library root (browsed by the Local
+  /// Files screen). Defaults to the OS music directory; `None` if unavailable.
+  pub local_music_path: Option<String>,
+  /// Base URL of the Subsonic/OpenSubsonic server (e.g.
+  /// `https://demo.navidrome.org`). `None` until configured.
+  pub subsonic_url: Option<String>,
+  /// Subsonic account username.
+  pub subsonic_username: Option<String>,
+  /// Subsonic account password. **Stored in plaintext in the YAML config** —
+  /// prefer the `SPOTATUI_SUBSONIC_PASSWORD` environment variable, which
+  /// overrides this field at connection time and is never written to disk.
+  pub subsonic_password: Option<String>,
+  /// The user's internet-radio station list, shown in the sidebar when the
+  /// Radio source is active. Stations found via the in-app directory search
+  /// are not persisted here (yet) — this list is hand-maintained in the config.
+  pub radio_stations: Vec<RadioStationConfig>,
+  /// Path to the `yt-dlp` binary used by the YouTube source. `None` resolves
+  /// plain `yt-dlp` through `$PATH`.
+  pub ytdlp_path: Option<String>,
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -917,6 +965,7 @@ impl UserConfig {
         announcement_feed_url: None,
         seen_announcement_ids: Vec::new(),
         shuffle_enabled: false,
+        active_source: Source::default(),
         liked_icon: "♥".to_string(),
         shuffle_icon: "🔀".to_string(),
         repeat_track_icon: "🔂".to_string(),
@@ -943,6 +992,12 @@ impl UserConfig {
         keepawake_enabled: true,
         enable_media_keys: true,
         sync_token: None,
+        local_music_path: dirs::audio_dir().map(|p| p.to_string_lossy().to_string()),
+        subsonic_url: None,
+        subsonic_username: None,
+        subsonic_password: None,
+        radio_stations: Vec::new(),
+        ytdlp_path: None,
       },
       path_to_config: None,
     }
@@ -961,6 +1016,17 @@ impl UserConfig {
 
         if !app_config_dir.exists() {
           fs::create_dir(&app_config_dir)?;
+        }
+
+        // Restrict the app's own config directory (holds config.yml, which
+        // carries the Subsonic password and party sync_token in cleartext,
+        // plus the Spotify token cache) to owner-only. Never touch
+        // `home_config_dir` (`~/.config`) — that's shared with every other
+        // application on the system.
+        #[cfg(unix)]
+        {
+          use std::os::unix::fs::PermissionsExt;
+          fs::set_permissions(&app_config_dir, fs::Permissions::from_mode(0o700))?;
         }
 
         let config_file_path = &app_config_dir.join(FILE_NAME);
@@ -1219,6 +1285,10 @@ impl UserConfig {
       self.behavior.shuffle_enabled = shuffle_enabled;
     }
 
+    if let Some(active_source_str) = behavior_config.active_source {
+      self.behavior.active_source = Source::from_config_str(&active_source_str);
+    }
+
     if let Some(visualizer_style) = behavior_config.visualizer_style {
       self.behavior.visualizer_style = visualizer_style;
     }
@@ -1296,6 +1366,45 @@ impl UserConfig {
     }
     if let Some(enable_media_keys) = behavior_config.enable_media_keys {
       self.behavior.enable_media_keys = enable_media_keys;
+    }
+    if let Some(local_music_path) = behavior_config.local_music_path {
+      let trimmed = local_music_path.trim();
+      self.behavior.local_music_path = if trimmed.is_empty() {
+        None
+      } else {
+        Some(trimmed.to_string())
+      };
+    }
+    // Subsonic server config: trim-to-None so blank keys read as unset.
+    let trim_to_none = |value: Option<String>| -> Option<String> {
+      value.and_then(|v| {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+          None
+        } else {
+          Some(trimmed.to_string())
+        }
+      })
+    };
+    if let Some(subsonic_url) = trim_to_none(behavior_config.subsonic_url) {
+      self.behavior.subsonic_url = Some(subsonic_url);
+    }
+    if let Some(subsonic_username) = trim_to_none(behavior_config.subsonic_username) {
+      self.behavior.subsonic_username = Some(subsonic_username);
+    }
+    if let Some(subsonic_password) = trim_to_none(behavior_config.subsonic_password) {
+      self.behavior.subsonic_password = Some(subsonic_password);
+    }
+    if let Some(radio_stations) = behavior_config.radio_stations {
+      // Drop entries missing a name or URL rather than failing the whole
+      // config; the dispatch filters again defensively at load time.
+      self.behavior.radio_stations = radio_stations
+        .into_iter()
+        .filter(|s| !s.name.trim().is_empty() && !s.url.trim().is_empty())
+        .collect();
+    }
+    if let Some(ytdlp_path) = trim_to_none(behavior_config.ytdlp_path) {
+      self.behavior.ytdlp_path = Some(ytdlp_path);
     }
     Ok(())
   }
@@ -1435,6 +1544,7 @@ impl UserConfig {
       announcement_feed_url: self.behavior.announcement_feed_url.clone(),
       seen_announcement_ids: Some(self.behavior.seen_announcement_ids.clone()),
       shuffle_enabled: Some(self.behavior.shuffle_enabled),
+      active_source: Some(self.behavior.active_source.to_config_str().to_string()),
       liked_icon: Some(self.behavior.liked_icon.clone()),
       shuffle_icon: Some(self.behavior.shuffle_icon.clone()),
       repeat_track_icon: Some(self.behavior.repeat_track_icon.clone()),
@@ -1446,6 +1556,16 @@ impl UserConfig {
       dismissed_announcements: Some(self.behavior.dismissed_announcements.clone()),
       relay_server_url: Some(self.behavior.relay_server_url.clone()),
       sync_token: self.behavior.sync_token.clone(),
+      local_music_path: self.behavior.local_music_path.clone(),
+      subsonic_url: self.behavior.subsonic_url.clone(),
+      subsonic_username: self.behavior.subsonic_username.clone(),
+      subsonic_password: self.behavior.subsonic_password.clone(),
+      radio_stations: if self.behavior.radio_stations.is_empty() {
+        None
+      } else {
+        Some(self.behavior.radio_stations.clone())
+      },
+      ytdlp_path: self.behavior.ytdlp_path.clone(),
       stop_after_current_track: Some(self.behavior.stop_after_current_track),
       sidebar_width_percent: Some(self.behavior.sidebar_width_percent),
       playbar_height_rows: Some(self.behavior.playbar_height_rows),
@@ -1592,15 +1712,87 @@ impl UserConfig {
       }
     };
 
+    // Serialize to a String/bytes first, then write via a private-file helper
+    // (0o600 on Unix — this file carries the Subsonic password and party
+    // sync_token in cleartext, so it deserves the same protection as the
+    // Spotify token cache) using a temp-file + atomic rename, so a crash
+    // mid-write can't corrupt the config. Do not log `content_yml`: it may
+    // contain the plaintext password/sync_token.
     let content_yml = serde_yaml::to_string(&final_config)?;
-    let mut config_file = fs::File::create(&paths.config_file_path)?;
-    std::io::Write::write_all(&mut config_file, content_yml.as_bytes())?;
+    let tmp_path = paths.config_file_path.with_extension("yml.tmp");
+    crate::core::auth::write_private_file(&tmp_path, content_yml.as_bytes())?;
+    fs::rename(&tmp_path, &paths.config_file_path)?;
 
     Ok(())
   }
 
   pub fn padded_liked_icon(&self) -> String {
     format!("{} ", &self.behavior.liked_icon)
+  }
+
+  pub fn add_radio_station(
+    &mut self,
+    name: impl AsRef<str>,
+    url: impl AsRef<str>,
+  ) -> Result<RadioStationAddOutcome> {
+    let name = name.as_ref().trim();
+    let url = url.as_ref().trim();
+
+    if name.is_empty() {
+      return Err(anyhow!("Radio station name is empty"));
+    }
+    if url.is_empty() {
+      return Err(anyhow!("Radio station URL is empty"));
+    }
+
+    if self
+      .behavior
+      .radio_stations
+      .iter()
+      .any(|station| station.url.trim() == url)
+    {
+      return Ok(RadioStationAddOutcome::AlreadyExists);
+    }
+
+    self.behavior.radio_stations.push(RadioStationConfig {
+      name: name.to_string(),
+      url: url.to_string(),
+    });
+
+    if let Err(error) = self.save_config() {
+      self.behavior.radio_stations.pop();
+      return Err(error);
+    }
+
+    Ok(RadioStationAddOutcome::Added)
+  }
+
+  pub fn remove_radio_station_by_url(
+    &mut self,
+    url: impl AsRef<str>,
+  ) -> Result<Option<RadioStationConfig>> {
+    let url = url.as_ref().trim();
+    if url.is_empty() {
+      return Err(anyhow!("Radio station URL is empty"));
+    }
+
+    let Some(index) = self
+      .behavior
+      .radio_stations
+      .iter()
+      .position(|station| station.url.trim() == url)
+    else {
+      return Ok(None);
+    };
+
+    let removed = self.behavior.radio_stations.remove(index);
+
+    if let Err(error) = self.save_config() {
+      self.behavior.radio_stations.insert(index, removed);
+      return Err(error);
+    }
+
+    Ok(Some(removed))
   }
 
   pub fn mark_announcement_seen(&mut self, announcement_id: impl Into<String>) {
@@ -1961,5 +2153,214 @@ mod tests {
     entries.insert("my_cmd".to_string(), "not-a-real-key".to_string());
     config.load_plugin_commands(entries);
     assert!(config.plugin_command_keys.is_empty());
+  }
+
+  #[test]
+  fn active_source_local_round_trips_through_config() {
+    use super::{BehaviorConfigString, UserConfig};
+    use crate::core::source::Source;
+
+    // "Local" in YAML deserialized and resolved → Source::Local
+    let behavior: BehaviorConfigString = serde_yaml::from_str("active_source: Local").unwrap();
+    assert_eq!(behavior.active_source, Some("Local".to_string()));
+
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.active_source, Source::Local);
+  }
+
+  #[test]
+  fn radio_stations_round_trip_through_config() {
+    use super::{BehaviorConfigString, RadioStationConfig, UserConfig};
+
+    let yaml = r#"
+radio_stations:
+  - name: SomaFM Groove Salad
+    url: https://ice1.somafm.com/groovesalad-128-mp3
+  - name: ""
+    url: https://blank-name.example/dropped
+"#;
+    let behavior: BehaviorConfigString = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(behavior.radio_stations.as_ref().map(Vec::len), Some(2));
+
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    // The blank-name entry is dropped at load; the valid one survives intact.
+    assert_eq!(
+      config.behavior.radio_stations,
+      vec![RadioStationConfig {
+        name: "SomaFM Groove Salad".to_string(),
+        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+      }]
+    );
+  }
+
+  #[test]
+  fn radio_stations_missing_field_defaults_to_empty() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
+    assert_eq!(behavior.radio_stations, None);
+
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert!(config.behavior.radio_stations.is_empty());
+  }
+
+  #[test]
+  fn adding_radio_station_persists_trimmed_unique_entry() {
+    use super::{
+      RadioStationAddOutcome, RadioStationConfig, UserConfig, UserConfigPaths, UserConfigString,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: config_path.clone(),
+    });
+
+    let outcome = config
+      .add_radio_station(
+        " SomaFM Groove Salad ",
+        " https://ice1.somafm.com/groovesalad-128-mp3 ",
+      )
+      .unwrap();
+    assert_eq!(outcome, RadioStationAddOutcome::Added);
+    assert_eq!(
+      config.behavior.radio_stations,
+      vec![RadioStationConfig {
+        name: "SomaFM Groove Salad".to_string(),
+        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+      }]
+    );
+
+    let saved = std::fs::read_to_string(config_path).unwrap();
+    let saved: UserConfigString = serde_yaml::from_str(&saved).unwrap();
+    assert_eq!(
+      saved
+        .behavior
+        .unwrap()
+        .radio_stations
+        .unwrap()
+        .first()
+        .cloned(),
+      Some(RadioStationConfig {
+        name: "SomaFM Groove Salad".to_string(),
+        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+      })
+    );
+  }
+
+  #[test]
+  fn adding_radio_station_dedupes_by_stream_url() {
+    use super::{RadioStationAddOutcome, RadioStationConfig, UserConfig, UserConfigPaths};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: dir.path().join("config.yml"),
+    });
+    config.behavior.radio_stations = vec![RadioStationConfig {
+      name: "Existing".to_string(),
+      url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+    }];
+
+    let outcome = config
+      .add_radio_station(
+        "Duplicate Name",
+        " https://ice1.somafm.com/groovesalad-128-mp3 ",
+      )
+      .unwrap();
+
+    assert_eq!(outcome, RadioStationAddOutcome::AlreadyExists);
+    assert_eq!(config.behavior.radio_stations.len(), 1);
+    assert_eq!(config.behavior.radio_stations[0].name, "Existing");
+  }
+
+  #[test]
+  fn removing_radio_station_persists_by_stream_url() {
+    use super::{RadioStationConfig, UserConfig, UserConfigPaths, UserConfigString};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: config_path.clone(),
+    });
+    config.behavior.radio_stations = vec![
+      RadioStationConfig {
+        name: "Groove Salad".to_string(),
+        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+      },
+      RadioStationConfig {
+        name: "Secret Agent".to_string(),
+        url: "https://ice1.somafm.com/secretagent-128-mp3".to_string(),
+      },
+    ];
+
+    let removed = config
+      .remove_radio_station_by_url(" https://ice1.somafm.com/groovesalad-128-mp3 ")
+      .unwrap();
+
+    assert_eq!(
+      removed.map(|station| station.name),
+      Some("Groove Salad".to_string())
+    );
+    assert_eq!(config.behavior.radio_stations.len(), 1);
+    assert_eq!(config.behavior.radio_stations[0].name, "Secret Agent");
+
+    let saved = std::fs::read_to_string(config_path).unwrap();
+    let saved: UserConfigString = serde_yaml::from_str(&saved).unwrap();
+    assert_eq!(
+      saved
+        .behavior
+        .unwrap()
+        .radio_stations
+        .unwrap()
+        .iter()
+        .map(|station| station.name.as_str())
+        .collect::<Vec<_>>(),
+      vec!["Secret Agent"]
+    );
+  }
+
+  #[test]
+  fn active_source_missing_field_defaults_to_spotify() {
+    use super::{BehaviorConfigString, UserConfig};
+    use crate::core::source::Source;
+
+    // No active_source key in config → field is None → default Spotify preserved
+    let behavior: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
+    assert_eq!(behavior.active_source, None);
+
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.active_source, Source::Spotify);
+  }
+
+  #[test]
+  fn active_source_unknown_string_falls_back_to_spotify() {
+    use crate::core::source::Source;
+
+    // Unknown/garbage strings must not panic and fall back to Spotify
+    assert_eq!(Source::from_config_str("Tidal"), Source::Spotify);
+    assert_eq!(Source::from_config_str(""), Source::Spotify);
+    assert_eq!(Source::from_config_str("local"), Source::Spotify); // case-sensitive
+  }
+
+  #[test]
+  fn active_source_to_config_str_matches_from_config_str() {
+    use crate::core::source::Source;
+
+    // Round-trip: to_config_str → from_config_str must be identity for both variants
+    assert_eq!(
+      Source::from_config_str(Source::Spotify.to_config_str()),
+      Source::Spotify
+    );
+    assert_eq!(
+      Source::from_config_str(Source::Local.to_config_str()),
+      Source::Local
+    );
   }
 }

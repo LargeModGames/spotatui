@@ -64,7 +64,7 @@ async fn read_sync_token(network: &Network) -> Option<String> {
 // ── Actual HTTP functions ─────────────────────────────────────────────────────
 
 async fn fetch_profile(token: &str) -> Result<String> {
-  let client = reqwest::Client::new();
+  let client = crate::infra::network::requests::shared_http_client();
   let resp = client
     .get(PROFILE_URL)
     .header("Authorization", format!("Bearer {}", token))
@@ -86,7 +86,7 @@ async fn fetch_profile(token: &str) -> Result<String> {
 }
 
 async fn fetch_friends(token: &str) -> Result<Vec<FriendEntry>> {
-  let client = reqwest::Client::new();
+  let client = crate::infra::network::requests::shared_http_client();
   let resp = client
     .get(FRIENDS_URL)
     .header("Authorization", format!("Bearer {}", token))
@@ -133,7 +133,7 @@ async fn post_add_friend_by_user_id(token: &str, user_id: &str) -> Result<()> {
 }
 
 async fn post_friend_request(token: &str, body: serde_json::Value) -> Result<()> {
-  let client = reqwest::Client::new();
+  let client = crate::infra::network::requests::shared_http_client();
   let resp = client
     .post(FRIENDS_URL)
     .header("Authorization", format!("Bearer {}", token))
@@ -156,7 +156,7 @@ async fn post_friend_request(token: &str, body: serde_json::Value) -> Result<()>
 }
 
 async fn delete_friend(token: &str, user_id: &str) -> Result<()> {
-  let client = reqwest::Client::new();
+  let client = crate::infra::network::requests::shared_http_client();
   let body = serde_json::json!({ "userId": user_id });
   let resp = client
     .delete(FRIENDS_URL)
@@ -183,7 +183,7 @@ async fn fetch_user_search(token: &str, query: &str) -> Result<Vec<FriendSearchR
     return Ok(vec![]);
   }
 
-  let client = reqwest::Client::new();
+  let client = crate::infra::network::requests::shared_http_client();
   let resp = client
     .get(USERS_SEARCH_URL)
     .header("Authorization", format!("Bearer {}", token))

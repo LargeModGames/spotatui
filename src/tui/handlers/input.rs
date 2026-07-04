@@ -3,7 +3,7 @@ extern crate unicode_width;
 use crate::core::app::{ActiveBlock, App, InputContext, RouteId};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::model::idtypes::{AlbumId, PlaylistId, ShowId, TrackId};
+use rspotify::prelude::Id;
 use std::convert::TryInto;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -113,8 +113,17 @@ fn process_input(app: &mut App, input: String) {
     return;
   }
 
-  // Default fallback behavior: treat the input as a raw search phrase.
-  app.dispatch(IoEvent::GetSearchResults(input, app.get_user_country()));
+  // Default fallback behavior: treat the input as a raw search phrase, routed to
+  // the active source's catalog.
+  if app.active_source == crate::core::source::Source::Subsonic {
+    app.dispatch(IoEvent::GetSubsonicSearchResults(input));
+  } else if app.active_source == crate::core::source::Source::Radio {
+    app.dispatch(IoEvent::GetRadioSearchResults(input));
+  } else if app.active_source == crate::core::source::Source::YouTube {
+    app.dispatch(IoEvent::GetYouTubeSearchResults(input));
+  } else {
+    app.dispatch(IoEvent::GetSearchResults(input, app.get_user_country()));
+  }
   app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
   // push_navigation_stack is a no-op when the Search route is already on top, which
   // otherwise leaves focus trapped in the input box. Force focus onto the results so
@@ -138,7 +147,10 @@ fn process_playlist_track_search(app: &mut App, input: String) {
   if let Some(playlist_id) = app.current_playlist_track_table_id() {
     app.pending_playlist_track_search = Some(query.clone());
     app.set_status_message(format!("Searching playlist for \"{query}\"..."), 60);
-    app.dispatch(IoEvent::SearchPlaylistTracks(playlist_id, query));
+    app.dispatch(IoEvent::SearchPlaylistTracks(
+      playlist_id.id().to_string(),
+      query,
+    ));
   }
 }
 
@@ -158,42 +170,32 @@ fn spotify_resource_id(base: &str, uri: &str, sep: &str, resource_type: &str) ->
 fn attempt_process_uri(app: &mut App, input: &str, base: &str, sep: &str) -> bool {
   let (album_id, matched) = spotify_resource_id(base, input, sep, "album");
   if matched {
-    if let Ok(album_id) = AlbumId::from_id(&album_id) {
-      app.dispatch(IoEvent::GetAlbum(album_id.into_static()));
-      return true;
-    }
+    app.dispatch(IoEvent::GetAlbum(album_id));
+    return true;
   }
 
   let (artist_id, matched) = spotify_resource_id(base, input, sep, "artist");
   if matched {
-    if let Ok(artist_id) = rspotify::model::idtypes::ArtistId::from_id(&artist_id) {
-      app.get_artist(artist_id.into_static(), "".to_string());
-    }
+    app.get_artist(artist_id, "".to_string());
     return true;
   }
 
   let (track_id, matched) = spotify_resource_id(base, input, sep, "track");
   if matched {
-    if let Ok(track_id) = TrackId::from_id(&track_id) {
-      app.dispatch(IoEvent::GetAlbumForTrack(track_id.into_static()));
-      return true;
-    }
+    app.dispatch(IoEvent::GetAlbumForTrack(track_id));
+    return true;
   }
 
   let (playlist_id, matched) = spotify_resource_id(base, input, sep, "playlist");
   if matched {
-    if let Ok(playlist_id) = PlaylistId::from_id(&playlist_id) {
-      app.dispatch(IoEvent::GetPlaylistItems(playlist_id.into_static(), 0));
-      return true;
-    }
+    app.dispatch(IoEvent::GetPlaylistItems(playlist_id, 0));
+    return true;
   }
 
   let (show_id, matched) = spotify_resource_id(base, input, sep, "show");
   if matched {
-    if let Ok(show_id) = ShowId::from_id(&show_id) {
-      app.dispatch(IoEvent::GetShow(show_id.into_static()));
-      return true;
-    }
+    app.dispatch(IoEvent::GetShow(show_id));
+    return true;
   }
 
   false
@@ -209,6 +211,7 @@ fn compute_character_width(character: char) -> u16 {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use rspotify::model::idtypes::PlaylistId;
   use rspotify::prelude::Id;
 
   fn str_to_vec_char(s: &str) -> Vec<char> {
@@ -353,7 +356,7 @@ mod tests {
 
     match rx.recv().unwrap() {
       IoEvent::SearchPlaylistTracks(id, query) => {
-        assert_eq!(id.id(), playlist_id.id());
+        assert_eq!(id, playlist_id.id());
         assert_eq!(query, "queen rock");
       }
       _ => panic!("unexpected event"),

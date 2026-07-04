@@ -1,4 +1,9 @@
+use crate::core::pagination::{CursorPaged, Paged};
+use crate::core::plugin_api::{
+  ArtistInfo, EpisodeInfo, PlayableInfo, PlaylistInfo, SavedAlbumInfo, ShowInfo, TrackInfo,
+};
 use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
+use crate::core::source::Source;
 use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
 use crate::infra::network::sync::{PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
@@ -8,22 +13,11 @@ use ratatui::layout::Size;
 use rspotify::{
   model::enums::Country,
   model::{
-    album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
-    artist::FullArtist,
-    context::{CurrentPlaybackContext, CurrentUserQueue},
-    device::DevicePayload,
-    idtypes::{ArtistId, PlaylistId, ShowId, TrackId},
-    page::{CursorBasedPage, Page},
-    playing::PlayHistory,
-    playlist::{PlaylistItem, SimplifiedPlaylist},
-    show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
-    track::{FullTrack, SavedTrack, SimplifiedTrack},
-    user::PrivateUser,
+    context::CurrentPlaybackContext, device::DevicePayload, idtypes::PlaylistId, track::FullTrack,
     PlayableItem,
   },
   prelude::*, // Adds Id trait for .id() method
 };
-use serde::de::DeserializeOwned;
 use std::cell::Cell;
 use std::sync::mpsc::Sender;
 #[cfg(any(feature = "streaming", all(feature = "mpris", target_os = "linux")))]
@@ -46,6 +40,20 @@ use rspotify::model::{
   DeviceType,
 };
 
+/// Sidebar library entries. The "Local Files" entry only appears when the
+/// `local-files` feature is built in (otherwise there is nothing to browse).
+#[cfg(feature = "local-files")]
+pub const LIBRARY_OPTIONS: [&str; 8] = [
+  "Discover",
+  "Recently Played",
+  "Friends",
+  "Liked Songs",
+  "Albums",
+  "Artists",
+  "Podcasts",
+  "Local Files",
+];
+#[cfg(not(feature = "local-files"))]
 pub const LIBRARY_OPTIONS: [&str; 7] = [
   "Discover",
   "Recently Played",
@@ -103,9 +111,11 @@ impl<T> ScrollableResultPages<T> {
   }
 }
 
-// Offset-keyed page caches are always kept sorted by page.offset, but the cache can be sparse.
-// Visible-page identity must be derived from page.offset, not raw cache index adjacency.
-impl<T: DeserializeOwned> ScrollableResultPages<Page<T>> {
+// Offset-keyed page caches are always kept sorted by `Paged::offset`, but the cache
+// can be sparse, so visible-page identity is derived from the offset, never raw
+// cache adjacency. There is no `DeserializeOwned` bound because `Paged` carries
+// already-mapped domain items.
+impl<T> ScrollableResultPages<Paged<T>> {
   pub fn page_index_for_offset(&self, offset: u32) -> Option<usize> {
     self
       .pages
@@ -113,7 +123,7 @@ impl<T: DeserializeOwned> ScrollableResultPages<Page<T>> {
       .ok()
   }
 
-  pub fn upsert_page_by_offset(&mut self, new_page: Page<T>) -> usize {
+  pub fn upsert_page_by_offset(&mut self, new_page: Paged<T>) -> usize {
     let active_page_offset = self.pages.get(self.index).map(|page| page.offset);
     let new_page_offset = new_page.offset;
 
@@ -143,6 +153,17 @@ impl<T: DeserializeOwned> ScrollableResultPages<Page<T>> {
   }
 }
 
+/// Minimal source-agnostic snapshot of the signed-in user, used for playlist
+/// ownership checks and market/country resolution. Holds only string fields so
+/// no `rspotify::model` type leaks into [`App`] state.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UserInfo {
+  pub id: String,
+  pub display_name: Option<String>,
+  /// ISO 3166-1 alpha-2 country code (e.g. `"US"`), when known.
+  pub country: Option<String>,
+}
+
 #[derive(Default)]
 pub struct SpotifyResultAndSelectedIndex<T> {
   pub index: usize,
@@ -152,11 +173,11 @@ pub struct SpotifyResultAndSelectedIndex<T> {
 #[derive(Clone)]
 pub struct Library {
   pub selected_index: usize,
-  pub saved_tracks: ScrollableResultPages<Page<SavedTrack>>,
-  pub saved_albums: ScrollableResultPages<Page<SavedAlbum>>,
-  pub saved_shows: ScrollableResultPages<Page<Show>>,
-  pub saved_artists: ScrollableResultPages<CursorBasedPage<FullArtist>>,
-  pub show_episodes: ScrollableResultPages<Page<SimplifiedEpisode>>,
+  pub saved_tracks: ScrollableResultPages<Paged<TrackInfo>>,
+  pub saved_albums: ScrollableResultPages<Paged<SavedAlbumInfo>>,
+  pub saved_shows: ScrollableResultPages<Paged<ShowInfo>>,
+  pub saved_artists: ScrollableResultPages<CursorPaged<ArtistInfo>>,
+  pub show_episodes: ScrollableResultPages<Paged<EpisodeInfo>>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -184,6 +205,9 @@ pub enum DialogContext {
   AddTrackToPlaylistPicker,
   RemoveTrackFromPlaylistConfirm,
   PersistKeybindingFallback,
+  /// Confirm deleting a local YouTube playlist (sidebar `D` under the
+  /// YouTube source).
+  YouTubePlaylistWindow,
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -258,6 +282,7 @@ pub enum ActiveBlock {
   Party,
   CreatePlaylistForm,
   Friends,
+  LocalBrowser,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -297,6 +322,7 @@ pub enum RouteId {
   Party,
   CreatePlaylist,
   Friends,
+  LocalBrowser,
 }
 
 // ── Friends feature ───────────────────────────────────────────────────────────
@@ -379,6 +405,9 @@ pub enum TrackTableContext {
   SavedTracks,
   RecommendedTracks,
   DiscoverPlaylist,
+  LocalPlaylist,
+  SubsonicPlaylist,
+  YouTubePlaylist,
 }
 
 // Is it possible to compose enums?
@@ -392,6 +421,15 @@ pub enum AlbumTableContext {
 pub enum EpisodeTableContext {
   Simplified,
   Full,
+}
+
+/// Which panel of the combined Source & Device picker (the `d` screen) has
+/// keyboard focus.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum SourceFocus {
+  Source,
+  #[default]
+  Devices,
 }
 
 /// Time range for Top Tracks/Artists in Discover feature
@@ -439,11 +477,11 @@ pub enum RecommendationsContext {
 }
 
 pub struct SearchResult {
-  pub albums: Option<Page<SimplifiedAlbum>>,
-  pub artists: Option<Page<FullArtist>>,
-  pub playlists: Option<Page<SimplifiedPlaylist>>,
-  pub tracks: Option<Page<FullTrack>>,
-  pub shows: Option<Page<SimplifiedShow>>,
+  pub albums: Option<crate::core::pagination::Paged<crate::core::plugin_api::AlbumInfo>>,
+  pub artists: Option<crate::core::pagination::Paged<crate::core::plugin_api::ArtistInfo>>,
+  pub playlists: Option<crate::core::pagination::Paged<crate::core::plugin_api::PlaylistInfo>>,
+  pub tracks: Option<crate::core::pagination::Paged<crate::core::plugin_api::TrackInfo>>,
+  pub shows: Option<crate::core::pagination::Paged<crate::core::plugin_api::ShowInfo>>,
   pub selected_album_index: Option<usize>,
   pub selected_artists_index: Option<usize>,
   pub selected_playlists_index: Option<usize>,
@@ -455,7 +493,7 @@ pub struct SearchResult {
 
 #[derive(Default)]
 pub struct TrackTable {
-  pub tracks: Vec<FullTrack>,
+  pub tracks: Vec<TrackInfo>,
   pub selected_index: usize,
   pub context: Option<TrackTableContext>,
 }
@@ -498,40 +536,43 @@ fn sort_playlist_track_matches(matches: &mut [(FullTrack, usize)], sort_state: S
 
 #[derive(Clone)]
 pub struct PendingPlaylistTrackAdd {
-  pub track_id: TrackId<'static>,
+  /// Track id/URI passed through to `AddTrackToPlaylist`.
+  pub track_id: String,
   pub track_name: String,
 }
 
 #[derive(Clone)]
 pub struct PendingPlaylistTrackRemoval {
-  pub playlist_id: PlaylistId<'static>,
+  /// Playlist id/URI passed through to `RemoveTrackFromPlaylistAtPosition`.
+  pub playlist_id: String,
   pub playlist_name: String,
-  pub track_id: TrackId<'static>,
+  /// Track id/URI passed through to `RemoveTrackFromPlaylistAtPosition`.
+  pub track_id: String,
   pub track_name: String,
   pub position: usize,
 }
 
 #[derive(Clone)]
 pub struct SelectedShow {
-  pub show: SimplifiedShow,
+  pub show: ShowInfo,
 }
 
 #[derive(Clone)]
 pub struct SelectedFullShow {
-  pub show: FullShow,
+  pub show: ShowInfo,
 }
 
 #[derive(Clone)]
 pub struct SelectedAlbum {
-  pub album: SimplifiedAlbum,
-  pub tracks: Page<SimplifiedTrack>,
+  pub album: crate::core::plugin_api::AlbumInfo,
+  pub tracks: crate::core::pagination::Paged<crate::core::plugin_api::TrackInfo>,
   pub selected_index: usize,
 }
 
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct SelectedFullAlbum {
-  pub album: FullAlbum,
+  pub album: crate::core::plugin_api::AlbumInfo,
   pub selected_index: usize,
 }
 
@@ -540,9 +581,9 @@ pub struct SelectedFullAlbum {
 pub struct Artist {
   pub artist_id: String,
   pub artist_name: String,
-  pub albums: Page<SimplifiedAlbum>,
-  pub related_artists: Vec<FullArtist>,
-  pub top_tracks: Vec<FullTrack>,
+  pub albums: crate::core::pagination::Paged<crate::core::plugin_api::AlbumInfo>,
+  pub related_artists: Vec<crate::core::plugin_api::ArtistInfo>,
+  pub top_tracks: Vec<crate::core::plugin_api::TrackInfo>,
   pub selected_album_index: usize,
   pub selected_related_artist_index: usize,
   pub selected_top_track_index: usize,
@@ -564,6 +605,27 @@ pub enum LyricsStatus {
   Loading,
   Found,
   NotFound,
+}
+
+/// Status of the currently-playing track's cover art, mirroring [`LyricsStatus`].
+/// Drives the placeholder message shown when art can't be displayed, so a
+/// missing image reads as an explicit state rather than silently showing
+/// nothing (or, worse, the previous track's art).
+#[cfg(feature = "cover-art")]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum CoverArtStatus {
+  /// Nothing is playing / no art has been requested yet.
+  #[default]
+  NotStarted,
+  /// A fetch/decode for the current track is in flight.
+  Loading,
+  /// Art for the current track is loaded and rendering.
+  Loaded,
+  /// The current source has no cover art to show (e.g. internet radio, or a
+  /// local file with no embedded picture).
+  Unavailable,
+  /// A fetch/decode was attempted for the current track but failed.
+  Failed,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -733,6 +795,14 @@ pub struct SettingItem {
   pub value: SettingValue,
 }
 
+/// Domain-level representation of the playback queue.
+/// Replaces `rspotify::model::CurrentUserQueue` in `App` state.
+#[derive(Debug, Clone)]
+pub struct QueueState {
+  pub currently_playing: Option<PlayableInfo>,
+  pub queue: Vec<PlayableInfo>,
+}
+
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
   /// Spotify's API comes back with the same value — otherwise a slow poll
@@ -747,7 +817,7 @@ pub struct App {
   pub audio_capture_active: bool,
   pub home_scroll: u16,
   pub user_config: UserConfig,
-  pub artists: Vec<FullArtist>,
+  pub artists: Vec<crate::core::plugin_api::ArtistInfo>,
   pub artist: Option<Artist>,
   pub album_table_context: AlbumTableContext,
   pub saved_album_tracks_index: usize,
@@ -759,10 +829,13 @@ pub struct App {
   #[allow(dead_code)]
   pub pending_stop_after_track: bool,
   pub devices: Option<DevicePayload>,
-  pub queue: Option<CurrentUserQueue>,
+  pub queue: Option<QueueState>,
   pub queue_selected_index: usize,
   #[cfg(feature = "cover-art")]
   pub cover_art: crate::tui::cover_art::CoverArt,
+  /// Status of the current track's cover art, driving the placeholder message.
+  #[cfg(feature = "cover-art")]
+  pub cover_art_status: CoverArtStatus,
   // Inputs:
   // input is the string for input;
   // input_idx is the index of the cursor in terms of character;
@@ -781,13 +854,19 @@ pub struct App {
   pub saved_show_ids_set: HashSet<String>,
   pub library: Library,
   pub playlist_offset: u32,
-  pub playlist_tracks: Option<Page<PlaylistItem>>,
-  pub playlist_track_pages: ScrollableResultPages<Page<PlaylistItem>>,
+  // Each item carries its absolute playlist position (`page.offset + raw slot
+  // index`) alongside the playable. The position is computed in the mapping
+  // layer before unparseable/local slots are dropped, so removal-by-position and
+  // play-from-here offsets stay correct (see `playlist_items_page`).
+  pub playlist_tracks: Option<Paged<(u32, PlayableInfo)>>,
+  pub playlist_track_pages: ScrollableResultPages<Paged<(u32, PlayableInfo)>>,
   pub playlist_track_table_id: Option<PlaylistId<'static>>,
   pub active_playlist_track_filter: Option<String>,
   pub pending_playlist_track_search: Option<String>,
-  pub playlists: Option<Page<SimplifiedPlaylist>>,
-  pub recently_played: SpotifyResultAndSelectedIndex<Option<CursorBasedPage<PlayHistory>>>,
+  pub playlists: Option<Paged<PlaylistInfo>>,
+  pub recently_played: SpotifyResultAndSelectedIndex<
+    Option<crate::core::pagination::CursorPaged<crate::core::plugin_api::TrackInfo>>,
+  >,
   pub recommendations_seed: String,
   pub recommendations_context: Option<RecommendationsContext>,
   pub search_results: SearchResult,
@@ -815,9 +894,38 @@ pub struct App {
   pub episode_table_context: EpisodeTableContext,
   pub selected_show_simplified: Option<SelectedShow>,
   pub selected_show_full: Option<SelectedFullShow>,
-  pub user: Option<PrivateUser>,
+  pub user: Option<UserInfo>,
   pub album_list_index: usize,
   pub artists_list_index: usize,
+  /// Folders (one per subdirectory of the configured music dir) shown by the
+  /// Local Files browser, and the cursor within that list.
+  pub local_playlists: Vec<PlaylistInfo>,
+  pub local_playlists_index: usize,
+  /// The user's Subsonic server playlists shown by the Subsonic browser, and the
+  /// cursor within that list. Populated by `GetSubsonicPlaylists` dispatch.
+  pub subsonic_playlists: Vec<PlaylistInfo>,
+  pub subsonic_playlists_index: usize,
+  /// The user's configured internet-radio stations (as playable rows, uri
+  /// `radio:<url>`) shown by the sidebar when the Radio source is active, and
+  /// the cursor within that list. Populated by `GetRadioStations` dispatch.
+  /// Unconditional (domain type) because the sidebar match arms key on the
+  /// unconditional `Source::Radio` variant even in the slim build.
+  pub radio_stations: Vec<TrackInfo>,
+  pub radio_stations_index: usize,
+  /// The user's local YouTube playlists (from `youtube_playlists.yml`), shown
+  /// by the sidebar when the YouTube source is active. Unconditional for the
+  /// same slim-build reason as [`radio_stations`](Self::radio_stations).
+  pub youtube_playlists: Vec<PlaylistInfo>,
+  /// The `youtube:playlist:` URI currently open in the shared track table, so
+  /// the remove-track flow knows which playlist to edit.
+  pub youtube_open_playlist: Option<String>,
+  /// The source the UI is currently scoped to (sidebar, search, capability
+  /// gating). Browse-scope only — never changes playback routing.
+  pub active_source: Source,
+  /// Cursor within the Source panel of the `d` picker (index into [`Source::ALL`]).
+  pub source_list_index: usize,
+  /// Which panel of the `d` picker currently has focus.
+  pub source_device_focus: SourceFocus,
   pub clipboard: Option<Clipboard>,
   pub shows_list_index: usize,
   pub episode_list_index: usize,
@@ -858,6 +966,9 @@ pub struct App {
   /// Device id for the native streaming device when known
   #[allow(dead_code)]
   pub native_device_id: Option<String>,
+  /// A `file://` URI to start playing once the UI is up (set from `--play-file`).
+  /// Consumed and cleared on first render.
+  pub pending_play_file: Option<String>,
   /// Native playback state - updated by player events, used when streaming is active
   /// This is more reliable than current_playback_context.is_playing during native streaming
   pub native_is_playing: Option<bool>,
@@ -875,9 +986,9 @@ pub struct App {
   /// Selected index in the Discover view
   pub discover_selected_index: usize,
   /// Top tracks from the user for Discover feature
-  pub discover_top_tracks: Vec<FullTrack>,
+  pub discover_top_tracks: Vec<TrackInfo>,
   /// Top Artists Mix tracks for Discover feature
-  pub discover_artists_mix: Vec<FullTrack>,
+  pub discover_artists_mix: Vec<TrackInfo>,
   /// Time range for Top Tracks
   pub discover_time_range: DiscoverTimeRange,
   /// Whether we're currently loading discover data
@@ -927,7 +1038,7 @@ pub struct App {
   /// Pending track removal info in remove-from-playlist confirmation flow
   pub pending_playlist_track_removal: Option<PendingPlaylistTrackRemoval>,
   /// Full flat list of all user playlists (all pages combined)
-  pub all_playlists: Vec<SimplifiedPlaylist>,
+  pub all_playlists: Vec<PlaylistInfo>,
   /// Folder tree from rootlist (None if not fetched or streaming disabled)
   pub _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
   /// Flattened folder+playlist items for display navigation
@@ -949,6 +1060,30 @@ pub struct App {
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
+  /// The active local-file playback session (multi-source Phase 3), or `None`
+  /// when Spotify owns playback. Decoupled from Spotify/librespot state: the
+  /// local playbar reads progress and pause state live from the player here, so
+  /// librespot events and polls never desync it. `Some` exactly while a local
+  /// file is playing; dropping it releases the audio output device.
+  #[cfg(feature = "local-files")]
+  pub local_playback: Option<crate::infra::local::LocalPlaybackState>,
+  /// The active Subsonic playback session (multi-source Phase 4), or `None` when
+  /// another backend owns playback. Same decoupling contract as
+  /// [`local_playback`](Self::local_playback): the playbar reads progress/pause
+  /// live from the player here, never touching Spotify/librespot fields.
+  #[cfg(feature = "subsonic")]
+  pub subsonic_playback: Option<crate::infra::subsonic::SubsonicPlaybackState>,
+  /// The active internet-radio playback session (multi-source Phase 5), or
+  /// `None` when another backend owns playback. Same decoupling contract as
+  /// [`local_playback`](Self::local_playback); unlike it there is no queue —
+  /// a station is one infinite stream.
+  #[cfg(feature = "internet-radio")]
+  pub radio_playback: Option<crate::infra::radio::RadioPlaybackState>,
+  /// The active YouTube playback session (multi-source, yt-dlp backed), or
+  /// `None` when another backend owns playback. Same decoupling contract as
+  /// [`subsonic_playback`](Self::subsonic_playback).
+  #[cfg(feature = "youtube")]
+  pub youtube_playback: Option<crate::infra::youtube::YouTubePlaybackState>,
   /// Sender used to recover native streaming when a stale/disconnected player is detected.
   #[cfg(feature = "streaming")]
   pub streaming_recovery_tx:
@@ -990,8 +1125,8 @@ pub struct App {
   pub create_playlist_name_idx: usize,
   pub create_playlist_name_cursor: u16,
   pub create_playlist_stage: CreatePlaylistStage,
-  pub create_playlist_tracks: Vec<FullTrack>,
-  pub create_playlist_search_results: Vec<FullTrack>,
+  pub create_playlist_tracks: Vec<TrackInfo>,
+  pub create_playlist_search_results: Vec<TrackInfo>,
   pub create_playlist_search_input: Vec<char>,
   pub create_playlist_search_idx: usize,
   pub create_playlist_search_cursor: u16,
@@ -1025,6 +1160,17 @@ impl Default for App {
       discover_time_range: DiscoverTimeRange::default(),
       discover_loading: false,
       artists_list_index: 0,
+      local_playlists: Vec::new(),
+      local_playlists_index: 0,
+      subsonic_playlists: Vec::new(),
+      subsonic_playlists_index: 0,
+      radio_stations: Vec::new(),
+      radio_stations_index: 0,
+      youtube_playlists: Vec::new(),
+      youtube_open_playlist: None,
+      active_source: Source::default(),
+      source_list_index: 0,
+      source_device_focus: SourceFocus::default(),
       shows_list_index: 0,
       episode_list_index: 0,
       artists: vec![],
@@ -1136,6 +1282,7 @@ impl Default for App {
       native_track_info: None,
       is_streaming_active: false,
       native_device_id: None,
+      pending_play_file: None,
       native_is_playing: None,
       native_playback_origin: None,
       keepawake: None,
@@ -1178,12 +1325,22 @@ impl Default for App {
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
       streaming_player: None,
+      #[cfg(feature = "local-files")]
+      local_playback: None,
+      #[cfg(feature = "subsonic")]
+      subsonic_playback: None,
+      #[cfg(feature = "internet-radio")]
+      radio_playback: None,
+      #[cfg(feature = "youtube")]
+      youtube_playback: None,
       #[cfg(feature = "streaming")]
       streaming_recovery_tx: None,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
       mpris_manager: None,
       #[cfg(feature = "cover-art")]
       cover_art: crate::tui::cover_art::CoverArt::new(),
+      #[cfg(feature = "cover-art")]
+      cover_art_status: CoverArtStatus::default(),
       friends: Vec::new(),
       friends_loading: false,
       friend_code: None,
@@ -1222,10 +1379,14 @@ impl App {
     user_config: UserConfig,
     spotify_token_expiry: SystemTime,
   ) -> App {
+    // Read the persisted active source before moving user_config into the struct,
+    // so the restored value overrides the Source::default() set by App::default().
+    let active_source = user_config.behavior.active_source;
     App {
       io_tx: Some(io_tx),
       user_config,
       spotify_token_expiry,
+      active_source,
       ..App::default()
     }
   }
@@ -1241,6 +1402,58 @@ impl App {
         // TODO: handle error
       };
     }
+  }
+
+  /// Snapshot the currently-playing non-Spotify session for persistence, or
+  /// `None` when Spotify (or nothing) owns playback. Reads the live position and
+  /// pause state straight from whichever source's player is active, mirroring
+  /// the source-ownership order the runner tick uses. Spotify playback is not
+  /// persisted here — its resume is handled by `startup_behavior` device logic.
+  pub fn current_persisted_playback(
+    &self,
+  ) -> Option<crate::core::persisted_playback::PersistedPlayback> {
+    #[cfg(any(
+      feature = "youtube",
+      feature = "subsonic",
+      feature = "local-files",
+      feature = "internet-radio"
+    ))]
+    use crate::core::persisted_playback::PersistedPlayback;
+    #[cfg(feature = "youtube")]
+    if let Some(s) = self.youtube_playback.as_ref() {
+      return Some(PersistedPlayback::YouTube {
+        tracks: s.tracks.clone(),
+        index: s.index,
+        position_ms: s.player.position().as_millis() as u64,
+        paused: s.player.is_paused(),
+      });
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(s) = self.subsonic_playback.as_ref() {
+      return Some(PersistedPlayback::Subsonic {
+        tracks: s.tracks.clone(),
+        index: s.index,
+        position_ms: s.player.position().as_millis() as u64,
+        paused: s.player.is_paused(),
+      });
+    }
+    #[cfg(feature = "local-files")]
+    if let Some(s) = self.local_playback.as_ref() {
+      return Some(PersistedPlayback::Local {
+        queue: s.queue.clone(),
+        index: s.index,
+        position_ms: s.player.position().as_millis() as u64,
+        paused: s.player.is_paused(),
+      });
+    }
+    #[cfg(feature = "internet-radio")]
+    if let Some(s) = self.radio_playback.as_ref() {
+      return Some(PersistedPlayback::Radio {
+        station: s.station.clone(),
+        paused: s.player.is_paused(),
+      });
+    }
+    None
   }
 
   #[allow(dead_code)]
@@ -1480,15 +1693,15 @@ impl App {
     true
   }
 
-  pub fn playlist_is_editable(&self, playlist: &SimplifiedPlaylist) -> bool {
+  pub fn playlist_is_editable(&self, playlist: &PlaylistInfo) -> bool {
     let Some(user) = &self.user else {
       return false;
     };
 
-    playlist.owner.id.id() == user.id.id() || playlist.collaborative
+    playlist.owner_id.as_deref() == Some(user.id.as_str()) || playlist.collaborative
   }
 
-  pub fn editable_playlists(&self) -> Vec<&SimplifiedPlaylist> {
+  pub fn editable_playlists(&self) -> Vec<&PlaylistInfo> {
     self
       .all_playlists
       .iter()
@@ -1496,15 +1709,48 @@ impl App {
       .collect()
   }
 
-  pub fn begin_add_track_to_playlist_flow(
-    &mut self,
-    track_id: Option<TrackId<'static>>,
-    track_name: String,
-  ) {
+  /// The destination playlists offered by the add-track picker dialog for the
+  /// active source: local YouTube playlists under YouTube, the user's editable
+  /// Spotify playlists otherwise.
+  pub fn playlist_picker_items(&self) -> Vec<&PlaylistInfo> {
+    if self.active_source == Source::YouTube {
+      self.youtube_playlists.iter().collect()
+    } else {
+      self.editable_playlists()
+    }
+  }
+
+  pub fn begin_add_track_to_playlist_flow(&mut self, track_id: Option<String>, track_name: String) {
     let Some(track_id) = track_id else {
       self.set_status_message("Track cannot be added to playlist".to_string(), 4);
       return;
     };
+
+    // Under the YouTube source the destinations are the *local* playlists
+    // (youtube_playlists.yml), not the Spotify ones — no user/playlist
+    // fetches apply. The picker's Enter routes by source too.
+    if self.active_source == Source::YouTube {
+      if self.youtube_playlists.is_empty() {
+        // Kick a (re)load in case the file changed on disk; if it is
+        // genuinely empty the user needs to create a playlist first.
+        self.dispatch(IoEvent::GetYouTubePlaylists);
+        self.set_status_message(
+          "No YouTube playlists yet — create one from the sidebar".to_string(),
+          4,
+        );
+        return;
+      }
+      self.clear_dialog_state();
+      self.pending_playlist_track_add = Some(PendingPlaylistTrackAdd {
+        track_id,
+        track_name,
+      });
+      self.push_navigation_stack(
+        RouteId::Dialog,
+        ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker),
+      );
+      return;
+    }
 
     let mut requested_data = false;
     if self.user.is_none() {
@@ -1572,9 +1818,9 @@ impl App {
       .collect()
   }
 
-  /// Get the SimplifiedPlaylist for a PlaylistFolderItem::Playlist variant
+  /// Get the playlist for a PlaylistFolderItem::Playlist variant
   #[allow(dead_code)]
-  pub fn get_playlist_for_item(&self, item: &PlaylistFolderItem) -> Option<&SimplifiedPlaylist> {
+  pub fn get_playlist_for_item(&self, item: &PlaylistFolderItem) -> Option<&PlaylistInfo> {
     match item {
       PlaylistFolderItem::Playlist { index, .. } => self.all_playlists.get(*index),
       PlaylistFolderItem::Folder(_) => None,
@@ -1588,17 +1834,14 @@ impl App {
     if let Some(PlaylistFolderItem::Playlist { index, .. }) =
       self.get_playlist_display_item_at(selected_index)
     {
-      return self
-        .all_playlists
-        .get(*index)
-        .map(|p| p.id.id().to_string());
+      return self.all_playlists.get(*index).and_then(|p| p.id.clone());
     }
 
     self
       .playlists
       .as_ref()
       .and_then(|playlists| playlists.items.get(selected_index))
-      .map(|playlist| playlist.id.id().to_string())
+      .and_then(|playlist| playlist.id.clone())
   }
 
   fn apply_seek(&mut self, seek_ms: u32) {
@@ -1767,6 +2010,18 @@ impl App {
       "seeking forwards by {} ms",
       self.user_config.behavior.seek_milliseconds
     );
+    // A seekable decoded source (local/subsonic/youtube) owns the session: seek
+    // relative to *its* live position, never from the stale/foreign Spotify
+    // progress. Radio returns None here, so its seek keys are correct no-ops.
+    // The source player clamps to the track duration internally, so no upper
+    // clamp is needed (and we must not read the stale Spotify context duration).
+    if let Some(pos) = self.active_source_position_ms() {
+      let new_progress = (pos as u32).saturating_add(self.user_config.behavior.seek_milliseconds);
+      self.song_progress_ms = new_progress as u128;
+      self.seek_ms = None;
+      self.dispatch(IoEvent::Seek(new_progress));
+      return;
+    }
     if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
@@ -1821,6 +2076,16 @@ impl App {
       "seeking backwards by {} ms",
       self.user_config.behavior.seek_milliseconds
     );
+    // A seekable decoded source (local/subsonic/youtube) owns the session: seek
+    // relative to *its* live position, never from the stale/foreign Spotify
+    // progress. Radio returns None here, so its seek keys are correct no-ops.
+    if let Some(pos) = self.active_source_position_ms() {
+      let new_progress = (pos as u32).saturating_sub(self.user_config.behavior.seek_milliseconds);
+      self.song_progress_ms = new_progress as u128;
+      self.seek_ms = None;
+      self.dispatch(IoEvent::Seek(new_progress));
+      return;
+    }
     let old_progress = match self.seek_ms {
       Some(seek_ms) => seek_ms,
       None => self.song_progress_ms,
@@ -1859,6 +2124,16 @@ impl App {
   /// dragging on the playbar progress line). The target is clamped to the track
   /// duration. Mirrors the dispatch logic of [`Self::seek_forwards`].
   pub fn seek_to(&mut self, position_ms: u32) {
+    // A seekable decoded source (local/subsonic/youtube) owns the session: seek
+    // it to the absolute target directly (the source player clamps to the track
+    // duration internally). Radio returns None here, so its playbar drags are
+    // correct no-ops. Never read the stale Spotify context duration for a source.
+    if self.active_source_position_ms().is_some() {
+      self.song_progress_ms = position_ms as u128;
+      self.seek_ms = None;
+      self.dispatch(IoEvent::Seek(position_ms));
+      return;
+    }
     if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
@@ -2007,24 +2282,12 @@ impl App {
     &mut self,
     seed_artists: Option<Vec<String>>,
     seed_tracks: Option<Vec<String>>,
-    first_track: Option<FullTrack>,
+    first_track: Option<TrackInfo>,
   ) {
     let user_country = self.get_user_country();
-    let seed_artist_ids = seed_artists.and_then(|ids| {
-      ids
-        .into_iter()
-        .map(|id| ArtistId::from_id(id).ok())
-        .collect()
-    });
-    let seed_track_ids = seed_tracks.and_then(|ids| {
-      ids
-        .into_iter()
-        .map(|id| TrackId::from_id(id).ok())
-        .collect()
-    });
     self.dispatch(IoEvent::GetRecommendationsForSeed(
-      seed_artist_ids,
-      seed_track_ids,
+      seed_artists,
+      seed_tracks,
       Box::new(first_track),
       user_country,
     ));
@@ -2032,12 +2295,7 @@ impl App {
 
   pub fn get_recommendations_for_track_id(&mut self, id: String) {
     let user_country = self.get_user_country();
-    if let Ok(track_id) = TrackId::from_id(id) {
-      self.dispatch(IoEvent::GetRecommendationsForTrackId(
-        track_id,
-        user_country,
-      ));
-    }
+    self.dispatch(IoEvent::GetRecommendationsForTrackId(id, user_country));
   }
 
   /// Returns the volume the UI should show and volume-up/down should use as a base.
@@ -2054,7 +2312,10 @@ impl App {
       .current_playback_context
       .as_ref()
       .and_then(|c| c.device.volume_percent)
-      .unwrap_or(0)
+      // No Spotify device volume (e.g. a decoded source is playing, or the slim
+      // build has no context): fall back to the configured volume, not 0, so the
+      // playbar and volume-up/down base math stay correct for every source.
+      .unwrap_or(self.user_config.behavior.volume_percent as u32)
   }
 
   /// Set volume to an absolute percentage (0-100). Routes through the same
@@ -2067,6 +2328,16 @@ impl App {
 
     if next_volume != current_volume {
       info!("setting volume to {}", next_volume);
+      // A decoded source owns the sink: route the volume change to its
+      // dispatcher (which sets the rodio sink's gain), never to the paused
+      // librespot. The dispatcher converts the u8 percentage to a float.
+      if self.active_decoded_source() {
+        self.dispatch(IoEvent::ChangeVolume(next_volume));
+        self.user_config.behavior.volume_percent = next_volume;
+        let _ = self.user_config.save_config();
+        self.pending_volume = Some(next_volume);
+        return;
+      }
       // Use native streaming player for instant control (bypasses event channel latency)
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() {
@@ -2113,6 +2384,16 @@ impl App {
 
     if next_volume != current_volume {
       info!("increasing volume: {} -> {}", current_volume, next_volume);
+      // A decoded source owns the sink: route the volume change to its
+      // dispatcher (which sets the rodio sink's gain), never to the paused
+      // librespot. The dispatcher converts the u8 percentage to a float.
+      if self.active_decoded_source() {
+        self.dispatch(IoEvent::ChangeVolume(next_volume));
+        self.user_config.behavior.volume_percent = next_volume;
+        let _ = self.user_config.save_config();
+        self.pending_volume = Some(next_volume);
+        return;
+      }
       // Use native streaming player for instant control (bypasses event channel latency)
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() {
@@ -2164,6 +2445,16 @@ impl App {
         current_volume, next_volume_u8
       );
 
+      // A decoded source owns the sink: route the volume change to its
+      // dispatcher (which sets the rodio sink's gain), never to the paused
+      // librespot. The dispatcher converts the u8 percentage to a float.
+      if self.active_decoded_source() {
+        self.dispatch(IoEvent::ChangeVolume(next_volume_u8));
+        self.user_config.behavior.volume_percent = next_volume_u8;
+        let _ = self.user_config.save_config();
+        self.pending_volume = Some(next_volume_u8);
+        return;
+      }
       // Use native streaming player for instant control (bypasses event channel latency)
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() {
@@ -2307,7 +2598,153 @@ impl App {
     false
   }
 
+  /// Whether any decoded-audio source (local file, Subsonic, internet radio, or
+  /// YouTube) currently owns the playback session.
+  ///
+  /// Starting a non-Spotify source only *pauses* librespot; it never clears
+  /// `is_streaming_active` / `current_playback_context`, so
+  /// [`is_native_streaming_active_for_playback`](Self::is_native_streaming_active_for_playback)
+  /// stays true while a decoded source owns the rodio sink. The direct-control
+  /// transport methods (next/prev/volume) use this guard to route to the active
+  /// source via `IoEvent` dispatch instead of driving the paused librespot.
+  ///
+  /// Radio is included: routing Next/volume to radio's dispatcher (which no-ops
+  /// or handles it) is still correct — we must never drive librespot while a
+  /// source is playing. In a build with all source features off this reduces to
+  /// `false`.
+  fn active_decoded_source(&self) -> bool {
+    #[cfg(feature = "local-files")]
+    if self.local_playback.is_some() {
+      return true;
+    }
+    #[cfg(feature = "subsonic")]
+    if self.subsonic_playback.is_some() {
+      return true;
+    }
+    #[cfg(feature = "internet-radio")]
+    if self.radio_playback.is_some() {
+      return true;
+    }
+    #[cfg(feature = "youtube")]
+    if self.youtube_playback.is_some() {
+      return true;
+    }
+    false
+  }
+
+  /// The player of whichever decoded source (local file, Subsonic, internet
+  /// radio, or YouTube) currently owns the session, or `None` when Spotify (or
+  /// nothing) owns it. All four sources decode through the same `LocalPlayer`
+  /// sink, so a single accessor covers transport/seek routing for every one.
+  /// Ordering mirrors [`Self::active_decoded_source`].
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  // Consumed only by the OS media integrations (MPRIS / macOS / Windows), so
+  // builds with decoded sources but none of those integrations leave it unused.
+  #[cfg_attr(
+    not(any(
+      all(feature = "mpris", target_os = "linux"),
+      all(feature = "macos-media", target_os = "macos"),
+      all(feature = "windows-media", target_os = "windows")
+    )),
+    allow(dead_code)
+  )]
+  pub fn active_decoded_player(&self) -> Option<&std::sync::Arc<crate::infra::audio::LocalPlayer>> {
+    #[cfg(feature = "local-files")]
+    if let Some(s) = &self.local_playback {
+      return Some(&s.player);
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(s) = &self.subsonic_playback {
+      return Some(&s.player);
+    }
+    #[cfg(feature = "internet-radio")]
+    if let Some(s) = &self.radio_playback {
+      return Some(&s.player);
+    }
+    #[cfg(feature = "youtube")]
+    if let Some(s) = &self.youtube_playback {
+      return Some(&s.player);
+    }
+    None
+  }
+
+  /// The current playback position, in milliseconds, of the active *seekable*
+  /// decoded source (local file, Subsonic, or YouTube).
+  ///
+  /// Read live from the source player's sink. Internet radio is intentionally
+  /// **excluded** — a live stream is not seekable — so radio returns `None` here
+  /// and seek keys become correct no-ops for radio. In a build with all seekable
+  /// source features off this reduces to `None`.
+  fn active_source_position_ms(&self) -> Option<u128> {
+    #[cfg(feature = "local-files")]
+    if let Some(local) = &self.local_playback {
+      return Some(local.player.position().as_millis());
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(subsonic) = &self.subsonic_playback {
+      return Some(subsonic.player.position().as_millis());
+    }
+    #[cfg(feature = "youtube")]
+    if let Some(youtube) = &self.youtube_playback {
+      return Some(youtube.player.position().as_millis());
+    }
+    None
+  }
+
   pub fn toggle_playback(&mut self) {
+    // Local-file playback owns the session: toggle the local sink directly. The
+    // playbar reads pause state live from the player, so nothing else to update.
+    #[cfg(feature = "local-files")]
+    if let Some(local) = &self.local_playback {
+      if local.player.is_paused() {
+        local.player.resume();
+      } else {
+        local.player.pause();
+      }
+      return;
+    }
+
+    // Subsonic playback owns the session the same way: toggle its sink directly.
+    #[cfg(feature = "subsonic")]
+    if let Some(subsonic) = &self.subsonic_playback {
+      if subsonic.player.is_paused() {
+        subsonic.player.resume();
+      } else {
+        subsonic.player.pause();
+      }
+      return;
+    }
+
+    // YouTube playback owns the session the same way: toggle its sink directly.
+    #[cfg(feature = "youtube")]
+    if let Some(youtube) = &self.youtube_playback {
+      if youtube.player.is_paused() {
+        youtube.player.resume();
+      } else {
+        youtube.player.pause();
+      }
+      return;
+    }
+
+    // Internet-radio playback owns the session the same way: toggle its sink
+    // directly. Without this branch radio falls through to the streaming path,
+    // which only ever emits a bare resume — so Play/Pause could resume radio but
+    // never pause it.
+    #[cfg(feature = "internet-radio")]
+    if let Some(radio) = &self.radio_playback {
+      if radio.player.is_paused() {
+        radio.player.resume();
+      } else {
+        radio.player.pause();
+      }
+      return;
+    }
+
     // Use native streaming player for instant control (bypasses event channel latency)
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
@@ -2373,6 +2810,18 @@ impl App {
 
   pub fn previous_track(&mut self) {
     info!("playing previous track or restarting current track");
+    // A decoded source owns the session: route to its dispatcher, never to the
+    // paused librespot. Preserve the ">= 3s restarts current, else previous"
+    // semantics (radio no-ops both Seek and PreviousTrack).
+    if self.active_decoded_source() {
+      if self.song_progress_ms >= 3_000 {
+        self.dispatch(IoEvent::Seek(0));
+      } else {
+        self.dispatch(IoEvent::PreviousTrack);
+      }
+      self.song_progress_ms = 0;
+      return;
+    }
     if self.song_progress_ms >= 3_000 {
       // If more than 3 seconds into the song, restart from beginning
       #[cfg(feature = "streaming")]
@@ -2415,6 +2864,13 @@ impl App {
 
   pub fn force_previous_track(&mut self) {
     info!("force skipping to previous track");
+    // A decoded source owns the session: route to its dispatcher, never to the
+    // paused librespot. The source handles or no-ops ForcePreviousTrack.
+    if self.active_decoded_source() {
+      self.song_progress_ms = 0;
+      self.dispatch(IoEvent::ForcePreviousTrack);
+      return;
+    }
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
       if let Some(ref player) = self.streaming_player {
@@ -2442,6 +2898,14 @@ impl App {
 
   pub fn next_track(&mut self) {
     info!("skipping to next track");
+    // A decoded source (local/subsonic/radio/youtube) owns the session: route to
+    // its dispatcher, never to the paused librespot. The source handles or
+    // no-ops NextTrack (radio has no queue).
+    if self.active_decoded_source() {
+      self.song_progress_ms = 0;
+      self.dispatch(IoEvent::NextTrack);
+      return;
+    }
     // Use native streaming player for instant control (bypasses event channel latency)
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
@@ -2603,7 +3067,7 @@ impl App {
         break;
       }
 
-      tracks.extend(page.items.iter().map(|item| item.track.clone()));
+      tracks.extend(page.items.iter().cloned());
       expected_offset = expected_offset.saturating_add(page.limit);
       active_index = page_index;
 
@@ -2618,8 +3082,8 @@ impl App {
   }
 
   pub fn set_playlist_tracks_to_table_continuous(&mut self) {
-    let mut tracks: Vec<FullTrack> = Vec::new();
-    let mut track_ids: Vec<TrackId<'static>> = Vec::new();
+    let mut tracks: Vec<TrackInfo> = Vec::new();
+    let mut track_ids: Vec<String> = Vec::new();
     let mut positions: Vec<usize> = Vec::new();
     let mut expected_offset = 0;
     let mut seen_offsets = HashSet::new();
@@ -2631,13 +3095,13 @@ impl App {
         break;
       }
 
-      for (idx, item) in page.items.iter().enumerate() {
-        if let Some(PlayableItem::Track(full_track)) = item.item.as_ref() {
-          tracks.push(full_track.clone());
-          if let Some(track_id) = full_track.id.as_ref() {
-            track_ids.push(track_id.clone().into_static());
+      for (position, item) in page.items.iter() {
+        if let PlayableInfo::Track(track) = item {
+          if let Some(id) = track.id.as_ref() {
+            track_ids.push(id.clone());
           }
-          positions.push(page.offset as usize + idx);
+          tracks.push(track.clone());
+          positions.push(*position as usize);
         }
       }
 
@@ -2689,7 +3153,7 @@ impl App {
     self.playlist_track_positions = None;
   }
 
-  pub fn replace_track_table_tracks(&mut self, tracks: Vec<FullTrack>) {
+  pub fn replace_track_table_tracks(&mut self, tracks: Vec<TrackInfo>) {
     self.playlist_track_positions = None;
 
     let track_count = tracks.len();
@@ -2742,9 +3206,13 @@ impl App {
 
     let track_ids = matches
       .iter()
-      .filter_map(|(track, _)| track.id.clone().map(|id| id.into_static()))
+      .filter_map(|(track, _)| track.id.as_ref().map(|id| id.id().to_string()))
       .collect();
-    let (tracks, positions): (Vec<_>, Vec<_>) = matches.into_iter().unzip();
+    let tracks: Vec<TrackInfo> = matches
+      .iter()
+      .map(|(track, _)| TrackInfo::from(track))
+      .collect();
+    let positions: Vec<usize> = matches.into_iter().map(|(_, position)| position).collect();
 
     self.active_playlist_track_filter = Some(query);
     self.pending_playlist_track_search = None;
@@ -2865,14 +3333,8 @@ impl App {
       .copied()
   }
 
-  pub fn set_saved_artists_to_table(&mut self, saved_artists_page: &CursorBasedPage<FullArtist>) {
-    self.dispatch(IoEvent::SetArtistsToTable(
-      saved_artists_page
-        .items
-        .clone()
-        .into_iter()
-        .collect::<Vec<FullArtist>>(),
-    ))
+  pub fn set_saved_artists_to_table(&mut self, saved_artists_page: &CursorPaged<ArtistInfo>) {
+    self.artists = saved_artists_page.items.clone();
   }
 
   pub fn get_current_user_saved_artists_next(&mut self) {
@@ -2889,9 +3351,9 @@ impl App {
       None => {
         if let Some(saved_artists) = &self.library.saved_artists.clone().get_results(None) {
           if let Some(last_artist) = saved_artists.items.last() {
-            self.dispatch(IoEvent::GetFollowedArtists(Some(
-              last_artist.id.clone().into_static(),
-            )));
+            if let Some(after) = last_artist.id.as_deref() {
+              self.dispatch(IoEvent::GetFollowedArtists(Some(after.to_string())));
+            }
           }
         }
       }
@@ -2952,7 +3414,10 @@ impl App {
         .contains(&next_offset)
       {
         self.playlist_tracks_prefetch_in_flight.insert(next_offset);
-        self.dispatch(IoEvent::GetPlaylistItems(playlist_id, next_offset));
+        self.dispatch(IoEvent::GetPlaylistItems(
+          playlist_id.id().to_string(),
+          next_offset,
+        ));
       }
     }
   }
@@ -2966,6 +3431,7 @@ impl App {
       return false;
     }
 
+    let tracks = tracks.iter().map(TrackInfo::from).collect();
     self.replace_track_table_tracks(tracks);
     self.track_table.selected_index = 0;
     true
@@ -3034,8 +3500,8 @@ impl App {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
             let selected_album = &albums.items[selected_index];
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.into_static()));
+            if let Some(ref id_str) = selected_album.id {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id_str.clone()));
             }
           }
         }
@@ -3043,16 +3509,17 @@ impl App {
       ActiveBlock::AlbumList => {
         if let Some(albums) = self.library.saved_albums.get_results(None) {
           if let Some(selected_album) = albums.items.get(self.album_list_index) {
-            let album_id = selected_album.album.id.clone();
-            self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.into_static()));
+            if let Some(id) = selected_album.album.id.as_deref() {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id.to_string()));
+            }
           }
         }
       }
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.into_static()));
+            if let Some(id_str) = &selected_album.id {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id_str.clone()));
             }
           }
         }
@@ -3068,8 +3535,8 @@ impl App {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
             let selected_album = &albums.items[selected_index];
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.into_static()));
+            if let Some(ref id_str) = selected_album.id {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id_str.clone()));
             }
           }
         }
@@ -3077,8 +3544,8 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.into_static()));
+            if let Some(id_str) = &selected_album.id {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id_str.clone()));
             }
           }
         }
@@ -3121,9 +3588,7 @@ impl App {
       None => {
         if let Some(show_episodes) = &self.library.show_episodes.get_results(None) {
           let offset = Some(show_episodes.offset + show_episodes.limit);
-          if let Ok(show_id) = ShowId::from_id(show_id) {
-            self.dispatch(IoEvent::GetCurrentShowEpisodes(show_id, offset));
-          }
+          self.dispatch(IoEvent::GetCurrentShowEpisodes(show_id, offset));
         }
       }
     }
@@ -3141,31 +3606,30 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
-            let selected_artist: &FullArtist = &artists.items[selected_index];
-            self.dispatch(IoEvent::UserUnfollowArtists(vec![selected_artist
-              .id
-              .clone()
-              .into_static()]));
+            let selected_artist = &artists.items[selected_index];
+            if let Some(ref id_str) = selected_artist.id {
+              self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
+            }
           }
         }
       }
       ActiveBlock::AlbumList => {
         if let Some(artists) = self.library.saved_artists.get_results(None) {
-          if let Some(selected_artist) = artists.items.get(self.artists_list_index) {
-            self.dispatch(IoEvent::UserUnfollowArtists(vec![selected_artist
-              .id
-              .clone()
-              .into_static()]));
+          if let Some(id) = artists
+            .items
+            .get(self.artists_list_index)
+            .and_then(|selected_artist| selected_artist.id.as_deref())
+          {
+            self.dispatch(IoEvent::UserUnfollowArtists(vec![id.to_string()]));
           }
         }
       }
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          self.dispatch(IoEvent::UserUnfollowArtists(vec![selected_artis
-            .id
-            .clone()
-            .into_static()]));
+          if let Some(id_str) = &selected_artis.id {
+            self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
+          }
         }
       }
       _ => (),
@@ -3178,21 +3642,19 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
-            let selected_artist: &FullArtist = &artists.items[selected_index];
-            self.dispatch(IoEvent::UserFollowArtists(vec![selected_artist
-              .id
-              .clone()
-              .into_static()]));
+            let selected_artist = &artists.items[selected_index];
+            if let Some(ref id_str) = selected_artist.id {
+              self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
+            }
           }
         }
       }
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          self.dispatch(IoEvent::UserFollowArtists(vec![selected_artis
-            .id
-            .clone()
-            .into_static()]));
+          if let Some(id_str) = &selected_artis.id {
+            self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
+          }
         }
       }
       _ => (),
@@ -3207,15 +3669,22 @@ impl App {
       ..
     } = self.search_results
     {
-      let selected_playlist: &SimplifiedPlaylist = &playlists.items[selected_index];
-      let selected_id = selected_playlist.id.clone();
+      let selected_playlist = &playlists.items[selected_index];
       let selected_public = selected_playlist.public;
-      let selected_owner_id = selected_playlist.owner.id.clone();
-      self.dispatch(IoEvent::UserFollowPlaylist(
-        selected_owner_id.into_static(),
-        selected_id.into_static(),
-        selected_public,
-      ));
+      if let Some(ref playlist_id_str) = selected_playlist.id {
+        // owner_id carries the Spotify user id (populated in PlaylistInfo::from_simplified).
+        // The network handler ignores this param (_playlist_owner_id), so a fallback
+        // string is harmless — but we use the real id when available.
+        let owner_id = selected_playlist
+          .owner_id
+          .clone()
+          .unwrap_or_else(|| "unknown".to_string());
+        self.dispatch(IoEvent::UserFollowPlaylist(
+          owner_id,
+          playlist_id_str.clone(),
+          selected_public,
+        ));
+      }
     }
   }
 
@@ -3225,13 +3694,13 @@ impl App {
       if let Some(PlaylistFolderItem::Playlist { index, .. }) =
         self.get_playlist_display_item_at(selected_index)
       {
-        if let Some(playlist) = self.all_playlists.get(*index) {
-          let selected_id = playlist.id.clone();
-          let user_id = user.id.clone();
-          self.dispatch(IoEvent::UserUnfollowPlaylist(
-            user_id.into_static(),
-            selected_id.into_static(),
-          ));
+        // Pass the stored string ids straight through to the IoEvent.
+        let ids = self.all_playlists.get(*index).and_then(|playlist| {
+          let selected_id = playlist.id.clone()?;
+          Some((user.id.clone(), selected_id))
+        });
+        if let Some((user_id, selected_id)) = ids {
+          self.dispatch(IoEvent::UserUnfollowPlaylist(user_id, selected_id));
         }
       }
     }
@@ -3245,12 +3714,14 @@ impl App {
       &self.user,
     ) {
       let selected_playlist = &playlists.items[selected_index];
-      let selected_id = selected_playlist.id.clone();
-      let user_id = user.id.clone();
-      self.dispatch(IoEvent::UserUnfollowPlaylist(
-        user_id.into_static(),
-        selected_id.into_static(),
-      ));
+      // `user.id` is the domain string id (UserInfo) and `selected_playlist.id`
+      // is an Option<String> (PlaylistInfo); both pass straight to the IoEvent.
+      if let Some(ref id_str) = selected_playlist.id {
+        self.dispatch(IoEvent::UserUnfollowPlaylist(
+          user.id.clone(),
+          id_str.clone(),
+        ));
+      }
     }
   }
 
@@ -3260,27 +3731,35 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(shows) = &self.search_results.shows {
           if let Some(selected_index) = self.search_results.selected_shows_index {
-            if let Some(show_id) = shows.items.get(selected_index).map(|item| item.id.clone()) {
-              self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id.into_static()));
+            if let Some(show) = shows.items.get(selected_index) {
+              if let Some(ref id_str) = show.id {
+                self.dispatch(IoEvent::CurrentUserSavedShowAdd(id_str.clone()));
+              }
             }
           }
         }
       }
-      ActiveBlock::EpisodeTable => match self.episode_table_context {
-        EpisodeTableContext::Full => {
-          if let Some(selected_episode) = self.selected_show_full.clone() {
-            let show_id = selected_episode.show.id;
-            self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id.into_static()));
-          }
+      ActiveBlock::EpisodeTable => {
+        if let Some(show_id) = self.selected_episode_show_id() {
+          self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id));
         }
-        EpisodeTableContext::Simplified => {
-          if let Some(selected_episode) = self.selected_show_simplified.clone() {
-            let show_id = selected_episode.show.id;
-            self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id.into_static()));
-          }
-        }
-      },
+      }
       _ => (),
+    }
+  }
+
+  /// Resolve the currently selected show's id/URI (from the episode-table
+  /// context). Returns `None` if the stored domain show has no id.
+  fn selected_episode_show_id(&self) -> Option<String> {
+    match self.episode_table_context {
+      EpisodeTableContext::Full => self
+        .selected_show_full
+        .as_ref()
+        .and_then(|s| s.show.id.clone()),
+      EpisodeTableContext::Simplified => self
+        .selected_show_simplified
+        .as_ref()
+        .and_then(|s| s.show.id.clone()),
     }
   }
 
@@ -3288,35 +3767,30 @@ impl App {
     info!("unfollowing show");
     match block {
       ActiveBlock::Podcasts => {
-        if let Some(shows) = self.library.saved_shows.get_results(None) {
-          if let Some(selected_show) = shows.items.get(self.shows_list_index) {
-            let show_id = selected_show.show.id.clone();
-            self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id.into_static()));
-          }
+        if let Some(id) = self
+          .library
+          .saved_shows
+          .get_results(None)
+          .and_then(|shows| shows.items.get(self.shows_list_index))
+          .and_then(|selected_show| selected_show.id.as_deref())
+        {
+          self.dispatch(IoEvent::CurrentUserSavedShowDelete(id.to_string()));
         }
       }
       ActiveBlock::SearchResultBlock => {
         if let Some(shows) = &self.search_results.shows {
           if let Some(selected_index) = self.search_results.selected_shows_index {
-            let show_id = shows.items[selected_index].id.clone();
-            self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id.into_static()));
+            if let Some(ref id_str) = shows.items[selected_index].id {
+              self.dispatch(IoEvent::CurrentUserSavedShowDelete(id_str.clone()));
+            }
           }
         }
       }
-      ActiveBlock::EpisodeTable => match self.episode_table_context {
-        EpisodeTableContext::Full => {
-          if let Some(selected_episode) = self.selected_show_full.clone() {
-            let show_id = selected_episode.show.id;
-            self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id.into_static()));
-          }
+      ActiveBlock::EpisodeTable => {
+        if let Some(show_id) = self.selected_episode_show_id() {
+          self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id));
         }
-        EpisodeTableContext::Simplified => {
-          if let Some(selected_episode) = self.selected_show_simplified.clone() {
-            let show_id = selected_episode.show.id;
-            self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id.into_static()));
-          }
-        }
-      },
+      }
       _ => (),
     }
   }
@@ -3378,7 +3852,7 @@ impl App {
     }
   }
 
-  pub fn get_artist(&mut self, artist_id: ArtistId<'static>, input_artist_name: String) {
+  pub fn get_artist(&mut self, artist_id: String, input_artist_name: String) {
     let user_country = self.get_user_country();
     self.dispatch(IoEvent::GetArtist(
       artist_id,
@@ -3387,9 +3861,15 @@ impl App {
     ));
   }
 
-  #[allow(deprecated)]
   pub fn get_user_country(&self) -> Option<Country> {
-    self.user.as_ref().and_then(|user| user.country)
+    // `country` is stored as its ISO 3166-1 alpha-2 string (the multi-source
+    // domain holds no rspotify types); re-derive the rspotify `Country` here at
+    // the boundary, the same way IDs are re-parsed when dispatching IoEvents.
+    let code = self
+      .user
+      .as_ref()
+      .and_then(|user| user.country.as_deref())?;
+    serde_json::from_value(serde_json::Value::String(code.to_string())).ok()
   }
 
   pub fn calculate_help_menu_offset(&mut self) {
@@ -3513,7 +3993,7 @@ impl App {
         SettingItem {
           id: "behavior.startup_behavior".to_string(),
           name: "Startup Behavior".to_string(),
-          description: "Playback state when spotatui starts: continue, play, or pause".to_string(),
+          description: "Playback state when spotatui starts. Continue resumes your last session (including a saved non-Spotify track) exactly as it was; Play always starts; Pause always pauses.".to_string(),
           value: SettingValue::Cycle(
             self
               .user_config
@@ -4525,9 +5005,15 @@ impl App {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::test_helpers::{private_user, simplified_playlist};
+  use crate::core::test_helpers::{playlist_info, user_info};
   use chrono::{Duration as ChronoDuration, Utc};
-  use rspotify::model::{artist::SimplifiedArtist, idtypes::PlaylistId};
+  use rspotify::model::{
+    artist::SimplifiedArtist,
+    idtypes::{PlaylistId, TrackId},
+    page::Page,
+    track::SavedTrack,
+    SimplifiedAlbum,
+  };
   use rspotify::prelude::Id;
   use std::collections::HashMap;
   use std::sync::mpsc::channel;
@@ -4626,14 +5112,25 @@ mod tests {
     }
   }
 
+  fn saved_tracks_domain_page(
+    offset: u32,
+    total: u32,
+    ids: &[&str],
+    has_next: bool,
+  ) -> Paged<TrackInfo> {
+    crate::infra::network::mapping::map_page(
+      &saved_tracks_page(offset, total, ids, has_next),
+      |st| TrackInfo::from(&st.track),
+    )
+  }
+
   fn empty_playlist_page(
     offset: u32,
     total: u32,
     limit: u32,
     has_next: bool,
-  ) -> Page<PlaylistItem> {
-    Page {
-      href: "https://example.com/playlists/test/items".to_string(),
+  ) -> Paged<(u32, PlayableInfo)> {
+    Paged {
       items: vec![],
       limit,
       next: has_next.then(|| "https://example.com/playlists/test/items?next".to_string()),
@@ -4643,22 +5140,23 @@ mod tests {
     }
   }
 
-  #[allow(deprecated)]
-  fn playlist_page(offset: u32, total: u32, ids: &[&str], has_next: bool) -> Page<PlaylistItem> {
-    Page {
-      href: "https://example.com/playlists/test/items".to_string(),
+  fn playlist_page(
+    offset: u32,
+    total: u32,
+    ids: &[&str],
+    has_next: bool,
+  ) -> Paged<(u32, PlayableInfo)> {
+    Paged {
       items: ids
         .iter()
         .enumerate()
         .map(|(index, id)| {
-          let track = PlayableItem::Track(full_track(id, &format!("Track {offset}-{index}")));
-          PlaylistItem {
-            added_at: Some(Utc::now()),
-            added_by: None,
-            is_local: false,
-            track: Some(track.clone()),
-            item: Some(track),
-          }
+          let position = offset + index as u32;
+          let track = PlayableInfo::Track(TrackInfo::from(&full_track(
+            id,
+            &format!("Track {offset}-{index}"),
+          )));
+          (position, track)
         })
         .collect(),
       limit: ids.len() as u32,
@@ -4676,14 +5174,14 @@ mod tests {
   #[test]
   fn upsert_page_by_offset_preserves_active_index() {
     let mut pages = ScrollableResultPages::new();
-    pages.add_pages(saved_tracks_page(
+    pages.add_pages(saved_tracks_domain_page(
       0,
       4,
       &["0000000000000000000001", "0000000000000000000002"],
       true,
     ));
 
-    let inserted_index = pages.upsert_page_by_offset(saved_tracks_page(
+    let inserted_index = pages.upsert_page_by_offset(saved_tracks_domain_page(
       2,
       4,
       &["0000000000000000000003", "0000000000000000000004"],
@@ -4698,14 +5196,14 @@ mod tests {
   #[test]
   fn upsert_page_by_offset_replaces_duplicate_page() {
     let mut pages = ScrollableResultPages::new();
-    pages.add_pages(saved_tracks_page(
+    pages.add_pages(saved_tracks_domain_page(
       0,
       2,
       &["0000000000000000000001", "0000000000000000000002"],
       false,
     ));
 
-    let replaced_index = pages.upsert_page_by_offset(saved_tracks_page(
+    let replaced_index = pages.upsert_page_by_offset(saved_tracks_domain_page(
       0,
       2,
       &["0000000000000000000003", "0000000000000000000004"],
@@ -4715,7 +5213,7 @@ mod tests {
     assert_eq!(replaced_index, 0);
     assert_eq!(pages.pages.len(), 1);
     assert_eq!(
-      pages.pages[0].items[0].track.id.as_ref().unwrap().id(),
+      pages.pages[0].items[0].id.as_deref().unwrap(),
       "0000000000000000000003"
     );
   }
@@ -4723,13 +5221,13 @@ mod tests {
   #[test]
   fn upsert_page_by_offset_keeps_active_page_when_inserting_before_it() {
     let mut pages = ScrollableResultPages::new();
-    pages.add_pages(saved_tracks_page(
+    pages.add_pages(saved_tracks_domain_page(
       0,
       6,
       &["0000000000000000000001", "0000000000000000000002"],
       true,
     ));
-    pages.add_pages(saved_tracks_page(
+    pages.add_pages(saved_tracks_domain_page(
       4,
       6,
       &["0000000000000000000005", "0000000000000000000006"],
@@ -4737,7 +5235,7 @@ mod tests {
     ));
     pages.index = 1;
 
-    let inserted_index = pages.upsert_page_by_offset(saved_tracks_page(
+    let inserted_index = pages.upsert_page_by_offset(saved_tracks_domain_page(
       2,
       6,
       &["0000000000000000000003", "0000000000000000000004"],
@@ -4754,15 +5252,19 @@ mod tests {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
     app.saved_tracks_prefetch_generation = 7;
-    app.library.saved_tracks.add_pages(saved_tracks_page(
-      0,
-      2,
-      &["0000000000000000000001", "0000000000000000000002"],
-      false,
-    ));
+    let saved_tracks_domain_page = crate::infra::network::mapping::map_page(
+      &saved_tracks_page(
+        0,
+        2,
+        &["0000000000000000000001", "0000000000000000000002"],
+        false,
+      ),
+      |st| TrackInfo::from(&st.track),
+    );
+    app.library.saved_tracks.add_pages(saved_tracks_domain_page);
     app.track_table.tracks = vec![
-      full_track("0000000000000000000001", "Track 1"),
-      full_track("0000000000000000000002", "Track 2"),
+      TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+      TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
     app.track_table.selected_index = 1;
 
@@ -4794,8 +5296,8 @@ mod tests {
     app.playlist_offset = 20;
     app.track_table.selected_index = 1;
     app.track_table.tracks = vec![
-      full_track("0000000000000000000001", "Track 1"),
-      full_track("0000000000000000000002", "Track 2"),
+      TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+      TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
 
     app.reset_playlist_tracks_view(playlist_id.clone(), TrackTableContext::MyPlaylists);
@@ -4834,7 +5336,7 @@ mod tests {
 
     match rx.recv().unwrap() {
       IoEvent::GetPlaylistItems(id, offset) => {
-        assert_eq!(id.id(), playlist_id.id());
+        assert_eq!(id, playlist_id.id());
         assert_eq!(offset, 20);
       }
       _ => panic!("unexpected event"),
@@ -4937,8 +5439,8 @@ mod tests {
     app.playlist_track_pages.upsert_page_by_offset(second_page);
     app.playlist_tracks = Some(first_page);
     app.track_table.tracks = vec![
-      full_track("0000000000000000000001", "Track 1"),
-      full_track("0000000000000000000002", "Track 2"),
+      TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+      TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
     app.track_table.selected_index = 1;
     app.pending_track_table_selection = Some(PendingTrackSelection::Index(2));
@@ -5001,7 +5503,10 @@ mod tests {
     app.playlist_track_table_id = Some(playlist_id);
     app.playlist_track_pages.upsert_page_by_offset(page);
     app.active_playlist_track_filter = Some("second".to_string());
-    app.track_table.tracks = vec![full_track("0000000000000000000002", "Second")];
+    app.track_table.tracks = vec![TrackInfo::from(&full_track(
+      "0000000000000000000002",
+      "Second",
+    ))];
     app.playlist_track_positions = Some(vec![1]);
 
     app.clear_playlist_track_filter();
@@ -5019,7 +5524,7 @@ mod tests {
     let active_playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
     let original_track = full_track("0000000000000000000001", "Original");
 
-    app.track_table.tracks = vec![original_track.clone()];
+    app.track_table.tracks = vec![TrackInfo::from(&original_track)];
     app.track_table.context = Some(TrackTableContext::PlaylistSearch);
     app.playlist_track_table_id = Some(active_playlist_id.clone());
 
@@ -5028,8 +5533,8 @@ mod tests {
       vec![full_track("0000000000000000000002", "Wrong Playlist")],
     ));
     assert_eq!(
-      app.track_table.tracks[0].id.as_ref().unwrap().id(),
-      original_track.id.as_ref().unwrap().id()
+      app.track_table.tracks[0].id.as_deref(),
+      original_track.id.as_ref().map(|id| id.id())
     );
 
     app.track_table.context = Some(TrackTableContext::SavedTracks);
@@ -5038,8 +5543,8 @@ mod tests {
       vec![full_track("0000000000000000000003", "Wrong Context")],
     ));
     assert_eq!(
-      app.track_table.tracks[0].id.as_ref().unwrap().id(),
-      original_track.id.as_ref().unwrap().id()
+      app.track_table.tracks[0].id.as_deref(),
+      original_track.id.as_ref().map(|id| id.id())
     );
   }
 
@@ -5047,16 +5552,16 @@ mod tests {
   fn editable_playlists_include_owned_and_collaborative_only() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
-    app.user = Some(private_user("spotatui-owner"));
+    app.user = Some(user_info("spotatui-owner"));
     app.all_playlists = vec![
-      simplified_playlist("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
-      simplified_playlist(
+      playlist_info("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
+      playlist_info(
         "37i9dQZF1DX4WYpdgoIcn6",
         "Collaborative",
         "friend-owner",
         true,
       ),
-      simplified_playlist("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
+      playlist_info("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
     ];
 
     let editable_names = app
@@ -5072,17 +5577,12 @@ mod tests {
   fn begin_add_track_to_playlist_flow_requires_editable_playlist() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
-    app.user = Some(private_user("spotatui-owner"));
-    app.playlists = Some(Page {
-      href: "https://api.spotify.com/v1/me/playlists".to_string(),
-      items: vec![],
-      limit: 50,
-      next: None,
-      offset: 0,
-      previous: None,
+    app.user = Some(user_info("spotatui-owner"));
+    app.playlists = Some(Paged {
       total: 1,
+      ..Default::default()
     });
-    app.all_playlists = vec![simplified_playlist(
+    app.all_playlists = vec![playlist_info(
       "37i9dQZF1DWZqd5JICZI0u",
       "Followed",
       "friend-owner",
@@ -5090,11 +5590,7 @@ mod tests {
     )];
 
     app.begin_add_track_to_playlist_flow(
-      Some(
-        TrackId::from_id("0000000000000000000001")
-          .unwrap()
-          .into_static(),
-      ),
+      Some("0000000000000000000001".to_string()),
       "Track".to_string(),
     );
 
@@ -5110,6 +5606,26 @@ mod tests {
   fn make_app_simple() -> App {
     let (tx, _rx) = channel();
     App::new(tx, UserConfig::new(), SystemTime::now())
+  }
+
+  // Regression for transport-4: with no Spotify device volume and no pending
+  // volume (the state while a decoded source plays, and the whole slim build),
+  // `desired_volume` must fall back to the configured volume, not 0. The old
+  // `.unwrap_or(0)` made volume-down a dead no-op and the first volume-up snap
+  // to the increment. This is the only hardware-free guard for that fix — a
+  // source-active transport test needs a real audio device (see report).
+  #[test]
+  fn desired_volume_falls_back_to_config_when_no_context() {
+    let mut app = make_app_simple();
+    app.current_playback_context = None;
+    app.pending_volume = None;
+    app.user_config.behavior.volume_percent = 42;
+
+    assert_eq!(
+      app.desired_volume(),
+      42,
+      "with no device volume and no pending volume, base volume must come from config, not 0"
+    );
   }
 
   #[test]

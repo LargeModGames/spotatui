@@ -1,3 +1,4 @@
+use super::mapping::{map_page, playlist_items_page};
 use super::requests::{
   spotify_api_request_json_for_with_refresh, spotify_get_typed_compat_for_with_refresh,
 };
@@ -6,6 +7,7 @@ use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
 };
+use crate::core::plugin_api::{PlaylistInfo, ShowInfo, TrackInfo};
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
@@ -124,7 +126,12 @@ pub async fn prefetch_saved_tracks_page_task(
     }
 
     populate_liked_song_ids_from_saved_tracks(&mut app_guard.liked_song_ids_set, &page);
-    app_guard.library.saved_tracks.upsert_page_by_offset(page);
+    let domain_page =
+      crate::infra::network::mapping::map_page(&page, |st| TrackInfo::from(&st.track));
+    app_guard
+      .library
+      .saved_tracks
+      .upsert_page_by_offset(domain_page);
     app_guard.set_saved_tracks_to_table_continuous();
     let Some(candidate_next_offset) = next_offset else {
       return;
@@ -203,7 +210,9 @@ pub async fn prefetch_playlist_tracks_page_task(
       return;
     }
 
-    app_guard.playlist_track_pages.upsert_page_by_offset(page);
+    app_guard
+      .playlist_track_pages
+      .upsert_page_by_offset(playlist_items_page(&page));
     app_guard.set_playlist_tracks_to_table_continuous();
     let Some(candidate_next_offset) = next_offset else {
       return;
@@ -425,6 +434,13 @@ impl LibraryNetwork for Network {
       offset += limit;
     }
 
+    // Convert to source-agnostic domain types at the network boundary.
+    let all_playlists: Vec<PlaylistInfo> = all_playlists
+      .iter()
+      .map(PlaylistInfo::from_simplified)
+      .collect();
+    let first_page = first_page.map(|page| map_page(&page, PlaylistInfo::from_simplified));
+
     #[cfg(feature = "streaming")]
     let streaming_player = {
       let app = self.app.lock().await;
@@ -487,7 +503,7 @@ impl LibraryNetwork for Network {
 
         let playlist_tracks_index = app
           .playlist_track_pages
-          .upsert_page_by_offset(playlist_tracks);
+          .upsert_page_by_offset(playlist_items_page(&playlist_tracks));
         app.set_playlist_tracks_to_table_continuous();
 
         let next_offset = app.next_missing_playlist_tracks_offset(playlist_tracks_index);
@@ -601,7 +617,9 @@ impl LibraryNetwork for Network {
         }
 
         populate_liked_song_ids_from_saved_tracks(&mut app.liked_song_ids_set, &saved_tracks);
-        let saved_tracks_index = app.library.saved_tracks.upsert_page_by_offset(saved_tracks);
+        let domain_page =
+          crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
+        let saved_tracks_index = app.library.saved_tracks.upsert_page_by_offset(domain_page);
         app.set_saved_tracks_to_table_continuous();
 
         let next_offset = app.next_missing_saved_tracks_offset(saved_tracks_index);
@@ -640,8 +658,12 @@ impl LibraryNetwork for Network {
     {
       Ok(saved_albums) => {
         if !saved_albums.items.is_empty() {
+          let domain_page = crate::infra::network::mapping::map_page(
+            &saved_albums,
+            crate::infra::network::mapping::saved_album_info,
+          );
           let mut app = self.app.lock().await;
-          app.library.saved_albums.add_pages(saved_albums);
+          app.library.saved_albums.add_pages(domain_page);
         }
       }
       Err(e) => {
@@ -763,8 +785,10 @@ impl LibraryNetwork for Network {
     {
       Ok(saved_shows) => {
         if !saved_shows.items.is_empty() {
+          let domain_page =
+            crate::infra::network::mapping::map_page(&saved_shows, |s| ShowInfo::from(&s.show));
           let mut app = self.app.lock().await;
-          app.library.saved_shows.add_pages(saved_shows);
+          app.library.saved_shows.add_pages(domain_page);
         }
       }
       Err(e) => {
@@ -824,13 +848,13 @@ impl LibraryNetwork for Network {
           let playlist_name = app
             .all_playlists
             .iter()
-            .find(|playlist| playlist.id.id() == playlist_id.id())
+            .find(|playlist| playlist.id.as_deref() == Some(playlist_id.id()))
             .map(|playlist| playlist.name.clone());
 
           if app.is_current_route_playlist_track_table_for(&playlist_id) {
             let playlist_offset = app.playlist_offset;
             app.dispatch(IoEvent::GetPlaylistItems(
-              playlist_id.clone(),
+              playlist_id.id().to_string(),
               playlist_offset,
             ));
           }
@@ -1002,7 +1026,7 @@ impl LibraryNetwork for Network {
 
     // Use raw API call to avoid rspotify deserializing FullPlaylist, which crashes when
     // Spotify returns a duplicate "items" key in the response (known API migration bug).
-    let user_id_str = user_id.id().to_string();
+    let user_id_str = user_id;
     let create_path = format!("users/{}/playlists", user_id_str);
     let create_body = json!({
       "name": name,
@@ -1235,9 +1259,7 @@ async fn fetch_rootlist_folders(
   Some(parse_rootlist_items(&contents.items))
 }
 
-fn build_flat_playlist_items(
-  playlists: &[rspotify::model::playlist::SimplifiedPlaylist],
-) -> Vec<PlaylistFolderItem> {
+fn build_flat_playlist_items(playlists: &[PlaylistInfo]) -> Vec<PlaylistFolderItem> {
   playlists
     .iter()
     .enumerate()
@@ -1283,7 +1305,7 @@ fn reconcile_playlist_selection(
         PlaylistFolderItem::Playlist { index, .. } => app
           .all_playlists
           .get(*index)
-          .filter(|playlist| playlist.id.id() == playlist_id)
+          .filter(|playlist| playlist.id.as_deref() == Some(playlist_id))
           .map(|_| display_idx),
         PlaylistFolderItem::Folder(_) => None,
       });
@@ -1297,7 +1319,7 @@ fn reconcile_playlist_selection(
     for item in &app.playlist_folder_items {
       if let PlaylistFolderItem::Playlist { index, current_id } = item {
         if let Some(playlist) = app.all_playlists.get(*index) {
-          if playlist.id.id() == playlist_id {
+          if playlist.id.as_deref() == Some(playlist_id) {
             target_folder = Some(*current_id);
             break;
           }
@@ -1316,7 +1338,7 @@ fn reconcile_playlist_selection(
           PlaylistFolderItem::Playlist { index, .. } => app
             .all_playlists
             .get(*index)
-            .filter(|playlist| playlist.id.id() == playlist_id)
+            .filter(|playlist| playlist.id.as_deref() == Some(playlist_id))
             .map(|_| idx),
           PlaylistFolderItem::Folder(_) => None,
         });
@@ -1398,14 +1420,14 @@ fn parse_rootlist_items(
 
 fn structurize_playlist_folders(
   nodes: &[PlaylistFolderNode],
-  playlists: &[rspotify::model::playlist::SimplifiedPlaylist],
+  playlists: &[PlaylistInfo],
 ) -> Vec<PlaylistFolderItem> {
   use std::collections::{HashMap, HashSet};
 
   let playlist_map: HashMap<String, usize> = playlists
     .iter()
     .enumerate()
-    .map(|(idx, playlist)| (playlist.id.id().to_string(), idx))
+    .filter_map(|(idx, playlist)| playlist.id.clone().map(|id| (id, idx)))
     .collect();
 
   let mut items: Vec<PlaylistFolderItem> = Vec::new();

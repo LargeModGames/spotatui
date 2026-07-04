@@ -1,4 +1,5 @@
 use crate::core::app::{ActiveBlock, App, RouteId};
+use crate::core::source::Source;
 use crate::core::user_config::KeyBindings;
 use crate::tui::event::Key;
 
@@ -111,9 +112,21 @@ pub fn handle_right_event(app: &mut App) {
   };
 }
 
+/// The topmost focusable sidebar block for the active source. Under any
+/// non-Spotify source (Local, Subsonic) the Library list is hidden, so the
+/// Playlists block sits on top.
+pub fn sidebar_top_block(app: &App) -> ActiveBlock {
+  if app.active_source != Source::Spotify {
+    ActiveBlock::MyPlaylists
+  } else {
+    ActiveBlock::Library
+  }
+}
+
 pub fn handle_left_event(app: &mut App) {
   // TODO: This should send you back to either library or playlist based on last selection
-  app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+  let top = sidebar_top_block(app);
+  app.set_current_route_state(Some(ActiveBlock::Empty), Some(top));
 }
 
 #[cfg(test)]
@@ -162,5 +175,23 @@ mod tests {
     let data: Vec<&str> = vec![];
     let next_index = on_low_press_handler(&data);
     assert_eq!(next_index, 0);
+  }
+
+  #[test]
+  fn left_event_targets_library_for_spotify_and_playlists_for_local() {
+    let mut app = App::default();
+    // Spotify (default): left arrow focuses the Library list.
+    app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+    handle_left_event(&mut app);
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+
+    // Local: the Library list is hidden, so left arrow focuses the local-folder
+    // Playlists block instead of an unrendered Library block.
+    app.active_source = Source::Local;
+    handle_left_event(&mut app);
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::MyPlaylists
+    );
   }
 }

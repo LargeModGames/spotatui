@@ -1,4 +1,5 @@
 use crate::core::app::{ActiveBlock, AnnouncementLevel, App, DialogContext};
+use crate::core::plugin_api::PlayableInfo;
 use crate::core::plugin_api::PopupLine;
 use crate::infra::network::sync::PartyStatus;
 use ratatui::{
@@ -8,11 +9,8 @@ use ratatui::{
   widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
   Frame,
 };
-use rspotify::model::PlayableItem;
-use rspotify::prelude::Id;
 
 use super::help::get_help_docs;
-use super::util::create_artist_string;
 
 pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   let [area] = f
@@ -82,15 +80,10 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   f.render_widget(help_menu, area);
 }
 
-fn queue_item_line(item: &PlayableItem) -> String {
+fn queue_item_line(item: &PlayableInfo) -> String {
   match item {
-    PlayableItem::Track(track) => {
-      format!("{} - {}", track.name, create_artist_string(&track.artists))
-    }
-    PlayableItem::Episode(episode) => {
-      format!("{} - {}", episode.name, episode.show.name)
-    }
-    _ => String::from("Unknown item"),
+    PlayableInfo::Track(t) => format!("{} - {}", t.name, t.artists.join(", ")),
+    PlayableInfo::Episode(e) => format!("{} - {}", e.name, e.show_name),
   }
 }
 
@@ -216,7 +209,9 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
   };
 
   match dialog_context {
-    DialogContext::PlaylistWindow | DialogContext::PlaylistSearch => {
+    DialogContext::PlaylistWindow
+    | DialogContext::PlaylistSearch
+    | DialogContext::YouTubePlaylistWindow => {
       if let Some(playlist) = app.dialog.as_ref() {
         let text = vec![
           Line::from(Span::raw("Are you sure you want to delete the playlist: ")),
@@ -372,7 +367,10 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   f.render_widget(header, vchunks[0]);
 
   let mut list_state = ListState::default();
-  let editable_playlists = app.editable_playlists();
+  // Destinations follow the active source: local YouTube playlists under the
+  // YouTube source, editable Spotify playlists otherwise (must stay in sync
+  // with the picker's key handler).
+  let editable_playlists = app.playlist_picker_items();
 
   if editable_playlists.is_empty() {
     let empty_text = Paragraph::new("No editable playlists available")
@@ -380,11 +378,14 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       .alignment(Alignment::Center);
     f.render_widget(empty_text, vchunks[1]);
   } else {
-    let is_own_playlist = |playlist: &rspotify::model::SimplifiedPlaylist| -> bool {
-      app
-        .user
-        .as_ref()
-        .is_some_and(|user| user.id.id() == playlist.owner.id.id())
+    let is_own_playlist = |playlist: &crate::core::plugin_api::PlaylistInfo| -> bool {
+      // Local YouTube playlists carry no owner id — they are always the
+      // user's own (no "(collab)" suffix).
+      playlist.owner_id.is_none()
+        || app
+          .user
+          .as_ref()
+          .is_some_and(|user| Some(user.id.as_str()) == playlist.owner_id.as_deref())
     };
     let items: Vec<ListItem> = editable_playlists
       .iter()
@@ -392,12 +393,8 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
         let label = if is_own_playlist(playlist) {
           playlist.name.clone()
         } else {
-          let owner = playlist
-            .owner
-            .display_name
-            .as_deref()
-            .unwrap_or_else(|| playlist.owner.id.id());
-          format!("{} - {} (collab)", playlist.name, owner)
+          // `owner` is the display name, falling back to the owner id.
+          format!("{} - {} (collab)", playlist.name, playlist.owner)
         };
         ListItem::new(Span::raw(label))
       })

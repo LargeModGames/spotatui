@@ -1,6 +1,7 @@
 use crate::core::{
-  app::{ActiveBlock, App},
+  app::{ActiveBlock, App, SourceFocus},
   layout::{fullscreen_view_layout, miniplayer_playbar_area},
+  source::Source,
 };
 use ratatui::{
   layout::{Alignment, Constraint, Layout, Position, Rect},
@@ -375,16 +376,71 @@ pub(crate) fn playbar_control_hitboxes(
   }
 
   let controls_area = playbar_layout_areas(app, playbar_area).controls_area;
-  playbar_control_hitboxes_in_area(controls_area)
+  let mut hitboxes: Vec<(PlaybarControl, Rect)> = playbar_control_hitboxes_in_area(controls_area)
     .into_iter()
     .map(|hitbox| (hitbox.control, hitbox.rect))
-    .collect()
+    .collect();
+
+  // A non-Spotify source only has a verified-correct route for Play/Pause
+  // (`App::toggle_playback` branches on the owning source before falling
+  // back to librespot). Next/Prev/Shuffle/volume have no such per-source
+  // guard yet (transport-2/3, tracked separately) and would otherwise drive
+  // paused librespot instead of the audible source — so keep those hitboxes
+  // out of the click surface until that routing lands, rather than wiring a
+  // click that acts on the wrong player.
+  if non_spotify_source_playback_active(app) && app.current_playback_context.is_none() {
+    hitboxes.retain(|(control, _)| *control == PlaybarControl::PlayPause);
+  }
+
+  hitboxes
 }
 
 fn playbar_controls_available(app: &App) -> bool {
-  app.current_playback_context.as_ref().is_some_and(|ctx| {
+  if app.current_playback_context.as_ref().is_some_and(|ctx| {
     ctx.item.is_some() || (app.is_streaming_active && app.native_device_id.is_some())
-  })
+  }) {
+    return true;
+  }
+
+  non_spotify_source_playback_active(app)
+}
+
+/// True when a non-Spotify source (local/subsonic/radio/youtube) currently
+/// owns playback. Each source's playback field is gated behind its own
+/// feature flag, so every access here is guarded to match — this must
+/// compile in the slim build (no source features) as well as any single- or
+/// all-sources build.
+fn non_spotify_source_playback_active(app: &App) -> bool {
+  // Slim builds (no source features) never reference `app` below.
+  #[cfg(not(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "internet-radio",
+    feature = "youtube"
+  )))]
+  let _ = app;
+
+  #[cfg(feature = "local-files")]
+  if app.local_playback.is_some() {
+    return true;
+  }
+
+  #[cfg(feature = "subsonic")]
+  if app.subsonic_playback.is_some() {
+    return true;
+  }
+
+  #[cfg(feature = "internet-radio")]
+  if app.radio_playback.is_some() {
+    return true;
+  }
+
+  #[cfg(feature = "youtube")]
+  if app.youtube_playback.is_some() {
+    return true;
+  }
+
+  false
 }
 
 pub(crate) fn playbar_control_at(
@@ -540,7 +596,16 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
   let (track_name, artist_str) = extract_track_info(app);
 
   if !app.cover_art.available() {
-    let p = Paragraph::new("No cover art available")
+    use crate::core::app::CoverArtStatus;
+    // No image is loaded: show an explicit message for the current state rather
+    // than a blank pane, so "no art" always reads as a deliberate outcome.
+    let message = match app.cover_art_status {
+      CoverArtStatus::Loading => "Loading cover art...",
+      CoverArtStatus::Unavailable => "No cover art for this source",
+      CoverArtStatus::Failed => "Cover art unavailable",
+      CoverArtStatus::Loaded | CoverArtStatus::NotStarted => "No cover art available",
+    };
+    let p = Paragraph::new(message)
       .style(Style::default().fg(Color::Rgb(100, 100, 100)))
       .alignment(Alignment::Center);
 
@@ -626,28 +691,16 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
 
 #[cfg(feature = "cover-art")]
 fn extract_track_info(app: &App) -> (Option<String>, Option<String>) {
-  use rspotify::model::PlayableItem;
-
-  // Prefer native track info (more responsive after skipping tracks)
-  if let Some(ref native_info) = app.native_track_info {
-    return (
-      Some(native_info.name.clone()),
-      Some(native_info.artists_display.clone()),
-    );
+  // Read from the source-agnostic snapshot so the fullscreen cover view labels
+  // the current track for every source (Spotify, native streaming, local files,
+  // Subsonic, radio, YouTube), not just Spotify.
+  match crate::infra::media_metadata::current_playback_snapshot(app) {
+    Some(snapshot) => (
+      Some(snapshot.metadata.title.clone()),
+      Some(snapshot.primary_artist()),
+    ),
+    None => (None, None),
   }
-
-  if let Some(ctx) = &app.current_playback_context {
-    if let Some(track_item) = &ctx.item {
-      let (name, artists) = match track_item {
-        PlayableItem::Track(track) => (track.name.clone(), create_artist_string(&track.artists)),
-        PlayableItem::Episode(episode) => (episode.name.clone(), episode.show.name.clone()),
-        _ => return (None, None),
-      };
-      return (Some(name), Some(artists));
-    }
-  }
-
-  (None, None)
 }
 
 fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
@@ -749,7 +802,286 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   }
 }
 
+/// Display snapshot for an engine playbar (local files, Subsonic or radio).
+///
+/// Extracted from the live player so [`render_local_playbar`] is a pure function
+/// of plain values and can be unit-tested with `TestBackend` (no audio device).
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "internet-radio",
+  feature = "youtube"
+))]
+struct LocalPlaybarView {
+  /// Source name shown in the playbar title, e.g. `"Local"` or `"Subsonic"`.
+  source_label: &'static str,
+  name: String,
+  artists: String,
+  is_playing: bool,
+  position_ms: u128,
+  duration_ms: u64,
+  volume_percent: u8,
+  /// 1-based position in the queue and total length, e.g. `(3, 12)` => "3/12".
+  /// `None` hides the indicator (e.g. a one-track session).
+  queue_position: Option<(usize, usize)>,
+  /// An infinite live stream (internet radio): `duration_ms` is meaningless,
+  /// so the seek bar renders as a full LIVE indicator with elapsed time only.
+  live: bool,
+}
+
+/// Render the playbar for an active local-file playback session.
+///
+/// Local playback has no Spotify `current_playback_context`; it renders from its
+/// own [`App::local_playback`] state, reading progress and pause state **live**
+/// from the player so they never desync from what is actually playing.
+#[cfg(feature = "local-files")]
+fn draw_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let Some(local) = app.local_playback.as_ref() else {
+    return;
+  };
+  let view = LocalPlaybarView {
+    source_label: "Local",
+    name: local.name.clone(),
+    artists: local.artists.clone(),
+    is_playing: !local.player.is_paused(),
+    position_ms: local.player.position().as_millis(),
+    duration_ms: local.duration_ms,
+    volume_percent: app.user_config.behavior.volume_percent,
+    // Only show the indicator for multi-track queues; a single file is noise.
+    queue_position: (local.queue.len() > 1).then(|| (local.index + 1, local.queue.len())),
+    live: false,
+  };
+  render_local_playbar(f, app, layout_chunk, &view);
+}
+
+/// Render the playbar for an active Subsonic playback session, reading
+/// progress/pause live from the player just like the local path.
+#[cfg(feature = "subsonic")]
+fn draw_subsonic_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let Some(subsonic) = app.subsonic_playback.as_ref() else {
+    return;
+  };
+  let track = subsonic.current();
+  let view = LocalPlaybarView {
+    source_label: "Subsonic",
+    name: track.map(|t| t.name.clone()).unwrap_or_default(),
+    artists: track.map(|t| t.artists.join(", ")).unwrap_or_default(),
+    is_playing: !subsonic.player.is_paused(),
+    position_ms: subsonic.player.position().as_millis(),
+    duration_ms: track.map(|t| t.duration_ms).unwrap_or(0),
+    volume_percent: app.user_config.behavior.volume_percent,
+    queue_position: (subsonic.tracks.len() > 1)
+      .then(|| (subsonic.index + 1, subsonic.tracks.len())),
+    live: false,
+  };
+  render_local_playbar(f, app, layout_chunk, &view);
+}
+
+/// Render the playbar for an active YouTube playback session, reading
+/// progress/pause live from the player just like the Subsonic path.
+#[cfg(feature = "youtube")]
+fn draw_youtube_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let Some(youtube) = app.youtube_playback.as_ref() else {
+    return;
+  };
+  let track = youtube.current();
+  let view = LocalPlaybarView {
+    source_label: "YouTube",
+    name: track.map(|t| t.name.clone()).unwrap_or_default(),
+    artists: track.map(|t| t.artists.join(", ")).unwrap_or_default(),
+    is_playing: !youtube.player.is_paused(),
+    position_ms: youtube.player.position().as_millis(),
+    duration_ms: track.map(|t| t.duration_ms).unwrap_or(0),
+    volume_percent: app.user_config.behavior.volume_percent,
+    queue_position: (youtube.tracks.len() > 1).then(|| (youtube.index + 1, youtube.tracks.len())),
+    live: false,
+  };
+  render_local_playbar(f, app, layout_chunk, &view);
+}
+
+/// Render the playbar for an active internet-radio session. The station name is
+/// the title line and the ICY now-playing text (when the stream sends it) the
+/// subtitle; elapsed time renders as a LIVE indicator since a stream is
+/// infinite.
+#[cfg(feature = "internet-radio")]
+fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let Some(radio) = app.radio_playback.as_ref() else {
+    return;
+  };
+  // Subtitle preference: live now-playing title, else genre tags from the
+  // directory row, else the station's country/codec/bitrate summary.
+  let artists = radio.now_playing_title().unwrap_or_else(|| {
+    if radio.station.artists.is_empty() {
+      radio.station.album.clone()
+    } else {
+      radio.station.artists.join(", ")
+    }
+  });
+  let view = LocalPlaybarView {
+    source_label: "Radio",
+    name: radio.station.name.clone(),
+    artists,
+    is_playing: !radio.player.is_paused(),
+    position_ms: radio.player.position().as_millis(),
+    duration_ms: 0,
+    volume_percent: app.user_config.behavior.volume_percent,
+    queue_position: None,
+    live: true,
+  };
+  render_local_playbar(f, app, layout_chunk, &view);
+}
+
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "internet-radio",
+  feature = "youtube"
+))]
+fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: &LocalPlaybarView) {
+  let playbar_areas = playbar_layout_areas(app, layout_chunk);
+
+  let play_title = if view.is_playing { "Playing" } else { "Paused" };
+
+  let current_route = app.get_current_route();
+  let highlight_state = (
+    matches!(
+      current_route.active_block,
+      ActiveBlock::PlayBar | ActiveBlock::MiniPlayer
+    ),
+    matches!(
+      current_route.hovered_block,
+      ActiveBlock::PlayBar | ActiveBlock::MiniPlayer
+    ),
+  );
+
+  let queue_label = match view.queue_position {
+    Some((current, total)) => format!(" | {current}/{total}"),
+    None => String::new(),
+  };
+  let title = format!(
+    "{:-7} ({}{} | Volume: {:-2}%)",
+    play_title, view.source_label, queue_label, view.volume_percent
+  );
+  let mut title_spans = vec![Span::styled(
+    title,
+    get_color(highlight_state, app.user_config.theme),
+  )];
+  if let Some(message) = app.status_message.as_ref() {
+    let msg_style = if app.status_message_is_error {
+      Style::default().fg(app.user_config.theme.error_text)
+    } else {
+      get_color(highlight_state, app.user_config.theme)
+    };
+    title_spans.push(Span::styled(format!(" | {}", message), msg_style));
+  }
+
+  let title_block = Block::default()
+    .borders(Borders::ALL)
+    .border_type(BorderType::Rounded)
+    .style(Style::default().bg(app.user_config.theme.playbar_background))
+    .title(Line::from(title_spans))
+    .border_style(get_color(highlight_state, app.user_config.theme));
+  f.render_widget(title_block, layout_chunk);
+
+  let lines = Text::from(Span::styled(
+    view.artists.clone(),
+    Style::default().fg(app.user_config.theme.playbar_text),
+  ));
+  let artist = Paragraph::new(lines)
+    .style(Style::default().fg(app.user_config.theme.playbar_text))
+    .block(
+      Block::default().title(Span::styled(
+        view.name.clone(),
+        Style::default()
+          .fg(app.user_config.theme.selected)
+          .add_modifier(Modifier::BOLD),
+      )),
+    );
+  f.render_widget(artist, playbar_areas.artist_area);
+
+  draw_playbar_controls(f, app, playbar_areas.controls_area);
+
+  // A live stream has no duration: never feed the zero into the percentage
+  // math (division by zero); render a full bar with elapsed time instead.
+  let (perc, song_progress_label) = if view.live {
+    (
+      100,
+      format!(
+        "LIVE \u{2022} {}",
+        super::util::millis_to_minutes(view.position_ms)
+      ),
+    )
+  } else {
+    let duration_std = std::time::Duration::from_millis(view.duration_ms);
+    (
+      get_track_progress_percentage(view.position_ms, duration_std),
+      display_track_progress(view.position_ms, duration_std),
+    )
+  };
+  let modifier = if app.user_config.behavior.enable_text_emphasis {
+    Modifier::ITALIC | Modifier::BOLD
+  } else {
+    Modifier::empty()
+  };
+  let song_progress = LineGauge::default()
+    .filled_style(
+      Style::default()
+        .fg(app.user_config.theme.playbar_progress)
+        .add_modifier(modifier),
+    )
+    .unfilled_style(
+      Style::default()
+        .fg(app.user_config.theme.playbar_background)
+        .add_modifier(modifier),
+    )
+    .ratio(perc as f64 / 100.0)
+    .filled_symbol("⣿")
+    .unfilled_symbol("⣉")
+    .label(Span::styled(
+      &song_progress_label,
+      Style::default().fg(app.user_config.theme.playbar_progress_text),
+    ));
+  f.render_widget(song_progress, playbar_areas.progress_area);
+
+  // Paint the cover art into the slot `playbar_layout_areas` reserved — the
+  // layout only carves out the space; without this the sources' playbar shows
+  // a blank indent where the image belongs (Spotify's path does the same).
+  #[cfg(feature = "cover-art")]
+  if let Some(cover_art) = playbar_areas.cover_art {
+    app.cover_art.render(f, cover_art);
+  }
+}
+
 pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  // Local-file playback owns the session and has no Spotify context to render
+  // from, so it takes a dedicated path.
+  #[cfg(feature = "local-files")]
+  if app.local_playback.is_some() {
+    draw_local_playbar(f, app, layout_chunk);
+    return;
+  }
+
+  // Subsonic playback likewise renders from its own session state.
+  #[cfg(feature = "subsonic")]
+  if app.subsonic_playback.is_some() {
+    draw_subsonic_playbar(f, app, layout_chunk);
+    return;
+  }
+
+  // Internet radio likewise renders from its own session state.
+  #[cfg(feature = "internet-radio")]
+  if app.radio_playback.is_some() {
+    draw_radio_playbar(f, app, layout_chunk);
+    return;
+  }
+
+  // YouTube likewise renders from its own session state.
+  #[cfg(feature = "youtube")]
+  if app.youtube_playback.is_some() {
+    draw_youtube_playbar(f, app, layout_chunk);
+    return;
+  }
+
   let playbar_areas = playbar_layout_areas(app, layout_chunk);
   let artist_area = playbar_areas.artist_area;
   let progress_area = playbar_areas.progress_area;
@@ -1053,29 +1385,39 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   }
 }
 
+/// The combined Source & Device picker (the `d` screen): a Source panel
+/// (Spotify / Local Files) stacked above the existing Spotify Connect device
+/// list. `Tab` toggles focus; the Devices panel is dimmed when Local is active.
 pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
-  let [instructions_area, list_area] = f
-    .area()
-    .layout(&Layout::vertical([Constraint::Percentage(20), Constraint::Percentage(80)]).margin(5));
+  // A small margin (rather than the device screen's old 5) keeps the fixed
+  // instructions + Source panel from squeezing the Devices list off-screen on
+  // shorter terminals: instructions(7) + source(4) + devices(>=3) fits from ~18
+  // rows up.
+  let [instructions_area, source_area, devices_area] = f.area().layout(
+    &Layout::vertical([
+      Constraint::Length(7),
+      Constraint::Length(Source::ALL.len() as u16 + 2),
+      Constraint::Min(3),
+    ])
+    .margin(2),
+  );
 
   let move_instructions = format!(
-    "Use `{}`/`{}` or up/down arrow keys to move up and down and <Enter> to select. ",
+    "Use `{}`/`{}` or arrow keys to move, `Tab` to switch panels, <Enter> to select.",
     app.user_config.keys.move_down, app.user_config.keys.move_up,
   );
-  let device_instructions: Vec<Line> = vec![
+  let instructions_text: Vec<Line> = vec![
     Line::from(Span::raw(
-      "To play tracks, please select a device. ",
+      "Choose your music source and Spotify playback device.",
     )),
     Line::from(Span::raw(move_instructions)),
     Line::from(Span::raw(
-      "Your choice here will be cached so you can jump straight back in when you next open `spotatui`. ",
+      "Your choices are cached so you can jump straight back in when you next open `spotatui`.",
     )),
-    Line::from(Span::raw(
-      "You can change the playback device at any time by pressing `d`.",
-    )),
+    Line::from(Span::raw("Reopen this screen any time by pressing `d`.")),
   ];
 
-  let instructions = Paragraph::new(device_instructions)
+  let instructions = Paragraph::new(instructions_text)
     .style(Style::default().fg(app.user_config.theme.text))
     .wrap(Wrap { trim: true })
     .block(
@@ -1088,35 +1430,45 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     );
   f.render_widget(instructions, instructions_area);
 
-  let no_device_message = Span::raw("No devices found: Make sure a device is active");
-
-  let items = match &app.devices {
-    Some(items) => {
-      if items.devices.is_empty() {
-        vec![ListItem::new(no_device_message)]
-      } else {
-        items
-          .devices
-          .iter()
-          .map(|device| ListItem::new(Span::raw(&device.name)))
-          .collect()
-      }
-    }
-    None => vec![ListItem::new(no_device_message)],
+  // --- Source panel ---
+  let source_focused = app.source_device_focus == SourceFocus::Source;
+  let source_border = if source_focused {
+    app.user_config.theme.active
+  } else {
+    app.user_config.theme.inactive
   };
-
-  let mut state = ListState::default();
-  state.select(app.selected_device_index);
-  let list = List::new(items)
+  let source_items: Vec<ListItem> = Source::ALL
+    .iter()
+    .map(|s| {
+      let is_active = *s == app.active_source;
+      let marker = if is_active { "●" } else { " " };
+      let suffix = if is_active { "  (active)" } else { "" };
+      let style = if is_active {
+        Style::default()
+          .fg(app.user_config.theme.active)
+          .add_modifier(Modifier::BOLD)
+      } else {
+        app.user_config.theme.base_style()
+      };
+      ListItem::new(Span::styled(
+        format!("{} {}{}", marker, s.label(), suffix),
+        style,
+      ))
+    })
+    .collect();
+  let mut source_state = ListState::default();
+  // Only the focused panel shows the moving cursor; the active source is always
+  // marked with `●` regardless of focus.
+  if source_focused {
+    source_state.select(Some(app.source_list_index));
+  }
+  let source_list = List::new(source_items)
     .block(
       Block::default()
-        .title(Span::styled(
-          "Devices",
-          Style::default().fg(app.user_config.theme.active),
-        ))
+        .title(Span::styled("Source", Style::default().fg(source_border)))
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(app.user_config.theme.inactive)),
+        .border_style(Style::default().fg(source_border)),
     )
     .style(app.user_config.theme.base_style())
     .highlight_style(
@@ -1126,7 +1478,63 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
         .add_modifier(Modifier::BOLD),
     )
     .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
-  f.render_stateful_widget(list, list_area, &mut state);
+  f.render_stateful_widget(source_list, source_area, &mut source_state);
+
+  // --- Devices panel (Spotify Connect only) ---
+  // Dimmed under any non-Spotify source (Local, Subsonic): device transfer is a
+  // Spotify Connect feature.
+  let non_spotify_active = app.active_source != Source::Spotify;
+  let devices_focused = app.source_device_focus == SourceFocus::Devices && !non_spotify_active;
+  let devices_color = if devices_focused {
+    app.user_config.theme.active
+  } else {
+    app.user_config.theme.inactive
+  };
+  let devices_title = if non_spotify_active {
+    "Devices (Spotify only)"
+  } else {
+    "Devices"
+  };
+  let device_text_style = if non_spotify_active {
+    Style::default().fg(app.user_config.theme.inactive)
+  } else {
+    app.user_config.theme.base_style()
+  };
+
+  let no_device_message = Span::raw("No devices found: Make sure a device is active");
+  let items: Vec<ListItem> = match &app.devices {
+    Some(payload) if !payload.devices.is_empty() => payload
+      .devices
+      .iter()
+      .map(|device| ListItem::new(Span::raw(device.name.clone())))
+      .collect(),
+    _ => vec![ListItem::new(no_device_message)],
+  };
+
+  let mut state = ListState::default();
+  if devices_focused {
+    state.select(app.selected_device_index);
+  }
+  let device_list = List::new(items)
+    .block(
+      Block::default()
+        .title(Span::styled(
+          devices_title,
+          Style::default().fg(devices_color),
+        ))
+        .borders(Borders::ALL)
+        .style(device_text_style)
+        .border_style(Style::default().fg(devices_color)),
+    )
+    .style(device_text_style)
+    .highlight_style(
+      Style::default()
+        .fg(app.user_config.theme.active)
+        .bg(app.user_config.theme.inactive)
+        .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
+  f.render_stateful_widget(device_list, devices_area, &mut state);
 }
 
 #[cfg(test)]
@@ -1317,5 +1725,180 @@ mod tests {
     let zero_height = playbar_cover_layout(Rect::new(4, 5, 10, 0), 100);
     assert_eq!(zero_height.slot, Rect::new(4, 5, 0, 0));
     assert_eq!(zero_height.text_area, Rect::new(4, 5, 10, 0));
+  }
+
+  /// Collect every rendered cell symbol in `area` into one string for substring
+  /// assertions.
+  #[cfg(feature = "local-files")]
+  fn rendered_text(area: Rect, view: &LocalPlaybarView) -> String {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+      .draw(|f| render_local_playbar(f, &app, area, view))
+      .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..area.height)
+      .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect()
+  }
+
+  /// Regression guard for the "blank playbar / frozen progress" bugs: with a
+  /// live position the renderer must show the track name, the playing state, and
+  /// the elapsed/total time — none of which require an audio device to verify.
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn local_playbar_renders_name_state_and_progress() {
+    let view = LocalPlaybarView {
+      source_label: "Local",
+      name: "My Local Song".to_string(),
+      artists: "Some Artist".to_string(),
+      is_playing: true,
+      position_ms: 60_000,  // 1:00
+      duration_ms: 311_811, // 5:11
+      volume_percent: 80,
+      queue_position: Some((3, 12)),
+      live: false,
+    };
+    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+
+    assert!(
+      content.contains("My Local Song"),
+      "track name should render: {content}"
+    );
+    assert!(
+      content.contains("Playing"),
+      "should show Playing: {content}"
+    );
+    assert!(
+      content.contains("1:00"),
+      "elapsed should show 1:00 at a 60s position: {content}"
+    );
+    assert!(
+      content.contains("5:11"),
+      "total duration should show 5:11: {content}"
+    );
+    assert!(
+      content.contains("3/12"),
+      "queue position should render for a multi-track queue: {content}"
+    );
+  }
+
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn local_playbar_shows_paused_state() {
+    let view = LocalPlaybarView {
+      source_label: "Local",
+      name: "Track".to_string(),
+      artists: "Artist".to_string(),
+      is_playing: false,
+      position_ms: 0,
+      duration_ms: 200_000,
+      volume_percent: 50,
+      queue_position: None,
+      live: false,
+    };
+    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    assert!(content.contains("Paused"), "should show Paused: {content}");
+    assert!(
+      !content.contains('/') || !content.contains("1/1"),
+      "a single-track session should not show a queue indicator: {content}"
+    );
+  }
+
+  /// A live (radio) view must render the station, the ICY subtitle and a LIVE
+  /// elapsed label — and must not divide by the zero duration (which would show
+  /// a bogus `0:00/0:00` countdown instead).
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn live_playbar_renders_live_label_instead_of_duration() {
+    let view = LocalPlaybarView {
+      source_label: "Radio",
+      name: "SomaFM Groove Salad".to_string(),
+      artists: "Boards of Canada - Olson".to_string(),
+      is_playing: true,
+      position_ms: 83_000, // 1:23 listening time
+      duration_ms: 0,      // the LIVE sentinel
+      volume_percent: 80,
+      queue_position: None,
+      live: true,
+    };
+    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+
+    assert!(
+      content.contains("SomaFM Groove Salad"),
+      "station name should render: {content}"
+    );
+    assert!(
+      content.contains("Boards of Canada - Olson"),
+      "ICY now-playing should render as the subtitle: {content}"
+    );
+    assert!(
+      content.contains("LIVE") && content.contains("1:23"),
+      "progress should render as LIVE with elapsed time: {content}"
+    );
+    assert!(
+      !content.contains("0:00"),
+      "a live stream must not render a zero duration countdown: {content}"
+    );
+  }
+
+  fn render_picker(app: &App, w: u16, h: u16) -> String {
+    use ratatui::{backend::TestBackend, Terminal};
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+    terminal.draw(|f| draw_device_list(f, app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..h)
+      .flat_map(|y| (0..w).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect()
+  }
+
+  #[test]
+  fn source_picker_lists_both_sources_and_marks_active() {
+    let app = App::default(); // Spotify is the default active source
+    let content = render_picker(&app, 60, 28);
+    assert!(
+      content.contains("Spotify"),
+      "Spotify source row should render: {content}"
+    );
+    assert!(
+      content.contains("Local Files"),
+      "Local Files source row should render: {content}"
+    );
+    assert!(
+      content.contains("(active)"),
+      "the active source should be marked: {content}"
+    );
+    // Spotify active: the Devices panel is the normal, non-dimmed title.
+    assert!(
+      !content.contains("Spotify only"),
+      "devices title should be plain when Spotify is active: {content}"
+    );
+  }
+
+  #[test]
+  fn source_picker_devices_title_notes_spotify_only_under_local() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    let content = render_picker(&app, 60, 28);
+    assert!(
+      content.contains("Spotify only"),
+      "devices title should note Spotify-only when Local is active: {content}"
+    );
+  }
+
+  #[test]
+  fn source_picker_keeps_source_panel_on_short_terminal() {
+    // Fixed instructions + Source panel must not squeeze the Source list off a
+    // short terminal (the reason the margin was trimmed from 5 to 2).
+    let app = App::default();
+    let content = render_picker(&app, 40, 18);
+    assert!(
+      content.contains("Spotify") && content.contains("Local Files"),
+      "both source rows should still render at 40x18: {content}"
+    );
   }
 }

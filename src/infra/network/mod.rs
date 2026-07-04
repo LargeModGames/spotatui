@@ -1,10 +1,13 @@
 pub mod friends;
+pub mod ids;
 pub mod library;
+pub mod mapping;
 pub mod metadata;
 pub mod playback;
 pub mod recommend;
 pub mod requests;
 pub mod search;
+pub mod spotify_source;
 pub mod sync;
 pub mod user;
 pub mod utils;
@@ -12,16 +15,12 @@ pub mod utils;
 use crate::core::app::App;
 use crate::core::auth;
 use crate::core::config::ClientConfig;
+use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use anyhow::anyhow;
 use rspotify::model::{
   album::SimplifiedAlbum,
-  artist::FullArtist,
   enums::{Country, RepeatState},
-  idtypes::{
-    AlbumId, ArtistId, EpisodeId, PlayContextId, PlayableId, PlaylistId, ShowId, TrackId, UserId,
-  },
-  show::SimplifiedShow,
-  track::FullTrack,
+  idtypes::{EpisodeId, PlayableId, TrackId},
 };
 use rspotify::prelude::Id;
 use rspotify::AuthCodePkceSpotify;
@@ -49,14 +48,13 @@ pub enum IoEvent {
   GetPlaylists,
   GetDevices,
   GetSearchResults(String, Option<Country>),
-  GetPlaylistItems(PlaylistId<'static>, u32),
-  SearchPlaylistTracks(PlaylistId<'static>, String),
+  /// Playlist id/URI, page offset.
+  GetPlaylistItems(String, u32),
+  /// Playlist id/URI, query.
+  SearchPlaylistTracks(String, String),
   GetCurrentSavedTracks(Option<u32>),
-  StartPlayback(
-    Option<PlayContextId<'static>>,
-    Option<Vec<PlayableId<'static>>>,
-    Option<usize>,
-  ),
+  /// Context URI (album/artist/playlist), specific playable URIs, start offset.
+  StartPlayback(Option<String>, Option<Vec<String>>, Option<usize>),
   UpdateSearchLimits(u32, u32),
   Seek(u32),
   NextTrack,
@@ -66,45 +64,54 @@ pub enum IoEvent {
   Repeat(RepeatState),
   PausePlayback,
   ChangeVolume(u8),
-  GetArtist(ArtistId<'static>, String, Option<Country>),
+  /// Artist id/URI, display name, market.
+  GetArtist(String, String, Option<Country>),
   GetAlbumTracks(Box<SimplifiedAlbum>),
+  /// Seed artist ids/URIs, seed track ids/URIs, first seed track, market.
   GetRecommendationsForSeed(
-    Option<Vec<ArtistId<'static>>>,
-    Option<Vec<TrackId<'static>>>,
-    Box<Option<FullTrack>>,
+    Option<Vec<String>>,
+    Option<Vec<String>>,
+    Box<Option<TrackInfo>>,
     Option<Country>,
   ),
   GetCurrentUserSavedAlbums(Option<u32>),
-  CurrentUserSavedAlbumsContains(Vec<AlbumId<'static>>),
-  CurrentUserSavedAlbumDelete(AlbumId<'static>),
-  CurrentUserSavedAlbumAdd(AlbumId<'static>),
-  UserUnfollowArtists(Vec<ArtistId<'static>>),
-  UserFollowArtists(Vec<ArtistId<'static>>),
-  UserFollowPlaylist(UserId<'static>, PlaylistId<'static>, Option<bool>),
-  UserUnfollowPlaylist(UserId<'static>, PlaylistId<'static>),
-  AddTrackToPlaylist(PlaylistId<'static>, TrackId<'static>),
-  RemoveTrackFromPlaylistAtPosition(PlaylistId<'static>, TrackId<'static>, usize),
+  CurrentUserSavedAlbumsContains(Vec<String>),
+  CurrentUserSavedAlbumDelete(String),
+  CurrentUserSavedAlbumAdd(String),
+  UserUnfollowArtists(Vec<String>),
+  UserFollowArtists(Vec<String>),
+  /// Owner user id, playlist id/URI, public flag.
+  UserFollowPlaylist(String, String, Option<bool>),
+  /// Owner user id, playlist id/URI.
+  UserUnfollowPlaylist(String, String),
+  /// Playlist id/URI, track id/URI.
+  AddTrackToPlaylist(String, String),
+  /// Playlist id/URI, track id/URI, position.
+  RemoveTrackFromPlaylistAtPosition(String, String, usize),
   GetUser,
-  ToggleSaveTrack(PlayableId<'static>),
-  GetRecommendationsForTrackId(TrackId<'static>, Option<Country>),
+  /// Playable URI (track or episode) to toggle in saved tracks.
+  ToggleSaveTrack(String),
+  /// Track id/URI, market.
+  GetRecommendationsForTrackId(String, Option<Country>),
   GetRecentlyPlayed,
-  GetFollowedArtists(Option<ArtistId<'static>>),
-  SetArtistsToTable(Vec<FullArtist>),
-  UserArtistFollowCheck(Vec<ArtistId<'static>>),
-  GetAlbum(AlbumId<'static>),
+  /// Pagination cursor: artist id/URI to fetch after.
+  GetFollowedArtists(Option<String>),
+  UserArtistFollowCheck(Vec<String>),
+  GetAlbum(String),
   TransferPlaybackToDevice(String, bool),
   #[allow(dead_code)]
   AutoSelectStreamingDevice(String, bool), // Auto-select a device by name (used for native streaming)
-  GetAlbumForTrack(TrackId<'static>),
-  CurrentUserSavedTracksContains(Vec<TrackId<'static>>),
+  GetAlbumForTrack(String),
+  CurrentUserSavedTracksContains(Vec<String>),
   GetCurrentUserSavedShows(Option<u32>),
-  CurrentUserSavedShowsContains(Vec<ShowId<'static>>),
-  CurrentUserSavedShowDelete(ShowId<'static>),
-  CurrentUserSavedShowAdd(ShowId<'static>),
-  GetShowEpisodes(Box<SimplifiedShow>),
-  GetShow(ShowId<'static>),
-  GetCurrentShowEpisodes(ShowId<'static>, Option<u32>),
-  AddItemToQueue(PlayableId<'static>),
+  CurrentUserSavedShowsContains(Vec<String>),
+  CurrentUserSavedShowDelete(String),
+  CurrentUserSavedShowAdd(String),
+  GetShowEpisodes(Box<ShowInfo>),
+  GetShow(String),
+  GetCurrentShowEpisodes(String, Option<u32>),
+  /// Playable URI (track or episode) to enqueue.
+  AddItemToQueue(String),
   GetQueue,
   IncrementGlobalSongCount,
   FetchGlobalSongCount,
@@ -115,7 +122,7 @@ pub enum IoEvent {
   /// Get Top Artists Mix - fetches top artists and their top tracks
   GetTopArtistsMix,
   /// Fetch all playlist tracks and apply sorting
-  FetchAllPlaylistTracksAndSort(PlaylistId<'static>),
+  FetchAllPlaylistTracksAndSort(String),
   /// Start hosting a listening party
   StartParty(sync::ControlMode),
   /// Join an existing listening party by code
@@ -134,8 +141,8 @@ pub enum IoEvent {
   PartyPlaybackCommand(sync::PlaybackAction),
   /// Search tracks to add to a new playlist
   SearchTracksForPlaylist(String),
-  /// Create a new playlist with the given name and track IDs
-  CreateNewPlaylist(String, Vec<TrackId<'static>>),
+  /// Create a new playlist: playlist name, track ids/URIs.
+  CreateNewPlaylist(String, Vec<String>),
   /// Fetch the current user's own friend code from spotatui.com
   GetFriendCode,
   /// Fetch the current user's friends list from spotatui.com
@@ -148,6 +155,66 @@ pub enum IoEvent {
   UnfollowFriend(String),
   /// Search spotatui.com users by display name or friend code
   SearchFriendUsers(String),
+  /// List the folders under the configured local music directory (handled by
+  /// `infra::local::dispatch`; a no-op on the Spotify network).
+  GetLocalPlaylists,
+  /// List the audio files in a local folder, identified by its `file://` URI.
+  /// The URI is only read by `infra::local::dispatch` (the `local-files`
+  /// feature); without it the event is an inert no-op.
+  #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
+  GetLocalTracks(String),
+  /// List the user's Subsonic server playlists (handled by
+  /// `infra::subsonic::dispatch`; a no-op on the Spotify network).
+  GetSubsonicPlaylists,
+  /// List the tracks of a Subsonic playlist, identified by its
+  /// `subsonic:playlist:` URI. Only read by `infra::subsonic::dispatch` (the
+  /// `subsonic` feature); without it the event is an inert no-op.
+  #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
+  GetSubsonicTracks(String),
+  /// Run a Subsonic catalog search and populate `app.search_results`. Only read
+  /// by `infra::subsonic::dispatch`; an inert no-op without the `subsonic` feature.
+  #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
+  GetSubsonicSearchResults(String),
+  /// Load the configured internet-radio stations into the sidebar (handled by
+  /// `infra::radio::dispatch`; a no-op on the Spotify network).
+  GetRadioStations,
+  /// Search the radio-browser.info directory and populate `app.search_results`.
+  /// Only read by `infra::radio::dispatch`; an inert no-op without the
+  /// `internet-radio` feature.
+  #[cfg_attr(not(feature = "internet-radio"), allow(dead_code))]
+  GetRadioSearchResults(String),
+  /// Run a YouTube search (via yt-dlp) and populate `app.search_results`.
+  /// Only read by `infra::youtube::dispatch`; an inert no-op without the
+  /// `youtube` feature.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  GetYouTubeSearchResults(String),
+  /// Load the local YouTube playlists file into the sidebar (handled by
+  /// `infra::youtube::dispatch`; a no-op on the Spotify network).
+  GetYouTubePlaylists,
+  /// Open a local YouTube playlist's tracks in the shared track table,
+  /// identified by its `youtube:playlist:` URI.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  GetYouTubeTracks(String),
+  /// Create a local YouTube playlist with the given name.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  CreateYouTubePlaylist(String),
+  /// Delete the local YouTube playlist with the given `youtube:playlist:` URI.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  DeleteYouTubePlaylist(String),
+  /// Add a video (bare id or `youtube:` URI; metadata resolved from the browse
+  /// views) to a local YouTube playlist (URI or bare id).
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  AddTrackToYouTubePlaylist(String, String),
+  /// Remove a video (bare id or `youtube:` URI) from a local YouTube playlist.
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  RemoveTrackFromYouTubePlaylist(String, String),
+  /// Fetch and decode the current track's cover art (album-art URL, source
+  /// thumbnail, or a local file's embedded picture). Dispatched by the shared
+  /// track-change detector; handled off the `App` lock so the render loop never
+  /// blocks on the download/decode. Source-agnostic and independent of Spotify
+  /// auth.
+  #[cfg(feature = "cover-art")]
+  FetchCoverArt(crate::tui::cover_art::CoverArtRequest),
 }
 
 pub struct Network {
@@ -202,9 +269,14 @@ impl Network {
 
   #[allow(clippy::cognitive_complexity)]
   pub async fn handle_network_event(&mut self, io_event: IoEvent) {
-    if !matches!(io_event, IoEvent::RefreshAuthentication)
-      && !self.ensure_authentication_fresh(false).await
-    {
+    // Cover-art fetches are source-agnostic (Subsonic/YouTube/local users may
+    // have no Spotify session at all), so they skip the Spotify auth gate like
+    // RefreshAuthentication does.
+    let bypass_auth = matches!(io_event, IoEvent::RefreshAuthentication);
+    #[cfg(feature = "cover-art")]
+    let bypass_auth = bypass_auth || matches!(io_event, IoEvent::FetchCoverArt(_));
+
+    if !bypass_auth && !self.ensure_authentication_fresh(false).await {
       return;
     }
 
@@ -232,16 +304,22 @@ impl Network {
       }
 
       IoEvent::GetPlaylistItems(playlist_id, playlist_offset) => {
-        self.get_playlist_tracks(playlist_id, playlist_offset).await;
+        if let Some(id) = ids::playlist_id(&playlist_id) {
+          self.get_playlist_tracks(id, playlist_offset).await;
+        }
       }
       IoEvent::SearchPlaylistTracks(playlist_id, query) => {
-        self.search_playlist_tracks(playlist_id, query).await;
+        if let Some(id) = ids::playlist_id(&playlist_id) {
+          self.search_playlist_tracks(id, query).await;
+        }
       }
       IoEvent::GetCurrentSavedTracks(offset) => {
         self.get_current_user_saved_tracks(offset).await;
       }
       IoEvent::StartPlayback(context_uri, uris, offset) => {
-        self.start_playback(context_uri, uris, offset).await;
+        let context = context_uri.as_deref().and_then(ids::play_context_id);
+        let uris = uris.map(|v| ids::playable_ids(&v));
+        self.start_playback(context, uris, offset).await;
       }
       IoEvent::UpdateSearchLimits(large_search_limit, small_search_limit) => {
         self.large_search_limit = large_search_limit;
@@ -269,12 +347,16 @@ impl Network {
         self.change_volume(volume).await;
       }
       IoEvent::GetArtist(artist_id, input_artist_name, country) => {
-        self.get_artist(artist_id, input_artist_name, country).await;
+        if let Some(id) = ids::artist_id(&artist_id) {
+          self.get_artist(id, input_artist_name, country).await;
+        }
       }
       IoEvent::GetAlbumTracks(album) => {
         self.get_album_tracks(album).await;
       }
       IoEvent::GetRecommendationsForSeed(seed_artists, seed_tracks, first_track, country) => {
+        let seed_artists = seed_artists.map(|v| ids::artist_ids(&v));
+        let seed_tracks = seed_tracks.map(|v| ids::track_ids(&v));
         self
           .get_recommendations_for_seed(seed_artists, seed_tracks, first_track, country)
           .await;
@@ -283,59 +365,81 @@ impl Network {
         self.get_current_user_saved_albums(offset).await;
       }
       IoEvent::CurrentUserSavedAlbumsContains(album_ids) => {
-        self.current_user_saved_albums_contains(album_ids).await;
+        self
+          .current_user_saved_albums_contains(ids::album_ids(&album_ids))
+          .await;
       }
       IoEvent::CurrentUserSavedAlbumDelete(album_id) => {
-        self.current_user_saved_album_delete(album_id).await;
+        if let Some(id) = ids::album_id(&album_id) {
+          self.current_user_saved_album_delete(id).await;
+        }
       }
       IoEvent::CurrentUserSavedAlbumAdd(album_id) => {
-        self.current_user_saved_album_add(album_id).await;
+        if let Some(id) = ids::album_id(&album_id) {
+          self.current_user_saved_album_add(id).await;
+        }
       }
       IoEvent::UserUnfollowArtists(artist_ids) => {
-        self.user_unfollow_artists(artist_ids).await;
+        self
+          .user_unfollow_artists(ids::artist_ids(&artist_ids))
+          .await;
       }
       IoEvent::UserFollowArtists(artist_ids) => {
-        self.user_follow_artists(artist_ids).await;
+        self.user_follow_artists(ids::artist_ids(&artist_ids)).await;
       }
       IoEvent::UserFollowPlaylist(playlist_owner_id, playlist_id, is_public) => {
-        self
-          .user_follow_playlist(playlist_owner_id, playlist_id, is_public)
-          .await;
+        if let (Some(owner), Some(id)) = (
+          ids::user_id(&playlist_owner_id),
+          ids::playlist_id(&playlist_id),
+        ) {
+          self.user_follow_playlist(owner, id, is_public).await;
+        }
       }
       IoEvent::UserUnfollowPlaylist(user_id, playlist_id) => {
-        self.user_unfollow_playlist(user_id, playlist_id).await;
+        if let (Some(owner), Some(id)) = (ids::user_id(&user_id), ids::playlist_id(&playlist_id)) {
+          self.user_unfollow_playlist(owner, id).await;
+        }
       }
       IoEvent::AddTrackToPlaylist(playlist_id, track_id) => {
-        self.add_track_to_playlist(playlist_id, track_id).await;
+        if let (Some(pid), Some(tid)) = (ids::playlist_id(&playlist_id), ids::track_id(&track_id)) {
+          self.add_track_to_playlist(pid, tid).await;
+        }
       }
       IoEvent::RemoveTrackFromPlaylistAtPosition(playlist_id, track_id, position) => {
-        self
-          .remove_track_from_playlist_at_position(playlist_id, track_id, position)
-          .await;
+        if let (Some(pid), Some(tid)) = (ids::playlist_id(&playlist_id), ids::track_id(&track_id)) {
+          self
+            .remove_track_from_playlist_at_position(pid, tid, position)
+            .await;
+        }
       }
 
-      IoEvent::ToggleSaveTrack(track_id) => {
-        self.toggle_save_track(track_id).await;
+      IoEvent::ToggleSaveTrack(uri) => {
+        if let Some(id) = ids::playable_id(&uri) {
+          self.toggle_save_track(id).await;
+        }
       }
       IoEvent::GetRecommendationsForTrackId(track_id, country) => {
-        self
-          .get_recommendations_for_track_id(track_id, country)
-          .await;
+        if let Some(id) = ids::track_id(&track_id) {
+          self.get_recommendations_for_track_id(id, country).await;
+        }
       }
       IoEvent::GetRecentlyPlayed => {
         self.get_recently_played().await;
       }
       IoEvent::GetFollowedArtists(after) => {
-        self.get_followed_artists(after).await;
-      }
-      IoEvent::SetArtistsToTable(full_artists) => {
-        self.set_artists_to_table(full_artists).await;
+        self
+          .get_followed_artists(after.and_then(|s| ids::artist_id(&s)))
+          .await;
       }
       IoEvent::UserArtistFollowCheck(artist_ids) => {
-        self.user_artist_check_follow(artist_ids).await;
+        self
+          .user_artist_check_follow(ids::artist_ids(&artist_ids))
+          .await;
       }
       IoEvent::GetAlbum(album_id) => {
-        self.get_album(album_id).await;
+        if let Some(id) = ids::album_id(&album_id) {
+          self.get_album(id).await;
+        }
       }
       IoEvent::TransferPlaybackToDevice(device_id, persist_device_id) => {
         self
@@ -351,37 +455,53 @@ impl Network {
       #[cfg(not(feature = "streaming"))]
       IoEvent::AutoSelectStreamingDevice(..) => {} // No-op without native streaming
       IoEvent::GetAlbumForTrack(track_id) => {
-        self.get_album_for_track(track_id).await;
+        if let Some(id) = ids::track_id(&track_id) {
+          self.get_album_for_track(id).await;
+        }
       }
       IoEvent::Shuffle(shuffle_state) => {
         self.shuffle(shuffle_state).await;
       }
       IoEvent::CurrentUserSavedTracksContains(track_ids) => {
-        self.current_user_saved_tracks_contains(track_ids).await;
+        self
+          .current_user_saved_tracks_contains(ids::track_ids(&track_ids))
+          .await;
       }
       IoEvent::GetCurrentUserSavedShows(offset) => {
         self.get_current_user_saved_shows(offset).await;
       }
       IoEvent::CurrentUserSavedShowsContains(show_ids) => {
-        self.current_user_saved_shows_contains(show_ids).await;
+        self
+          .current_user_saved_shows_contains(ids::show_ids(&show_ids))
+          .await;
       }
       IoEvent::CurrentUserSavedShowDelete(show_id) => {
-        self.current_user_saved_shows_delete(show_id).await;
+        if let Some(id) = ids::show_id(&show_id) {
+          self.current_user_saved_shows_delete(id).await;
+        }
       }
       IoEvent::CurrentUserSavedShowAdd(show_id) => {
-        self.current_user_saved_shows_add(show_id).await;
+        if let Some(id) = ids::show_id(&show_id) {
+          self.current_user_saved_shows_add(id).await;
+        }
       }
       IoEvent::GetShowEpisodes(show) => {
         self.get_show_episodes(show).await;
       }
       IoEvent::GetShow(show_id) => {
-        self.get_show(show_id).await;
+        if let Some(id) = ids::show_id(&show_id) {
+          self.get_show(id).await;
+        }
       }
       IoEvent::GetCurrentShowEpisodes(show_id, offset) => {
-        self.get_current_show_episodes(show_id, offset).await;
+        if let Some(id) = ids::show_id(&show_id) {
+          self.get_current_show_episodes(id, offset).await;
+        }
       }
-      IoEvent::AddItemToQueue(item) => {
-        self.add_item_to_queue(item).await;
+      IoEvent::AddItemToQueue(uri) => {
+        if let Some(id) = ids::playable_id(&uri) {
+          self.add_item_to_queue(id).await;
+        }
       }
       IoEvent::GetQueue => {
         self.get_queue().await;
@@ -398,6 +518,10 @@ impl Network {
       IoEvent::GetLyrics(track, artist, duration) => {
         self.get_lyrics(track, artist, duration).await;
       }
+      #[cfg(feature = "cover-art")]
+      IoEvent::FetchCoverArt(request) => {
+        self.fetch_cover_art(request).await;
+      }
       IoEvent::GetUserTopTracks(time_range) => {
         self.get_user_top_tracks(time_range).await;
       }
@@ -405,7 +529,9 @@ impl Network {
         self.get_top_artists_mix().await;
       }
       IoEvent::FetchAllPlaylistTracksAndSort(playlist_id) => {
-        self.fetch_all_playlist_tracks_and_sort(playlist_id).await;
+        if let Some(id) = ids::playlist_id(&playlist_id) {
+          self.fetch_all_playlist_tracks_and_sort(id).await;
+        }
       }
       IoEvent::StartParty(control_mode) => {
         self.start_party(control_mode).await;
@@ -429,7 +555,9 @@ impl Network {
         self.search_tracks_for_playlist(query).await;
       }
       IoEvent::CreateNewPlaylist(name, track_ids) => {
-        self.create_new_playlist(name, track_ids).await;
+        self
+          .create_new_playlist(name, ids::track_ids(&track_ids))
+          .await;
       }
       IoEvent::GetFriendCode => {
         friends::handle_get_friend_code(self).await;
@@ -449,6 +577,27 @@ impl Network {
       IoEvent::SearchFriendUsers(query) => {
         friends::handle_search_friend_users(self, query).await;
       }
+      // Local-files browse events are handled by infra::local::dispatch before
+      // reaching the network; they only arrive here when the feature is off.
+      IoEvent::GetLocalPlaylists | IoEvent::GetLocalTracks(_) => {}
+      // Subsonic browse/search events are handled by infra::subsonic::dispatch
+      // before reaching the network; they only arrive here when the feature is off.
+      IoEvent::GetSubsonicPlaylists
+      | IoEvent::GetSubsonicTracks(_)
+      | IoEvent::GetSubsonicSearchResults(_) => {}
+      // Radio browse/search events are handled by infra::radio::dispatch before
+      // reaching the network; they only arrive here when the feature is off.
+      IoEvent::GetRadioStations | IoEvent::GetRadioSearchResults(_) => {}
+      // YouTube search/playlist events are handled by infra::youtube::dispatch
+      // before reaching the network; they only arrive here when the feature is
+      // off.
+      IoEvent::GetYouTubeSearchResults(_)
+      | IoEvent::GetYouTubePlaylists
+      | IoEvent::GetYouTubeTracks(_)
+      | IoEvent::CreateYouTubePlaylist(_)
+      | IoEvent::DeleteYouTubePlaylist(_)
+      | IoEvent::AddTrackToYouTubePlaylist(..)
+      | IoEvent::RemoveTrackFromYouTubePlaylist(..) => {}
     };
 
     {

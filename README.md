@@ -2,7 +2,7 @@
 
 > A Spotify client for the terminal written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui).
 >
-> A community-maintained fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), actively developed with new features like native streaming, synced lyrics, and real-time audio visualization.
+> A community-maintained fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), actively developed with new features like native streaming, synced lyrics, and real-time audio visualization, and growing beyond Spotify with optional local files, Subsonic/Navidrome, internet radio, and YouTube sources.
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Upstream](https://img.shields.io/badge/upstream-Rigellute%2Fspotify--tui-blue)](https://github.com/Rigellute/spotify-tui)
@@ -26,28 +26,36 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 ## Table of Contents
 
-- [Help Wanted](#help-wanted)
-- [Performance](#performance)
-- [Privacy Notice](#privacy-notice)
-- [Migrating from spotify-tui](#migrating-from-spotify-tui)
-- [Installation](#installation)
-- [Connecting to Spotify](#connecting-to-spotify)
-- [Usage](#usage)
-- [Native Streaming](#native-streaming)
-- [Configuration](#configuration)
-  - [Discord Rich Presence](#discord-rich-presence)
-- [Plugins](#plugins)
-- [Limitations](#limitations)
-  - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
-- [Using with spotifyd](#using-with-spotifyd)
-- [Libraries used](#libraries-used)
-- [Development](#development)
-  - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
-- [Maintainer](#maintainer)
-- [spotatui Contributors](#spotatui-contributors)
-- [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
-- [Star History](#star-history)
-- [Roadmap](#roadmap)
+- [spotatui](#spotatui)
+  - [Song History](#song-history)
+  - [Table of Contents](#table-of-contents)
+  - [Help Wanted](#help-wanted)
+  - [Performance](#performance)
+  - [Privacy Notice](#privacy-notice)
+  - [Migrating from spotify-tui](#migrating-from-spotify-tui)
+  - [Installation](#installation)
+  - [Connecting to Spotify](#connecting-to-spotify)
+  - [Usage](#usage)
+  - [Native Streaming](#native-streaming)
+  - [Music Sources (Beyond Spotify)](#music-sources-beyond-spotify)
+    - [Local Files](#local-files)
+    - [Subsonic / Navidrome](#subsonic--navidrome)
+    - [Internet Radio](#internet-radio)
+    - [YouTube](#youtube)
+  - [Configuration](#configuration)
+    - [Discord Rich Presence](#discord-rich-presence)
+  - [Plugins](#plugins)
+  - [Limitations](#limitations)
+    - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
+  - [Using with spotifyd](#using-with-spotifyd)
+  - [Libraries used](#libraries-used)
+  - [Development](#development)
+    - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
+  - [Maintainer](#maintainer)
+  - [spotatui Contributors](#spotatui-contributors)
+  - [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
+  - [Star History](#star-history)
+  - [Roadmap](#roadmap)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -199,9 +207,101 @@ spotatui can play audio directly without needing spotifyd or the official Spotif
 - Context-backed native playback prefers Spotify-visible playback starts when it is safe to do so, while raw URI-list playback stays on the stable direct native path
 - Runs on our maintained [librespot fork](https://github.com/LargeModGames/spotatui-librespot), which backports upstream fixes for Spotify's evolving audio delivery (e.g. the HTTP 530 CDN issue that silenced native playback)
 
-> **Known limitation — `error audio key 0 1`:** Since late 2025, Spotify rejects librespot's audio-key requests for some accounts (more common on newer accounts), so native playback can't decrypt audio and fails. This is an upstream Spotify change that affects every librespot-based client (not just spotatui) and can't be fixed here. When it happens, spotatui shows a status-bar message — press `d` and pick an official Spotify Connect device (the desktop or mobile Spotify app) to keep listening. Accounts created before ~2020 are typically unaffected.
 
 See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/Native-Streaming) for setup details.
+
+## Music Sources (Beyond Spotify)
+
+spotatui is growing into a general music player. Press `d` to open the **Source & Device**
+picker and switch between sources; the sidebar and search re-scope to the active source.
+Playback for these sources runs through spotatui's own audio engine, so volume control and
+the audio visualizer work exactly like they do for Spotify.
+
+| Source | What it does | Needs |
+|---|---|---|
+| **Local Files** | Browse and play a folder of audio files (FLAC, MP3, OGG, WAV, …) | Nothing; set `local_music_path` or use the OS music dir |
+| **Subsonic** | Browse playlists, search, and stream from any Subsonic-compatible server (Navidrome, Gonic, Airsonic, Funkwhale, …) | A server account |
+| **Internet Radio** | Play icecast/shoutcast streams with live now-playing metadata; search the [radio-browser.info](https://www.radio-browser.info) directory (30k+ stations) | Nothing |
+| **YouTube** | Search YouTube and play audio; build **local playlists** stored in a plain file | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended) |
+
+These sources need no Spotify Premium. Combined with YouTube's local playlists, spotatui is
+fully usable without any paid account.
+
+**Resuming your last session:** quit while playing from a non-Spotify source and spotatui
+remembers that track and its position, bringing it back on the next launch. This follows the
+`startup_behavior` setting: the default `continue` resumes it exactly as it was (playing if it
+was playing when you closed), `play` always resumes it, and `pause` cues it paused.
+
+Availability: included in the Linux and Windows release binaries. Not yet available on macOS
+(the shared audio output path is disabled there pending a fix; contributions welcome). When
+building from source, enable them with cargo features:
+
+```bash
+cargo install spotatui --features local-files,subsonic,internet-radio,youtube
+```
+
+### Local Files
+
+```yaml
+behavior:
+  local_music_path: "/home/you/Music" # defaults to the OS music directory
+```
+
+Pick **Local Files** in the `d` picker; the sidebar lists your folders. Selecting a track
+queues the folder with next/previous and auto-advance.
+
+### Subsonic / Navidrome
+
+```yaml
+behavior:
+  subsonic_url: "https://music.example.com"
+  subsonic_username: "you"
+  subsonic_password: "secret" # prefer the env var below
+```
+
+Prefer setting the password via the `SPOTATUI_SUBSONIC_PASSWORD` environment variable so it
+never sits in the config file in plaintext.
+
+### Internet Radio
+
+Stations come from your config list and from searching the radio-browser.info directory
+in-app (the search box searches stations while Radio is the active source; Enter plays one
+directly). Press the save/like key (`F` by default) on a highlighted station, or while
+a radio stream is playing, to save it to `behavior.radio_stations` and show it in the
+Radio Stations sidebar. Highlight a saved sidebar station and press `D` to remove it.
+
+```yaml
+behavior:
+  radio_stations:
+    - name: "SomaFM Groove Salad"
+      url: "https://ice1.somafm.com/groovesalad-128-mp3"
+```
+
+The playbar shows a `LIVE` badge with the stream's now-playing title as it updates.
+
+### YouTube
+
+Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (install it from your
+package manager; `ffmpeg` is recommended for cleaner audio containers). No Google account,
+no API key, no cookies: search and playback are anonymous. If yt-dlp is somewhere unusual:
+
+```yaml
+behavior:
+  ytdlp_path: "/opt/yt-dlp/yt-dlp" # optional; defaults to `yt-dlp` on PATH
+```
+
+Search for anything and press Enter on a result to play it (the first play takes a few
+seconds while the audio downloads). When YouTube extraction changes and playback breaks,
+updating yt-dlp (`yt-dlp -U` or your package manager) is the fix; no spotatui update needed.
+
+**Local YouTube playlists**: since there is no usable YouTube login API, playlists live in
+`~/.config/spotatui/youtube_playlists.yml`, a plain human-editable file you can back up or
+share:
+
+- Sidebar → `+ New Playlist` creates one
+- `w` on a search result adds it to a playlist (same picker dialog as Spotify)
+- Enter on a playlist opens it; Enter on a track plays the playlist as a queue
+- `x` removes a track, `D` deletes a playlist (both with confirmation)
 
 ## Configuration
 

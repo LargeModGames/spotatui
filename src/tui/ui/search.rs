@@ -11,7 +11,7 @@ use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
 use super::util::{
-  create_artist_string, draw_selectable_list, get_color, get_search_results_highlight_state,
+  draw_selectable_list, get_color, get_search_results_highlight_state, join_artist_names,
   SMALL_TERMINAL_WIDTH,
 };
 
@@ -142,7 +142,49 @@ pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect)
   f.render_widget(settings, settings_area);
 }
 
+/// Internet-radio search results: one full-area station list instead of the
+/// five-block Spotify layout (a directory search returns only stations, so
+/// Artists/Albums/Playlists/Podcasts would all be dead panels). Backed by the
+/// same `SongSearch` block/index as the songs list so selection and Enter
+/// share the existing machinery.
+fn draw_radio_station_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let stations: Vec<String> = match &app.search_results.tracks {
+    Some(tracks) => tracks
+      .items
+      .iter()
+      .map(|station| {
+        let mut row = format!("\u{1F4FB} {}", station.name);
+        // Genre tags land in `artists`, the country/codec/bitrate summary in
+        // `album` (see infra::radio::station_to_track_info); both optional.
+        if !station.artists.is_empty() {
+          row += &format!(" - {}", station.artists.join(", "));
+        }
+        if !station.album.is_empty() {
+          row += &format!("  ({})", station.album);
+        }
+        row
+      })
+      .collect(),
+    None => vec![],
+  };
+
+  draw_selectable_list(
+    f,
+    app,
+    layout_chunk,
+    "Radio Stations",
+    &stations,
+    get_search_results_highlight_state(app, SearchResultBlock::SongSearch),
+    app.search_results.selected_tracks_index,
+  );
+}
+
 pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  if app.active_source == crate::core::source::Source::Radio {
+    draw_radio_station_results(f, app, layout_chunk);
+    return;
+  }
+
   let [song_artist_area, albums_playlist_area, podcasts_area] =
     layout_chunk.layout(&Layout::vertical([
       Constraint::Percentage(35),
@@ -174,11 +216,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .iter()
         .map(|item| {
           let mut song_name = "".to_string();
-          let id = item
-            .clone()
-            .id
-            .map(|id| id.id().to_string())
-            .unwrap_or_else(|| "".to_string());
+          let id = item.id.clone().unwrap_or_default();
           if currently_playing_id == id {
             song_name += "▶ "
           }
@@ -187,7 +225,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           }
 
           song_name += &item.name;
-          song_name += &format!(" - {}", &create_artist_string(&item.artists));
+          song_name += &format!(" - {}", item.artists.join(", "));
           song_name
         })
         .collect(),
@@ -210,10 +248,12 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .iter()
         .map(|item| {
           let mut artist = String::new();
-          if app.followed_artist_ids_set.contains(item.id.id()) {
-            artist.push_str(&app.user_config.padded_liked_icon());
+          if let Some(ref id) = item.id {
+            if app.followed_artist_ids_set.contains(id.as_str()) {
+              artist.push_str(&app.user_config.padded_liked_icon());
+            }
           }
-          artist.push_str(&item.name.to_owned());
+          artist.push_str(&item.name);
           artist
         })
         .collect(),
@@ -243,15 +283,15 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .iter()
         .map(|item| {
           let mut album_artist = String::new();
-          if let Some(album_id) = &item.id {
-            if app.saved_album_ids_set.contains(album_id.id()) {
+          if let Some(ref id) = item.id {
+            if app.saved_album_ids_set.contains(id.as_str()) {
               album_artist.push_str(&app.user_config.padded_liked_icon());
             }
           }
           album_artist.push_str(&format!(
             "{} - {} ({})",
-            item.name.to_owned(),
-            create_artist_string(&item.artists),
+            item.name,
+            join_artist_names(&item.artists),
             item.album_type.as_deref().unwrap_or("unknown")
           ));
           album_artist
@@ -325,12 +365,12 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           .iter()
           .map(|item| {
             let mut show_name = String::new();
-            if app.saved_show_ids_set.contains(item.id.id()) {
-              show_name.push_str(&app.user_config.padded_liked_icon());
+            if let Some(ref id) = item.id {
+              if app.saved_show_ids_set.contains(id.as_str()) {
+                show_name.push_str(&app.user_config.padded_liked_icon());
+              }
             }
-            #[allow(deprecated)]
-            let publisher = &item.publisher;
-            show_name.push_str(&format!("{:} - {}", item.name, publisher));
+            show_name.push_str(&item.name);
             show_name
           })
           .collect(),
@@ -339,5 +379,98 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       get_search_results_highlight_state(app, SearchResultBlock::ShowSearch),
       app.search_results.selected_shows_index,
     );
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::pagination::Paged;
+  use crate::core::plugin_api::TrackInfo;
+  use crate::core::source::Source;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  fn rendered(app: &App, area: Rect) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+      .draw(|f| draw_search_results(f, app, area))
+      .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..area.height)
+      .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect()
+  }
+
+  fn station(name: &str, tags: Vec<String>, summary: &str) -> TrackInfo {
+    TrackInfo {
+      uri: Some(format!("radio:https://example.com/{name}")),
+      name: name.to_string(),
+      artists: tags,
+      album: summary.to_string(),
+      duration_ms: 0,
+      id: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }
+  }
+
+  /// Radio search results must render as one full-area Stations panel, not
+  /// the five-block Spotify layout with stations shoved under "Songs".
+  #[test]
+  fn radio_results_render_single_station_panel() {
+    let mut app = App::default();
+    app.active_source = Source::Radio;
+    app.search_results.tracks = Some(Paged {
+      items: vec![
+        station(
+          "Groove Salad",
+          vec!["ambient".to_string(), "chillout".to_string()],
+          "US \u{2022} MP3 \u{2022} 128 kbps",
+        ),
+        station("Bare FM", vec![], ""),
+      ],
+      total: 2,
+      ..Default::default()
+    });
+
+    let content = rendered(&app, Rect::new(0, 0, 90, 30));
+
+    assert!(
+      content.contains("Radio Stations"),
+      "panel title should be Radio Stations: {content}"
+    );
+    assert!(
+      content.contains("Groove Salad - ambient, chillout"),
+      "station rows should show name and tags: {content}"
+    );
+    for spotify_panel in ["Songs", "Artists", "Albums", "Playlists", "Podcasts"] {
+      assert!(
+        !content.contains(spotify_panel),
+        "{spotify_panel} panel must not render under Radio: {content}"
+      );
+    }
+    assert!(
+      !content.contains("Bare FM -"),
+      "a station without tags must not render a dangling separator: {content}"
+    );
+  }
+
+  /// The Spotify layout is untouched for the default source.
+  #[test]
+  fn spotify_results_still_render_five_blocks() {
+    let app = App::default();
+    let content = rendered(&app, Rect::new(0, 0, 90, 30));
+    for spotify_panel in ["Songs", "Artists", "Albums", "Playlists", "Podcasts"] {
+      assert!(
+        content.contains(spotify_panel),
+        "{spotify_panel} panel should render under Spotify: {content}"
+      );
+    }
   }
 }

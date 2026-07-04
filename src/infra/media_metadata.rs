@@ -56,6 +56,23 @@ impl PlaybackSnapshot {
 }
 
 pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
+  // A non-Spotify decoded source (local / subsonic / internet-radio / youtube)
+  // owns the audio sink while its `*_playback` field is `Some`. Starting such a
+  // source only *pauses* librespot and never clears the Spotify context, so
+  // without this branch the snapshot (window title, Discord RPC, and the
+  // MPRIS/macOS fallback path) would keep showing the stale paused Spotify
+  // track. Progress and play-state are read live from the owning source's
+  // player, so they stay correct regardless of librespot's frozen position.
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  if let Some(snapshot) = source_playback_snapshot(app) {
+    return Some(snapshot);
+  }
+
   let context = app.current_playback_context.as_ref();
   let use_native_metadata = app.is_streaming_active && app.native_track_info.is_some();
 
@@ -128,6 +145,138 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   })
 }
 
+/// Build a [`PlaybackSnapshot`] for whichever non-Spotify decoded source
+/// currently owns playback (at most one `*_playback` is `Some`). Metadata comes
+/// from the source's stored track info; progress and play-state are read live
+/// from its player. Returns `None` when no such source is active.
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "internet-radio",
+  feature = "youtube"
+))]
+fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
+  #[cfg(feature = "local-files")]
+  if let Some(local) = app.local_playback.as_ref() {
+    return Some(source_snapshot(
+      local.name.clone(),
+      vec![local.artists.clone()],
+      local.album.clone(),
+      local.duration_ms as u32,
+      local.queue.get(local.index).cloned(),
+      // Local files carry embedded art (read via `extract_embedded_cover`), not
+      // a URL, so the snapshot's `image_url` stays `None`.
+      None,
+      local.player.position().as_millis(),
+      !local.player.is_paused(),
+      app,
+    ));
+  }
+
+  #[cfg(feature = "subsonic")]
+  if let Some(subsonic) = app.subsonic_playback.as_ref() {
+    let track = subsonic.tracks.get(subsonic.index)?;
+    return Some(source_snapshot(
+      track.name.clone(),
+      track.artists.clone(),
+      track.album.clone(),
+      track.duration_ms as u32,
+      track.uri.clone(),
+      track.image_url.clone(),
+      subsonic.player.position().as_millis(),
+      !subsonic.player.is_paused(),
+      app,
+    ));
+  }
+
+  #[cfg(feature = "youtube")]
+  if let Some(youtube) = app.youtube_playback.as_ref() {
+    let track = youtube.tracks.get(youtube.index)?;
+    return Some(source_snapshot(
+      track.name.clone(),
+      track.artists.clone(),
+      track.album.clone(),
+      track.duration_ms as u32,
+      track.uri.clone(),
+      track.image_url.clone(),
+      youtube.player.position().as_millis(),
+      !youtube.player.is_paused(),
+      app,
+    ));
+  }
+
+  #[cfg(feature = "internet-radio")]
+  if let Some(radio) = app.radio_playback.as_ref() {
+    // Prefer the live ICY "Artist - Title" when the stream provides it; fall
+    // back to the station's own tags. A live stream has no track duration.
+    let artists = radio.now_playing_title().unwrap_or_else(|| {
+      if radio.station.artists.is_empty() {
+        radio.station.album.clone()
+      } else {
+        radio.station.artists.join(", ")
+      }
+    });
+    return Some(source_snapshot(
+      radio.station.name.clone(),
+      vec![artists],
+      radio.station.album.clone(),
+      0,
+      radio.station.uri.clone(),
+      // Live radio streams carry no per-track cover art.
+      None,
+      radio.player.position().as_millis(),
+      !radio.player.is_paused(),
+      app,
+    ));
+  }
+
+  None
+}
+
+/// Assemble a [`PlaybackSnapshot`] from a decoded source's fields. `image_url`
+/// is a directly-fetchable cover-art URL when the source provides one (Subsonic
+/// getCoverArt, YouTube thumbnail) and `None` otherwise (local files carry
+/// embedded art fetched separately; radio has none). Sources are always treated
+/// as a single track and take shuffle from the user config (no per-source
+/// shuffle state).
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "internet-radio",
+  feature = "youtube"
+))]
+#[allow(clippy::too_many_arguments)]
+fn source_snapshot(
+  title: String,
+  artists: Vec<String>,
+  album: String,
+  duration_ms: u32,
+  item_uri: Option<String>,
+  image_url: Option<String>,
+  progress_ms: u128,
+  is_playing: bool,
+  app: &App,
+) -> PlaybackSnapshot {
+  PlaybackSnapshot {
+    metadata: PlaybackMetadata {
+      title,
+      artists,
+      album,
+      image_url,
+      duration_ms,
+    },
+    item_kind: PlaybackItemKind::Track,
+    item_id: None,
+    item_uri,
+    context_uri: None,
+    source: PlaybackSource::ExternalDevice,
+    progress_ms,
+    is_playing,
+    shuffle: app.user_config.behavior.shuffle_enabled,
+    repeat: None,
+  }
+}
+
 fn metadata_and_identity_from_context_item(
   item: Option<&PlayableItem>,
 ) -> Option<(
@@ -187,6 +336,63 @@ fn image_url_from_context_item(item: Option<&PlayableItem>) -> Option<String> {
     PlayableItem::Track(track) => track.album.images.first().map(|image| image.url.clone()),
     PlayableItem::Episode(episode) => episode.images.first().map(|image| image.url.clone()),
     PlayableItem::Unknown(_) => None,
+  }
+}
+
+/// Static metadata for an active local-files playback session, decoupled from
+/// the live [`crate::infra::local::LocalPlaybackState`] (which embeds an audio
+/// device that cannot be constructed in a headless test). Used to drive the OS
+/// media integrations (MPRIS / macOS Now Playing) when a local file owns the
+/// playback session.
+///
+/// Compiled only when both the local-files source and an OS media integration
+/// that consumes it (MPRIS on Linux, Now Playing on macOS) are enabled, so
+/// other combos (e.g. local-files + discord-rpc alone) stay free of dead-code
+/// warnings under `-D warnings`.
+#[cfg(all(
+  feature = "local-files",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalMediaMetadata {
+  pub title: String,
+  pub artists: Vec<String>,
+  pub album: String,
+  pub duration_ms: u32,
+}
+
+/// Choose the metadata the OS media integration should display.
+///
+/// When a local file owns the playback session (`local` is `Some`), its static
+/// metadata wins so media keys / Now Playing follow local playback instead of
+/// the stale Spotify context. Otherwise the Spotify-derived `spotify` metadata
+/// (if any) is used.
+///
+/// This is a pure function over plain fields so it is unit-testable without a
+/// live D-Bus connection or an audio device.
+#[cfg(all(
+  feature = "local-files",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+pub fn select_media_metadata(
+  local: Option<LocalMediaMetadata>,
+  spotify: Option<PlaybackMetadata>,
+) -> Option<PlaybackMetadata> {
+  match local {
+    Some(local) => Some(PlaybackMetadata {
+      title: local.title,
+      artists: local.artists,
+      album: local.album,
+      image_url: None,
+      duration_ms: local.duration_ms,
+    }),
+    None => spotify,
   }
 }
 
@@ -420,5 +626,78 @@ mod tests {
     let app = app();
 
     assert_eq!(current_playback_snapshot(&app), None);
+  }
+
+  #[cfg(all(
+    feature = "local-files",
+    any(
+      all(feature = "mpris", target_os = "linux"),
+      all(feature = "macos-media", target_os = "macos")
+    )
+  ))]
+  #[test]
+  fn local_metadata_is_selected_when_local_active() {
+    use super::{select_media_metadata, LocalMediaMetadata};
+
+    let local = LocalMediaMetadata {
+      title: "Local Song".to_string(),
+      artists: vec!["Local Artist".to_string()],
+      album: "Local Album".to_string(),
+      duration_ms: 200_000,
+    };
+    let spotify = PlaybackMetadata {
+      title: "Spotify Song".to_string(),
+      artists: vec!["Spotify Artist".to_string()],
+      album: "Spotify Album".to_string(),
+      image_url: Some("https://example.com/cover.jpg".to_string()),
+      duration_ms: 181_000,
+    };
+
+    let selected = select_media_metadata(Some(local), Some(spotify)).unwrap();
+
+    assert_eq!(selected.title, "Local Song");
+    assert_eq!(selected.artists, vec!["Local Artist"]);
+    assert_eq!(selected.album, "Local Album");
+    assert_eq!(selected.duration_ms, 200_000);
+    // Local sessions carry no album art URL.
+    assert_eq!(selected.image_url, None);
+  }
+
+  #[cfg(all(
+    feature = "local-files",
+    any(
+      all(feature = "mpris", target_os = "linux"),
+      all(feature = "macos-media", target_os = "macos")
+    )
+  ))]
+  #[test]
+  fn spotify_metadata_is_selected_when_local_inactive() {
+    use super::select_media_metadata;
+
+    let spotify = PlaybackMetadata {
+      title: "Spotify Song".to_string(),
+      artists: vec!["Spotify Artist".to_string()],
+      album: "Spotify Album".to_string(),
+      image_url: Some("https://example.com/cover.jpg".to_string()),
+      duration_ms: 181_000,
+    };
+
+    let selected = select_media_metadata(None, Some(spotify.clone())).unwrap();
+
+    assert_eq!(selected, spotify);
+  }
+
+  #[cfg(all(
+    feature = "local-files",
+    any(
+      all(feature = "mpris", target_os = "linux"),
+      all(feature = "macos-media", target_os = "macos")
+    )
+  ))]
+  #[test]
+  fn no_metadata_when_neither_source_active() {
+    use super::select_media_metadata;
+
+    assert_eq!(select_media_metadata(None, None), None);
   }
 }

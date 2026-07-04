@@ -1,5 +1,6 @@
 use super::common_key_events;
 use crate::core::app::{ActiveBlock, App, RouteId, LIBRARY_OPTIONS};
+use crate::core::source::Source;
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 
@@ -76,6 +77,21 @@ pub fn handler(key: Key, app: &mut App) {
       6 => {
         app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
         app.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
+      }
+      // Local Files (only present when the `local-files` feature is built in).
+      // Doubles as the "switch to Local source" shortcut: it flips the active
+      // source so the sidebar re-scopes to local folders, then opens the browser.
+      7 => {
+        app.active_source = Source::Local;
+        // Mirror the persisted value so the selection survives restarts.
+        app.user_config.behavior.active_source = Source::Local;
+        if let Err(e) = app.user_config.save_config() {
+          log::warn!("[source] failed to persist active_source: {e}");
+        }
+        app.selected_playlist_index = Some(0);
+        app.local_playlists_index = 0;
+        app.dispatch(IoEvent::GetLocalPlaylists);
+        app.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
       }
       // This is required because Rust can't tell if this pattern is exhaustive
       _ => {}

@@ -36,7 +36,7 @@ pub use self::popups::{
 };
 pub use self::search::{draw_input_and_help_box, draw_search_results};
 pub use self::tables::{
-  draw_album_list, draw_album_table, draw_artist_table, draw_podcast_table,
+  draw_album_list, draw_album_table, draw_artist_table, draw_local_browser, draw_podcast_table,
   draw_recently_played_table, draw_recommendations_table, draw_show_episodes, draw_song_table,
 };
 use self::util::{get_main_layout_margin, SMALL_TERMINAL_WIDTH};
@@ -127,6 +127,9 @@ pub fn draw_routes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     }
     RouteId::Artists => {
       draw_artist_table(f, app, content_area);
+    }
+    RouteId::LocalBrowser => {
+      draw_local_browser(f, app, content_area);
     }
     RouteId::Podcasts => {
       draw_podcast_table(f, app, content_area);

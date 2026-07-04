@@ -2,6 +2,16 @@
 // This module provides cross-platform audio capture:
 // - Linux: PipeWire native (via pipewire-rs)
 // - Windows/macOS: cpal (WASAPI/CoreAudio)
+//
+// It also hosts the shared decoded-audio output engine (`LocalPlayer`), used by
+// any source that plays through the local rodio sink (local files, Subsonic).
+
+// Shared decode/output engine. Gated on `audio-decode`, which both `local-files`
+// and `subsonic` pull in, so the player is reachable from either source.
+#[cfg(feature = "audio-decode")]
+mod player;
+#[cfg(feature = "audio-decode")]
+pub use player::LocalPlayer;
 
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 mod analyzer;

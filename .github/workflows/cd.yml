@@ -21,11 +21,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Multi-source features (local-files, subsonic, internet-radio, youtube)
+          # ship on Linux and Windows only: they share the rodio output engine,
+          # which is gated off at runtime on macOS (CoreAudio/Bluetooth crashes,
+          # #9/#20). Add them to the macOS rows once the macOS output path lands.
+          # The youtube source needs a yt-dlp binary at runtime (ffmpeg
+          # recommended); without one it shows an actionable error.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_prefix: linux-x86_64 # most Linux distros
             binary_postfix: ""
-            audio_features: "audio-viz,mpris"
+            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
           - os: macos-15-intel # Intel runner for x86_64 (available until Aug 2027)
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
@@ -40,7 +46,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_prefix: windows-x86_64
             binary_postfix: ".exe"
-            audio_features: "audio-viz-cpal,windows-media"
+            audio_features: "audio-viz-cpal,windows-media,local-files,subsonic,internet-radio,youtube"
 
     steps:
       - name: Checkout sources
@@ -181,6 +187,8 @@ jobs:
             - On **macOS with Apple Silicon (M1/M2/M3)** → `spotatui-macos-aarch64.tar.gz`
 
             Checksums (`.sha256`) are optional and only needed if you want to verify the download.
+
+            The Linux and Windows builds include the extra music sources (Local Files, Subsonic, Internet Radio, YouTube). The YouTube source needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
 
             To update use "spotatui update --install" or use your package manager of choice.
           draft: false

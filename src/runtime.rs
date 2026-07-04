@@ -56,7 +56,14 @@ use log::warn;
 use rspotify::{model::user::PrivateUser, AuthCodePkceSpotify};
 #[cfg(feature = "streaming")]
 use std::path::Path;
-#[cfg(feature = "streaming")]
+// Used by the streaming OAuth timeout and by `restore_playback_session`'s
+// per-source position seeks.
+#[cfg(any(
+  feature = "streaming",
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "youtube"
+))]
 use std::time::Duration;
 use std::{
   fs,
@@ -110,6 +117,53 @@ fn update_macos_metadata(
   last_metadata: &mut Option<MacosMetadata>,
   app: &App,
 ) {
+  // Local-file playback owns its own state and never populates the Spotify
+  // playback context, so Now Playing must read metadata, play state, and
+  // position straight from the live local player when local is active.
+  #[cfg(feature = "local-files")]
+  if let Some(local) = app.local_playback.as_ref() {
+    use crate::infra::media_metadata::{select_media_metadata, LocalMediaMetadata};
+
+    let is_playing = !local.player.is_paused();
+    let position_ms = local.player.position().as_millis() as u64;
+
+    // `select_media_metadata` is the single, unit-tested decision for which
+    // source the OS integration follows; local always wins while it is active.
+    let metadata = select_media_metadata(
+      Some(LocalMediaMetadata {
+        title: local.name.clone(),
+        artists: vec![local.artists.clone()],
+        album: local.album.clone(),
+        duration_ms: local.duration_ms as u32,
+      }),
+      None,
+    )
+    .expect("local metadata is present");
+
+    let new_metadata = MacosMetadata {
+      title: metadata.title.clone(),
+      artists: metadata.artists.clone(),
+      album: metadata.album.clone(),
+      duration_ms: metadata.duration_ms,
+      art_url: metadata.image_url.clone(),
+    };
+
+    if last_metadata.as_ref() != Some(&new_metadata) {
+      manager.set_metadata(
+        &metadata.title,
+        &metadata.artists,
+        &metadata.album,
+        metadata.duration_ms,
+        metadata.image_url,
+      );
+      *last_metadata = Some(new_metadata);
+    }
+
+    manager.set_playback_status(is_playing);
+    manager.set_position(position_ms);
+    return;
+  }
+
   if let Some(snapshot) = crate::infra::media_metadata::current_playback_snapshot(app) {
     let new_metadata = MacosMetadata {
       title: snapshot.metadata.title.clone(),
@@ -607,6 +661,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         .help("Rerun client authentication setup wizard"),
     )
     .arg(
+      Arg::new("play-file")
+        .long("play-file")
+        .value_name("PATH")
+        .help("Play a local audio file on startup (requires the local-files build feature)."),
+    )
+    .arg(
       Arg::new("completions")
         .long("completions")
         .help("Generates completions for your preferred shell")
@@ -674,6 +734,24 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
 
   let initial_shuffle_enabled = user_config.behavior.shuffle_enabled;
   let initial_startup_behavior = user_config.behavior.startup_behavior;
+
+  // Load the persisted non-Spotify playback session so the last song can resume
+  // on launch. The file's mere existence means a non-Spotify source was playing
+  // at the last save: the runner clears it whenever playback stops or switches
+  // to Spotify, so a present file is always something worth resuming — even when
+  // the browse source was later switched to Spotify while the song kept playing
+  // (browse-source and playback-source are deliberately decoupled). A session
+  // whose source feature isn't compiled into this build is a no-op on restore.
+  let restore_session: Option<crate::core::persisted_playback::PersistedPlayback> =
+    match crate::core::persisted_playback::default_session_path()
+      .and_then(|path| crate::core::persisted_playback::load(&path))
+    {
+      Ok(session) => session,
+      Err(e) => {
+        log::warn!("[session] ignoring unreadable playback session: {e}");
+        None
+      }
+    };
 
   if let Some(tick_rate) = matches
     .get_one::<String>("tick-rate")
@@ -817,6 +895,25 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     user_config.clone(),
     token_expiry,
   )));
+
+  // `--play-file <PATH>`: queue a local file to start once the UI is up. The
+  // path is canonicalised to an absolute `file://` URI so the local-files
+  // dispatch can route it; an unreadable path is reported as a status message.
+  if let Some(path) = matches.get_one::<String>("play-file") {
+    match std::fs::canonicalize(path).ok().and_then(|abs| {
+      url::Url::from_file_path(abs)
+        .ok()
+        .map(|url| url.to_string())
+    }) {
+      Some(uri) => app.lock().await.pending_play_file = Some(uri),
+      None => {
+        app
+          .lock()
+          .await
+          .set_status_message(format!("Cannot find local file: {path}"), 8);
+      }
+    }
+  }
 
   // Work with the cli (not really async)
   if let Some(cmd) = matches.subcommand_name() {
@@ -1230,8 +1327,17 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
           devices_snapshot = Some(devices_vec);
         }
 
+        // When resuming a non-Spotify session, never transfer Spotify playback
+        // to a device on startup — that would fight the restored source for the
+        // audio output. Treat the device decision as passive (Continue); the
+        // device list is still fetched above for the UI.
+        let device_startup_behavior = if restore_session.is_some() {
+          StartupBehavior::Continue
+        } else {
+          initial_startup_behavior
+        };
         let startup_decision = startup_device_decision(
-          initial_startup_behavior,
+          device_startup_behavior,
           saved_device_id,
           devices_snapshot.as_deref(),
           &device_name,
@@ -1247,20 +1353,34 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         }
       }
 
-      // Apply configured startup play behavior. Continue is passive and must not
+      // Resume a persisted non-Spotify session if there is one; it honors the
+      // startup behavior for its own play/pause decision. Otherwise fall back to
+      // the Spotify startup play behavior. Continue is passive and must not
       // transfer devices, change shuffle, or otherwise activate Spotatui.
-      match initial_startup_behavior {
-        StartupBehavior::Continue => {}
-        StartupBehavior::Play => {
-          network
-            .handle_network_event(IoEvent::Shuffle(initial_shuffle_enabled))
-            .await;
-          network
-            .handle_network_event(IoEvent::StartPlayback(None, None, None))
-            .await;
-        }
-        StartupBehavior::Pause => {
-          network.handle_network_event(IoEvent::PausePlayback).await;
+      if let Some(session) = restore_session {
+        // Resume off the event pump: a slow source (yt-dlp download, remote
+        // fetch) must not stall the Spotify startup events the UI's first render
+        // queues (user, playlists, current playback). The restore drives the
+        // source's own start path, which serializes on the `App` lock like every
+        // other event, so running it concurrently is safe.
+        let restore_app = Arc::clone(&network.app);
+        tokio::spawn(async move {
+          restore_playback_session(&restore_app, session, initial_startup_behavior).await;
+        });
+      } else {
+        match initial_startup_behavior {
+          StartupBehavior::Continue => {}
+          StartupBehavior::Play => {
+            network
+              .handle_network_event(IoEvent::Shuffle(initial_shuffle_enabled))
+              .await;
+            network
+              .handle_network_event(IoEvent::StartPlayback(None, None, None))
+              .await;
+          }
+          StartupBehavior::Pause => {
+            network.handle_network_event(IoEvent::PausePlayback).await;
+          }
         }
       }
 
@@ -1288,11 +1408,202 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   Ok(())
 }
 
+/// Resume a persisted non-Spotify playback session at launch.
+///
+/// Drives the source's existing, tested start path (seeding the browse table
+/// with the persisted metadata so the snapshot resolves, then dispatching the
+/// same `StartPlayback` the keyboard would), and afterwards applies the saved
+/// position and the play/pause decision. That decision follows `startup_behavior`:
+/// `Play` forces playing, `Pause` forces paused, and `Continue` restores the
+/// exact state the session had when it was saved.
+///
+/// A failed start (removed video, dead network, macOS local playback, missing
+/// yt-dlp) publishes no session, so the resume step simply finds nothing and
+/// no-ops — startup is never blocked or crashed by a stale session. Any variant
+/// whose source feature is disabled in this build is a no-op.
+#[allow(unused_variables)]
+async fn restore_playback_session(
+  app: &Arc<Mutex<App>>,
+  session: crate::core::persisted_playback::PersistedPlayback,
+  startup_behavior: StartupBehavior,
+) {
+  #[cfg(any(
+    feature = "youtube",
+    feature = "subsonic",
+    feature = "local-files",
+    feature = "internet-radio"
+  ))]
+  use crate::core::persisted_playback::PersistedPlayback;
+
+  // Resolve whether the restored track should end up paused.
+  let resolve_paused = |saved_paused: bool| match startup_behavior {
+    StartupBehavior::Play => false,
+    StartupBehavior::Pause => true,
+    StartupBehavior::Continue => saved_paused,
+  };
+
+  match session {
+    #[cfg(feature = "local-files")]
+    PersistedPlayback::Local {
+      queue,
+      index,
+      position_ms,
+      paused,
+    } => {
+      if queue.is_empty() {
+        return;
+      }
+      // Local reads tags from disk, so the URI queue alone drives the start.
+      crate::infra::local::dispatch::route_local_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(queue), Some(index)),
+      )
+      .await;
+      let guard = app.lock().await;
+      if let Some(s) = guard.local_playback.as_ref() {
+        if position_ms > 0 {
+          let _ = s.player.seek(Duration::from_millis(position_ms));
+        }
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    #[cfg(feature = "subsonic")]
+    PersistedPlayback::Subsonic {
+      tracks,
+      index,
+      position_ms,
+      paused,
+    } => {
+      let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
+      if uris.is_empty() {
+        return;
+      }
+      // Seed the browse table so the start path's snapshot resolves metadata.
+      app.lock().await.track_table.tracks = tracks;
+      crate::infra::subsonic::dispatch::route_subsonic_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(uris), Some(index)),
+      )
+      .await;
+      let guard = app.lock().await;
+      if let Some(s) = guard.subsonic_playback.as_ref() {
+        if position_ms > 0 {
+          let _ = s.player.seek(Duration::from_millis(position_ms));
+        }
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    #[cfg(feature = "youtube")]
+    PersistedPlayback::YouTube {
+      tracks,
+      index,
+      position_ms,
+      paused,
+    } => {
+      let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
+      if uris.is_empty() {
+        return;
+      }
+      app.lock().await.track_table.tracks = tracks;
+      crate::infra::youtube::dispatch::route_youtube_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(uris), Some(index)),
+      )
+      .await;
+      let guard = app.lock().await;
+      if let Some(s) = guard.youtube_playback.as_ref() {
+        if position_ms > 0 {
+          let _ = s.player.seek(Duration::from_millis(position_ms));
+        }
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    #[cfg(feature = "internet-radio")]
+    PersistedPlayback::Radio { station, paused } => {
+      let Some(uri) = station.uri.clone() else {
+        return;
+      };
+      // Seed the browse table so the start path's station snapshot resolves.
+      app.lock().await.track_table.tracks = vec![station];
+      crate::infra::radio::dispatch::route_radio_event(
+        app,
+        &IoEvent::StartPlayback(Some(uri), None, None),
+      )
+      .await;
+      // A live stream has no seekable position; only apply the pause decision.
+      let guard = app.lock().await;
+      if let Some(s) = guard.radio_playback.as_ref() {
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
+      }
+    }
+    // Any variant whose source feature is disabled in this build.
+    #[allow(unreachable_patterns)]
+    _ => {}
+  }
+}
+
 async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Network) {
   loop {
     match io_rx.try_recv() {
       Ok(io_event) => {
-        network.handle_network_event(io_event).await;
+        // Local-file playback is intercepted before the Spotify network so the
+        // network stays Spotify-only (see infra::local::dispatch).
+        let handled_locally = {
+          #[cfg(feature = "local-files")]
+          {
+            crate::infra::local::dispatch::route_local_event(&network.app, &io_event).await
+          }
+          #[cfg(not(feature = "local-files"))]
+          {
+            false
+          }
+        };
+        // Subsonic is intercepted after local and before the Spotify network. A
+        // `subsonic:` URI falls through the local dispatch (its `is_file_uri` is
+        // false) and is caught here (see infra::subsonic::dispatch). Skipped when
+        // local already consumed the event.
+        #[cfg(feature = "subsonic")]
+        let handled_subsonic = !handled_locally
+          && crate::infra::subsonic::dispatch::route_subsonic_event(&network.app, &io_event).await;
+        #[cfg(not(feature = "subsonic"))]
+        let handled_subsonic = false;
+        // Internet radio is intercepted last before the Spotify network. A
+        // `radio:` URI falls through both earlier dispatches and is caught here
+        // (see infra::radio::dispatch). Skipped when already consumed.
+        #[cfg(feature = "internet-radio")]
+        let handled_radio = !handled_locally
+          && !handled_subsonic
+          && crate::infra::radio::dispatch::route_radio_event(&network.app, &io_event).await;
+        #[cfg(not(feature = "internet-radio"))]
+        let handled_radio = false;
+        // YouTube is intercepted last before the Spotify network. A `youtube:`
+        // URI falls through the three earlier dispatches and is caught here
+        // (see infra::youtube::dispatch). Skipped when already consumed.
+        #[cfg(feature = "youtube")]
+        let handled_youtube = !handled_locally
+          && !handled_subsonic
+          && !handled_radio
+          && crate::infra::youtube::dispatch::route_youtube_event(&network.app, &io_event).await;
+        #[cfg(not(feature = "youtube"))]
+        let handled_youtube = false;
+        if !handled_locally && !handled_subsonic && !handled_radio && !handled_youtube {
+          network.handle_network_event(io_event).await;
+        } else {
+          // A source router consumed the event and returned without touching
+          // `is_loading`, which `App::dispatch` set to true. Only
+          // `handle_network_event` resets it, and we skipped that path, so clear
+          // it here — otherwise selecting/loading Local, Subsonic, Radio, or
+          // YouTube content leaves the UI stuck on the loading indicator.
+          network.app.lock().await.is_loading = false;
+        }
       }
       Err(std::sync::mpsc::TryRecvError::Empty) => {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -1322,6 +1633,23 @@ async fn handle_mpris_events(
     if !app.lock().await.user_config.behavior.enable_media_keys {
       continue;
     }
+
+    // A decoded source (local file, Subsonic, radio, or YouTube) owns the
+    // session: route transport through the same IoEvents the keyboard uses
+    // (intercepted by the per-source route_*_event dispatchers before the
+    // Spotify network) so media keys follow the audible source instead of
+    // librespot. This must run *before* the streaming-player branches below,
+    // since librespot is initialized even while a decoded source is playing.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "internet-radio",
+      feature = "youtube"
+    ))]
+    if route_decoded_mpris_event(&event, &app, &mpris_manager).await {
+      continue;
+    }
+
     match event {
       MprisEvent::PlayPause => {
         #[cfg(feature = "streaming")]
@@ -1504,6 +1832,90 @@ async fn handle_mpris_events(
   }
 }
 
+/// Route an MPRIS transport event through the standard dispatch path when any
+/// decoded source (local file, Subsonic, internet radio, or YouTube) owns the
+/// session.
+///
+/// Returns `true` if the event was consumed (and the caller must skip the
+/// Spotify/librespot branches). Play/pause/next/previous/stop/seek map onto the
+/// same `IoEvent`s the keyboard uses; the per-source `route_*_event` dispatchers
+/// intercept them before the Spotify network, so the control lands on whichever
+/// source is actually audible instead of the paused librespot session.
+/// Non-transport events (shuffle/loop) return `false` so existing behaviour is
+/// preserved.
+#[cfg(all(
+  feature = "mpris",
+  target_os = "linux",
+  any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "internet-radio",
+    feature = "youtube"
+  )
+))]
+async fn route_decoded_mpris_event(
+  event: &mpris::MprisEvent,
+  app: &Arc<Mutex<App>>,
+  mpris_manager: &Arc<mpris::MprisManager>,
+) -> bool {
+  use mpris::MprisEvent;
+
+  let mut app_lock = app.lock().await;
+  // Read the live source-player state up front, then drop the borrow so the
+  // immutable read does not conflict with the `&mut self` dispatch calls below.
+  let Some(player) = app_lock.active_decoded_player() else {
+    return false;
+  };
+  let is_paused = player.is_paused();
+  let position_ms = player.position().as_millis() as i64;
+
+  match event {
+    MprisEvent::PlayPause => {
+      if is_paused {
+        app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+      } else {
+        app_lock.dispatch(IoEvent::PausePlayback);
+      }
+      true
+    }
+    MprisEvent::Play => {
+      app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+      true
+    }
+    MprisEvent::Pause | MprisEvent::Stop => {
+      app_lock.dispatch(IoEvent::PausePlayback);
+      true
+    }
+    MprisEvent::Next => {
+      app_lock.dispatch(IoEvent::NextTrack);
+      true
+    }
+    MprisEvent::Previous => {
+      app_lock.dispatch(IoEvent::PreviousTrack);
+      true
+    }
+    MprisEvent::Seek(offset_micros) => {
+      let offset_ms = offset_micros / 1000;
+      let new_position_ms = (position_ms + offset_ms).max(0) as u32;
+      app_lock.dispatch(IoEvent::Seek(new_position_ms));
+      drop(app_lock);
+      mpris_manager.emit_seeked(new_position_ms as u64);
+      true
+    }
+    MprisEvent::SetPosition(position_micros) => {
+      let new_position_ms = (position_micros / 1000).max(0) as u32;
+      app_lock.dispatch(IoEvent::Seek(new_position_ms));
+      drop(app_lock);
+      mpris_manager.emit_seeked(new_position_ms as u64);
+      true
+    }
+    // Shuffle/loop don't apply to single-file local playback. Volume is handled
+    // by the top-level `set_volume_percent`, which already routes to whichever
+    // decoded source owns the sink. Leave all three to the existing handling.
+    MprisEvent::SetShuffle(_) | MprisEvent::SetLoopStatus(_) | MprisEvent::SetVolume(_) => false,
+  }
+}
+
 /// Handle macOS media events from external sources (media keys, Control Center, AirPods, etc.)
 /// Routes control requests to the native streaming player
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
@@ -1519,6 +1931,23 @@ async fn handle_macos_media_events(
     if !app.lock().await.user_config.behavior.enable_media_keys {
       continue;
     }
+
+    // A decoded source (local file, Subsonic, radio, or YouTube) owns the
+    // session: route transport through the same IoEvents the keyboard uses
+    // (intercepted by the per-source route_*_event dispatchers before the
+    // Spotify network) so media keys follow the audible source instead of
+    // librespot. This must run *before* `active_streaming_player` below, since
+    // librespot stays active even while a decoded source is playing.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "internet-radio",
+      feature = "youtube"
+    ))]
+    if route_decoded_macos_event(&event, &app).await {
+      continue;
+    }
+
     let Some(player) = player::active_streaming_player(&app).await else {
       continue;
     };
@@ -1557,6 +1986,63 @@ async fn handle_macos_media_events(
   }
 }
 
+/// Route a macOS media transport event through the standard dispatch path when
+/// any decoded source (local file, Subsonic, internet radio, or YouTube) owns
+/// the session.
+///
+/// Returns `true` if the event was consumed (and the caller must skip the
+/// streaming-player branches). Play/pause/next/previous/stop map onto the same
+/// `IoEvent`s the keyboard uses; the per-source `route_*_event` dispatchers
+/// intercept them before the Spotify network, so the control lands on whichever
+/// source is actually audible instead of the paused librespot session.
+#[cfg(all(
+  feature = "macos-media",
+  target_os = "macos",
+  any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "internet-radio",
+    feature = "youtube"
+  )
+))]
+async fn route_decoded_macos_event(
+  event: &macos_media::MacMediaEvent,
+  app: &Arc<Mutex<App>>,
+) -> bool {
+  use macos_media::MacMediaEvent;
+
+  let mut app_lock = app.lock().await;
+  // Read the live source-player state up front, then drop the borrow so the
+  // immutable read does not conflict with the `&mut self` dispatch calls below.
+  let Some(player) = app_lock.active_decoded_player() else {
+    return false;
+  };
+  let is_paused = player.is_paused();
+
+  match event {
+    MacMediaEvent::PlayPause => {
+      if is_paused {
+        app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+      } else {
+        app_lock.dispatch(IoEvent::PausePlayback);
+      }
+    }
+    MacMediaEvent::Play => {
+      app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+    }
+    MacMediaEvent::Pause | MacMediaEvent::Stop => {
+      app_lock.dispatch(IoEvent::PausePlayback);
+    }
+    MacMediaEvent::Next => {
+      app_lock.dispatch(IoEvent::NextTrack);
+    }
+    MacMediaEvent::Previous => {
+      app_lock.dispatch(IoEvent::PreviousTrack);
+    }
+  }
+  true
+}
+
 #[cfg(all(feature = "windows-media", target_os = "windows"))]
 async fn handle_windows_media_events(
   mut event_rx: tokio::sync::mpsc::UnboundedReceiver<smtc_tokio::WindowsMediaEvent>,
@@ -1568,6 +2054,23 @@ async fn handle_windows_media_events(
     if !app.lock().await.user_config.behavior.enable_media_keys {
       continue;
     }
+
+    // A decoded source (local file, Subsonic, radio, or YouTube) owns the
+    // session: route transport through the same IoEvents the keyboard uses
+    // (intercepted by the per-source route_*_event dispatchers before the
+    // Spotify network) so SMTC controls follow the audible source instead of
+    // librespot. This must run *before* the streaming-player branches below,
+    // since librespot stays active even while a decoded source is playing.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "internet-radio",
+      feature = "youtube"
+    ))]
+    if route_decoded_windows_event(&event, &app).await {
+      continue;
+    }
+
     let player_opt = player::active_streaming_player(&app).await;
 
     let is_native_loaded = app.lock().await.native_track_info.is_some();
@@ -1632,6 +2135,59 @@ async fn handle_windows_media_events(
       }
     }
   }
+}
+
+/// Route a Windows SMTC media transport event through the standard dispatch
+/// path when any decoded source (local file, Subsonic, internet radio, or
+/// YouTube) owns the session.
+///
+/// Returns `true` if the event was consumed (and the caller must skip the
+/// streaming-player branches). Play/pause/next/previous/stop/seek map onto the
+/// same `IoEvent`s the keyboard uses; the per-source `route_*_event` dispatchers
+/// intercept them before the Spotify network, so the control lands on whichever
+/// source is actually audible instead of the paused librespot session.
+#[cfg(all(
+  feature = "windows-media",
+  target_os = "windows",
+  any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "internet-radio",
+    feature = "youtube"
+  )
+))]
+async fn route_decoded_windows_event(
+  event: &smtc_tokio::WindowsMediaEvent,
+  app: &Arc<Mutex<App>>,
+) -> bool {
+  use smtc_tokio::WindowsMediaEvent;
+
+  let mut app_lock = app.lock().await;
+  // Only consume the event while a decoded source owns the session; otherwise
+  // fall through to the streaming-player branches for Spotify/librespot.
+  if app_lock.active_decoded_player().is_none() {
+    return false;
+  }
+
+  match event {
+    WindowsMediaEvent::Play => {
+      app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+    }
+    WindowsMediaEvent::Pause | WindowsMediaEvent::Stop => {
+      app_lock.dispatch(IoEvent::PausePlayback);
+    }
+    WindowsMediaEvent::Next => {
+      app_lock.dispatch(IoEvent::NextTrack);
+    }
+    WindowsMediaEvent::Previous => {
+      app_lock.dispatch(IoEvent::PreviousTrack);
+    }
+    WindowsMediaEvent::SetPosition(pos) => {
+      app_lock.song_progress_ms = *pos as u128;
+      app_lock.dispatch(IoEvent::Seek(*pos as u32));
+    }
+  }
+  true
 }
 
 #[cfg(test)]

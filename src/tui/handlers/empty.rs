@@ -1,6 +1,7 @@
 use super::common_key_events;
 use crate::{
   core::app::{ActiveBlock, App},
+  core::source::Source,
   tui::event::Key,
 };
 
@@ -34,7 +35,10 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       match app.get_current_route().hovered_block {
-        ActiveBlock::MyPlaylists => {
+        // Under any non-Spotify source (Local, Subsonic) the Library list is
+        // hidden, so MyPlaylists is already the top sidebar block — pressing up
+        // should stay put rather than jump to a block that isn't rendered.
+        ActiveBlock::MyPlaylists if app.active_source == Source::Spotify => {
           app.set_current_route_state(None, Some(ActiveBlock::Library));
         }
         ActiveBlock::PlayBar => {
@@ -55,7 +59,8 @@ pub fn handler(key: Key, app: &mut App) {
         | ActiveBlock::Discover
         | ActiveBlock::RecentlyPlayed
         | ActiveBlock::TrackTable => {
-          app.set_current_route_state(None, Some(ActiveBlock::Library));
+          let top = common_key_events::sidebar_top_block(app);
+          app.set_current_route_state(None, Some(top));
         }
         _ => {}
       }
