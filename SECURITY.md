@@ -6,8 +6,8 @@ We maintain security fixes only for the current stable release stream.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.39  | :white_check_mark: |
-| < 0.39  | :x:                |
+| 0.40  | :white_check_mark: |
+| < 0.40  | :x:                |
 
 ## Reporting a Vulnerability
 
