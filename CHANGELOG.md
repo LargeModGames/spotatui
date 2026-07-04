@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+## [v0.40.1] 2026-07-04
+
 ### Changed
 
-- **Spotify is now optional at first-time setup**: On a fresh install spotatui asks which source you want to set up (Spotify, YouTube, Subsonic/Navidrome, Internet Radio, or Local Files — only those compiled into your build are listed). Picking a free source skips the Spotify login entirely and drops you straight into the TUI; Subsonic collects and verifies your server credentials inline, and YouTube checks for `yt-dlp` on your `PATH`. Picking Spotify runs the existing auth wizard unchanged.
+- **Spotify is now optional at first-time setup**: On a fresh install spotatui shows an interactive multi-select picker of the sources compiled into your build (Spotify, YouTube, Subsonic/Navidrome, Internet Radio, and Local Files). Use the arrow keys or `j`/`k` to move, `space` to toggle, `enter` to confirm, or `esc` to skip; you can enable several sources at once. Choosing a free source skips the Spotify login entirely and drops you straight into the TUI; Subsonic collects and verifies your server credentials inline, and YouTube checks for `yt-dlp` on your `PATH`. Picking Spotify (alone or alongside others) runs the existing auth wizard unchanged. Non-TTY/piped runs fall back to the original numbered single-select prompt, and slim/macOS builds keep the Spotify-only behavior.
 
 ### Added
 

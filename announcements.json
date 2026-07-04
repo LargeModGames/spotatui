@@ -2,13 +2,22 @@
   "version": 1,
   "announcements": [
     {
+      "id": "2026-07-04-multi-source-playback",
+      "title": "New: play from more than just Spotify",
+      "body": "spotatui is no longer Spotify-only. You can now stream from local files, a Subsonic/Navidrome server, internet radio, and YouTube, all from the same interface. Spotify is now optional at first-time setup, so pick whichever sources you want from the interactive source picker on first run. Cover art, lyrics, Discord Rich Presence, and media-key controls work across every source. Enable the free sources with the `all-sources` build feature.",
+      "level": "info",
+      "url": "https://github.com/LargeModGames/spotatui/pull/329",
+      "starts_at": "2026-07-04T00:00:00Z",
+      "ends_at": null
+    },
+    {
       "id": "2026-06-12-self-update-broken",
       "title": "Action needed: auto-update is broken in v0.38.5 to v0.39.0",
       "body": "A bug in update checksum verification means spotatui v0.38.5 through v0.39.0 cannot update themselves: the update check fails silently on every launch. The fix ships in v0.39.1, but affected versions cannot reach it on their own. Please update once manually (winget upgrade, brew upgrade, your package manager, or the GitHub releases page). Auto-update works again from v0.39.1 onward.",
       "level": "warning",
       "url": "https://github.com/LargeModGames/spotatui/pull/303",
       "starts_at": "2026-06-12T00:00:00Z",
-      "ends_at": null
+      "ends_at": "2026-07-03T23:59:59Z"
     },
     {
       "id": "2026-06-12-lua-scripting",
@@ -26,7 +35,7 @@
       "level": "info",
       "url": "https://github.com/LargeModGames/spotatui/issues/251",
       "starts_at": "2026-05-19T00:00:00Z",
-      "ends_at": null
+      "ends_at": "2026-07-03T23:59:59Z"
     },
     {
       "id": "2026-02-27-major-refactor-complete",
@@ -35,7 +44,7 @@
       "level": "info",
       "url": "https://github.com/LargeModGames/spotatui/blob/main/CONTRIBUTING.md",
       "starts_at": "2026-02-27T00:00:00Z",
-      "ends_at": null
+      "ends_at": "2026-07-03T23:59:59Z"
     }
   ]
 }
