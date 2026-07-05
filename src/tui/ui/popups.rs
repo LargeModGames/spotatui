@@ -95,13 +95,18 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
   let style = app.user_config.theme.base_style();
   let mut items: Vec<ListItem> = Vec::new();
 
-  // Row 0: "Now playing" header. Still sourced from the Spotify Web-API mirror
-  // for now; Phase 2 rewires it to the native queue slot's current track.
-  let now = app
-    .queue
-    .as_ref()
-    .and_then(|q| q.currently_playing.as_ref());
-  let now_text = now.map(queue_item_line).unwrap_or_else(|| "—".to_string());
+  // Row 0: "Now playing" header. Prefer the native queue slot's current track;
+  // fall back to the Spotify Web-API mirror (external Connect device) otherwise.
+  let now_text = app
+    .queue_now_display()
+    .or_else(|| {
+      app
+        .queue
+        .as_ref()
+        .and_then(|q| q.currently_playing.as_ref())
+        .map(queue_item_line)
+    })
+    .unwrap_or_else(|| "—".to_string());
   items.push(
     ListItem::new(Line::from(vec![
       Span::styled("Now playing: ", style.add_modifier(Modifier::BOLD)),

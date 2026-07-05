@@ -909,27 +909,52 @@ pub async fn start_ui(
         // The `advancing` guard also protects the brief empty-sink window during
         // a track change's decode — the same class of guard as the
         // "don't treat the pre-playback empty sink as end-of-track" invariant.
-        #[cfg(feature = "local-files")]
+        // Native queue slot: when the queued track finishes, advance the queue
+        // (play the next queued item, or resume the suspended context). Runs
+        // before the per-source blocks so it takes precedence over them.
+        #[cfg(feature = "audio-decode")]
         {
-          // Decide under one borrow whether to advance (true), tear down
-          // (false), or do nothing (None) — then act after the borrow ends so
-          // the teardown's `app.local_playback = None` doesn't overlap it.
-          let advance = app.local_playback.as_mut().and_then(|local| {
-            if local.player.is_finished() && !local.advancing {
-              if crate::infra::local::next_index(local.index, local.queue.len()).is_some() {
-                local.advancing = true; // atomic check-and-set: one dispatch only
-                Some(true)
-              } else {
-                Some(false)
-              }
-            } else {
-              None
+          use crate::infra::queue::QueueNowPlaying;
+          let advance = match app.queue_now.as_mut() {
+            Some(QueueNowPlaying::Decoded(d)) if d.player.is_finished() && !d.advancing => {
+              d.advancing = true; // atomic check-and-set: one dispatch only
+              true
             }
+            _ => false,
+          };
+          if advance {
+            app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
+          }
+        }
+
+        #[cfg(feature = "local-files")]
+        if !app.queue_owns_playback() {
+          // Decide under one borrow, then act after the borrow ends. With items
+          // in the native queue a finished track suspends the context and hands
+          // the sink to the queue instead of advancing/tearing down.
+          use crate::infra::queue::{advance_decision, Decision};
+          let queue_len = app.native_queue.len();
+          let decision = app.local_playback.as_ref().map(|local| {
+            advance_decision(
+              local.player.is_finished(),
+              local.advancing,
+              crate::infra::local::next_index(local.index, local.queue.len()).is_some(),
+              queue_len,
+            )
           });
-          match advance {
-            Some(true) => app.dispatch(crate::infra::network::IoEvent::NextTrack),
-            Some(false) => app.local_playback = None,
-            None => {}
+          match decision {
+            Some(Decision::AdvanceContext) => {
+              if let Some(local) = app.local_playback.as_mut() {
+                local.advancing = true; // atomic check-and-set: one dispatch only
+              }
+              app.dispatch(crate::infra::network::IoEvent::NextTrack);
+            }
+            Some(Decision::SuspendToQueue) => {
+              app.suspend_active_decoded_context_for_skip();
+              app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
+            }
+            Some(Decision::Teardown) => app.local_playback = None,
+            Some(Decision::None) | None => {}
           }
         }
 
@@ -938,24 +963,30 @@ pub async fn start_ui(
         // empty for the whole multi-second download window; without it the next
         // tick would re-dispatch and skip several tracks per advance.
         #[cfg(feature = "subsonic")]
-        {
-          let advance = app.subsonic_playback.as_mut().and_then(|subsonic| {
-            if subsonic.player.is_finished() && !subsonic.advancing {
-              if crate::infra::subsonic::next_index(subsonic.index, subsonic.tracks.len()).is_some()
-              {
-                subsonic.advancing = true; // atomic check-and-set: one dispatch only
-                Some(true)
-              } else {
-                Some(false)
-              }
-            } else {
-              None
-            }
+        if !app.queue_owns_playback() {
+          use crate::infra::queue::{advance_decision, Decision};
+          let queue_len = app.native_queue.len();
+          let decision = app.subsonic_playback.as_ref().map(|subsonic| {
+            advance_decision(
+              subsonic.player.is_finished(),
+              subsonic.advancing,
+              crate::infra::subsonic::next_index(subsonic.index, subsonic.tracks.len()).is_some(),
+              queue_len,
+            )
           });
-          match advance {
-            Some(true) => app.dispatch(crate::infra::network::IoEvent::NextTrack),
-            Some(false) => app.subsonic_playback = None,
-            None => {}
+          match decision {
+            Some(Decision::AdvanceContext) => {
+              if let Some(subsonic) = app.subsonic_playback.as_mut() {
+                subsonic.advancing = true; // atomic check-and-set: one dispatch only
+              }
+              app.dispatch(crate::infra::network::IoEvent::NextTrack);
+            }
+            Some(Decision::SuspendToQueue) => {
+              app.suspend_active_decoded_context_for_skip();
+              app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
+            }
+            Some(Decision::Teardown) => app.subsonic_playback = None,
+            Some(Decision::None) | None => {}
           }
         }
 
@@ -963,23 +994,30 @@ pub async fn start_ui(
         // download window is even longer, so the `advancing` guard matters
         // just as much here.
         #[cfg(feature = "youtube")]
-        {
-          let advance = app.youtube_playback.as_mut().and_then(|youtube| {
-            if youtube.player.is_finished() && !youtube.advancing {
-              if crate::infra::youtube::next_index(youtube.index, youtube.tracks.len()).is_some() {
-                youtube.advancing = true; // atomic check-and-set: one dispatch only
-                Some(true)
-              } else {
-                Some(false)
-              }
-            } else {
-              None
-            }
+        if !app.queue_owns_playback() {
+          use crate::infra::queue::{advance_decision, Decision};
+          let queue_len = app.native_queue.len();
+          let decision = app.youtube_playback.as_ref().map(|youtube| {
+            advance_decision(
+              youtube.player.is_finished(),
+              youtube.advancing,
+              crate::infra::youtube::next_index(youtube.index, youtube.tracks.len()).is_some(),
+              queue_len,
+            )
           });
-          match advance {
-            Some(true) => app.dispatch(crate::infra::network::IoEvent::NextTrack),
-            Some(false) => app.youtube_playback = None,
-            None => {}
+          match decision {
+            Some(Decision::AdvanceContext) => {
+              if let Some(youtube) = app.youtube_playback.as_mut() {
+                youtube.advancing = true; // atomic check-and-set: one dispatch only
+              }
+              app.dispatch(crate::infra::network::IoEvent::NextTrack);
+            }
+            Some(Decision::SuspendToQueue) => {
+              app.suspend_active_decoded_context_for_skip();
+              app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
+            }
+            Some(Decision::Teardown) => app.youtube_playback = None,
+            Some(Decision::None) | None => {}
           }
         }
 
@@ -1008,6 +1046,14 @@ pub async fn start_ui(
         // the (paused) librespot position below clobber it.
         #[allow(unused_mut)]
         let mut source_owns_playback = false;
+        // The native queue slot owns the sink when playing a decoded track; read
+        // progress from its player first (it may share the suspended context's
+        // player, in which case a per-source block below reads the same value).
+        #[cfg(feature = "audio-decode")]
+        if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
+          source_owns_playback = true;
+          app.song_progress_ms = d.player.position().as_millis();
+        }
         #[cfg(feature = "local-files")]
         if let Some(local) = app.local_playback.as_ref() {
           source_owns_playback = true;

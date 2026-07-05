@@ -137,7 +137,7 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
 /// Build a [`SubsonicSource`] from the saved server config, with the password
 /// taken from the `SPOTATUI_SUBSONIC_PASSWORD` env var when set. Returns `None`
 /// (after surfacing a status message) when no server URL is configured.
-async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource> {
+pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource> {
   let (url, username, config_password) = {
     let guard = app.lock().await;
     let behavior = &guard.user_config.behavior;
@@ -344,6 +344,23 @@ async fn download_track(source: &SubsonicSource, track_id: &str) -> Result<Named
   Ok(tmp)
 }
 
+/// Download the track at `uri` and play it on `player`, returning the tempfile
+/// (which the caller must keep alive for the duration of playback). Extracted so
+/// the native queue engine can play a one-off Subsonic track on a borrowed
+/// player without touching `subsonic_playback`.
+pub(crate) async fn download_and_play(
+  source: &SubsonicSource,
+  player: &Arc<LocalPlayer>,
+  uri: &str,
+) -> Result<NamedTempFile> {
+  let track_id = track_id_from_uri(uri)?.to_string();
+  let tmp = download_track(source, &track_id).await?;
+  let path = tmp.path().to_path_buf();
+  let decode_player = Arc::clone(player);
+  tokio::task::spawn_blocking(move || decode_player.play_file(&path)).await??;
+  Ok(tmp)
+}
+
 /// Begin playing a queue of subsonic tracks, taking over the session and
 /// starting at `start_idx` (clamped into range).
 async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: usize) {
@@ -461,7 +478,7 @@ enum Plan {
 /// A download failure tears the session down (deliberate divergence from the
 /// local source's skip-past): on a network outage, walking the whole queue at
 /// tick speed would spray error toasts, so one failure ends playback instead.
-async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
+pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
   let plan = {
     let guard = app.lock().await;
     match guard.subsonic_playback.as_ref() {

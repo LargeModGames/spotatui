@@ -116,6 +116,16 @@ pub enum IoEvent {
   /// Playable URI (track or episode) to enqueue.
   AddItemToQueue(String),
   GetQueue,
+  /// Advance the native cross-source queue: play the next queued item, or resume
+  /// the suspended per-source context when the queue drains. Consumed by
+  /// `infra::queue::dispatch::route_queue_event` (wired first in the pump); it
+  /// never reaches the Spotify network handler.
+  AdvanceNativeQueue,
+  /// Resume a suspended native-streaming Spotify context after the native queue
+  /// drains (context URI, resume-track URI). Implemented in Phase 3; the network
+  /// handler arm is a no-op until then.
+  #[allow(dead_code)]
+  ResumeSpotifyContext(Option<String>, Option<String>),
   IncrementGlobalSongCount,
   FetchGlobalSongCount,
   FetchAnnouncements,
@@ -616,6 +626,11 @@ impl Network {
       IoEvent::GetQueue => {
         self.get_queue().await;
       }
+      // Consumed by the queue router before it reaches the network; only lands
+      // here if the router somehow let it through. No Spotify work to do.
+      IoEvent::AdvanceNativeQueue => {}
+      // Phase 3 wires the actual context resume; a no-op for now.
+      IoEvent::ResumeSpotifyContext(..) => {}
       IoEvent::IncrementGlobalSongCount => {
         self.increment_global_song_count().await;
       }

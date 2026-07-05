@@ -280,6 +280,25 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
   }
 }
 
+/// Decode and play a single local file on `player`, returning its metadata.
+/// Extracted so the native queue engine can play a one-off `file://` track on a
+/// borrowed player without touching `local_playback`. Mirrors the core of
+/// [`play_index`] (tag read + blocking decode) with no session bookkeeping.
+#[cfg_attr(not(feature = "local-files"), allow(dead_code))]
+pub(crate) async fn play_single_file(
+  player: &Arc<LocalPlayer>,
+  uri: &str,
+) -> anyhow::Result<crate::core::plugin_api::TrackInfo> {
+  let path = file_uri_to_path(uri)?;
+  let decode_player = Arc::clone(player);
+  let info = tokio::task::spawn_blocking(move || {
+    let info = track_info_from_path(&path);
+    decode_player.play_file(&path).map(|()| info)
+  })
+  .await??;
+  Ok(info)
+}
+
 /// Play the queued track at `target`, reusing the already-published session's
 /// player and queue. Used by Next/Previous and the runner tick's auto-advance.
 ///
@@ -288,7 +307,7 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
 /// `target` to the *following* track, so a single corrupt file is skipped past
 /// rather than retried forever. `advancing` is cleared in both arms once the new
 /// source is in the sink (or the play failed), reopening auto-advance.
-async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
+pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
   // Snapshot the player + URI under a short lock.
   let (player, uri) = {
     let mut guard = app.lock().await;

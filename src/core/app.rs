@@ -7,6 +7,8 @@ use crate::core::source::Source;
 use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
 use crate::infra::network::sync::{PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
+#[cfg(any(feature = "streaming", feature = "audio-decode"))]
+use crate::infra::queue::QueueNowPlaying;
 use crate::tui::event::Key;
 use anyhow::anyhow;
 use ratatui::layout::Size;
@@ -836,9 +838,15 @@ pub struct App {
   /// and holds tracks from any source. Phase 2 consumes it for playback.
   pub native_queue: Vec<TrackInfo>,
   /// How to resume the underlying per-source context after the native queue
-  /// drains. Populated by the Phase 2 playback engine; unused in Phase 1.
-  #[allow(dead_code)]
+  /// drains. Populated when a track is queued over an active context.
   pub queue_suspended: Option<crate::core::queue::SuspendedContext>,
+  /// What the native queue's playback slot is currently playing, if anything.
+  /// Overlays the per-source `*_playback` contexts without mutating them (those
+  /// are the context to resume). Gated to builds that can actually play a queued
+  /// track — every read goes through the unconditional
+  /// [`Self::queue_owns_playback`] accessor.
+  #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+  pub queue_now: Option<crate::infra::queue::QueueNowPlaying>,
   #[cfg(feature = "cover-art")]
   pub cover_art: crate::tui::cover_art::CoverArt,
   /// Status of the current track's cover art, driving the placeholder message.
@@ -1220,6 +1228,8 @@ impl Default for App {
       queue_selected_index: 0,
       native_queue: Vec::new(),
       queue_suspended: None,
+      #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+      queue_now: None,
       input: vec![],
       input_idx: 0,
       input_cursor_position: 0,
@@ -1437,6 +1447,33 @@ impl App {
   /// pause state straight from whichever source's player is active, mirroring
   /// the source-ownership order the runner tick uses. Spotify playback is not
   /// persisted here — its resume is handled by `startup_behavior` device logic.
+  /// The resume point (`resume_index`, `resume_position_ms`) recorded when the
+  /// active decoded context was suspended under the native queue, or `None` when
+  /// no decoded context is suspended. Only one context is ever active, so this
+  /// unambiguously describes it.
+  #[cfg(any(feature = "youtube", feature = "subsonic", feature = "local-files"))]
+  fn suspended_resume(&self) -> Option<(Option<usize>, u64)> {
+    match self.queue_suspended.as_ref()? {
+      #[cfg(feature = "local-files")]
+      crate::core::queue::SuspendedContext::Local {
+        resume_index,
+        resume_position_ms,
+      } => Some((*resume_index, *resume_position_ms)),
+      #[cfg(feature = "subsonic")]
+      crate::core::queue::SuspendedContext::Subsonic {
+        resume_index,
+        resume_position_ms,
+      } => Some((*resume_index, *resume_position_ms)),
+      #[cfg(feature = "youtube")]
+      crate::core::queue::SuspendedContext::YouTube {
+        resume_index,
+        resume_position_ms,
+      } => Some((*resume_index, *resume_position_ms)),
+      #[allow(unreachable_patterns)]
+      _ => None,
+    }
+  }
+
   pub fn current_persisted_playback(
     &self,
   ) -> Option<crate::core::persisted_playback::PersistedPlayback> {
@@ -1449,30 +1486,73 @@ impl App {
     use crate::core::persisted_playback::PersistedPlayback;
     #[cfg(feature = "youtube")]
     if let Some(s) = self.youtube_playback.as_ref() {
-      return Some(PersistedPlayback::YouTube {
-        tracks: s.tracks.clone(),
-        index: s.index,
-        position_ms: s.player.position().as_millis() as u64,
-        paused: s.player.is_paused(),
-      });
+      // While suspended under the queue, the context's player is playing a
+      // *queued* track, so read the resume point from `queue_suspended` instead
+      // of the (repurposed) live player. A `None` resume_index means the context
+      // was exhausted — don't persist it (the queue itself still persists).
+      match self.suspended_resume() {
+        Some((Some(index), position_ms)) => {
+          return Some(PersistedPlayback::YouTube {
+            tracks: s.tracks.clone(),
+            index,
+            position_ms,
+            paused: false,
+          });
+        }
+        Some((None, _)) => {}
+        None => {
+          return Some(PersistedPlayback::YouTube {
+            tracks: s.tracks.clone(),
+            index: s.index,
+            position_ms: s.player.position().as_millis() as u64,
+            paused: s.player.is_paused(),
+          });
+        }
+      }
     }
     #[cfg(feature = "subsonic")]
     if let Some(s) = self.subsonic_playback.as_ref() {
-      return Some(PersistedPlayback::Subsonic {
-        tracks: s.tracks.clone(),
-        index: s.index,
-        position_ms: s.player.position().as_millis() as u64,
-        paused: s.player.is_paused(),
-      });
+      match self.suspended_resume() {
+        Some((Some(index), position_ms)) => {
+          return Some(PersistedPlayback::Subsonic {
+            tracks: s.tracks.clone(),
+            index,
+            position_ms,
+            paused: false,
+          });
+        }
+        Some((None, _)) => {}
+        None => {
+          return Some(PersistedPlayback::Subsonic {
+            tracks: s.tracks.clone(),
+            index: s.index,
+            position_ms: s.player.position().as_millis() as u64,
+            paused: s.player.is_paused(),
+          });
+        }
+      }
     }
     #[cfg(feature = "local-files")]
     if let Some(s) = self.local_playback.as_ref() {
-      return Some(PersistedPlayback::Local {
-        queue: s.queue.clone(),
-        index: s.index,
-        position_ms: s.player.position().as_millis() as u64,
-        paused: s.player.is_paused(),
-      });
+      match self.suspended_resume() {
+        Some((Some(index), position_ms)) => {
+          return Some(PersistedPlayback::Local {
+            queue: s.queue.clone(),
+            index,
+            position_ms,
+            paused: false,
+          });
+        }
+        Some((None, _)) => {}
+        None => {
+          return Some(PersistedPlayback::Local {
+            queue: s.queue.clone(),
+            index: s.index,
+            position_ms: s.player.position().as_millis() as u64,
+            paused: s.player.is_paused(),
+          });
+        }
+      }
     }
     #[cfg(feature = "internet-radio")]
     if let Some(s) = self.radio_playback.as_ref() {
@@ -1492,13 +1572,18 @@ impl App {
     &self,
   ) -> Option<crate::core::persisted_playback::PersistedSession> {
     let playback = self.current_persisted_playback();
-    if playback.is_none() && self.native_queue.is_empty() {
+    let queue_now_track = self.queue_now_track();
+    if playback.is_none() && self.native_queue.is_empty() && queue_now_track.is_none() {
       return None;
     }
-    Some(crate::core::persisted_playback::PersistedSession {
-      playback,
-      queue: self.native_queue.clone(),
-    })
+    // A track playing through the queue slot has been popped off `native_queue`;
+    // prepend it so a mid-queue quit resumes it (it re-enters the queue on the
+    // next launch).
+    let mut queue = self.native_queue.clone();
+    if let Some(track) = queue_now_track {
+      queue.insert(0, track.clone());
+    }
+    Some(crate::core::persisted_playback::PersistedSession { playback, queue })
   }
 
   #[allow(dead_code)]
@@ -2701,6 +2786,159 @@ impl App {
     self.set_status_message(format!("Queued: {name}"), 3);
   }
 
+  /// Whether the native queue's playback slot currently owns the output (either a
+  /// decoded queued track or, in Phase 3, a native-streamed Spotify one). The
+  /// single gated entry point for every queue-ownership check; reduces to `false`
+  /// in a slim build where the slot cannot exist.
+  pub fn queue_owns_playback(&self) -> bool {
+    #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+    {
+      self.queue_now.is_some()
+    }
+    #[cfg(not(any(feature = "streaming", feature = "audio-decode")))]
+    {
+      false
+    }
+  }
+
+  /// The queue slot's player when it is playing a *decoded* queued track (local /
+  /// Subsonic / YouTube). `None` for a Spotify slot or an empty slot.
+  #[cfg(feature = "audio-decode")]
+  pub fn queue_now_decoded_player(&self) -> Option<&Arc<crate::infra::audio::LocalPlayer>> {
+    match self.queue_now.as_ref()? {
+      QueueNowPlaying::Decoded(d) => Some(&d.player),
+      #[cfg(feature = "streaming")]
+      QueueNowPlaying::Spotify { .. } => None,
+    }
+  }
+
+  /// Take the queue slot, returning its player when it was a decoded track (so
+  /// the caller can stop it). Clears [`Self::queue_now`] either way.
+  #[cfg(feature = "audio-decode")]
+  pub fn take_queue_now_decoded_player(&mut self) -> Option<Arc<crate::infra::audio::LocalPlayer>> {
+    match self.queue_now.take() {
+      Some(QueueNowPlaying::Decoded(d)) => Some(d.player),
+      _ => None,
+    }
+  }
+
+  /// The track currently playing through the queue slot, if any. Used by
+  /// persistence to prepend it back onto the saved queue so a mid-queue quit
+  /// doesn't lose the in-flight track.
+  fn queue_now_track(&self) -> Option<&TrackInfo> {
+    #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+    {
+      match self.queue_now.as_ref()? {
+        #[cfg(feature = "audio-decode")]
+        QueueNowPlaying::Decoded(d) => Some(&d.track),
+        #[cfg(feature = "streaming")]
+        QueueNowPlaying::Spotify { track } => Some(track),
+      }
+    }
+    #[cfg(not(any(feature = "streaming", feature = "audio-decode")))]
+    {
+      None
+    }
+  }
+
+  /// A `"{name} - {artists}"` label for the track playing through the queue slot,
+  /// for the Queue screen's "Now playing" row. `None` when the slot is empty.
+  pub fn queue_now_display(&self) -> Option<String> {
+    let track = self.queue_now_track()?;
+    Some(format!("{} - {}", track.name, track.artists.join(", ")))
+  }
+
+  /// Suspend the active decoded context with **skip** semantics (resume at the
+  /// context's *next* track, position 0) and latch its `advancing` guard so the
+  /// runner tick leaves it alone. Radio is torn down (a live stream can't share
+  /// the sink) and its station stashed for reconnect. A no-op when no decoded
+  /// context is active. Called before handing the sink to the native queue.
+  pub(crate) fn suspend_active_decoded_context_for_skip(&mut self) {
+    #[cfg(feature = "local-files")]
+    if let Some(local) = self.local_playback.as_mut() {
+      let resume_index = crate::infra::local::next_index(local.index, local.queue.len());
+      local.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Local {
+        resume_index,
+        resume_position_ms: 0,
+      });
+      return;
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(s) = self.subsonic_playback.as_mut() {
+      let resume_index = crate::infra::subsonic::next_index(s.index, s.tracks.len());
+      s.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Subsonic {
+        resume_index,
+        resume_position_ms: 0,
+      });
+      return;
+    }
+    #[cfg(feature = "youtube")]
+    if let Some(s) = self.youtube_playback.as_mut() {
+      let resume_index = crate::infra::youtube::next_index(s.index, s.tracks.len());
+      s.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::YouTube {
+        resume_index,
+        resume_position_ms: 0,
+      });
+      return;
+    }
+    #[cfg(feature = "internet-radio")]
+    if let Some(radio) = self.radio_playback.take() {
+      radio.player.stop();
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Radio {
+        station: radio.station,
+      });
+    }
+  }
+
+  /// Suspend the active decoded context with **mid-track** semantics (resume the
+  /// *same* track at its live position) — the Enter-jump path. Radio has no
+  /// seekable position, so it is stashed for reconnect like the skip path.
+  pub(crate) fn suspend_active_decoded_context_mid_track(&mut self) {
+    #[cfg(feature = "local-files")]
+    if let Some(local) = self.local_playback.as_mut() {
+      let position_ms = local.player.position().as_millis() as u64;
+      let index = local.index;
+      local.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Local {
+        resume_index: Some(index),
+        resume_position_ms: position_ms,
+      });
+      return;
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(s) = self.subsonic_playback.as_mut() {
+      let position_ms = s.player.position().as_millis() as u64;
+      let index = s.index;
+      s.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Subsonic {
+        resume_index: Some(index),
+        resume_position_ms: position_ms,
+      });
+      return;
+    }
+    #[cfg(feature = "youtube")]
+    if let Some(s) = self.youtube_playback.as_mut() {
+      let position_ms = s.player.position().as_millis() as u64;
+      let index = s.index;
+      s.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::YouTube {
+        resume_index: Some(index),
+        resume_position_ms: position_ms,
+      });
+      return;
+    }
+    #[cfg(feature = "internet-radio")]
+    if let Some(radio) = self.radio_playback.take() {
+      radio.player.stop();
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Radio {
+        station: radio.station,
+      });
+    }
+  }
+
   /// Whether any decoded-audio source (local file, Subsonic, internet radio, or
   /// YouTube) currently owns the playback session.
   ///
@@ -2716,6 +2954,12 @@ impl App {
   /// source is playing. In a build with all source features off this reduces to
   /// `false`.
   fn active_decoded_source(&self) -> bool {
+    // The native queue slot playing a decoded track owns the sink even when no
+    // per-source `*_playback` context is set (e.g. queueing from an idle app).
+    #[cfg(feature = "audio-decode")]
+    if self.queue_now_decoded_player().is_some() {
+      return true;
+    }
     #[cfg(feature = "local-files")]
     if self.local_playback.is_some() {
       return true;
@@ -2757,6 +3001,10 @@ impl App {
     allow(dead_code)
   )]
   pub fn active_decoded_player(&self) -> Option<&std::sync::Arc<crate::infra::audio::LocalPlayer>> {
+    #[cfg(feature = "audio-decode")]
+    if let Some(p) = self.queue_now_decoded_player() {
+      return Some(p);
+    }
     #[cfg(feature = "local-files")]
     if let Some(s) = &self.local_playback {
       return Some(&s.player);
@@ -2784,6 +3032,10 @@ impl App {
   /// and seek keys become correct no-ops for radio. In a build with all seekable
   /// source features off this reduces to `None`.
   fn active_source_position_ms(&self) -> Option<u128> {
+    #[cfg(feature = "audio-decode")]
+    if let Some(p) = self.queue_now_decoded_player() {
+      return Some(p.position().as_millis());
+    }
     #[cfg(feature = "local-files")]
     if let Some(local) = &self.local_playback {
       return Some(local.player.position().as_millis());
@@ -2800,6 +3052,18 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
+    // The native queue slot owns the sink: toggle its player directly (covers the
+    // idle-app case where no per-source context is set).
+    #[cfg(feature = "audio-decode")]
+    if let Some(player) = self.queue_now_decoded_player() {
+      if player.is_paused() {
+        player.resume();
+      } else {
+        player.pause();
+      }
+      return;
+    }
+
     // Local-file playback owns the session: toggle the local sink directly. The
     // playbar reads pause state live from the player, so nothing else to update.
     #[cfg(feature = "local-files")]
@@ -3001,6 +3265,21 @@ impl App {
 
   pub fn next_track(&mut self) {
     info!("skipping to next track");
+    // The native queue owns playback: skip to the next queued item (or resume
+    // the suspended context when the queue drains).
+    if self.queue_owns_playback() {
+      self.song_progress_ms = 0;
+      self.dispatch(IoEvent::AdvanceNativeQueue);
+      return;
+    }
+    // A decoded context is playing with items waiting in the queue: suspend it
+    // (skip semantics — resume at the context's next track) and start the queue.
+    if self.active_decoded_source() && !self.native_queue.is_empty() {
+      self.suspend_active_decoded_context_for_skip();
+      self.song_progress_ms = 0;
+      self.dispatch(IoEvent::AdvanceNativeQueue);
+      return;
+    }
     // A decoded source (local/subsonic/radio/youtube) owns the session: route to
     // its dispatcher, never to the paused librespot. The source handles or
     // no-ops NextTrack (radio has no queue).

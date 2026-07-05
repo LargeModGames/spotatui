@@ -14,12 +14,31 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('J') => reorder(1, app),
     Key::Char('K') => reorder(-1, app),
     k if k == app.user_config.keys.remove_from_queue => remove_selected(app),
-    Key::Enter => {
-      // Play-from-queue is wired in Phase 2 (queue playback engine).
-      app.set_status_message("Play-from-queue lands with queue playback", 3);
-    }
+    Key::Enter => play_selected(app),
     _ => {}
   }
+}
+
+/// Jump to the selected queue row: drop every item before it, then start the
+/// native queue there. If a decoded context is playing and the queue does not
+/// already own playback, suspend it mid-track first (so it resumes at the same
+/// track + position when the queue drains). Row 0 (now playing) is non-actionable.
+fn play_selected(app: &mut App) {
+  let selected = app.queue_selected_index;
+  if selected == 0 {
+    return;
+  }
+  let skip = selected - 1;
+  if skip >= app.native_queue.len() {
+    return;
+  }
+  // Drop the items before the selected one so it becomes the queue head.
+  app.native_queue.drain(..skip);
+  app.queue_selected_index = 1;
+  if !app.queue_owns_playback() {
+    app.suspend_active_decoded_context_mid_track();
+  }
+  app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
 }
 
 /// Total selectable rows: the now-playing header plus every queue item.

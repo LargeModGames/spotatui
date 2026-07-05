@@ -1610,9 +1610,15 @@ async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Ne
   loop {
     match io_rx.try_recv() {
       Ok(io_event) => {
+        // The native queue router runs first: it owns `AdvanceNativeQueue` and
+        // the queue slot's transport controls, and relinquishes the slot on an
+        // unrelated `StartPlayback` (returning false so the per-source
+        // teardowns/starts still run). Compiled unconditionally.
+        let handled_queue =
+          crate::infra::queue::dispatch::route_queue_event(&network.app, &io_event).await;
         // Local-file playback is intercepted before the Spotify network so the
         // network stays Spotify-only (see infra::local::dispatch).
-        let handled_locally = {
+        let handled_locally = !handled_queue && {
           #[cfg(feature = "local-files")]
           {
             crate::infra::local::dispatch::route_local_event(&network.app, &io_event).await
@@ -1627,7 +1633,8 @@ async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Ne
         // false) and is caught here (see infra::subsonic::dispatch). Skipped when
         // local already consumed the event.
         #[cfg(feature = "subsonic")]
-        let handled_subsonic = !handled_locally
+        let handled_subsonic = !handled_queue
+          && !handled_locally
           && crate::infra::subsonic::dispatch::route_subsonic_event(&network.app, &io_event).await;
         #[cfg(not(feature = "subsonic"))]
         let handled_subsonic = false;
@@ -1635,7 +1642,8 @@ async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Ne
         // `radio:` URI falls through both earlier dispatches and is caught here
         // (see infra::radio::dispatch). Skipped when already consumed.
         #[cfg(feature = "internet-radio")]
-        let handled_radio = !handled_locally
+        let handled_radio = !handled_queue
+          && !handled_locally
           && !handled_subsonic
           && crate::infra::radio::dispatch::route_radio_event(&network.app, &io_event).await;
         #[cfg(not(feature = "internet-radio"))]
@@ -1644,13 +1652,19 @@ async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Ne
         // URI falls through the three earlier dispatches and is caught here
         // (see infra::youtube::dispatch). Skipped when already consumed.
         #[cfg(feature = "youtube")]
-        let handled_youtube = !handled_locally
+        let handled_youtube = !handled_queue
+          && !handled_locally
           && !handled_subsonic
           && !handled_radio
           && crate::infra::youtube::dispatch::route_youtube_event(&network.app, &io_event).await;
         #[cfg(not(feature = "youtube"))]
         let handled_youtube = false;
-        if !handled_locally && !handled_subsonic && !handled_radio && !handled_youtube {
+        if !handled_queue
+          && !handled_locally
+          && !handled_subsonic
+          && !handled_radio
+          && !handled_youtube
+        {
           network.handle_network_event(io_event).await;
         } else {
           // A source router consumed the event and returned without touching

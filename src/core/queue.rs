@@ -48,7 +48,6 @@ pub fn source_label(source: QueueItemSource) -> &'static str {
 /// streaming; each alternative source is gated on its own Cargo feature. Phase 2
 /// consults this to skip unplayable items with a status message instead of
 /// stalling the queue.
-#[allow(dead_code)]
 pub fn source_available(source: QueueItemSource) -> bool {
   match source {
     QueueItemSource::Spotify => cfg!(feature = "streaming"),
@@ -65,10 +64,12 @@ pub fn source_available(source: QueueItemSource) -> bool {
 /// down rather than resumed. In a slim build (no source features) this enum has
 /// zero variants — the `App` field is `Option<SuspendedContext>`, so that is a
 /// valid, always-`None` type.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SuspendedContext {
+  // Constructed in Phase 3 (Spirc preemption); defined now so the enum is
+  // stable and the resume path can already match it.
   #[cfg(feature = "streaming")]
+  #[allow(dead_code)]
   Spotify {
     context_uri: Option<String>,
     resume_track_uri: Option<String>,
@@ -88,8 +89,14 @@ pub enum SuspendedContext {
     resume_index: Option<usize>,
     resume_position_ms: u64,
   },
+  /// A live radio stream can't be paused/resumed, so resuming it means
+  /// reconnecting. The suspended station row is kept to re-open the stream when
+  /// the queue drains (the radio session itself is torn down at suspension so
+  /// the queue slot can take the output device).
   #[cfg(feature = "internet-radio")]
-  Radio,
+  Radio {
+    station: crate::core::plugin_api::TrackInfo,
+  },
 }
 
 #[cfg(test)]
