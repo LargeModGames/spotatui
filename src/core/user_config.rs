@@ -175,6 +175,7 @@ impl Default for Theme {
 pub enum ThemePreset {
   #[default]
   Default,
+  Terminal,
   PookiePink,
   Spotify,
   Vesper,
@@ -192,6 +193,7 @@ impl ThemePreset {
   pub fn all() -> &'static [ThemePreset] {
     &[
       ThemePreset::Default,
+      ThemePreset::Terminal,
       ThemePreset::PookiePink,
       ThemePreset::Spotify,
       ThemePreset::Vesper,
@@ -209,6 +211,7 @@ impl ThemePreset {
   pub fn name(&self) -> &'static str {
     match self {
       ThemePreset::Default => "Default (Cyan)",
+      ThemePreset::Terminal => "Terminal (ANSI)",
       ThemePreset::PookiePink => "Pookie Pink",
       ThemePreset::Spotify => "Spotify",
       ThemePreset::Vesper => "Vesper",
@@ -226,6 +229,7 @@ impl ThemePreset {
   pub fn from_name(name: &str) -> Self {
     match name {
       "Default (Cyan)" => ThemePreset::Default,
+      "Terminal (ANSI)" => ThemePreset::Terminal,
       "Pookie Pink" => ThemePreset::PookiePink,
       "Spotify" => ThemePreset::Spotify,
       "Vesper" => ThemePreset::Vesper,
@@ -262,6 +266,29 @@ impl ThemePreset {
   pub fn to_theme(self) -> Theme {
     match self {
       ThemePreset::Default => Theme::default(),
+      // Deliberately uses named ANSI colors (unlike the RGB rationale in
+      // Theme::default) so terminal-palette tools like pywal restyle the UI
+      // live, without restarting spotatui.
+      ThemePreset::Terminal => Theme {
+        analysis_bar: Color::Cyan,
+        analysis_bar_text: Color::Reset,
+        active: Color::Cyan,
+        banner: Color::Cyan,
+        error_border: Color::Red,
+        error_text: Color::LightRed,
+        hint: Color::Yellow,
+        hovered: Color::Magenta,
+        inactive: Color::DarkGray,
+        playbar_background: Color::Reset,
+        playbar_progress: Color::Cyan,
+        playbar_progress_text: Color::Reset,
+        playbar_text: Color::Reset,
+        selected: Color::Cyan,
+        text: Color::Reset,
+        background: Color::Reset,
+        header: Color::Reset,
+        highlighted_lyrics: Color::Cyan,
+      },
       ThemePreset::PookiePink => Theme {
         analysis_bar: Color::Rgb(255, 255, 255),         // White
         analysis_bar_text: Color::Rgb(165, 30, 100),     // Dark pink
@@ -1954,6 +1981,35 @@ mod tests {
       parse_theme_item("23, 43, 45").unwrap(),
       Color::Rgb(23, 43, 45)
     );
+  }
+
+  #[test]
+  fn terminal_preset_colors_round_trip_through_config() {
+    use super::{color_to_string, parse_theme_item, ThemePreset};
+
+    let theme = ThemePreset::Terminal.to_theme();
+    for color in [
+      theme.analysis_bar,
+      theme.analysis_bar_text,
+      theme.active,
+      theme.banner,
+      theme.error_border,
+      theme.error_text,
+      theme.hint,
+      theme.hovered,
+      theme.inactive,
+      theme.playbar_background,
+      theme.playbar_progress,
+      theme.playbar_progress_text,
+      theme.playbar_text,
+      theme.selected,
+      theme.text,
+      theme.background,
+      theme.header,
+      theme.highlighted_lyrics,
+    ] {
+      assert_eq!(parse_theme_item(&color_to_string(color)).unwrap(), color);
+    }
   }
 
   #[test]
