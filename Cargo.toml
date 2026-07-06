@@ -67,7 +67,7 @@ icy-metadata = { version = "0.6", optional = true, default-features = false }
 
 # Local-files media source dependencies
 symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "wav", "aiff", "isomp4", "mkv", "pcm", "vorbis"], optional = true, default-features = false }
-lofty = { version = "0.22", optional = true }
+lofty = { version = "0.24", optional = true }
 # Local-files audio output. Defaults pull in cpal `playback` plus the common
 # codecs (flac/mp3/mp4-aac/vorbis/wav) via symphonia. Project-validated on
 # Linux and Windows (librespot uses rodio-backend on both); the macOS output
