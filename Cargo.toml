@@ -53,7 +53,7 @@ discord-rich-presence = { version = "1.1", optional = true }
 ratatui-image = { version = "11.0.4", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true }
 mlua = { version = "0.12", features = ["lua54", "vendored", "serde"], optional = true }
-md-5 = { version = "0.10", optional = true }
+md-5 = { version = "0.11", optional = true }
 # Subsonic streams each track to a tempfile before playing it through the shared
 # rodio sink. Also a dev-dependency (used by tests across features).
 tempfile = { version = "3", optional = true }
