@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **Native idle recovery no longer repeats forever**: When Spotify reports no active playback after a stale native session, spotatui still tries to restore the local device automatically. It now stops after two recovery attempts for the same idle session instead of sending `transfer(None)` and `activate()` every few seconds ([#311](https://github.com/LargeModGames/spotatui/issues/311)).
 - **Album tracklists no longer cut off at 50 songs**: Opening an album now pages through the full Spotify tracklist instead of stopping at the API's 50-track page limit, whether the album is opened from search results, an artist's discography, a track's context, or the saved-albums library ([#324](https://github.com/LargeModGames/spotatui/issues/324)).
 
 ### Added

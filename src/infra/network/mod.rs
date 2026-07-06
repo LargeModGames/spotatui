@@ -261,6 +261,8 @@ pub struct Network {
   pub small_search_limit: u32,
   pub client_config: ClientConfig,
   pub app: Arc<Mutex<App>>,
+  #[cfg(feature = "streaming")]
+  native_idle_recovery: playback::NativeIdleRecoveryState,
   pub party_connection: Option<sync::PartyConnection>,
   pub party_incoming_rx: Option<tokio::sync::mpsc::UnboundedReceiver<sync::SyncMessage>>,
   pub token_cache_path: PathBuf,
@@ -282,6 +284,7 @@ impl Network {
       small_search_limit: 4,
       client_config,
       app: Arc::clone(app),
+      native_idle_recovery: playback::NativeIdleRecoveryState::default(),
       party_connection: None,
       party_incoming_rx: None,
       token_cache_path,

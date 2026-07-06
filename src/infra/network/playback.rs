@@ -30,6 +30,12 @@ use std::sync::Arc;
 
 const MAX_API_PLAYBACK_URIS: usize = 100;
 
+#[cfg(feature = "streaming")]
+const MAX_NATIVE_IDLE_RECOVERY_ATTEMPTS: u8 = 2;
+
+#[cfg(feature = "streaming")]
+const NATIVE_IDLE_RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
 pub trait PlaybackNetwork {
   async fn get_current_playback(&mut self);
   async fn start_playback(
@@ -174,6 +180,70 @@ enum NativeDevicePreferenceUpdate {
 }
 
 #[cfg(feature = "streaming")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum NativeIdleRecoveryPhase {
+  #[default]
+  Armed,
+  Idle {
+    attempts: u8,
+    last_attempt: Instant,
+  },
+}
+
+#[cfg(feature = "streaming")]
+#[derive(Debug, Default)]
+pub(super) struct NativeIdleRecoveryState {
+  player_instance: Option<usize>,
+  phase: NativeIdleRecoveryPhase,
+}
+
+#[cfg(feature = "streaming")]
+impl NativeIdleRecoveryState {
+  fn observe_player_instance(&mut self, player_instance: Option<usize>) {
+    if self.player_instance != player_instance {
+      self.player_instance = player_instance;
+      self.phase = NativeIdleRecoveryPhase::Armed;
+    }
+  }
+
+  fn observe_available_playback(&mut self) {
+    self.phase = NativeIdleRecoveryPhase::Armed;
+  }
+
+  fn should_attempt_idle_recovery(&mut self, now: Instant) -> bool {
+    match self.phase {
+      NativeIdleRecoveryPhase::Armed => {
+        self.phase = NativeIdleRecoveryPhase::Idle {
+          attempts: 1,
+          last_attempt: now,
+        };
+        true
+      }
+      NativeIdleRecoveryPhase::Idle {
+        attempts,
+        last_attempt,
+      } if attempts < MAX_NATIVE_IDLE_RECOVERY_ATTEMPTS
+        && now.duration_since(last_attempt) >= NATIVE_IDLE_RECOVERY_RETRY_INTERVAL =>
+      {
+        self.phase = NativeIdleRecoveryPhase::Idle {
+          attempts: attempts + 1,
+          last_attempt: now,
+        };
+        true
+      }
+      NativeIdleRecoveryPhase::Idle { .. } => false,
+    }
+  }
+
+  fn settle_current_episode(&mut self, now: Instant) {
+    self.phase = NativeIdleRecoveryPhase::Idle {
+      attempts: MAX_NATIVE_IDLE_RECOVERY_ATTEMPTS,
+      last_attempt: now,
+    };
+  }
+}
+
+#[cfg(feature = "streaming")]
 fn should_activate_native_for_playback(context: NativeActivationContext) -> bool {
   if !context.player_connected {
     return false;
@@ -207,6 +277,15 @@ fn native_device_preference_update(
   } else {
     NativeDevicePreferenceUpdate::KeepExistingPreference
   }
+}
+
+#[cfg(feature = "streaming")]
+fn native_idle_device_preference_update(
+  saved_device_id: Option<&str>,
+  saved_device_matches_native: bool,
+) -> Option<NativeDevicePreferenceUpdate> {
+  let update = native_device_preference_update(saved_device_id, false, saved_device_matches_native);
+  (update != NativeDevicePreferenceUpdate::KeepExistingPreference).then_some(update)
 }
 
 #[cfg(feature = "streaming")]
@@ -248,13 +327,14 @@ fn persist_native_device_id_if_needed(
 }
 
 #[cfg(feature = "streaming")]
-fn mark_native_idle_device_if_preferred(
+fn reconcile_native_idle_device_if_preferred(
   client_config: &mut ClientConfig,
   app: &mut App,
   player: &crate::infra::player::StreamingPlayer,
-) -> bool {
+  recovery: &mut NativeIdleRecoveryState,
+) {
   if !player.is_connected() {
-    return false;
+    return;
   }
 
   let native_device_id = player.device_id();
@@ -264,23 +344,18 @@ fn mark_native_idle_device_if_preferred(
     app.devices.as_ref(),
     player.device_name(),
   );
-  let native_preference_update = native_device_preference_update(
+  let Some(native_preference_update) = native_idle_device_preference_update(
     client_config.device_id.as_deref(),
-    false,
     saved_device_matches_native,
-  );
+  ) else {
+    return;
+  };
 
-  if native_preference_update == NativeDevicePreferenceUpdate::KeepExistingPreference {
-    return false;
-  }
-
-  let should_transfer = app
-    .last_device_activation
-    .is_none_or(|instant| instant.elapsed() >= Duration::from_secs(5));
-  if should_transfer {
+  let now = Instant::now();
+  if recovery.should_attempt_idle_recovery(now) {
     let _ = player.transfer(None);
     player.activate();
-    app.last_device_activation = Some(Instant::now());
+    app.last_device_activation = Some(now);
   }
 
   app.mark_native_streaming_device_available(
@@ -294,8 +369,6 @@ fn mark_native_idle_device_if_preferred(
     &native_device_id,
     native_preference_update,
   );
-
-  should_transfer
 }
 
 #[cfg(feature = "streaming")]
@@ -648,6 +721,13 @@ impl PlaybackNetwork for Network {
     #[cfg(feature = "streaming")]
     let streaming_player = current_streaming_player(self).await;
     #[cfg(feature = "streaming")]
+    self.native_idle_recovery.observe_player_instance(
+      streaming_player
+        .as_ref()
+        .filter(|player| player.is_connected())
+        .map(|player| Arc::as_ptr(player) as usize),
+    );
+    #[cfg(feature = "streaming")]
     // Check if native streaming is active by examining the pre-fetched player
     // (avoids redundant lock call from is_native_streaming_active)
     let local_state: Option<(Option<u8>, bool, rspotify::model::RepeatState, Option<bool>)> =
@@ -684,6 +764,8 @@ impl PlaybackNetwork for Network {
     match context {
       #[allow(unused_mut)]
       Ok(Some(mut c)) => {
+        #[cfg(feature = "streaming")]
+        self.native_idle_recovery.observe_available_playback();
         app.instant_since_last_current_playback_poll = Instant::now();
 
         // Detect whether the native spotatui streaming device is the active Spotify device.
@@ -857,18 +939,15 @@ impl PlaybackNetwork for Network {
       }
       Ok(None) => {
         #[cfg(feature = "streaming")]
-        let native_transfer_requested = streaming_player.as_ref().is_some_and(|player| {
-          mark_native_idle_device_if_preferred(&mut self.client_config, &mut app, player)
-        });
-        #[cfg(not(feature = "streaming"))]
-        let native_transfer_requested = false;
-
-        if native_transfer_requested {
-          app.dispatch(IoEvent::GetCurrentPlayback);
-          app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(6);
-        } else {
-          app.instant_since_last_current_playback_poll = Instant::now();
+        if let Some(player) = streaming_player.as_ref() {
+          reconcile_native_idle_device_if_preferred(
+            &mut self.client_config,
+            &mut app,
+            player,
+            &mut self.native_idle_recovery,
+          );
         }
+        app.instant_since_last_current_playback_poll = Instant::now();
       }
       Err(e) => {
         app.is_fetching_current_playback = false;
@@ -926,18 +1005,15 @@ impl PlaybackNetwork for Network {
         if err.to_string().contains("404") || err.to_string().contains("Not Found") {
           app.current_playback_context = None;
           #[cfg(feature = "streaming")]
-          let native_transfer_requested = streaming_player.as_ref().is_some_and(|player| {
-            mark_native_idle_device_if_preferred(&mut self.client_config, &mut app, player)
-          });
-          #[cfg(not(feature = "streaming"))]
-          let native_transfer_requested = false;
-
-          if native_transfer_requested {
-            app.dispatch(IoEvent::GetCurrentPlayback);
-            app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(6);
-          } else {
-            app.instant_since_last_current_playback_poll = Instant::now();
+          if let Some(player) = streaming_player.as_ref() {
+            reconcile_native_idle_device_if_preferred(
+              &mut self.client_config,
+              &mut app,
+              player,
+              &mut self.native_idle_recovery,
+            );
           }
+          app.instant_since_last_current_playback_poll = Instant::now();
           app.is_fetching_current_playback = false;
           return;
         }
@@ -1077,6 +1153,9 @@ impl PlaybackNetwork for Network {
       }
 
       player.activate();
+      self
+        .native_idle_recovery
+        .settle_current_episode(activation_time);
       {
         let mut app = self.app.lock().await;
         app.is_streaming_active = true;
@@ -1253,6 +1332,9 @@ impl PlaybackNetwork for Network {
               let activation_time = Instant::now();
               let native_device_id = player.device_id();
               player.activate();
+              self
+                .native_idle_recovery
+                .settle_current_episode(activation_time);
               {
                 let mut app = self.app.lock().await;
                 let saved_device_matches_native = saved_device_matches_native_player(
@@ -1574,9 +1656,13 @@ impl PlaybackNetwork for Network {
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = transfer_playback_backend(self, &device_id).await {
+      let activation_time = Instant::now();
       let native_device_id = player.device_id();
       let _ = player.transfer(None);
       player.activate();
+      self
+        .native_idle_recovery
+        .settle_current_episode(activation_time);
       let mut app = self.app.lock().await;
       let saved_device_matches_native = saved_device_matches_native_player(
         self.client_config.device_id.as_deref(),
@@ -1598,8 +1684,8 @@ impl PlaybackNetwork for Network {
       // — mirrors the non-native transfer branch below. Without this, the first
       // play can leak to the official Spotify client / 404 (#282).
       app.current_playback_context = None;
-      app.last_device_activation = Some(Instant::now());
-      app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(6);
+      app.last_device_activation = Some(activation_time);
+      app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
       persist_native_device_id_if_needed(
         &mut self.client_config,
         &mut app,
@@ -1680,6 +1766,9 @@ impl PlaybackNetwork for Network {
         let _ = player.transfer(None);
       }
       player.activate();
+      self
+        .native_idle_recovery
+        .settle_current_episode(activation_time);
 
       {
         let mut app = self.app.lock().await;
@@ -2066,6 +2155,85 @@ mod tests {
     assert_eq!(
       native_device_preference_update(Some("old-native-device"), false, true),
       NativeDevicePreferenceUpdate::Persist
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_exposes_native_device_when_it_is_preferred() {
+    assert_eq!(
+      native_idle_device_preference_update(None, false),
+      Some(NativeDevicePreferenceUpdate::Persist)
+    );
+    assert_eq!(
+      native_idle_device_preference_update(Some("old-native-device"), true),
+      Some(NativeDevicePreferenceUpdate::Persist)
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_preserves_saved_external_device() {
+    assert_eq!(
+      native_idle_device_preference_update(Some("phone-device"), false),
+      None
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_recovery_is_limited_to_two_spaced_attempts() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    assert!(recovery.should_attempt_idle_recovery(started_at));
+    assert!(!recovery.should_attempt_idle_recovery(
+      started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL - Duration::from_millis(1)
+    ));
+    assert!(recovery.should_attempt_idle_recovery(started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL));
+    assert!(!recovery.should_attempt_idle_recovery(
+      started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL
+    ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn healthy_playback_rearms_idle_recovery() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    assert!(recovery.should_attempt_idle_recovery(started_at));
+    recovery.observe_available_playback();
+
+    assert!(recovery.should_attempt_idle_recovery(started_at + Duration::from_millis(1)));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn replacement_player_rearms_idle_recovery() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+    recovery.settle_current_episode(started_at);
+
+    recovery.observe_player_instance(Some(2));
+
+    assert!(recovery.should_attempt_idle_recovery(started_at + Duration::from_millis(1)));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn explicit_activation_settles_current_idle_episode() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    recovery.settle_current_episode(started_at);
+
+    assert!(
+      !recovery.should_attempt_idle_recovery(started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL)
     );
   }
 
