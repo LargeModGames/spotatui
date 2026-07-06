@@ -24,11 +24,11 @@
 //!
 //! ## Threading
 //!
-//! `rodio::OutputStream` is `!Send`, so it cannot live on the shared player
+//! `rodio::MixerDeviceSink` is `!Send`, so it cannot live on the shared player
 //! struct (which is held behind an `Arc` across async tasks). Instead a
-//! dedicated thread owns the `OutputStream` and keeps it alive; the player holds
-//! only the `Send + Sync` [`rodio::Sink`] plus a keepalive channel whose drop
-//! tells the thread to release the device.
+//! dedicated thread owns the `MixerDeviceSink` and keeps it alive; the player
+//! holds only the `Send + Sync` [`rodio::Player`] plus a keepalive channel whose
+//! drop tells the thread to release the device.
 
 use std::io::BufReader;
 use std::path::Path;
@@ -36,14 +36,14 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use rodio::{Decoder, Sink};
+use rodio::{Decoder, Player};
 
 /// An audio player for local files, driving the system default output device.
 ///
-/// Cheap to hold behind an `Arc`: the heavy `OutputStream` lives on a dedicated
-/// thread, and the `Sink` here is a lightweight `Arc`-backed handle.
+/// Cheap to hold behind an `Arc`: the heavy `MixerDeviceSink` lives on a
+/// dedicated thread, and the `Player` here is a lightweight `Arc`-backed handle.
 pub struct LocalPlayer {
-  sink: Sink,
+  sink: Player,
   /// Dropping this sender signals the audio thread to drop its `OutputStream`
   /// and release the audio device. Held for the player's lifetime.
   _keepalive: mpsc::Sender<()>,
@@ -199,25 +199,25 @@ impl LocalPlayer {
 // ---------------------------------------------------------------------------
 
 /// Open the default output device on a dedicated thread and return a control
-/// `Sink` plus a keepalive sender (dropping it releases the device).
+/// `Player` plus a keepalive sender (dropping it releases the device).
 #[cfg(not(target_os = "macos"))]
-fn open_sink() -> Result<(Sink, mpsc::Sender<()>)> {
-  use rodio::OutputStreamBuilder;
+fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
+  use rodio::DeviceSinkBuilder;
 
-  let (init_tx, init_rx) = mpsc::channel::<std::result::Result<Sink, String>>();
+  let (init_tx, init_rx) = mpsc::channel::<std::result::Result<Player, String>>();
   let (keepalive_tx, keepalive_rx) = mpsc::channel::<()>();
 
   std::thread::Builder::new()
     .name("spotatui-local-audio".to_string())
     .spawn(move || {
-      match OutputStreamBuilder::open_default_stream() {
+      match DeviceSinkBuilder::open_default_sink() {
         Ok(mut stream) => {
-          // rodio `eprintln!`s a "Dropping OutputStream" warning on drop by
+          // rodio `eprintln!`s a drop warning for the `MixerDeviceSink` by
           // default (it has no `tracing` feature enabled here). Raw stderr
           // output corrupts the TUI, and the drop is deliberate anyway (device
           // handoff between sources tears the player down) — silence it.
           stream.log_on_drop(false);
-          let sink = Sink::connect_new(stream.mixer());
+          let sink = Player::connect_new(stream.mixer());
           if init_tx.send(Ok(sink)).is_err() {
             return; // player was dropped before init completed
           }
@@ -243,7 +243,7 @@ fn open_sink() -> Result<(Sink, mpsc::Sender<()>)> {
 
 /// macOS output is not yet supported — see module docs.
 #[cfg(target_os = "macos")]
-fn open_sink() -> Result<(Sink, mpsc::Sender<()>)> {
+fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
   anyhow::bail!(
     "Local audio playback is not yet supported on macOS: rodio output crashes on \
      CoreAudio/Bluetooth devices (see issues #9/#20). A macOS output path is a tracked follow-up."
