@@ -73,7 +73,7 @@ lofty = { version = "0.24", optional = true }
 # Linux and Windows (librespot uses rodio-backend on both); the macOS output
 # path is gated off in `LocalPlayer` because rodio crashes on CoreAudio/
 # Bluetooth (see the portaudio note above and issues #9/#20).
-rodio = { version = "0.21", optional = true }
+rodio = { version = "0.22", optional = true }
 
 # Streaming dependencies (librespot)
 librespot-core = { version = "0.8", optional = true }
