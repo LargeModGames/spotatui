@@ -29,6 +29,7 @@ use std::{
   collections::HashSet,
   time::{Duration, Instant, SystemTime},
 };
+use unicode_width::UnicodeWidthStr;
 
 use arboard::Clipboard;
 #[cfg(feature = "streaming")]
@@ -325,6 +326,47 @@ pub enum RouteId {
   CreatePlaylist,
   Friends,
   LocalBrowser,
+}
+
+impl RouteId {
+  /// Routes that can be shown at startup with no extra context (no album/artist
+  /// id, search query, etc.). These are the only routes `startup_route` may
+  /// select.
+  pub const STARTUP_OPTIONS: &'static [RouteId] = &[
+    RouteId::Home,
+    RouteId::RecentlyPlayed,
+    RouteId::Podcasts,
+    RouteId::Discover,
+    RouteId::Artists,
+    RouteId::AlbumList,
+  ];
+
+  /// Parse a `startup_route` config token. Unknown / non-context-free strings
+  /// return `None` (the caller logs a warning and falls back to Home).
+  pub fn from_config_str(s: &str) -> Option<RouteId> {
+    match s.trim().to_ascii_lowercase().as_str() {
+      "home" => Some(RouteId::Home),
+      "recently_played" | "recent" => Some(RouteId::RecentlyPlayed),
+      "podcasts" => Some(RouteId::Podcasts),
+      "discover" => Some(RouteId::Discover),
+      "artists" | "library" => Some(RouteId::Artists),
+      "album_list" | "albums" => Some(RouteId::AlbumList),
+      _ => None,
+    }
+  }
+
+  /// The config-file token for this route (inverse of `from_config_str`).
+  pub fn to_config_str(&self) -> &'static str {
+    match self {
+      RouteId::Home => "home",
+      RouteId::RecentlyPlayed => "recently_played",
+      RouteId::Podcasts => "podcasts",
+      RouteId::Discover => "discover",
+      RouteId::Artists => "artists",
+      RouteId::AlbumList => "album_list",
+      _ => "home",
+    }
+  }
 }
 
 // ── Friends feature ───────────────────────────────────────────────────────────
@@ -720,6 +762,7 @@ pub enum CreatePlaylistFocus {
 pub enum SettingsCategory {
   #[default]
   Behavior,
+  Icons,
   Keybindings,
   Theme,
 }
@@ -728,6 +771,7 @@ impl SettingsCategory {
   pub fn all() -> &'static [SettingsCategory] {
     &[
       SettingsCategory::Behavior,
+      SettingsCategory::Icons,
       SettingsCategory::Keybindings,
       SettingsCategory::Theme,
     ]
@@ -736,6 +780,7 @@ impl SettingsCategory {
   pub fn name(&self) -> &'static str {
     match self {
       SettingsCategory::Behavior => "Behavior",
+      SettingsCategory::Icons => "Icons",
       SettingsCategory::Keybindings => "Keybindings",
       SettingsCategory::Theme => "Theme",
     }
@@ -744,16 +789,18 @@ impl SettingsCategory {
   pub fn index(&self) -> usize {
     match self {
       SettingsCategory::Behavior => 0,
-      SettingsCategory::Keybindings => 1,
-      SettingsCategory::Theme => 2,
+      SettingsCategory::Icons => 1,
+      SettingsCategory::Keybindings => 2,
+      SettingsCategory::Theme => 3,
     }
   }
 
   pub fn from_index(index: usize) -> Self {
     match index {
       0 => SettingsCategory::Behavior,
-      1 => SettingsCategory::Keybindings,
-      2 => SettingsCategory::Theme,
+      1 => SettingsCategory::Icons,
+      2 => SettingsCategory::Keybindings,
+      3 => SettingsCategory::Theme,
       _ => SettingsCategory::Behavior,
     }
   }
@@ -771,6 +818,49 @@ pub enum SettingValue {
   /// A value cycling through a fixed list of options: (current, all options).
   Cycle(String, &'static [&'static str]),
 }
+
+const STARTUP_ROUTE_SETTING_OPTIONS: &[&str] = &[
+  "home",
+  "recently_played",
+  "podcasts",
+  "discover",
+  "artists",
+  "album_list",
+];
+const PLAYLIST_TRACK_SORT_SETTING_OPTIONS: &[&str] = &[
+  "default",
+  "name",
+  "name:desc",
+  "date_added",
+  "date_added:desc",
+  "artist",
+  "artist:desc",
+  "album",
+  "album:desc",
+  "duration",
+  "duration:desc",
+];
+const SAVED_ALBUM_SORT_SETTING_OPTIONS: &[&str] = &[
+  "default",
+  "name",
+  "name:desc",
+  "date_added",
+  "date_added:desc",
+  "artist",
+  "artist:desc",
+];
+const SAVED_ARTIST_SORT_SETTING_OPTIONS: &[&str] = &["default", "name", "name:desc"];
+const RECENTLY_PLAYED_SORT_SETTING_OPTIONS: &[&str] = &[
+  "default",
+  "name",
+  "name:desc",
+  "artist",
+  "artist:desc",
+  "album",
+  "album:desc",
+];
+const SIDEBAR_POSITION_SETTING_OPTIONS: &[&str] = &["left", "right", "hidden"];
+const PLAYBAR_POSITION_SETTING_OPTIONS: &[&str] = &["bottom", "top"];
 
 impl SettingValue {
   #[allow(dead_code)]
@@ -1034,6 +1124,7 @@ pub struct App {
   pub playlist_sort: SortState,
   pub album_sort: SortState,
   pub artist_sort: SortState,
+  pub recently_played_sort: SortState,
   /// Animation frame counter for the "Liked" heart flash effect (0-10)
   pub liked_song_animation_frame: Option<u8>,
   /// Global animation tick counter, incremented every tick.
@@ -1332,6 +1423,7 @@ impl Default for App {
       playlist_sort: SortState::new(),
       album_sort: SortState::new(),
       artist_sort: SortState::new(),
+      recently_played_sort: SortState::new(),
       liked_song_animation_frame: None,
       animation_tick: 0,
       last_party_sync_at: Instant::now(),
@@ -1419,6 +1511,50 @@ impl App {
     // Read the persisted active source before moving user_config into the struct,
     // so the restored value overrides the Source::default() set by App::default().
     let active_source = user_config.behavior.active_source;
+    // Resolve configurable per-context default sort states. Config validation
+    // already rejected invalid specs at load time, so parse failure here is a
+    // defensive fallback to the built-in default sort.
+    let parse_sort = |spec: &str, ctx: SortContext| -> SortState {
+      SortState::parse(spec, ctx).unwrap_or_default()
+    };
+    let playlist_sort = parse_sort(
+      &user_config.behavior.default_sort_playlist_tracks,
+      SortContext::PlaylistTracks,
+    );
+    let album_sort = parse_sort(
+      &user_config.behavior.default_sort_saved_albums,
+      SortContext::SavedAlbums,
+    );
+    let artist_sort = parse_sort(
+      &user_config.behavior.default_sort_saved_artists,
+      SortContext::SavedArtists,
+    );
+    let recently_played_sort = parse_sort(
+      &user_config.behavior.default_sort_recently_played,
+      SortContext::RecentlyPlayed,
+    );
+    // Resolve the configurable startup route. Unknown / non-context-free values
+    // degrade to Home + warn (precedent: StartupBehavior::from_name).
+    let startup_route_id = match RouteId::from_config_str(&user_config.behavior.startup_route) {
+      Some(id) => id,
+      None => {
+        log::warn!(
+          "[config] startup_route '{}' is not a valid context-free route (valid: {}); using Home",
+          user_config.behavior.startup_route,
+          RouteId::STARTUP_OPTIONS
+            .iter()
+            .map(|r| r.to_config_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+        );
+        RouteId::Home
+      }
+    };
+    let startup_route = Route {
+      id: startup_route_id,
+      active_block: ActiveBlock::Empty,
+      hovered_block: ActiveBlock::Library,
+    };
     App {
       io_tx: Some(io_tx),
       user_config,
@@ -1427,7 +1563,40 @@ impl App {
       spotify_connected: spotify_token_expiry.is_some(),
       spotify_token_expiry,
       active_source,
+      navigation_stack: vec![startup_route],
+      playlist_sort,
+      album_sort,
+      artist_sort,
+      recently_played_sort,
       ..App::default()
+    }
+  }
+
+  /// Sort the recently-played track list in place per `recently_played_sort`.
+  /// `Default` keeps the API's play order (a re-fetch restores it).
+  pub fn sort_recently_played_items(&mut self) {
+    let sort_state = self.recently_played_sort;
+    if sort_state.field == SortField::Default {
+      return;
+    }
+    if let Some(page) = self.recently_played.result.as_mut() {
+      page.items.sort_by(|a, b| {
+        let order = match sort_state.field {
+          SortField::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+          SortField::Artist => {
+            let artist_a = a.artists.first().map(|s| s.to_lowercase());
+            let artist_b = b.artists.first().map(|s| s.to_lowercase());
+            artist_a.cmp(&artist_b)
+          }
+          SortField::Album => a.album.to_lowercase().cmp(&b.album.to_lowercase()),
+          _ => std::cmp::Ordering::Equal,
+        };
+        if sort_state.order == SortOrder::Descending {
+          order.reverse()
+        } else {
+          order
+        }
+      });
     }
   }
 
@@ -1774,7 +1943,8 @@ impl App {
       }
     }
     self.status_message = Some(message.into());
-    self.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl_secs));
+    let ttl = self.scaled_status_ttl(ttl_secs);
+    self.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl));
     self.status_message_is_error = false;
   }
 
@@ -1789,8 +1959,18 @@ impl App {
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
   pub fn set_error_status_message(&mut self, message: impl Into<String>, ttl_secs: u64) {
     self.status_message = Some(message.into());
-    self.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl_secs));
+    let ttl = self.scaled_status_ttl(ttl_secs);
+    self.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl));
     self.status_message_is_error = true;
+  }
+
+  /// Scale a status-message TTL by `status_message_ttl_percent` (default 100
+  /// == 1.0×). Applied here at the single sink so the ~66 call sites keep
+  /// their relative per-severity TTLs.
+  fn scaled_status_ttl(&self, ttl_secs: u64) -> u64 {
+    let pct = self.user_config.behavior.status_message_ttl_percent as u64;
+    // round to nearest, never zero.
+    ((ttl_secs * pct + 50) / 100).max(1)
   }
 
   #[cfg(feature = "streaming")]
@@ -2017,10 +2197,12 @@ impl App {
     }
 
     // Poll interval depends on playback mode:
-    // - Native streaming: 5 seconds (real-time events provide updates between polls)
-    // - External players (spotifyd, etc.): 1 second (no events, need faster polling for smooth playbar)
-    let poll_interval_ms = if self.is_streaming_active {
-      5_000
+    // - Native streaming: configurable (default 5s; real-time events provide
+    //   updates between polls).
+    // - External players (spotifyd, etc.): 1 second (no events, need faster
+    //   polling for smooth playbar) — stays hardcoded, not a preference.
+    let poll_interval_ms: u128 = if self.is_streaming_active {
+      self.user_config.behavior.playback_poll_seconds as u128 * 1000
     } else {
       1_000
     };
@@ -4560,6 +4742,30 @@ impl App {
           ),
         },
         SettingItem {
+          id: "behavior.status_message_ttl_percent".to_string(),
+          name: "Status TTL Percent".to_string(),
+          description: "Scale status message duration from 10% to 1000%".to_string(),
+          value: SettingValue::Number(self.user_config.behavior.status_message_ttl_percent as i64),
+        },
+        SettingItem {
+          id: "behavior.playback_poll_seconds".to_string(),
+          name: "Playback Poll Seconds".to_string(),
+          description: "Seconds between regular playback refreshes".to_string(),
+          value: SettingValue::Number(self.user_config.behavior.playback_poll_seconds as i64),
+        },
+        SettingItem {
+          id: "behavior.table_scroll_padding".to_string(),
+          name: "Table Scroll Padding".to_string(),
+          description: "Rows reserved while scrolling tables".to_string(),
+          value: SettingValue::Number(self.user_config.behavior.table_scroll_padding as i64),
+        },
+        SettingItem {
+          id: "behavior.like_animation_frames".to_string(),
+          name: "Like Animation Frames".to_string(),
+          description: "Frames used by the playbar like animation".to_string(),
+          value: SettingValue::Number(self.user_config.behavior.like_animation_frames as i64),
+        },
+        SettingItem {
           id: "behavior.enable_text_emphasis".to_string(),
           name: "Text Emphasis".to_string(),
           description: "Enable bold/italic text styling".to_string(),
@@ -4636,6 +4842,81 @@ impl App {
           ),
         },
         SettingItem {
+          id: "behavior.startup_route".to_string(),
+          name: "Startup Route".to_string(),
+          description: "Screen shown when spotatui starts".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.startup_route.clone(),
+            STARTUP_ROUTE_SETTING_OPTIONS,
+          ),
+        },
+        SettingItem {
+          id: "behavior.default_sort_playlist_tracks".to_string(),
+          name: "Playlist Track Sort".to_string(),
+          description: "Default sort for playlist track tables".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.default_sort_playlist_tracks.clone(),
+            PLAYLIST_TRACK_SORT_SETTING_OPTIONS,
+          ),
+        },
+        SettingItem {
+          id: "behavior.default_sort_saved_albums".to_string(),
+          name: "Saved Album Sort".to_string(),
+          description: "Default sort for saved albums".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.default_sort_saved_albums.clone(),
+            SAVED_ALBUM_SORT_SETTING_OPTIONS,
+          ),
+        },
+        SettingItem {
+          id: "behavior.default_sort_saved_artists".to_string(),
+          name: "Saved Artist Sort".to_string(),
+          description: "Default sort for saved artists".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.default_sort_saved_artists.clone(),
+            SAVED_ARTIST_SORT_SETTING_OPTIONS,
+          ),
+        },
+        SettingItem {
+          id: "behavior.default_sort_recently_played".to_string(),
+          name: "Recently Played Sort".to_string(),
+          description: "Default sort for recently played tracks".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.default_sort_recently_played.clone(),
+            RECENTLY_PLAYED_SORT_SETTING_OPTIONS,
+          ),
+        },
+        SettingItem {
+          id: "behavior.sidebar_position".to_string(),
+          name: "Sidebar Position".to_string(),
+          description: "Place the sidebar left, right, or hide it".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.sidebar_position.clone(),
+            SIDEBAR_POSITION_SETTING_OPTIONS,
+          ),
+        },
+        SettingItem {
+          id: "behavior.playbar_position".to_string(),
+          name: "Playbar Position".to_string(),
+          description: "Place the playbar at the bottom or top".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.playbar_position.clone(),
+            PLAYBAR_POSITION_SETTING_OPTIONS,
+          ),
+        },
+        SettingItem {
+          id: "behavior.small_terminal_width".to_string(),
+          name: "Small Terminal Width".to_string(),
+          description: "Width below which compact layout is used".to_string(),
+          value: SettingValue::Number(self.user_config.behavior.small_terminal_width as i64),
+        },
+        SettingItem {
+          id: "behavior.small_terminal_height".to_string(),
+          name: "Small Terminal Height".to_string(),
+          description: "Height below which compact margins are used".to_string(),
+          value: SettingValue::Number(self.user_config.behavior.small_terminal_height as i64),
+        },
+        SettingItem {
           id: "behavior.enable_announcements".to_string(),
           name: "Remote Announcements".to_string(),
           description: "Show one-time announcements from remote JSON feed".to_string(),
@@ -4681,6 +4962,31 @@ impl App {
               .unwrap_or_default(),
           ),
         },
+        #[cfg(feature = "cover-art")]
+        SettingItem {
+          id: "behavior.draw_cover_art".to_string(),
+          name: "Draw Cover Art".to_string(),
+          description: "Enable rendering song/episode cover art".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.draw_cover_art),
+        },
+        #[cfg(feature = "cover-art")]
+        SettingItem {
+          id: "behavior.draw_cover_art_forced".to_string(),
+          name: "Force Draw Cover Art".to_string(),
+          description: "Force rendering of cover art despite terminal support".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.draw_cover_art_forced),
+        },
+        #[cfg(feature = "cover-art")]
+        SettingItem {
+          id: "behavior.playbar_cover_art_size_percent".to_string(),
+          name: "Cover Art Size".to_string(),
+          description: "Playbar cover art size as a percentage (25-200)".to_string(),
+          value: SettingValue::Number(
+            self.user_config.behavior.playbar_cover_art_size_percent as i64,
+          ),
+        },
+      ],
+      SettingsCategory::Icons => vec![
         SettingItem {
           id: "behavior.liked_icon".to_string(),
           name: "Liked Icon".to_string(),
@@ -4705,28 +5011,47 @@ impl App {
           description: "Icon for paused state".to_string(),
           value: SettingValue::String(self.user_config.behavior.paused_icon.clone()),
         },
-        #[cfg(feature = "cover-art")]
         SettingItem {
-          id: "behavior.draw_cover_art".to_string(),
-          name: "Draw Cover Art".to_string(),
-          description: "Enable rendering song/episode cover art".to_string(),
-          value: SettingValue::Bool(self.user_config.behavior.draw_cover_art),
+          id: "behavior.gauge_filled_icon".to_string(),
+          name: "Gauge Filled Icon".to_string(),
+          description: "Single-cell icon for filled gauge segments".to_string(),
+          value: SettingValue::String(self.user_config.behavior.gauge_filled_icon.clone()),
         },
-        #[cfg(feature = "cover-art")]
         SettingItem {
-          id: "behavior.draw_cover_art_forced".to_string(),
-          name: "Force Draw Cover Art".to_string(),
-          description: "Force rendering of cover art despite terminal support".to_string(),
-          value: SettingValue::Bool(self.user_config.behavior.draw_cover_art_forced),
+          id: "behavior.gauge_unfilled_icon".to_string(),
+          name: "Gauge Empty Icon".to_string(),
+          description: "Single-cell icon for empty gauge segments".to_string(),
+          value: SettingValue::String(self.user_config.behavior.gauge_unfilled_icon.clone()),
         },
-        #[cfg(feature = "cover-art")]
         SettingItem {
-          id: "behavior.playbar_cover_art_size_percent".to_string(),
-          name: "Cover Art Size".to_string(),
-          description: "Playbar cover art size as a percentage (25-200)".to_string(),
-          value: SettingValue::Number(
-            self.user_config.behavior.playbar_cover_art_size_percent as i64,
-          ),
+          id: "behavior.active_source_icon".to_string(),
+          name: "Active Source Icon".to_string(),
+          description: "Icon for the active playback source".to_string(),
+          value: SettingValue::String(self.user_config.behavior.active_source_icon.clone()),
+        },
+        SettingItem {
+          id: "behavior.episode_played_icon".to_string(),
+          name: "Episode Played Icon".to_string(),
+          description: "Single-cell icon for fully played episodes".to_string(),
+          value: SettingValue::String(self.user_config.behavior.episode_played_icon.clone()),
+        },
+        SettingItem {
+          id: "behavior.sort_ascending_icon".to_string(),
+          name: "Sort Ascending Icon".to_string(),
+          description: "Single-cell icon for ascending sort".to_string(),
+          value: SettingValue::String(self.user_config.behavior.sort_ascending_icon.clone()),
+        },
+        SettingItem {
+          id: "behavior.sort_descending_icon".to_string(),
+          name: "Sort Descending Icon".to_string(),
+          description: "Single-cell icon for descending sort".to_string(),
+          value: SettingValue::String(self.user_config.behavior.sort_descending_icon.clone()),
+        },
+        SettingItem {
+          id: "behavior.list_highlight_icon".to_string(),
+          name: "List Highlight Icon".to_string(),
+          description: "Icon shown next to highlighted list rows".to_string(),
+          value: SettingValue::String(self.user_config.behavior.list_highlight_icon.clone()),
         },
       ],
       SettingsCategory::Keybindings => vec![
@@ -5066,6 +5391,7 @@ impl App {
   pub fn apply_settings_changes(&mut self) {
     use crate::core::user_config::{parse_theme_item, ThemePreset};
 
+    let mut settings_error: Option<String> = None;
     for setting in &self.settings_items {
       match setting.id.as_str() {
         // Behavior settings
@@ -5088,6 +5414,26 @@ impl App {
           if let SettingValue::Number(v) = &setting.value {
             self.user_config.behavior.animation_tick_rate_milliseconds =
               normalize_tick_rate_milliseconds(*v);
+          }
+        }
+        "behavior.status_message_ttl_percent" => {
+          if let SettingValue::Number(v) = &setting.value {
+            self.user_config.behavior.status_message_ttl_percent = (*v).clamp(10, 1000) as u16;
+          }
+        }
+        "behavior.playback_poll_seconds" => {
+          if let SettingValue::Number(v) = &setting.value {
+            self.user_config.behavior.playback_poll_seconds = (*v).max(1) as u64;
+          }
+        }
+        "behavior.table_scroll_padding" => {
+          if let SettingValue::Number(v) = &setting.value {
+            self.user_config.behavior.table_scroll_padding = (*v).max(0) as u16;
+          }
+        }
+        "behavior.like_animation_frames" => {
+          if let SettingValue::Number(v) = &setting.value {
+            self.user_config.behavior.like_animation_frames = (*v).max(1) as u8;
           }
         }
         "behavior.enable_text_emphasis" => {
@@ -5134,6 +5480,51 @@ impl App {
           if let SettingValue::Cycle(v, _) = &setting.value {
             self.user_config.behavior.startup_behavior =
               crate::core::user_config::StartupBehavior::from_name(v);
+          }
+        }
+        "behavior.startup_route" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.startup_route = v.clone();
+          }
+        }
+        "behavior.default_sort_playlist_tracks" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.default_sort_playlist_tracks = v.clone();
+          }
+        }
+        "behavior.default_sort_saved_albums" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.default_sort_saved_albums = v.clone();
+          }
+        }
+        "behavior.default_sort_saved_artists" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.default_sort_saved_artists = v.clone();
+          }
+        }
+        "behavior.default_sort_recently_played" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.default_sort_recently_played = v.clone();
+          }
+        }
+        "behavior.sidebar_position" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.sidebar_position = v.clone();
+          }
+        }
+        "behavior.playbar_position" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.playbar_position = v.clone();
+          }
+        }
+        "behavior.small_terminal_width" => {
+          if let SettingValue::Number(v) = &setting.value {
+            self.user_config.behavior.small_terminal_width = (*v).max(1) as u16;
+          }
+        }
+        "behavior.small_terminal_height" => {
+          if let SettingValue::Number(v) = &setting.value {
+            self.user_config.behavior.small_terminal_height = (*v).max(1) as u16;
           }
         }
         "behavior.keepawake_enabled" => {
@@ -5201,6 +5592,49 @@ impl App {
         "behavior.paused_icon" => {
           if let SettingValue::String(v) = &setting.value {
             self.user_config.behavior.paused_icon = v.clone();
+          }
+        }
+        "behavior.gauge_filled_icon"
+        | "behavior.gauge_unfilled_icon"
+        | "behavior.episode_played_icon"
+        | "behavior.sort_ascending_icon"
+        | "behavior.sort_descending_icon" => {
+          if let SettingValue::String(v) = &setting.value {
+            if UnicodeWidthStr::width(v.as_str()) == 1 {
+              match setting.id.as_str() {
+                "behavior.gauge_filled_icon" => {
+                  self.user_config.behavior.gauge_filled_icon = v.clone()
+                }
+                "behavior.gauge_unfilled_icon" => {
+                  self.user_config.behavior.gauge_unfilled_icon = v.clone()
+                }
+                "behavior.episode_played_icon" => {
+                  self.user_config.behavior.episode_played_icon = v.clone()
+                }
+                "behavior.sort_ascending_icon" => {
+                  self.user_config.behavior.sort_ascending_icon = v.clone()
+                }
+                "behavior.sort_descending_icon" => {
+                  self.user_config.behavior.sort_descending_icon = v.clone()
+                }
+                _ => {}
+              }
+            } else {
+              settings_error = Some(format!(
+                "{} must be exactly one terminal cell wide",
+                setting.name
+              ));
+            }
+          }
+        }
+        "behavior.active_source_icon" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.active_source_icon = v.clone();
+          }
+        }
+        "behavior.list_highlight_icon" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.list_highlight_icon = v.clone();
           }
         }
         #[cfg(feature = "cover-art")]
@@ -5621,6 +6055,9 @@ impl App {
         _ => {}
       }
     }
+    if let Some(message) = settings_error {
+      self.set_status_message(message, 4);
+    }
   }
 
   /// Updates the colour RGB entries when switching through the presets in themes
@@ -5725,6 +6162,41 @@ mod tests {
     assert_eq!(app.native_queue[0].name, "Song");
     // No Web-API dispatch for a non-Spotify item.
     assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn default_sort_recently_played_seeds_state_and_sorts_items() {
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.default_sort_recently_played = "name:desc".to_string();
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
+    assert_eq!(app.recently_played_sort.field, SortField::Name);
+    assert_eq!(app.recently_played_sort.order, SortOrder::Descending);
+
+    app.recently_played.result = Some(crate::core::pagination::CursorPaged {
+      items: vec![
+        queue_track(None, "Alpha"),
+        queue_track(None, "Charlie"),
+        queue_track(None, "Bravo"),
+      ],
+      limit: 3,
+      next: None,
+      cursor_after: None,
+      total: None,
+    });
+
+    app.sort_recently_played_items();
+
+    let names: Vec<_> = app
+      .recently_played
+      .result
+      .as_ref()
+      .unwrap()
+      .items
+      .iter()
+      .map(|t| t.name.as_str())
+      .collect();
+    assert_eq!(names, vec!["Charlie", "Bravo", "Alpha"]);
   }
 
   #[test]

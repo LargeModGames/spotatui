@@ -1,4 +1,5 @@
 use crate::core::app::{ActiveBlock, App, InputContext, SearchResultBlock};
+use crate::core::layout::COMPACT_TOP_ROW_THRESHOLD;
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   style::Style,
@@ -12,41 +13,23 @@ use rspotify::prelude::Id;
 
 use super::util::{
   draw_selectable_list, get_color, get_search_results_highlight_state, join_artist_names,
-  SMALL_TERMINAL_WIDTH,
 };
 
-const COMPACT_TOP_ROW_THRESHOLD: u16 = 60;
-const COMPACT_HELP_WIDTH: u16 = 6;
-const COMPACT_SETTINGS_WIDTH: u16 = 10;
-
-pub fn draw_input_and_help_box(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let compact_top_row = layout_chunk.width < COMPACT_TOP_ROW_THRESHOLD;
-
-  // Check for the width and change the constraints accordingly
-  let constraints = if compact_top_row {
-    [
-      Constraint::Min(1),
-      Constraint::Length(COMPACT_HELP_WIDTH),
-      Constraint::Length(COMPACT_SETTINGS_WIDTH),
-    ]
-  } else if app.size.width >= SMALL_TERMINAL_WIDTH
-    && !app.user_config.behavior.enforce_wide_search_bar
-  {
-    [
-      Constraint::Percentage(65),
-      Constraint::Percentage(18),
-      Constraint::Percentage(17),
-    ]
-  } else {
-    [
-      Constraint::Percentage(80),
-      Constraint::Percentage(8),
-      Constraint::Percentage(12),
-    ]
-  };
-
-  let [input_area, help_area, settings_area] =
-    layout_chunk.layout(&Layout::horizontal(constraints));
+/// Draws the search input, Help button and Settings button into pre-split
+/// areas (see `core::layout::split_input_help_and_settings`). Splitting is
+/// owned by `compute_main_layout` so mouse hit-testing always matches.
+pub fn draw_input_and_help_box(
+  f: &mut Frame<'_>,
+  app: &App,
+  input_area: Rect,
+  help_area: Rect,
+  settings_area: Rect,
+) {
+  let row_width = input_area
+    .width
+    .saturating_add(help_area.width)
+    .saturating_add(settings_area.width);
+  let compact_top_row = row_width < COMPACT_TOP_ROW_THRESHOLD;
 
   let current_route = app.get_current_route();
 

@@ -10,9 +10,6 @@ use ratatui::{
 use rspotify::model::artist::SimplifiedArtist;
 use std::time::Duration;
 
-pub const SMALL_TERMINAL_WIDTH: u16 = 150;
-pub const SMALL_TERMINAL_HEIGHT: u16 = 45;
-
 pub fn get_search_results_highlight_state(
   app: &App,
   block_to_match: SearchResultBlock,
@@ -80,7 +77,10 @@ pub fn draw_selectable_list<S>(
       get_color(highlight_state, app.user_config.theme)
         .add_modifier(Modifier::BOLD | Modifier::REVERSED),
     )
-    .highlight_symbol(Line::from("▶ ").style(get_color(highlight_state, app.user_config.theme)));
+    .highlight_symbol(
+      Line::from(format!("{} ", app.user_config.behavior.list_highlight_icon))
+        .style(get_color(highlight_state, app.user_config.theme)),
+    );
   f.render_stateful_widget(list, layout_chunk, &mut state);
 }
 
@@ -159,14 +159,6 @@ pub fn get_track_progress_percentage(song_progress_ms: u128, track_duration: Dur
 }
 
 // Make better use of space on small terminals
-pub fn get_main_layout_margin(app: &App) -> u16 {
-  if app.size.height > SMALL_TERMINAL_HEIGHT {
-    1
-  } else {
-    0
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;

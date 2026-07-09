@@ -1,3 +1,4 @@
+use crate::core::format::Template;
 use crate::core::source::Source;
 use crate::tui::event::Key;
 use anyhow::{anyhow, Result};
@@ -819,6 +820,30 @@ pub struct BehaviorConfigString {
   pub subsonic_password: Option<String>,
   pub radio_stations: Option<Vec<RadioStationConfig>>,
   pub ytdlp_path: Option<String>,
+  // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
+  pub gauge_filled_icon: Option<String>,
+  pub gauge_unfilled_icon: Option<String>,
+  pub active_source_icon: Option<String>,
+  pub episode_played_icon: Option<String>,
+  pub sort_ascending_icon: Option<String>,
+  pub sort_descending_icon: Option<String>,
+  pub list_highlight_icon: Option<String>,
+  pub playbar_control_labels: Option<HashMap<String, String>>,
+  // --- Phase 3: behavior constants / startup / sort ---
+  pub status_message_ttl_percent: Option<u16>,
+  pub playback_poll_seconds: Option<u64>,
+  pub table_scroll_padding: Option<u16>,
+  pub like_animation_frames: Option<u8>,
+  pub startup_route: Option<String>,
+  pub default_sort_playlist_tracks: Option<String>,
+  pub default_sort_saved_albums: Option<String>,
+  pub default_sort_saved_artists: Option<String>,
+  pub default_sort_recently_played: Option<String>,
+  // --- Phase 6: layout arrangement ---
+  pub sidebar_position: Option<String>,
+  pub playbar_position: Option<String>,
+  pub small_terminal_width: Option<u16>,
+  pub small_terminal_height: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -890,6 +915,107 @@ pub struct BehaviorConfig {
   /// Path to the `yt-dlp` binary used by the YouTube source. `None` resolves
   /// plain `yt-dlp` through `$PATH`.
   pub ytdlp_path: Option<String>,
+  // --- Phase 2: icons / glyphs / labels ---
+  pub gauge_filled_icon: String,
+  pub gauge_unfilled_icon: String,
+  pub active_source_icon: String,
+  pub episode_played_icon: String,
+  pub sort_ascending_icon: String,
+  pub sort_descending_icon: String,
+  pub list_highlight_icon: String,
+  /// Optional override of playbar control button labels, keyed by
+  /// `prev`/`play_pause`/`next`/`shuffle`/`repeat`/`like`/`vol_down`/`vol_up`.
+  pub playbar_control_labels: HashMap<String, String>,
+  // --- Phase 3: behavior constants / startup / sort ---
+  pub status_message_ttl_percent: u16,
+  pub playback_poll_seconds: u64,
+  pub table_scroll_padding: u16,
+  pub like_animation_frames: u8,
+  pub startup_route: String,
+  pub default_sort_playlist_tracks: String,
+  pub default_sort_saved_albums: String,
+  pub default_sort_saved_artists: String,
+  pub default_sort_recently_played: String,
+  // --- Phase 6: layout arrangement ---
+  pub sidebar_position: String,
+  pub playbar_position: String,
+  pub small_terminal_width: u16,
+  pub small_terminal_height: u16,
+}
+
+impl BehaviorConfig {
+  /// Return the emphasis modifier to apply to emphasized text, gated on
+  /// `enable_text_emphasis`. Callers pass the modifier they *want*
+  /// (e.g. `Modifier::BOLD`, `Modifier::BOLD | Modifier::ITALIC`) and get
+  /// `Modifier::empty()` when emphasis is disabled — so a single call site
+  /// replaces the previous unconditional `Modifier::BOLD`.
+  pub fn emphasis(&self, m: ratatui::style::Modifier) -> ratatui::style::Modifier {
+    if self.enable_text_emphasis {
+      m
+    } else {
+      ratatui::style::Modifier::empty()
+    }
+  }
+}
+
+// ===== Phase 4: format templates =====
+
+/// Placeholder keys available to every format template, in index order.
+pub const FORMAT_KEYS: &[&str] = &[
+  "state", "device", "source", "queue", "shuffle", "repeat", "volume", "party",
+];
+
+/// On-disk format config: all templates optional, defaulting to today's output.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FormatConfigString {
+  pub playbar_status: Option<String>,
+  pub playbar_status_source: Option<String>,
+  pub window_title: Option<String>,
+}
+
+/// Parsed format templates. Defaults reproduce today's `format!` output
+/// byte-for-byte.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FormatConfig {
+  /// Spotify playbar title: `"{state} ({device} | Shuffle: {shuffle} | Repeat: {repeat} | Volume: {volume}%){party}"`
+  pub playbar_status: Template,
+  /// Local-source playbar title: `"{state} ({source}{queue} | Volume: {volume}%)"`
+  pub playbar_status_source: Template,
+  /// Window title: `"{state}: {artist} - {title}"`
+  pub window_title: Template,
+}
+
+impl FormatConfig {
+  /// Today's hardcoded Spotify playbar format string.
+  pub const DEFAULT_PLAYBAR_STATUS: &'static str =
+    "{state} ({device} | Shuffle: {shuffle} | Repeat: {repeat} | Volume: {volume}%){party}";
+  /// Today's hardcoded local-source playbar format string.
+  pub const DEFAULT_PLAYBAR_STATUS_SOURCE: &'static str =
+    "{state} ({source}{queue} | Volume: {volume}%)";
+  /// Today's hardcoded window-title format string: `"{title} — {artist}"`.
+  /// (The artist segment is composed by the call site and omitted when empty.)
+  pub const DEFAULT_WINDOW_TITLE: &'static str = "{title}{artist}";
+
+  /// The keys valid for window-title templates (a subset: artist/title are
+  /// resolved at the call site, not via FORMAT_KEYS).
+  pub const WINDOW_TITLE_KEYS: &'static [&'static str] = &["title", "artist"];
+
+  pub fn default_templates() -> Self {
+    Self {
+      playbar_status: Template::parse(Self::DEFAULT_PLAYBAR_STATUS, FORMAT_KEYS)
+        .expect("default playbar_status template must parse"),
+      playbar_status_source: Template::parse(Self::DEFAULT_PLAYBAR_STATUS_SOURCE, FORMAT_KEYS)
+        .expect("default playbar_status_source template must parse"),
+      window_title: Template::parse(Self::DEFAULT_WINDOW_TITLE, Self::WINDOW_TITLE_KEYS)
+        .expect("default window_title template must parse"),
+    }
+  }
+}
+
+impl Default for FormatConfig {
+  fn default() -> Self {
+    Self::default_templates()
+  }
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -898,6 +1024,49 @@ pub struct UserConfigString {
   behavior: Option<BehaviorConfigString>,
   theme: Option<UserTheme>,
   plugin_commands: Option<HashMap<String, String>>,
+  format: Option<FormatConfigString>,
+  tables: Option<TablesConfigString>,
+}
+
+// ===== Phase 5: table columns =====
+
+/// A single on-disk column spec. `header` overrides the default display text.
+/// Exactly one of `width_percent` / `width` may be set; both set (or neither
+/// for a column that expects a fixed default) — specifying both is a hard
+/// error. When neither is set, the column's built-in default width applies.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ColumnSpec {
+  /// Defaulted so an entry missing `id` fails that table's resolution (a
+  /// recoverable, warn-level error) instead of failing the whole YAML parse.
+  #[serde(default)]
+  pub id: String,
+  pub header: Option<String>,
+  pub width_percent: Option<f32>,
+  pub width: Option<u16>,
+}
+
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TablesConfigString {
+  pub songs: Option<Vec<ColumnSpec>>,
+  pub album_tracks: Option<Vec<ColumnSpec>>,
+  pub albums: Option<Vec<ColumnSpec>>,
+  pub podcasts: Option<Vec<ColumnSpec>>,
+  pub episodes: Option<Vec<ColumnSpec>>,
+  pub recently_played: Option<Vec<ColumnSpec>>,
+}
+
+/// Validated (but not yet render-bound) per-table column lists. Defaults are
+/// represented as empty `Vec`s; the rendering layer substitutes the built-in
+/// default columns when a table is empty. This keeps `core` free of `tui`
+/// dependencies — the column registry lives in `tui::ui::columns`.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TablesConfig {
+  pub songs: Vec<ColumnSpec>,
+  pub album_tracks: Vec<ColumnSpec>,
+  pub albums: Vec<ColumnSpec>,
+  pub podcasts: Vec<ColumnSpec>,
+  pub episodes: Vec<ColumnSpec>,
+  pub recently_played: Vec<ColumnSpec>,
 }
 
 #[derive(Clone)]
@@ -910,6 +1079,10 @@ pub struct UserConfig {
   pub path_to_config: Option<UserConfigPaths>,
   /// Keybindings for plugin commands: key -> command name.
   pub plugin_command_keys: HashMap<Key, String>,
+  /// Parsed format templates (Phase 4).
+  pub format: FormatConfig,
+  /// Resolved per-table column layouts (Phase 5).
+  pub tables: TablesConfig,
 }
 
 impl UserConfig {
@@ -1031,8 +1204,36 @@ impl UserConfig {
         subsonic_password: None,
         radio_stations: Vec::new(),
         ytdlp_path: None,
+        // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
+        gauge_filled_icon: "⣿".to_string(),
+        gauge_unfilled_icon: "⣉".to_string(),
+        active_source_icon: "●".to_string(),
+        episode_played_icon: "✔".to_string(),
+        sort_ascending_icon: "↑".to_string(),
+        sort_descending_icon: "↓".to_string(),
+        list_highlight_icon: "▶".to_string(),
+        playbar_control_labels: HashMap::new(),
+        // --- Phase 3: behavior constants / startup / sort ---
+        status_message_ttl_percent: 100,
+        playback_poll_seconds: 5,
+        table_scroll_padding: 5,
+        like_animation_frames: 10,
+        startup_route: "home".to_string(),
+        default_sort_playlist_tracks: "default".to_string(),
+        default_sort_saved_albums: "default".to_string(),
+        default_sort_saved_artists: "default".to_string(),
+        default_sort_recently_played: "default".to_string(),
+        // --- Phase 6: layout arrangement ---
+        sidebar_position: "left".to_string(),
+        playbar_position: "bottom".to_string(),
+        small_terminal_width: 150,
+        small_terminal_height: 45,
       },
       path_to_config: None,
+      // Phase 4 / 5: parsed templates + resolved columns default to today's
+      // built-in output (empty TablesConfig == built-in default columns).
+      format: FormatConfig::default_templates(),
+      tables: TablesConfig::default(),
     }
   }
 
@@ -1262,10 +1463,6 @@ impl UserConfig {
       self.behavior.paused_icon = paused_icon;
     }
 
-    if let Some(playing_icon) = behavior_config.playing_icon {
-      self.behavior.playing_icon = playing_icon;
-    }
-
     if let Some(shuffle_icon) = behavior_config.shuffle_icon {
       self.behavior.shuffle_icon = shuffle_icon;
     }
@@ -1444,6 +1641,213 @@ impl UserConfig {
     if let Some(ytdlp_path) = trim_to_none(behavior_config.ytdlp_path) {
       self.behavior.ytdlp_path = Some(ytdlp_path);
     }
+
+    // ===== Phase 2: icons / glyphs / labels =====
+    // Width-restricted glyphs (column math depends on them) are validated to
+    // exactly one terminal column; free-form labels are accepted as-is.
+    // A bad glyph degrades to the built-in default with a warning rather than
+    // failing config load (the app must stay launchable on a typo).
+    let load_width1_icon = |dest: &mut String, value: Option<String>, field: &str| {
+      if let Some(icon) = value {
+        let icon = icon.trim().to_string();
+        if icon.is_empty() {
+          log::warn!("[config] {field} must not be empty; using default");
+          return;
+        }
+        let width: usize = unicode_width::UnicodeWidthStr::width(icon.as_str());
+        if width != 1 {
+          log::warn!(
+            "[config] {field} must be exactly one terminal column wide (got {width} columns): {icon}; using default"
+          );
+          return;
+        }
+        *dest = icon;
+      }
+    };
+    load_width1_icon(
+      &mut self.behavior.gauge_filled_icon,
+      behavior_config.gauge_filled_icon,
+      "gauge_filled_icon",
+    );
+    load_width1_icon(
+      &mut self.behavior.gauge_unfilled_icon,
+      behavior_config.gauge_unfilled_icon,
+      "gauge_unfilled_icon",
+    );
+    // playing_icon prefixes the title cell of the playing row (padded to two
+    // columns in padded_playing_icon), so it must be exactly one column wide.
+    load_width1_icon(
+      &mut self.behavior.playing_icon,
+      behavior_config.playing_icon,
+      "playing_icon",
+    );
+    // active_source_icon, list_highlight_icon render in free space, not a
+    // fixed-width column → accept any non-empty glyph.
+    if let Some(icon) = behavior_config.active_source_icon {
+      let icon = icon.trim().to_string();
+      if !icon.is_empty() {
+        self.behavior.active_source_icon = icon;
+      }
+    }
+    if let Some(icon) = behavior_config.list_highlight_icon {
+      let icon = icon.trim().to_string();
+      if !icon.is_empty() {
+        self.behavior.list_highlight_icon = icon;
+      }
+    }
+    // episode_played_icon renders in a width-2 "played" column (tables.rs),
+    // so it must be exactly one column wide (the leading space is added at
+    // the call site).
+    load_width1_icon(
+      &mut self.behavior.episode_played_icon,
+      behavior_config.episode_played_icon,
+      "episode_played_icon",
+    );
+    // sort direction icons render in a width-1 column.
+    load_width1_icon(
+      &mut self.behavior.sort_ascending_icon,
+      behavior_config.sort_ascending_icon,
+      "sort_ascending_icon",
+    );
+    load_width1_icon(
+      &mut self.behavior.sort_descending_icon,
+      behavior_config.sort_descending_icon,
+      "sort_descending_icon",
+    );
+    // playbar control labels: free-form strings keyed by control id. Keep only
+    // the known keys so typos don't silently no-op; empty values are dropped
+    // (falling back to the built-in label).
+    if let Some(labels) = behavior_config.playbar_control_labels {
+      let allowed = [
+        "prev",
+        "play_pause",
+        "next",
+        "shuffle",
+        "repeat",
+        "like",
+        "vol_down",
+        "vol_up",
+      ];
+      let mut kept = HashMap::new();
+      for (key, val) in labels {
+        let key = key.trim().to_string();
+        let val = val.trim().to_string();
+        if !allowed.contains(&key.as_str()) {
+          log::warn!(
+            "[config] playbar_control_labels: skipping unknown key '{key}' (allowed: {})",
+            allowed.join(", ")
+          );
+          continue;
+        }
+        if val.is_empty() {
+          // empty == reset to default; drop the override
+          continue;
+        }
+        kept.insert(key, val);
+      }
+      self.behavior.playbar_control_labels = kept;
+    }
+
+    // ===== Phase 3: behavior constants / startup / sort =====
+    if let Some(pct) = behavior_config.status_message_ttl_percent {
+      self.behavior.status_message_ttl_percent = pct.clamp(10, 1000);
+    }
+    if let Some(secs) = behavior_config.playback_poll_seconds {
+      if secs < 1 {
+        return Err(anyhow!(
+          "playback_poll_seconds must be at least 1, is {secs}"
+        ));
+      }
+      self.behavior.playback_poll_seconds = secs;
+    }
+    if let Some(padding) = behavior_config.table_scroll_padding {
+      self.behavior.table_scroll_padding = padding;
+    }
+    if let Some(frames) = behavior_config.like_animation_frames {
+      if frames < 1 {
+        return Err(anyhow!(
+          "like_animation_frames must be at least 1, is {frames}"
+        ));
+      }
+      self.behavior.like_animation_frames = frames;
+    }
+    if let Some(route) = behavior_config.startup_route {
+      let route = route.trim().to_string();
+      if !route.is_empty() {
+        // Validation of the route id happens in App::apply_startup_route();
+        // store the raw string here so an unknown value degrades to Home + warn
+        // rather than failing config load.
+        self.behavior.startup_route = route;
+      }
+    }
+    // Per-context default sort: "<field>" or "<field>:desc". Validate against
+    // the context's available fields; a typo degrades to the default order
+    // with a warning rather than failing config load.
+    let load_sort_default = |dest: &mut String,
+                             value: Option<String>,
+                             ctx: crate::core::sort::SortContext,
+                             field: &str| {
+      if let Some(spec) = value {
+        let spec = spec.trim().to_string();
+        if spec.is_empty() {
+          return;
+        }
+        match crate::core::sort::SortState::parse(&spec, ctx) {
+          Ok(_) => *dest = spec,
+          Err(e) => log::warn!("[config] {field}: {e}; using default sort"),
+        }
+      }
+    };
+    load_sort_default(
+      &mut self.behavior.default_sort_playlist_tracks,
+      behavior_config.default_sort_playlist_tracks,
+      crate::core::sort::SortContext::PlaylistTracks,
+      "default_sort_playlist_tracks",
+    );
+    load_sort_default(
+      &mut self.behavior.default_sort_saved_albums,
+      behavior_config.default_sort_saved_albums,
+      crate::core::sort::SortContext::SavedAlbums,
+      "default_sort_saved_albums",
+    );
+    load_sort_default(
+      &mut self.behavior.default_sort_saved_artists,
+      behavior_config.default_sort_saved_artists,
+      crate::core::sort::SortContext::SavedArtists,
+      "default_sort_saved_artists",
+    );
+    load_sort_default(
+      &mut self.behavior.default_sort_recently_played,
+      behavior_config.default_sort_recently_played,
+      crate::core::sort::SortContext::RecentlyPlayed,
+      "default_sort_recently_played",
+    );
+
+    // ===== Phase 6: layout arrangement =====
+    if let Some(pos) = behavior_config.sidebar_position {
+      let pos = pos.trim().to_string();
+      match pos.as_str() {
+        "left" | "right" | "hidden" => self.behavior.sidebar_position = pos,
+        _ => log::warn!(
+          "[config] sidebar_position '{pos}' is invalid (expected left|right|hidden); using left"
+        ),
+      }
+    }
+    if let Some(pos) = behavior_config.playbar_position {
+      let pos = pos.trim().to_string();
+      match pos.as_str() {
+        "bottom" | "top" => self.behavior.playbar_position = pos,
+        _ => log::warn!(
+          "[config] playbar_position '{pos}' is invalid (expected bottom|top); using bottom"
+        ),
+      }
+    }
+    if let Some(w) = behavior_config.small_terminal_width {
+      self.behavior.small_terminal_width = w.max(1);
+    }
+    if let Some(h) = behavior_config.small_terminal_height {
+      self.behavior.small_terminal_height = h.max(1);
+    }
     Ok(())
   }
 
@@ -1550,11 +1954,66 @@ impl UserConfig {
       if let Some(plugin_commands) = config_yml.plugin_commands {
         self.load_plugin_commands(plugin_commands);
       }
+      if let Some(format) = config_yml.format {
+        self.load_formatconfig(format);
+      }
+      if let Some(tables) = config_yml.tables {
+        self.load_tablesconfig(tables);
+      }
 
       Ok(())
     } else {
       Ok(())
     }
+  }
+
+  /// Validate and apply format templates (Phase 4). Each template is parsed
+  /// against `FORMAT_KEYS` (or the window-title subset); a parse error
+  /// degrades that template to the built-in default with a warning listing
+  /// the valid keys, so a typo never blocks app launch.
+  pub fn load_formatconfig(&mut self, format: FormatConfigString) {
+    if let Some(s) = format.playbar_status {
+      match Template::parse(s.trim(), FORMAT_KEYS) {
+        Ok(t) => self.format.playbar_status = t,
+        Err(e) => log::warn!("[config] format.playbar_status: {e}; using default"),
+      }
+    }
+    if let Some(s) = format.playbar_status_source {
+      match Template::parse(s.trim(), FORMAT_KEYS) {
+        Ok(t) => self.format.playbar_status_source = t,
+        Err(e) => log::warn!("[config] format.playbar_status_source: {e}; using default"),
+      }
+    }
+    if let Some(s) = format.window_title {
+      match Template::parse(s.trim(), FormatConfig::WINDOW_TITLE_KEYS) {
+        Ok(t) => self.format.window_title = t,
+        Err(e) => log::warn!("[config] format.window_title: {e}; using default"),
+      }
+    }
+  }
+
+  /// Validate and apply table column specs (Phase 5). Unknown / duplicate
+  /// ids, empty lists, or both-widths-set degrade that table to its built-in
+  /// default columns with a warning listing valid ids, so a typo never
+  /// blocks app launch.
+  pub fn load_tablesconfig(&mut self, tables: TablesConfigString) {
+    // Each table is validated against its registry of valid column ids (kept
+    // in the rendering layer). Empty specs are dropped (== built-in defaults).
+    let load = |table: &'static str, specs: Option<Vec<ColumnSpec>>| -> Vec<ColumnSpec> {
+      match resolve_table_specs(table, specs) {
+        Ok(specs) => specs,
+        Err(e) => {
+          log::warn!("[config] {e}; using default columns");
+          Vec::new()
+        }
+      }
+    };
+    self.tables.songs = load("songs", tables.songs);
+    self.tables.album_tracks = load("album_tracks", tables.album_tracks);
+    self.tables.albums = load("albums", tables.albums);
+    self.tables.podcasts = load("podcasts", tables.podcasts);
+    self.tables.episodes = load("episodes", tables.episodes);
+    self.tables.recently_played = load("recently_played", tables.recently_played);
   }
 
   /// Save the current configuration to the config file
@@ -1620,6 +2079,32 @@ impl UserConfig {
       playbar_cover_art_size_percent: Some(self.behavior.playbar_cover_art_size_percent),
       keepawake_enabled: Some(self.behavior.keepawake_enabled),
       enable_media_keys: Some(self.behavior.enable_media_keys),
+      // --- Phase 2/3/6 new fields (persist whatever the user set) ---
+      gauge_filled_icon: Some(self.behavior.gauge_filled_icon.clone()),
+      gauge_unfilled_icon: Some(self.behavior.gauge_unfilled_icon.clone()),
+      active_source_icon: Some(self.behavior.active_source_icon.clone()),
+      episode_played_icon: Some(self.behavior.episode_played_icon.clone()),
+      sort_ascending_icon: Some(self.behavior.sort_ascending_icon.clone()),
+      sort_descending_icon: Some(self.behavior.sort_descending_icon.clone()),
+      list_highlight_icon: Some(self.behavior.list_highlight_icon.clone()),
+      playbar_control_labels: if self.behavior.playbar_control_labels.is_empty() {
+        None
+      } else {
+        Some(self.behavior.playbar_control_labels.clone())
+      },
+      status_message_ttl_percent: Some(self.behavior.status_message_ttl_percent),
+      playback_poll_seconds: Some(self.behavior.playback_poll_seconds),
+      table_scroll_padding: Some(self.behavior.table_scroll_padding),
+      like_animation_frames: Some(self.behavior.like_animation_frames),
+      startup_route: Some(self.behavior.startup_route.clone()),
+      default_sort_playlist_tracks: Some(self.behavior.default_sort_playlist_tracks.clone()),
+      default_sort_saved_albums: Some(self.behavior.default_sort_saved_albums.clone()),
+      default_sort_saved_artists: Some(self.behavior.default_sort_saved_artists.clone()),
+      default_sort_recently_played: Some(self.behavior.default_sort_recently_played.clone()),
+      sidebar_position: Some(self.behavior.sidebar_position.clone()),
+      playbar_position: Some(self.behavior.playbar_position.clone()),
+      small_terminal_width: Some(self.behavior.small_terminal_width),
+      small_terminal_height: Some(self.behavior.small_terminal_height),
     };
 
     // Helper to convert Key to config string
@@ -1741,6 +2226,8 @@ impl UserConfig {
           behavior: Some(build_behavior()),
           theme: Some(build_theme()),
           plugin_commands: None,
+          format: None,
+          tables: None,
         }
       }
     } else {
@@ -1749,6 +2236,8 @@ impl UserConfig {
         behavior: Some(build_behavior()),
         theme: Some(build_theme()),
         plugin_commands: None,
+        format: None,
+        tables: None,
       }
     };
 
@@ -1768,6 +2257,13 @@ impl UserConfig {
 
   pub fn padded_liked_icon(&self) -> String {
     format!("{} ", &self.behavior.liked_icon)
+  }
+
+  /// The configured `playing_icon` followed by a single trailing space, for
+  /// prepending to the title cell of the currently-playing row. Width-2
+  /// (the icon is validated to one column at load time).
+  pub fn padded_playing_icon(&self) -> String {
+    format!("{} ", &self.behavior.playing_icon)
   }
 
   pub fn add_radio_station(
@@ -1855,6 +2351,99 @@ impl UserConfig {
   pub fn do_draw_cover_art(&self, full_image_support: bool) -> bool {
     self.behavior.draw_cover_art && (self.behavior.draw_cover_art_forced || full_image_support)
   }
+}
+
+/// Canonical valid column ids per table. This is the single source of truth
+/// shared by config validation (here) and the rendering registry
+/// (`tui::ui::columns`). Adding a column id means adding it here *and* to the
+/// registry; the round-trip test guards the two staying in sync.
+pub fn valid_column_ids(table: &str) -> &'static [&'static str] {
+  match table {
+    "songs" | "album_tracks" | "recently_played" => {
+      &["liked", "index", "title", "artist", "album", "length"]
+    }
+    "albums" => &["title", "artist", "date", "liked"],
+    "podcasts" => &["title", "publisher"],
+    "episodes" => &["played", "date", "title", "duration"],
+    _ => &[],
+  }
+}
+
+/// Validate a single table's column specs: unknown id, duplicate id, empty
+/// list, or both widths set are hard errors. An empty/absent list yields an
+/// empty `Vec` (== built-in default columns at render time).
+fn resolve_table_specs(
+  table: &'static str,
+  specs: Option<Vec<ColumnSpec>>,
+) -> Result<Vec<ColumnSpec>> {
+  let Some(specs) = specs else {
+    return Ok(Vec::new());
+  };
+  let valid = valid_column_ids(table);
+  let mut seen: Vec<String> = Vec::new();
+  let mut out = Vec::with_capacity(specs.len());
+  for spec in specs {
+    if spec.id.trim().is_empty() {
+      return Err(anyhow!(
+        "tables.{table}: column with empty id (valid ids: {})",
+        valid.join(", ")
+      ));
+    }
+    let id = spec.id.trim().to_string();
+    if !valid.contains(&id.as_str()) {
+      return Err(anyhow!(
+        "tables.{table}: unknown column id '{id}' (valid: {})",
+        valid.join(", ")
+      ));
+    }
+    if seen.iter().any(|s| s == &id) {
+      return Err(anyhow!("tables.{table}: duplicate column id '{id}'"));
+    }
+    if spec.width_percent.is_some() && spec.width.is_some() {
+      return Err(anyhow!(
+        "tables.{table}: column '{id}' sets both width_percent and width — pick one"
+      ));
+    }
+    if let Some(pct) = spec.width_percent {
+      if !(0.0..=100.0).contains(&pct) {
+        return Err(anyhow!(
+          "tables.{table}: column '{id}' width_percent {pct} out of range 0..=100"
+        ));
+      }
+      if pct == 0.0 {
+        return Err(anyhow!(
+          "tables.{table}: column '{id}' has width_percent 0 (it would be invisible) — remove the column instead"
+        ));
+      }
+    }
+    if spec.width == Some(0) {
+      return Err(anyhow!(
+        "tables.{table}: column '{id}' has width 0 (it would be invisible) — remove the column instead"
+      ));
+    }
+    seen.push(id.clone());
+    out.push(ColumnSpec {
+      id,
+      header: spec
+        .header
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty()),
+      width_percent: spec.width_percent,
+      width: spec.width,
+    });
+  }
+  if out.is_empty() {
+    return Err(anyhow!(
+      "tables.{table}: column list must not be empty (omit the key to use defaults)"
+    ));
+  }
+  let percent_sum: f32 = out.iter().filter_map(|c| c.width_percent).sum();
+  if percent_sum > 100.0 {
+    return Err(anyhow!(
+      "tables.{table}: width_percent values sum to {percent_sum} (must be <= 100) — trailing columns would be clipped"
+    ));
+  }
+  Ok(out)
 }
 
 pub fn parse_theme_item(theme_item: &str) -> Result<Color> {
@@ -2431,5 +3020,182 @@ radio_stations:
       Source::from_config_str(Source::Local.to_config_str()),
       Source::Local
     );
+  }
+
+  #[test]
+  fn example_config_loads_without_falling_back() {
+    use super::{UserConfig, UserConfigString};
+
+    // The shipped example must always be valid: it deserializes, and every
+    // section applies as written instead of degrading to defaults.
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/config.example.yml");
+    let raw = std::fs::read_to_string(path).expect("example config must exist");
+    let yml: UserConfigString =
+      serde_yaml::from_str(&raw).expect("example config must deserialize");
+
+    let mut config = UserConfig::new();
+    if let Some(behavior) = yml.behavior {
+      config
+        .load_behaviorconfig(behavior)
+        .expect("example behavior section must load");
+    }
+    if let Some(format) = yml.format {
+      config.load_formatconfig(format);
+    }
+    if let Some(tables) = yml.tables {
+      config.load_tablesconfig(tables);
+    }
+
+    // Spot-check that the documented values were applied, not defaulted away.
+    assert_eq!(config.behavior.startup_route, "home");
+    assert_eq!(config.behavior.playing_icon, "▶");
+    // Every documented table resolves to its example columns (an empty Vec
+    // would mean that table's spec was rejected and fell back to defaults).
+    assert_eq!(config.tables.songs.len(), 5);
+    assert_eq!(config.tables.album_tracks.len(), 5);
+    assert_eq!(config.tables.albums.len(), 3);
+    assert_eq!(config.tables.podcasts.len(), 2);
+    assert_eq!(config.tables.episodes.len(), 4);
+    assert_eq!(config.tables.recently_played.len(), 4);
+    assert_eq!(
+      config.tables.songs[2].header.as_deref(),
+      Some("Band"),
+      "header override from the example must survive resolution"
+    );
+  }
+
+  #[test]
+  fn structural_behavior_errors_degrade_to_defaults_instead_of_failing_load() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    // A two-column playing icon, an empty gauge icon, an invalid sort field,
+    // and an unknown playbar label key must all warn-and-fallback: the app
+    // must stay launchable on a config typo.
+    let yaml = r#"
+playing_icon: "WW"
+gauge_filled_icon: ""
+default_sort_saved_albums: "dtae_added"
+playbar_control_labels:
+  bogus_key: "x"
+  play_pause: "PLAY"
+"#;
+    let behavior: BehaviorConfigString = serde_yaml::from_str(yaml).unwrap();
+    let mut config = UserConfig::new();
+    let defaults = UserConfig::new();
+
+    config.load_behaviorconfig(behavior).unwrap();
+
+    assert_eq!(config.behavior.playing_icon, defaults.behavior.playing_icon);
+    assert_eq!(
+      config.behavior.gauge_filled_icon,
+      defaults.behavior.gauge_filled_icon
+    );
+    assert_eq!(
+      config.behavior.default_sort_saved_albums,
+      defaults.behavior.default_sort_saved_albums
+    );
+    // The unknown key is skipped, the valid one is kept.
+    assert_eq!(
+      config.behavior.playbar_control_labels.get("play_pause"),
+      Some(&"PLAY".to_string())
+    );
+    assert!(!config
+      .behavior
+      .playbar_control_labels
+      .contains_key("bogus_key"));
+  }
+
+  #[test]
+  fn playing_icon_is_width_validated_like_other_fixed_cell_icons() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str("playing_icon: \"»\"").unwrap();
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.playing_icon, "»");
+  }
+
+  #[test]
+  fn invalid_format_template_falls_back_to_default() {
+    use super::{FormatConfig, FormatConfigString, UserConfig};
+
+    let mut config = UserConfig::new();
+    config.load_formatconfig(FormatConfigString {
+      window_title: Some("{bogus}".to_string()),
+      playbar_status: Some("{unbalanced".to_string()),
+      ..Default::default()
+    });
+
+    let defaults = FormatConfig::default();
+    assert_eq!(config.format.window_title, defaults.window_title);
+    assert_eq!(config.format.playbar_status, defaults.playbar_status);
+  }
+
+  #[test]
+  fn invalid_table_columns_fall_back_to_default_columns() {
+    use super::{ColumnSpec, TablesConfigString, UserConfig};
+
+    let mut config = UserConfig::new();
+    config.load_tablesconfig(TablesConfigString {
+      songs: Some(vec![ColumnSpec {
+        id: "bogus".to_string(),
+        ..Default::default()
+      }]),
+      albums: Some(vec![ColumnSpec {
+        id: "title".to_string(),
+        ..Default::default()
+      }]),
+      ..Default::default()
+    });
+
+    // The bad table degrades to defaults (empty == built-in columns); the
+    // valid table is kept.
+    assert!(config.tables.songs.is_empty());
+    assert_eq!(config.tables.albums.len(), 1);
+  }
+
+  #[test]
+  fn column_spec_missing_id_is_recoverable_not_a_parse_error() {
+    use super::{TablesConfigString, UserConfig};
+
+    // Missing `id` must not fail YAML deserialization of the whole config;
+    // it degrades that table to defaults during resolution.
+    let tables: TablesConfigString = serde_yaml::from_str("songs:\n  - { width_percent: 40 }\n")
+      .expect("missing id must not fail deserialization");
+    let mut config = UserConfig::new();
+    config.load_tablesconfig(tables);
+    assert!(config.tables.songs.is_empty());
+  }
+
+  #[test]
+  fn table_specs_reject_zero_and_oversubscribed_widths() {
+    use super::{resolve_table_specs, ColumnSpec};
+
+    let col = |id: &str, pct: Option<f32>, width: Option<u16>| ColumnSpec {
+      id: id.to_string(),
+      header: None,
+      width_percent: pct,
+      width,
+    };
+
+    assert!(resolve_table_specs("songs", Some(vec![col("title", Some(0.0), None)])).is_err());
+    assert!(resolve_table_specs("songs", Some(vec![col("title", None, Some(0))])).is_err());
+    assert!(resolve_table_specs(
+      "songs",
+      Some(vec![
+        col("title", Some(70.0), None),
+        col("artist", Some(70.0), None)
+      ])
+    )
+    .is_err());
+    // A valid subset still resolves.
+    assert!(resolve_table_specs(
+      "songs",
+      Some(vec![
+        col("title", Some(60.0), None),
+        col("artist", Some(40.0), None)
+      ])
+    )
+    .is_ok());
   }
 }

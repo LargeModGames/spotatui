@@ -1,5 +1,5 @@
-use super::util;
 use crate::core::app::App;
+use crate::core::layout::main_layout_margin;
 use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle};
 use ratatui::{
   buffer::Buffer,
@@ -14,7 +14,7 @@ use tui_bar_graph::{BarGraph, BarStyle, ColorMode};
 use tui_equalizer::{Band, Equalizer};
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
-  let margin = util::get_main_layout_margin(app);
+  let margin = main_layout_margin(app);
 
   let [info_area, visualizer_area] = f
     .area()

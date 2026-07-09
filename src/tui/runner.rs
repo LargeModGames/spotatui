@@ -218,12 +218,19 @@ fn playback_window_title(app: &App) -> String {
   };
 
   let title = sanitize_window_title_component(&snapshot.metadata.title);
-  let artist = sanitize_window_title_component(&snapshot.primary_artist());
-  if artist.trim().is_empty() {
-    title
+  let artist_raw = sanitize_window_title_component(&snapshot.primary_artist());
+  // Compose the artist segment with the em-dash separator, matching today's
+  // `"{title} — {artist}"` output; omitted when there's no artist.
+  let artist = if artist_raw.trim().is_empty() {
+    String::new()
   } else {
-    format!("{} — {}", title, artist)
-  }
+    format!(" — {}", artist_raw)
+  };
+  app
+    .user_config
+    .format
+    .window_title
+    .render(&[&title, &artist])
 }
 
 fn sanitize_window_title_component(value: &str) -> String {
@@ -683,7 +690,9 @@ pub async fn start_ui(
         terminal.hide_cursor()?;
       }
 
-      let cursor_offset = if app.size.height > ui::util::SMALL_TERMINAL_HEIGHT {
+      let cursor_offset = if app.size.height
+        > crate::core::layout::small_terminal_height(&app.user_config.behavior)
+      {
         2
       } else {
         1
@@ -1192,6 +1201,17 @@ pub async fn start_ui(
         app.dispatch(IoEvent::GetCurrentPlayback);
         app.dispatch(IoEvent::GetPlaylists);
         app.dispatch(IoEvent::GetUser);
+        // startup_route seeds the nav stack directly (App::new), bypassing the
+        // handlers that normally fetch a screen's data on navigation — kick
+        // off that fetch here or the screen renders empty until re-entered.
+        // (Home needs nothing extra; Discover fetches from within its menu.)
+        match app.get_current_route().id {
+          RouteId::RecentlyPlayed => app.dispatch(IoEvent::GetRecentlyPlayed),
+          RouteId::AlbumList => app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None)),
+          RouteId::Artists => app.dispatch(IoEvent::GetFollowedArtists(None)),
+          RouteId::Podcasts => app.dispatch(IoEvent::GetCurrentUserSavedShows(None)),
+          _ => {}
+        }
       }
       // A persisted non-Spotify active source needs its sidebar data loaded
       // too (all of these are inert no-ops when the feature is off).

@@ -22,7 +22,8 @@ pub fn draw_friends(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     .border_style(get_color(highlight_state, app.user_config.theme))
     .title(Span::styled(
       " Friends ",
-      get_color(highlight_state, app.user_config.theme).add_modifier(Modifier::BOLD),
+      get_color(highlight_state, app.user_config.theme)
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ));
 
   let inner = outer_block.inner(layout_chunk);
@@ -63,7 +64,7 @@ fn draw_no_token_prompt(f: &mut Frame<'_>, app: &App, area: Rect) {
       "Account Required",
       Style::default()
         .fg(theme.banner)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )),
     Line::default(),
     Line::from(Span::styled(
@@ -79,7 +80,9 @@ fn draw_no_token_prompt(f: &mut Frame<'_>, app: &App, area: Rect) {
       Span::styled("  Sign up at: ", Style::default().fg(theme.inactive)),
       Span::styled(
         "https://spotatui.com",
-        Style::default().fg(theme.hint).add_modifier(Modifier::BOLD),
+        Style::default()
+          .fg(theme.hint)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       ),
     ]),
     Line::default(),
@@ -116,11 +119,13 @@ fn draw_friend_code_card(f: &mut Frame<'_>, app: &App, area: Rect) {
       " YOUR CODE  ",
       Style::default()
         .fg(theme.inactive)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ),
     Span::styled(
       code_text,
-      Style::default().fg(theme.hint).add_modifier(Modifier::BOLD),
+      Style::default()
+        .fg(theme.hint)
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ),
     Span::raw("  "),
     Span::styled(hint, Style::default().fg(theme.inactive)),
@@ -186,14 +191,14 @@ fn draw_filter_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
   let all_style = if app.friend_filter == FriendFilter::All {
     Style::default()
       .fg(theme.selected)
-      .add_modifier(Modifier::BOLD)
+      .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   } else {
     Style::default().fg(theme.inactive)
   };
   let online_style = if app.friend_filter == FriendFilter::Online {
     Style::default()
       .fg(theme.selected)
-      .add_modifier(Modifier::BOLD)
+      .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   } else {
     Style::default().fg(theme.inactive)
   };
@@ -241,7 +246,7 @@ fn draw_friend_list(f: &mut Frame<'_>, app: &App, area: Rect, friends: &[&Friend
       let name_style = if is_selected {
         Style::default()
           .fg(theme.selected)
-          .add_modifier(Modifier::BOLD)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
         Style::default().fg(theme.text)
       };
@@ -287,7 +292,7 @@ fn draw_friend_list(f: &mut Frame<'_>, app: &App, area: Rect, friends: &[&Friend
     .highlight_style(
       Style::default()
         .fg(theme.selected)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol("▶ ");
 
@@ -347,7 +352,7 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
       " Add Friend ",
       Style::default()
         .fg(theme.active)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ));
 
   let inner = block.inner(dialog_area);
@@ -362,16 +367,22 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
 
   // Tab row
   let code_style = if app.friend_add_mode == FriendAddMode::Code {
-    Style::default()
-      .fg(theme.selected)
-      .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    Style::default().fg(theme.selected).add_modifier(
+      app
+        .user_config
+        .behavior
+        .emphasis(Modifier::BOLD | Modifier::UNDERLINED),
+    )
   } else {
     Style::default().fg(theme.inactive)
   };
   let search_style = if app.friend_add_mode == FriendAddMode::Search {
-    Style::default()
-      .fg(theme.selected)
-      .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    Style::default().fg(theme.selected).add_modifier(
+      app
+        .user_config
+        .behavior
+        .emphasis(Modifier::BOLD | Modifier::UNDERLINED),
+    )
   } else {
     Style::default().fg(theme.inactive)
   };
@@ -411,7 +422,9 @@ fn draw_add_by_code(f: &mut Frame<'_>, app: &App, area: Rect) {
   let style = if input.is_empty() {
     Style::default().fg(theme.inactive)
   } else {
-    Style::default().fg(theme.hint).add_modifier(Modifier::BOLD)
+    Style::default()
+      .fg(theme.hint)
+      .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   };
 
   let [_, input_row, hint_row, _] = area.layout(&Layout::vertical([
@@ -492,7 +505,7 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
       let style = if is_sel {
         Style::default()
           .fg(theme.selected)
-          .add_modifier(Modifier::BOLD)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
         Style::default().fg(theme.text)
       };
@@ -509,7 +522,7 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
   let list = List::new(items).highlight_style(
     Style::default()
       .fg(theme.selected)
-      .add_modifier(Modifier::BOLD),
+      .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
   );
   f.render_stateful_widget(list, results_area, &mut state);
 }

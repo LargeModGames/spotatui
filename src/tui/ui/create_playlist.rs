@@ -33,7 +33,7 @@ fn draw_name_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
       "Create Playlist (Esc to cancel)",
       Style::default()
         .fg(theme.header)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(theme.base_style())
@@ -83,7 +83,7 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
       title,
       Style::default()
         .fg(theme.header)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(theme.base_style())
@@ -161,7 +161,7 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .highlight_style(
       Style::default()
         .fg(theme.selected)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .style(theme.base_style());
   f.render_stateful_widget(results_list, panels[0], &mut results_state);
@@ -206,7 +206,7 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .highlight_style(
       Style::default()
         .fg(theme.selected)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .style(theme.base_style());
   f.render_stateful_widget(added_list, panels[1], &mut added_state);

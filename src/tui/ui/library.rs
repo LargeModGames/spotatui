@@ -1,15 +1,12 @@
 use crate::core::app::{ActiveBlock, App, LIBRARY_OPTIONS};
-use crate::core::layout::library_constraints;
+use crate::core::layout::{is_wide_layout, library_constraints, split_input_help_and_settings};
 use crate::core::source::Source;
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   Frame,
 };
 
-use super::{
-  search::draw_input_and_help_box,
-  util::{draw_selectable_list, SMALL_TERMINAL_WIDTH},
-};
+use super::{search::draw_input_and_help_box, util::draw_selectable_list};
 
 pub fn draw_library_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let current_route = app.get_current_route();
@@ -189,12 +186,14 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     || app.active_source == Source::Radio
     || app.active_source == Source::YouTube
   {
-    if app.size.width >= SMALL_TERMINAL_WIDTH && !app.user_config.behavior.enforce_wide_search_bar {
+    if is_wide_layout(app) {
       let [input_area, playlist_area] = layout_chunk.layout(&Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(0),
       ]));
-      draw_input_and_help_box(f, app, input_area);
+      let [input_text_area, help_area, settings_area] =
+        split_input_help_and_settings(app, input_area);
+      draw_input_and_help_box(f, app, input_text_area, help_area, settings_area);
       draw_playlist_block(f, app, playlist_area);
     } else {
       draw_playlist_block(f, app, layout_chunk);
@@ -203,7 +202,7 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   }
 
   // Check for width to make a responsive layout
-  if app.size.width >= SMALL_TERMINAL_WIDTH && !app.user_config.behavior.enforce_wide_search_bar {
+  if is_wide_layout(app) {
     let lib_constraints = library_constraints(&app.user_config.behavior);
     let [input_area, library_area, playlist_area] = layout_chunk.layout(&Layout::vertical([
       Constraint::Length(3),
@@ -212,7 +211,9 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     ]));
 
     // Search input and help
-    draw_input_and_help_box(f, app, input_area);
+    let [input_text_area, help_area, settings_area] =
+      split_input_help_and_settings(app, input_area);
+    draw_input_and_help_box(f, app, input_text_area, help_area, settings_area);
     draw_library_block(f, app, library_area);
     draw_playlist_block(f, app, playlist_area);
   } else {

@@ -5,7 +5,7 @@ use crate::core::{
 };
 use ratatui::{
   layout::{Alignment, Constraint, Layout, Position, Rect},
-  style::{Color, Modifier, Style},
+  style::{Modifier, Style},
   text::{Line, Span, Text},
   widgets::{
     canvas::Canvas, Block, BorderType, Borders, LineGauge, List, ListItem, ListState, Paragraph,
@@ -52,7 +52,8 @@ pub(crate) enum PlaybarControl {
 }
 
 impl PlaybarControl {
-  const fn button_label(self) -> &'static str {
+  /// The built-in (default) label for this control.
+  const fn default_label(self) -> &'static str {
     match self {
       Self::Prev => "[Prev]",
       Self::PlayPause => "[Play/Pause]",
@@ -62,6 +63,33 @@ impl PlaybarControl {
       Self::Like => "[Like]",
       Self::VolumeDown => "[Vol-]",
       Self::VolumeUp => "[Vol+]",
+    }
+  }
+
+  /// The `playbar_control_labels` map key for this control.
+  const fn config_key(self) -> &'static str {
+    match self {
+      Self::Prev => "prev",
+      Self::PlayPause => "play_pause",
+      Self::Next => "next",
+      Self::Shuffle => "shuffle",
+      Self::Repeat => "repeat",
+      Self::Like => "like",
+      Self::VolumeDown => "vol_down",
+      Self::VolumeUp => "vol_up",
+    }
+  }
+
+  /// The label for this control, honoring a `playbar_control_labels` override
+  /// from config (falling back to the built-in default). Mouse hit-testing
+  /// uses the same resolver, so hitboxes always match what's rendered.
+  fn label(
+    self,
+    behavior: &crate::core::user_config::BehaviorConfig,
+  ) -> std::borrow::Cow<'static, str> {
+    match behavior.playbar_control_labels.get(self.config_key()) {
+      Some(override_label) => std::borrow::Cow::Owned(override_label.clone()),
+      None => std::borrow::Cow::Borrowed(self.default_label()),
     }
   }
 }
@@ -134,8 +162,12 @@ fn playbar_layout_areas(app: &App, layout_chunk: Rect) -> PlaybarLayoutAreas {
       );
       if let Some(rendered_size) = app.cover_art.size_for(cover_layout.image_area) {
         let cover_layout = cover_layout.with_rendered_size(rendered_size);
-        let (artist_area, controls_area, progress_area) =
-          split_cover_playbar_rows(other, cover_layout.text_area, cover_layout.image_area);
+        let (artist_area, controls_area, progress_area) = split_cover_playbar_rows(
+          other,
+          cover_layout.text_area,
+          cover_layout.image_area,
+          &app.user_config.behavior,
+        );
 
         return PlaybarLayoutAreas {
           artist_area,
@@ -248,7 +280,12 @@ fn bottom_aligned_rect_within(bounds: Rect, size: Rect) -> Rect {
 }
 
 #[cfg(feature = "cover-art")]
-fn split_cover_playbar_rows(inner: Rect, text_area: Rect, image_area: Rect) -> (Rect, Rect, Rect) {
+fn split_cover_playbar_rows(
+  inner: Rect,
+  text_area: Rect,
+  image_area: Rect,
+  behavior: &crate::core::user_config::BehaviorConfig,
+) -> (Rect, Rect, Rect) {
   if inner.width == 0 || inner.height == 0 || text_area.width == 0 || text_area.height == 0 {
     let empty = Rect::new(text_area.x, text_area.y, text_area.width, 0);
     return (empty, empty, empty);
@@ -269,7 +306,8 @@ fn split_cover_playbar_rows(inner: Rect, text_area: Rect, image_area: Rect) -> (
     )
   };
 
-  let controls_area = cover_playbar_controls_area(inner, text_area, image_area, progress_area);
+  let controls_area =
+    cover_playbar_controls_area(inner, text_area, image_area, progress_area, behavior);
   let artist_area = cover_playbar_artist_area(text_area, image_area, controls_area, progress_area);
 
   (artist_area, controls_area, progress_area)
@@ -281,8 +319,9 @@ fn cover_playbar_controls_area(
   text_area: Rect,
   image_area: Rect,
   progress_area: Rect,
+  behavior: &crate::core::user_config::BehaviorConfig,
 ) -> Rect {
-  let required_width = playbar_controls_required_width();
+  let required_width = playbar_controls_required_width(behavior);
   let controls_y = progress_area.y.saturating_sub(1);
   let image_bottom = image_area.y.saturating_add(image_area.height);
 
@@ -317,12 +356,15 @@ fn cover_playbar_artist_area(
   Rect::new(text_area.x, y, text_area.width, height)
 }
 
-fn playbar_control_hitboxes_in_area(controls_area: Rect) -> Vec<PlaybarControlHitbox> {
+fn playbar_control_hitboxes_in_area(
+  controls_area: Rect,
+  behavior: &crate::core::user_config::BehaviorConfig,
+) -> Vec<PlaybarControlHitbox> {
   if controls_area.width == 0 || controls_area.height == 0 {
     return Vec::new();
   }
 
-  let required_width = playbar_controls_required_width();
+  let required_width = playbar_controls_required_width(behavior);
   let start_x = if controls_area.width > required_width {
     controls_area
       .x
@@ -337,7 +379,8 @@ fn playbar_control_hitboxes_in_area(controls_area: Rect) -> Vec<PlaybarControlHi
   let mut hitboxes = Vec::with_capacity(PLAYBAR_CONTROLS.len());
 
   for control in PLAYBAR_CONTROLS {
-    let width = control.button_label().len() as u16;
+    let label = control.label(behavior);
+    let width = unicode_width::UnicodeWidthStr::width(label.as_ref()) as u16;
     if x.saturating_add(width) > right {
       break;
     }
@@ -356,14 +399,14 @@ fn playbar_control_hitboxes_in_area(controls_area: Rect) -> Vec<PlaybarControlHi
   hitboxes
 }
 
-fn playbar_controls_required_width() -> u16 {
+fn playbar_controls_required_width(behavior: &crate::core::user_config::BehaviorConfig) -> u16 {
   PLAYBAR_CONTROLS
     .iter()
     .enumerate()
     .fold(0u16, |width, (idx, control)| {
-      width
-        .saturating_add(u16::from(idx > 0))
-        .saturating_add(control.button_label().len() as u16)
+      width.saturating_add(u16::from(idx > 0)).saturating_add(
+        unicode_width::UnicodeWidthStr::width(control.label(behavior).as_ref()) as u16,
+      )
     })
 }
 
@@ -376,10 +419,11 @@ pub(crate) fn playbar_control_hitboxes(
   }
 
   let controls_area = playbar_layout_areas(app, playbar_area).controls_area;
-  let mut hitboxes: Vec<(PlaybarControl, Rect)> = playbar_control_hitboxes_in_area(controls_area)
-    .into_iter()
-    .map(|hitbox| (hitbox.control, hitbox.rect))
-    .collect();
+  let mut hitboxes: Vec<(PlaybarControl, Rect)> =
+    playbar_control_hitboxes_in_area(controls_area, &app.user_config.behavior)
+      .into_iter()
+      .map(|hitbox| (hitbox.control, hitbox.rect))
+      .collect();
 
   // A non-Spotify source only has a verified-correct route for Play/Pause
   // (`App::toggle_playback` branches on the owning source before falling
@@ -545,8 +589,11 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
 
 fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
   let controls_style = Style::default().fg(app.user_config.theme.playbar_text);
-  for hitbox in playbar_control_hitboxes_in_area(controls_area) {
-    let control = Paragraph::new(Span::styled(hitbox.control.button_label(), controls_style));
+  for hitbox in playbar_control_hitboxes_in_area(controls_area, &app.user_config.behavior) {
+    let control = Paragraph::new(Span::styled(
+      hitbox.control.label(&app.user_config.behavior).into_owned(),
+      controls_style,
+    ));
     f.render_widget(control, hitbox.rect);
   }
 }
@@ -606,7 +653,7 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
       CoverArtStatus::Loaded | CoverArtStatus::NotStarted => "No cover art available",
     };
     let p = Paragraph::new(message)
-      .style(Style::default().fg(Color::Rgb(100, 100, 100)))
+      .style(Style::default().fg(app.user_config.theme.inactive))
       .alignment(Alignment::Center);
 
     let vertical_center = area.y + area.height / 2;
@@ -655,7 +702,7 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
         .style(
           Style::default()
             .fg(app.user_config.theme.selected)
-            .add_modifier(Modifier::BOLD),
+            .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
         )
         .alignment(Alignment::Center);
       f.render_widget(
@@ -710,7 +757,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   let block = Block::default()
     .borders(Borders::ALL)
     .title(" Lyrics ")
-    .style(Style::default().fg(Color::Rgb(100, 100, 100))); // RGB for cross-terminal compat
+    .style(Style::default().fg(app.user_config.theme.inactive));
   f.render_widget(block.clone(), area);
 
   let inner_area = block.inner(area);
@@ -725,7 +772,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
 
     if !text.is_empty() {
       let p = Paragraph::new(text)
-        .style(Style::default().fg(Color::Rgb(100, 100, 100))) // RGB for cross-terminal compat
+        .style(Style::default().fg(app.user_config.theme.inactive))
         .alignment(Alignment::Center);
 
       // Center vertically in inner area
@@ -781,9 +828,9 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
         let style = if is_active {
           Style::default()
             .fg(app.user_config.theme.highlighted_lyrics) // Use theme color for highlighted lyrics
-            .add_modifier(Modifier::BOLD)
+            .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
         } else {
-          Style::default().fg(Color::Rgb(100, 100, 100)) // Dim gray for inactive lines
+          Style::default().fg(app.user_config.theme.inactive) // Dim gray for inactive lines
         };
 
         let p = Paragraph::new(text.clone())
@@ -965,10 +1012,23 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     Some((current, total)) => format!(" | {current}/{total}"),
     None => String::new(),
   };
-  let title = format!(
-    "{:-7} ({}{} | Volume: {:-2}%)",
-    play_title, view.source_label, queue_label, view.volume_percent
-  );
+  // Build the title from the configurable playbar_status_source template.
+  // Values are pre-padded to match the original `{:-N}` format widths so the
+  // default template reproduces today's output byte-for-byte.
+  let title = app.user_config.format.playbar_status_source.render(&[
+    // state — left-aligned to 7 cols (matches `{:-7}`)
+    &format!("{:<7}", play_title),
+    // device / source / queue
+    "",
+    view.source_label,
+    &queue_label,
+    // shuffle / repeat / volume / party — unused in the source template
+    "",
+    "",
+    // volume — left-aligned to 2 (matches `{:-2}`)
+    &format!("{:<2}", view.volume_percent),
+    "",
+  ]);
   let mut title_spans = vec![Span::styled(
     title,
     get_color(highlight_state, app.user_config.theme),
@@ -1001,7 +1061,7 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
         view.name.clone(),
         Style::default()
           .fg(app.user_config.theme.selected)
-          .add_modifier(Modifier::BOLD),
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       )),
     );
   f.render_widget(artist, playbar_areas.artist_area);
@@ -1042,8 +1102,8 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
         .add_modifier(modifier),
     )
     .ratio(perc as f64 / 100.0)
-    .filled_symbol("⣿")
-    .unfilled_symbol("⣉")
+    .filled_symbol(app.user_config.behavior.gauge_filled_icon.as_str())
+    .unfilled_symbol(app.user_config.behavior.gauge_unfilled_icon.as_str())
     .label(Span::styled(
       &song_progress_label,
       Style::default().fg(app.user_config.theme.playbar_progress_text),
@@ -1172,26 +1232,38 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         RepeatState::Context => "All",
       };
 
-      let mut title = format!(
-        "{:-7} ({} | Shuffle: {:-3} | Repeat: {:-5} | Volume: {:-2}%)",
-        play_title,
-        current_playback_context.device.name,
-        shuffle_text,
-        repeat_text,
-        app.desired_volume()
-      );
-
-      if let Some(session) = &app.party_session {
-        let party_label = match session.role {
+      // Build the title from the configurable playbar_status template.
+      // Values are pre-padded to match the original `{:-N}` format widths so
+      // the default template reproduces today's output byte-for-byte.
+      let party_segment = if let Some(session) = &app.party_session {
+        match session.role {
           crate::infra::network::sync::PartyRole::Host => {
-            format!("Party: {} listeners", session.guests.len())
+            format!(" | Party: {} listeners", session.guests.len())
           }
           crate::infra::network::sync::PartyRole::Guest => {
-            format!("Party: following {}", session.host_name)
+            format!(" | Party: following {}", session.host_name)
           }
-        };
-        title = format!("{} | {}", title, party_label);
-      }
+        }
+      } else {
+        String::new()
+      };
+      let title = app.user_config.format.playbar_status.render(&[
+        // state — left-aligned to 7 cols (matches `{:-7}`)
+        &format!("{:<7}", play_title),
+        // device
+        &current_playback_context.device.name,
+        // source / queue — unused in the Spotify template
+        "",
+        "",
+        // shuffle — left-aligned to 3 (matches `{:-3}`)
+        &format!("{:<3}", shuffle_text),
+        // repeat — left-aligned to 5 (matches `{:-5}`)
+        &format!("{:<5}", repeat_text),
+        // volume — left-aligned to 2 (matches `{:-2}`)
+        &format!("{:<2}", app.desired_volume()),
+        // party — pre-composed optional segment
+        &party_segment,
+      ]);
 
       let current_route = app.get_current_route();
       let highlight_state = (
@@ -1291,7 +1363,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             track_name,
             Style::default()
               .fg(app.user_config.theme.selected)
-              .add_modifier(Modifier::BOLD),
+              .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
           )),
         );
       f.render_widget(artist, artist_area);
@@ -1323,8 +1395,8 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             .add_modifier(modifier),
         )
         .ratio(perc as f64 / 100.0)
-        .filled_symbol("⣿")
-        .unfilled_symbol("⣉")
+        .filled_symbol(app.user_config.behavior.gauge_filled_icon.as_str())
+        .unfilled_symbol(app.user_config.behavior.gauge_unfilled_icon.as_str())
         .label(Span::styled(
           &song_progress_label,
           Style::default().fg(app.user_config.theme.playbar_progress_text),
@@ -1333,28 +1405,34 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
       // Draw "Like" animation (heart burst) if active
       if let Some(frame) = app.liked_song_animation_frame {
-        let progress = (10 - frame) as f64;
+        let total_frames = app.user_config.behavior.like_animation_frames.max(1);
+        let progress = (total_frames.saturating_sub(frame)) as f64;
         let y_base = 20.0 + progress * 5.0; // Rise up
+        let heart = app.user_config.behavior.liked_icon.clone();
+        let heart_color = app.user_config.theme.selected;
 
         let canvas = Canvas::default()
           .block(Block::default()) // No border, transparent
           .x_bounds([0.0, 100.0])
           .y_bounds([0.0, 100.0])
-          .paint(|ctx| {
-            let color = app.user_config.theme.selected;
+          .paint(move |ctx| {
             // Center heart
-            ctx.print(50.0, y_base, Span::styled("♥", Style::default().fg(color)));
+            ctx.print(
+              50.0,
+              y_base,
+              Span::styled(heart.clone(), Style::default().fg(heart_color)),
+            );
             // Left particle (lagging slightly)
             ctx.print(
               48.0,
               y_base - 3.0,
-              Span::styled("♥", Style::default().fg(color)),
+              Span::styled(heart.clone(), Style::default().fg(heart_color)),
             );
             // Right particle (lagging slightly)
             ctx.print(
               52.0,
               y_base - 3.0,
-              Span::styled("♥", Style::default().fg(color)),
+              Span::styled(heart.clone(), Style::default().fg(heart_color)),
             );
           });
 
@@ -1485,7 +1563,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
         "Welcome to spotatui!",
         Style::default()
           .fg(app.user_config.theme.active)
-          .add_modifier(Modifier::BOLD),
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       )),
     );
   f.render_widget(instructions, instructions_area);
@@ -1501,12 +1579,16 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     .iter()
     .map(|s| {
       let is_active = *s == app.active_source;
-      let marker = if is_active { "●" } else { " " };
+      let marker = if is_active {
+        app.user_config.behavior.active_source_icon.as_str()
+      } else {
+        " "
+      };
       let suffix = if is_active { "  (active)" } else { "" };
       let style = if is_active {
         Style::default()
           .fg(app.user_config.theme.active)
-          .add_modifier(Modifier::BOLD)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
         app.user_config.theme.base_style()
       };
@@ -1535,7 +1617,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
       Style::default()
         .fg(app.user_config.theme.active)
         .bg(app.user_config.theme.inactive)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
   f.render_stateful_widget(source_list, source_area, &mut source_state);
@@ -1591,7 +1673,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
       Style::default()
         .fg(app.user_config.theme.active)
         .bg(app.user_config.theme.inactive)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
   f.render_stateful_widget(device_list, devices_area, &mut state);
@@ -1639,13 +1721,15 @@ mod tests {
 
   #[test]
   fn control_hitboxes_handle_zero_sized_area() {
-    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 0, 0)).is_empty());
-    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 10, 0)).is_empty());
+    let behavior = crate::core::user_config::UserConfig::new().behavior;
+    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 0, 0), &behavior).is_empty());
+    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 10, 0), &behavior).is_empty());
   }
 
   #[test]
   fn control_hitboxes_truncate_for_tiny_widths() {
-    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(5, 10, 8, 1));
+    let behavior = crate::core::user_config::UserConfig::new().behavior;
+    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(5, 10, 8, 1), &behavior);
     assert_eq!(hitboxes.len(), 1);
     assert_eq!(hitboxes[0].control, PlaybarControl::Prev);
     assert_eq!(hitboxes[0].rect, Rect::new(5, 10, 6, 1));
@@ -1653,7 +1737,8 @@ mod tests {
 
   #[test]
   fn control_hitboxes_include_all_controls_when_wide_enough() {
-    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(0, 0, 200, 1));
+    let behavior = crate::core::user_config::UserConfig::new().behavior;
+    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(0, 0, 200, 1), &behavior);
     assert_eq!(hitboxes.len(), PLAYBAR_CONTROLS.len());
     assert_eq!(hitboxes[0].control, PlaybarControl::Prev);
     assert_eq!(

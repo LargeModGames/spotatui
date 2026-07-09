@@ -3,20 +3,15 @@ use crate::core::app::{
   ActiveBlock, App, RouteId, SettingValue, SettingsCategory, LIBRARY_OPTIONS,
 };
 use crate::core::layout::{
-  fullscreen_view_layout, library_constraints, miniplayer_playbar_area, playbar_constraint,
-  sidebar_constraints,
+  compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
 };
 use crate::tui::event::Key;
 use crate::tui::ui::player::{playbar_control_at, playbar_progress_line};
 use crate::tui::ui::tables::table_scroll_offset;
-use crate::tui::ui::util::{get_main_layout_margin, SMALL_TERMINAL_WIDTH};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const COMPACT_TOP_ROW_THRESHOLD: u16 = 60;
-const COMPACT_HELP_WIDTH: u16 = 8;
-const COMPACT_SETTINGS_WIDTH: u16 = 12;
 const SETTINGS_UNSAVED_PROMPT_WIDTH: u16 = 58;
 const SETTINGS_UNSAVED_PROMPT_HEIGHT: u16 = 9;
 
@@ -771,16 +766,6 @@ fn settings_item_index_from_click(
   (row_index < item_count).then_some(row_index)
 }
 
-struct MainLayoutAreas {
-  input: Option<Rect>,
-  help: Option<Rect>,
-  settings: Option<Rect>,
-  playbar: Rect,
-  library: Rect,
-  playlists: Rect,
-  content: Rect,
-}
-
 struct SettingsLayoutAreas {
   tabs: Rect,
   list: Rect,
@@ -874,115 +859,7 @@ fn miniplayer_view_playbar_area(app: &App) -> Option<Rect> {
 }
 
 fn main_layout_areas(app: &App) -> Option<MainLayoutAreas> {
-  if app.size.width == 0 || app.size.height == 0 {
-    return None;
-  }
-
-  let root = Rect::new(0, 0, app.size.width, app.size.height);
-  let margin = get_main_layout_margin(app);
-  let wide_layout =
-    app.size.width >= SMALL_TERMINAL_WIDTH && !app.user_config.behavior.enforce_wide_search_bar;
-
-  let behavior = &app.user_config.behavior;
-  let playbar = playbar_constraint(behavior);
-  let sidebar = sidebar_constraints(behavior);
-  let library = library_constraints(behavior);
-
-  let (routes_area, playbar_area) = if wide_layout {
-    let [routes_area, playbar_area] =
-      root.layout(&Layout::vertical([Constraint::Min(1), playbar]).margin(margin));
-    (routes_area, playbar_area)
-  } else {
-    let [input_area, routes_area, playbar_area] = root.layout(
-      &Layout::vertical([Constraint::Length(3), Constraint::Min(1), playbar]).margin(margin),
-    );
-    let [input_text_area, help_area, settings_area] =
-      split_input_help_and_settings(app, input_area);
-
-    let [library_area, playlist_area] =
-      user_area_for_routes(routes_area).layout(&Layout::vertical([library[0], library[1]]));
-    let [_user_area, content_area] =
-      routes_area.layout(&Layout::horizontal([sidebar[0], sidebar[1]]));
-
-    return Some(MainLayoutAreas {
-      input: Some(input_text_area),
-      help: Some(help_area),
-      settings: Some(settings_area),
-      playbar: playbar_area,
-      library: library_area,
-      playlists: playlist_area,
-      content: content_area,
-    });
-  };
-
-  let [user_area, content_area] = routes_area.layout(&Layout::horizontal([sidebar[0], sidebar[1]]));
-
-  if wide_layout {
-    let [input_area, library_area, playlist_area] = user_area.layout(&Layout::vertical([
-      Constraint::Length(3),
-      library[0],
-      library[1],
-    ]));
-    let [input_text_area, help_area, settings_area] =
-      split_input_help_and_settings(app, input_area);
-    Some(MainLayoutAreas {
-      input: Some(input_text_area),
-      help: Some(help_area),
-      settings: Some(settings_area),
-      playbar: playbar_area,
-      library: library_area,
-      playlists: playlist_area,
-      content: content_area,
-    })
-  } else {
-    let [library_area, playlist_area] =
-      user_area.layout(&Layout::vertical([library[0], library[1]]));
-    Some(MainLayoutAreas {
-      input: None,
-      help: None,
-      settings: None,
-      playbar: playbar_area,
-      library: library_area,
-      playlists: playlist_area,
-      content: content_area,
-    })
-  }
-}
-
-fn split_input_help_and_settings(app: &App, input_row_area: Rect) -> [Rect; 3] {
-  let compact_top_row = input_row_area.width < COMPACT_TOP_ROW_THRESHOLD;
-
-  let constraints = if compact_top_row {
-    [
-      Constraint::Min(1),
-      Constraint::Length(COMPACT_HELP_WIDTH),
-      Constraint::Length(COMPACT_SETTINGS_WIDTH),
-    ]
-  } else if app.size.width >= SMALL_TERMINAL_WIDTH
-    && !app.user_config.behavior.enforce_wide_search_bar
-  {
-    [
-      Constraint::Percentage(65),
-      Constraint::Percentage(18),
-      Constraint::Percentage(17),
-    ]
-  } else {
-    [
-      Constraint::Percentage(80),
-      Constraint::Percentage(10),
-      Constraint::Percentage(10),
-    ]
-  };
-
-  input_row_area.layout(&Layout::horizontal(constraints))
-}
-
-fn user_area_for_routes(routes_area: Rect) -> Rect {
-  let [user_area, _content_area] = routes_area.layout(&Layout::horizontal([
-    Constraint::Percentage(20),
-    Constraint::Percentage(80),
-  ]));
-  user_area
+  compute_main_layout(app)
 }
 
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -1410,13 +1287,17 @@ mod tests {
       .unwrap();
     let buffer = terminal.backend().buffer();
 
-    // The LineGauge fills with "⣿" and "⣉"; neither appears in the time label, so the
-    // first such cell on the progress row is the true gauge start column.
+    // The LineGauge fills with the configured filled/unfilled symbols; neither
+    // appears in the time label, so the first such cell on the progress row is
+    // the true gauge start column. Parameterized on the config fields so an
+    // overridden gauge glyph can't silently break the alignment guard.
+    let filled = app.user_config.behavior.gauge_filled_icon.as_str();
+    let unfilled = app.user_config.behavior.gauge_unfilled_icon.as_str();
     let rendered_start = (areas.playbar.x..areas.playbar.x + areas.playbar.width)
       .find(|&x| {
         matches!(
           buffer.cell((x, line.row)).map(|c| c.symbol()),
-          Some("⣿") | Some("⣉")
+          Some(s) if s == filled || s == unfilled
         )
       })
       .expect("expected rendered gauge cells on the progress row");
@@ -1623,10 +1504,18 @@ mod tests {
     let divider = 1u16;
     let behavior_tab_width =
       left_padding + SettingsCategory::Behavior.name().len() as u16 + right_padding;
+    let icons_tab_width =
+      left_padding + SettingsCategory::Icons.name().len() as u16 + right_padding;
     let keybindings_tab_width =
       left_padding + SettingsCategory::Keybindings.name().len() as u16 + right_padding;
-    let theme_title_start =
-      inner_left + behavior_tab_width + divider + keybindings_tab_width + divider + left_padding;
+    let theme_title_start = inner_left
+      + behavior_tab_width
+      + divider
+      + icons_tab_width
+      + divider
+      + keybindings_tab_width
+      + divider
+      + left_padding;
     let theme_tab_x = theme_title_start + 1;
     let tab_y = areas.tabs.y + 1;
 

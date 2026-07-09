@@ -1,0 +1,114 @@
+# Example spotatui config.yml. Every field is optional — omit anything to keep
+# the built-in default. A typo in any of these fields logs a warning and falls
+# back to the default; it never prevents the app from starting.
+# Full reference: docs/configuration.md
+
+behavior:
+  # --- Timing / behavior constants ---
+  status_message_ttl_percent: 100 # 10..=1000; 200 = status messages last twice as long
+  playback_poll_seconds: 5        # min 1; playback-state poll interval
+  table_scroll_padding: 5         # rows kept visible below the selection while scrolling
+  like_animation_frames: 10       # min 1; length of the heart burst when liking a track
+
+  # --- Startup ---
+  # home | recently_played | podcasts | discover | artists | album_list
+  startup_route: home
+
+  # --- Default sorting ("<field>" or "<field>:desc") ---
+  # playlist_tracks: default | name | date_added | artist | album | duration
+  # saved_albums:    default | name | date_added | artist
+  # saved_artists:   default | name
+  # recently_played: default | name | artist | album
+  default_sort_playlist_tracks: default
+  default_sort_saved_albums: default
+  default_sort_saved_artists: default
+  default_sort_recently_played: default
+
+  # --- Layout ---
+  sidebar_position: left   # left | right | hidden (auto-reveals when focused)
+  playbar_position: bottom # bottom | top
+  small_terminal_width: 150  # wide-layout breakpoint (columns)
+  small_terminal_height: 45  # margin breakpoint (rows)
+
+  # --- Icons ---
+  # Fixed-cell icons (playing/gauge/episode/sort) must be exactly one terminal
+  # column wide; invalid glyphs fall back to the defaults with a warning.
+  # Note: some glyphs below (e.g. ↑ ↓ ● ▶) are Unicode "East Asian Ambiguous"
+  # width — terminals configured to render ambiguous-width characters as wide
+  # (common with CJK locales) draw them 2 cells wide, which shifts column
+  # alignment. If that happens, set your terminal's ambiguous width to
+  # "narrow" or pick unambiguous glyphs.
+  liked_icon: "♥"
+  shuffle_icon: "🔀"
+  playing_icon: "▶"
+  paused_icon: "⏸"
+  gauge_filled_icon: "⣿"
+  gauge_unfilled_icon: "⣉"
+  active_source_icon: "●"
+  episode_played_icon: "✔"
+  sort_ascending_icon: "↑"
+  sort_descending_icon: "↓"
+  list_highlight_icon: "▶"
+
+  # --- Playbar button labels (config-only) ---
+  # All keys optional; omit (or set "") to keep a button's built-in label.
+  # Mouse hitboxes resize to fit automatically.
+  # playbar_control_labels:
+  #   prev: "⏮"
+  #   play_pause: "[PLAY/PAUSE]"
+  #   next: "⏭"
+  #   shuffle: "shfl"
+  #   repeat: "rpt"
+  #   like: "♥+"
+  #   vol_down: "vol-"
+  #   vol_up: "vol+"
+
+# --- Status line & window title templates (config-only) ---
+# {key} placeholders, {{ / }} for literal braces. Unknown keys fall back to
+# the default template with a warning listing the valid keys.
+# playbar keys: state, device, source, queue, shuffle, repeat, volume, party
+# window_title keys: title, artist ({artist} includes its own " — " separator
+# and renders empty when unknown)
+format:
+  playbar_status: "{state} ({device} | Shuffle: {shuffle} | Repeat: {repeat} | Volume: {volume}%){party}"
+  playbar_status_source: "{state} ({source}{queue} | Volume: {volume}%)"
+  window_title: "{title}{artist}"
+
+# --- Table columns (config-only) ---
+# Reorder, remove, rename (header:) and resize (width_percent: or width:, not
+# both, no zeros, percents may not sum past 100). Omit a table for defaults.
+# Valid ids:
+#   songs / album_tracks / recently_played: liked, index, title, artist, album, length
+#   albums:   title, artist, date, liked
+#   podcasts: title, publisher
+#   episodes: played, date, title, duration
+tables:
+  songs:
+    - { id: liked }
+    - { id: title, width_percent: 40 }
+    - { id: artist, header: "Band", width_percent: 30 }
+    - { id: album }
+    - { id: length }
+  album_tracks:
+    - { id: liked }
+    - { id: index }
+    - { id: title }
+    - { id: artist }
+    - { id: length }
+  albums:
+    - { id: title }
+    - { id: artist }
+    - { id: date }
+  podcasts:
+    - { id: title }
+    - { id: publisher }
+  episodes:
+    - { id: played }
+    - { id: date }
+    - { id: title }
+    - { id: duration }
+  recently_played:
+    - { id: liked }
+    - { id: title }
+    - { id: artist }
+    - { id: length }

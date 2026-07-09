@@ -754,8 +754,11 @@ impl Network {
 
   async fn show_status_message(&self, message: String, ttl_secs: u64) {
     let mut app = self.app.lock().await;
+    // Scale by status_message_ttl_percent, matching App::set_status_message.
+    let pct = app.user_config.behavior.status_message_ttl_percent as u64;
+    let ttl = ((ttl_secs * pct + 50) / 100).max(1);
     app.status_message = Some(message);
-    app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl_secs));
+    app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl));
   }
 
   async fn refresh_authentication(&mut self) {

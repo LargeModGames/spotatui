@@ -1,5 +1,6 @@
 pub mod artist;
 pub mod audio_analysis;
+pub mod columns;
 pub mod create_playlist;
 pub mod discover;
 pub mod friends;
@@ -14,11 +15,8 @@ pub mod tables;
 pub mod util;
 
 use crate::core::app::{App, RouteId};
-use crate::core::layout::{playbar_constraint, sidebar_constraints};
-use ratatui::{
-  layout::{Constraint, Layout, Rect},
-  Frame,
-};
+use crate::core::layout::{compute_main_layout, is_wide_layout};
+use ratatui::{layout::Rect, Frame};
 
 pub use self::artist::draw_artist_albums;
 pub use self::create_playlist::draw_create_playlist_form;
@@ -39,43 +37,20 @@ pub use self::tables::{
   draw_album_list, draw_album_table, draw_artist_table, draw_local_browser, draw_podcast_table,
   draw_recently_played_table, draw_recommendations_table, draw_show_episodes, draw_song_table,
 };
-use self::util::{get_main_layout_margin, SMALL_TERMINAL_WIDTH};
-
 pub fn draw_main_layout(f: &mut Frame<'_>, app: &App) {
-  let margin = get_main_layout_margin(app);
-  // Responsive layout: new one kicks in at width 150 or higher
-  if app.size.width >= SMALL_TERMINAL_WIDTH && !app.user_config.behavior.enforce_wide_search_bar {
-    let [routes_area, playbar_area] = f.area().layout(
-      &Layout::vertical([
-        Constraint::Min(1),
-        playbar_constraint(&app.user_config.behavior),
-      ])
-      .margin(margin),
-    );
-
-    // Nested main block with potential routes
-    draw_routes(f, app, routes_area);
-
-    // Currently playing
-    draw_playbar(f, app, playbar_area);
-  } else {
-    let [input_area, routes_area, playbar_area] = f.area().layout(
-      &Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(1),
-        playbar_constraint(&app.user_config.behavior),
-      ])
-      .margin(margin),
-    );
-
-    // Search input and help
-    draw_input_and_help_box(f, app, input_area);
-
-    // Nested main block with potential routes
-    draw_routes(f, app, routes_area);
-
-    // Currently playing
-    draw_playbar(f, app, playbar_area);
+  if let Some(areas) = compute_main_layout(app) {
+    // In wide layout the input row lives inside the sidebar and is drawn by
+    // draw_user_block (it varies per source); the top row is only drawn here.
+    if !is_wide_layout(app) {
+      if let (Some(input_area), Some(help_area), Some(settings_area)) =
+        (areas.input, areas.help, areas.settings)
+      {
+        draw_input_and_help_box(f, app, input_area, help_area, settings_area);
+      }
+    }
+    draw_user_block(f, app, areas.sidebar);
+    draw_route_content(f, app, areas.content);
+    draw_playbar(f, app, areas.playbar);
   }
 
   // Possibly draw confirm dialog
@@ -85,13 +60,7 @@ pub fn draw_main_layout(f: &mut Frame<'_>, app: &App) {
   draw_sort_menu(f, app);
 }
 
-pub fn draw_routes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let [user_area, content_area] = layout_chunk.layout(&Layout::horizontal(sidebar_constraints(
-    &app.user_config.behavior,
-  )));
-
-  draw_user_block(f, app, user_area);
-
+fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
   let current_route = app.get_current_route();
 
   match current_route.id {
@@ -152,4 +121,72 @@ pub fn draw_routes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     RouteId::Dialog => {}         // This is handled in draw_dialog.
     RouteId::CreatePlaylist => {} // This is drawn as an overlay via draw_create_playlist_form.
   };
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::ActiveBlock;
+  use ratatui::{backend::TestBackend, buffer::Buffer, layout::Size, Terminal};
+
+  fn render(width: u16, height: u16) -> (App, Buffer) {
+    let mut app = App::default();
+    app.size = Size { width, height };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw_main_layout(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (app, buffer)
+  }
+
+  fn row_text(buffer: &Buffer, y: u16) -> String {
+    (0..buffer.area().width)
+      .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect()
+  }
+
+  // The drawn input/help/settings boxes and sidebar panels must land exactly
+  // where `compute_main_layout` puts the mouse hitboxes, and the search box
+  // must be drawn once (a second copy used to overlay the Library panel in
+  // wide layout, shifting it down three rows).
+  #[test]
+  fn wide_layout_draws_input_row_and_library_at_hitbox_positions() {
+    let (app, buffer) = render(160, 50);
+    let areas = compute_main_layout(&app).expect("layout areas");
+    let input = areas.input.expect("input area");
+
+    let input_row = row_text(&buffer, input.y);
+    assert!(input_row.contains("Search"), "input row: {input_row}");
+    assert!(input_row.contains("Help"), "input row: {input_row}");
+    assert!(input_row.contains("Settings"), "input row: {input_row}");
+
+    let library_row = row_text(&buffer, areas.library.y);
+    assert!(
+      library_row.contains("Library"),
+      "library panel not at hitbox row: {library_row}"
+    );
+    let playlists_row = row_text(&buffer, areas.playlists.y);
+    assert!(
+      playlists_row.contains("Playlists"),
+      "playlists panel not at hitbox row: {playlists_row}"
+    );
+  }
+
+  #[test]
+  fn narrow_layout_draws_input_row_and_library_at_hitbox_positions() {
+    let (app, buffer) = render(100, 40);
+    let areas = compute_main_layout(&app).expect("layout areas");
+    let input = areas.input.expect("input area");
+
+    let input_row = row_text(&buffer, input.y);
+    assert!(input_row.contains("Search"), "input row: {input_row}");
+    assert!(input_row.contains("Help"), "input row: {input_row}");
+    assert!(input_row.contains("Settings"), "input row: {input_row}");
+
+    let library_row = row_text(&buffer, areas.library.y);
+    assert!(
+      library_row.contains("Library"),
+      "library panel not at hitbox row: {library_row}"
+    );
+  }
 }

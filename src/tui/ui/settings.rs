@@ -47,7 +47,7 @@ fn draw_category_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
     .highlight_style(
       Style::default()
         .fg(app.user_config.theme.selected)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .style(app.user_config.theme.base_style());
 
@@ -111,7 +111,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
       let name_style = if is_selected {
         Style::default()
           .fg(app.user_config.theme.selected)
-          .add_modifier(Modifier::BOLD)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
         Style::default().fg(app.user_config.theme.text)
       };
@@ -119,7 +119,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
       let value_style = if is_editing {
         Style::default()
           .fg(app.user_config.theme.hint)
-          .add_modifier(Modifier::BOLD)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else if is_selected {
         Style::default().fg(app.user_config.theme.selected)
       } else {
@@ -152,13 +152,13 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
     .highlight_style(
       Style::default()
         .fg(app.user_config.theme.selected)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol(
       Line::from("▶ ").style(
         Style::default()
           .fg(app.user_config.theme.selected)
-          .add_modifier(Modifier::BOLD),
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       ),
     );
 

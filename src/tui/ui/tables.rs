@@ -1,6 +1,7 @@
 use crate::core::app::{
   ActiveBlock, AlbumTableContext, App, EpisodeTableContext, RecommendationsContext,
 };
+use crate::core::plugin_api::{EpisodeInfo, SavedAlbumInfo, ShowInfo, TrackInfo};
 use ratatui::{
   layout::{Constraint, Rect},
   style::{Modifier, Style},
@@ -11,6 +12,7 @@ use ratatui::{
 use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
+use super::columns::{resolve_columns, ResolvedColumn, TableColumnSet};
 use super::util::{get_color, get_percentage_width, join_artist_names, millis_to_minutes};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -24,7 +26,7 @@ pub enum TableId {
   PodcastEpisodes,
 }
 
-#[derive(Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColumnId {
   #[default]
   None,
@@ -32,24 +34,25 @@ pub enum ColumnId {
   Liked,
 }
 
-pub struct TableHeader<'a> {
+pub struct TableHeader {
   pub id: TableId,
-  pub items: Vec<TableHeaderItem<'a>>,
+  pub items: Vec<TableHeaderItem>,
 }
 
-impl TableHeader<'_> {
+impl TableHeader {
   pub fn get_index(&self, id: ColumnId) -> Option<usize> {
     self.items.iter().position(|item| item.id == id)
   }
 }
 
 #[derive(Default)]
-pub struct TableHeaderItem<'a> {
+pub struct TableHeaderItem {
   pub id: ColumnId,
-  pub text: &'a str,
+  pub text: String,
   pub width: u16,
 }
 
+#[derive(Clone)]
 pub struct TableItem {
   pub id: String,
   pub format: Vec<String>,
@@ -59,6 +62,124 @@ struct AlbumUi {
   selected_index: usize,
   items: Vec<TableItem>,
   title: String,
+}
+
+fn table_columns(app: &App, table: TableColumnSet, layout_width: u16) -> Vec<ResolvedColumn> {
+  let configured = match table {
+    TableColumnSet::Songs => &app.user_config.tables.songs,
+    TableColumnSet::AlbumTracks => &app.user_config.tables.album_tracks,
+    TableColumnSet::Albums => &app.user_config.tables.albums,
+    TableColumnSet::Podcasts => &app.user_config.tables.podcasts,
+    TableColumnSet::Episodes => &app.user_config.tables.episodes,
+    TableColumnSet::RecentlyPlayed => &app.user_config.tables.recently_played,
+  };
+  resolve_columns(table, layout_width, configured)
+}
+
+fn table_header(id: TableId, columns: &[ResolvedColumn]) -> TableHeader {
+  TableHeader {
+    id,
+    items: columns
+      .iter()
+      .map(|column| TableHeaderItem {
+        id: column.column_id,
+        text: column.header.clone(),
+        width: column.width,
+      })
+      .collect(),
+  }
+}
+
+fn track_table_item(track: &TrackInfo, columns: &[ResolvedColumn]) -> TableItem {
+  TableItem {
+    id: track.id.clone().unwrap_or_default(),
+    format: columns
+      .iter()
+      .map(|column| match column.id.as_str() {
+        "liked" => String::new(),
+        "index" => track.track_number.to_string(),
+        "title" => track.name.clone(),
+        "artist" => track.artists.join(", "),
+        "album" => track.album.clone(),
+        "length" => millis_to_minutes(track.duration_ms as u128),
+        _ => String::new(),
+      })
+      .collect(),
+  }
+}
+
+fn album_table_item(album: &SavedAlbumInfo, columns: &[ResolvedColumn], app: &App) -> TableItem {
+  let has_liked_column = columns.iter().any(|column| column.id == "liked");
+  TableItem {
+    id: album.album.id.clone().unwrap_or_default(),
+    format: columns
+      .iter()
+      .map(|column| match column.id.as_str() {
+        "liked" => app.user_config.padded_liked_icon(),
+        "title" => {
+          if has_liked_column {
+            album.album.name.clone()
+          } else {
+            format!(
+              "{}{}",
+              app.user_config.padded_liked_icon(),
+              album.album.name
+            )
+          }
+        }
+        "artist" => join_artist_names(&album.album.artists),
+        "date" => album.album.release_date.clone().unwrap_or_default(),
+        _ => String::new(),
+      })
+      .collect(),
+  }
+}
+
+fn podcast_table_item(show: &ShowInfo, columns: &[ResolvedColumn]) -> TableItem {
+  TableItem {
+    id: show.id.clone().unwrap_or_default(),
+    format: columns
+      .iter()
+      .map(|column| match column.id.as_str() {
+        "title" => show.name.clone(),
+        "publisher" => show.publisher.clone(),
+        _ => String::new(),
+      })
+      .collect(),
+  }
+}
+
+fn episode_table_item(episode: &EpisodeInfo, columns: &[ResolvedColumn], app: &App) -> TableItem {
+  let duration_ms = episode.duration_ms as u128;
+  let (played_str, time_str) = match &episode.resume_point {
+    Some(resume_point) => (
+      if resume_point.fully_played {
+        format!(" {}", app.user_config.behavior.episode_played_icon)
+      } else {
+        String::new()
+      },
+      format!(
+        "{} / {}",
+        millis_to_minutes(resume_point.resume_position_ms as u128),
+        millis_to_minutes(duration_ms)
+      ),
+    ),
+    None => (String::new(), millis_to_minutes(duration_ms)),
+  };
+
+  TableItem {
+    id: episode.id.clone().unwrap_or_default(),
+    format: columns
+      .iter()
+      .map(|column| match column.id.as_str() {
+        "played" => played_str.clone(),
+        "date" => episode.release_date.clone(),
+        "title" => episode.name.clone(),
+        "duration" => time_str.clone(),
+        _ => String::new(),
+      })
+      .collect(),
+  }
 }
 
 /// Render the Local Files folder browser: a selectable list of folders (one per
@@ -103,7 +224,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let header = TableHeader {
     id: TableId::Artist,
     items: vec![TableHeaderItem {
-      text: "Artist",
+      text: "Artist".to_string(),
       width: get_percentage_width(layout_chunk.width, 1.0),
       ..Default::default()
     }],
@@ -148,21 +269,8 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 }
 
 pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let header = TableHeader {
-    id: TableId::Podcast,
-    items: vec![
-      TableHeaderItem {
-        text: "Name",
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Publisher(s)",
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0),
-        ..Default::default()
-      },
-    ],
-  };
+  let columns = table_columns(app, TableColumnSet::Podcasts, layout_chunk.width);
+  let header = table_header(TableId::Podcast, &columns);
 
   let current_route = app.get_current_route();
 
@@ -175,10 +283,7 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items = saved_shows
       .items
       .iter()
-      .map(|show| TableItem {
-        id: show.id.clone().unwrap_or_default(),
-        format: vec![show.name.to_owned(), show.publisher.to_owned()],
-      })
+      .map(|show| podcast_table_item(show, &columns))
       .collect::<Vec<TableItem>>();
 
     draw_table(
@@ -194,36 +299,8 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 }
 
 pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let header = TableHeader {
-    id: TableId::Album,
-    items: vec![
-      TableHeaderItem {
-        id: ColumnId::Liked,
-        text: "",
-        width: 2,
-      },
-      TableHeaderItem {
-        text: "#",
-        width: 3,
-        ..Default::default()
-      },
-      TableHeaderItem {
-        id: ColumnId::Title,
-        text: "Title",
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0) - 5,
-      },
-      TableHeaderItem {
-        text: "Artist",
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Length",
-        width: get_percentage_width(layout_chunk.width, 1.0 / 5.0),
-        ..Default::default()
-      },
-    ],
-  };
+  let columns = table_columns(app, TableColumnSet::AlbumTracks, layout_chunk.width);
+  let header = table_header(TableId::Album, &columns);
 
   let current_route = app.get_current_route();
   let highlight_state = (
@@ -241,16 +318,7 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             .tracks
             .items
             .iter()
-            .map(|item| TableItem {
-              id: item.id.clone().unwrap_or_default(),
-              format: vec![
-                "".to_string(),
-                item.track_number.to_string(),
-                item.name.to_owned(),
-                item.artists.join(", "),
-                millis_to_minutes(item.duration_ms as u128),
-              ],
-            })
+            .map(|item| track_table_item(item, &columns))
             .collect::<Vec<TableItem>>(),
           title: format!(
             "{} by {}",
@@ -266,16 +334,7 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           .album
           .tracks
           .iter()
-          .map(|item| TableItem {
-            id: item.id.clone().unwrap_or_default(),
-            format: vec![
-              "".to_string(),
-              item.track_number.to_string(),
-              item.name.to_owned(),
-              item.artists.join(", "),
-              millis_to_minutes(item.duration_ms as u128),
-            ],
-          })
+          .map(|item| track_table_item(item, &columns))
           .collect::<Vec<TableItem>>(),
         title: format!(
           "{} by {}",
@@ -302,36 +361,8 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 }
 
 pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let header = TableHeader {
-    id: TableId::Song,
-    items: vec![
-      TableHeaderItem {
-        id: ColumnId::Liked,
-        text: "",
-        width: 2,
-      },
-      TableHeaderItem {
-        id: ColumnId::Title,
-        text: "Title",
-        width: get_percentage_width(layout_chunk.width, 0.3),
-      },
-      TableHeaderItem {
-        text: "Artist",
-        width: get_percentage_width(layout_chunk.width, 0.3),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Album",
-        width: get_percentage_width(layout_chunk.width, 0.3),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Length",
-        width: get_percentage_width(layout_chunk.width, 0.1),
-        ..Default::default()
-      },
-    ],
-  };
+  let columns = table_columns(app, TableColumnSet::Songs, layout_chunk.width);
+  let header = table_header(TableId::Song, &columns);
 
   let current_route = app.get_current_route();
   let highlight_state = (
@@ -343,16 +374,7 @@ pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
     .track_table
     .tracks
     .iter()
-    .map(|item| TableItem {
-      id: item.id.clone().unwrap_or_default(),
-      format: vec![
-        "".to_string(),
-        item.name.to_owned(),
-        item.artists.join(", "),
-        item.album.clone(),
-        millis_to_minutes(item.duration_ms as u128),
-      ],
-    })
+    .map(|item| track_table_item(item, &columns))
     .collect::<Vec<TableItem>>();
   // match RecommendedContext
   let recommendations_ui = match &app.recommendations_context {
@@ -378,36 +400,8 @@ pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
 }
 
 pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let header = TableHeader {
-    id: TableId::Song,
-    items: vec![
-      TableHeaderItem {
-        id: ColumnId::Liked,
-        text: "",
-        width: 2,
-      },
-      TableHeaderItem {
-        id: ColumnId::Title,
-        text: "Title",
-        width: get_percentage_width(layout_chunk.width, 0.3),
-      },
-      TableHeaderItem {
-        text: "Artist",
-        width: get_percentage_width(layout_chunk.width, 0.3),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Album",
-        width: get_percentage_width(layout_chunk.width, 0.3),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Length",
-        width: get_percentage_width(layout_chunk.width, 0.1),
-        ..Default::default()
-      },
-    ],
-  };
+  let columns = table_columns(app, TableColumnSet::Songs, layout_chunk.width);
+  let header = table_header(TableId::Song, &columns);
 
   let current_route = app.get_current_route();
   let highlight_state = (
@@ -419,16 +413,7 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     .track_table
     .tracks
     .iter()
-    .map(|item| TableItem {
-      id: item.id.clone().unwrap_or_default(),
-      format: vec![
-        "".to_string(),
-        item.name.to_owned(),
-        item.artists.join(", "),
-        item.album.clone(),
-        millis_to_minutes(item.duration_ms as u128),
-      ],
-    })
+    .map(|item| track_table_item(item, &columns))
     .collect::<Vec<TableItem>>();
 
   let title = if app.is_playlist_track_table_context() {
@@ -457,26 +442,8 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 }
 
 pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let header = TableHeader {
-    id: TableId::AlbumList,
-    items: vec![
-      TableHeaderItem {
-        text: "Name",
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Artists",
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Release Date",
-        width: get_percentage_width(layout_chunk.width, 1.0 / 5.0),
-        ..Default::default()
-      },
-    ],
-  };
+  let columns = table_columns(app, TableColumnSet::Albums, layout_chunk.width);
+  let header = table_header(TableId::AlbumList, &columns);
 
   let current_route = app.get_current_route();
 
@@ -491,18 +458,7 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items = saved_albums
       .items
       .iter()
-      .map(|saved_album| TableItem {
-        id: saved_album.album.id.clone().unwrap_or_default(),
-        format: vec![
-          format!(
-            "{}{}",
-            app.user_config.padded_liked_icon(),
-            &saved_album.album.name
-          ),
-          join_artist_names(&saved_album.album.artists),
-          saved_album.album.release_date.clone().unwrap_or_default(),
-        ],
-      })
+      .map(|saved_album| album_table_item(saved_album, &columns, app))
       .collect::<Vec<TableItem>>();
 
     draw_table(
@@ -518,32 +474,8 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 }
 
 pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let header = TableHeader {
-    id: TableId::PodcastEpisodes,
-    items: vec![
-      TableHeaderItem {
-        // Column to mark an episode as fully played
-        text: "",
-        width: 2,
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Date",
-        width: get_percentage_width(layout_chunk.width, 0.5 / 5.0) - 2,
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Name",
-        width: get_percentage_width(layout_chunk.width, 3.5 / 5.0),
-        id: ColumnId::Title,
-      },
-      TableHeaderItem {
-        text: "Duration",
-        width: get_percentage_width(layout_chunk.width, 1.0 / 5.0),
-        ..Default::default()
-      },
-    ],
-  };
+  let columns = table_columns(app, TableColumnSet::Episodes, layout_chunk.width);
+  let header = table_header(TableId::PodcastEpisodes, &columns);
 
   let current_route = app.get_current_route();
 
@@ -556,33 +488,7 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items = episodes
       .items
       .iter()
-      .map(|episode| {
-        let duration_ms = episode.duration_ms as u128;
-        let (played_str, time_str) = match &episode.resume_point {
-          Some(resume_point) => (
-            if resume_point.fully_played {
-              " ✔".to_owned()
-            } else {
-              "".to_owned()
-            },
-            format!(
-              "{} / {}",
-              millis_to_minutes(resume_point.resume_position_ms as u128),
-              millis_to_minutes(duration_ms)
-            ),
-          ),
-          None => ("".to_owned(), millis_to_minutes(duration_ms)),
-        };
-        TableItem {
-          id: episode.id.clone().unwrap_or_default(),
-          format: vec![
-            played_str,
-            episode.release_date.to_owned(),
-            episode.name.to_owned(),
-            time_str,
-          ],
-        }
-      })
+      .map(|episode| episode_table_item(episode, &columns, app))
       .collect::<Vec<TableItem>>();
 
     let title = match &app.episode_table_context {
@@ -619,32 +525,8 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 }
 
 pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let header = TableHeader {
-    id: TableId::RecentlyPlayed,
-    items: vec![
-      TableHeaderItem {
-        id: ColumnId::Liked,
-        text: "",
-        width: 2,
-      },
-      TableHeaderItem {
-        id: ColumnId::Title,
-        text: "Title",
-        // We need to subtract the fixed value of the previous column
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0) - 2,
-      },
-      TableHeaderItem {
-        text: "Artist",
-        width: get_percentage_width(layout_chunk.width, 2.0 / 5.0),
-        ..Default::default()
-      },
-      TableHeaderItem {
-        text: "Length",
-        width: get_percentage_width(layout_chunk.width, 1.0 / 5.0),
-        ..Default::default()
-      },
-    ],
-  };
+  let columns = table_columns(app, TableColumnSet::RecentlyPlayed, layout_chunk.width);
+  let header = table_header(TableId::RecentlyPlayed, &columns);
 
   if let Some(recently_played) = &app.recently_played.result {
     let current_route = app.get_current_route();
@@ -659,15 +541,7 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
     let items = recently_played
       .items
       .iter()
-      .map(|item| TableItem {
-        id: item.id.clone().unwrap_or_default(),
-        format: vec![
-          "".to_string(),
-          item.name.clone(),
-          item.artists.join(", "),
-          millis_to_minutes(item.duration_ms as u128),
-        ],
-      })
+      .map(|item| track_table_item(item, &columns))
       .collect::<Vec<TableItem>>();
 
     draw_table(
@@ -717,7 +591,14 @@ fn draw_table(
 
   // Make sure that the selected item is visible on the page. Need to add some rows of padding
   // to chunk height for header and header space to get a true table height
-  let padding = 5;
+  // Clamp the configured padding to half the table height so an oversized
+  // value can never zero out the visible-row count (which would pin the
+  // scroll offset to 0 and make off-screen rows unreachable).
+  let padding = app
+    .user_config
+    .behavior
+    .table_scroll_padding
+    .min(layout_chunk.height / 2);
   let visible_rows = layout_chunk
     .height
     .checked_sub(padding)
@@ -733,17 +614,20 @@ fn draw_table(
     // if table displays songs
     match header.id {
       TableId::Song | TableId::RecentlyPlayed | TableId::Album => {
-        // First check if the song should be highlighted because it is currently playing
-        if let Some(title_idx) = header.get_index(ColumnId::Title) {
-          if let Some(track_playing_offset_index) =
-            track_playing_index.and_then(|idx| idx.checked_sub(offset))
-          {
-            if i == track_playing_offset_index {
-              formatted_row[title_idx] = format!("▶ {}", &formatted_row[title_idx]);
-              style = Style::default()
-                .fg(app.user_config.theme.active)
-                .add_modifier(Modifier::BOLD);
+        // First check if the song should be highlighted because it is currently playing.
+        // The marker goes on the title cell, falling back to the first cell when the
+        // user's column config omits `title` so the playing row is never unmarked.
+        if let Some(track_playing_offset_index) =
+          track_playing_index.and_then(|idx| idx.checked_sub(offset))
+        {
+          if i == track_playing_offset_index {
+            let title_idx = header.get_index(ColumnId::Title).unwrap_or(0);
+            if let Some(cell) = formatted_row.get_mut(title_idx) {
+              cell.insert_str(0, &app.user_config.padded_playing_icon());
             }
+            style = Style::default()
+              .fg(app.user_config.theme.active)
+              .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
           }
         }
 
@@ -755,16 +639,17 @@ fn draw_table(
         }
       }
       TableId::PodcastEpisodes => {
-        if let Some(name_idx) = header.get_index(ColumnId::Title) {
-          if let Some(track_playing_offset_index) =
-            track_playing_index.and_then(|idx| idx.checked_sub(offset))
-          {
-            if i == track_playing_offset_index {
-              formatted_row[name_idx] = format!("▶ {}", &formatted_row[name_idx]);
-              style = Style::default()
-                .fg(app.user_config.theme.active)
-                .add_modifier(Modifier::BOLD);
+        if let Some(track_playing_offset_index) =
+          track_playing_index.and_then(|idx| idx.checked_sub(offset))
+        {
+          if i == track_playing_offset_index {
+            let name_idx = header.get_index(ColumnId::Title).unwrap_or(0);
+            if let Some(cell) = formatted_row.get_mut(name_idx) {
+              cell.insert_str(0, &app.user_config.padded_playing_icon());
             }
+            style = Style::default()
+              .fg(app.user_config.theme.active)
+              .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
           }
         }
       }
@@ -788,7 +673,7 @@ fn draw_table(
 
   let table = Table::new(rows, &widths)
     .header(
-      Row::new(header.items.iter().map(|h| h.text))
+      Row::new(header.items.iter().map(|h| h.text.as_str()))
         .style(Style::default().fg(app.user_config.theme.header)),
     )
     .block(

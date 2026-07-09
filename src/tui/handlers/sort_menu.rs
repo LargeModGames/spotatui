@@ -78,7 +78,7 @@ pub fn open_sort_menu(app: &mut App, context: SortContext) {
     SortContext::PlaylistTracks => app.playlist_sort.field,
     SortContext::SavedAlbums => app.album_sort.field,
     SortContext::SavedArtists => app.artist_sort.field,
-    SortContext::RecentlyPlayed => SortField::Default, // No persistent sort for this
+    SortContext::RecentlyPlayed => app.recently_played_sort.field,
   };
 
   let available = context.available_fields();
@@ -116,7 +116,7 @@ fn apply_sort(app: &mut App, field: SortField) {
       }
       SortContext::SavedAlbums => sort_saved_albums(app),
       SortContext::SavedArtists => sort_saved_artists(app),
-      SortContext::RecentlyPlayed => { /* no persistent sort */ }
+      SortContext::RecentlyPlayed => app.sort_recently_played_items(),
     }
   }
 }
@@ -126,7 +126,7 @@ fn get_sort_state_mut(app: &mut App, ctx: SortContext) -> &mut crate::core::sort
     SortContext::PlaylistTracks => &mut app.playlist_sort,
     SortContext::SavedAlbums => &mut app.album_sort,
     SortContext::SavedArtists => &mut app.artist_sort,
-    SortContext::RecentlyPlayed => &mut app.playlist_sort, // fallback
+    SortContext::RecentlyPlayed => &mut app.recently_played_sort,
   }
 }
 

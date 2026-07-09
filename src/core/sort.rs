@@ -46,6 +46,32 @@ impl SortField {
       SortField::Album => Some('l'),
     }
   }
+
+  /// Lowercase config-file token, e.g. `"name"`, `"date_added"`.
+  pub fn to_config_str(self) -> &'static str {
+    match self {
+      SortField::Default => "default",
+      SortField::Name => "name",
+      SortField::DateAdded => "date_added",
+      SortField::Artist => "artist",
+      SortField::Duration => "duration",
+      SortField::Album => "album",
+    }
+  }
+
+  /// Parse a config-file token back to a `SortField`. Returns `None` for
+  /// unknown strings (callers surface the context's valid fields in the error).
+  pub fn from_config_str(s: &str) -> Option<Self> {
+    match s.trim() {
+      "default" => Some(SortField::Default),
+      "name" => Some(SortField::Name),
+      "date_added" => Some(SortField::DateAdded),
+      "artist" => Some(SortField::Artist),
+      "duration" => Some(SortField::Duration),
+      "album" => Some(SortField::Album),
+      _ => None,
+    }
+  }
 }
 
 /// Sort order direction
@@ -66,10 +92,37 @@ impl SortOrder {
   }
 
   /// Get the sort indicator arrow
+  #[allow(dead_code)]
   pub fn indicator(&self) -> &'static str {
     match self {
       SortOrder::Ascending => "↑",
       SortOrder::Descending => "↓",
+    }
+  }
+
+  /// Get the sort indicator using caller-supplied icons (from config).
+  pub fn indicator_icon<'a>(&self, ascending: &'a str, descending: &'a str) -> &'a str {
+    match self {
+      SortOrder::Ascending => ascending,
+      SortOrder::Descending => descending,
+    }
+  }
+
+  /// Config-file token for the direction suffix (`:desc`).
+  #[allow(dead_code)]
+  pub fn to_config_suffix(self) -> &'static str {
+    match self {
+      SortOrder::Ascending => "",
+      SortOrder::Descending => ":desc",
+    }
+  }
+
+  /// Parse a `:desc` direction suffix. Only `desc` flips to descending;
+  /// everything else (including `asc` or empty) is ascending.
+  pub fn parse_suffix(s: &str) -> Self {
+    match s.trim() {
+      "desc" => SortOrder::Descending,
+      _ => SortOrder::Ascending,
     }
   }
 }
@@ -144,6 +197,54 @@ impl SortState {
   pub fn reset(&mut self) {
     self.field = SortField::Default;
     self.order = SortOrder::Ascending;
+  }
+
+  /// Render as a config token: `"field"` or `"field:desc"`.
+  #[allow(dead_code)]
+  pub fn to_config_str(self) -> String {
+    format!(
+      "{}{}",
+      self.field.to_config_str(),
+      self.order.to_config_suffix()
+    )
+  }
+
+  /// Parse a `"<field>"` / `"<field>:desc"` spec, validating that the field is
+  /// available in `ctx`. Hard error (with the context's valid fields) if the
+  /// field is unknown or unavailable in this context.
+  pub fn parse(spec: &str, ctx: SortContext) -> Result<Self, String> {
+    let (field_str, order_str) = match spec.split_once(':') {
+      Some((f, o)) => (f, o),
+      None => (spec, ""),
+    };
+    let field = SortField::from_config_str(field_str).ok_or_else(|| {
+      format!(
+        "unknown sort field '{}' (valid for this context: {})",
+        field_str.trim(),
+        ctx
+          .available_fields()
+          .iter()
+          .map(|f| f.to_config_str())
+          .collect::<Vec<_>>()
+          .join(", ")
+      )
+    })?;
+    if !ctx.available_fields().contains(&field) {
+      return Err(format!(
+        "sort field '{}' is not available in this context (valid: {})",
+        field.to_config_str(),
+        ctx
+          .available_fields()
+          .iter()
+          .map(|f| f.to_config_str())
+          .collect::<Vec<_>>()
+          .join(", ")
+      ));
+    }
+    Ok(Self {
+      field,
+      order: SortOrder::parse_suffix(order_str),
+    })
   }
 }
 
@@ -224,6 +325,31 @@ mod tests {
   fn test_sort_order_toggle() {
     assert_eq!(SortOrder::Ascending.toggle(), SortOrder::Descending);
     assert_eq!(SortOrder::Descending.toggle(), SortOrder::Ascending);
+  }
+
+  #[test]
+  fn sort_order_indicators_and_config_suffixes_match_direction() {
+    assert_eq!(SortOrder::Ascending.indicator(), "↑");
+    assert_eq!(SortOrder::Descending.indicator(), "↓");
+    assert_eq!(SortOrder::Ascending.to_config_suffix(), "");
+    assert_eq!(SortOrder::Descending.to_config_suffix(), ":desc");
+  }
+
+  #[test]
+  fn sort_state_config_round_trips() {
+    let parsed = SortState::parse("artist:desc", SortContext::PlaylistTracks).unwrap();
+    assert_eq!(
+      parsed,
+      SortState {
+        field: SortField::Artist,
+        order: SortOrder::Descending
+      }
+    );
+    assert_eq!(parsed.to_config_str(), "artist:desc");
+    assert_eq!(
+      SortState::parse("artist", SortContext::SavedArtists).unwrap_err(),
+      "sort field 'artist' is not available in this context (valid: default, name)"
+    );
   }
 
   #[test]

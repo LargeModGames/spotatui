@@ -226,7 +226,10 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
     .unwrap_or_else(|| "—".to_string());
   items.push(
     ListItem::new(Line::from(vec![
-      Span::styled("Now playing: ", style.add_modifier(Modifier::BOLD)),
+      Span::styled(
+        "Now playing: ",
+        style.add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+      ),
       Span::raw(now_text),
     ]))
     .style(style),
@@ -303,7 +306,7 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
       Style::default()
         .fg(app.user_config.theme.active)
         .bg(app.user_config.theme.inactive)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
   f.render_stateful_widget(list, area, &mut state);
@@ -383,7 +386,7 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
           Line::from(Span::raw("Are you sure you want to delete the playlist: ")),
           Line::from(Span::styled(
             playlist.as_str(),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
           )),
           Line::from(Span::raw("?")),
         ];
@@ -396,11 +399,11 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
           Line::from(Span::raw("Remove this track from playlist?")),
           Line::from(Span::styled(
             format!("Track: {}", pending_remove.track_name),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
           )),
           Line::from(Span::styled(
             format!("Playlist: {}", pending_remove.playlist_name),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
           )),
         ];
         draw_confirmation_dialog(f, app, "Remove Track", text, 60);
@@ -413,7 +416,7 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
           Line::from(Span::raw("Use fallback shortcut for Open Settings?")),
           Line::from(Span::styled(
             format!("Save as: {}", persist.open_settings_key),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
           )),
         ];
         draw_confirmation_dialog(f, app, "Save Shortcut Fallback", text, 66);
@@ -448,7 +451,7 @@ fn draw_confirmation_dialog(
       title,
       Style::default()
         .fg(app.user_config.theme.header)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
@@ -501,7 +504,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       "Add Track To Playlist",
       Style::default()
         .fg(app.user_config.theme.header)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
@@ -609,7 +612,7 @@ pub fn draw_announcement_prompt(f: &mut Frame<'_>, app: &App) {
   let mut text = vec![
     Line::from(Span::styled(
       format!("{}  {}", level_label, announcement.title),
-      Style::default().add_modifier(Modifier::BOLD),
+      Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )),
     Line::from(""),
   ];
@@ -622,7 +625,7 @@ pub fn draw_announcement_prompt(f: &mut Frame<'_>, app: &App) {
     text.push(Line::from(""));
     text.push(Line::from(Span::styled(
       format!("More: {}", url),
-      Style::default().add_modifier(Modifier::ITALIC),
+      Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::ITALIC)),
     )));
   }
 
@@ -659,7 +662,7 @@ pub fn draw_exit_prompt(f: &mut Frame<'_>, app: &App) {
   let text = vec![
     Line::from(Span::styled(
       "Exit spotatui?",
-      Style::default().add_modifier(Modifier::BOLD),
+      Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )),
     Line::from(""),
     Line::from("Press Y for Yes or N for No"),
@@ -699,7 +702,7 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
     crate::core::sort::SortContext::PlaylistTracks => &app.playlist_sort,
     crate::core::sort::SortContext::SavedAlbums => &app.album_sort,
     crate::core::sort::SortContext::SavedArtists => &app.artist_sort,
-    crate::core::sort::SortContext::RecentlyPlayed => &app.playlist_sort,
+    crate::core::sort::SortContext::RecentlyPlayed => &app.recently_played_sort,
   };
 
   let width = std::cmp::min(f.area().width.saturating_sub(4), 35);
@@ -720,7 +723,13 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
         .map(|c| format!(" ({})", c))
         .unwrap_or_default();
       let indicator = if *field == current_sort.field {
-        format!(" {}", current_sort.order.indicator())
+        format!(
+          " {}",
+          current_sort.order.indicator_icon(
+            &app.user_config.behavior.sort_ascending_icon,
+            &app.user_config.behavior.sort_descending_icon,
+          )
+        )
       } else {
         String::new()
       };
@@ -729,7 +738,7 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
       let style = if i == app.sort_menu_selected {
         Style::default()
           .fg(app.user_config.theme.active)
-          .add_modifier(Modifier::BOLD)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else if *field == current_sort.field {
         Style::default().fg(app.user_config.theme.hovered)
       } else {
@@ -757,13 +766,13 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
           title,
           Style::default()
             .fg(app.user_config.theme.active)
-            .add_modifier(Modifier::BOLD),
+            .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
         )),
     )
     .highlight_style(
       Style::default()
         .fg(app.user_config.theme.active)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
 
@@ -789,7 +798,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
   let style = app.user_config.theme.base_style();
   let active_style = Style::default()
     .fg(app.user_config.theme.active)
-    .add_modifier(Modifier::BOLD);
+    .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
   let hint_style = Style::default().fg(app.user_config.theme.hint);
 
   let mut lines: Vec<Line> = Vec::new();
@@ -1017,7 +1026,7 @@ pub fn draw_plugin_popup(f: &mut Frame<'_>, app: &App) {
       popup.title.clone(),
       Style::default()
         .fg(app.user_config.theme.header)
-        .add_modifier(Modifier::BOLD),
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ));
 
   let paragraph = Paragraph::new(ratatui_lines)

@@ -221,6 +221,9 @@ See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/N
 
 The config file is at `${HOME}/.config/spotatui/config.yml`. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
 
+Nearly everything is customizable: keybindings, themes, icons, playbar button labels, status-line and window-title format templates, table columns (reorder/rename/resize), default sorting per screen, startup screen, and layout (sidebar/playbar position). Invalid values fall back to defaults with a logged warning — a config typo never blocks startup.
+
+- Customization guide: [`docs/configuration.md`](docs/configuration.md), with a commented [`examples/config.example.yml`](examples/config.example.yml)
 - Full config reference: [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration)
 - Built-in themes (Spotify, Dracula, Nord, …): [Themes Wiki](https://github.com/LargeModGames/spotatui/wiki/Themes)
 

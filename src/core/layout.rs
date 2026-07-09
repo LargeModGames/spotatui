@@ -1,5 +1,135 @@
+use crate::core::app::{ActiveBlock, App};
 use crate::core::user_config::BehaviorConfig;
 use ratatui::layout::{Constraint, Layout, Rect};
+
+pub const COMPACT_TOP_ROW_THRESHOLD: u16 = 60;
+const COMPACT_HELP_WIDTH: u16 = 6;
+const COMPACT_SETTINGS_WIDTH: u16 = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MainLayoutAreas {
+  pub input: Option<Rect>,
+  pub help: Option<Rect>,
+  pub settings: Option<Rect>,
+  pub playbar: Rect,
+  /// The full sidebar (user block) area, including the input row in wide layout.
+  pub sidebar: Rect,
+  pub library: Rect,
+  pub playlists: Rect,
+  pub content: Rect,
+}
+
+pub fn small_terminal_width(behavior: &BehaviorConfig) -> u16 {
+  behavior.small_terminal_width.max(1)
+}
+
+pub fn small_terminal_height(behavior: &BehaviorConfig) -> u16 {
+  behavior.small_terminal_height.max(1)
+}
+
+pub fn main_layout_margin(app: &App) -> u16 {
+  if app.size.height > small_terminal_height(&app.user_config.behavior) {
+    1
+  } else {
+    0
+  }
+}
+
+pub fn is_wide_layout(app: &App) -> bool {
+  app.size.width >= small_terminal_width(&app.user_config.behavior)
+    && !app.user_config.behavior.enforce_wide_search_bar
+}
+
+pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
+  if app.size.width == 0 || app.size.height == 0 {
+    return None;
+  }
+
+  let root = Rect::new(0, 0, app.size.width, app.size.height);
+  let margin = main_layout_margin(app);
+  let wide_layout = is_wide_layout(app);
+  let behavior = &app.user_config.behavior;
+
+  let (input_area, routes_area, playbar_area) = if wide_layout {
+    if behavior.playbar_position == "top" {
+      let [playbar_area, routes_area] = root.layout(
+        &Layout::vertical([playbar_constraint(behavior), Constraint::Min(1)]).margin(margin),
+      );
+      (None, routes_area, playbar_area)
+    } else {
+      let [routes_area, playbar_area] = root.layout(
+        &Layout::vertical([Constraint::Min(1), playbar_constraint(behavior)]).margin(margin),
+      );
+      (None, routes_area, playbar_area)
+    }
+  } else if behavior.playbar_position == "top" {
+    let [playbar_area, input_area, routes_area] = root.layout(
+      &Layout::vertical([
+        playbar_constraint(behavior),
+        Constraint::Length(3),
+        Constraint::Min(1),
+      ])
+      .margin(margin),
+    );
+    (Some(input_area), routes_area, playbar_area)
+  } else {
+    let [input_area, routes_area, playbar_area] = root.layout(
+      &Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(1),
+        playbar_constraint(behavior),
+      ])
+      .margin(margin),
+    );
+    (Some(input_area), routes_area, playbar_area)
+  };
+
+  let (user_area, content_area) = split_routes_area(app, routes_area);
+  let library = library_constraints(behavior);
+  let (input, help, settings, library_area, playlist_area) = if wide_layout {
+    let [input_area, library_area, playlist_area] = user_area.layout(&Layout::vertical([
+      Constraint::Length(3),
+      library[0],
+      library[1],
+    ]));
+    let [input_text_area, help_area, settings_area] =
+      split_input_help_and_settings(app, input_area);
+    (
+      Some(input_text_area),
+      Some(help_area),
+      Some(settings_area),
+      library_area,
+      playlist_area,
+    )
+  } else {
+    let [library_area, playlist_area] =
+      user_area.layout(&Layout::vertical([library[0], library[1]]));
+    if let Some(input_area) = input_area {
+      let [input_text_area, help_area, settings_area] =
+        split_input_help_and_settings(app, input_area);
+      (
+        Some(input_text_area),
+        Some(help_area),
+        Some(settings_area),
+        library_area,
+        playlist_area,
+      )
+    } else {
+      (None, None, None, library_area, playlist_area)
+    }
+  };
+
+  Some(MainLayoutAreas {
+    input,
+    help,
+    settings,
+    playbar: playbar_area,
+    sidebar: user_area,
+    library: library_area,
+    playlists: playlist_area,
+    content: content_area,
+  })
+}
 
 /// Returns horizontal constraints for the [sidebar, content] split based on config.
 /// When sidebar_width_percent is 0, the sidebar is hidden (zero length).
@@ -11,6 +141,69 @@ pub fn sidebar_constraints(behavior: &BehaviorConfig) -> [Constraint; 2] {
     Constraint::Percentage(sidebar),
     Constraint::Percentage(content),
   ]
+}
+
+fn split_routes_area(app: &App, routes_area: Rect) -> (Rect, Rect) {
+  let behavior = &app.user_config.behavior;
+  let sidebar = if sidebar_is_hidden(app) {
+    [Constraint::Length(0), Constraint::Min(1)]
+  } else {
+    sidebar_constraints(behavior)
+  };
+
+  match behavior.sidebar_position.as_str() {
+    "right" => {
+      let [content_area, user_area] =
+        routes_area.layout(&Layout::horizontal([sidebar[1], sidebar[0]]));
+      (user_area, content_area)
+    }
+    _ => {
+      let [user_area, content_area] =
+        routes_area.layout(&Layout::horizontal([sidebar[0], sidebar[1]]));
+      (user_area, content_area)
+    }
+  }
+}
+
+fn sidebar_is_hidden(app: &App) -> bool {
+  if app.user_config.behavior.sidebar_position != "hidden" {
+    return false;
+  }
+
+  let route = app.get_current_route();
+  !matches!(
+    route.active_block,
+    ActiveBlock::Library | ActiveBlock::MyPlaylists
+  ) && !matches!(
+    route.hovered_block,
+    ActiveBlock::Library | ActiveBlock::MyPlaylists
+  )
+}
+
+pub fn split_input_help_and_settings(app: &App, input_row_area: Rect) -> [Rect; 3] {
+  let compact_top_row = input_row_area.width < COMPACT_TOP_ROW_THRESHOLD;
+
+  let constraints = if compact_top_row {
+    [
+      Constraint::Min(1),
+      Constraint::Length(COMPACT_HELP_WIDTH),
+      Constraint::Length(COMPACT_SETTINGS_WIDTH),
+    ]
+  } else if is_wide_layout(app) {
+    [
+      Constraint::Percentage(65),
+      Constraint::Percentage(18),
+      Constraint::Percentage(17),
+    ]
+  } else {
+    [
+      Constraint::Percentage(80),
+      Constraint::Percentage(8),
+      Constraint::Percentage(12),
+    ]
+  };
+
+  input_row_area.layout(&Layout::horizontal(constraints))
 }
 
 /// Returns the playbar height constraint based on config.

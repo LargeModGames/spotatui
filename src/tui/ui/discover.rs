@@ -106,7 +106,10 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         ))
         .border_style(get_color(highlight_state, app.user_config.theme)),
     )
-    .highlight_style(get_color(highlight_state, app.user_config.theme).add_modifier(Modifier::BOLD))
+    .highlight_style(
+      get_color(highlight_state, app.user_config.theme)
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+    )
     .highlight_symbol(Line::from("▶ ").style(get_color(highlight_state, app.user_config.theme)));
 
   f.render_stateful_widget(list, list_area, &mut state);

@@ -254,6 +254,7 @@ impl UserNetwork for Network {
           app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));
         }
         app.recently_played.result = Some(domain_page);
+        app.sort_recently_played_items();
         app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
       }
       Err(e) => {
