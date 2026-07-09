@@ -6,6 +6,7 @@
 
 - **Native idle recovery no longer repeats forever**: When Spotify reports no active playback after a stale native session, spotatui still tries to restore the local device automatically. It now stops after two recovery attempts for the same idle session instead of sending `transfer(None)` and `activate()` every few seconds ([#311](https://github.com/LargeModGames/spotatui/issues/311)).
 - **Album tracklists no longer cut off at 50 songs**: Opening an album now pages through the full Spotify tracklist instead of stopping at the API's 50-track page limit, whether the album is opened from search results, an artist's discography, a track's context, or the saved-albums library ([#324](https://github.com/LargeModGames/spotatui/issues/324)).
+- **`s` saves tracks in search results**: Pressing `s` on a highlighted track in the Songs search block now toggles its saved/liked state, matching the track-table binding shown in the help menu. Search results also fetch the liked state of listed tracks, so already-liked songs show the liked marker and toggle correctly ([#348](https://github.com/LargeModGames/spotatui/issues/348)).
 
 ### Added
 

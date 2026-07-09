@@ -691,8 +691,24 @@ pub fn handler(key: Key, app: &mut App) {
     },
     Key::Char('r') => handle_recommended_tracks(app),
     _ if key == app.user_config.keys.add_item_to_queue => handle_add_item_to_queue(app),
-    // Add `s` to "see more" on each option
+    Key::Char('s') => handle_save_track_event(app),
     _ => {}
+  }
+}
+
+fn handle_save_track_event(app: &mut App) {
+  if let SearchResultBlock::SongSearch = app.search_results.selected_block {
+    let uri = app.search_results.selected_tracks_index.and_then(|index| {
+      app
+        .search_results
+        .tracks
+        .as_ref()
+        .and_then(|tracks| tracks.items.get(index))
+        .and_then(|track| track.uri.clone())
+    });
+    if let Some(uri) = uri {
+      app.dispatch(IoEvent::ToggleSaveTrack(uri));
+    }
   }
 }
 
@@ -863,6 +879,38 @@ mod tests {
       app.get_current_route().active_block,
       ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
     );
+  }
+
+  /// Issue #348 regression: `s` on a highlighted search-result track must
+  /// toggle its saved/liked state, matching the track-table binding shown in
+  /// the help menu ("Save track in list or table").
+  #[test]
+  fn pressing_s_on_search_song_toggles_saved_track() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.search_results.tracks = Some(Paged {
+      items: vec![TrackInfo::from(&full_track(
+        "0000000000000000000001",
+        "Search Track",
+      ))],
+      offset: 0,
+      limit: 1,
+      total: 1,
+      next: None,
+      previous: None,
+    });
+    app.search_results.selected_block = SearchResultBlock::SongSearch;
+    app.search_results.selected_tracks_index = Some(0);
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+
+    handler(Key::Char('s'), &mut app);
+
+    match rx.try_recv().unwrap() {
+      IoEvent::ToggleSaveTrack(uri) => {
+        assert_eq!(uri, "spotify:track:0000000000000000000001");
+      }
+      _ => panic!("expected a ToggleSaveTrack for the selected search track"),
+    }
   }
 
   /// panic-1 regression: a stale `selected_playlists_index` left over from a

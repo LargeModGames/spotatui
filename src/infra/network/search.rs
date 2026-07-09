@@ -105,6 +105,17 @@ impl SearchNetwork for Network {
     let mut app = self.app.lock().await;
 
     // Extract ids for follow/saved checks from raw rspotify pages before conversion.
+    if let Some(ref track_results) = track_result {
+      let track_ids = track_results
+        .items
+        .iter()
+        .filter_map(|track| track.id.as_ref().map(|id| id.id().to_string()))
+        .collect();
+
+      // Check if these tracks are liked
+      app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_ids));
+    }
+
     if let Some(ref album_results) = album_result {
       let artist_ids = album_results
         .items
