@@ -5925,6 +5925,7 @@ dependencies = [
  "tui-equalizer",
  "unicode-width",
  "url",
+ "vergen",
 ]
 
 [[package]]

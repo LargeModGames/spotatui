@@ -84,7 +84,7 @@ brew install spotatui
 winget install spotatui
 
 # Cargo
-cargo install spotatui
+cargo install --locked spotatui
 
 # Arch Linux (AUR) - pre-built binary (faster)
 yay -S spotatui-bin
@@ -173,7 +173,7 @@ spotatui is a general music player, not just a Spotify client. Press `d` to open
 **Availability:** included in the Linux and Windows release binaries. Not yet on macOS (the shared audio output path is disabled there pending a fix; contributions welcome). When building from source, enable them with cargo features:
 
 ```bash
-cargo install spotatui --features local-files,subsonic,internet-radio,youtube
+cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube
 ```
 
 Each source has a few config keys; the essentials are below, and the full reference lives in the [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration).
