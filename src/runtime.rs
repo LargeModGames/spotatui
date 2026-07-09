@@ -1202,15 +1202,11 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     if let Some(ref mpris) = mpris_manager {
       if let Some(event_rx) = mpris.take_event_rx() {
-        #[cfg(feature = "streaming")]
-        let streaming_player_for_mpris = streaming_player.clone();
         let mpris_for_seek = Arc::clone(mpris);
         let app_for_mpris = Arc::clone(&app);
         tokio::spawn(async move {
           handle_mpris_events(
             event_rx,
-            #[cfg(feature = "streaming")]
-            streaming_player_for_mpris,
             shared_is_playing_for_mpris,
             shared_position_for_mpris,
             mpris_for_seek,
@@ -1689,7 +1685,6 @@ async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Ne
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 async fn handle_mpris_events(
   mut event_rx: tokio::sync::mpsc::UnboundedReceiver<mpris::MprisEvent>,
-  #[cfg(feature = "streaming")] streaming_player: Option<Arc<player::StreamingPlayer>>,
   shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
   shared_position: Arc<AtomicU64>,
   mpris_manager: Arc<mpris::MprisManager>,
@@ -1720,10 +1715,18 @@ async fn handle_mpris_events(
       continue;
     }
 
+    // Dynamically fetch the current active player so MPRIS can target the correct player
+    // and not the stale player. The old player can be stale on, e.g., native streaming recovery.
+    #[cfg(feature = "streaming")]
+    let current_player = {
+      let app_lock = app.lock().await;
+      app_lock.streaming_player.clone()
+    };
+
     match event {
       MprisEvent::PlayPause => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           if shared_is_playing.load(Ordering::Relaxed) {
             player.pause();
           } else {
@@ -1748,7 +1751,7 @@ async fn handle_mpris_events(
       }
       MprisEvent::Play => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           player.play();
           continue;
         }
@@ -1757,7 +1760,7 @@ async fn handle_mpris_events(
       }
       MprisEvent::Pause => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           player.pause();
           continue;
         }
@@ -1766,7 +1769,7 @@ async fn handle_mpris_events(
       }
       MprisEvent::Next => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           let _ = player;
           app.lock().await.next_track();
           continue;
@@ -1776,7 +1779,7 @@ async fn handle_mpris_events(
       }
       MprisEvent::Previous => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           let _ = player;
           app.lock().await.previous_track();
           continue;
@@ -1786,7 +1789,7 @@ async fn handle_mpris_events(
       }
       MprisEvent::Stop => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           player.stop();
           continue;
         }
@@ -1796,7 +1799,7 @@ async fn handle_mpris_events(
       MprisEvent::Seek(offset_micros) => {
         // MPRIS sends relative offset in microseconds (can be negative for rewind)
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           let current_ms = shared_position.load(Ordering::Relaxed) as i64;
           let offset_ms = offset_micros / 1000;
           let new_position_ms = (current_ms + offset_ms).max(0) as u32;
@@ -1822,7 +1825,7 @@ async fn handle_mpris_events(
         // MPRIS SetPosition sends absolute position in microseconds
         let new_position_ms = (position_micros / 1000).max(0) as u32;
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           player.seek(new_position_ms);
           shared_position.store(new_position_ms as u64, Ordering::Relaxed);
           if let Ok(mut app_lock) = app.try_lock() {
@@ -1840,7 +1843,7 @@ async fn handle_mpris_events(
       }
       MprisEvent::SetShuffle(shuffle) => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           if let Err(e) = player.set_shuffle(shuffle) {
             eprintln!("MPRIS: Failed to set shuffle: {}", e);
           } else {
@@ -1872,7 +1875,7 @@ async fn handle_mpris_events(
           LoopStatusEvent::Playlist => RepeatState::Context,
         };
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = streaming_player {
+        if let Some(ref player) = current_player {
           if let Err(e) = player.set_repeat_mode(repeat_state) {
             eprintln!("MPRIS: Failed to set repeat mode: {}", e);
           } else {
