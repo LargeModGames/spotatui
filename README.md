@@ -1,8 +1,8 @@
 # spotatui
 
-> A Spotify client for the terminal written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui).
+> A terminal music player written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui) — native Spotify streaming, synced lyrics, a real-time audio visualizer, and optional Local, Subsonic/Navidrome, Internet Radio, and YouTube sources. Spotify is optional.
 >
-> A community-maintained fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), actively developed with new features like native streaming, synced lyrics, and real-time audio visualization, and growing beyond Spotify with optional local files, Subsonic/Navidrome, internet radio, and YouTube sources.
+> A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Upstream](https://img.shields.io/badge/upstream-Rigellute%2Fspotify--tui-blue)](https://github.com/Rigellute/spotify-tui)
@@ -26,29 +26,29 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 ## Table of Contents
 
-- [Help Wanted](#help-wanted)
-- [Performance](#performance)
-- [Privacy Notice](#privacy-notice)
-- [Migrating from spotify-tui](#migrating-from-spotify-tui)
+- [Features](#features)
 - [Installation](#installation)
-- [First-time setup](#first-time-setup)
+- [Quickstart](#quickstart)
   - [Adding Spotify later](#adding-spotify-later)
-- [Usage](#usage)
-- [Native Streaming](#native-streaming)
-- [Music Sources (Beyond Spotify)](#music-sources-beyond-spotify)
+- [Music Sources](#music-sources)
   - [Local Files](#local-files)
   - [Subsonic / Navidrome](#subsonic--navidrome)
   - [Internet Radio](#internet-radio)
   - [YouTube](#youtube)
+- [Native Streaming](#native-streaming)
 - [Configuration](#configuration)
   - [Discord Rich Presence](#discord-rich-presence)
+  - [Anonymous Song Counter](#anonymous-song-counter)
 - [Plugins](#plugins)
-- [Limitations](#limitations)
+- [Performance](#performance)
+- [Playback Requirements](#playback-requirements)
   - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
 - [Using with spotifyd](#using-with-spotifyd)
+- [Migrating from spotify-tui](#migrating-from-spotify-tui)
 - [Libraries used](#libraries-used)
 - [Development](#development)
   - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
+- [Help Wanted](#help-wanted)
 - [Maintainer](#maintainer)
 - [spotatui Contributors](#spotatui-contributors)
 - [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
@@ -59,61 +59,21 @@
 
 
 
-## Help Wanted
+## Features
 
-**spotatui is currently maintained by a solo developer.** More contributors would be hugely appreciated! Here's how you can help:
-
-- **Star the repo** to help others discover the project
-- **Report bugs** or request features in [Issues](https://github.com/LargeModGames/spotatui/issues)
-- **Join the community** in [Discussions](https://github.com/LargeModGames/spotatui/discussions)
-- **Submit a PR** for code, docs, or themes
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for more details!
-
-## Performance
-
-spotatui is extremely lightweight compared to the official Electron client.
-
-| Mode                            | RAM Usage |
-| :------------------------------ | :-------- |
-| **Native Streaming (Base)**     | ~78 MB    |
-| **With Synced Lyrics**          | ~78 MB    |
-| **With System-Wide Visualizer** | ~80 MB    |
-
-*Tested on Arch Linux (Hyprland).*
-
-## Privacy Notice
-
-**Anonymous Global Counter**: spotatui includes an opt-in feature that contributes to a global counter showing how many songs have been played by all users worldwide. This feature:
-
-- **Is completely anonymous** - no personal information, song names, artists, or listening history is collected
-- **Only sends a simple increment** when a new song starts playing
-- **Is enabled by default** but can be opted out at any time
-- **Can be disabled** by setting `enable_global_song_count: false` in `~/.config/spotatui/config.yml`
-
-We respect your privacy. This is purely a fun community metric with zero tracking of individual users.
-
-## Migrating from spotify-tui
-
-If you used the original `spotify-tui` before:
-
-- The binary name changed from `spt` to `spotatui`.
-- Config paths changed:
-  - Old: `~/.config/spotify-tui/`
-  - New: `~/.config/spotatui/`
-
-You can copy your existing config:
-
-```bash
-mkdir -p ~/.config/spotatui
-cp -r ~/.config/spotify-tui/* ~/.config/spotatui/
-```
-
-You may be asked to re-authenticate with Spotify the first time.
+- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), or [YouTube](#youtube). The free sources need no Spotify account; press `d` to switch between them at any time.
+- **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
+- **Synced lyrics.** Line-by-line lyrics that follow playback.
+- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
+- **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
+- **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
+- **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
+- **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
+- **Lightweight.** ~78 MB RAM while streaming, versus a full Electron client. See [Performance](#performance).
 
 ## Installation
 
-> **Note:** Spotify is optional. On first launch spotatui asks which source you want to use, and YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only required for the Spotify source (native streaming and Web API playback controls); you can add Spotify anytime later from the `d` menu.
+> **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
 
 ```bash
 # Homebrew (macOS only)
@@ -132,7 +92,7 @@ yay -S spotatui-bin
 # Arch Linux (AUR) - build from source
 yay -S spotatui
 
-# Void Linux (Unoffical Repo)
+# Void Linux (Unofficial Repo)
 echo repository=https://raw.githubusercontent.com/Event-Horizon-VL/blackhole-vl/repository-x86_64 | sudo tee /etc/xbps.d/20-repository-extra.conf
 sudo xbps-install -S spotatui
 ```
@@ -160,9 +120,9 @@ Or download pre-built binaries from [GitHub Releases](https://github.com/LargeMo
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
-## First-time setup
+## Quickstart
 
-Run `spotatui`. On the first launch it asks which source you want to set up:
+Run `spotatui`. On the first launch it asks which source to set up:
 
 ```
 Welcome to spotatui! Choose your music source:
@@ -174,94 +134,58 @@ Welcome to spotatui! Choose your music source:
   5) Local Files    (free)
 ```
 
-- Pick a **free source** to skip Spotify entirely. Subsonic prompts for your server URL and credentials (and verifies the connection); YouTube checks that `yt-dlp` is on your `PATH`. Only sources compiled into your build are listed.
-- Pick **Spotify** to run the Spotify auth wizard. You'll need to create a Spotify Developer app at the [Spotify Dashboard](https://developer.spotify.com/dashboard/applications). See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation#connecting-to-spotify) for step-by-step setup.
+Pick a **free source** to skip Spotify entirely, or pick **Spotify** to run the auth wizard (you'll create a Spotify Developer app — see the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation#connecting-to-spotify)). Only sources compiled into your build are listed.
+
+Once you're in:
+
+- Press `?` for the in-app help menu of all key events.
+- Press `d` to open the **Source & Device** picker and switch sources.
+- Press `z` on a track to queue it; open the queue with `Shift+Q`.
+- Run `spotatui --help` for the CLI. See the [Keybindings Wiki](https://github.com/LargeModGames/spotatui/wiki/Keybindings) for every shortcut.
+
+A few CLI examples to get you started:
+
+```bash
+spotatui --completions zsh                       # Shell completions (bash, powershell, and more supported)
+spotatui play --name "Your Playlist" --playlist --random  # Play a random song from a playlist
+spotatui playback --toggle                       # Play/pause current playback
+spotatui list --liked --limit 50                 # List your liked songs
+spotatui history recap --period 30d --output ./recap.html  # Generate a shareable listening recap
+```
 
 ### Adding Spotify later
 
-Started with a free source and want Spotify too? Press `d` to open the Source & Device menu and select **Spotify** — spotatui opens your browser to log in without restarting. This enables Spotify's Web API (browsing, playlists, controlling external devices) right away; **native (librespot) streaming still requires a restart**, since it initializes at startup.
+Started with a free source and want Spotify too? Press `d`, select **Spotify**, and spotatui opens your browser to log in without restarting — enabling browsing, playlists, and controlling external devices right away. **Native (librespot) streaming still requires a restart**, since it initializes at startup.
 
-## Usage
+## Music Sources
 
-The binary is named `spotatui`.
-
-Running `spotatui` with no arguments will bring up the UI. Press `?` to bring up a help menu that shows currently implemented key events and their actions.
-There is also a CLI that is able to do most of the stuff the UI does. Use `spotatui --help` to learn more.
-
-See [Keybindings Wiki](https://github.com/LargeModGames/spotatui/wiki/Keybindings) for the full list of keyboard shortcuts.
-
-**Play queue**: press `z` on any track to add it to a native queue that plays across all sources (Spotify, Local Files, Subsonic, YouTube) before your current playlist/album context resumes. Open the queue with `Shift+Q` to remove an item (`x`, configurable via `remove_from_queue`), reorder it (`J`/`K`), or press `Enter` to skip ahead and play it now.
-
-Here are some example to get you excited.
-```
-spotatui --completions zsh # Prints shell completions for zsh to stdout (bash, power-shell and more are supported)
-
-spotatui play --name "Your Playlist" --playlist --random # Plays a random song from "Your Playlist"
-spotatui play --name "A cool song" --track # Plays 'A cool song'
-
-spotatui playback --like --shuffle # Likes the current song and toggles shuffle mode
-spotatui playback --toggle # Plays/pauses the current playback
-
-spotatui list --liked --limit 50 # See your liked songs (50 is the max limit)
-
-# Looks for 'An even cooler song' and gives you the '{name} from {album}' of up to 30 matches
-spotatui search "An even cooler song" --tracks --format "%t from %b" --limit 30
-
-# Generate a shareable HTML recap from spotatui's local listening history
-spotatui history recap --period 30d --output ./spotatui-recap.html
-```
-
-## Native Streaming
-
-spotatui can play audio directly without needing spotifyd or the official Spotify app. Just run `spotatui` and it will appear as a Spotify Connect device.
-
-- Works with media keys, MPRIS (Linux), and macOS Now Playing
-- Premium account required
-- Context-backed native playback prefers Spotify-visible playback starts when it is safe to do so, while raw URI-list playback stays on the stable direct native path
-- Runs on our maintained [librespot fork](https://github.com/LargeModGames/spotatui-librespot), which backports upstream fixes for Spotify's evolving audio delivery (e.g. the HTTP 530 CDN issue that silenced native playback)
-
-
-See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/Native-Streaming) for setup details.
-
-## Music Sources (Beyond Spotify)
-
-spotatui is growing into a general music player. Press `d` to open the **Source & Device**
-picker and switch between sources; the sidebar and search re-scope to the active source.
-Playback for these sources runs through spotatui's own audio engine, so volume control and
-the audio visualizer work exactly like they do for Spotify.
+spotatui is a general music player, not just a Spotify client. Press `d` to open the **Source & Device** picker; the sidebar and search re-scope to the active source. Playback for these sources runs through spotatui's own audio engine, so volume control and the visualizer work exactly as they do for Spotify — and none of them need Spotify Premium.
 
 | Source | What it does | Needs |
 |---|---|---|
 | **Local Files** | Browse and play a folder of audio files (FLAC, MP3, OGG, WAV, …) | Nothing; set `local_music_path` or use the OS music dir |
-| **Subsonic** | Browse playlists, search, and stream from any Subsonic-compatible server (Navidrome, Gonic, Airsonic, Funkwhale, …) | A server account |
+| **Subsonic** | Browse, search, and stream from any Subsonic-compatible server (Navidrome, Gonic, Airsonic, Funkwhale, …) | A server account |
 | **Internet Radio** | Play icecast/shoutcast streams with live now-playing metadata; search the [radio-browser.info](https://www.radio-browser.info) directory (30k+ stations) | Nothing |
 | **YouTube** | Search YouTube and play audio; build **local playlists** stored in a plain file | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended) |
 
-These sources need no Spotify Premium. Combined with YouTube's local playlists, spotatui is
-fully usable without any paid account.
+**Resuming your last session:** quit while playing from a non-Spotify source and spotatui restores that track and its position on the next launch, following the `startup_behavior` setting (`continue`, `play`, or `pause`).
 
-**Resuming your last session:** quit while playing from a non-Spotify source and spotatui
-remembers that track and its position, bringing it back on the next launch. This follows the
-`startup_behavior` setting: the default `continue` resumes it exactly as it was (playing if it
-was playing when you closed), `play` always resumes it, and `pause` cues it paused.
-
-Availability: included in the Linux and Windows release binaries. Not yet available on macOS
-(the shared audio output path is disabled there pending a fix; contributions welcome). When
-building from source, enable them with cargo features:
+**Availability:** included in the Linux and Windows release binaries. Not yet on macOS (the shared audio output path is disabled there pending a fix; contributions welcome). When building from source, enable them with cargo features:
 
 ```bash
 cargo install spotatui --features local-files,subsonic,internet-radio,youtube
 ```
 
+Each source has a few config keys; the essentials are below, and the full reference lives in the [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration).
+
 ### Local Files
+
+Set a folder (defaults to the OS music directory), then pick **Local Files** in the `d` picker:
 
 ```yaml
 behavior:
-  local_music_path: "/home/you/Music" # defaults to the OS music directory
+  local_music_path: "/home/you/Music"
 ```
-
-Pick **Local Files** in the `d` picker; the sidebar lists your folders. Selecting a track
-queues the folder with next/previous and auto-advance.
 
 ### Subsonic / Navidrome
 
@@ -269,70 +193,42 @@ queues the folder with next/previous and auto-advance.
 behavior:
   subsonic_url: "https://music.example.com"
   subsonic_username: "you"
-  subsonic_password: "secret" # prefer the env var below
 ```
 
-Prefer setting the password via the `SPOTATUI_SUBSONIC_PASSWORD` environment variable so it
-never sits in the config file in plaintext.
+Prefer setting the password via the `SPOTATUI_SUBSONIC_PASSWORD` environment variable so it never sits in the config file in plaintext.
 
 ### Internet Radio
 
-Stations come from your config list and from searching the radio-browser.info directory
-in-app (the search box searches stations while Radio is the active source; Enter plays one
-directly). Press the save/like key (`F` by default) on a highlighted station, or while
-a radio stream is playing, to save it to `behavior.radio_stations` and show it in the
-Radio Stations sidebar. Highlight a saved sidebar station and press `D` to remove it.
-
-```yaml
-behavior:
-  radio_stations:
-    - name: "SomaFM Groove Salad"
-      url: "https://ice1.somafm.com/groovesalad-128-mp3"
-```
-
-The playbar shows a `LIVE` badge with the stream's now-playing title as it updates.
+Search the radio-browser.info directory in-app (Enter plays a station directly), and press the save key (`F` by default) to keep a station in your sidebar. Saved stations live under `behavior.radio_stations`; the playbar shows a `LIVE` badge with the stream's now-playing title.
 
 ### YouTube
 
-Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (install it from your
-package manager; `ffmpeg` is recommended for cleaner audio containers). No Google account,
-no API key, no cookies: search and playback are anonymous. If yt-dlp is somewhere unusual:
+Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recommended). No Google account, API key, or cookies — search and playback are anonymous. If playback breaks after a YouTube change, updating yt-dlp (`yt-dlp -U`) is the fix; no spotatui update needed.
 
-```yaml
-behavior:
-  ytdlp_path: "/opt/yt-dlp/yt-dlp" # optional; defaults to `yt-dlp` on PATH
-```
+**Local YouTube playlists** live in `~/.config/spotatui/youtube_playlists.yml`, a plain human-editable file you can back up or share. Create one from the sidebar, add tracks with `w`, and play a playlist as a queue with `Enter`.
 
-Search for anything and press Enter on a result to play it (the first play takes a few
-seconds while the audio downloads). When YouTube extraction changes and playback breaks,
-updating yt-dlp (`yt-dlp -U` or your package manager) is the fix; no spotatui update needed.
+## Native Streaming
 
-**Local YouTube playlists**: since there is no usable YouTube login API, playlists live in
-`~/.config/spotatui/youtube_playlists.yml`, a plain human-editable file you can back up or
-share:
+spotatui can play Spotify audio directly, without spotifyd or the official app — just run it and it appears as a Spotify Connect device.
 
-- Sidebar → `+ New Playlist` creates one
-- `w` on a search result adds it to a playlist (same picker dialog as Spotify)
-- Enter on a playlist opens it; Enter on a track plays the playlist as a queue
-- `x` removes a track, `D` deletes a playlist (both with confirmation)
+- Premium account required
+- Works with media keys, MPRIS (Linux), and macOS Now Playing
+- Runs on our maintained [librespot fork](https://github.com/LargeModGames/spotatui-librespot), which backports upstream fixes for Spotify's evolving audio delivery (e.g. the HTTP 530 CDN issue that silenced native playback)
+
+See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/Native-Streaming) for setup details.
 
 ## Configuration
 
-A configuration file is located at `${HOME}/.config/spotatui/config.yml`.
+The config file is at `${HOME}/.config/spotatui/config.yml`. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
 
-spotatui also stores local listening history at `${HOME}/.config/spotatui/history/listens.jsonl`. This powers the `spotatui history recap` CLI and starts collecting from rollout onward; short or skipped plays are stored but excluded from recap totals.
+- Full config reference: [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration)
+- Built-in themes (Spotify, Dracula, Nord, …): [Themes Wiki](https://github.com/LargeModGames/spotatui/wiki/Themes)
 
-See the [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration) for the full config file reference.
-
-You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
-
-See [Themes Wiki](https://github.com/LargeModGames/spotatui/wiki/Themes) for built-in presets (Spotify, Dracula, Nord, etc.).
+spotatui also stores local listening history at `${HOME}/.config/spotatui/history/listens.jsonl`, which powers `spotatui history recap`. Short or skipped plays are stored but excluded from recap totals.
 
 ### Discord Rich Presence
 
-Discord Rich Presence is enabled by default and uses the built-in spotatui application ID, so no extra setup is required.
-
-Overrides (optional):
+Enabled by default using the built-in spotatui application ID, so no setup is required. Optional overrides:
 
 ```yaml
 behavior:
@@ -340,14 +236,15 @@ behavior:
   discord_rpc_client_id: "your_client_id"
 ```
 
-You can also override via `SPOTATUI_DISCORD_APP_ID` or disable in the setting or by setting `behavior.enable_discord_rpc: false` in ~/.config/spotatui/config.yml.
+You can also override the app ID via `SPOTATUI_DISCORD_APP_ID`, or disable it in Settings or with `behavior.enable_discord_rpc: false`.
+
+### Anonymous Song Counter
+
+spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment when a new song starts. It is enabled by default and can be disabled with `enable_global_song_count: false` in `~/.config/spotatui/config.yml`. This is purely a fun community metric with zero tracking of individual users.
 
 ## Plugins
 
-spotatui runs user-written Lua plugins. They react to playback events, add commands and key
-bindings, draw popups and playbar segments, restyle the theme, and make async HTTP requests.
-
-Install a plugin published as a git repository (requires `git`):
+spotatui runs user-written Lua plugins. They react to playback events, add commands and key bindings, draw popups and playbar segments, restyle the theme, and make async HTTP requests. Install one published as a git repository (requires `git`):
 
 ```bash
 spotatui plugin add owner/repo
@@ -356,41 +253,48 @@ spotatui plugin update
 spotatui plugin remove <name>
 ```
 
-See [`PLUGINS.md`](PLUGINS.md) for the ecosystem overview, [`examples/plugins/`](examples/plugins)
-for runnable examples, and [`docs/scripting.md`](docs/scripting.md) for the full API reference.
+See [`PLUGINS.md`](PLUGINS.md) for the ecosystem overview, [`examples/plugins/`](examples/plugins) for runnable examples, and [`docs/scripting.md`](docs/scripting.md) for the full API reference.
 
-## Limitations
+## Performance
 
-This app uses the [Web API](https://developer.spotify.com/documentation/web-api/) from Spotify, which doesn't handle streaming itself. You have three options for audio playback:
+spotatui is extremely lightweight compared to the official Electron client.
 
-1. **Native Streaming (NEW!)** - spotatui can now play audio directly using its built-in streaming feature. See [Native Streaming](#native-streaming) below.
-2. **Official Spotify Client** - Have the official Spotify app open on your computer
-3. **Spotifyd** - Use a lightweight alternative like [spotifyd](https://github.com/Spotifyd/spotifyd)
+| Mode                            | RAM Usage |
+| :------------------------------ | :-------- |
+| **Native Streaming (Base)**     | ~78 MB    |
+| **With Synced Lyrics**          | ~78 MB    |
+| **With System-Wide Visualizer** | ~80 MB    |
 
-If you want to play tracks, Spotify requires that you have a Premium account.
+*Tested on Arch Linux (Hyprland).*
 
-With a free account, spotatui can still authenticate and browse your library/search results, but playback actions (play/pause/seek/transfer) will not work in either:
+## Playback Requirements
 
-- Native Streaming (librespot)
-- Web API playback control mode
+The free sources (Local Files, Subsonic, Internet Radio, YouTube) play through spotatui's own audio engine and need no extra setup.
+
+Spotify is different: it uses the [Web API](https://developer.spotify.com/documentation/web-api/), which doesn't stream audio itself. To play Spotify tracks you need **one** of:
+
+1. **Native Streaming** — spotatui plays audio directly using its built-in streaming. See [Native Streaming](#native-streaming). *(Recommended.)*
+2. **Official Spotify Client** — have the official app open on your computer.
+3. **[spotifyd](https://github.com/Spotifyd/spotifyd)** — a lightweight background alternative.
+
+Playing Spotify tracks requires a **Premium** account. With a free Spotify account spotatui can authenticate and browse your library/search results, but playback actions (play/pause/seek/transfer) will not work in either native streaming or Web API playback control mode.
 
 ### Deprecated Spotify API Features
 
-**Note:** As of November 2024, Spotify deprecated and removed access to certain API endpoints for new applications. The following features are included in this app but **will only work if your Spotify Developer application was created before November 27, 2024**:
+As of November 2024, Spotify removed access to certain API endpoints for new applications. The following features **only work if your Spotify Developer application was created before November 27, 2024**:
 
-- **Audio Visualization** (press `v`): Now uses **local real-time FFT analysis** of your system audio. The visualization no longer depends on Spotify's deprecated Audio Analysis API.
+- **Related Artists** — the "Related Artists" section on an artist page.
+- **Audio Analysis** — spotatui no longer depends on it. The **audio visualizer** (press `v`) now uses **local real-time FFT analysis** of your system audio, so it works regardless of your app's creation date:
 
-  **Platform Support:**
   | Platform    | Status               | Notes                                    |
   | ----------- | -------------------- | ---------------------------------------- |
   | **Windows** | Works out of the box | Uses WASAPI loopback                     |
   | **Linux**   | Works out of the box | Uses PipeWire/PulseAudio monitor devices |
   | **macOS**   | Requires setup       | Needs a virtual audio device (see below) |
 
-  > **macOS Users:** macOS doesn't natively expose system audio loopback. To use audio visualization, install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid). Configure it to capture system audio and set it as your default input device.
-
-  > **Note:** The audio visualization is **system-wide** - it captures all audio playing on your system, not just Spotify. This means it will also react to YouTube videos, games, or any other audio source!
-- **Related Artists**: When viewing an artist page, the "Related Artists" section shows similar artists based on Spotify's recommendation algorithm. This feature **only works if your Spotify Developer application was created before November 27, 2024**.
+  > **macOS:** macOS doesn't natively expose system audio loopback. Install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid), route system audio through it, and set it as your default input device.
+  >
+  > **Note:** The visualizer is **system-wide** — it captures all audio on your system, so it also reacts to YouTube videos, games, and any other source.
 
 For more information, see [Spotify's announcement about API changes](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api).
 
@@ -398,13 +302,27 @@ For more information, see [Spotify's announcement about API changes](https://dev
 
 > **Note:** If you're using native streaming, you don't need spotifyd!
 
-Follow the spotifyd documentation to get set up.
+Follow the spotifyd documentation to get set up. After that:
 
-After that there is not much to it.
+1. Start the spotifyd daemon.
+1. Start `spotatui`.
+1. Press `d` to open the device selection menu — the spotifyd "device" should appear (if not, check [these docs](https://github.com/Spotifyd/spotifyd#logging)).
 
-1. Start running the spotifyd daemon.
-1. Start up `spotatui`
-1. Press `d` to go to the device selection menu and the spotifyd "device" should be there - if not check [these docs](https://github.com/Spotifyd/spotifyd#logging)
+## Migrating from spotify-tui
+
+If you used the original `spotify-tui` before:
+
+- The binary name changed from `spt` to `spotatui`.
+- Config paths changed: `~/.config/spotify-tui/` → `~/.config/spotatui/`.
+
+You can copy your existing config:
+
+```bash
+mkdir -p ~/.config/spotatui
+cp -r ~/.config/spotify-tui/* ~/.config/spotatui/
+```
+
+You may be asked to re-authenticate with Spotify the first time.
 
 ## Libraries used
 
@@ -438,13 +356,25 @@ After that there is not much to it.
 1. And then `cargo run`
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines.
+
 ### Windows Subsystem for Linux
 
-You might get a linking error. If so, you'll probably need to install additional dependencies required by the clipboard package
+You might get a linking error. If so, you'll probably need to install additional dependencies required by the clipboard package:
 
 ```bash
 sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
+
+## Help Wanted
+
+**spotatui is currently maintained by a solo developer.** More contributors would be hugely appreciated — and **you don't need to write code to help**:
+
+- **Star the repo** to help others discover the project
+- **Report bugs** or request features in [Issues](https://github.com/LargeModGames/spotatui/issues)
+- **Join the community** in [Discussions](https://github.com/LargeModGames/spotatui/discussions)
+- **Submit a PR** for code, docs, or themes
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more details!
 
 ## Maintainer
 
