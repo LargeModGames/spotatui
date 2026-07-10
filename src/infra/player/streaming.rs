@@ -33,6 +33,7 @@ use tokio::time::{timeout, Duration};
 struct RecoveringSink {
   inner: Option<Box<dyn audio_backend::Sink>>,
   make_sink: Box<dyn Fn() -> Box<dyn audio_backend::Sink>>,
+  started: bool,
 }
 
 impl RecoveringSink {
@@ -43,6 +44,7 @@ impl RecoveringSink {
     Self {
       inner: None,
       make_sink: Box::new(make_sink),
+      started: false,
     }
   }
 
@@ -100,12 +102,14 @@ impl RecoveringSink {
       Ok(Err(err)) => {
         warn!("Audio backend {context} error: {err}");
         self.inner = None;
+        self.started = false;
         Err(err)
       }
       Err(payload) => {
         let err = Self::panic_to_sink_error(context, payload);
         error!("{err}");
         self.inner = None;
+        self.started = false;
         Err(err)
       }
     }
@@ -114,17 +118,24 @@ impl RecoveringSink {
 
 impl audio_backend::Sink for RecoveringSink {
   fn start(&mut self) -> audio_backend::SinkResult<()> {
-    self.with_inner("start", |sink| sink.start())
+    // The stream is already open and running (kept alive across pause): resuming
+    // is a no-op, avoiding librespot's ~600ms PortAudio reopen on every resume.
+    if self.started && self.inner.is_some() {
+      return Ok(());
+    }
+    let result = self.with_inner("start", |sink| sink.start());
+    if result.is_ok() {
+      self.started = true;
+    }
+    result
   }
 
   fn stop(&mut self) -> audio_backend::SinkResult<()> {
-    if self.inner.is_none() {
-      return Ok(());
-    }
-
-    // Avoid process exits in librespot when sink.stop() errors.
-    let _ = self.with_inner("stop", |sink| sink.stop());
-    self.inner = None;
+    // Keep the underlying device open across pause. librespot pauses by ceasing
+    // to feed packets (blocking writes simply stop), which is what silences
+    // output; tearing the PortAudio stream down here would force a slow reopen
+    // on the next resume. The stream is closed when the sink is dropped (player
+    // shutdown/replacement) or reset via the error-recovery path in with_inner.
     Ok(())
   }
 
