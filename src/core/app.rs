@@ -740,6 +740,14 @@ pub enum PlaylistFolderItem {
   },
 }
 
+/// A row in the add-to-playlist picker dialog: a navigable folder or an
+/// editable destination playlist.
+#[derive(Debug)]
+pub enum PlaylistPickerRow<'a> {
+  Folder(&'a PlaylistFolder),
+  Playlist(&'a PlaylistInfo),
+}
+
 /// Which stage of the "Create Playlist" form we are on
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum CreatePlaylistStage {
@@ -1154,6 +1162,8 @@ pub struct App {
   pub playlist_track_positions: Option<Vec<usize>>,
   /// Selected playlist index in the add-to-playlist picker dialog
   pub playlist_picker_selected_index: usize,
+  /// Folder ID the add-to-playlist picker dialog is viewing (0 = root)
+  pub playlist_picker_folder_id: usize,
   /// Pending track to add in add-to-playlist dialog flow
   pub pending_playlist_track_add: Option<PendingPlaylistTrackAdd>,
   /// Pending track removal info in remove-from-playlist confirmation flow
@@ -1438,6 +1448,7 @@ impl Default for App {
       pending_track_table_selection: None,
       playlist_track_positions: None,
       playlist_picker_selected_index: 0,
+      playlist_picker_folder_id: 0,
       pending_playlist_track_add: None,
       pending_playlist_track_removal: None,
       all_playlists: Vec::new(),
@@ -1818,6 +1829,7 @@ impl App {
     self.pending_playlist_track_add = None;
     self.pending_playlist_track_removal = None;
     self.playlist_picker_selected_index = 0;
+    self.playlist_picker_folder_id = 0;
   }
 
   pub fn clear_friend_add_dialog_state(&mut self) {
@@ -2028,15 +2040,52 @@ impl App {
       .collect()
   }
 
-  /// The destination playlists offered by the add-track picker dialog for the
-  /// active source: local YouTube playlists under YouTube, the user's editable
-  /// Spotify playlists otherwise.
-  pub fn playlist_picker_items(&self) -> Vec<&PlaylistInfo> {
+  /// The rows offered by the add-track picker dialog for the active source:
+  /// local YouTube playlists under YouTube (flat), otherwise the user's
+  /// editable Spotify playlists plus folder rows scoped to
+  /// `playlist_picker_folder_id`, mirroring the sidebar's folder navigation.
+  pub fn playlist_picker_items(&self) -> Vec<PlaylistPickerRow<'_>> {
     if self.active_source == Source::YouTube {
-      self.youtube_playlists.iter().collect()
-    } else {
-      self.editable_playlists()
+      return self
+        .youtube_playlists
+        .iter()
+        .map(PlaylistPickerRow::Playlist)
+        .collect();
     }
+
+    // Fallback: folder items never built (rootlist fetch failed, streaming
+    // disabled, …) — flat editable list, same as the pre-folder behavior.
+    if self.playlist_folder_items.is_empty() {
+      return self
+        .editable_playlists()
+        .into_iter()
+        .map(PlaylistPickerRow::Playlist)
+        .collect();
+    }
+
+    let mut rows: Vec<PlaylistPickerRow> = self
+      .playlist_folder_items
+      .iter()
+      .filter_map(|item| match item {
+        PlaylistFolderItem::Folder(f) if f.current_id == self.playlist_picker_folder_id => {
+          Some(PlaylistPickerRow::Folder(f))
+        }
+        PlaylistFolderItem::Playlist { index, current_id }
+          if *current_id == self.playlist_picker_folder_id =>
+        {
+          self
+            .all_playlists
+            .get(*index)
+            .filter(|playlist| self.playlist_is_editable(playlist))
+            .map(PlaylistPickerRow::Playlist)
+        }
+        _ => None,
+      })
+      .collect();
+    if self.user_config.behavior.group_folders_first {
+      rows.sort_by_key(|row| !matches!(row, PlaylistPickerRow::Folder(_)));
+    }
+    rows
   }
 
   pub fn begin_add_track_to_playlist_flow(&mut self, track_id: Option<String>, track_name: String) {

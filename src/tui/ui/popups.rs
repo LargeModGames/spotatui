@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, AnnouncementLevel, App, DialogContext};
+use crate::core::app::{ActiveBlock, AnnouncementLevel, App, DialogContext, PlaylistPickerRow};
 use crate::core::plugin_api::PlayableInfo;
 use crate::core::plugin_api::PopupLine;
 use crate::infra::network::sync::PartyStatus;
@@ -536,12 +536,12 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   f.render_widget(header, vchunks[0]);
 
   let mut list_state = ListState::default();
-  // Destinations follow the active source: local YouTube playlists under the
-  // YouTube source, editable Spotify playlists otherwise (must stay in sync
-  // with the picker's key handler).
-  let editable_playlists = app.playlist_picker_items();
+  // Rows follow the active source: local YouTube playlists under the YouTube
+  // source, editable Spotify playlists plus folder rows otherwise (must stay
+  // in sync with the picker's key handler).
+  let picker_rows = app.playlist_picker_items();
 
-  if editable_playlists.is_empty() {
+  if picker_rows.is_empty() {
     let empty_text = Paragraph::new("No editable playlists available")
       .style(Style::default().fg(app.user_config.theme.inactive))
       .alignment(Alignment::Center);
@@ -556,21 +556,34 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
           .as_ref()
           .is_some_and(|user| Some(user.id.as_str()) == playlist.owner_id.as_deref())
     };
-    let items: Vec<ListItem> = editable_playlists
+    let items: Vec<ListItem> = picker_rows
       .iter()
-      .map(|playlist| {
-        let label = if is_own_playlist(playlist) {
-          playlist.name.clone()
-        } else {
-          // `owner` is the display name, falling back to the owner id.
-          format!("{} - {} (collab)", playlist.name, playlist.owner)
+      .map(|row| {
+        let label = match row {
+          // Same folder rendering as the sidebar (ui/library.rs): back rows
+          // ("← name") as-is, other folders with a 📁 prefix.
+          PlaylistPickerRow::Folder(folder) => {
+            if folder.name.starts_with('\u{2190}') {
+              folder.name.clone()
+            } else {
+              format!("\u{1F4C1} {}", folder.name)
+            }
+          }
+          PlaylistPickerRow::Playlist(playlist) => {
+            if is_own_playlist(playlist) {
+              playlist.name.clone()
+            } else {
+              // `owner` is the display name, falling back to the owner id.
+              format!("{} - {} (collab)", playlist.name, playlist.owner)
+            }
+          }
         };
         ListItem::new(Span::raw(label))
       })
       .collect();
     let selected = app
       .playlist_picker_selected_index
-      .min(editable_playlists.len() - 1);
+      .min(picker_rows.len() - 1);
     list_state.select(Some(selected));
 
     let list = List::new(items)
@@ -582,7 +595,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   }
 
   let footer = Paragraph::new(format!(
-    "Enter add | q cancel | {}/{} or arrows move | H/M/L jump",
+    "Enter add/open | q cancel | {}/{} or arrows move | H/M/L jump",
     app.user_config.keys.move_down, app.user_config.keys.move_up,
   ))
   .style(Style::default().fg(app.user_config.theme.inactive))
