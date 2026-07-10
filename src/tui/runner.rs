@@ -677,6 +677,7 @@ pub async fn start_ui(
           }
           ActiveBlock::ExitPrompt => ui::draw_exit_prompt(f, &app),
           ActiveBlock::Settings => ui::settings::draw_settings(f, &app),
+          ActiveBlock::PluginScreen => ui::draw_plugin_screen(f, &app),
           ActiveBlock::CreatePlaylistForm => {
             ui::draw_main_layout(f, &app);
             ui::draw_create_playlist_form(f, &app);
@@ -851,12 +852,18 @@ pub async fn start_ui(
                 } else {
                   app.lyrics = None;
                   app.lyrics_status = crate::core::app::LyricsStatus::NotFound;
+                  app
+                    .plugin_data_generations
+                    .bump(crate::core::app::PluginDataKind::Lyrics);
                 }
               }
               None => {
                 // Nothing is playing: reset so no stale lyrics linger.
                 app.lyrics = None;
                 app.lyrics_status = crate::core::app::LyricsStatus::NotStarted;
+                app
+                  .plugin_data_generations
+                  .bump(crate::core::app::PluginDataKind::Lyrics);
               }
             }
           }

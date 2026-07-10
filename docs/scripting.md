@@ -97,7 +97,7 @@ A global table named `spotatui` is available in every plugin.
 
 ### Constants
 
-- `spotatui.api_version` - integer API version (currently `4`).
+- `spotatui.api_version` - integer API version (currently `5`).
 
 ### Declaring API compatibility
 
@@ -106,7 +106,7 @@ particular version, declare it on the first line so users on an older spotatui g
 message instead of a cryptic `attempt to call nil` error:
 
 ```lua
-spotatui.require_api(4)
+spotatui.require_api(5)
 ```
 
 `spotatui.require_api(n)` raises a load error (`requires spotatui scripting API v{n} ...`) when
@@ -127,6 +127,11 @@ error. Valid events:
 | `seek` | playback table or nil | Same track, same play state, and progress jumps backward by more than 1.5s or forward by more than 6.5s. Forward jumps inside that window are treated as normal Connect polling, not seeks. |
 | `volume_change` | playback table or nil | The device volume percentage changes. |
 | `queue_change` | none | The queue contents change. |
+| `shuffle_change` | playback table or nil | Shuffle flips while playback exists on both sides of the tick. |
+| `repeat_change` | playback table or nil | The repeat mode changes while playback exists on both sides of the tick. |
+| `device_change` | none | The device list changes (by id, name, or which device is active). |
+| `search_results` | none | New search results arrive (from the Search screen or `spotatui.search`). |
+| `route_change` | `{ name = "..." }` | The visible screen changes. Names are listed under Navigation below; plugin screens are `"plugin:<name>"`. |
 
 You can register multiple callbacks for the same event.
 
@@ -137,6 +142,11 @@ These return a snapshot of the cached state. Snapshots are refreshed before call
 - `spotatui.playback()` - playback table, or `nil` when there is no playback.
 - `spotatui.current_track()` - track table, or `nil`.
 - `spotatui.devices()` - array of device tables.
+- `spotatui.playlists()` - array of playlist tables (cached; empty until the app has fetched playlists).
+- `spotatui.queue()` - `{ currently_playing = item or nil, items = { ... } }` (cached).
+- `spotatui.search_results()` - `{ tracks, albums, artists, playlists, shows }` (cached).
+- `spotatui.current_route()` - the current screen name as a string.
+- `spotatui.config()` - theme + behavior settings (see "Reading configuration" below).
 
 The playback table has these fields:
 
@@ -150,6 +160,46 @@ The playback table has these fields:
   volume_percent = number or nil,
   device = { id, name, kind, is_active, volume_percent } or nil,
 }
+```
+
+`repeat` is a Lua reserved word, so index it with `pb["repeat"]`, not `pb.repeat`. (The matching
+action is named `set_repeat` for the same reason.)
+
+The cached reads for playlists, queue and search results refresh when the underlying data
+changes; they are cheap to call but can be empty until the app has actually fetched that data.
+Use the async `get_*` reads below when you want to trigger a fetch and be told when it lands.
+
+### Async data reads
+
+These request fresh data from Spotify and deliver it to a callback, following the same
+`callback(data, err)` convention as HTTP. The call returns immediately; the callback runs on a
+later UI tick once the data has arrived. If nothing arrives within 15 seconds the callback
+receives `(nil, "request timed out")`. Callbacks are one-shot.
+
+- `spotatui.get_playlists(cb)` - `cb(array of playlist tables, err)`.
+- `spotatui.get_queue(cb)` - `cb({ currently_playing, items }, err)`. Each queue item is
+  `{ kind = "track" | "episode", track = {...} or nil, episode = {...} or nil }`. An
+  unavailable queue (no active device) delivers an empty snapshot.
+- `spotatui.get_search_results(query, cb)` - runs a search (without leaving the current
+  screen) and delivers `{ tracks, albums, artists, playlists, shows }`.
+- `spotatui.get_saved_tracks(cb)` - liked songs fetched so far.
+- `spotatui.get_saved_albums(cb)` - `{ album = {...}, added_at }` entries.
+- `spotatui.get_saved_shows(cb)` - saved podcasts.
+- `spotatui.get_recently_played(cb)` - recently played tracks.
+- `spotatui.get_devices(cb)` - refreshes the device list without opening the device picker.
+- `spotatui.get_lyrics(cb)` - `cb({ status, lines }, err)` for the current track, where
+  `status` is `"not_started" | "loading" | "found" | "not_found"` and each line is
+  `{ time_ms, text }`. Delivered immediately when lyrics are already resolved; otherwise waits
+  for the in-flight fetch.
+
+```lua
+spotatui.get_playlists(function(playlists, err)
+  if err then
+    spotatui.notify("playlists: " .. err, 4)
+    return
+  end
+  spotatui.notify("you have " .. #playlists .. " playlists", 4)
+end)
 ```
 
 ### Actions
@@ -168,6 +218,104 @@ native streaming fast paths (librespot) when the native player is active.
 - `spotatui.shuffle(on)` - set shuffle to the desired state. No-op if already in that state.
 - `spotatui.search(query)` - run a search and open the Search screen.
 - `spotatui.notify(msg, ttl_secs?)` - show a status message (default ttl 4 seconds).
+- `spotatui.set_repeat(mode)` - set repeat to `"off"`, `"track"` or `"context"` (named
+  `set_repeat` because `repeat` is a Lua reserved word).
+- `spotatui.cycle_repeat()` - cycle repeat exactly like the repeat keybinding (keeps the
+  native-streaming fast path).
+- `spotatui.transfer_playback(device_id)` - transfer playback to a device (does not overwrite
+  your saved device preference).
+- `spotatui.play_uri(uri)` - play a `spotify:track:`/`spotify:episode:` uri directly, or start
+  a `spotify:album:`/`playlist:`/`artist:`/`show:` uri as a context. Anything else raises.
+- `spotatui.play_context(uri, offset?)` - play a container uri, optionally from a 0-based
+  track offset.
+- `spotatui.add_to_queue(uri)` - add a track/episode to the queue.
+- `spotatui.create_playlist(name, uris?)` - create a playlist, optionally seeded with track uris.
+- `spotatui.playlist_add_track(playlist, track)` - add a track to a playlist (ids or uris).
+- `spotatui.playlist_remove_track(playlist, track, position)` - remove the track occurrence at
+  the given 0-based position (required, like the Web API).
+- `spotatui.follow_playlist(playlist)` / `spotatui.unfollow_playlist(playlist)`.
+- `spotatui.toggle_save_track(uri)` - like/unlike a track.
+- `spotatui.save_album(id)` / `spotatui.unsave_album(id)`.
+- `spotatui.save_show(id)` / `spotatui.unsave_show(id)`.
+- `spotatui.follow_artist(id)` / `spotatui.unfollow_artist(id)`.
+
+Arguments are lightly validated (non-empty, well-formed uri kinds, in-range numbers); invalid
+arguments raise a Lua error at call time. The network call itself still happens later, so a
+valid-looking id that Spotify rejects surfaces as a normal API error message, not a Lua error.
+
+### Timers
+
+- `spotatui.set_timeout(ms, fn) -> handle` - run `fn` once after roughly `ms` milliseconds.
+- `spotatui.set_interval(ms, fn) -> handle` - run `fn` repeatedly every roughly `ms`
+  milliseconds (`ms` must be at least 1).
+- `spotatui.cancel_timer(handle)` - cancel a pending timeout or interval. Unknown or expired
+  handles are a no-op.
+
+Timers fire from the app's tick loop, so their real resolution is the UI tick rate
+(`behavior.tick_rate_milliseconds`, at most 999ms) -- a 10ms timeout still waits for the next
+tick. If the app stalls past several interval periods, the interval fires once and reschedules
+(no catch-up burst). An interval whose callback errors is removed after the first failure.
+
+### Navigation
+
+- `spotatui.navigate(target)` - open a screen, doing exactly what the matching keybinding does
+  (including any data fetch it performs). Valid targets: `home`, `queue`, `settings`,
+  `devices`, `help`, `lyrics`, `recently_played`, `party`, `analysis`, `miniplayer`. Unknown
+  targets raise.
+- `spotatui.back()` - pop the navigation stack, like the back key.
+- `spotatui.current_route()` - the current screen name. Screen names also show up in the
+  `route_change` event: `home`, `search`, `track_table`, `album_tracks`, `album_list`,
+  `artist`, `artists`, `recently_played`, `devices`, `queue`, `settings`, `help`, `lyrics`,
+  `cover_art`, `miniplayer`, `analysis`, `discover`, `podcasts`, `podcast_episodes`,
+  `recommendations`, `party`, `friends`, `local_browser`, `create_playlist`, `dialog`,
+  `announcement`, `exit_prompt`, `error`, and `plugin:<name>` for plugin screens.
+
+### Persistent storage
+
+Each plugin gets a private key-value store persisted as plain JSON at
+`~/.config/spotatui/plugin-data/<plugin>.json`. Values must be JSON-serializable (tables,
+strings, numbers, booleans); functions and userdata raise.
+
+- `spotatui.storage_get(key)` - the stored value, or `nil`.
+- `spotatui.storage_set(key, value)` - store a value. `nil` removes the key.
+- `spotatui.storage_remove(key)` - remove a key.
+- `spotatui.storage_keys()` - array of stored key names.
+
+Writes are flushed to disk in the background (roughly every 3 seconds) and always on quit.
+The files are plain JSON on disk -- other programs (and other plugins, via `io`) can read
+them, so do not store secrets. If two spotatui instances run at once, the last writer wins.
+A missing or corrupt file starts the plugin with an empty store (corruption is logged).
+
+```lua
+local plays = (spotatui.storage_get("play_count") or 0) + 1
+spotatui.storage_set("play_count", plays)
+```
+
+### Reading configuration
+
+`spotatui.config()` returns the live user configuration:
+
+```
+{
+  theme = { active = "0, 180, 180", playbar_text = "Reset", ... },
+  behavior = {
+    seek_milliseconds, volume_increment,
+    tick_rate_milliseconds, animation_tick_rate_milliseconds,
+    liked_icon, shuffle_icon, repeat_track_icon, repeat_context_icon,
+    playing_icon, paused_icon,
+    enable_text_emphasis, show_loading_indicator, enforce_wide_search_bar,
+    set_window_title, shuffle_enabled, stop_after_current_track,
+    sidebar_width_percent, playbar_height_rows, library_height_percent,
+    active_source,
+  },
+}
+```
+
+Theme values use the same string forms as `config.yml` (named color or `"r, g, b"`), so they
+can round-trip through `spotatui.set_theme`. Secrets and service credentials (sync token,
+relay URL, Subsonic credentials, Discord client id) are never exposed. The snapshot is
+populated once the app is running; reading it at load time (before the `start` event) returns
+empty defaults.
 
 ### Logging
 
@@ -359,6 +507,82 @@ spotatui.set_theme({
   hint = "0, 200, 0",
 })
 ```
+
+### Custom screens
+
+Plugins can register full-screen views. Screens are retained-mode: you publish content with
+`set_screen`, the app renders it from its own state, and you update it again whenever you want
+the view to change (typically from `on_key`, a timer, or a data callback). There is no
+per-frame draw callback.
+
+- `spotatui.register_screen(name, spec)` - register a screen. `name` must be non-empty with no
+  whitespace and unique across all plugins. `spec` is a table:
+  - `title` (optional string) - the window title (defaults to the screen name).
+  - `on_key(key)` (required) - called for every key pressed while the screen is focused. `key`
+    is a `config.yml`-style string (`"a"`, `"ctrl-x"`, `"enter"`, `"up"`, `"space"`, ...).
+  - `on_open()` / `on_close()` (optional) - called when the screen gains/loses the route.
+- `spotatui.set_screen(name, widgets)` - publish the screen's content (see widgets below).
+- `spotatui.show_screen(name)` - navigate to the screen.
+- `spotatui.close_screen(name)` - leave the screen if it is currently shown.
+
+`set_screen`/`show_screen`/`close_screen` verify the screen is registered and owned by the
+calling plugin.
+
+`widgets` is an array; each entry is a table with a `type`:
+
+- `{ type = "paragraph", lines = <lines>, height? }` - styled text. `lines` uses the same
+  format as `spotatui.popup`.
+- `{ type = "list", items = <lines>, title?, selected?, height? }` - a bordered list.
+  `selected` is 1-based (like Lua arrays) and highlights that item.
+- `{ type = "gauge", ratio, label? }` - a progress bar; `ratio` is clamped to 0..1.
+
+Widgets with a `height` take exactly that many rows; the rest split the remaining space
+evenly.
+
+Keys reach `on_key` only after the global keybindings have run, so keys like the back key or
+volume keys keep their normal meaning. `Esc` (and the back key) leave the screen, and
+`PageUp`/`PageDown` scroll paragraph text; everything else is forwarded. An `on_key` that
+errors is disabled after the first failure (one strike).
+
+A minimal interactive screen:
+
+```lua
+spotatui.require_api(5)
+
+local selected = 1
+local names = {}
+
+local function render()
+  spotatui.set_screen("my_playlists", {
+    { type = "paragraph", lines = { { text = "j/k to move, Esc to leave", italic = true } }, height = 2 },
+    { type = "list", title = "Playlists", items = names, selected = selected },
+  })
+end
+
+spotatui.register_screen("my_playlists", {
+  title = "My Playlists",
+  on_key = function(key)
+    if key == "j" and selected < #names then selected = selected + 1 end
+    if key == "k" and selected > 1 then selected = selected - 1 end
+    render()
+  end,
+  on_open = function()
+    spotatui.get_playlists(function(playlists, err)
+      names = {}
+      for _, p in ipairs(playlists or {}) do
+        names[#names + 1] = p.name
+      end
+      render()
+    end)
+  end,
+})
+
+spotatui.register_command("my_playlists", function()
+  spotatui.show_screen("my_playlists")
+end)
+```
+
+Bind `my_playlists` under `plugin_commands` in `config.yml` to open it with a key.
 
 ## Error behavior
 

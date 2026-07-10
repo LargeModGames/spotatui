@@ -50,6 +50,9 @@ pub enum IoEvent {
   RefreshAuthentication,
   GetPlaylists,
   GetDevices,
+  /// Refresh the device list without opening the device picker (plugin data reads).
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  GetDevicesSilent,
   GetSearchResults(String, Option<Country>),
   /// Playlist id/URI, page offset.
   GetPlaylistItems(String, u32),
@@ -97,6 +100,9 @@ pub enum IoEvent {
   /// Track id/URI, market.
   GetRecommendationsForTrackId(String, Option<Country>),
   GetRecentlyPlayed,
+  /// Refresh recently-played data without opening the screen (plugin data reads).
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  GetRecentlyPlayedSilent,
   /// Pagination cursor: artist id/URI to fetch after.
   GetFollowedArtists(Option<String>),
   UserArtistFollowCheck(Vec<String>),
@@ -424,7 +430,10 @@ impl Network {
         self.get_user().await;
       }
       IoEvent::GetDevices => {
-        self.get_devices().await;
+        self.get_devices(true).await;
+      }
+      IoEvent::GetDevicesSilent => {
+        self.get_devices(false).await;
       }
       IoEvent::GetCurrentPlayback => {
         self.get_current_playback().await;
@@ -554,7 +563,10 @@ impl Network {
         }
       }
       IoEvent::GetRecentlyPlayed => {
-        self.get_recently_played().await;
+        self.get_recently_played(true).await;
+      }
+      IoEvent::GetRecentlyPlayedSilent => {
+        self.get_recently_played(false).await;
       }
       IoEvent::GetFollowedArtists(after) => {
         self

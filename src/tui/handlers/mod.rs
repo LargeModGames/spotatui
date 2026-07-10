@@ -25,6 +25,7 @@ mod mouse;
 mod party;
 mod playbar;
 mod playlist;
+mod plugin_screen;
 mod podcasts;
 mod queue_menu;
 mod recap_prompt;
@@ -512,6 +513,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::RecapPrompt => {
       recap_prompt::handler(key, app);
     }
+    ActiveBlock::PluginScreen => {
+      plugin_screen::handler(key, app);
+    }
   }
 }
 
@@ -547,7 +551,8 @@ fn handle_escape(app: &mut App) {
     ActiveBlock::SelectDevice
     | ActiveBlock::LyricsView
     | ActiveBlock::CoverArtView
-    | ActiveBlock::MiniPlayer => {
+    | ActiveBlock::MiniPlayer
+    | ActiveBlock::PluginScreen => {
       app.pop_navigation_stack();
     }
     // This is a global view that has no active/inactive distinction so do nothing

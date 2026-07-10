@@ -65,11 +65,15 @@ fn include_native_streaming_device(app: &crate::core::app::App, payload: &mut De
 
 pub trait UserNetwork {
   async fn get_user(&mut self);
-  async fn get_devices(&mut self);
+  /// `navigate: false` refreshes the device list without opening the device
+  /// picker (used by plugin data reads).
+  async fn get_devices(&mut self, navigate: bool);
   async fn get_user_top_tracks(&mut self, time_range: DiscoverTimeRange);
   async fn get_top_artists_mix(&mut self);
+  /// `navigate: false` refreshes the data without opening the screen (used by
+  /// plugin data reads).
   #[allow(dead_code)]
-  async fn get_recently_played(&mut self);
+  async fn get_recently_played(&mut self, navigate: bool);
 }
 
 impl UserNetwork for Network {
@@ -104,14 +108,16 @@ impl UserNetwork for Network {
     }
   }
 
-  async fn get_devices(&mut self) {
+  async fn get_devices(&mut self, navigate: bool) {
     match self
       .spotify_get_typed::<DevicePayload>("me/player/devices", &[])
       .await
     {
       Ok(result) => {
         let mut app = self.app.lock().await;
-        app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+        if navigate {
+          app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+        }
 
         #[cfg(feature = "streaming")]
         let mut result = result;
@@ -132,6 +138,9 @@ impl UserNetwork for Network {
             .or(Some(0))
         };
         app.devices = Some(result);
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::Devices);
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -235,7 +244,7 @@ impl UserNetwork for Network {
     app.discover_loading = false;
   }
 
-  async fn get_recently_played(&mut self) {
+  async fn get_recently_played(&mut self, navigate: bool) {
     let limit = self.large_search_limit;
     match self
       .spotify_get_typed::<CursorBasedPage<PlayHistory>>(
@@ -255,7 +264,12 @@ impl UserNetwork for Network {
         }
         app.recently_played.result = Some(domain_page);
         app.sort_recently_played_items();
-        app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::RecentlyPlayed);
+        if navigate {
+          app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
+        }
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;

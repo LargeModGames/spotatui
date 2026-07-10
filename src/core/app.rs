@@ -299,6 +299,11 @@ pub enum ActiveBlock {
   Friends,
   LocalBrowser,
   Stats,
+  /// A plugin-registered custom screen (the screen name lives in
+  /// [`RouteId::PluginScreen`]; `ActiveBlock` is `Copy` and can't carry it).
+  /// Only script effects construct it.
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  PluginScreen,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -341,6 +346,10 @@ pub enum RouteId {
   Friends,
   LocalBrowser,
   Stats,
+  /// A plugin-registered custom screen, keyed by its registered name.
+  /// Only script effects construct it.
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  PluginScreen(String),
 }
 
 impl RouteId {
@@ -667,6 +676,51 @@ pub enum LyricsStatus {
   Loading,
   Found,
   NotFound,
+}
+
+/// Data domains plugins can request through the scripting API. Each domain has
+/// a generation counter in [`PluginDataGenerations`] that the network layer
+/// bumps whenever it writes that domain to `App`, so the script engine can tell
+/// "the data a plugin asked for has arrived" without a per-request completion
+/// signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginDataKind {
+  Playlists,
+  Queue,
+  Search,
+  SavedTracks,
+  SavedAlbums,
+  SavedShows,
+  RecentlyPlayed,
+  Devices,
+  Lyrics,
+}
+
+impl PluginDataKind {
+  pub const COUNT: usize = 9;
+
+  pub fn index(self) -> usize {
+    self as usize
+  }
+}
+
+/// Per-domain write counters for plugin data requests. See [`PluginDataKind`].
+#[derive(Debug, Default)]
+pub struct PluginDataGenerations {
+  counters: [u64; PluginDataKind::COUNT],
+}
+
+impl PluginDataGenerations {
+  pub fn bump(&mut self, kind: PluginDataKind) {
+    let slot = &mut self.counters[kind.index()];
+    *slot = slot.wrapping_add(1);
+  }
+
+  // Only the scripting engine reads generations; the network layer just bumps.
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  pub fn get(&self, kind: PluginDataKind) -> u64 {
+    self.counters[kind.index()]
+  }
 }
 
 /// Status of the currently-playing track's cover art, mirroring [`LyricsStatus`].
@@ -1295,6 +1349,19 @@ pub struct App {
   pub create_playlist_focus: CreatePlaylistFocus,
   /// Commands queued by keybindings for the scripting engine to run.
   pub pending_plugin_commands: Vec<String>,
+  /// Per-domain write counters driving async plugin data reads (see
+  /// [`PluginDataKind`]). Ungated: the network layer bumps them in every build;
+  /// only the scripting engine reads them.
+  pub plugin_data_generations: PluginDataGenerations,
+  /// Retained content of plugin-registered custom screens, keyed by screen
+  /// name. Written by script effects; read by the draw loop.
+  pub plugin_screens:
+    std::collections::BTreeMap<String, crate::core::plugin_api::PluginScreenContent>,
+  /// Keys pressed while a plugin screen was focused: `(screen_name, key_string)`,
+  /// drained by the script engine after each key event.
+  pub pending_plugin_screen_keys: Vec<(String, String)>,
+  /// Vertical scroll for the focused plugin screen.
+  pub plugin_screen_scroll: u16,
   /// Per-plugin playbar segments, keyed by plugin name (BTreeMap for deterministic order).
   pub plugin_playbar_segments: std::collections::BTreeMap<String, String>,
   /// Currently displayed plugin popup, if any.
@@ -1542,6 +1609,10 @@ impl Default for App {
       create_playlist_selected_result: 0,
       create_playlist_focus: CreatePlaylistFocus::SearchInput,
       pending_plugin_commands: Vec::new(),
+      plugin_data_generations: PluginDataGenerations::default(),
+      plugin_screens: std::collections::BTreeMap::new(),
+      pending_plugin_screen_keys: Vec::new(),
+      plugin_screen_scroll: 0,
       plugin_playbar_segments: std::collections::BTreeMap::new(),
       plugin_popup: None,
       plugin_popup_scroll: 0,

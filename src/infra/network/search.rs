@@ -189,6 +189,9 @@ impl SearchNetwork for Network {
       playlists_len,
     );
     clamp_selected_index(&mut app.search_results.selected_shows_index, shows_len);
+    app
+      .plugin_data_generations
+      .bump(crate::core::app::PluginDataKind::Search);
   }
 
   async fn search_tracks_for_playlist(&mut self, search_term: String) {

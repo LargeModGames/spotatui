@@ -1803,6 +1803,9 @@ impl PlaybackNetwork for Network {
             if native_confirmed || name_seen {
               let mut app = self.app.lock().await;
               app.devices = Some(payload);
+              app
+                .plugin_data_generations
+                .bump(crate::core::app::PluginDataKind::Devices);
             }
 
             if native_confirmed {
@@ -1926,10 +1929,18 @@ impl PlaybackNetwork for Network {
         };
         let mut app = self.app.lock().await;
         app.queue = Some(domain_queue);
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::Queue);
       }
       Err(e) => {
         let mut app = self.app.lock().await;
         app.queue = None;
+        // Bump on failure too: completion (not success) is what plugin data
+        // requests wait on.
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::Queue);
         app.status_message = Some("Could not load queue (no active device?)".to_string());
         app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(3));
         log::warn!("get_queue failed: {}", e);

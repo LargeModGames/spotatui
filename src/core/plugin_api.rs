@@ -13,7 +13,7 @@ use crate::infra::media_metadata::current_playback_snapshot;
 use rspotify::model::RepeatState;
 use serde::{Deserialize, Serialize};
 
-pub const API_VERSION: u32 = 4;
+pub const API_VERSION: u32 = 5;
 
 /// A popup dialog produced by a plugin.
 #[derive(Debug, Clone, PartialEq)]
@@ -241,6 +241,186 @@ pub struct SearchResults {
   pub shows: Vec<ShowInfo>,
 }
 
+/// Retained content of a plugin custom screen. Screens are retained-mode by
+/// design: draw runs with `&App` only (the engine is unreachable there), so
+/// plugins publish content via effects and the renderer just reads it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PluginScreenContent {
+  pub title: String,
+  pub widgets: Vec<PluginWidget>,
+}
+
+/// A widget in a [`PluginScreenContent`]. Fixed-height widgets take their
+/// requested rows; the remaining vertical space is split evenly between the
+/// rest.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginWidget {
+  Paragraph {
+    lines: Vec<PopupLine>,
+    height: Option<u16>,
+  },
+  List {
+    title: Option<String>,
+    items: Vec<PopupLine>,
+    /// 0-based index of the highlighted item.
+    selected: Option<usize>,
+    height: Option<u16>,
+  },
+  Gauge {
+    /// 0.0..=1.0 (clamped at the API layer).
+    ratio: f64,
+    label: Option<String>,
+  },
+}
+
+/// A queue item as exposed to plugins. [`PlayableInfo`]'s externally-tagged
+/// serde shape (`{ Track = {...} }`) is hostile to Lua, so queue items are
+/// flattened into an explicit `kind` plus at most one populated payload field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueueItemSnapshot {
+  /// `"track"` or `"episode"`.
+  pub kind: String,
+  #[serde(default)]
+  pub track: Option<TrackInfo>,
+  #[serde(default)]
+  pub episode: Option<EpisodeInfo>,
+}
+
+impl QueueItemSnapshot {
+  pub fn from_playable(item: &PlayableInfo) -> Self {
+    match item {
+      PlayableInfo::Track(t) => QueueItemSnapshot {
+        kind: "track".to_string(),
+        track: Some(t.clone()),
+        episode: None,
+      },
+      PlayableInfo::Episode(e) => QueueItemSnapshot {
+        kind: "episode".to_string(),
+        track: None,
+        episode: Some(e.clone()),
+      },
+    }
+  }
+}
+
+/// The playback queue as exposed to plugins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct QueueSnapshot {
+  #[serde(default)]
+  pub currently_playing: Option<QueueItemSnapshot>,
+  #[serde(default)]
+  pub items: Vec<QueueItemSnapshot>,
+}
+
+/// A single timestamped lyrics line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LyricsLineSnapshot {
+  pub time_ms: u64,
+  pub text: String,
+}
+
+/// Lyrics for the current track as exposed to plugins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LyricsSnapshot {
+  /// One of `"not_started"`, `"loading"`, `"found"`, `"not_found"`.
+  pub status: String,
+  #[serde(default)]
+  pub lines: Vec<LyricsLineSnapshot>,
+}
+
+/// Safe, plugin-visible behavior settings. Secrets and service credentials
+/// (sync_token, relay_server_url, subsonic credentials, discord client id,
+/// announcement feeds) are deliberately excluded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct BehaviorSnapshot {
+  pub seek_milliseconds: u32,
+  pub volume_increment: u8,
+  pub tick_rate_milliseconds: u64,
+  pub animation_tick_rate_milliseconds: u64,
+  pub enable_text_emphasis: bool,
+  pub show_loading_indicator: bool,
+  pub enforce_wide_search_bar: bool,
+  pub liked_icon: String,
+  pub shuffle_icon: String,
+  pub repeat_track_icon: String,
+  pub repeat_context_icon: String,
+  pub playing_icon: String,
+  pub paused_icon: String,
+  pub set_window_title: bool,
+  pub shuffle_enabled: bool,
+  pub stop_after_current_track: bool,
+  pub sidebar_width_percent: u8,
+  pub playbar_height_rows: u16,
+  pub library_height_percent: u8,
+  /// Lowercased active source name, e.g. `"spotify"`, `"local"`.
+  pub active_source: String,
+}
+
+/// User configuration as exposed to plugins: theme colors as config-file
+/// strings plus safe behavior scalars.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ConfigSnapshot {
+  pub theme: std::collections::BTreeMap<String, String>,
+  pub behavior: BehaviorSnapshot,
+}
+
+/// Build a [`ConfigSnapshot`] from the live user config. Theme colors use the
+/// same string forms `parse_theme_item` accepts (named or `"r, g, b"`).
+pub fn config_snapshot(config: &crate::core::user_config::UserConfig) -> ConfigSnapshot {
+  use crate::core::user_config::color_to_string;
+  let t = &config.theme;
+  let theme: std::collections::BTreeMap<String, String> = [
+    ("active", t.active),
+    ("analysis_bar", t.analysis_bar),
+    ("analysis_bar_text", t.analysis_bar_text),
+    ("banner", t.banner),
+    ("background", t.background),
+    ("error_border", t.error_border),
+    ("error_text", t.error_text),
+    ("header", t.header),
+    ("highlighted_lyrics", t.highlighted_lyrics),
+    ("hint", t.hint),
+    ("hovered", t.hovered),
+    ("inactive", t.inactive),
+    ("playbar_background", t.playbar_background),
+    ("playbar_progress", t.playbar_progress),
+    ("playbar_progress_text", t.playbar_progress_text),
+    ("playbar_text", t.playbar_text),
+    ("selected", t.selected),
+    ("text", t.text),
+  ]
+  .into_iter()
+  .map(|(name, color)| (name.to_string(), color_to_string(color)))
+  .collect();
+
+  let b = &config.behavior;
+  ConfigSnapshot {
+    theme,
+    behavior: BehaviorSnapshot {
+      seek_milliseconds: b.seek_milliseconds,
+      volume_increment: b.volume_increment,
+      tick_rate_milliseconds: b.tick_rate_milliseconds,
+      animation_tick_rate_milliseconds: b.animation_tick_rate_milliseconds,
+      enable_text_emphasis: b.enable_text_emphasis,
+      show_loading_indicator: b.show_loading_indicator,
+      enforce_wide_search_bar: b.enforce_wide_search_bar,
+      liked_icon: b.liked_icon.clone(),
+      shuffle_icon: b.shuffle_icon.clone(),
+      repeat_track_icon: b.repeat_track_icon.clone(),
+      repeat_context_icon: b.repeat_context_icon.clone(),
+      playing_icon: b.playing_icon.clone(),
+      paused_icon: b.paused_icon.clone(),
+      set_window_title: b.set_window_title,
+      shuffle_enabled: b.shuffle_enabled,
+      stop_after_current_track: b.stop_after_current_track,
+      sidebar_width_percent: b.sidebar_width_percent,
+      playbar_height_rows: b.playbar_height_rows,
+      library_height_percent: b.library_height_percent,
+      active_source: format!("{:?}", b.active_source).to_lowercase(),
+    },
+  }
+}
+
 /// Default for serde `is_playable` fields: a track/episode is assumed playable
 /// unless the API explicitly says otherwise.
 fn default_true() -> bool {
@@ -369,6 +549,181 @@ pub fn device_list(app: &App) -> Vec<DeviceInfo> {
         .collect()
     })
     .unwrap_or_default()
+}
+
+/// Stable plugin-facing name of a route. Exhaustive on purpose (no `_` arm):
+/// adding a `RouteId` without naming it here is a compile error, keeping the
+/// scripting contract in sync.
+pub fn route_name(route: &crate::core::app::Route) -> String {
+  use crate::core::app::RouteId;
+  match &route.id {
+    RouteId::Analysis => "analysis",
+    RouteId::AlbumTracks => "album_tracks",
+    RouteId::AlbumList => "album_list",
+    RouteId::Artist => "artist",
+    RouteId::LyricsView => "lyrics",
+    RouteId::CoverArtView => "cover_art",
+    RouteId::MiniPlayer => "miniplayer",
+    RouteId::Error => "error",
+    RouteId::Home => "home",
+    RouteId::RecentlyPlayed => "recently_played",
+    RouteId::Search => "search",
+    RouteId::SelectedDevice => "devices",
+    RouteId::TrackTable => "track_table",
+    RouteId::Discover => "discover",
+    RouteId::Artists => "artists",
+    RouteId::Podcasts => "podcasts",
+    RouteId::PodcastEpisodes => "podcast_episodes",
+    RouteId::Recommendations => "recommendations",
+    RouteId::Dialog => "dialog",
+    RouteId::AnnouncementPrompt => "announcement",
+    RouteId::RecapPrompt => "recap_prompt",
+    RouteId::ExitPrompt => "exit_prompt",
+    RouteId::Settings => "settings",
+    RouteId::HelpMenu => "help",
+    RouteId::Queue => "queue",
+    RouteId::Party => "party",
+    RouteId::CreatePlaylist => "create_playlist",
+    RouteId::Friends => "friends",
+    RouteId::LocalBrowser => "local_browser",
+    RouteId::Stats => "stats",
+    RouteId::PluginScreen(name) => return format!("plugin:{name}"),
+  }
+  .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot serializers for plugin data reads
+// ---------------------------------------------------------------------------
+
+/// The user's playlists (full list, folder structure flattened away).
+pub fn playlists_snapshot(app: &App) -> Vec<PlaylistInfo> {
+  app.all_playlists.clone()
+}
+
+/// Saved ("liked") tracks fetched so far, in library order.
+pub fn saved_tracks_snapshot(app: &App) -> Vec<TrackInfo> {
+  app
+    .library
+    .saved_tracks
+    .pages
+    .iter()
+    .flat_map(|page| page.items.iter().cloned())
+    .collect()
+}
+
+/// Saved albums fetched so far, in library order.
+pub fn saved_albums_snapshot(app: &App) -> Vec<SavedAlbumInfo> {
+  app
+    .library
+    .saved_albums
+    .pages
+    .iter()
+    .flat_map(|page| page.items.iter().cloned())
+    .collect()
+}
+
+/// Saved shows fetched so far, in library order.
+pub fn saved_shows_snapshot(app: &App) -> Vec<ShowInfo> {
+  app
+    .library
+    .saved_shows
+    .pages
+    .iter()
+    .flat_map(|page| page.items.iter().cloned())
+    .collect()
+}
+
+/// Recently played tracks (most recent first, as returned by the API).
+pub fn recently_played_snapshot(app: &App) -> Vec<TrackInfo> {
+  app
+    .recently_played
+    .result
+    .as_ref()
+    .map(|page| page.items.clone())
+    .unwrap_or_default()
+}
+
+/// The Spotify playback queue. An unavailable queue (no active device) maps to
+/// an empty snapshot rather than an error.
+pub fn queue_snapshot(app: &App) -> QueueSnapshot {
+  let Some(queue) = app.queue.as_ref() else {
+    return QueueSnapshot::default();
+  };
+  QueueSnapshot {
+    currently_playing: queue
+      .currently_playing
+      .as_ref()
+      .map(QueueItemSnapshot::from_playable),
+    items: queue
+      .queue
+      .iter()
+      .map(QueueItemSnapshot::from_playable)
+      .collect(),
+  }
+}
+
+/// The current search results (first page of each category).
+pub fn search_results_snapshot(app: &App) -> SearchResults {
+  SearchResults {
+    tracks: app
+      .search_results
+      .tracks
+      .as_ref()
+      .map(|p| p.items.clone())
+      .unwrap_or_default(),
+    albums: app
+      .search_results
+      .albums
+      .as_ref()
+      .map(|p| p.items.clone())
+      .unwrap_or_default(),
+    artists: app
+      .search_results
+      .artists
+      .as_ref()
+      .map(|p| p.items.clone())
+      .unwrap_or_default(),
+    playlists: app
+      .search_results
+      .playlists
+      .as_ref()
+      .map(|p| p.items.clone())
+      .unwrap_or_default(),
+    shows: app
+      .search_results
+      .shows
+      .as_ref()
+      .map(|p| p.items.clone())
+      .unwrap_or_default(),
+  }
+}
+
+/// Lyrics for the current track, with the fetch status spelled out.
+pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
+  use crate::core::app::LyricsStatus;
+  let status = match app.lyrics_status {
+    LyricsStatus::NotStarted => "not_started",
+    LyricsStatus::Loading => "loading",
+    LyricsStatus::Found => "found",
+    LyricsStatus::NotFound => "not_found",
+  };
+  LyricsSnapshot {
+    status: status.to_string(),
+    lines: app
+      .lyrics
+      .as_ref()
+      .map(|lines| {
+        lines
+          .iter()
+          .map(|(time_ms, text)| LyricsLineSnapshot {
+            time_ms: *time_ms as u64,
+            text: text.clone(),
+          })
+          .collect()
+      })
+      .unwrap_or_default(),
+  }
 }
 
 // ---------------------------------------------------------------------------

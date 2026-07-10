@@ -30,6 +30,93 @@ pub(crate) enum ScriptEffect {
   ShowPopup(PluginPopup),
   /// Apply theme color overrides at runtime (field name -> color).
   SetTheme(Vec<(String, ratatui::style::Color)>),
+  /// A whitelisted IoEvent built by the API layer. Lua never constructs raw
+  /// IoEvents; only the documented `spotatui.*` actions can produce these.
+  Dispatch(IoEvent),
+  /// Cycle repeat off -> context -> track via `App::repeat()`, which keeps the
+  /// native-streaming fast path.
+  CycleRepeat,
+  /// Unfollow a playlist; the current user id is resolved at drain time.
+  UnfollowPlaylist(String),
+  /// Navigate to a whitelisted target (validated at the API layer against
+  /// [`NAV_TARGETS`]); apply mirrors the matching keybinding exactly.
+  Navigate(String),
+  /// Pop the navigation stack (same as the back key).
+  Back,
+  /// Publish (retained) content for a registered plugin screen.
+  SetScreenContent {
+    name: String,
+    content: crate::core::plugin_api::PluginScreenContent,
+  },
+  /// Navigate to a registered plugin screen.
+  ShowScreen(String),
+  /// Pop the named plugin screen if it is the current route.
+  CloseScreen(String),
+}
+
+/// Screens reachable via `spotatui.navigate(name)`.
+pub(super) const NAV_TARGETS: &[&str] = &[
+  "home",
+  "queue",
+  "settings",
+  "devices",
+  "help",
+  "lyrics",
+  "recently_played",
+  "party",
+  "analysis",
+  "miniplayer",
+];
+
+/// Replicate the matching keybinding for each nav target. Unknown targets are
+/// rejected at the API layer, so the fallback arm is unreachable in practice.
+fn apply_navigate(app: &mut App, target: &str) {
+  use crate::core::app::{ActiveBlock, RouteId, SourceFocus};
+  use crate::core::source::Source;
+
+  match target {
+    "home" => app.push_navigation_stack(RouteId::Home, ActiveBlock::Empty),
+    "queue" => {
+      app.dispatch(IoEvent::GetQueue);
+      app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
+    }
+    "settings" => {
+      app.load_settings_for_category();
+      app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+    }
+    "devices" => {
+      // Mirrors the manage_devices keybinding: open the Source & Device picker,
+      // focus per active source, and only fetch devices under Spotify.
+      app.source_list_index = Source::ALL
+        .iter()
+        .position(|s| *s == app.active_source)
+        .unwrap_or(0);
+      app.source_device_focus = if app.active_source == Source::Spotify {
+        SourceFocus::Devices
+      } else {
+        SourceFocus::Source
+      };
+      app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+      if app.active_source == Source::Spotify {
+        app.dispatch(IoEvent::GetDevices);
+      }
+    }
+    "help" => app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu),
+    "lyrics" => app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView),
+    // The network handler pushes the route once the data arrives, exactly like
+    // the keybinding.
+    "recently_played" => app.dispatch(IoEvent::GetRecentlyPlayed),
+    "party" => app.push_navigation_stack(RouteId::Party, ActiveBlock::Party),
+    "analysis" => app.get_audio_analysis(),
+    "miniplayer" => {
+      if app.get_current_route().id == RouteId::MiniPlayer {
+        app.pop_navigation_stack();
+      } else {
+        app.push_navigation_stack(RouteId::MiniPlayer, ActiveBlock::MiniPlayer);
+      }
+    }
+    _ => {}
+  }
 }
 
 /// Returns `true` when the current playback state indicates active playback.
@@ -82,6 +169,39 @@ pub(super) fn apply_effects(effects: Vec<ScriptEffect>, app: &mut App) {
       ScriptEffect::ShowPopup(popup) => {
         app.plugin_popup = Some(popup);
         app.plugin_popup_scroll = 0;
+      }
+      ScriptEffect::Dispatch(event) => app.dispatch(event),
+      ScriptEffect::CycleRepeat => app.repeat(),
+      ScriptEffect::Navigate(target) => apply_navigate(app, &target),
+      ScriptEffect::Back => {
+        app.pop_navigation_stack();
+      }
+      ScriptEffect::SetScreenContent { name, content } => {
+        app.plugin_screens.insert(name, content);
+      }
+      ScriptEffect::ShowScreen(name) => {
+        use crate::core::app::{ActiveBlock, RouteId};
+        if app.get_current_route().id != RouteId::PluginScreen(name.clone()) {
+          app.push_navigation_stack(RouteId::PluginScreen(name), ActiveBlock::PluginScreen);
+        }
+        app.plugin_screen_scroll = 0;
+      }
+      ScriptEffect::CloseScreen(name) => {
+        use crate::core::app::RouteId;
+        if app.get_current_route().id == RouteId::PluginScreen(name) {
+          app.pop_navigation_stack();
+        }
+      }
+      ScriptEffect::UnfollowPlaylist(playlist_id) => {
+        let user_id = app.user.as_ref().map(|u| u.id.clone());
+        if let Some(user_id) = user_id {
+          app.dispatch(IoEvent::UserUnfollowPlaylist(user_id, playlist_id));
+        } else {
+          app.set_error_status_message(
+            "plugin unfollow_playlist: user profile not loaded yet".to_string(),
+            4,
+          );
+        }
       }
       ScriptEffect::SetTheme(pairs) => {
         for (field, color) in pairs {

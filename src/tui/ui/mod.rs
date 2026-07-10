@@ -8,6 +8,7 @@ pub mod help;
 pub mod home;
 pub mod library;
 pub mod player;
+pub mod plugin_screen;
 pub mod popups;
 pub mod search;
 pub mod settings;
@@ -29,6 +30,7 @@ pub use self::library::draw_user_block;
 pub use self::player::draw_cover_art_view;
 pub use self::player::draw_miniplayer;
 pub use self::player::{draw_device_list, draw_lyrics_view, draw_playbar};
+pub use self::plugin_screen::draw_plugin_screen;
 pub use self::popups::{
   draw_announcement_prompt, draw_dialog, draw_error_screen, draw_exit_prompt, draw_help_menu,
   draw_party, draw_plugin_popup, draw_queue, draw_recap_prompt, draw_sort_menu,
@@ -123,7 +125,8 @@ fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
     | RouteId::Settings
     | RouteId::HelpMenu
     | RouteId::Queue
-    | RouteId::Party => {} // These are drawn outside the main routed content area.
+    | RouteId::Party
+    | RouteId::PluginScreen(_) => {} // These are drawn outside the main routed content area.
     RouteId::Dialog => {}         // This is handled in draw_dialog.
     RouteId::CreatePlaylist => {} // This is drawn as an overlay via draw_create_playlist_form.
   };

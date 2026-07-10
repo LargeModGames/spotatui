@@ -118,18 +118,30 @@ impl UtilsNetwork for Network {
             } else {
               app.lyrics_status = LyricsStatus::NotFound;
             }
+            app
+              .plugin_data_generations
+              .bump(crate::core::app::PluginDataKind::Lyrics);
           } else {
             let mut app = self.app.lock().await;
             app.lyrics_status = LyricsStatus::NotFound;
+            app
+              .plugin_data_generations
+              .bump(crate::core::app::PluginDataKind::Lyrics);
           }
         } else {
           let mut app = self.app.lock().await;
           app.lyrics_status = LyricsStatus::NotFound;
+          app
+            .plugin_data_generations
+            .bump(crate::core::app::PluginDataKind::Lyrics);
         }
       }
       Err(_) => {
         let mut app = self.app.lock().await;
         app.lyrics_status = LyricsStatus::NotFound;
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::Lyrics);
       }
     }
   }

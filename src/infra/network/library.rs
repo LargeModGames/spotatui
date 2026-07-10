@@ -462,6 +462,9 @@ impl LibraryNetwork for Network {
     let mut app = self.app.lock().await;
     app.playlists = first_page;
     app.all_playlists = all_playlists;
+    app
+      .plugin_data_generations
+      .bump(crate::core::app::PluginDataKind::Playlists);
     app._playlist_folder_nodes = folder_nodes;
     app.playlist_folder_items = folder_items;
 
@@ -623,6 +626,9 @@ impl LibraryNetwork for Network {
           crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
         let saved_tracks_index = app.library.saved_tracks.upsert_page_by_offset(domain_page);
         app.set_saved_tracks_to_table_continuous();
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::SavedTracks);
 
         let next_offset = app.next_missing_saved_tracks_offset(saved_tracks_index);
         let generation = app.saved_tracks_prefetch_generation;
@@ -659,14 +665,19 @@ impl LibraryNetwork for Network {
     .await
     {
       Ok(saved_albums) => {
+        let mut app = self.app.lock().await;
         if !saved_albums.items.is_empty() {
           let domain_page = crate::infra::network::mapping::map_page(
             &saved_albums,
             crate::infra::network::mapping::saved_album_info,
           );
-          let mut app = self.app.lock().await;
           app.library.saved_albums.add_pages(domain_page);
         }
+        // Bump even on an empty page: completion is the signal plugin data
+        // requests wait on, and an empty library never writes a page.
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::SavedAlbums);
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -786,12 +797,16 @@ impl LibraryNetwork for Network {
     .await
     {
       Ok(saved_shows) => {
+        let mut app = self.app.lock().await;
         if !saved_shows.items.is_empty() {
           let domain_page =
             crate::infra::network::mapping::map_page(&saved_shows, |s| ShowInfo::from(&s.show));
-          let mut app = self.app.lock().await;
           app.library.saved_shows.add_pages(domain_page);
         }
+        // Bump even on an empty page (see saved-albums note above).
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::SavedShows);
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;

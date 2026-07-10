@@ -12,6 +12,7 @@ privileges, so read anything you install from elsewhere (see
 | [`track-info-popup.lua`](track-info-popup.lua) | `register_command`, reads, `popup` |
 | [`accent-cycler.lua`](accent-cycler.lua) | `register_command`, `set_theme` |
 | [`now-playing-webhook.lua`](now-playing-webhook.lua) | `http_post`, `json_encode` |
+| [`queue-browser.lua`](queue-browser.lua) | Custom screens, async data reads, timers, storage |
 | [`session-stats/`](session-stats) | A directory plugin with a `require`-d helper module |
 
 ## Installing

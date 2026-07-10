@@ -1374,6 +1374,769 @@ fn diff_queue_change() {
   assert_eq!(events, vec![ScriptEvent::QueueChange]);
 }
 
+// --- dispatch-backed actions ---
+
+#[cfg(test)]
+mod action_tests {
+  use super::*;
+  use crate::core::app::{App, UserInfo};
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use rspotify::model::RepeatState;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  fn make_app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    (app, rx)
+  }
+
+  #[test]
+  fn set_repeat_maps_all_modes() {
+    for (mode, expected) in [
+      ("off", RepeatState::Off),
+      ("track", RepeatState::Track),
+      ("context", RepeatState::Context),
+    ] {
+      match run_action(&format!(r#"spotatui.set_repeat("{mode}")"#)) {
+        ScriptEffect::Dispatch(IoEvent::Repeat(state)) => assert_eq!(state, expected),
+        _ => panic!("expected Dispatch(Repeat) for mode '{mode}'"),
+      }
+    }
+  }
+
+  #[test]
+  fn set_repeat_invalid_mode_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("test", r#"spotatui.set_repeat("all")"#)
+      .is_err());
+  }
+
+  #[test]
+  fn cycle_repeat_queues_cycle_effect() {
+    assert!(matches!(
+      run_action("spotatui.cycle_repeat()"),
+      ScriptEffect::CycleRepeat
+    ));
+  }
+
+  #[test]
+  fn play_uri_track_uses_uri_list() {
+    match run_action(r#"spotatui.play_uri("spotify:track:abc123")"#) {
+      ScriptEffect::Dispatch(IoEvent::StartPlayback(None, Some(uris), None)) => {
+        assert_eq!(uris, vec!["spotify:track:abc123".to_string()]);
+      }
+      _ => panic!("expected StartPlayback with uri list"),
+    }
+  }
+
+  #[test]
+  fn play_uri_album_uses_context() {
+    match run_action(r#"spotatui.play_uri("spotify:album:abc123")"#) {
+      ScriptEffect::Dispatch(IoEvent::StartPlayback(Some(ctx), None, None)) => {
+        assert_eq!(ctx, "spotify:album:abc123");
+      }
+      _ => panic!("expected StartPlayback with context"),
+    }
+  }
+
+  #[test]
+  fn play_uri_garbage_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("test", r#"spotatui.play_uri("not-a-uri")"#)
+      .is_err());
+  }
+
+  #[test]
+  fn play_context_carries_offset() {
+    match run_action(r#"spotatui.play_context("spotify:playlist:p1", 5)"#) {
+      ScriptEffect::Dispatch(IoEvent::StartPlayback(Some(ctx), None, Some(offset))) => {
+        assert_eq!(ctx, "spotify:playlist:p1");
+        assert_eq!(offset, 5);
+      }
+      _ => panic!("expected StartPlayback with context + offset"),
+    }
+  }
+
+  #[test]
+  fn play_context_rejects_track_uri() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("test", r#"spotatui.play_context("spotify:track:t1")"#)
+      .is_err());
+  }
+
+  #[test]
+  fn add_to_queue_queues_dispatch() {
+    match run_action(r#"spotatui.add_to_queue("spotify:track:t1")"#) {
+      ScriptEffect::Dispatch(IoEvent::AddItemToQueue(uri)) => {
+        assert_eq!(uri, "spotify:track:t1");
+      }
+      _ => panic!("expected AddItemToQueue dispatch"),
+    }
+  }
+
+  #[test]
+  fn create_playlist_with_uris() {
+    match run_action(r#"spotatui.create_playlist("Mix", {"spotify:track:a", "spotify:track:b"})"#) {
+      ScriptEffect::Dispatch(IoEvent::CreateNewPlaylist(name, uris)) => {
+        assert_eq!(name, "Mix");
+        assert_eq!(uris.len(), 2);
+      }
+      _ => panic!("expected CreateNewPlaylist dispatch"),
+    }
+  }
+
+  #[test]
+  fn create_playlist_empty_name_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("test", r#"spotatui.create_playlist("  ")"#)
+      .is_err());
+  }
+
+  #[test]
+  fn playlist_remove_track_requires_position() {
+    match run_action(r#"spotatui.playlist_remove_track("p1", "t1", 0)"#) {
+      ScriptEffect::Dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(p, t, pos)) => {
+        assert_eq!(p, "p1");
+        assert_eq!(t, "t1");
+        assert_eq!(pos, 0);
+      }
+      _ => panic!("expected RemoveTrackFromPlaylistAtPosition dispatch"),
+    }
+
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("test", r#"spotatui.playlist_remove_track("p1", "t1")"#)
+      .is_err());
+    assert!(engine
+      .load_source("test", r#"spotatui.playlist_remove_track("p1", "t1", -1)"#)
+      .is_err());
+  }
+
+  #[test]
+  fn transfer_playback_does_not_persist_device() {
+    match run_action(r#"spotatui.transfer_playback("dev-1")"#) {
+      ScriptEffect::Dispatch(IoEvent::TransferPlaybackToDevice(id, persist)) => {
+        assert_eq!(id, "dev-1");
+        assert!(!persist);
+      }
+      _ => panic!("expected TransferPlaybackToDevice dispatch"),
+    }
+  }
+
+  #[test]
+  fn follow_and_save_actions_map_to_events() {
+    assert!(matches!(
+      run_action(r#"spotatui.toggle_save_track("spotify:track:t1")"#),
+      ScriptEffect::Dispatch(IoEvent::ToggleSaveTrack(_))
+    ));
+    assert!(matches!(
+      run_action(r#"spotatui.save_album("a1")"#),
+      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedAlbumAdd(_))
+    ));
+    assert!(matches!(
+      run_action(r#"spotatui.unsave_album("a1")"#),
+      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedAlbumDelete(_))
+    ));
+    assert!(matches!(
+      run_action(r#"spotatui.save_show("s1")"#),
+      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedShowAdd(_))
+    ));
+    assert!(matches!(
+      run_action(r#"spotatui.unsave_show("s1")"#),
+      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedShowDelete(_))
+    ));
+    match run_action(r#"spotatui.follow_artist("ar1")"#) {
+      ScriptEffect::Dispatch(IoEvent::UserFollowArtists(ids)) => {
+        assert_eq!(ids, vec!["ar1".to_string()]);
+      }
+      _ => panic!("expected UserFollowArtists dispatch"),
+    }
+    assert!(matches!(
+      run_action(r#"spotatui.unfollow_artist("ar1")"#),
+      ScriptEffect::Dispatch(IoEvent::UserUnfollowArtists(_))
+    ));
+    assert!(matches!(
+      run_action(r#"spotatui.follow_playlist("p1")"#),
+      ScriptEffect::Dispatch(IoEvent::UserFollowPlaylist(_, _, None))
+    ));
+    assert!(matches!(
+      run_action(r#"spotatui.unfollow_playlist("p1")"#),
+      ScriptEffect::UnfollowPlaylist(_)
+    ));
+  }
+
+  #[test]
+  fn empty_string_argument_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("test", r#"spotatui.add_to_queue("")"#)
+      .is_err());
+  }
+
+  #[test]
+  fn drain_dispatch_sends_io_event() {
+    let (mut app, rx) = make_app();
+    let engine = ScriptEngine::new().unwrap();
+    engine
+      .shared
+      .effects
+      .borrow_mut()
+      .push(ScriptEffect::Dispatch(IoEvent::AddItemToQueue(
+        "spotify:track:t1".to_string(),
+      )));
+    engine.drain_effects(&mut app);
+
+    match rx.try_recv() {
+      Ok(IoEvent::AddItemToQueue(uri)) => assert_eq!(uri, "spotify:track:t1"),
+      _ => panic!("expected AddItemToQueue on channel (IoEvent is not Debug)"),
+    }
+  }
+
+  #[test]
+  fn drain_unfollow_playlist_resolves_current_user() {
+    let (mut app, rx) = make_app();
+    app.user = Some(UserInfo {
+      id: "me-123".to_string(),
+      display_name: None,
+      country: None,
+    });
+    let engine = ScriptEngine::new().unwrap();
+    engine
+      .shared
+      .effects
+      .borrow_mut()
+      .push(ScriptEffect::UnfollowPlaylist("p1".to_string()));
+    engine.drain_effects(&mut app);
+
+    match rx.try_recv() {
+      Ok(IoEvent::UserUnfollowPlaylist(user_id, playlist_id)) => {
+        assert_eq!(user_id, "me-123");
+        assert_eq!(playlist_id, "p1");
+      }
+      _ => panic!("expected UserUnfollowPlaylist on channel (IoEvent is not Debug)"),
+    }
+  }
+
+  #[test]
+  fn drain_unfollow_playlist_without_user_sets_error() {
+    let (mut app, rx) = make_app();
+    let engine = ScriptEngine::new().unwrap();
+    engine
+      .shared
+      .effects
+      .borrow_mut()
+      .push(ScriptEffect::UnfollowPlaylist("p1".to_string()));
+    engine.drain_effects(&mut app);
+
+    assert!(rx.try_recv().is_err(), "no IoEvent expected");
+    assert!(app.status_message_is_error);
+  }
+}
+
+// --- async data reads (spotatui.get_*) ---
+
+#[cfg(test)]
+mod data_read_tests {
+  use super::*;
+  use crate::core::app::{App, LyricsStatus, PluginDataKind};
+  use crate::core::plugin_api::PlaylistInfo;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::channel;
+  use std::time::{Duration, Instant, SystemTime};
+
+  fn make_app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    (app, rx)
+  }
+
+  fn playlist(name: &str) -> PlaylistInfo {
+    PlaylistInfo {
+      uri: format!("spotify:playlist:{name}"),
+      name: name.to_string(),
+      owner: "owner".to_string(),
+      track_count: 3,
+      id: Some(name.to_string()),
+      owner_id: Some("owner".to_string()),
+      collaborative: false,
+      public: Some(true),
+      image_url: None,
+    }
+  }
+
+  const GET_PLAYLISTS_NOTIFY: &str = r#"
+    spotatui.get_playlists(function(data, err)
+      if err then
+        spotatui.notify("err: " .. err, 1)
+      else
+        spotatui.notify("ok: " .. #data .. ":" .. (data[1] and data[1].name or "-"), 1)
+      end
+    end)
+  "#;
+
+  #[test]
+  fn get_playlists_dispatches_io_event_and_resolves_on_bump() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, rx) = make_app();
+    engine.load_source("reader", GET_PLAYLISTS_NOTIFY).unwrap();
+
+    let now = Instant::now();
+    engine.process_data_requests_for_test(&mut app, now);
+
+    match rx.try_recv() {
+      Ok(IoEvent::GetPlaylists) => {}
+      _ => panic!("expected GetPlaylists dispatch (IoEvent is not Debug)"),
+    }
+    // Not resolved yet: generation unchanged.
+    assert!(drain(&engine).is_empty());
+
+    // Simulate the network write + bump, then the next engine pass resolves.
+    app.all_playlists = vec![playlist("Jams")];
+    app.plugin_data_generations.bump(PluginDataKind::Playlists);
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(500));
+
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "ok: 1:Jams"),
+      _ => panic!("expected data callback notify"),
+    }
+  }
+
+  #[test]
+  fn data_request_times_out_with_distinct_error() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine.load_source("reader", GET_PLAYLISTS_NOTIFY).unwrap();
+
+    let now = Instant::now();
+    engine.process_data_requests_for_test(&mut app, now);
+    assert!(drain(&engine).is_empty());
+
+    // Never bump; jump past the deadline.
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_secs(16));
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "err: request timed out"),
+      _ => panic!("expected timeout notify"),
+    }
+  }
+
+  #[test]
+  fn erroring_data_callback_queues_notify_error_and_is_one_shot() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "bad_reader",
+        r#"spotatui.get_playlists(function(data, err) error("data boom") end)"#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_data_requests_for_test(&mut app, now);
+    app.plugin_data_generations.bump(PluginDataKind::Playlists);
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
+
+    match one(&engine) {
+      ScriptEffect::NotifyError(msg, 6) => {
+        assert!(msg.contains("bad_reader"));
+        assert!(msg.contains("data boom"));
+      }
+      _ => panic!("expected data callback error notify"),
+    }
+    assert!(engine.shared.current_plugin.borrow().is_empty());
+
+    // The slot is cleared: another bump must not re-fire the callback.
+    app.plugin_data_generations.bump(PluginDataKind::Playlists);
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(2));
+    assert!(drain(&engine).is_empty());
+  }
+
+  #[test]
+  fn two_same_kind_requests_both_resolve_on_one_bump() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "reader",
+        r#"
+          spotatui.get_playlists(function(data, err) spotatui.notify("first", 1) end)
+          spotatui.get_playlists(function(data, err) spotatui.notify("second", 1) end)
+        "#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_data_requests_for_test(&mut app, now);
+    app.plugin_data_generations.bump(PluginDataKind::Playlists);
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
+
+    let effects = drain(&engine);
+    let messages: Vec<String> = effects
+      .into_iter()
+      .filter_map(|e| match e {
+        ScriptEffect::Notify(m, _) => Some(m),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(messages, vec!["first".to_string(), "second".to_string()]);
+  }
+
+  #[test]
+  fn get_search_results_dispatches_query() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, rx) = make_app();
+    engine
+      .load_source(
+        "searcher",
+        r#"spotatui.get_search_results("daft punk", function(data, err) end)"#,
+      )
+      .unwrap();
+
+    engine.process_data_requests_for_test(&mut app, Instant::now());
+    match rx.try_recv() {
+      Ok(IoEvent::GetSearchResults(q, _)) => assert_eq!(q, "daft punk"),
+      _ => panic!("expected GetSearchResults dispatch (IoEvent is not Debug)"),
+    }
+  }
+
+  #[test]
+  fn get_search_results_empty_query_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let result = engine.load_source(
+      "searcher",
+      r#"spotatui.get_search_results("", function() end)"#,
+    );
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn get_lyrics_terminal_status_delivers_immediately_without_dispatch() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, rx) = make_app();
+    app.lyrics_status = LyricsStatus::Found;
+    app.lyrics = Some(vec![(1500, "hello lyrics".to_string())]);
+
+    engine
+      .load_source(
+        "lyricist",
+        r#"
+          spotatui.get_lyrics(function(data, err)
+            spotatui.notify(data.status .. ":" .. data.lines[1].text .. ":" .. data.lines[1].time_ms, 1)
+          end)
+        "#,
+      )
+      .unwrap();
+
+    engine.process_data_requests_for_test(&mut app, Instant::now());
+    assert!(
+      rx.try_recv().is_err(),
+      "lyrics must not dispatch an IoEvent"
+    );
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "found:hello lyrics:1500"),
+      _ => panic!("expected immediate lyrics notify"),
+    }
+  }
+
+  #[test]
+  fn get_lyrics_pending_resolves_when_fetch_completes() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, rx) = make_app();
+    app.lyrics_status = LyricsStatus::Loading;
+
+    engine
+      .load_source(
+        "lyricist",
+        r#"spotatui.get_lyrics(function(data, err) spotatui.notify(data.status, 1) end)"#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_data_requests_for_test(&mut app, now);
+    assert!(
+      rx.try_recv().is_err(),
+      "lyrics must not dispatch an IoEvent"
+    );
+    assert!(drain(&engine).is_empty());
+
+    app.lyrics_status = LyricsStatus::NotFound;
+    app.plugin_data_generations.bump(PluginDataKind::Lyrics);
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "not_found"),
+      _ => panic!("expected pending lyrics notify"),
+    }
+  }
+
+  #[test]
+  fn get_queue_resolves_with_flattened_items() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "queuer",
+        r#"
+          spotatui.get_queue(function(data, err)
+            local current = data.currently_playing and data.currently_playing.track.name or "-"
+            spotatui.notify(current .. ":" .. #data.items .. ":" .. data.items[1].kind, 1)
+          end)
+        "#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_data_requests_for_test(&mut app, now);
+
+    app.queue = Some(crate::core::app::QueueState {
+      currently_playing: Some(crate::core::plugin_api::PlayableInfo::Track(track(
+        "uri:now",
+        "Now Playing",
+      ))),
+      queue: vec![crate::core::plugin_api::PlayableInfo::Track(track(
+        "uri:next", "Next Up",
+      ))],
+    });
+    app.plugin_data_generations.bump(PluginDataKind::Queue);
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
+
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Now Playing:1:track"),
+      _ => panic!("expected queue notify"),
+    }
+  }
+
+  #[test]
+  fn cached_playlists_read_refreshes_on_generation_change() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+
+    // First tick: sentinel forces a refresh of the (empty) snapshot.
+    engine.on_tick(&mut app);
+    engine
+      .load_source(
+        "sync",
+        r#"spotatui.notify("n=" .. #spotatui.playlists(), 1)"#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "n=0"),
+      _ => panic!("expected empty cached read"),
+    }
+
+    // Data lands without a bump: the cache must NOT refresh.
+    app.all_playlists = vec![playlist("A")];
+    engine.on_tick(&mut app);
+    engine
+      .load_source(
+        "sync2",
+        r#"spotatui.notify("n=" .. #spotatui.playlists(), 1)"#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "n=0"),
+      _ => panic!("expected stale cached read before bump"),
+    }
+
+    // After the bump the next tick refreshes.
+    app.plugin_data_generations.bump(PluginDataKind::Playlists);
+    engine.on_tick(&mut app);
+    engine
+      .load_source(
+        "sync3",
+        r#"spotatui.notify("n=" .. #spotatui.playlists(), 1)"#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "n=1"),
+      _ => panic!("expected refreshed cached read"),
+    }
+  }
+}
+
+// --- timers ---
+
+#[cfg(test)]
+mod timer_tests {
+  use super::*;
+  use std::time::{Duration, Instant};
+
+  #[test]
+  fn set_timeout_fires_once() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine
+      .load_source(
+        "timer",
+        r#"spotatui.set_timeout(100, function() spotatui.notify("fired", 1) end)"#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_timers_for_test(now); // arms; not due yet
+    assert!(drain(&engine).is_empty());
+
+    engine.process_timers_for_test(now + Duration::from_millis(150));
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "fired"),
+      _ => panic!("expected timeout notify"),
+    }
+
+    // One-shot: never fires again.
+    engine.process_timers_for_test(now + Duration::from_millis(500));
+    assert!(drain(&engine).is_empty());
+  }
+
+  #[test]
+  fn set_interval_repeats_and_skips_missed_periods() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine
+      .load_source(
+        "timer",
+        r#"spotatui.set_interval(100, function() spotatui.notify("tick", 1) end)"#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_timers_for_test(now); // arm
+    engine.process_timers_for_test(now + Duration::from_millis(150));
+    assert_eq!(drain(&engine).len(), 1);
+
+    engine.process_timers_for_test(now + Duration::from_millis(260));
+    assert_eq!(drain(&engine).len(), 1);
+
+    // A long stall fires ONCE (no catch-up burst), rescheduled from `now`.
+    engine.process_timers_for_test(now + Duration::from_millis(2000));
+    assert_eq!(drain(&engine).len(), 1);
+  }
+
+  #[test]
+  fn cancel_timer_before_due_prevents_firing() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine
+      .load_source(
+        "timer",
+        r#"
+          local h = spotatui.set_timeout(100, function() spotatui.notify("nope", 1) end)
+          spotatui.cancel_timer(h)
+        "#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_timers_for_test(now);
+    engine.process_timers_for_test(now + Duration::from_millis(500));
+    assert!(drain(&engine).is_empty());
+  }
+
+  #[test]
+  fn erroring_interval_is_removed_with_notify_error() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine
+      .load_source(
+        "bad_timer",
+        r#"spotatui.set_interval(100, function() error("interval boom") end)"#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_timers_for_test(now);
+    engine.process_timers_for_test(now + Duration::from_millis(150));
+    match one(&engine) {
+      ScriptEffect::NotifyError(msg, 6) => {
+        assert!(msg.contains("bad_timer"));
+        assert!(msg.contains("interval boom"));
+      }
+      _ => panic!("expected timer error notify"),
+    }
+
+    // One strike: the interval is gone.
+    engine.process_timers_for_test(now + Duration::from_millis(1000));
+    assert!(drain(&engine).is_empty());
+  }
+
+  #[test]
+  fn timer_set_inside_event_handler_fires() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine
+      .load_source(
+        "timer",
+        r#"
+          spotatui.on("start", function()
+            spotatui.set_timeout(50, function() spotatui.notify("deferred", 1) end)
+          end)
+        "#,
+      )
+      .unwrap();
+
+    engine.emit(ScriptEvent::Start);
+    assert!(drain(&engine).is_empty());
+
+    let now = Instant::now();
+    engine.process_timers_for_test(now); // arms next pass
+    engine.process_timers_for_test(now + Duration::from_millis(100));
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "deferred"),
+      _ => panic!("expected deferred timer notify"),
+    }
+  }
+
+  #[test]
+  fn timer_set_inside_timer_callback_fires_next_pass() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine
+      .load_source(
+        "timer",
+        r#"
+          spotatui.set_timeout(10, function()
+            spotatui.set_timeout(10, function() spotatui.notify("nested", 1) end)
+          end)
+        "#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_timers_for_test(now);
+    engine.process_timers_for_test(now + Duration::from_millis(20));
+    assert!(drain(&engine).is_empty(), "outer fired, nested only queued");
+    // The nested timer arms on the NEXT pass; its delay counts from there.
+    engine.process_timers_for_test(now + Duration::from_millis(50));
+    assert!(drain(&engine).is_empty(), "nested armed, not yet due");
+    engine.process_timers_for_test(now + Duration::from_millis(100));
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nested"),
+      _ => panic!("expected nested timer notify"),
+    }
+  }
+
+  #[test]
+  fn negative_ms_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("timer", r#"spotatui.set_timeout(-5, function() end)"#)
+      .is_err());
+    assert!(engine
+      .load_source("timer", r#"spotatui.set_interval(0, function() end)"#)
+      .is_err());
+  }
+}
+
+// --- plugin_id sanitizer ---
+
+#[test]
+fn plugin_id_strips_lua_suffix_and_sanitizes() {
+  use super::shared::plugin_id;
+  assert_eq!(plugin_id("stats.lua"), "stats");
+  assert_eq!(plugin_id("my-plugin"), "my-plugin");
+  assert_eq!(plugin_id("weird name!.lua"), "weird_name_");
+  assert_eq!(plugin_id("dir.plugin"), "dir_plugin");
+  assert_eq!(plugin_id("под.lua"), "___");
+}
+
 // --- directory plugin loading (spotatui plugin add) ---
 
 use std::path::{Path, PathBuf};
@@ -1536,4 +2299,678 @@ fn hidden_single_file_plugin_is_skipped() {
   assert_eq!(loaded, 0);
   assert!(drain(&engine).is_empty());
   std::fs::remove_dir_all(&cfg).unwrap();
+}
+
+// --- plugin storage ---
+
+#[cfg(test)]
+mod storage_tests {
+  use super::*;
+
+  /// Engine with a temp config dir registered (empty plugins dir is fine).
+  fn engine_with_dir(cfg: &Path) -> ScriptEngine {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine.load_user_scripts(cfg);
+    engine
+  }
+
+  #[test]
+  fn storage_round_trip_within_one_engine() {
+    let cfg = temp_config_dir();
+    let mut engine = engine_with_dir(&cfg);
+    engine
+      .load_source(
+        "a.lua",
+        r#"
+          spotatui.storage_set("count", 42)
+          spotatui.storage_set("nested", { x = 1, tags = {"a", "b"} })
+          spotatui.notify(spotatui.storage_get("count") .. ":" .. spotatui.storage_get("nested").tags[2], 1)
+        "#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "42:b"),
+      _ => panic!("expected storage round-trip notify"),
+    }
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn storage_flushes_and_reloads_in_new_engine() {
+    let cfg = temp_config_dir();
+    {
+      let mut engine = engine_with_dir(&cfg);
+      engine
+        .load_source("a.lua", r#"spotatui.storage_set("song", "Nightcall")"#)
+        .unwrap();
+      engine.flush_storage(true);
+    }
+
+    // The file exists under the sanitized plugin id.
+    let file = cfg.join("plugin-data").join("a.json");
+    assert!(file.is_file(), "expected {}", file.display());
+
+    let mut engine = engine_with_dir(&cfg);
+    engine
+      .load_source(
+        "a.lua",
+        r#"spotatui.notify(spotatui.storage_get("song") or "missing", 1)"#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Nightcall"),
+      _ => panic!("expected persisted value notify"),
+    }
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn storage_set_nil_deletes_key() {
+    let cfg = temp_config_dir();
+    let mut engine = engine_with_dir(&cfg);
+    engine
+      .load_source(
+        "a.lua",
+        r#"
+          spotatui.storage_set("gone", "soon")
+          spotatui.storage_set("gone", nil)
+          spotatui.notify(tostring(spotatui.storage_get("gone")) .. ":" .. #spotatui.storage_keys(), 1)
+        "#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nil:0"),
+      _ => panic!("expected nil-delete notify"),
+    }
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn storage_remove_and_keys() {
+    let cfg = temp_config_dir();
+    let mut engine = engine_with_dir(&cfg);
+    engine
+      .load_source(
+        "a.lua",
+        r#"
+          spotatui.storage_set("one", 1)
+          spotatui.storage_set("two", 2)
+          spotatui.storage_remove("one")
+          local keys = spotatui.storage_keys()
+          spotatui.notify(#keys .. ":" .. keys[1], 1)
+        "#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "1:two"),
+      _ => panic!("expected remove/keys notify"),
+    }
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn storage_set_function_value_raises() {
+    let cfg = temp_config_dir();
+    let mut engine = engine_with_dir(&cfg);
+    let result = engine.load_source("a.lua", r#"spotatui.storage_set("f", function() end)"#);
+    assert!(result.is_err(), "functions must not be storable");
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn storage_isolated_per_plugin() {
+    let cfg = temp_config_dir();
+    {
+      let mut engine = engine_with_dir(&cfg);
+      engine
+        .load_source("a.lua", r#"spotatui.storage_set("who", "plugin a")"#)
+        .unwrap();
+      engine
+        .load_source("b", r#"spotatui.storage_set("who", "plugin b")"#)
+        .unwrap();
+      engine.flush_storage(true);
+    }
+
+    assert!(cfg.join("plugin-data").join("a.json").is_file());
+    assert!(cfg.join("plugin-data").join("b.json").is_file());
+
+    let mut engine = engine_with_dir(&cfg);
+    engine
+      .load_source("b", r#"spotatui.notify(spotatui.storage_get("who"), 1)"#)
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "plugin b"),
+      _ => panic!("expected isolated namespace notify"),
+    }
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn corrupt_storage_file_starts_empty() {
+    let cfg = temp_config_dir();
+    write_file(&cfg.join("plugin-data").join("a.json"), "{not json");
+
+    let mut engine = engine_with_dir(&cfg);
+    engine
+      .load_source(
+        "a.lua",
+        r#"spotatui.notify(tostring(spotatui.storage_get("anything")), 1)"#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nil"),
+      _ => panic!("expected empty-after-corruption notify"),
+    }
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn storage_outside_plugin_context_raises() {
+    // current_plugin is empty outside load/callback paths; simulate by loading
+    // a chunk with an empty plugin name.
+    let cfg = temp_config_dir();
+    let mut engine = engine_with_dir(&cfg);
+    let result = engine.load_source("", r#"spotatui.storage_get("x")"#);
+    assert!(result.is_err());
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+}
+
+// --- state events (route/device/search) + shuffle/repeat diffs ---
+
+#[cfg(test)]
+mod state_event_tests {
+  use super::*;
+  use crate::core::app::{ActiveBlock, App, RouteId};
+  use crate::core::plugin_api::DeviceInfo;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use crate::infra::scripting::events::diff_state_events;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  fn make_app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    (app, rx)
+  }
+
+  fn device(id: &str, active: bool) -> DeviceInfo {
+    DeviceInfo {
+      id: Some(id.to_string()),
+      name: id.to_string(),
+      kind: "computer".to_string(),
+      is_active: active,
+      volume_percent: Some(50),
+    }
+  }
+
+  #[test]
+  fn diff_shuffle_change() {
+    let old = Some(playback(Some(track("uri:1", "A")), true, 0));
+    let mut new_pb = playback(Some(track("uri:1", "A")), true, 0);
+    new_pb.shuffle = true;
+    let q = Some(vec![]);
+    let events = diff_events(&old, &q, &Some(new_pb), &q);
+    assert_eq!(events, vec![ScriptEvent::ShuffleChange]);
+  }
+
+  #[test]
+  fn diff_repeat_change() {
+    let old = Some(playback(Some(track("uri:1", "A")), true, 0));
+    let mut new_pb = playback(Some(track("uri:1", "A")), true, 0);
+    new_pb.repeat = "track".to_string();
+    let q = Some(vec![]);
+    let events = diff_events(&old, &q, &Some(new_pb), &q);
+    assert_eq!(events, vec![ScriptEvent::RepeatChange]);
+  }
+
+  #[test]
+  fn diff_none_to_some_is_not_shuffle_or_repeat_change() {
+    let mut new_pb = playback(Some(track("uri:1", "A")), false, 0);
+    new_pb.shuffle = true;
+    new_pb.repeat = "context".to_string();
+    let q = Some(vec![]);
+    let events = diff_events(&None, &q, &Some(new_pb), &q);
+    assert!(!events.contains(&ScriptEvent::ShuffleChange));
+    assert!(!events.contains(&ScriptEvent::RepeatChange));
+  }
+
+  #[test]
+  fn diff_state_route_change_carries_new_name() {
+    let events = diff_state_events("home", "queue", &[], &[], false);
+    assert_eq!(events, vec![ScriptEvent::RouteChange("queue".to_string())]);
+  }
+
+  #[test]
+  fn diff_state_device_change_on_active_flip() {
+    let old = [device("a", true), device("b", false)];
+    let new = [device("a", false), device("b", true)];
+    let events = diff_state_events("home", "home", &old, &new, false);
+    assert_eq!(events, vec![ScriptEvent::DeviceChange]);
+  }
+
+  #[test]
+  fn diff_state_no_events_when_identical() {
+    let devs = [device("a", true)];
+    assert!(diff_state_events("home", "home", &devs, &devs, false).is_empty());
+  }
+
+  #[test]
+  fn diff_state_search_advance() {
+    let events = diff_state_events("home", "home", &[], &[], true);
+    assert_eq!(events, vec![ScriptEvent::SearchResults]);
+  }
+
+  #[test]
+  fn route_change_event_fires_after_key_navigation() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "router",
+        r#"spotatui.on("route_change", function(ev) spotatui.notify("now at " .. ev.name, 1) end)"#,
+      )
+      .unwrap();
+
+    // Baseline the route (as on_start would), then navigate like a key handler.
+    engine.run_pending_commands(&mut app);
+    let _ = drain(&engine);
+    app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
+    engine.run_pending_commands(&mut app);
+
+    assert_eq!(app.status_message.as_deref(), Some("now at queue"));
+  }
+
+  #[test]
+  fn current_route_sync_read_tracks_navigation() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+    engine.on_tick(&mut app);
+    engine
+      .load_source("reader", r#"spotatui.notify(spotatui.current_route(), 1)"#)
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "settings"),
+      _ => panic!("expected current_route notify"),
+    }
+  }
+
+  #[test]
+  fn navigate_unknown_target_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source("nav", r#"spotatui.navigate("narnia")"#)
+      .is_err());
+  }
+
+  #[test]
+  fn navigate_queue_pushes_route_and_fetches() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, rx) = make_app();
+    engine
+      .load_source("nav", r#"spotatui.navigate("queue")"#)
+      .unwrap();
+    engine.drain_effects(&mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::Queue);
+    match rx.try_recv() {
+      Ok(IoEvent::GetQueue) => {}
+      _ => panic!("expected GetQueue dispatch (IoEvent is not Debug)"),
+    }
+  }
+
+  #[test]
+  fn back_pops_navigation_stack() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
+    engine.load_source("nav", r#"spotatui.back()"#).unwrap();
+    engine.drain_effects(&mut app);
+    assert_eq!(app.get_current_route().id, RouteId::Home);
+  }
+
+  #[test]
+  fn device_change_event_fires_on_active_device_swap() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "dev",
+        r#"spotatui.on("device_change", function() spotatui.notify("devices moved", 1) end)"#,
+      )
+      .unwrap();
+
+    engine.on_tick(&mut app); // baseline: no devices
+    let _ = drain(&engine);
+
+    #[allow(deprecated)]
+    let payload = rspotify::model::device::DevicePayload {
+      devices: vec![rspotify::model::Device {
+        id: Some("dev-1".to_string()),
+        is_active: true,
+        is_private_session: false,
+        is_restricted: false,
+        name: "Desk".to_string(),
+        _type: rspotify::model::DeviceType::Computer,
+        volume_percent: Some(30),
+      }],
+    };
+    app.devices = Some(payload);
+    engine.on_tick(&mut app);
+    assert_eq!(app.status_message.as_deref(), Some("devices moved"));
+  }
+}
+
+// --- custom plugin screens ---
+
+#[cfg(test)]
+mod screen_tests {
+  use super::*;
+  use crate::core::app::{ActiveBlock, App, RouteId};
+  use crate::core::plugin_api::PluginWidget;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  fn make_app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    (app, rx)
+  }
+
+  const STATS_SCREEN: &str = r#"
+    spotatui.register_screen("stats", {
+      title = "Stats",
+      on_key = function(key)
+        spotatui.notify("key: " .. key, 1)
+      end,
+      on_open = function() spotatui.notify("opened", 1) end,
+      on_close = function() spotatui.notify("closed", 1) end,
+    })
+  "#;
+
+  #[test]
+  fn show_screen_pushes_route_and_close_pops() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+    engine
+      .load_source("stats.lua", r#"spotatui.show_screen("stats")"#)
+      .unwrap();
+    engine.drain_effects(&mut app);
+
+    assert_eq!(
+      app.get_current_route().id,
+      RouteId::PluginScreen("stats".to_string())
+    );
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::PluginScreen
+    );
+
+    engine
+      .load_source("stats.lua", r#"spotatui.close_screen("stats")"#)
+      .unwrap();
+    engine.drain_effects(&mut app);
+    assert!(!matches!(
+      app.get_current_route().id,
+      RouteId::PluginScreen(_)
+    ));
+  }
+
+  #[test]
+  fn set_screen_publishes_widgets() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+    engine
+      .load_source(
+        "stats.lua",
+        r#"
+          spotatui.set_screen("stats", {
+            { type = "paragraph", lines = {"hello", { text = "styled", bold = true }}, height = 4 },
+            { type = "list", title = "Songs", items = {"one", "two"}, selected = 2 },
+            { type = "gauge", ratio = 1.7, label = "70%" },
+          })
+        "#,
+      )
+      .unwrap();
+    engine.drain_effects(&mut app);
+
+    let content = app.plugin_screens.get("stats").expect("content published");
+    assert_eq!(content.title, "Stats");
+    assert_eq!(content.widgets.len(), 3);
+    match &content.widgets[0] {
+      PluginWidget::Paragraph { lines, height } => {
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].bold);
+        assert_eq!(*height, Some(4));
+      }
+      _ => panic!("expected paragraph widget"),
+    }
+    match &content.widgets[1] {
+      PluginWidget::List {
+        title,
+        items,
+        selected,
+        ..
+      } => {
+        assert_eq!(title.as_deref(), Some("Songs"));
+        assert_eq!(items.len(), 2);
+        // Lua-side selected is 1-based; stored 0-based.
+        assert_eq!(*selected, Some(1));
+      }
+      _ => panic!("expected list widget"),
+    }
+    match &content.widgets[2] {
+      PluginWidget::Gauge { ratio, label } => {
+        assert_eq!(*ratio, 1.0, "ratio must be clamped");
+        assert_eq!(label.as_deref(), Some("70%"));
+      }
+      _ => panic!("expected gauge widget"),
+    }
+  }
+
+  #[test]
+  fn set_screen_rejects_unknown_widget_type_and_bad_selected() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+    assert!(engine
+      .load_source(
+        "stats.lua",
+        r#"spotatui.set_screen("stats", {{ type = "table" }})"#
+      )
+      .is_err());
+    assert!(engine
+      .load_source(
+        "stats.lua",
+        r#"spotatui.set_screen("stats", {{ type = "list", items = {"x"}, selected = 0 }})"#
+      )
+      .is_err());
+  }
+
+  #[test]
+  fn set_screen_unregistered_or_foreign_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+
+    // Not registered at all.
+    assert!(engine
+      .load_source("stats.lua", r#"spotatui.set_screen("nope", {})"#)
+      .is_err());
+
+    // Registered, but owned by another plugin.
+    let err = engine
+      .load_source("intruder.lua", r#"spotatui.show_screen("stats")"#)
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("belongs to plugin"), "got: {err}");
+  }
+
+  #[test]
+  fn duplicate_screen_name_raises() {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+    assert!(engine
+      .load_source(
+        "other.lua",
+        r#"spotatui.register_screen("stats", { on_key = function() end })"#
+      )
+      .is_err());
+  }
+
+  #[test]
+  fn register_screen_requires_on_key() {
+    let mut engine = ScriptEngine::new().unwrap();
+    assert!(engine
+      .load_source(
+        "stats.lua",
+        r#"spotatui.register_screen("stats", { title = "T" })"#
+      )
+      .is_err());
+  }
+
+  #[test]
+  fn pending_screen_key_reaches_on_key() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+
+    app
+      .pending_plugin_screen_keys
+      .push(("stats".to_string(), "ctrl-x".to_string()));
+    engine.run_pending_commands(&mut app);
+
+    assert_eq!(app.status_message.as_deref(), Some("key: ctrl-x"));
+  }
+
+  #[test]
+  fn erroring_on_key_is_one_strike() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "bad.lua",
+        r#"spotatui.register_screen("boom", { on_key = function() error("kaput") end })"#,
+      )
+      .unwrap();
+
+    app
+      .pending_plugin_screen_keys
+      .push(("boom".to_string(), "a".to_string()));
+    engine.run_pending_commands(&mut app);
+    assert!(app.status_message_is_error);
+    assert!(app
+      .status_message
+      .as_deref()
+      .unwrap_or("")
+      .contains("kaput"));
+
+    // Second key: the erroring on_key was removed, nothing fires.
+    app.status_message = None;
+    app.status_message_is_error = false;
+    app
+      .pending_plugin_screen_keys
+      .push(("boom".to_string(), "a".to_string()));
+    engine.run_pending_commands(&mut app);
+    assert!(app.status_message.is_none());
+  }
+
+  #[test]
+  fn on_open_and_on_close_fire_on_route_transitions() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+
+    // Baseline route tracking.
+    engine.run_pending_commands(&mut app);
+
+    engine
+      .load_source("stats.lua", r#"spotatui.show_screen("stats")"#)
+      .unwrap();
+    engine.drain_effects(&mut app);
+    engine.run_pending_commands(&mut app);
+    assert_eq!(app.status_message.as_deref(), Some("opened"));
+
+    app.pop_navigation_stack();
+    engine.run_pending_commands(&mut app);
+    assert_eq!(app.status_message.as_deref(), Some("closed"));
+  }
+
+  #[test]
+  fn route_name_for_plugin_screen_is_prefixed() {
+    use crate::core::app::Route;
+    let route = Route {
+      id: RouteId::PluginScreen("stats".to_string()),
+      active_block: ActiveBlock::PluginScreen,
+      hovered_block: ActiveBlock::PluginScreen,
+    };
+    assert_eq!(crate::core::plugin_api::route_name(&route), "plugin:stats");
+  }
+}
+
+// --- config() read ---
+
+#[cfg(test)]
+mod config_tests {
+  use super::*;
+  use crate::core::app::App;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  fn make_app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    (app, rx)
+  }
+
+  #[test]
+  fn config_exposes_theme_and_behavior_scalars() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    app.user_config.theme.playbar_text = ratatui::style::Color::Magenta;
+    app.user_config.behavior.seek_milliseconds = 12345;
+    engine.on_tick(&mut app);
+
+    engine
+      .load_source(
+        "cfg",
+        r#"
+          local c = spotatui.config()
+          spotatui.notify(c.theme.playbar_text .. ":" .. c.behavior.seek_milliseconds, 1)
+        "#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Magenta:12345"),
+      _ => panic!("expected config notify"),
+    }
+  }
+
+  #[test]
+  fn config_excludes_secrets() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    app.user_config.behavior.sync_token = Some("SECRET".to_string());
+    engine.on_tick(&mut app);
+
+    engine
+      .load_source(
+        "cfg",
+        r#"
+          local c = spotatui.config()
+          spotatui.notify(tostring(c.behavior.sync_token) .. ":" .. tostring(c.behavior.relay_server_url), 1)
+        "#,
+      )
+      .unwrap();
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nil:nil"),
+      _ => panic!("expected secrets-excluded notify"),
+    }
+  }
 }
