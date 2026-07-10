@@ -152,15 +152,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read annotated tag message
-        id: tag_message
+      - name: Read release notes from changelog
+        id: changelog
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         shell: bash
         run: |
-          TAG_MESSAGE=$(git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)')
+          RELEASE_NOTES=$(awk -v version="$GITHUB_REF_NAME" '
+            index($0, "## [" version "]") == 1 { in_section = 1; next }
+            in_section && /^## \[/ { exit }
+            in_section { print }
+          ' CHANGELOG.md)
+
+          if [ -z "$RELEASE_NOTES" ]; then
+            echo "No CHANGELOG.md section found for ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
           {
-            echo "message<<EOF"
-            echo "$TAG_MESSAGE"
+            echo "notes<<EOF"
+            echo "$RELEASE_NOTES"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -174,10 +184,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
-          generate_release_notes: true
+          generate_release_notes: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            ${{ steps.tag_message.outputs.message }}
+            ${{ steps.changelog.outputs.notes }}
 
             ## Downloads
 
