@@ -7,7 +7,7 @@ use ratatui::{
   Frame,
 };
 
-use super::util::{get_color, truncate_text};
+use super::util::{get_color, hint_span, truncate_text};
 
 pub fn draw_friends(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let current_route = app.get_current_route();
@@ -321,13 +321,6 @@ fn draw_help_bar(f: &mut Frame<'_>, app: &App, area: Rect) {
   ]);
 
   f.render_widget(Paragraph::new(line), area);
-}
-
-fn hint_span(key: &'static str, theme: crate::core::user_config::Theme) -> Span<'static> {
-  Span::styled(
-    key,
-    Style::default().fg(theme.hint).add_modifier(Modifier::BOLD),
-  )
 }
 
 // ── Add-Friend dialog overlay ─────────────────────────────────────────────────

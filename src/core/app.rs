@@ -5,6 +5,7 @@ use crate::core::plugin_api::{
 use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
 use crate::core::source::Source;
 use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
+use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
 use crate::infra::network::sync::{PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
 #[cfg(any(feature = "streaming", feature = "audio-decode"))]
@@ -21,6 +22,7 @@ use rspotify::{
   prelude::*, // Adds Id trait for .id() method
 };
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 #[cfg(any(feature = "streaming", all(feature = "mpris", target_os = "linux")))]
 use std::sync::Arc;
@@ -46,10 +48,11 @@ use rspotify::model::{
 /// Sidebar library entries. The "Local Files" entry only appears when the
 /// `local-files` feature is built in (otherwise there is nothing to browse).
 #[cfg(feature = "local-files")]
-pub const LIBRARY_OPTIONS: [&str; 8] = [
+pub const LIBRARY_OPTIONS: [&str; 9] = [
   "Discover",
   "Recently Played",
   "Friends",
+  "Stats",
   "Liked Songs",
   "Albums",
   "Artists",
@@ -57,10 +60,11 @@ pub const LIBRARY_OPTIONS: [&str; 8] = [
   "Local Files",
 ];
 #[cfg(not(feature = "local-files"))]
-pub const LIBRARY_OPTIONS: [&str; 7] = [
+pub const LIBRARY_OPTIONS: [&str; 8] = [
   "Discover",
   "Recently Played",
   "Friends",
+  "Stats",
   "Liked Songs",
   "Albums",
   "Artists",
@@ -250,6 +254,13 @@ pub struct PendingKeybindingPersist {
   pub open_settings_key: Key,
 }
 
+/// State backing the monthly recap popup.
+#[derive(Clone, Debug)]
+pub struct RecapPromptState {
+  pub path: PathBuf,
+  pub listens: usize,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ActiveBlock {
   Analysis,
@@ -278,6 +289,7 @@ pub enum ActiveBlock {
   Dialog(DialogContext),
 
   AnnouncementPrompt,
+  RecapPrompt,
   ExitPrompt,
   Settings,
   SortMenu,
@@ -286,6 +298,7 @@ pub enum ActiveBlock {
   CreatePlaylistForm,
   Friends,
   LocalBrowser,
+  Stats,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -318,6 +331,7 @@ pub enum RouteId {
   Dialog,
 
   AnnouncementPrompt,
+  RecapPrompt,
   ExitPrompt,
   Settings,
   HelpMenu,
@@ -326,6 +340,7 @@ pub enum RouteId {
   CreatePlaylist,
   Friends,
   LocalBrowser,
+  Stats,
 }
 
 impl RouteId {
@@ -339,6 +354,7 @@ impl RouteId {
     RouteId::Discover,
     RouteId::Artists,
     RouteId::AlbumList,
+    RouteId::Stats,
   ];
 
   /// Parse a `startup_route` config token. Unknown / non-context-free strings
@@ -351,6 +367,7 @@ impl RouteId {
       "discover" => Some(RouteId::Discover),
       "artists" | "library" => Some(RouteId::Artists),
       "album_list" | "albums" => Some(RouteId::AlbumList),
+      "stats" => Some(RouteId::Stats),
       _ => None,
     }
   }
@@ -364,6 +381,7 @@ impl RouteId {
       RouteId::Discover => "discover",
       RouteId::Artists => "artists",
       RouteId::AlbumList => "album_list",
+      RouteId::Stats => "stats",
       _ => "home",
     }
   }
@@ -1121,6 +1139,18 @@ pub struct App {
   pub discover_time_range: DiscoverTimeRange,
   /// Whether we're currently loading discover data
   pub discover_loading: bool,
+  /// Period shown on the Stats screen
+  pub stats_period: RecapPeriod,
+  /// Whether we're currently loading stats data
+  pub stats_loading: bool,
+  /// Selected index in the Stats screen's Top Tracks list
+  pub stats_selected_track: usize,
+  /// Aggregated listening stats for the Stats screen
+  pub stats_data: Option<StatsData>,
+  /// Cached listening streak summary (Home strip + Stats screen)
+  pub listening_streaks: Option<StreakSummary>,
+  /// Pending monthly recap popup (path + listen count)
+  pub recap_prompt: Option<RecapPromptState>,
   // Sort menu state
   /// Whether the sort menu popup is visible
   pub sort_menu_visible: bool,
@@ -1290,6 +1320,12 @@ impl Default for App {
       discover_artists_mix: vec![],
       discover_time_range: DiscoverTimeRange::default(),
       discover_loading: false,
+      stats_period: RecapPeriod::ThirtyDays,
+      stats_loading: false,
+      stats_selected_track: 0,
+      stats_data: None,
+      listening_streaks: None,
+      recap_prompt: None,
       artists_list_index: 0,
       local_playlists: Vec::new(),
       local_playlists_index: 0,
@@ -4971,6 +5007,12 @@ impl App {
           description: "Show one-time announcements from remote JSON feed".to_string(),
           value: SettingValue::Bool(self.user_config.behavior.enable_announcements),
         },
+        SettingItem {
+          id: "behavior.enable_monthly_recap_prompt".to_string(),
+          name: "Monthly Recap Prompt".to_string(),
+          description: "Show a popup once a month when your listening recap is ready".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.enable_monthly_recap_prompt),
+        },
         #[cfg(feature = "self-update")]
         SettingItem {
           id: "behavior.disable_auto_update".to_string(),
@@ -5282,7 +5324,9 @@ impl App {
         SettingItem {
           id: "keys.generate_recap".to_string(),
           name: "Generate Listening Recap".to_string(),
-          description: "Generate and open the 30-day listening recap HTML card".to_string(),
+          description:
+            "Generate and open the listening recap HTML card (uses the selected period on the Stats screen, 30 days elsewhere)"
+              .to_string(),
           value: SettingValue::Key(key_to_string(&self.user_config.keys.generate_recap)),
         },
         SettingItem {
@@ -5589,6 +5633,11 @@ impl App {
         "behavior.enable_announcements" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_announcements = *v;
+          }
+        }
+        "behavior.enable_monthly_recap_prompt" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.enable_monthly_recap_prompt = *v;
           }
         }
         #[cfg(feature = "self-update")]

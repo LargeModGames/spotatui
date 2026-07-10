@@ -671,6 +671,10 @@ pub async fn start_ui(
           #[cfg(feature = "cover-art")]
           ActiveBlock::CoverArtView => ui::draw_cover_art_view(f, &app),
           ActiveBlock::AnnouncementPrompt => ui::draw_announcement_prompt(f, &app),
+          ActiveBlock::RecapPrompt => {
+            ui::draw_main_layout(f, &app);
+            ui::draw_recap_prompt(f, &app);
+          }
           ActiveBlock::ExitPrompt => ui::draw_exit_prompt(f, &app),
           ActiveBlock::Settings => ui::settings::draw_settings(f, &app),
           ActiveBlock::CreatePlaylistForm => {
@@ -1201,17 +1205,32 @@ pub async fn start_ui(
         app.dispatch(IoEvent::GetCurrentPlayback);
         app.dispatch(IoEvent::GetPlaylists);
         app.dispatch(IoEvent::GetUser);
-        // startup_route seeds the nav stack directly (App::new), bypassing the
-        // handlers that normally fetch a screen's data on navigation — kick
-        // off that fetch here or the screen renders empty until re-entered.
-        // (Home needs nothing extra; Discover fetches from within its menu.)
-        match app.get_current_route().id {
-          RouteId::RecentlyPlayed => app.dispatch(IoEvent::GetRecentlyPlayed),
-          RouteId::AlbumList => app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None)),
-          RouteId::Artists => app.dispatch(IoEvent::GetFollowedArtists(None)),
-          RouteId::Podcasts => app.dispatch(IoEvent::GetCurrentUserSavedShows(None)),
-          _ => {}
+      }
+      // startup_route seeds the nav stack directly (App::new), bypassing the
+      // handlers that normally fetch a screen's data on navigation — kick
+      // off that fetch here or the screen renders empty until re-entered.
+      // (Home needs nothing extra; Discover fetches from within its menu.)
+      // Spotify-backed screens are gated on a connected session; Stats reads
+      // local history so it always fetches.
+      match app.get_current_route().id {
+        RouteId::RecentlyPlayed if app.spotify_connected => {
+          app.dispatch(IoEvent::GetRecentlyPlayed)
         }
+        RouteId::AlbumList if app.spotify_connected => {
+          app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None))
+        }
+        RouteId::Artists if app.spotify_connected => {
+          app.dispatch(IoEvent::GetFollowedArtists(None))
+        }
+        RouteId::Podcasts if app.spotify_connected => {
+          app.dispatch(IoEvent::GetCurrentUserSavedShows(None))
+        }
+        RouteId::Stats => {
+          app.stats_loading = true;
+          let period = app.stats_period;
+          app.dispatch(IoEvent::LoadListeningStats(period));
+        }
+        _ => {}
       }
       // A persisted non-Spotify active source needs its sidebar data loaded
       // too (all of these are inert no-ops when the feature is off).

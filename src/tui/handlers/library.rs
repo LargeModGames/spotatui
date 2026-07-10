@@ -57,31 +57,37 @@ pub fn handler(key: Key, app: &mut App) {
         }
         app.last_friends_refresh_at = std::time::Instant::now();
       }
-      // Liked Songs
+      // Stats
       3 => {
+        app.stats_loading = true;
+        app.dispatch(IoEvent::LoadListeningStats(app.stats_period));
+        app.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
+      }
+      // Liked Songs
+      4 => {
         app.reset_saved_tracks_view();
         app.dispatch(IoEvent::GetCurrentSavedTracks(None));
         app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
       }
       // Albums
-      4 => {
+      5 => {
         app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None));
         app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
       }
       // Artists
-      5 => {
+      6 => {
         app.dispatch(IoEvent::GetFollowedArtists(None));
         app.push_navigation_stack(RouteId::Artists, ActiveBlock::Artists);
       }
       // Podcasts
-      6 => {
+      7 => {
         app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
         app.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
       }
       // Local Files (only present when the `local-files` feature is built in).
       // Doubles as the "switch to Local source" shortcut: it flips the active
       // source so the sidebar re-scopes to local folders, then opens the browser.
-      7 => {
+      8 => {
         app.active_source = Source::Local;
         // Mirror the persisted value so the selection survives restarts.
         app.user_config.behavior.active_source = Source::Local;
@@ -98,4 +104,44 @@ pub fn handler(key: Key, app: &mut App) {
     },
     _ => (),
   };
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  fn app_with_selection(index: usize) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.library.selected_index = index;
+    (app, rx)
+  }
+
+  #[test]
+  fn enter_on_stats_entry_opens_stats_screen() {
+    let index = LIBRARY_OPTIONS.iter().position(|o| *o == "Stats").unwrap();
+    let (mut app, rx) = app_with_selection(index);
+    handler(Key::Enter, &mut app);
+    assert_eq!(app.get_current_route().id, RouteId::Stats);
+    assert!(app.stats_loading);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::LoadListeningStats(_))));
+  }
+
+  #[test]
+  fn enter_on_liked_songs_still_fetches_saved_tracks() {
+    let index = LIBRARY_OPTIONS
+      .iter()
+      .position(|o| *o == "Liked Songs")
+      .unwrap();
+    let (mut app, rx) = app_with_selection(index);
+    handler(Key::Enter, &mut app);
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetCurrentSavedTracks(None))
+    ));
+  }
 }

@@ -11,6 +11,7 @@ pub mod player;
 pub mod popups;
 pub mod search;
 pub mod settings;
+pub mod stats;
 pub mod tables;
 pub mod util;
 
@@ -30,9 +31,10 @@ pub use self::player::draw_miniplayer;
 pub use self::player::{draw_device_list, draw_lyrics_view, draw_playbar};
 pub use self::popups::{
   draw_announcement_prompt, draw_dialog, draw_error_screen, draw_exit_prompt, draw_help_menu,
-  draw_party, draw_plugin_popup, draw_queue, draw_sort_menu,
+  draw_party, draw_plugin_popup, draw_queue, draw_recap_prompt, draw_sort_menu,
 };
 pub use self::search::{draw_input_and_help_box, draw_search_results};
+pub use self::stats::draw_stats;
 pub use self::tables::{
   draw_album_list, draw_album_table, draw_artist_table, draw_local_browser, draw_podcast_table,
   draw_recently_played_table, draw_recommendations_table, draw_show_episodes, draw_song_table,
@@ -94,6 +96,9 @@ fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
     RouteId::Friends => {
       draw_friends(f, app, content_area);
     }
+    RouteId::Stats => {
+      draw_stats(f, app, content_area);
+    }
     RouteId::Artists => {
       draw_artist_table(f, app, content_area);
     }
@@ -113,6 +118,7 @@ fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
     | RouteId::CoverArtView
     | RouteId::MiniPlayer
     | RouteId::AnnouncementPrompt
+    | RouteId::RecapPrompt
     | RouteId::ExitPrompt
     | RouteId::Settings
     | RouteId::HelpMenu
@@ -188,5 +194,26 @@ mod tests {
       library_row.contains("Library"),
       "library panel not at hitbox row: {library_row}"
     );
+  }
+
+  #[test]
+  fn stats_route_renders_period_tabs() {
+    let mut app = App::default();
+    app.size = Size {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
+    let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+    terminal.draw(|f| draw_main_layout(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let all_text: String = (0..50).map(|y| row_text(&buffer, y)).collect();
+    assert!(all_text.contains("Stats"), "missing Stats title");
+    assert!(
+      all_text.contains("Last 30 Days"),
+      "missing selected period label"
+    );
+    assert!(all_text.contains("Top Tracks"), "missing Top Tracks panel");
   }
 }

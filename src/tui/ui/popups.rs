@@ -663,6 +663,54 @@ pub fn draw_announcement_prompt(f: &mut Frame<'_>, app: &App) {
   f.render_widget(paragraph, rect);
 }
 
+pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
+  let Some(prompt) = &app.recap_prompt else {
+    return;
+  };
+
+  let width = std::cmp::min(f.area().width.saturating_sub(4), 64);
+  let height = 10;
+  let rect = f
+    .area()
+    .centered(Constraint::Length(width), Constraint::Length(height));
+
+  f.render_widget(Clear, rect);
+
+  let text = vec![
+    Line::from(Span::styled(
+      "Your monthly listening recap is ready! 🎉",
+      Style::default()
+        .fg(app.user_config.theme.active)
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+    )),
+    Line::from(""),
+    Line::from(format!(
+      "{} listens made it into your 30-day recap.",
+      prompt.listens
+    )),
+    Line::from("Open it in the browser to view and download your share card."),
+    Line::from(""),
+    Line::from(Span::styled(
+      "[ENTER] Open   [ESC] Later   [d] Don't show this again",
+      Style::default().fg(app.user_config.theme.inactive),
+    )),
+  ];
+
+  let paragraph = Paragraph::new(text)
+    .style(app.user_config.theme.base_style())
+    .alignment(Alignment::Center)
+    .wrap(Wrap { trim: false })
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .style(app.user_config.theme.base_style())
+        .border_style(Style::default().fg(app.user_config.theme.active))
+        .title(" Monthly Recap "),
+    );
+
+  f.render_widget(paragraph, rect);
+}
+
 pub fn draw_exit_prompt(f: &mut Frame<'_>, app: &App) {
   let width = std::cmp::min(f.area().width.saturating_sub(4), 56);
   let height = 8;

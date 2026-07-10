@@ -786,6 +786,7 @@ pub struct BehaviorConfigString {
   pub enable_announcements: Option<bool>,
   pub announcement_feed_url: Option<String>,
   pub seen_announcement_ids: Option<Vec<String>>,
+  pub enable_monthly_recap_prompt: Option<bool>,
   pub shuffle_enabled: Option<bool>,
   pub active_source: Option<String>,
   pub liked_icon: Option<String>,
@@ -864,6 +865,7 @@ pub struct BehaviorConfig {
   pub enable_announcements: bool,
   pub announcement_feed_url: Option<String>,
   pub seen_announcement_ids: Vec<String>,
+  pub enable_monthly_recap_prompt: bool,
   pub shuffle_enabled: bool,
   /// The last active source — persisted so it survives restarts.
   pub active_source: Source,
@@ -1170,6 +1172,7 @@ impl UserConfig {
         enable_announcements: true,
         announcement_feed_url: None,
         seen_announcement_ids: Vec::new(),
+        enable_monthly_recap_prompt: true,
         shuffle_enabled: false,
         active_source: Source::default(),
         liked_icon: "♥".to_string(),
@@ -1493,6 +1496,10 @@ impl UserConfig {
 
     if let Some(enable_announcements) = behavior_config.enable_announcements {
       self.behavior.enable_announcements = enable_announcements;
+    }
+
+    if let Some(enable_monthly_recap_prompt) = behavior_config.enable_monthly_recap_prompt {
+      self.behavior.enable_monthly_recap_prompt = enable_monthly_recap_prompt;
     }
 
     if let Some(announcement_feed_url) = behavior_config.announcement_feed_url {
@@ -2041,6 +2048,7 @@ impl UserConfig {
       enable_announcements: Some(self.behavior.enable_announcements),
       announcement_feed_url: self.behavior.announcement_feed_url.clone(),
       seen_announcement_ids: Some(self.behavior.seen_announcement_ids.clone()),
+      enable_monthly_recap_prompt: Some(self.behavior.enable_monthly_recap_prompt),
       shuffle_enabled: Some(self.behavior.shuffle_enabled),
       active_source: Some(self.behavior.active_source.to_config_str().to_string()),
       liked_icon: Some(self.behavior.liked_icon.clone()),

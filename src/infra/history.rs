@@ -1,11 +1,11 @@
-use crate::core::app::App;
+use crate::core::app::{ActiveBlock, App, RecapPromptState, RouteId};
 use crate::infra::media_metadata::{
   current_playback_snapshot, PlaybackItemKind, PlaybackSnapshot, PlaybackSource,
 };
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -207,6 +207,143 @@ pub enum RecapPeriod {
   All,
 }
 
+impl RecapPeriod {
+  pub const ALL_PERIODS: [RecapPeriod; 5] = [
+    RecapPeriod::SevenDays,
+    RecapPeriod::ThirtyDays,
+    RecapPeriod::Month,
+    RecapPeriod::Year,
+    RecapPeriod::All,
+  ];
+
+  pub fn next(self) -> Self {
+    self.cycle(1)
+  }
+
+  pub fn prev(self) -> Self {
+    self.cycle(Self::ALL_PERIODS.len() - 1)
+  }
+
+  fn cycle(self, offset: usize) -> Self {
+    let index = Self::ALL_PERIODS
+      .iter()
+      .position(|period| *period == self)
+      .unwrap_or(0);
+    Self::ALL_PERIODS[(index + offset) % Self::ALL_PERIODS.len()]
+  }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StreakSummary {
+  pub current_days: u32,
+  pub longest_days: u32,
+  pub today_ms: u64,
+}
+
+/// Aggregated listening stats backing the in-app Stats screen.
+#[derive(Clone, Debug)]
+pub struct StatsData {
+  pub total_plays: usize,
+  pub total_time_ms: u64,
+  pub top_tracks: Vec<RankedEntry>,
+  pub top_artists: Vec<RankedEntry>,
+  pub top_albums: Vec<RankedEntry>,
+  pub days: Vec<RankedEntry>,
+}
+
+const STATS_LIST_LIMIT: usize = 20;
+
+pub fn build_stats_data(filtered: &[ListenRecord]) -> StatsData {
+  StatsData {
+    total_plays: filtered.len(),
+    total_time_ms: filtered.iter().map(|record| record.listened_ms).sum(),
+    top_tracks: aggregate_top_tracks(filtered, STATS_LIST_LIMIT),
+    top_artists: aggregate_top_artists(filtered, STATS_LIST_LIMIT),
+    top_albums: aggregate_top_albums(filtered, STATS_LIST_LIMIT),
+    days: aggregate_days(filtered),
+  }
+}
+
+pub fn compute_streaks(listens: &[ListenRecord]) -> StreakSummary {
+  streaks_from_day_totals(&qualified_day_totals(listens))
+}
+
+/// Listened milliseconds per local day, qualified records only. The history
+/// collector keeps one of these updated incrementally so streaks don't require
+/// re-reading the listens file after every track.
+fn qualified_day_totals(listens: &[ListenRecord]) -> BTreeMap<NaiveDate, u64> {
+  let mut totals: BTreeMap<NaiveDate, u64> = BTreeMap::new();
+  for record in listens.iter().filter(|record| record.qualified) {
+    let date = record.ended_at.with_timezone(&Local).date_naive();
+    *totals.entry(date).or_default() += record.listened_ms;
+  }
+  totals
+}
+
+fn streaks_from_day_totals(day_totals: &BTreeMap<NaiveDate, u64>) -> StreakSummary {
+  let today = Local::now().date_naive();
+  let days: BTreeSet<NaiveDate> = day_totals.keys().copied().collect();
+  streaks_from_days(
+    &days,
+    today,
+    day_totals.get(&today).copied().unwrap_or_default(),
+  )
+}
+
+fn streaks_from_days(days: &BTreeSet<NaiveDate>, today: NaiveDate, today_ms: u64) -> StreakSummary {
+  let mut longest_days = 0u32;
+  let mut run = 0u32;
+  let mut prev: Option<NaiveDate> = None;
+  let mut last_run = 0u32;
+  for &day in days {
+    run = match prev {
+      Some(prev_day) if day == prev_day + Duration::days(1) => run + 1,
+      _ => 1,
+    };
+    longest_days = longest_days.max(run);
+    last_run = run;
+    prev = Some(day);
+  }
+
+  // A streak stays alive until midnight: count the trailing run if it ends
+  // today or yesterday.
+  let current_days = match prev {
+    Some(last_day) if last_day == today || last_day + Duration::days(1) == today => last_run,
+    _ => 0,
+  };
+
+  StreakSummary {
+    current_days,
+    longest_days,
+    today_ms,
+  }
+}
+
+/// Spawn a cloud history sync unless one is already in flight. Overlapping
+/// syncs would race on the last-synced timestamp and double-send records;
+/// a skipped sync is harmless because every sync sends everything newer than
+/// that timestamp, so the next trigger (next song or exit) catches up.
+fn spawn_cloud_history_sync(
+  client: &reqwest::Client,
+  sync_token: &str,
+  in_flight: &Arc<std::sync::atomic::AtomicBool>,
+) {
+  use std::sync::atomic::Ordering;
+
+  if in_flight.swap(true, Ordering::AcqRel) {
+    return;
+  }
+  let client = client.clone();
+  let token = sync_token.to_string();
+  let in_flight = Arc::clone(in_flight);
+  tokio::spawn(async move {
+    if let Err(e) = sync_history_to_cloud_with_client(&client, &token).await {
+      log::warn!("failed to sync listening history to cloud: {}", e);
+    }
+    in_flight.store(false, Ordering::Release);
+  });
+}
+
 pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
   tokio::spawn(async move {
     let mut collector = HistoryCollector::default();
@@ -215,7 +352,26 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
     let http_client = crate::infra::network::requests::shared_http_client().clone();
 
     // Check on startup
-    perform_auto_recap_check(&app);
+    perform_auto_recap_check(&app).await;
+
+    // Streak cache: load the full history once, then keep per-day totals
+    // updated incrementally from the records this collector appends (avoids
+    // re-reading the ever-growing listens file after every track).
+    let mut day_totals: Option<BTreeMap<NaiveDate, u64>> =
+      match tokio::task::spawn_blocking(load_listens).await {
+        Ok(Ok(listens)) => Some(qualified_day_totals(&listens)),
+        Ok(Err(error)) => {
+          log::warn!("failed to load listens for streak cache: {}", error);
+          None
+        }
+        Err(error) => {
+          log::warn!("streak cache task failed: {}", error);
+          None
+        }
+      };
+    if let Some(totals) = &day_totals {
+      app.lock().await.listening_streaks = Some(streaks_from_day_totals(totals));
+    }
 
     // Sync history to cloud on startup
     let sync_token_opt: Option<String> = if let Ok(app_guard) = app.try_lock() {
@@ -224,14 +380,9 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
       None
     };
 
+    let history_sync_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(ref token) = sync_token_opt {
-      let token = token.clone();
-      let client = http_client.clone();
-      tokio::spawn(async move {
-        if let Err(e) = sync_history_to_cloud_with_client(&client, &token).await {
-          log::warn!("failed to run startup history cloud sync: {}", e);
-        }
-      });
+      spawn_cloud_history_sync(&http_client, token, &history_sync_in_flight);
     }
 
     // Now-playing tracking state
@@ -242,7 +393,7 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
 
       if last_auto_check.elapsed().as_secs() >= 3600 {
         last_auto_check = Instant::now();
-        perform_auto_recap_check(&app);
+        perform_auto_recap_check(&app).await;
       }
 
       let snapshot = if let Ok(app) = app.try_lock() {
@@ -278,11 +429,41 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
         }
       }
 
-      if let Err(error) = collector.observe(snapshot) {
-        log::warn!("listening history collector failed: {}", error);
+      match collector.observe(snapshot) {
+        Ok(Some(record)) => {
+          if record.qualified {
+            if let Some(totals) = &mut day_totals {
+              let date = record.ended_at.with_timezone(&Local).date_naive();
+              *totals.entry(date).or_default() += record.listened_ms;
+              app.lock().await.listening_streaks = Some(streaks_from_day_totals(totals));
+            }
+          }
+          // Push the finished listen to the cloud right away instead of only
+          // at startup/exit; long sessions otherwise pile up records that
+          // stall the exit sync.
+          if let Some(ref token) = sync_token_opt {
+            spawn_cloud_history_sync(&http_client, token, &history_sync_in_flight);
+          }
+        }
+        Ok(None) => {}
+        Err(error) => {
+          log::warn!("listening history collector failed: {}", error);
+        }
       }
     }
   });
+}
+
+/// Default output path for the shareable recap page, used by the automatic
+/// monthly check and the in-app `generate_recap` key.
+pub fn recap_output_path() -> Result<PathBuf> {
+  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
+  Ok(
+    home
+      .join(".config")
+      .join("spotatui")
+      .join("spotatui-recap.html"),
+  )
 }
 
 fn last_recap_file_path() -> Result<PathBuf> {
@@ -296,7 +477,27 @@ fn last_recap_file_path() -> Result<PathBuf> {
   )
 }
 
-fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
+fn auto_recap_is_due(last_recap_contents: Option<&str>, now_ts: i64) -> bool {
+  match last_recap_contents {
+    Some(content) => match content.trim().parse::<i64>() {
+      Ok(ts) => now_ts - ts >= 30 * 24 * 3600,
+      Err(_) => true,
+    },
+    None => true,
+  }
+}
+
+async fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
+  if !app
+    .lock()
+    .await
+    .user_config
+    .behavior
+    .enable_monthly_recap_prompt
+  {
+    return;
+  }
+
   let path = match last_recap_file_path() {
     Ok(p) => p,
     Err(e) => {
@@ -306,49 +507,55 @@ fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
   };
 
   let now = Utc::now();
-  let should_generate = match fs::read_to_string(&path) {
-    Ok(content) => {
-      if let Ok(ts) = content.trim().parse::<i64>() {
-        let diff_secs = now.timestamp() - ts;
-        diff_secs >= 30 * 24 * 3600
-      } else {
-        true
-      }
-    }
-    Err(_) => true,
+  if !auto_recap_is_due(fs::read_to_string(&path).ok().as_deref(), now.timestamp()) {
+    return;
+  }
+
+  let output_path = match recap_output_path() {
+    Ok(p) => p,
+    Err(_) => return,
   };
 
-  if should_generate {
-    let home = match dirs::home_dir() {
-      Some(h) => h,
-      None => return,
-    };
-    let output_path = home
-      .join(".config")
-      .join("spotatui")
-      .join("spotatui-recap.html");
+  // The export reads and renders the whole history file; keep it off the
+  // runtime worker threads.
+  let export_path = output_path.clone();
+  let result = tokio::task::spawn_blocking(move || {
+    export_history_recap(RecapPeriod::ThirtyDays, &export_path)
+  })
+  .await
+  .map_err(anyhow::Error::from)
+  .and_then(|result| result);
 
-    match export_history_recap(RecapPeriod::ThirtyDays, &output_path) {
-      Ok(count) => {
-        if count > 0 {
-          if let Err(e) = fs::write(&path, now.timestamp().to_string()) {
-            log::warn!("failed to write last recap timestamp: {}", e);
-          }
+  match result {
+    Ok(count) => {
+      if count > 0 {
+        if let Err(e) = fs::write(&path, now.timestamp().to_string()) {
+          log::warn!("failed to write last recap timestamp: {}", e);
+        }
 
-          if let Ok(mut app_guard) = app.try_lock() {
-            app_guard.set_status_message(
-              format!(
-                "30-day listening recap generated at ~/.config/spotatui/spotatui-recap.html ({} listens)",
-                count
-              ),
-              10,
-            );
-          }
+        let mut app_guard = app.lock().await;
+        if app_guard.get_current_route().active_block == ActiveBlock::Input {
+          // Never steal keystrokes from an input field; fall back to a status
+          // message instead of the popup.
+          app_guard.set_status_message(
+            format!(
+              "Monthly listening recap ready at {} ({} listens)",
+              output_path.display(),
+              count
+            ),
+            10,
+          );
+        } else {
+          app_guard.recap_prompt = Some(RecapPromptState {
+            path: output_path,
+            listens: count,
+          });
+          app_guard.push_navigation_stack(RouteId::RecapPrompt, ActiveBlock::RecapPrompt);
         }
       }
-      Err(e) => {
-        log::warn!("failed to automatically generate recap: {}", e);
-      }
+    }
+    Err(e) => {
+      log::warn!("failed to automatically generate recap: {}", e);
     }
   }
 }
@@ -356,7 +563,15 @@ fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
 pub fn export_history_recap(period: RecapPeriod, output_path: &Path) -> Result<usize> {
   let listens = load_listens()?;
   let filtered = filter_listens_for_period(&listens, period);
-  let html = render_history_recap_html(period, &filtered);
+  // The share card is toggleable between the requested period and All Time
+  // (or Last 30 Days when All Time itself was requested).
+  let alt_period = if period == RecapPeriod::All {
+    RecapPeriod::ThirtyDays
+  } else {
+    RecapPeriod::All
+  };
+  let alt_filtered = filter_listens_for_period(&listens, alt_period);
+  let html = render_history_recap_html(period, &filtered, alt_period, &alt_filtered);
 
   if let Some(parent) = output_path.parent() {
     fs::create_dir_all(parent)?;
@@ -404,7 +619,9 @@ pub fn load_listens() -> Result<Vec<ListenRecord>> {
 }
 
 impl HistoryCollector {
-  fn observe(&mut self, snapshot: Option<PlaybackSnapshot>) -> Result<()> {
+  /// Returns the listen record appended to the history file, if any.
+  fn observe(&mut self, snapshot: Option<PlaybackSnapshot>) -> Result<Option<ListenRecord>> {
+    let mut appended = None;
     let now_utc = Utc::now();
     let now_instant = Instant::now();
 
@@ -432,12 +649,12 @@ impl HistoryCollector {
         });
 
         if should_roll {
-          self.finalize_current(now_utc)?;
+          appended = self.finalize_current(now_utc)?;
         }
 
         if self.current.is_none() {
           self.current = Some(ActiveListenSession::from_snapshot(snapshot, now_utc));
-          return Ok(());
+          return Ok(appended);
         }
 
         if let Some(current) = &mut self.current {
@@ -447,23 +664,25 @@ impl HistoryCollector {
         }
       }
       None => {
-        self.finalize_current(now_utc)?;
+        appended = self.finalize_current(now_utc)?;
       }
     }
 
-    Ok(())
+    Ok(appended)
   }
 
-  fn finalize_current(&mut self, ended_at: DateTime<Utc>) -> Result<()> {
+  fn finalize_current(&mut self, ended_at: DateTime<Utc>) -> Result<Option<ListenRecord>> {
     let Some(current) = self.current.take() else {
-      return Ok(());
+      return Ok(None);
     };
 
     if current.listened_ms == 0 {
-      return Ok(());
+      return Ok(None);
     }
 
-    append_listen_record(ListenRecord::from_active_session(current, ended_at))
+    let record = ListenRecord::from_active_session(current, ended_at);
+    append_listen_record(&record)?;
+    Ok(Some(record))
   }
 }
 
@@ -550,14 +769,14 @@ fn listens_file_path() -> Result<PathBuf> {
   )
 }
 
-fn append_listen_record(record: ListenRecord) -> Result<()> {
+fn append_listen_record(record: &ListenRecord) -> Result<()> {
   let path = listens_file_path()?;
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent)?;
   }
 
   let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-  serde_json::to_writer(&mut file, &record)?;
+  serde_json::to_writer(&mut file, record)?;
   writeln!(file)?;
   Ok(())
 }
@@ -579,7 +798,10 @@ fn history_source_from_snapshot(snapshot: &PlaybackSnapshot) -> HistoryPlaybackS
   }
 }
 
-fn filter_listens_for_period(listens: &[ListenRecord], period: RecapPeriod) -> Vec<ListenRecord> {
+pub fn filter_listens_for_period(
+  listens: &[ListenRecord],
+  period: RecapPeriod,
+) -> Vec<ListenRecord> {
   let now = Utc::now();
   listens
     .iter()
@@ -597,42 +819,109 @@ fn filter_listens_for_period(listens: &[ListenRecord], period: RecapPeriod) -> V
     .collect()
 }
 
-fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> String {
-  let total_listening_ms = listens.iter().map(|record| record.listened_ms).sum::<u64>();
-  let top_tracks = aggregate_top_tracks(listens);
-  let top_artists = aggregate_top_artists(listens);
-  let top_albums = aggregate_top_albums(listens);
+/// The raw (unescaped) values the share card shows for one period.
+struct CardData {
+  period: RecapPeriod,
+  track_title: String,
+  track_artist: String,
+  top_artist: String,
+  top_album: String,
+  plays: usize,
+  time: String,
+}
+
+impl CardData {
+  fn from_listens(period: RecapPeriod, listens: &[ListenRecord]) -> Self {
+    Self::from_tops(
+      period,
+      aggregate_top_tracks(listens, 1).first(),
+      aggregate_top_artists(listens, 1).first(),
+      aggregate_top_albums(listens, 1).first(),
+      listens.len(),
+      listens.iter().map(|record| record.listened_ms).sum(),
+    )
+  }
+
+  /// Build from already-aggregated ranked lists; the first entry of each wins.
+  fn from_tops(
+    period: RecapPeriod,
+    top_track: Option<&RankedEntry>,
+    top_artist: Option<&RankedEntry>,
+    top_album: Option<&RankedEntry>,
+    plays: usize,
+    total_ms: u64,
+  ) -> Self {
+    let top_track_raw = top_track
+      .map(|entry| entry.display.as_str())
+      .unwrap_or("No data");
+    let (track_title, track_artist) = if top_track_raw == "No data" {
+      ("No data".to_string(), "No data".to_string())
+    } else {
+      (
+        top_track_raw
+          .split(" - ")
+          .next()
+          .unwrap_or(top_track_raw)
+          .to_string(),
+        top_track_raw.split(" - ").nth(1).unwrap_or("").to_string(),
+      )
+    };
+
+    Self {
+      period,
+      track_title,
+      track_artist,
+      top_artist: top_artist
+        .map(|entry| entry.display.as_str())
+        .unwrap_or("No data")
+        .to_string(),
+      top_album: top_album
+        .map(|entry| entry.display.as_str())
+        .unwrap_or("No data")
+        .to_string(),
+      plays,
+      time: format_duration(total_ms),
+    }
+  }
+
+  /// Render as a JS object literal for the recap page's inline script.
+  fn to_js_object(&self) -> String {
+    format!(
+      "{{ period: {}, track: {}, artist: {}, topArtist: {}, topAlbum: {}, plays: {}, time: {} }}",
+      js_string(period_label(self.period)),
+      js_string(&self.track_title),
+      js_string(&self.track_artist),
+      js_string(&self.top_artist),
+      js_string(&self.top_album),
+      self.plays,
+      js_string(&self.time),
+    )
+  }
+}
+
+fn render_history_recap_html(
+  period: RecapPeriod,
+  listens: &[ListenRecord],
+  alt_period: RecapPeriod,
+  alt_listens: &[ListenRecord],
+) -> String {
+  let top_tracks = aggregate_top_tracks(listens, 5);
+  let top_artists = aggregate_top_artists(listens, 5);
+  let top_albums = aggregate_top_albums(listens, 5);
   let listening_days = aggregate_days(listens);
   let listening_hours = aggregate_hours(listens);
 
-  let top_album_title = escape_html(
-    top_albums
-      .first()
-      .map(|entry| entry.display.as_str())
-      .unwrap_or("No data"),
+  // The primary card's No. 1 entries fall out of the limit-5 lists above; only
+  // the alternative period needs its own aggregation.
+  let card = CardData::from_tops(
+    period,
+    top_tracks.first(),
+    top_artists.first(),
+    top_albums.first(),
+    listens.len(),
+    listens.iter().map(|record| record.listened_ms).sum(),
   );
-
-  let top_track_raw = top_tracks
-    .first()
-    .map(|entry| entry.display.as_str())
-    .unwrap_or("No data");
-  let top_track_title_clean = if top_track_raw == "No data" {
-    "No data".to_string()
-  } else {
-    top_track_raw
-      .split(" - ")
-      .next()
-      .unwrap_or(top_track_raw)
-      .to_string()
-  };
-  let top_track_title_clean = escape_html(&top_track_title_clean);
-
-  let top_track_artist = if top_track_raw == "No data" {
-    "No data".to_string()
-  } else {
-    top_track_raw.split(" - ").nth(1).unwrap_or("").to_string()
-  };
-  let top_track_artist = escape_html(&top_track_artist);
+  let alt_card = CardData::from_listens(alt_period, alt_listens);
 
   format!(
     r#"<!DOCTYPE html>
@@ -941,6 +1230,37 @@ fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> S
       font-family: var(--font-mono);
       color: var(--accent);
     }}
+    .card-toggle {{
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      max-width: 440px;
+      margin-bottom: 16px;
+    }}
+    .toggle-btn {{
+      flex: 1;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 99px;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-weight: 700;
+      font-family: var(--font-sans);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 9px 16px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }}
+    .toggle-btn:hover {{
+      color: var(--text);
+      border-color: rgba(29, 185, 84, 0.3);
+    }}
+    .toggle-btn.active {{
+      background: rgba(29, 185, 84, 0.12);
+      border-color: rgba(29, 185, 84, 0.4);
+      color: var(--accent);
+    }}
     .download-container {{
       margin-top: 20px;
       width: 100%;
@@ -1122,14 +1442,18 @@ fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> S
     <div class="dashboard-grid">
       <!-- Left Column: The Share Card Area -->
       <div class="share-column">
+        <div class="card-toggle">
+          <button id="card-toggle-0" class="toggle-btn active" onclick="setActiveCard(0)">{title}</button>
+          <button id="card-toggle-1" class="toggle-btn" onclick="setActiveCard(1)">{alt_title}</button>
+        </div>
         <div class="card-wrapper">
           <div id="share-card" class="share-card">
             <!-- Ambient glowing node inside the card -->
             <div class="card-glow"></div>
-            
+
             <div class="card-header">
               <span class="card-brand">spota<span style="color:var(--accent)">tui</span></span>
-              <span class="period-badge">{title}</span>
+              <span id="card-period" class="period-badge">{title}</span>
             </div>
             
             <div class="cover-container">
@@ -1141,28 +1465,28 @@ fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> S
             
             <div class="top-track-card">
               <span class="rank-badge">NO. 1 TRACK</span>
-              <div class="track-title">{top_track_title}</div>
-              <div class="track-artist">{top_track_artist}</div>
+              <div id="card-track-title" class="track-title">{top_track_title}</div>
+              <div id="card-track-artist" class="track-artist">{top_track_artist}</div>
             </div>
-            
+
             <div class="card-stats-grid">
               <div class="stats-row">
                 <div class="stat-pill">
                   <span class="stat-label">Qualified Plays</span>
-                  <span class="stat-value">{total_plays}</span>
+                  <span id="card-plays" class="stat-value">{total_plays}</span>
                 </div>
                 <div class="stat-pill">
                   <span class="stat-label">Listening Time</span>
-                  <span class="stat-value">{total_time}</span>
+                  <span id="card-time" class="stat-value">{total_time}</span>
                 </div>
               </div>
               <div class="stat-pill full-width">
                 <span class="stat-label">Top Artist</span>
-                <span class="stat-value">{top_artist_name}</span>
+                <span id="card-top-artist" class="stat-value">{top_artist_name}</span>
               </div>
               <div class="stat-pill full-width">
                 <span class="stat-label">Top Album</span>
-                <span class="stat-value">{top_album_title}</span>
+                <span id="card-top-album" class="stat-value">{top_album_title}</span>
               </div>
             </div>
             
@@ -1222,41 +1546,276 @@ fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> S
     </footer>
   </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script>
-    document.addEventListener('DOMContentLoaded', () => {{
-      const trackTitle = "{top_track_title}";
-      const trackArtist = "{top_artist_name}";
-      
-      if (trackTitle && trackTitle !== "No data") {{
-        // Clean parentheses or bracket noise for high search precision
-        const cleanTitle = trackTitle.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim();
-        const query = encodeURIComponent(`${{cleanTitle}} ${{trackArtist}}`);
-        const url = `https://itunes.apple.com/search?term=${{query}}&limit=1&entity=song`;
-        
-        fetch(url)
-          .then(res => res.json())
-          .then(data => {{
-            if (data.results && data.results.length > 0) {{
-              const artworkUrl = data.results[0].artworkUrl100.replace('100x100bb', '600x600bb');
-              const img = document.getElementById('cover-art-img');
-              img.src = artworkUrl;
-              img.onload = () => {{
-                img.style.display = 'block';
-                document.getElementById('cover-art-placeholder').style.display = 'none';
-              }};
-            }}
-          }})
-          .catch(err => console.error('Error fetching cover art:', err));
+    // Raw (JS-escaped, not HTML-escaped) card data emitted by spotatui: the
+    // requested period first, the toggle alternative second.
+    const CARDS = [{card_js}, {alt_card_js}];
+    let activeCard = 0;
+    // Cover-art URL per card: undefined = not fetched yet, null = none found.
+    const coverUrls = [undefined, undefined];
+
+    function showCoverPlaceholder() {{
+      document.getElementById('cover-art-img').style.display = 'none';
+      document.getElementById('cover-art-placeholder').style.display = 'flex';
+    }}
+
+    function applyCover(index) {{
+      const img = document.getElementById('cover-art-img');
+      const url = coverUrls[index];
+      if (!url) {{
+        showCoverPlaceholder();
+        return;
       }}
+      showCoverPlaceholder();
+      img.onload = () => {{
+        // Only reveal if this card is still the active one.
+        if (activeCard === index) {{
+          img.style.display = 'block';
+          document.getElementById('cover-art-placeholder').style.display = 'none';
+        }}
+      }};
+      if (img.src === url && img.complete && img.naturalWidth > 0) {{
+        img.onload();
+      }} else {{
+        img.src = url;
+      }}
+    }}
+
+    function loadCoverFor(index) {{
+      if (coverUrls[index] !== undefined) {{
+        applyCover(index);
+        return;
+      }}
+      const card = CARDS[index];
+      if (!card.track || card.track === 'No data') {{
+        coverUrls[index] = null;
+        applyCover(index);
+        return;
+      }}
+      // Clean parentheses or bracket noise for high search precision
+      const cleanTitle = card.track.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim();
+      const query = encodeURIComponent(`${{cleanTitle}} ${{card.artist}}`);
+      const url = `https://itunes.apple.com/search?term=${{query}}&limit=1&entity=song`;
+
+      fetch(url)
+        .then(res => res.json())
+        .then(data => {{
+          coverUrls[index] = (data.results && data.results.length > 0)
+            ? data.results[0].artworkUrl100.replace('100x100bb', '600x600bb')
+            : null;
+          if (activeCard === index) applyCover(index);
+        }})
+        .catch(err => {{
+          console.error('Error fetching cover art:', err);
+          coverUrls[index] = null;
+          if (activeCard === index) applyCover(index);
+        }});
+    }}
+
+    function setActiveCard(index) {{
+      activeCard = index;
+      const card = CARDS[index];
+      document.getElementById('card-toggle-0').classList.toggle('active', index === 0);
+      document.getElementById('card-toggle-1').classList.toggle('active', index === 1);
+      document.getElementById('card-period').textContent = card.period;
+      document.getElementById('card-track-title').textContent = card.track;
+      document.getElementById('card-track-artist').textContent = card.artist;
+      document.getElementById('card-plays').textContent = String(card.plays);
+      document.getElementById('card-time').textContent = card.time;
+      document.getElementById('card-top-artist').textContent = card.topArtist;
+      document.getElementById('card-top-album').textContent = card.topAlbum;
+      loadCoverFor(index);
+    }}
+
+    document.addEventListener('DOMContentLoaded', () => {{
+      loadCoverFor(0);
     }});
 
+    // ── Share-card renderer ────────────────────────────────────────────────
+    // Draws the card directly with the canvas 2D API: no external libraries,
+    // deterministic output, works offline.
+    const CANVAS_SCALE = 3;
+    const CARD_W = 440;
+    const CARD_H = 660;
+    const ACCENT = '#1db954';
+    const TEXT = '#f1f5f9';
+    const MUTED = '#94a3b8';
+
+    function roundRectPath(ctx, x, y, w, h, r) {{
+      r = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }}
+
+    function fitText(ctx, text, maxWidth) {{
+      if (ctx.measureText(text).width <= maxWidth) return text;
+      let t = text;
+      while (t.length > 1 && ctx.measureText(t + '…').width > maxWidth) {{
+        t = t.slice(0, -1);
+      }}
+      return t + '…';
+    }}
+
+    function drawStatPill(ctx, x, y, w, h, label, value) {{
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
+      roundRectPath(ctx, x, y, w, h, 14);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = MUTED;
+      ctx.font = '500 11px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText(label.toUpperCase(), x + 14, y + 21);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 15px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText(fitText(ctx, value, w - 28), x + 14, y + 41);
+    }}
+
+    function drawCardToCanvas() {{
+      const card = CARDS[activeCard];
+      const canvas = document.createElement('canvas');
+      canvas.width = CARD_W * CANVAS_SCALE;
+      canvas.height = CARD_H * CANVAS_SCALE;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(CANVAS_SCALE, CANVAS_SCALE);
+
+      // Card background: gradient fill inside rounded border
+      const bg = ctx.createLinearGradient(0, 0, CARD_W, CARD_H);
+      bg.addColorStop(0, '#0b1a11');
+      bg.addColorStop(1, '#050a0f');
+      ctx.fillStyle = bg;
+      roundRectPath(ctx, 0, 0, CARD_W, CARD_H, 28);
+      ctx.fill();
+      ctx.save();
+      ctx.clip();
+
+      // Ambient glow at the top
+      const glow = ctx.createRadialGradient(CARD_W / 2, 0, 0, CARD_W / 2, 0, 220);
+      glow.addColorStop(0, 'rgba(29, 185, 84, 0.18)');
+      glow.addColorStop(1, 'rgba(29, 185, 84, 0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, CARD_W, 240);
+
+      // Header: brand left, period badge right
+      ctx.textAlign = 'left';
+      ctx.font = '800 20px "Plus Jakarta Sans", sans-serif';
+      ctx.fillStyle = TEXT;
+      ctx.fillText('spota', 32, 52);
+      ctx.fillStyle = ACCENT;
+      ctx.fillText('tui', 32 + ctx.measureText('spota').width, 52);
+
+      ctx.font = '700 11px "Plus Jakarta Sans", sans-serif';
+      const badgeText = card.period.toUpperCase();
+      const badgeW = ctx.measureText(badgeText).width + 24;
+      ctx.fillStyle = 'rgba(29, 185, 84, 0.12)';
+      roundRectPath(ctx, CARD_W - 32 - badgeW, 34, badgeW, 24, 12);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(29, 185, 84, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = ACCENT;
+      ctx.fillText(badgeText, CARD_W - 32 - badgeW + 12, 50);
+
+      // Cover art (or placeholder) centered
+      const coverSize = 174;
+      const coverX = (CARD_W - coverSize) / 2;
+      const coverY = 96;
+      ctx.save();
+      roundRectPath(ctx, coverX, coverY, coverSize, coverSize, 20);
+      ctx.clip();
+      const coverGrad = ctx.createLinearGradient(coverX, coverY, coverX + coverSize, coverY + coverSize);
+      coverGrad.addColorStop(0, '#1b2820');
+      coverGrad.addColorStop(1, '#05080c');
+      ctx.fillStyle = coverGrad;
+      ctx.fillRect(coverX, coverY, coverSize, coverSize);
+      const img = document.getElementById('cover-art-img');
+      if (img && img.style.display === 'block' && img.complete && img.naturalWidth > 0) {{
+        try {{
+          ctx.drawImage(img, coverX, coverY, coverSize, coverSize);
+        }} catch (e) {{
+          console.warn('cover art could not be drawn, keeping placeholder:', e);
+        }}
+      }} else {{
+        // Placeholder music note
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.font = '48px "Plus Jakarta Sans", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('♪', coverX + coverSize / 2, coverY + coverSize / 2 + 16);
+      }}
+      ctx.restore();
+      roundRectPath(ctx, coverX, coverY, coverSize, coverSize, 20);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Top-track panel
+      const panelY = 300;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
+      roundRectPath(ctx, 32, panelY, CARD_W - 64, 104, 18);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.font = '700 10px "JetBrains Mono", monospace';
+      const rankText = 'NO. 1 TRACK';
+      const rankW = ctx.measureText(rankText).width + 16;
+      ctx.fillStyle = 'rgba(29, 185, 84, 0.1)';
+      roundRectPath(ctx, (CARD_W - rankW) / 2, panelY + 14, rankW, 20, 6);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(29, 185, 84, 0.18)';
+      ctx.stroke();
+      ctx.fillStyle = ACCENT;
+      ctx.fillText(rankText, CARD_W / 2, panelY + 28);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '800 18px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText(fitText(ctx, card.track, CARD_W - 104), CARD_W / 2, panelY + 60);
+      ctx.fillStyle = MUTED;
+      ctx.font = '400 14px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText(fitText(ctx, card.artist, CARD_W - 104), CARD_W / 2, panelY + 84);
+
+      // Stat pills
+      const pillW = (CARD_W - 64 - 12) / 2;
+      drawStatPill(ctx, 32, 424, pillW, 54, 'Qualified Plays', String(card.plays));
+      drawStatPill(ctx, 32 + pillW + 12, 424, pillW, 54, 'Listening Time', card.time);
+      drawStatPill(ctx, 32, 490, CARD_W - 64, 54, 'Top Artist', card.topArtist);
+      drawStatPill(ctx, 32, 556, CARD_W - 64, 54, 'Top Album', card.topAlbum);
+
+      // Footer
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+      ctx.beginPath();
+      ctx.moveTo(32, 622);
+      ctx.lineTo(CARD_W - 32, 622);
+      ctx.stroke();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = MUTED;
+      ctx.font = '400 11px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText('generated by spotatui', 32, 642);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = ACCENT;
+      ctx.font = '400 11px "JetBrains Mono", monospace';
+      ctx.fillText('github.com/LargeModGames/spotatui', CARD_W - 32, 642);
+      ctx.restore();
+
+      // Card border on top of everything
+      roundRectPath(ctx, 0.5, 0.5, CARD_W - 1, CARD_H - 1, 28);
+      ctx.strokeStyle = 'rgba(29, 185, 84, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      return canvas;
+    }}
+
     function downloadCard() {{
-      const card = document.getElementById('share-card');
       const btn = document.querySelector('.download-btn');
-      const wrapper = document.querySelector('.card-wrapper');
       const originalText = btn.innerHTML;
-      
       btn.disabled = true;
       btn.innerHTML = `
         <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.2 8H18" /></svg>
@@ -1264,56 +1823,27 @@ fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> S
       `;
       btn.style.opacity = '0.7';
 
-      const originalTransform = wrapper.style.transform;
-      const originalMargin = wrapper.style.marginBottom;
-      const originalHeight = wrapper.style.height;
-      const originalBoxShadow = card.style.boxShadow;
-
-      wrapper.style.transform = 'none';
-      wrapper.style.marginBottom = '0';
-      wrapper.style.height = 'auto';
-      card.style.boxShadow = 'none';
+      const restore = () => {{
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        btn.style.opacity = '1';
+      }};
 
       document.fonts.ready.then(() => {{
-        setTimeout(() => {{
-          html2canvas(card, {{
-            scale: 3,
-            useCORS: true,
-            backgroundColor: '#05080c',
-            logging: false,
-            width: 440,
-            height: 660,
-            windowWidth: 440,
-            windowHeight: 660
-          }}).then(canvas => {{
-            wrapper.style.transform = originalTransform;
-            wrapper.style.marginBottom = originalMargin;
-            wrapper.style.height = originalHeight;
-            card.style.boxShadow = originalBoxShadow;
-
-            const link = document.createElement('a');
-            const dateStr = new Date().toISOString().slice(0, 10);
-            link.download = `spotatui-recap-${{dateStr}}.png`;
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-            
-            btn.disabled = false;
-            btn.innerHTML = originalText;
-            btn.style.opacity = '1';
-          }}).catch(err => {{
-            console.error(err);
-            wrapper.style.transform = originalTransform;
-            wrapper.style.marginBottom = originalMargin;
-            wrapper.style.height = originalHeight;
-            card.style.boxShadow = originalBoxShadow;
-
-            alert('Could not render image. Please try again!');
-            btn.disabled = false;
-            btn.innerHTML = originalText;
-            btn.style.opacity = '1';
-          }});
-        }}, 300);
-      }});
+        try {{
+          const canvas = drawCardToCanvas();
+          const link = document.createElement('a');
+          const dateStr = new Date().toISOString().slice(0, 10);
+          const periodSlug = CARDS[activeCard].period.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+          link.download = `spotatui-recap-${{periodSlug}}-${{dateStr}}.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        }} catch (err) {{
+          console.error(err);
+          alert('Could not render image. Please try again!');
+        }}
+        restore();
+      }}).catch(restore);
     }}
   </script>
 </body>
@@ -1325,17 +1855,15 @@ fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> S
     } else {
       "A shareable HTML snapshot of your qualified local listening history, generated directly from spotatui."
     }),
-    total_plays = listens.len(),
-    total_time = format_duration(total_listening_ms),
-    top_track_title = top_track_title_clean,
-    top_track_artist = top_track_artist,
-    top_artist_name = escape_html(
-      top_artists
-        .first()
-        .map(|entry| entry.display.as_str())
-        .unwrap_or("No data"),
-    ),
-    top_album_title = top_album_title,
+    alt_title = escape_html(period_label(alt_period)),
+    total_plays = card.plays,
+    total_time = escape_html(&card.time),
+    top_track_title = escape_html(&card.track_title),
+    top_track_artist = escape_html(&card.track_artist),
+    top_artist_name = escape_html(&card.top_artist),
+    top_album_title = escape_html(&card.top_album),
+    card_js = card.to_js_object(),
+    alt_card_js = alt_card.to_js_object(),
     top_tracks_html = render_ranked_entries(&top_tracks, "No tracks yet."),
     top_artists_html = render_ranked_entries(&top_artists, "No artists yet."),
     top_albums_html = render_ranked_entries(&top_albums, "No albums yet."),
@@ -1345,15 +1873,16 @@ fn render_history_recap_html(period: RecapPeriod, listens: &[ListenRecord]) -> S
   )
 }
 
-#[derive(Clone)]
-struct RankedEntry {
-  display: String,
-  detail: String,
-  value: u64,
+#[derive(Clone, Debug)]
+pub struct RankedEntry {
+  pub display: String,
+  pub detail: String,
+  pub value: u64,
+  pub uri: Option<String>,
 }
 
-fn aggregate_top_tracks(listens: &[ListenRecord]) -> Vec<RankedEntry> {
-  let mut totals: BTreeMap<String, (String, u64, u64)> = BTreeMap::new();
+pub fn aggregate_top_tracks(listens: &[ListenRecord], limit: usize) -> Vec<RankedEntry> {
+  let mut totals: BTreeMap<String, (String, u64, u64, Option<String>)> = BTreeMap::new();
   for record in listens {
     let key = record
       .item_id
@@ -1365,6 +1894,7 @@ fn aggregate_top_tracks(listens: &[ListenRecord]) -> Vec<RankedEntry> {
         format!("{} - {}", record.title, record.artists.join(", ")),
         0,
         0,
+        record.item_uri.clone(),
       )
     });
     entry.1 += record.listened_ms;
@@ -1374,12 +1904,14 @@ fn aggregate_top_tracks(listens: &[ListenRecord]) -> Vec<RankedEntry> {
   sort_ranked_entries(
     totals
       .into_values()
-      .map(|(display, listened_ms, plays)| RankedEntry {
+      .map(|(display, listened_ms, plays, uri)| RankedEntry {
         display,
         detail: format!("{} plays · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
+        uri,
       })
       .collect(),
+    limit,
   )
 }
 
@@ -1392,7 +1924,7 @@ fn split_artists(combo: &str) -> Vec<String> {
     .collect()
 }
 
-fn aggregate_top_artists(listens: &[ListenRecord]) -> Vec<RankedEntry> {
+pub fn aggregate_top_artists(listens: &[ListenRecord], limit: usize) -> Vec<RankedEntry> {
   let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
   for record in listens {
     for artist_combo in &record.artists {
@@ -1412,12 +1944,14 @@ fn aggregate_top_artists(listens: &[ListenRecord]) -> Vec<RankedEntry> {
         display: artist,
         detail: format!("{} track hits · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
+        uri: None,
       })
       .collect(),
+    limit,
   )
 }
 
-fn aggregate_top_albums(listens: &[ListenRecord]) -> Vec<RankedEntry> {
+pub fn aggregate_top_albums(listens: &[ListenRecord], limit: usize) -> Vec<RankedEntry> {
   let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
   for record in listens {
     if record.album.trim().is_empty() {
@@ -1435,12 +1969,14 @@ fn aggregate_top_albums(listens: &[ListenRecord]) -> Vec<RankedEntry> {
         display: album,
         detail: format!("{} plays · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
+        uri: None,
       })
       .collect(),
+    limit,
   )
 }
 
-fn aggregate_days(listens: &[ListenRecord]) -> Vec<RankedEntry> {
+pub fn aggregate_days(listens: &[ListenRecord]) -> Vec<RankedEntry> {
   let mut totals: BTreeMap<String, u64> = BTreeMap::new();
   for record in listens {
     let label = record.ended_at.format("%Y-%m-%d").to_string();
@@ -1455,6 +1991,7 @@ fn aggregate_days(listens: &[ListenRecord]) -> Vec<RankedEntry> {
       display: label,
       detail: format_duration(listened_ms),
       value: listened_ms,
+      uri: None,
     })
     .collect::<Vec<_>>()
     .into_iter()
@@ -1474,18 +2011,19 @@ fn aggregate_hours(listens: &[ListenRecord]) -> Vec<RankedEntry> {
       display: format!("{hour:02}:00"),
       detail: format_duration(*totals.get(&hour).unwrap_or(&0)),
       value: *totals.get(&hour).unwrap_or(&0),
+      uri: None,
     })
     .collect()
 }
 
-fn sort_ranked_entries(mut entries: Vec<RankedEntry>) -> Vec<RankedEntry> {
+fn sort_ranked_entries(mut entries: Vec<RankedEntry>, limit: usize) -> Vec<RankedEntry> {
   entries.sort_by(|left, right| {
     right
       .value
       .cmp(&left.value)
       .then_with(|| left.display.cmp(&right.display))
   });
-  entries.truncate(5);
+  entries.truncate(limit);
   entries
 }
 
@@ -1573,7 +2111,7 @@ fn render_bar_entries(entries: &[RankedEntry]) -> String {
   format!(r#"<div class="bars">{rows}</div>"#)
 }
 
-fn period_label(period: RecapPeriod) -> &'static str {
+pub fn period_label(period: RecapPeriod) -> &'static str {
   match period {
     RecapPeriod::SevenDays => "Last 7 Days",
     RecapPeriod::ThirtyDays => "Last 30 Days",
@@ -1583,7 +2121,7 @@ fn period_label(period: RecapPeriod) -> &'static str {
   }
 }
 
-fn format_duration(total_ms: u64) -> String {
+pub fn format_duration(total_ms: u64) -> String {
   let total_minutes = total_ms / 1000 / 60;
   let hours = total_minutes / 60;
   let minutes = total_minutes % 60;
@@ -1601,6 +2139,16 @@ fn escape_html(input: &str) -> String {
     .replace('>', "&gt;")
     .replace('"', "&quot;")
     .replace('\'', "&#39;")
+}
+
+/// Encode a string as a JS string literal (quotes included). Unlike
+/// `escape_html`, the value round-trips exactly; needed for the recap page's
+/// inline `<script>` data. `</` is escaped so a value can never close the
+/// script tag early.
+fn js_string(input: &str) -> String {
+  serde_json::to_string(input)
+    .unwrap_or_else(|_| "\"\"".to_string())
+    .replace("</", "<\\/")
 }
 
 fn last_synced_file_path() -> Result<PathBuf> {
@@ -1931,5 +2479,156 @@ mod tests {
     assert!(tracker
       .observe(None, t0 + std::time::Duration::from_secs(2))
       .is_none());
+  }
+
+  fn day(year: i32, month: u32, day: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(year, month, day).unwrap()
+  }
+
+  #[test]
+  fn streak_counts_consecutive_run_ending_today() {
+    let today = day(2026, 5, 21);
+    let days: BTreeSet<NaiveDate> = [day(2026, 5, 19), day(2026, 5, 20), today]
+      .into_iter()
+      .collect();
+    let summary = streaks_from_days(&days, today, 90_000);
+    assert_eq!(summary.current_days, 3);
+    assert_eq!(summary.longest_days, 3);
+    assert_eq!(summary.today_ms, 90_000);
+  }
+
+  #[test]
+  fn streak_survives_until_midnight_when_today_has_no_listen() {
+    let today = day(2026, 5, 21);
+    let days: BTreeSet<NaiveDate> = [day(2026, 5, 19), day(2026, 5, 20)].into_iter().collect();
+    let summary = streaks_from_days(&days, today, 0);
+    assert_eq!(summary.current_days, 2);
+    assert_eq!(summary.today_ms, 0);
+  }
+
+  #[test]
+  fn streak_resets_after_a_gap() {
+    let today = day(2026, 5, 21);
+    let days: BTreeSet<NaiveDate> = [day(2026, 5, 15), day(2026, 5, 16), day(2026, 5, 17)]
+      .into_iter()
+      .collect();
+    let summary = streaks_from_days(&days, today, 0);
+    assert_eq!(summary.current_days, 0);
+    assert_eq!(summary.longest_days, 3);
+  }
+
+  #[test]
+  fn longest_streak_can_exceed_current() {
+    let today = day(2026, 5, 21);
+    let days: BTreeSet<NaiveDate> = [
+      day(2026, 5, 10),
+      day(2026, 5, 11),
+      day(2026, 5, 12),
+      day(2026, 5, 13),
+      day(2026, 5, 20),
+      today,
+    ]
+    .into_iter()
+    .collect();
+    let summary = streaks_from_days(&days, today, 0);
+    assert_eq!(summary.current_days, 2);
+    assert_eq!(summary.longest_days, 4);
+  }
+
+  #[test]
+  fn streak_is_zero_with_no_listens() {
+    let summary = streaks_from_days(&BTreeSet::new(), day(2026, 5, 21), 0);
+    assert_eq!(summary, StreakSummary::default());
+  }
+
+  #[test]
+  fn compute_streaks_ignores_unqualified_records() {
+    let records = vec![record_at(19, 60_000, false), record_at(20, 60_000, true)];
+    let summary = compute_streaks(&records);
+    assert_eq!(summary.longest_days, 1);
+  }
+
+  #[test]
+  fn top_tracks_respect_limit_and_carry_uri() {
+    let records: Vec<ListenRecord> = (1..=8)
+      .map(|d| record_at(d, 60_000 * d as u64, true))
+      .collect();
+    let entries = aggregate_top_tracks(&records, 3);
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].display, "Track 8 - Artist");
+    assert_eq!(entries[0].uri.as_deref(), Some("spotify:track:id-8"));
+  }
+
+  #[test]
+  fn stats_data_totals_only_reflect_given_records() {
+    let records = vec![record_at(20, 100_000, true), record_at(21, 50_000, true)];
+    let stats = build_stats_data(&records);
+    assert_eq!(stats.total_plays, 2);
+    assert_eq!(stats.total_time_ms, 150_000);
+    assert_eq!(stats.top_tracks.len(), 2);
+  }
+
+  #[test]
+  fn recap_html_uses_canvas_renderer_not_html2canvas() {
+    let records = vec![record_at(20, 120_000, true)];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    assert!(!html.contains("html2canvas"));
+    assert!(html.contains("getContext('2d')"));
+  }
+
+  #[test]
+  fn recap_html_escapes_titles_for_both_dom_and_js() {
+    let mut record = record_at(20, 120_000, true);
+    record.title = r#"Mr. Brightside "Live" & Loud </script>"#.to_string();
+    let records = [record];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    // DOM side stays HTML-escaped
+    assert!(html.contains("&quot;Live&quot; &amp; Loud"));
+    // JS side round-trips the raw value as a valid string literal, with the
+    // script-closing sequence neutralized
+    assert!(html.contains(r#"\"Live\" & Loud"#));
+    assert!(html.contains(r#"<\/script>"#));
+    assert!(!html.contains(r#"& Loud </script>"#));
+  }
+
+  #[test]
+  fn recap_html_embeds_both_card_periods_with_toggle() {
+    let this_month = record_at(20, 120_000, true);
+    let html = render_history_recap_html(
+      RecapPeriod::ThirtyDays,
+      std::slice::from_ref(&this_month),
+      RecapPeriod::All,
+      &[this_month.clone(), record_at(21, 60_000, true)],
+    );
+    // Toggle buttons for both periods
+    assert!(html.contains(r#"onclick="setActiveCard(0)">Last 30 Days<"#));
+    assert!(html.contains(r#"onclick="setActiveCard(1)">All Time<"#));
+    // Both card datasets are embedded with their own play counts
+    assert!(html.contains(r#"period: "Last 30 Days", track:"#));
+    assert!(html.contains(r#"period: "All Time", track:"#));
+    assert!(html.contains("plays: 1,"));
+    assert!(html.contains("plays: 2,"));
+  }
+
+  #[test]
+  fn js_string_round_trips_special_characters() {
+    assert_eq!(js_string("plain"), r#""plain""#);
+    assert_eq!(js_string(r#"a "b" & c"#), r#""a \"b\" & c""#);
+    assert_eq!(js_string("</script>"), r#""<\/script>""#);
+  }
+
+  #[test]
+  fn auto_recap_due_on_missing_invalid_or_old_timestamp() {
+    let now = 1_800_000_000_i64;
+    assert!(auto_recap_is_due(None, now));
+    assert!(auto_recap_is_due(Some("not a number"), now));
+    assert!(auto_recap_is_due(
+      Some(&(now - 31 * 24 * 3600).to_string()),
+      now
+    ));
+    assert!(!auto_recap_is_due(
+      Some(&(now - 24 * 3600).to_string()),
+      now
+    ));
   }
 }

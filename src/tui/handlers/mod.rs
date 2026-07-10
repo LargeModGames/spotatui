@@ -27,12 +27,14 @@ mod playbar;
 mod playlist;
 mod podcasts;
 mod queue_menu;
+mod recap_prompt;
 mod recently_played;
 pub mod resize;
 mod search_results;
 mod select_device;
 mod settings;
 mod sort_menu;
+mod stats;
 mod track_table;
 
 use crate::core::app::{
@@ -329,37 +331,8 @@ pub fn handle_app(key: Key, app: &mut App) {
       if is_input_mode(app) {
         handle_block_events(key, app);
       } else {
-        match dirs::home_dir() {
-          Some(home) => {
-            let output_path = home
-              .join(".config")
-              .join("spotatui")
-              .join("spotatui-recap.html");
-            match crate::infra::history::export_history_recap(
-              crate::infra::history::RecapPeriod::ThirtyDays,
-              &output_path,
-            ) {
-              Ok(count) => {
-                app.set_status_message(
-                  format!(
-                    "Listening recap generated at ~/.config/spotatui/spotatui-recap.html ({} listens)",
-                    count
-                  ),
-                  5,
-                );
-                if let Err(e) = open::that(&output_path) {
-                  log::warn!("failed to open recap in browser: {}", e);
-                }
-              }
-              Err(e) => {
-                app.set_status_message(format!("Failed to generate recap: {}", e), 5);
-              }
-            }
-          }
-          None => {
-            app.set_status_message("Error: Could not locate home directory", 5);
-          }
-        }
+        let period = recap_period_for_current_route(app);
+        app.dispatch(IoEvent::GenerateRecap(period));
       }
     }
     // Resize sidebar: { decreases, } increases width
@@ -426,6 +399,7 @@ fn is_input_mode(app: &App) -> bool {
       | ActiveBlock::AnnouncementPrompt
       | ActiveBlock::ExitPrompt
       | ActiveBlock::CreatePlaylistForm
+      | ActiveBlock::RecapPrompt
   )
 }
 
@@ -532,6 +506,12 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Friends => {
       friends::handler(key, app);
     }
+    ActiveBlock::Stats => {
+      stats::handler(key, app);
+    }
+    ActiveBlock::RecapPrompt => {
+      recap_prompt::handler(key, app);
+    }
   }
 }
 
@@ -587,6 +567,11 @@ fn handle_escape(app: &mut App) {
     }
     ActiveBlock::Friends => {
       friends::handler(Key::Esc, app);
+    }
+    // "[ESC] Later" on the recap popup: dismiss without opening.
+    ActiveBlock::RecapPrompt => {
+      app.recap_prompt = None;
+      app.pop_navigation_stack();
     }
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);
@@ -658,6 +643,16 @@ fn handle_jump_to_artist_album(app: &mut App) {
   };
 }
 
+/// The recap period the `generate_recap` key should use: the selected period
+/// on the Stats screen, 30 days anywhere else.
+fn recap_period_for_current_route(app: &App) -> crate::infra::history::RecapPeriod {
+  if app.get_current_route().active_block == ActiveBlock::Stats {
+    app.stats_period
+  } else {
+    crate::infra::history::RecapPeriod::ThirtyDays
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -681,6 +676,22 @@ mod tests {
     let mut app = App::default();
     app.push_navigation_stack(RouteId::Friends, ActiveBlock::Friends);
     app
+  }
+
+  #[test]
+  fn recap_period_follows_stats_screen_selection() {
+    let mut app = App::default();
+    app.stats_period = crate::infra::history::RecapPeriod::Year;
+    assert_eq!(
+      recap_period_for_current_route(&app),
+      crate::infra::history::RecapPeriod::ThirtyDays
+    );
+
+    app.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
+    assert_eq!(
+      recap_period_for_current_route(&app),
+      crate::infra::history::RecapPeriod::Year
+    );
   }
 
   #[test]

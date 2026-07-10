@@ -34,6 +34,14 @@ pub fn get_artist_highlight_state(app: &App, block_to_match: ArtistBlock) -> (bo
   }
 }
 
+/// Bold key hint for help bars, e.g. the "↑/↓" in "↑/↓ Navigate".
+pub fn hint_span(key: &'static str, theme: Theme) -> Span<'static> {
+  Span::styled(
+    key,
+    Style::default().fg(theme.hint).add_modifier(Modifier::BOLD),
+  )
+}
+
 pub fn get_color((is_active, is_hovered): (bool, bool), theme: Theme) -> Style {
   match (is_active, is_hovered) {
     (true, _) => Style::default().fg(theme.selected).bg(theme.background),

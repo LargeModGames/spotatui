@@ -92,6 +92,7 @@ pub fn content_active_block_for_route(route_id: &RouteId) -> Option<ActiveBlock>
     RouteId::AlbumList => Some(ActiveBlock::AlbumList),
     RouteId::PodcastEpisodes => Some(ActiveBlock::EpisodeTable),
     RouteId::Discover => Some(ActiveBlock::Discover),
+    RouteId::Stats => Some(ActiveBlock::Stats),
     RouteId::Artists => Some(ActiveBlock::Artists),
     RouteId::RecentlyPlayed => Some(ActiveBlock::RecentlyPlayed),
     RouteId::Search => Some(ActiveBlock::SearchResultBlock),

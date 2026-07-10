@@ -169,6 +169,10 @@ pub enum IoEvent {
   UnfollowFriend(String),
   /// Search spotatui.com users by display name or friend code
   SearchFriendUsers(String),
+  /// Aggregate local listening history for the Stats screen
+  LoadListeningStats(crate::infra::history::RecapPeriod),
+  /// Export the shareable HTML recap and open it in the browser
+  GenerateRecap(crate::infra::history::RecapPeriod),
   /// List the folders under the configured local music directory (handled by
   /// `infra::local::dispatch`; a no-op on the Spotify network).
   GetLocalPlaylists,
@@ -355,6 +359,8 @@ impl Network {
         | IoEvent::AddFriendByUserId(_)
         | IoEvent::UnfollowFriend(_)
         | IoEvent::SearchFriendUsers(_)
+        | IoEvent::LoadListeningStats(_)
+        | IoEvent::GenerateRecap(_)
         | IoEvent::StartParty(_)
         | IoEvent::JoinParty { .. }
         | IoEvent::SetPartyControlMode(_)
@@ -709,6 +715,12 @@ impl Network {
       IoEvent::SearchFriendUsers(query) => {
         friends::handle_search_friend_users(self, query).await;
       }
+      IoEvent::LoadListeningStats(period) => {
+        self.load_listening_stats(period).await;
+      }
+      IoEvent::GenerateRecap(period) => {
+        self.generate_recap(period).await;
+      }
       IoEvent::BeginSpotifyLogin => {
         self.begin_spotify_login().await;
       }
@@ -750,6 +762,77 @@ impl Network {
   async fn handle_error(&mut self, e: anyhow::Error) {
     let mut app = self.app.lock().await;
     app.handle_error(e);
+  }
+
+  /// Aggregate local listening history for the Stats screen. Reads the
+  /// listens file off the runtime threads; never touches Spotify.
+  async fn load_listening_stats(&mut self, period: crate::infra::history::RecapPeriod) {
+    use crate::infra::history;
+
+    let result = tokio::task::spawn_blocking(move || {
+      let listens = history::load_listens()?;
+      let filtered = history::filter_listens_for_period(&listens, period);
+      Ok::<_, anyhow::Error>((
+        history::build_stats_data(&filtered),
+        history::compute_streaks(&listens),
+      ))
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|result| result);
+
+    let mut app = self.app.lock().await;
+    match result {
+      Ok((stats, streaks)) => {
+        app.listening_streaks = Some(streaks);
+        // Cycling periods quickly can race two loads; only the response for
+        // the currently selected period may land.
+        if app.stats_period == period {
+          app.stats_data = Some(stats);
+          app.stats_loading = false;
+        }
+      }
+      Err(error) => {
+        app.stats_loading = false;
+        app.handle_error(anyhow!("failed to load listening history: {}", error));
+      }
+    }
+  }
+
+  /// Export the shareable HTML recap off the runtime threads and open it in
+  /// the browser; reads only local history, never Spotify.
+  async fn generate_recap(&mut self, period: crate::infra::history::RecapPeriod) {
+    use crate::infra::history;
+
+    let result = tokio::task::spawn_blocking(move || {
+      let output_path = history::recap_output_path()?;
+      let count = history::export_history_recap(period, &output_path)?;
+      Ok::<_, anyhow::Error>((output_path, count))
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|result| result);
+
+    match result {
+      Ok((output_path, count)) => {
+        if let Err(e) = open::that(&output_path) {
+          log::warn!("failed to open recap in browser: {}", e);
+        }
+        let mut app = self.app.lock().await;
+        app.set_status_message(
+          format!(
+            "Listening recap generated at {} ({} listens)",
+            output_path.display(),
+            count
+          ),
+          5,
+        );
+      }
+      Err(error) => {
+        let mut app = self.app.lock().await;
+        app.set_status_message(format!("Failed to generate recap: {}", error), 5);
+      }
+    }
   }
 
   async fn show_status_message(&self, message: String, ttl_secs: u64) {

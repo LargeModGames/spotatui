@@ -385,9 +385,24 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("Radio"),
     ],
     vec![
-      String::from("Generate 30-day listening recap card"),
+      String::from("Generate listening recap card (selected period on Stats, 30 days elsewhere)"),
       key_bindings.generate_recap.to_string(),
       String::from("General"),
+    ],
+    vec![
+      String::from("Open Stats screen"),
+      String::from("Library sidebar"),
+      String::from("Stats"),
+    ],
+    vec![
+      String::from("Cycle stats period"),
+      String::from("[ / ]"),
+      String::from("Stats"),
+    ],
+    vec![
+      String::from("Play selected top track"),
+      String::from("<Enter>"),
+      String::from("Stats"),
     ],
     vec![
       String::from("Open sort menu"),

@@ -76,7 +76,32 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   f.render_widget(top_text, banner_area);
 
   // Prepend global counter status to the changelog view
-  let mut changelog_lines = Vec::with_capacity(base_changelog_lines.len() + 2);
+  let mut changelog_lines = Vec::with_capacity(base_changelog_lines.len() + 4);
+
+  // Listening streak strip (cache read only; populated by the history collector)
+  if let Some(streaks) = &app.listening_streaks {
+    if streaks.current_days > 0 {
+      let mut spans = vec![Span::styled(
+        format!("{}-day listening streak", streaks.current_days),
+        Style::default().fg(app.user_config.theme.active),
+      )];
+      if streaks.today_ms > 0 {
+        spans.push(Span::styled(
+          format!(
+            " · {} today",
+            crate::infra::history::format_duration(streaks.today_ms)
+          ),
+          Style::default().fg(app.user_config.theme.hint),
+        ));
+      } else {
+        spans.push(Span::styled(
+          " · listen today to keep it!",
+          Style::default().fg(app.user_config.theme.hint),
+        ));
+      }
+      changelog_lines.push(Line::from(spans));
+    }
+  }
   let counter_message = if cfg!(feature = "telemetry") {
     if app.user_config.behavior.enable_global_song_count {
       match app.global_song_count {

@@ -405,6 +405,7 @@ fn is_main_layout_mouse_interactive(active_block: ActiveBlock) -> bool {
       | ActiveBlock::Dialog(_)
       | ActiveBlock::SortMenu
       | ActiveBlock::Party
+      | ActiveBlock::RecapPrompt
   )
 }
 
