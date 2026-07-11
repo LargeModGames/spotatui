@@ -10,7 +10,6 @@ pub mod media_metadata;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 pub mod mpris;
 pub mod network;
-#[cfg(feature = "streaming")]
 pub mod player;
 pub mod queue;
 #[cfg(feature = "internet-radio")]

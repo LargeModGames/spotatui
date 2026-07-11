@@ -1,4 +1,7 @@
 use crate::core::pagination::{CursorPaged, Paged};
+use crate::core::playback_target::{
+  spotify_target_from_device, PlaybackTarget, SonosNowPlaying, SonosRoom,
+};
 use crate::core::plugin_api::{
   ArtistInfo, EpisodeInfo, PlayableInfo, PlaylistInfo, SavedAlbumInfo, ShowInfo, TrackInfo,
 };
@@ -1206,6 +1209,11 @@ pub struct App {
   #[allow(dead_code)]
   pub pending_stop_after_track: bool,
   pub devices: Option<DevicePayload>,
+  pub sonos_rooms: Vec<SonosRoom>,
+  pub selected_sonos_room_uuid: Option<String>,
+  pub sonos_now_playing: Option<SonosNowPlaying>,
+  pub sonos_volume: Option<u8>,
+  pub sonos_is_playing: Option<bool>,
   pub queue: Option<QueueState>,
   pub queue_selected_index: usize,
   /// The native cross-source playback queue (FIFO). Unlike [`Self::queue`]
@@ -1711,6 +1719,11 @@ impl Default for App {
       last_track_id: None,
       pending_stop_after_track: false,
       devices: None,
+      sonos_rooms: Vec::new(),
+      selected_sonos_room_uuid: None,
+      sonos_now_playing: None,
+      sonos_volume: None,
+      sonos_is_playing: None,
       queue: None,
       queue_selected_index: 0,
       native_queue: Vec::new(),
@@ -2015,6 +2028,26 @@ impl App {
         _ => {}
       }
     }
+  }
+
+  pub fn playback_targets(&self) -> Vec<PlaybackTarget> {
+    let mut targets = self
+      .devices
+      .as_ref()
+      .map(|payload| {
+        payload
+          .devices
+          .iter()
+          .filter_map(spotify_target_from_device)
+          .collect::<Vec<_>>()
+      })
+      .unwrap_or_default();
+
+    targets.extend(self.sonos_rooms.iter().cloned().map(|room| {
+      let is_selected = self.selected_sonos_room_uuid.as_deref() == Some(room.uuid.as_str());
+      PlaybackTarget::Sonos { room, is_selected }
+    }));
+    targets
   }
 
   // Send a network event to the network thread
@@ -2742,6 +2775,21 @@ impl App {
   }
 
   fn apply_seek(&mut self, seek_ms: u32) {
+    if self.sonos_owns_playback() {
+      let duration_ms = self
+        .sonos_now_playing
+        .as_ref()
+        .and_then(|snapshot| snapshot.duration_ms);
+      let event = if duration_ms.is_none_or(|duration| seek_ms < duration) {
+        IoEvent::Seek(seek_ms)
+      } else {
+        IoEvent::NextTrack
+      };
+      self.seek_ms = None;
+      self.dispatch(event);
+      return;
+    }
+
     if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
@@ -2766,7 +2814,7 @@ impl App {
     // No Spotify session (free-source launch): the poll would hit the auth gate
     // and re-flash a "connect Spotify" status message every interval. Free
     // sources drive their own playback state, so skip the Spotify poll entirely.
-    if !self.spotify_connected {
+    if !self.spotify_connected && !self.sonos_owns_playback() {
       return;
     }
 
@@ -2775,7 +2823,9 @@ impl App {
     //   updates between polls).
     // - External players (spotifyd, etc.): 1 second (no events, need faster
     //   polling for smooth playbar) — stays hardcoded, not a preference.
-    let poll_interval_ms: u128 = if self.is_streaming_active {
+    let poll_interval_ms: u128 = if self.sonos_owns_playback() {
+      2_000
+    } else if self.is_streaming_active {
       self.user_config.behavior.playback_poll_seconds as u128 * 1000
     } else {
       1_000
@@ -2791,6 +2841,7 @@ impl App {
       // Trigger the seek if the user has set a new position
       match self.seek_ms {
         Some(seek_ms) => self.apply_seek(seek_ms as u32),
+        None if self.sonos_owns_playback() => self.dispatch(IoEvent::GetSonosPlayback),
         None => self.dispatch(IoEvent::GetCurrentPlayback),
       }
     }
@@ -2915,10 +2966,14 @@ impl App {
 
     self.poll_current_playback();
     let playing_now = self.user_config.behavior.keepawake_enabled
-      && self
-        .native_is_playing
-        .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
-        .unwrap_or(false);
+      && if self.sonos_owns_playback() {
+        self.sonos_is_playing.unwrap_or(false)
+      } else {
+        self
+          .native_is_playing
+          .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
+          .unwrap_or(false)
+      };
     match (playing_now, self.keepawake.is_some()) {
       (true, false) => {
         self.keepawake = keepawake::Builder::default()
@@ -2932,6 +2987,16 @@ impl App {
       }
       (false, true) => self.keepawake = None,
       _ => {}
+    }
+
+    if self.sonos_owns_playback() && self.sonos_is_playing.unwrap_or(false) {
+      let duration_ms = self
+        .sonos_now_playing
+        .as_ref()
+        .and_then(|snapshot| snapshot.duration_ms)
+        .map(u128::from)
+        .unwrap_or(u128::MAX);
+      self.song_progress_ms = (self.song_progress_ms + elapsed.as_millis()).min(duration_ms);
     }
 
     if let Some(CurrentPlaybackContext {
@@ -3006,6 +3071,21 @@ impl App {
       self.dispatch(IoEvent::Seek(new_progress));
       return;
     }
+    if self.sonos_owns_playback() {
+      let old_progress = self.seek_ms.unwrap_or(self.song_progress_ms);
+      let duration_ms = self
+        .sonos_now_playing
+        .as_ref()
+        .and_then(|snapshot| snapshot.duration_ms)
+        .unwrap_or(u32::MAX);
+      let new_progress = (old_progress as u32)
+        .saturating_add(self.user_config.behavior.seek_milliseconds)
+        .min(duration_ms);
+      self.song_progress_ms = new_progress as u128;
+      self.seek_ms = None;
+      self.dispatch(IoEvent::Seek(new_progress));
+      return;
+    }
     if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
@@ -3070,6 +3150,16 @@ impl App {
       self.dispatch(IoEvent::Seek(new_progress));
       return;
     }
+    if self.sonos_owns_playback() {
+      let old_progress = self.seek_ms.unwrap_or(self.song_progress_ms);
+      let new_progress =
+        (old_progress as u32).saturating_sub(self.user_config.behavior.seek_milliseconds);
+      self.song_progress_ms = new_progress as u128;
+      self.seek_ms = None;
+      self.dispatch(IoEvent::Seek(new_progress));
+      return;
+    }
+
     let old_progress = match self.seek_ms {
       Some(seek_ms) => seek_ms,
       None => self.song_progress_ms,
@@ -3117,6 +3207,18 @@ impl App {
       // drag must not dispatch one seek per drag event; coalesce to the last
       // target with the same throttle-and-flush pattern as the other backends.
       self.queue_source_seek(position_ms);
+      return;
+    }
+    if self.sonos_owns_playback() {
+      let duration_ms = self
+        .sonos_now_playing
+        .as_ref()
+        .and_then(|snapshot| snapshot.duration_ms)
+        .unwrap_or(u32::MAX);
+      let new_progress = position_ms.min(duration_ms);
+      self.song_progress_ms = new_progress as u128;
+      self.seek_ms = None;
+      self.dispatch(IoEvent::Seek(new_progress));
       return;
     }
     if let Some(CurrentPlaybackContext {
@@ -3355,6 +3457,11 @@ impl App {
   pub fn desired_volume(&self) -> u32 {
     if let Some(pending) = self.pending_volume {
       return pending as u32;
+    }
+    if self.sonos_owns_playback() {
+      return self
+        .sonos_volume
+        .unwrap_or(self.user_config.behavior.volume_percent) as u32;
     }
     self
       .current_playback_context
@@ -3653,6 +3760,9 @@ impl App {
   /// build without native streaming, any Spotify context is external by
   /// definition.
   pub fn spotify_external_device_active(&self) -> bool {
+    if self.sonos_owns_playback() {
+      return true;
+    }
     #[cfg(feature = "streaming")]
     {
       self.current_playback_context.is_some() && !self.is_native_streaming_active_for_playback()
@@ -3724,6 +3834,15 @@ impl App {
     {
       false
     }
+  }
+
+  pub fn sonos_owns_playback(&self) -> bool {
+    self
+      .selected_sonos_room_uuid
+      .as_ref()
+      .is_some_and(|uuid| self.sonos_rooms.iter().any(|room| room.uuid == *uuid))
+      && !self.queue_owns_playback()
+      && !self.active_decoded_source()
   }
 
   /// Whether the queue slot is playing a Spotify track via native streaming.
@@ -4580,6 +4699,17 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
+    if self.sonos_owns_playback() {
+      if self.sonos_is_playing.unwrap_or(false) {
+        self.sonos_is_playing = Some(false);
+        self.dispatch(IoEvent::PausePlayback);
+      } else {
+        self.sonos_is_playing = Some(true);
+        self.dispatch(IoEvent::StartPlayback(None, None, None));
+      }
+      return;
+    }
+
     // The native queue slot owns the sink: toggle its player directly (covers the
     // idle-app case where no per-source context is set).
     #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
@@ -7729,6 +7859,26 @@ mod tests {
     }
   }
 
+  #[test]
+  fn add_track_to_native_queue_routes_spotify_track_to_sonos_queue() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+
+    app.add_track_to_native_queue(queue_track(Some("spotify:track:abc"), "Spotify Song"));
+
+    assert!(app.native_queue.is_empty());
+    assert!(matches!(
+      rx.recv().unwrap(),
+      IoEvent::AddItemToQueue(uri) if uri == "spotify:track:abc"
+    ));
+  }
+
   #[allow(deprecated)]
   fn make_external_context() -> CurrentPlaybackContext {
     use rspotify::model::{
@@ -8767,6 +8917,104 @@ mod tests {
     app.poll_current_playback();
 
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+    assert!(app.is_fetching_current_playback);
+  }
+
+  #[test]
+  fn playback_targets_include_and_mark_selected_sonos_room() {
+    let mut app = App::default();
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+
+    let targets = app.playback_targets();
+
+    assert!(matches!(
+      targets.as_slice(),
+      [PlaybackTarget::Sonos {
+        is_selected: true,
+        ..
+      }]
+    ));
+    assert_eq!(targets[0].label(), "Kitchen (Sonos, selected)");
+  }
+
+  #[test]
+  fn unavailable_sonos_selection_does_not_own_playback() {
+    let mut app = App::default();
+    app.selected_sonos_room_uuid = Some("RINCON_MISSING".to_string());
+
+    assert!(!app.sonos_owns_playback());
+  }
+
+  #[test]
+  fn sonos_seek_updates_progress_and_dispatches_local_seek() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+    app.sonos_now_playing = Some(SonosNowPlaying {
+      room_uuid: "RINCON_KITCHEN".to_string(),
+      title: Some("Song".to_string()),
+      artist: None,
+      album: None,
+      track_uri: Some("x-sonos-spotify:spotify%3atrack%3aabc123?sid=9&sn=2".to_string()),
+      duration_ms: Some(60_000),
+      position_ms: 10_000,
+      is_playing: true,
+      volume_percent: Some(30),
+    });
+
+    app.seek_to(90_000);
+
+    assert_eq!(app.song_progress_ms, 60_000);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::Seek(60_000))));
+  }
+
+  #[test]
+  fn sonos_toggle_dispatches_local_transport_events() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+    app.sonos_is_playing = Some(false);
+
+    app.toggle_playback();
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+
+    app.toggle_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+  }
+
+  #[test]
+  fn sonos_poll_runs_without_spotify_session() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(10);
+
+    app.poll_current_playback();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetSonosPlayback)));
     assert!(app.is_fetching_current_playback);
   }
 }

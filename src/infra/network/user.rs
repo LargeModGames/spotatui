@@ -1,6 +1,7 @@
 use super::requests::is_rate_limited_error;
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId, UserInfo};
+use crate::core::playback_target::PlaybackTarget;
 use crate::core::plugin_api::TrackInfo;
 use anyhow::anyhow;
 
@@ -68,6 +69,7 @@ pub trait UserNetwork {
   /// `navigate: false` refreshes the device list without opening the device
   /// picker (used by plugin data reads).
   async fn get_devices(&mut self, navigate: bool);
+  async fn discover_sonos_rooms(&mut self);
   async fn get_user_top_tracks(&mut self, time_range: DiscoverTimeRange);
   async fn get_top_artists_mix(&mut self);
   /// `navigate: false` refreshes the data without opening the screen (used by
@@ -129,21 +131,95 @@ impl UserNetwork for Network {
           }
         }
 
-        app.selected_device_index = if result.devices.is_empty() {
-          None
-        } else {
-          app
-            .selected_device_index
-            .filter(|index| *index < result.devices.len())
-            .or(Some(0))
-        };
+        let previous_index = app.selected_device_index;
         app.devices = Some(result);
+        let targets = app.playback_targets();
+        app.selected_device_index = targets
+          .iter()
+          .position(|target| {
+            matches!(
+              target,
+              PlaybackTarget::Sonos {
+                is_selected: true,
+                ..
+              }
+            )
+          })
+          .or_else(|| {
+            targets.iter().position(|target| {
+              matches!(
+                target,
+                PlaybackTarget::Spotify {
+                  is_active: true,
+                  ..
+                }
+              )
+            })
+          })
+          .or_else(|| previous_index.filter(|index| *index < targets.len()))
+          .or_else(|| (!targets.is_empty()).then_some(0));
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::Devices);
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
+      }
+    }
+  }
+
+  async fn discover_sonos_rooms(&mut self) {
+    match crate::infra::sonos::discovery::discover_rooms().await {
+      Ok(mut rooms) => {
+        let mut app = self.app.lock().await;
+        // SSDP is lossy: preserve the selected room's last validated endpoint
+        // when a refresh misses it, rather than silently routing commands to a
+        // different backend.
+        if let Some(selected_room) = app
+          .selected_sonos_room_uuid
+          .as_deref()
+          .and_then(|uuid| app.sonos_rooms.iter().find(|room| room.uuid == uuid))
+          .cloned()
+        {
+          if !rooms.iter().any(|room| room.uuid == selected_room.uuid) {
+            rooms.push(selected_room);
+          }
+        }
+        app.sonos_rooms = rooms;
+        let targets = app.playback_targets();
+        app.selected_device_index = targets
+          .iter()
+          .position(|target| {
+            matches!(
+              target,
+              PlaybackTarget::Sonos {
+                is_selected: true,
+                ..
+              }
+            )
+          })
+          .or_else(|| {
+            targets.iter().position(|target| {
+              matches!(
+                target,
+                PlaybackTarget::Spotify {
+                  is_active: true,
+                  ..
+                }
+              )
+            })
+          })
+          .or_else(|| (!targets.is_empty()).then_some(0));
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::Devices);
+      }
+      Err(error) => {
+        log::debug!("Sonos discovery failed: {error}");
+        let mut app = self.app.lock().await;
+        if app.selected_sonos_room_uuid.is_some() {
+          app.set_error_status_message(format!("Could not discover Sonos rooms: {error}"), 6);
+        }
       }
     }
   }

@@ -46,17 +46,23 @@ impl CliApp {
 
   // spt playback -t
   pub async fn toggle_playback(&mut self) {
-    let context = self.net.app.lock().await.current_playback_context.clone();
-    if let Some(c) = context {
-      if c.is_playing {
-        self.net.handle_network_event(IoEvent::PausePlayback).await;
-        return;
+    let is_playing = {
+      let app = self.net.app.lock().await;
+      if app.sonos_owns_playback() {
+        app.sonos_is_playing.unwrap_or(false)
+      } else {
+        app
+          .current_playback_context
+          .as_ref()
+          .is_some_and(|context| context.is_playing)
       }
-    }
-    self
-      .net
-      .handle_network_event(IoEvent::StartPlayback(None, None, None))
-      .await;
+    };
+    let event = if is_playing {
+      IoEvent::PausePlayback
+    } else {
+      IoEvent::StartPlayback(None, None, None)
+    };
+    self.net.handle_network_event(event).await;
   }
 
   // spt pb --share-track (share the current playing song)
@@ -119,28 +125,35 @@ impl CliApp {
 
   // spt ... -d ... (specify device to control)
   pub async fn set_device(&mut self, name: String) -> Result<()> {
-    // Change the device if specified by user
+    // Change the device if specified by user.
     let mut app = self.net.app.lock().await;
-    let mut device_index = 0;
-    if let Some(dp) = &app.devices {
-      for (i, d) in dp.devices.iter().enumerate() {
-        if d.name == name {
-          device_index = i;
-          // Save the id of the device
-          if let Some(id) = d.id.clone() {
-            self
-              .net
-              .client_config
-              .set_device_id(id)
-              .map_err(|_e| anyhow!("failed to use device with name '{}'", d.name))?;
-          }
-        }
-      }
-    } else {
-      // Error out if no device is available
-      return Err(anyhow!("no device available"));
-    }
+    let devices = app
+      .devices
+      .as_ref()
+      .ok_or_else(|| anyhow!("no device available"))?;
+    let (device_index, device) = devices
+      .devices
+      .iter()
+      .enumerate()
+      .find(|(_, device)| device.name == name)
+      .ok_or_else(|| anyhow!("no device named '{name}' is available"))?;
+    let id = device
+      .id
+      .clone()
+      .ok_or_else(|| anyhow!("device '{}' has no usable id", device.name))?;
+    self
+      .net
+      .client_config
+      .set_device_id(id)
+      .map_err(|_| anyhow!("failed to use device with name '{}'", device.name))?;
+
+    // An explicit Spotify CLI target overrides a restored Sonos preference for
+    // this invocation; otherwise subsequent commands would still route locally.
     app.selected_device_index = Some(device_index);
+    app.selected_sonos_room_uuid = None;
+    app.sonos_now_playing = None;
+    app.sonos_is_playing = None;
+    app.sonos_volume = None;
     Ok(())
   }
 
@@ -299,7 +312,17 @@ impl CliApp {
         .handle_network_event(IoEvent::GetCurrentPlayback)
         .await;
       let app = self.net.app.lock().await;
-      if let Some(CurrentPlaybackContext {
+      if app.sonos_owns_playback() {
+        let duration = app
+          .sonos_now_playing
+          .as_ref()
+          .and_then(|snapshot| snapshot.duration_ms)
+          .ok_or_else(|| anyhow!("Sonos did not report a seekable duration"))?;
+        (
+          u32::try_from(app.song_progress_ms).unwrap_or(u32::MAX),
+          duration,
+        )
+      } else if let Some(CurrentPlaybackContext {
         progress: Some(ms),
         item: Some(item),
         ..
@@ -409,6 +432,48 @@ impl CliApp {
       .net
       .handle_network_event(IoEvent::GetCurrentPlayback)
       .await;
+    let sonos_status = {
+      let app = self.net.app.lock().await;
+      if app.sonos_owns_playback() {
+        let room_uuid = app.selected_sonos_room_uuid.as_deref();
+        app
+          .sonos_now_playing
+          .as_ref()
+          .filter(|snapshot| Some(snapshot.room_uuid.as_str()) == room_uuid)
+          .cloned()
+          .map(|snapshot| {
+            let room_name = app
+              .sonos_rooms
+              .iter()
+              .find(|room| room.uuid == snapshot.room_uuid)
+              .map(|room| room.name.clone())
+              .unwrap_or_else(|| "Sonos".to_string());
+            let volume = app.sonos_volume.or(snapshot.volume_percent).unwrap_or(0);
+            (snapshot, room_name, volume)
+          })
+      } else {
+        None
+      }
+    };
+    if let Some((snapshot, room_name, volume)) = sonos_status {
+      let title = snapshot.title.ok_or_else(|| anyhow!("no track playing"))?;
+      let hs = vec![
+        Format::Track(title),
+        Format::Artist(snapshot.artist.unwrap_or_default()),
+        Format::Album(snapshot.album.unwrap_or_default()),
+        Format::Uri(snapshot.track_uri.unwrap_or_default()),
+        Format::Position((
+          snapshot.position_ms,
+          snapshot.duration_ms.unwrap_or_default(),
+        )),
+        Format::Flags((rspotify::model::RepeatState::Off, false, false)),
+        Format::Device(room_name),
+        Format::Volume(u32::from(volume)),
+        Format::Playing(snapshot.is_playing),
+      ];
+      return Ok(self.format_output(format, hs));
+    }
+
     self
       .net
       .handle_network_event(IoEvent::GetCurrentSavedTracks(None))

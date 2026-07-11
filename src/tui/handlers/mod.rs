@@ -201,10 +201,12 @@ pub fn handle_app(key: Key, app: &mut App) {
         SourceFocus::Source
       };
       app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+      // Sonos discovery is local and independent of Spotify authentication.
+      app.dispatch(IoEvent::DiscoverSonosRooms);
       // Only Spotify needs a `me/player/devices` fetch; skip it under Local so an
       // unauthenticated/offline session doesn't surface a spurious error.
       if app.active_source == Source::Spotify {
-        app.dispatch(IoEvent::GetDevices);
+        app.dispatch(IoEvent::GetDevicesSilent);
       }
     }
     _ if key == app.user_config.keys.decrease_volume => {
@@ -746,6 +748,19 @@ mod tests {
     // force_previous_track dispatches through App which requires no io_tx in tests,
     // so just confirm the route didn't change (it shouldn't navigate anywhere)
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+  }
+
+  #[test]
+  fn opening_device_selector_discovers_sonos_independently() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let manage_devices = app.user_config.keys.manage_devices;
+
+    handle_app(manage_devices, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::SelectedDevice);
+    assert!(matches!(rx.recv().unwrap(), IoEvent::DiscoverSonosRooms));
+    assert!(matches!(rx.recv().unwrap(), IoEvent::GetDevicesSilent));
   }
 
   #[test]

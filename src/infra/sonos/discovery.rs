@@ -1,6 +1,8 @@
 use crate::core::playback_target::SonosRoom;
 use anyhow::{anyhow, Context, Result};
+use futures::{stream, StreamExt};
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
@@ -15,6 +17,7 @@ const SONOS_SEARCH_TARGETS: &[&str] = &[
   "ssdp:all",
 ];
 const SSDP_SEARCH_BURSTS: usize = 2;
+const MAX_DEVICE_DESCRIPTION_BYTES: usize = 262_144;
 
 pub async fn discover_rooms() -> Result<Vec<SonosRoom>> {
   let socket = UdpSocket::bind("0.0.0.0:0")
@@ -42,25 +45,40 @@ pub async fn discover_rooms() -> Result<Vec<SonosRoom>> {
     };
 
     let recv = tokio::time::timeout(remaining, socket.recv_from(&mut buf)).await;
-    let Ok(Ok((len, _))) = recv else {
+    let Ok(Ok((len, source))) = recv else {
       break;
     };
     let response = String::from_utf8_lossy(&buf[..len]);
     let Some(location) = ssdp_header(&response, "location") else {
       continue;
     };
+    if !location_matches_responder(location, source.ip()) {
+      log::debug!("ignoring SSDP location that does not match responder {source}: {location}");
+      continue;
+    }
 
     locations.insert(location.to_string());
   }
 
   let client = reqwest::Client::builder()
     .timeout(Duration::from_secs(2))
+    .redirect(reqwest::redirect::Policy::none())
     .build()
     .context("failed to build Sonos discovery HTTP client")?;
   let mut rooms_by_uuid = HashMap::new();
+  let discovered = stream::iter(locations.into_iter().map(|location| {
+    let client = &client;
+    async move {
+      let result = room_from_device_description(client, &location).await;
+      (location, result)
+    }
+  }))
+  .buffer_unordered(8)
+  .collect::<Vec<_>>()
+  .await;
 
-  for location in locations {
-    match room_from_device_description(&client, &location).await {
+  for (location, result) in discovered {
+    match result {
       Ok(room) => {
         rooms_by_uuid.entry(room.uuid.clone()).or_insert(room);
       }
@@ -77,18 +95,44 @@ async fn room_from_device_description(
   client: &reqwest::Client,
   location: &str,
 ) -> Result<SonosRoom> {
-  let body = client
+  let response = client
     .get(location)
     .send()
     .await
     .with_context(|| format!("failed to fetch Sonos device description from {location}"))?
     .error_for_status()
-    .with_context(|| format!("Sonos device description returned an error at {location}"))?
-    .text()
-    .await
-    .context("failed to read Sonos device description")?;
+    .with_context(|| format!("Sonos device description returned an error at {location}"))?;
+  let body = response_text_limited(response, MAX_DEVICE_DESCRIPTION_BYTES).await?;
 
   parse_device_description(location, &body)
+}
+
+async fn response_text_limited(
+  mut response: reqwest::Response,
+  max_bytes: usize,
+) -> Result<String> {
+  if response
+    .content_length()
+    .is_some_and(|length| length > max_bytes as u64)
+  {
+    return Err(anyhow!(
+      "Sonos device description exceeded {max_bytes} bytes"
+    ));
+  }
+  let mut body = Vec::new();
+  while let Some(chunk) = response
+    .chunk()
+    .await
+    .context("failed to read Sonos device description")?
+  {
+    if body.len().saturating_add(chunk.len()) > max_bytes {
+      return Err(anyhow!(
+        "Sonos device description exceeded {max_bytes} bytes"
+      ));
+    }
+    body.extend_from_slice(&chunk);
+  }
+  Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 pub fn parse_device_description(location: &str, xml: &str) -> Result<SonosRoom> {
@@ -118,6 +162,19 @@ fn is_sonos_device_description(xml: &str, uuid: &str) -> bool {
 
 fn contains_sonos(value: &str) -> bool {
   value.to_ascii_lowercase().contains("sonos")
+}
+
+fn location_matches_responder(location: &str, responder: IpAddr) -> bool {
+  let Ok(url) = url::Url::parse(location) else {
+    return false;
+  };
+  if url.scheme() != "http" {
+    return false;
+  }
+  url
+    .host_str()
+    .and_then(|host| host.parse::<IpAddr>().ok())
+    .is_some_and(|host| host == responder)
 }
 
 pub fn ssdp_search_request(search_target: &str) -> String {
@@ -166,6 +223,27 @@ mod tests {
     assert!(request.contains("HOST: 239.255.255.250:1900"));
     assert!(request.contains("MAN: \"ssdp:discover\""));
     assert!(request.contains("ST: ssdp:all"));
+  }
+
+  #[test]
+  fn accepts_http_location_from_ssdp_responder() {
+    assert!(location_matches_responder(
+      "http://192.168.1.20:1400/xml/device_description.xml",
+      "192.168.1.20".parse().unwrap()
+    ));
+  }
+
+  #[test]
+  fn rejects_location_for_another_host_or_scheme() {
+    let responder = "192.168.1.20".parse().unwrap();
+    assert!(!location_matches_responder(
+      "http://127.0.0.1:8080/private",
+      responder
+    ));
+    assert!(!location_matches_responder(
+      "https://192.168.1.20/device.xml",
+      responder
+    ));
   }
 
   #[test]

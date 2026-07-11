@@ -36,6 +36,7 @@
   - [Internet Radio](#internet-radio)
   - [YouTube](#youtube)
 - [Native Streaming](#native-streaming)
+- [Sonos](#sonos)
 - [Configuration](#configuration)
   - [Discord Rich Presence](#discord-rich-presence)
   - [Anonymous Song Counter](#anonymous-song-counter)
@@ -63,6 +64,7 @@
 
 - **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), or [YouTube](#youtube). The free sources need no Spotify account; press `d` to switch between them at any time.
 - **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
+- **[Sonos playback](#sonos).** Discover Sonos rooms on the local network and control Spotify playback through them without exposing the speakers to the Spotify Web API device list.
 - **Synced lyrics.** Line-by-line lyrics that follow playback.
 - **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
 - **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
@@ -217,6 +219,14 @@ spotatui can play Spotify audio directly, without spotifyd or the official app �
 
 See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/Native-Streaming) for setup details.
 
+## Sonos
+
+spotatui can discover Sonos S1/S2 rooms on the same local network with SSDP/UPnP. Press `d`, keep **Spotify** selected as the source, and choose a room from the Devices panel. The selected room is persisted as `sonos:<room UUID>` and restored on the next launch.
+
+Play, pause, previous/next, seek, volume, now-playing polling, and adding Spotify tracks to the Sonos queue use local SOAP control. Group members route transport and queue commands through their coordinator. A Spotify Premium account and an existing Spotify service configured in the Sonos household are required.
+
+Sonos support is currently experimental. Viewing the Sonos queue and changing Sonos shuffle/repeat are not supported yet. S1, S2, and grouped-room hardware testing is welcome in [issue #251](https://github.com/LargeModGames/spotatui/issues/251).
+
 ## Configuration
 
 The config file is at `${HOME}/.config/spotatui/config.yml`. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
@@ -289,6 +299,7 @@ Spotify is different: it uses the [Web API](https://developer.spotify.com/docume
 1. **Native Streaming** — spotatui plays audio directly using its built-in streaming. See [Native Streaming](#native-streaming). *(Recommended.)*
 2. **Official Spotify Client** — have the official app open on your computer.
 3. **[spotifyd](https://github.com/Spotifyd/spotifyd)** — a lightweight background alternative.
+4. **[Sonos](#sonos)** — a Sonos S1/S2 room on the same local network with Spotify configured in the Sonos app.
 
 Playing Spotify tracks requires a **Premium** account. With a free Spotify account spotatui can authenticate and browse your library/search results, but playback actions (play/pause/seek/transfer) will not work in either native streaming or Web API playback control mode.
 

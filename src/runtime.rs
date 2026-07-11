@@ -9,7 +9,7 @@ mod alsa_silence {
     fn snd_lib_error_set_handler(handler: SndLibErrorHandlerT) -> c_int;
   }
 
-  unsafe extern "C" fn silent_error_handler(
+  extern "C" fn silent_error_handler(
     _file: *const c_char,
     _line: c_int,
     _function: *const c_char,
@@ -29,6 +29,7 @@ use crate::cli;
 use crate::core::app::App;
 use crate::core::auth;
 use crate::core::config::ClientConfig;
+use crate::core::playback_target::parse_sonos_persisted_id;
 use crate::core::user_config::{
   validate_tick_rate_milliseconds, StartupBehavior, UserConfig, UserConfigPaths,
 };
@@ -801,6 +802,19 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
     windows_media_manager: ctx.windows_media_manager,
   });
 
+  // A persisted Sonos target is restored by the network task. Keep the native
+  // player warm for later selection, but do not let deferred startup transfer
+  // playback away from Sonos.
+  if ctx
+    .client_config
+    .device_id
+    .as_deref()
+    .and_then(parse_sonos_persisted_id)
+    .is_some()
+  {
+    return;
+  }
+
   // Auto-select the saved playback device when available (fallback to native
   // streaming). This used to run inline in the network task before the pump
   // started; the decision's outcome now dispatches through the pump.
@@ -1474,15 +1488,8 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
           interval.tick().await;
           if let Ok(app) = app_for_windows_metadata.try_lock() {
             update_windows_metadata(&windows_media_for_metadata, &mut last_metadata, &app);
-            let is_playing = if app.native_track_info.is_some() {
-              app.native_is_playing.unwrap_or(false)
-            } else {
-              app
-                .current_playback_context
-                .as_ref()
-                .map(|c| c.is_playing)
-                .unwrap_or(false)
-            };
+            let is_playing = crate::infra::media_metadata::current_playback_snapshot(&app)
+              .is_some_and(|snapshot| snapshot.is_playing);
 
             if app.native_track_info.is_none() {
               if last_playing != Some(is_playing) {
@@ -1518,12 +1525,18 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     // run on a background task while the UI renders (see
     // `deferred_streaming_startup`).
     #[cfg(feature = "streaming")]
+    let saved_sonos_preference = client_config
+      .device_id
+      .as_deref()
+      .and_then(parse_sonos_persisted_id)
+      .is_some();
+    #[cfg(feature = "streaming")]
     if streaming_attempted {
       // When resuming a non-Spotify session, never transfer Spotify playback
       // to a device on startup — that would fight the restored source for the
       // audio output. Treat the device decision as passive (Continue); the
       // device list is still fetched for the UI.
-      let device_startup_behavior = if restore_playback.is_some() {
+      let device_startup_behavior = if restore_playback.is_some() || saved_sonos_preference {
         StartupBehavior::Continue
       } else {
         initial_startup_behavior
@@ -1531,7 +1544,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       // While init is running, a playback request that finds no active device
       // parks itself for replay instead of erroring (the task clears this and
       // replays whatever parked when it finishes, whatever the outcome).
-      app.lock().await.native_backend_pending = true;
+      app.lock().await.native_backend_pending = !saved_sonos_preference;
       deferred_streaming_startup(DeferredStreamingContext {
         app: Arc::clone(&app),
         spotify: spotify
@@ -1545,7 +1558,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         device_startup_behavior,
         // A restored non-Spotify session owns the startup play/pause decision;
         // otherwise the deferred task fires it once the device is selected.
-        spotify_startup_behavior: if restore_playback.is_some() {
+        spotify_startup_behavior: if restore_playback.is_some() || saved_sonos_preference {
           None
         } else {
           Some(initial_startup_behavior)
@@ -1590,9 +1603,24 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       #[cfg(not(feature = "streaming"))]
       let mut network = Network::new(spotify, client_config, &app, final_token_cache_path);
 
-      // The saved-device startup decision moved into
-      // `deferred_streaming_startup` (it needs the native player's device
-      // name, which now materializes in the background).
+      let saved_sonos_uuid = network
+        .client_config
+        .device_id
+        .as_deref()
+        .and_then(parse_sonos_persisted_id)
+        .map(str::to_string);
+      if let Some(room_uuid) = saved_sonos_uuid.as_ref() {
+        network
+          .handle_network_event(IoEvent::TransferPlaybackToSonosRoom(
+            room_uuid.clone(),
+            true,
+          ))
+          .await;
+      }
+
+      // Non-Sonos saved-device startup moved into `deferred_streaming_startup`:
+      // it needs the native player's device name, which now materializes in the
+      // background.
 
       // Resume a persisted non-Spotify session if there is one; it honors the
       // startup behavior for its own play/pause decision. Otherwise fall back to
@@ -1613,23 +1641,25 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         tokio::spawn(async move {
           restore_playback_session(&restore_app, session, initial_startup_behavior).await;
         });
-      } else if network.spotify.is_some() {
-        // Spotify startup play/pause only applies with a Spotify session; a
-        // free-source launch has nothing to activate here. When native
-        // streaming init is deferred, `deferred_streaming_startup` fires this
-        // after the device decision instead — running it here would race the
-        // init and 404 with NO_ACTIVE_DEVICE onto the Error screen.
+      } else if network.spotify.is_some() || saved_sonos_uuid.is_some() {
+        // Deferred native startup owns Spotify startup behavior. A selected
+        // Sonos room is restored independently and can apply Play/Pause here,
+        // even without a Spotatui Spotify OAuth session.
         #[cfg(feature = "streaming")]
-        let startup_behavior_runs_here = !streaming_attempted;
+        let startup_behavior_runs_here = saved_sonos_uuid.is_some() || !streaming_attempted;
         #[cfg(not(feature = "streaming"))]
         let startup_behavior_runs_here = true;
-        if startup_behavior_runs_here {
+        let selected_target_available = saved_sonos_uuid.is_none()
+          || network.app.lock().await.sonos_owns_playback();
+        if startup_behavior_runs_here && selected_target_available {
           match initial_startup_behavior {
             StartupBehavior::Continue => {}
             StartupBehavior::Play => {
-              network
-                .handle_network_event(IoEvent::Shuffle(initial_shuffle_enabled))
-                .await;
+              if !network.app.lock().await.sonos_owns_playback() {
+                network
+                  .handle_network_event(IoEvent::Shuffle(initial_shuffle_enabled))
+                  .await;
+              }
               network
                 .handle_network_event(IoEvent::StartPlayback(None, None, None))
                 .await;

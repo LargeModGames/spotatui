@@ -1,13 +1,25 @@
 use crate::core::playback_target::SonosRoom;
 use crate::infra::sonos::spotify::SonosSpotifyItem;
 use anyhow::{anyhow, Context, Result};
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 const AV_TRANSPORT_URN: &str = "urn:schemas-upnp-org:service:AVTransport:1";
 const RENDERING_CONTROL_URN: &str = "urn:schemas-upnp-org:service:RenderingControl:1";
+const ZONE_GROUP_TOPOLOGY_URN: &str = "urn:schemas-upnp-org:service:ZoneGroupTopology:1";
+const MAX_SONOS_RESPONSE_BYTES: usize = 1_048_576;
 
 pub struct SonosTransport {
   client: reqwest::Client,
+  coordinators: Mutex<HashMap<String, (SonosRoom, Instant)>>,
+  spotify_accounts: Mutex<HashMap<String, (Vec<SpotifyAccount>, Instant)>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SpotifyAccount {
+  service_type: u32,
+  serial_number: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,8 +39,11 @@ impl SonosTransport {
     Ok(Self {
       client: reqwest::Client::builder()
         .timeout(Duration::from_secs(4))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("failed to build Sonos HTTP client")?,
+      coordinators: Mutex::new(HashMap::new()),
+      spotify_accounts: Mutex::new(HashMap::new()),
     })
   }
 
@@ -60,8 +75,15 @@ impl SonosTransport {
     enqueue_as_next: bool,
   ) -> Result<Option<u32>> {
     let mut last_error = None;
+    let mut attempts = Vec::new();
+    if let Ok(accounts) = self.spotify_accounts_for_room(room).await {
+      for account in accounts {
+        attempts.extend(item.attempts_for_account(account.service_type, &account.serial_number));
+      }
+    }
+    attempts.extend_from_slice(item.attempts());
 
-    for attempt in item.attempts() {
+    for attempt in &attempts {
       match self
         .add_uri_to_queue(
           room,
@@ -71,7 +93,15 @@ impl SonosTransport {
         )
         .await
       {
-        Ok(first_track_number) => return Ok(first_track_number),
+        Ok(Some(first_track_number)) if first_track_number > 0 => {
+          return Ok(Some(first_track_number));
+        }
+        Ok(first_track_number) if !enqueue_as_next => return Ok(first_track_number),
+        Ok(_) => {
+          last_error = Some(anyhow!(
+            "Sonos accepted the item but did not report its queue position"
+          ));
+        }
         Err(err) => last_error = Some(err),
       }
     }
@@ -81,52 +111,22 @@ impl SonosTransport {
 
   pub async fn play(&self, room: &SonosRoom) -> Result<()> {
     self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "Play",
-        "<Speed>1</Speed>",
-      )
+      .av_transport_soap(room, "Play", "<Speed>1</Speed>")
       .await
       .map(|_| ())
   }
 
   pub async fn pause(&self, room: &SonosRoom) -> Result<()> {
-    self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "Pause",
-        "",
-      )
-      .await
-      .map(|_| ())
+    self.av_transport_soap(room, "Pause", "").await.map(|_| ())
   }
 
   pub async fn next(&self, room: &SonosRoom) -> Result<()> {
-    self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "Next",
-        "",
-      )
-      .await
-      .map(|_| ())
+    self.av_transport_soap(room, "Next", "").await.map(|_| ())
   }
 
   pub async fn previous(&self, room: &SonosRoom) -> Result<()> {
     self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "Previous",
-        "",
-      )
+      .av_transport_soap(room, "Previous", "")
       .await
       .map(|_| ())
   }
@@ -137,13 +137,7 @@ impl SonosTransport {
       format_duration(position_ms)
     );
     self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "Seek",
-        &body,
-      )
+      .av_transport_soap(room, "Seek", &body)
       .await
       .map(|_| ())
   }
@@ -182,29 +176,28 @@ impl SonosTransport {
   }
 
   pub async fn now_playing(&self, room: &SonosRoom) -> Result<SonosPlaybackSnapshot> {
-    let transport_response = self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "GetTransportInfo",
-        "",
-      )
-      .await?;
-    let position_response = self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "GetPositionInfo",
-        "",
-      )
-      .await?;
+    let transport_response = self.av_transport_soap(room, "GetTransportInfo", "").await?;
+    let position_response = self.av_transport_soap(room, "GetPositionInfo", "").await?;
     let volume_percent = self.volume(room).await.ok();
     let metadata = xml_text(&position_response, "TrackMetaData").filter(|value| {
       let trimmed = value.trim();
       !trimmed.is_empty() && trimmed != "NOT_IMPLEMENTED"
     });
+
+    let track_uri = xml_text(&position_response, "TrackURI").filter(|value| {
+      let trimmed = value.trim();
+      !trimmed.is_empty() && trimmed != "NOT_IMPLEMENTED"
+    });
+    if let Some(account) = track_uri
+      .as_deref()
+      .and_then(spotify_account_from_track_uri)
+    {
+      self
+        .spotify_accounts
+        .lock()
+        .await
+        .insert(room.uuid.clone(), (vec![account], Instant::now()));
+    }
 
     Ok(SonosPlaybackSnapshot {
       title: metadata
@@ -219,10 +212,7 @@ impl SonosTransport {
         .as_deref()
         .and_then(|xml| xml_text(xml, "upnp:album"))
         .filter(|value| !value.trim().is_empty()),
-      track_uri: xml_text(&position_response, "TrackURI").filter(|value| {
-        let trimmed = value.trim();
-        !trimmed.is_empty() && trimmed != "NOT_IMPLEMENTED"
-      }),
+      track_uri,
       duration_ms: xml_text(&position_response, "TrackDuration")
         .as_deref()
         .and_then(parse_sonos_duration_ms),
@@ -250,24 +240,21 @@ impl SonosTransport {
       escape_xml(enqueued_metadata),
       u8::from(enqueue_as_next)
     );
-    let response = self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "AddURIToQueue",
-        &body,
-      )
-      .await?;
+    let response = self.av_transport_soap(room, "AddURIToQueue", &body).await?;
 
     Ok(xml_text(&response, "FirstTrackNumberEnqueued").and_then(|value| value.parse::<u32>().ok()))
   }
 
   async fn play_queue_track(&self, room: &SonosRoom, one_based_track_number: u32) -> Result<()> {
-    let queue_uri = format!("x-rincon-queue:{}#0", room.uuid);
-    self.set_av_transport_uri(room, &queue_uri, "").await?;
-    self.seek_track_number(room, one_based_track_number).await?;
-    self.play(room).await
+    let coordinator = self.av_transport_room(room).await;
+    let queue_uri = format!("x-rincon-queue:{}#0", coordinator.uuid);
+    self
+      .set_av_transport_uri(&coordinator, &queue_uri, "")
+      .await?;
+    self
+      .seek_track_number(&coordinator, one_based_track_number)
+      .await?;
+    self.play(&coordinator).await
   }
 
   async fn set_av_transport_uri(&self, room: &SonosRoom, uri: &str, metadata: &str) -> Result<()> {
@@ -277,13 +264,7 @@ impl SonosTransport {
       escape_xml(metadata)
     );
     self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "SetAVTransportURI",
-        &body,
-      )
+      .av_transport_soap(room, "SetAVTransportURI", &body)
       .await
       .map(|_| ())
   }
@@ -291,15 +272,99 @@ impl SonosTransport {
   async fn seek_track_number(&self, room: &SonosRoom, one_based_track_number: u32) -> Result<()> {
     let body = format!("<Unit>TRACK_NR</Unit><Target>{one_based_track_number}</Target>");
     self
-      .soap(
-        room,
-        "MediaRenderer/AVTransport/Control",
-        AV_TRANSPORT_URN,
-        "Seek",
-        &body,
-      )
+      .av_transport_soap(room, "Seek", &body)
       .await
       .map(|_| ())
+  }
+
+  async fn av_transport_soap(
+    &self,
+    room: &SonosRoom,
+    action: &str,
+    action_body: &str,
+  ) -> Result<String> {
+    let coordinator = self.av_transport_room(room).await;
+    self
+      .soap(
+        &coordinator,
+        "MediaRenderer/AVTransport/Control",
+        AV_TRANSPORT_URN,
+        action,
+        action_body,
+      )
+      .await
+  }
+
+  async fn av_transport_room(&self, room: &SonosRoom) -> SonosRoom {
+    if let Some((coordinator, fetched_at)) = self.coordinators.lock().await.get(&room.uuid) {
+      if fetched_at.elapsed() < Duration::from_secs(30) {
+        return coordinator.clone();
+      }
+    }
+
+    let Some(coordinator) = self
+      .soap_without_instance(
+        room,
+        "ZoneGroupTopology/Control",
+        ZONE_GROUP_TOPOLOGY_URN,
+        "GetZoneGroupState",
+        "",
+      )
+      .await
+      .ok()
+      .and_then(|response| coordinator_from_zone_group_state(room, &response))
+    else {
+      // Older firmware and transient topology failures can still accept direct
+      // AVTransport commands. Do not cache the fallback so the next command can
+      // retry coordinator resolution.
+      return room.clone();
+    };
+
+    let fetched_at = Instant::now();
+    let mut coordinators = self.coordinators.lock().await;
+    coordinators.insert(room.uuid.clone(), (coordinator.clone(), fetched_at));
+    coordinators.insert(coordinator.uuid.clone(), (coordinator.clone(), fetched_at));
+    coordinator
+  }
+
+  async fn spotify_accounts_for_room(&self, room: &SonosRoom) -> Result<Vec<SpotifyAccount>> {
+    if let Some((accounts, fetched_at)) = self.spotify_accounts.lock().await.get(&room.uuid) {
+      if fetched_at.elapsed() < Duration::from_secs(300) {
+        return Ok(accounts.clone());
+      }
+    }
+
+    let url = control_url(&room.location, "status/accounts")?;
+    let response = match self.client.get(url).send().await {
+      Ok(response) => response,
+      Err(error) => {
+        self
+          .spotify_accounts
+          .lock()
+          .await
+          .insert(room.uuid.clone(), (Vec::new(), Instant::now()));
+        return Err(
+          anyhow!(error).context(format!("failed to read Sonos accounts from {}", room.name)),
+        );
+      }
+    };
+    if !response.status().is_success() {
+      let status = response.status();
+      self
+        .spotify_accounts
+        .lock()
+        .await
+        .insert(room.uuid.clone(), (Vec::new(), Instant::now()));
+      return Err(anyhow!("Sonos account discovery returned {status}"));
+    }
+    let accounts =
+      spotify_accounts_from_xml(&response_text_limited(response, MAX_SONOS_RESPONSE_BYTES).await?);
+    self
+      .spotify_accounts
+      .lock()
+      .await
+      .insert(room.uuid.clone(), (accounts.clone(), Instant::now()));
+    Ok(accounts)
   }
 
   async fn soap(
@@ -310,8 +375,35 @@ impl SonosTransport {
     action: &str,
     action_body: &str,
   ) -> Result<String> {
-    let url = control_url(&room.location, control_path)?;
     let envelope = soap_envelope(service_urn, action, action_body);
+    self
+      .send_soap(room, control_path, service_urn, action, envelope)
+      .await
+  }
+
+  async fn soap_without_instance(
+    &self,
+    room: &SonosRoom,
+    control_path: &str,
+    service_urn: &str,
+    action: &str,
+    action_body: &str,
+  ) -> Result<String> {
+    let envelope = soap_envelope_without_instance(service_urn, action, action_body);
+    self
+      .send_soap(room, control_path, service_urn, action, envelope)
+      .await
+  }
+
+  async fn send_soap(
+    &self,
+    room: &SonosRoom,
+    control_path: &str,
+    service_urn: &str,
+    action: &str,
+    envelope: String,
+  ) -> Result<String> {
+    let url = control_url(&room.location, control_path)?;
     let response = self
       .client
       .post(&url)
@@ -323,7 +415,7 @@ impl SonosTransport {
       .with_context(|| format!("failed to send Sonos {action} command to {}", room.name))?;
 
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = response_text_limited(response, MAX_SONOS_RESPONSE_BYTES).await?;
     if !status.is_success() {
       let detail = upnp_error_detail(&body).unwrap_or_else(|| body.trim().to_string());
       return Err(anyhow!(
@@ -341,15 +433,173 @@ impl SonosTransport {
   }
 }
 
+async fn response_text_limited(
+  mut response: reqwest::Response,
+  max_bytes: usize,
+) -> Result<String> {
+  if response
+    .content_length()
+    .is_some_and(|length| length > max_bytes as u64)
+  {
+    return Err(anyhow!("Sonos response exceeded {max_bytes} bytes"));
+  }
+  let mut body = Vec::new();
+  while let Some(chunk) = response
+    .chunk()
+    .await
+    .context("failed to read Sonos response")?
+  {
+    if body.len().saturating_add(chunk.len()) > max_bytes {
+      return Err(anyhow!("Sonos response exceeded {max_bytes} bytes"));
+    }
+    body.extend_from_slice(&chunk);
+  }
+  Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+fn coordinator_from_zone_group_state(
+  selected_room: &SonosRoom,
+  response: &str,
+) -> Option<SonosRoom> {
+  let state = xml_text(response, "ZoneGroupState")?;
+  let selected_member = format!("UUID=\"{}\"", selected_room.uuid);
+  let mut remaining = state.as_str();
+
+  while let Some(group_start) = remaining.find("<ZoneGroup ") {
+    remaining = &remaining[group_start..];
+    let opening_end = remaining.find('>')? + 1;
+    let group_end = remaining.find("</ZoneGroup>")? + "</ZoneGroup>".len();
+    let opening = &remaining[..opening_end];
+    let group = &remaining[..group_end];
+    if group.contains(&selected_member) {
+      let coordinator_uuid = xml_attribute(opening, "Coordinator")?;
+      let mut members = group;
+      while let Some(member_start) = members.find("<ZoneGroupMember ") {
+        members = &members[member_start..];
+        let member_end = members.find('>')? + 1;
+        let member = &members[..member_end];
+        if xml_attribute(member, "UUID").as_deref() == Some(coordinator_uuid.as_str()) {
+          let location = xml_attribute(member, "Location")?;
+          if !is_valid_sonos_control_location(&location) {
+            return None;
+          }
+          return Some(SonosRoom {
+            uuid: coordinator_uuid,
+            name: xml_attribute(member, "ZoneName").unwrap_or_else(|| selected_room.name.clone()),
+            location,
+          });
+        }
+        members = &members[member_end..];
+      }
+      return None;
+    }
+    remaining = &remaining[group_end..];
+  }
+  None
+}
+
+fn spotify_account_from_track_uri(track_uri: &str) -> Option<SpotifyAccount> {
+  if !track_uri.starts_with("x-sonos-spotify:") {
+    return None;
+  }
+  let query = track_uri.split_once('?')?.1;
+  let mut service_id = None;
+  let mut serial_number = None;
+  for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+    match key.as_ref() {
+      "sid" => service_id = value.parse::<u32>().ok(),
+      "sn" if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) => {
+        serial_number = Some(value.into_owned());
+      }
+      _ => {}
+    }
+  }
+  let service_type = service_id?.checked_mul(256)?.checked_add(7)?;
+  let serial_number = serial_number?;
+  matches!(service_type, 2311 | 3079).then_some(SpotifyAccount {
+    service_type,
+    serial_number,
+  })
+}
+
+fn spotify_accounts_from_xml(xml: &str) -> Vec<SpotifyAccount> {
+  let mut accounts = Vec::new();
+  let mut remaining = xml;
+  while let Some(start) = remaining.find("<Account ") {
+    remaining = &remaining[start..];
+    let Some(end) = remaining.find('>') else {
+      break;
+    };
+    let tag = &remaining[..=end];
+    let service_type = xml_attribute(tag, "Type").and_then(|value| value.parse::<u32>().ok());
+    let serial_number = xml_attribute(tag, "SerialNum");
+    let deleted = xml_attribute(tag, "Deleted").as_deref() == Some("1");
+    if let (Some(service_type @ (2311 | 3079)), Some(serial_number)) = (service_type, serial_number)
+    {
+      if !deleted
+        && !serial_number.is_empty()
+        && serial_number.bytes().all(|byte| byte.is_ascii_digit())
+      {
+        accounts.push(SpotifyAccount {
+          service_type,
+          serial_number,
+        });
+      }
+    }
+    remaining = &remaining[end + 1..];
+  }
+  accounts
+}
+
+fn xml_attribute(tag: &str, name: &str) -> Option<String> {
+  let prefix = format!("{name}=\"");
+  let start = tag.find(&prefix)? + prefix.len();
+  let end = tag[start..].find('"')? + start;
+  Some(unescape_xml(&tag[start..end]))
+}
+
 fn control_url(location: &str, control_path: &str) -> Result<String> {
+  if !is_valid_sonos_control_location(location) {
+    return Err(anyhow!("invalid Sonos control location"));
+  }
   let parsed = url::Url::parse(location).context("invalid Sonos device description URL")?;
   let origin = parsed.origin().ascii_serialization();
   Ok(format!("{origin}/{control_path}"))
 }
 
+fn is_valid_sonos_control_location(location: &str) -> bool {
+  let Ok(parsed) = url::Url::parse(location) else {
+    return false;
+  };
+  if parsed.scheme() != "http" {
+    return false;
+  }
+  #[cfg(test)]
+  if matches!(
+    parsed.host(),
+    Some(url::Host::Ipv4(ip)) if ip.is_loopback()
+  ) {
+    return true;
+  }
+  if parsed.port_or_known_default() != Some(1400) {
+    return false;
+  }
+  match parsed.host() {
+    Some(url::Host::Ipv4(ip)) => ip.is_private() || ip.is_link_local(),
+    Some(url::Host::Ipv6(ip)) => ip.is_unique_local() || ip.is_unicast_link_local(),
+    _ => false,
+  }
+}
+
 fn soap_envelope(service_urn: &str, action: &str, action_body: &str) -> String {
   format!(
     r#"<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:{action} xmlns:u="{service_urn}"><InstanceID>0</InstanceID>{action_body}</u:{action}></s:Body></s:Envelope>"#
+  )
+}
+
+fn soap_envelope_without_instance(service_urn: &str, action: &str, action_body: &str) -> String {
+  format!(
+    r#"<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:{action} xmlns:u="{service_urn}">{action_body}</u:{action}></s:Body></s:Envelope>"#
   )
 }
 
@@ -491,6 +741,152 @@ mod tests {
       Some("Artist".to_string())
     );
     assert_eq!(xml_text(metadata, "upnp:album"), Some("Album".to_string()));
+  }
+
+  #[test]
+  fn resolves_selected_group_member_to_coordinator() {
+    let selected = SonosRoom {
+      uuid: "RINCON_BEDROOM".to_string(),
+      name: "Bedroom".to_string(),
+      location: "http://192.168.1.21:1400/xml/device_description.xml".to_string(),
+    };
+    let response = r#"<s:Envelope><s:Body><u:GetZoneGroupStateResponse><ZoneGroupState>&lt;ZoneGroups&gt;&lt;ZoneGroup Coordinator=&quot;RINCON_LIVING&quot;&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_LIVING&quot; ZoneName=&quot;Living Room&quot; Location=&quot;http://192.168.1.20:1400/xml/device_description.xml&quot;/&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_BEDROOM&quot; ZoneName=&quot;Bedroom&quot; Location=&quot;http://192.168.1.21:1400/xml/device_description.xml&quot;/&gt;&lt;/ZoneGroup&gt;&lt;/ZoneGroups&gt;</ZoneGroupState></u:GetZoneGroupStateResponse></s:Body></s:Envelope>"#;
+
+    let coordinator = coordinator_from_zone_group_state(&selected, response).unwrap();
+
+    assert_eq!(coordinator.uuid, "RINCON_LIVING");
+    assert_eq!(coordinator.name, "Living Room");
+    assert_eq!(
+      coordinator.location,
+      "http://192.168.1.20:1400/xml/device_description.xml"
+    );
+  }
+
+  #[test]
+  fn rejects_non_lan_topology_coordinator_location() {
+    let selected = SonosRoom {
+      uuid: "RINCON_BEDROOM".to_string(),
+      name: "Bedroom".to_string(),
+      location: "http://192.168.1.21:1400/xml/device_description.xml".to_string(),
+    };
+    let response = r#"<ZoneGroupState>&lt;ZoneGroups&gt;&lt;ZoneGroup Coordinator=&quot;RINCON_LIVING&quot;&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_LIVING&quot; Location=&quot;http://8.8.8.8:1400/private&quot;/&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_BEDROOM&quot;/&gt;&lt;/ZoneGroup&gt;&lt;/ZoneGroups&gt;</ZoneGroupState>"#;
+
+    assert_eq!(coordinator_from_zone_group_state(&selected, response), None);
+    assert!(control_url("http://8.8.8.8:1400/private", "control").is_err());
+    assert!(control_url("https://192.168.1.20:1400/private", "control").is_err());
+  }
+
+  #[test]
+  fn infers_spotify_account_from_existing_track_uri() {
+    assert_eq!(
+      spotify_account_from_track_uri("x-sonos-spotify:spotify%3atrack%3aabc?sid=9&flags=8224&sn=2"),
+      Some(SpotifyAccount {
+        service_type: 2311,
+        serial_number: "2".to_string(),
+      })
+    );
+    assert_eq!(spotify_account_from_track_uri("https://example.com"), None);
+  }
+
+  #[test]
+  fn parses_spotify_accounts() {
+    let xml = r#"<ZPSupportInfo><Accounts><Account Type="2311" SerialNum="1"><UN>hidden</UN></Account><Account Type="3079" SerialNum="3"/><Account Type="44551" SerialNum="4"/><Account Type="2311" SerialNum="5" Deleted="1"/></Accounts></ZPSupportInfo>"#;
+
+    assert_eq!(
+      spotify_accounts_from_xml(xml),
+      vec![
+        SpotifyAccount {
+          service_type: 2311,
+          serial_number: "1".to_string(),
+        },
+        SpotifyAccount {
+          service_type: 3079,
+          serial_number: "3".to_string(),
+        },
+      ]
+    );
+  }
+
+  #[tokio::test]
+  async fn spotify_playback_routes_queue_sequence_through_coordinator() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let base = format!("http://{address}");
+    let server_base = base.clone();
+    let server = tokio::spawn(async move {
+      let mut requests = Vec::new();
+      for _ in 0..6 {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        loop {
+          let mut chunk = [0_u8; 4096];
+          let read = stream.read(&mut chunk).await.unwrap();
+          if read == 0 {
+            break;
+          }
+          request.extend_from_slice(&chunk[..read]);
+          let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+            continue;
+          };
+          let headers = String::from_utf8_lossy(&request[..header_end]);
+          let content_length = headers
+            .lines()
+            .find_map(|line| {
+              line
+                .to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+          if request.len() >= header_end + 4 + content_length {
+            break;
+          }
+        }
+
+        let request = String::from_utf8_lossy(&request).into_owned();
+        let body = if request.starts_with("GET /status/accounts ") {
+          r#"<Accounts><Account Type="2311" SerialNum="2"/></Accounts>"#.to_string()
+        } else if request.contains("GetZoneGroupState") {
+          format!(
+            r#"<GetZoneGroupStateResponse><ZoneGroupState>&lt;ZoneGroups&gt;&lt;ZoneGroup Coordinator=&quot;RINCON_COORD&quot;&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_COORD&quot; ZoneName=&quot;Living Room&quot; Location=&quot;{server_base}/xml/device_description.xml&quot;/&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_MEMBER&quot;/&gt;&lt;/ZoneGroup&gt;&lt;/ZoneGroups&gt;</ZoneGroupState></GetZoneGroupStateResponse>"#
+          )
+        } else if request.contains("AddURIToQueue") {
+          "<AddURIToQueueResponse><FirstTrackNumberEnqueued>4</FirstTrackNumberEnqueued></AddURIToQueueResponse>".to_string()
+        } else {
+          "<Response/>".to_string()
+        };
+        let response = format!(
+          "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+        requests.push(request);
+      }
+      requests
+    });
+
+    let room = SonosRoom {
+      uuid: "RINCON_MEMBER".to_string(),
+      name: "Bedroom".to_string(),
+      location: format!("{base}/xml/device_description.xml"),
+    };
+    let transport = SonosTransport::new().unwrap();
+    let item = crate::infra::sonos::spotify::item_from_spotify_uri("spotify:track:abc123").unwrap();
+
+    transport.play_spotify_item(&room, &item).await.unwrap();
+    let requests = server.await.unwrap();
+
+    assert!(requests[0].starts_with("GET /status/accounts "));
+    assert!(requests[1].contains("GetZoneGroupState"));
+    assert!(requests[2].contains("AddURIToQueue"));
+    assert!(requests[2].contains("sid=9&amp;sn=2"));
+    assert!(requests[3].contains("SetAVTransportURI"));
+    assert!(requests[3].contains("x-rincon-queue:RINCON_COORD#0"));
+    assert!(requests[4].contains("<Unit>TRACK_NR</Unit><Target>4</Target>"));
+    assert!(requests[5].contains("<u:Play"));
   }
 
   #[test]

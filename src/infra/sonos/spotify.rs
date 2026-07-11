@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use rspotify::model::idtypes::{PlayContextId, PlayableId};
 use rspotify::prelude::Id;
 
-const SPOTIFY_SERVICE_NUMBERS: [u32; 2] = [2311, 3079];
+const SPOTIFY_SERVICE_TYPES: [u32; 2] = [2311, 3079];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SonosSpotifyItem {
@@ -25,6 +25,34 @@ impl SonosSpotifyItem {
 
   pub fn queue_track_offset(&self) -> u32 {
     self.queue_track_offset
+  }
+
+  /// Build attempts using an account advertised by `/status/accounts`.
+  /// `service_type` is the Sonos account Type (for example 2311), while the
+  /// URI `sid` is the underlying service ID: `(service_type - 7) / 256`.
+  pub fn attempts_for_account(
+    &self,
+    service_type: u32,
+    serial_number: &str,
+  ) -> Vec<SonosSpotifyAttempt> {
+    let Some(service_id) = service_type
+      .checked_sub(7)
+      .filter(|value| value % 256 == 0)
+      .map(|value| value / 256)
+    else {
+      return Vec::new();
+    };
+    let Ok((kind, _)) = parse_spotify_uri(&self.spotify_uri) else {
+      return Vec::new();
+    };
+    account_attempts(
+      &self.spotify_uri,
+      &self.title,
+      kind,
+      service_type,
+      service_id,
+      serial_number,
+    )
   }
 }
 
@@ -85,30 +113,28 @@ fn item_from_spotify_uri_with_queue_offset(
   let title = spotify_uri.to_string();
   let mut attempts = Vec::new();
 
-  for service_number in SPOTIFY_SERVICE_NUMBERS {
-    let metadata = sonos_metadata(magic.item_class, &item_id, &title, service_number);
+  for service_type in SPOTIFY_SERVICE_TYPES {
+    let service_id = (service_type - 7) / 256;
+    let metadata = sonos_metadata(magic.item_class, &item_id, &title, service_type);
 
     for prefix in magic.uri_prefixes {
       attempts.push(SonosSpotifyAttempt {
-        enqueued_uri: format!("{prefix}{encoded_uri}?sid={service_number}&sn=0"),
+        enqueued_uri: format!("{prefix}{encoded_uri}?sid={service_id}&sn=0"),
         enqueued_metadata: metadata.clone(),
       });
-    }
-
-    for prefix in magic.uri_prefixes {
       attempts.push(SonosSpotifyAttempt {
         enqueued_uri: format!("{prefix}{encoded_uri}"),
         enqueued_metadata: metadata.clone(),
       });
     }
 
-    // Older Sonos firmware and some S1 systems have historically accepted the
-    // sid=9/sn=7 Spotify URI form used by several UPnP integrations. Keep it as
-    // a fallback so S1/S2 differences are handled without separate code paths.
+    // Some S1 metadata uses the older container prefix and explicit flags.
+    // Without an advertised account serial, keep the fallback internally
+    // consistent by using the derived service ID and neutral serial zero.
     for prefix in magic.legacy_uri_prefixes {
       attempts.push(SonosSpotifyAttempt {
         enqueued_uri: format!(
-          "{prefix}{encoded_uri}?sid=9&flags={}&sn=7",
+          "{prefix}{encoded_uri}?sid={service_id}&flags={}&sn=0",
           magic.legacy_flags
         ),
         enqueued_metadata: metadata.clone(),
@@ -124,10 +150,44 @@ fn item_from_spotify_uri_with_queue_offset(
   })
 }
 
+fn account_attempts(
+  spotify_uri: &str,
+  title: &str,
+  kind: SpotifyKind,
+  service_type: u32,
+  service_id: u32,
+  serial_number: &str,
+) -> Vec<SonosSpotifyAttempt> {
+  let magic = spotify_magic(kind);
+  let encoded_uri = percent_encode_colons(spotify_uri);
+  let item_id = format!("{}{}", magic.item_id_prefix, encoded_uri);
+  let metadata = sonos_metadata(magic.item_class, &item_id, title, service_type);
+  let mut attempts = Vec::new();
+
+  for prefix in magic.uri_prefixes {
+    attempts.push(SonosSpotifyAttempt {
+      enqueued_uri: format!("{prefix}{encoded_uri}?sid={service_id}&sn={serial_number}"),
+      enqueued_metadata: metadata.clone(),
+    });
+  }
+  for prefix in magic.legacy_uri_prefixes {
+    attempts.push(SonosSpotifyAttempt {
+      enqueued_uri: format!(
+        "{prefix}{encoded_uri}?sid={service_id}&flags={}&sn={serial_number}",
+        magic.legacy_flags
+      ),
+      enqueued_metadata: metadata.clone(),
+    });
+  }
+  attempts
+}
+
 fn parse_spotify_uri(spotify_uri: &str) -> Result<(SpotifyKind, &str)> {
   let mut parts = spotify_uri.split(':');
-  match (parts.next(), parts.next(), parts.next()) {
-    (Some("spotify"), Some(kind), Some(id)) if !id.is_empty() => {
+  match (parts.next(), parts.next(), parts.next(), parts.next()) {
+    (Some("spotify"), Some(kind), Some(id), None)
+      if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
+    {
       let kind = match kind {
         "album" => SpotifyKind::Album,
         "episode" => SpotifyKind::Episode,
@@ -210,11 +270,13 @@ mod tests {
     let attempts = item.attempts();
 
     assert_eq!(item.spotify_uri, "spotify:track:abc123");
-    assert!(attempts.iter().any(
-      |attempt| attempt.enqueued_uri == "x-sonos-spotify:spotify%3atrack%3aabc123?sid=2311&sn=0"
-    ));
+    assert!(
+      attempts.iter().any(
+        |attempt| attempt.enqueued_uri == "x-sonos-spotify:spotify%3atrack%3aabc123?sid=9&sn=0"
+      )
+    );
     assert!(attempts.iter().any(|attempt| attempt.enqueued_uri
-      == "x-sonos-spotify:spotify%3atrack%3aabc123?sid=9&flags=8224&sn=7"));
+      == "x-sonos-spotify:spotify%3atrack%3aabc123?sid=9&flags=8224&sn=0"));
     assert!(attempts[0]
       .enqueued_metadata
       .contains("SA_RINCON2311_X_#Svc2311-0-Token"));
@@ -224,15 +286,34 @@ mod tests {
   }
 
   #[test]
+  fn uses_discovered_service_id_and_account_serial() {
+    let item = item_from_spotify_uri("spotify:track:abc123").unwrap();
+    let attempts = item.attempts_for_account(2311, "2");
+
+    assert!(
+      attempts.iter().any(
+        |attempt| attempt.enqueued_uri == "x-sonos-spotify:spotify%3atrack%3aabc123?sid=9&sn=2"
+      )
+    );
+    assert!(attempts.iter().all(|attempt| attempt
+      .enqueued_metadata
+      .contains("SA_RINCON2311_X_#Svc2311-0-Token")));
+    assert!(item.attempts_for_account(2300, "2").is_empty());
+  }
+
+  #[test]
   fn converts_playlist_uri_to_sonos_container() {
-    let item = item_from_spotify_uri("spotify:playlist:a&b").unwrap();
+    let item = item_from_spotify_uri("spotify:playlist:abc123").unwrap();
 
     assert!(item.attempts().iter().any(|attempt| attempt
       .enqueued_uri
-      .contains("x-rincon-cpcontainer:1006206cspotify%3aplaylist%3aa&b")));
-    assert!(item.attempts()[0]
-      .enqueued_metadata
-      .contains("spotify%3aplaylist%3aa&amp;b"));
+      .contains("x-rincon-cpcontainer:1006206cspotify%3aplaylist%3aabc123")));
+  }
+
+  #[test]
+  fn rejects_malformed_spotify_ids() {
+    assert!(item_from_spotify_uri("spotify:track:a&b").is_err());
+    assert!(item_from_spotify_uri("spotify:track:abc:extra").is_err());
   }
 
   #[test]

@@ -1,5 +1,4 @@
 use rspotify::model::device::Device;
-use std::time::{Duration, Instant};
 
 pub const SONOS_DEVICE_ID_PREFIX: &str = "sonos:";
 
@@ -34,17 +33,6 @@ pub struct SonosNowPlaying {
   pub position_ms: u32,
   pub is_playing: bool,
   pub volume_percent: Option<u8>,
-  pub fetched_at: Instant,
-}
-
-impl SonosNowPlaying {
-  pub fn is_for_room(&self, room_uuid: &str) -> bool {
-    self.room_uuid == room_uuid
-  }
-
-  pub fn is_fresh(&self, max_age: Duration) -> bool {
-    self.fetched_at.elapsed() <= max_age
-  }
 }
 
 impl PlaybackTarget {
@@ -75,7 +63,9 @@ pub fn sonos_persisted_id(uuid: &str) -> String {
 }
 
 pub fn parse_sonos_persisted_id(device_id: &str) -> Option<&str> {
-  device_id.strip_prefix(SONOS_DEVICE_ID_PREFIX)
+  device_id
+    .strip_prefix(SONOS_DEVICE_ID_PREFIX)
+    .filter(|uuid| !uuid.trim().is_empty())
 }
 
 pub fn spotify_target_from_device(device: &Device) -> Option<PlaybackTarget> {
@@ -97,5 +87,7 @@ mod tests {
     assert_eq!(persisted, "sonos:RINCON_123");
     assert_eq!(parse_sonos_persisted_id(&persisted), Some("RINCON_123"));
     assert_eq!(parse_sonos_persisted_id("spotify-device"), None);
+    assert_eq!(parse_sonos_persisted_id("sonos:"), None);
+    assert_eq!(parse_sonos_persisted_id("sonos:   "), None);
   }
 }
