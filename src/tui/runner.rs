@@ -638,10 +638,12 @@ pub async fn start_ui(
       };
 
       let current_route = app.get_current_route();
-      let animation_active = matches!(
-        current_route.active_block,
-        ActiveBlock::Analysis | ActiveBlock::Home
-      ) || app.liked_song_animation_frame.is_some();
+      // The banner animates whenever the Home screen is displayed, regardless
+      // of which block has focus (on Home the focused block is usually Empty
+      // or Library, not Home), so gate the fast tick on the route.
+      let animation_active = current_route.id == RouteId::Home
+        || current_route.active_block == ActiveBlock::Analysis
+        || app.liked_song_animation_frame.is_some();
       let current_tick_rate = if animation_active {
         app.user_config.behavior.animation_tick_rate_milliseconds
       } else {

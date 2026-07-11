@@ -8,7 +8,7 @@ use ratatui::{
   widgets::{Block, BorderType, Borders, Paragraph, Wrap},
   Frame,
 };
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use unicode_width::UnicodeWidthStr;
 
 use super::util::get_color;
@@ -38,7 +38,7 @@ impl ChangelogCacheKey {
 
 struct ChangelogCache {
   key: ChangelogCacheKey,
-  changelog_lines: Vec<Line<'static>>,
+  changelog_lines: Arc<Vec<Line<'static>>>,
 }
 
 static CHANGELOG_CACHE: OnceLock<Mutex<ChangelogCache>> = OnceLock::new();
@@ -124,7 +124,7 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     counter_style,
   )]));
   changelog_lines.push(Line::from(""));
-  changelog_lines.extend(base_changelog_lines);
+  changelog_lines.extend(base_changelog_lines.iter().map(borrow_line));
 
   // CHANGELOG
   let bottom_text = Paragraph::new(Text::from(changelog_lines))
@@ -151,12 +151,12 @@ fn get_clean_changelog() -> &'static str {
 fn get_changelog_cache(
   theme: &crate::core::user_config::Theme,
   changelog_width: u16,
-) -> Vec<Line<'static>> {
+) -> Arc<Vec<Line<'static>>> {
   let cache = CHANGELOG_CACHE.get_or_init(|| {
     let changelog = get_clean_changelog();
     let key = ChangelogCacheKey::from_theme(theme, changelog_width);
     Mutex::new(ChangelogCache {
-      changelog_lines: build_changelog_lines(changelog, theme, changelog_width),
+      changelog_lines: Arc::new(build_changelog_lines(changelog, theme, changelog_width)),
       key,
     })
   });
@@ -164,16 +164,33 @@ fn get_changelog_cache(
   let key = ChangelogCacheKey::from_theme(theme, changelog_width);
   if cache.key != key {
     let changelog = get_clean_changelog();
-    cache.changelog_lines = build_changelog_lines(changelog, theme, changelog_width);
+    cache.changelog_lines = Arc::new(build_changelog_lines(changelog, theme, changelog_width));
     cache.key = key;
   }
-  cache.changelog_lines.clone()
+  Arc::clone(&cache.changelog_lines)
 }
 
-fn build_banner_gradient_lines(
-  theme: &crate::core::user_config::Theme,
-  animation_tick: u64,
-) -> Vec<Line<'static>> {
+/// Re-spans a cached line borrowing its span content instead of cloning the
+/// Strings. Cached changelog lines carry span-level styling only, so copying
+/// the spans is lossless.
+fn borrow_line<'a>(line: &'a Line<'static>) -> Line<'a> {
+  Line::from(
+    line
+      .spans
+      .iter()
+      .map(|span| Span::styled(span.content.as_ref(), span.style))
+      .collect::<Vec<Span<'a>>>(),
+  )
+}
+
+struct BannerGradientCache {
+  key: (Color, Color, Color),
+  gradient: colorgrad::LinearGradient,
+}
+
+static BANNER_GRADIENT_CACHE: OnceLock<Mutex<BannerGradientCache>> = OnceLock::new();
+
+fn build_banner_gradient(theme: &crate::core::user_config::Theme) -> colorgrad::LinearGradient {
   fn to_rgba(color: ratatui::style::Color) -> (u8, u8, u8, u8) {
     match color {
       ratatui::style::Color::Rgb(r, g, b) => (r, g, b, 255),
@@ -203,7 +220,7 @@ fn build_banner_gradient_lines(
 
   // Build a looping gradient: banner → hovered → active → banner
   // This ensures a smooth wrap-around for continuous animation
-  let grad = colorgrad::GradientBuilder::new()
+  colorgrad::GradientBuilder::new()
     .colors(&[
       colorgrad::Color::from_rgba8(c1.0, c1.1, c1.2, c1.3),
       colorgrad::Color::from_rgba8(c2.0, c2.1, c2.2, c2.3),
@@ -211,7 +228,28 @@ fn build_banner_gradient_lines(
       colorgrad::Color::from_rgba8(c1.0, c1.1, c1.2, c1.3),
     ])
     .build::<colorgrad::LinearGradient>()
-    .unwrap();
+    .unwrap()
+}
+
+fn build_banner_gradient_lines(
+  theme: &crate::core::user_config::Theme,
+  animation_tick: u64,
+) -> Vec<Line<'static>> {
+  // Only the phase changes per frame; the gradient itself depends solely on
+  // the three theme colors, so rebuild it only when those change.
+  let key = (theme.banner, theme.hovered, theme.active);
+  let cache = BANNER_GRADIENT_CACHE.get_or_init(|| {
+    Mutex::new(BannerGradientCache {
+      key,
+      gradient: build_banner_gradient(theme),
+    })
+  });
+  let mut cache = cache.lock().expect("banner gradient cache lock failed");
+  if cache.key != key {
+    cache.gradient = build_banner_gradient(theme);
+    cache.key = key;
+  }
+  let grad = &cache.gradient;
 
   // Phase offset scrolls the gradient over time (~4 seconds per full cycle at 62 FPS)
   let phase = animation_tick as f64 * 0.004;
@@ -220,17 +258,17 @@ fn build_banner_gradient_lines(
     .lines()
     .enumerate()
     .map(|(row, line)| {
-      let chars: Vec<char> = line.chars().collect();
-      let line_len = chars.len().max(1);
-      let spans: Vec<Span<'static>> = chars
-        .into_iter()
+      let line_len = line.chars().count().max(1);
+      let spans: Vec<Span<'static>> = line
+        .char_indices()
         .enumerate()
-        .map(|(col, ch)| {
+        .map(|(col, (byte_idx, ch))| {
           // Diagonal gradient: combine column position and row offset
           let t = ((col as f64 / line_len as f64) + (row as f64 * 0.08) + phase) % 1.0;
           let [r, g, b, _] = grad.at(t as f32).to_rgba8();
           Span::styled(
-            ch.to_string(),
+            // Slice of the static banner text: no String allocation per glyph
+            &line[byte_idx..byte_idx + ch.len_utf8()],
             Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
           )
         })
