@@ -124,14 +124,29 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     counter_style,
   )]));
   changelog_lines.push(Line::from(""));
-  changelog_lines.extend(base_changelog_lines.iter().map(borrow_line));
+
+  // The cached changelog lines are pre-wrapped to the area width (one line ==
+  // one row), so slice out the visible window ourselves instead of using
+  // Paragraph::scroll, which re-composes every line above the offset each
+  // frame. Only the visible cached lines get re-spanned (borrow_line).
+  let scroll = usize::from(app.home_scroll);
+  let height = usize::from(changelog_area.height);
+  let prefix_len = changelog_lines.len();
+  let mut visible: Vec<Line> = Vec::with_capacity(height);
+  visible.extend(changelog_lines.drain(..).skip(scroll).take(height));
+  let base_start = scroll.saturating_sub(prefix_len);
+  let remaining = height.saturating_sub(visible.len());
+  if remaining > 0 {
+    if let Some(slice) = base_changelog_lines.get(base_start..) {
+      visible.extend(slice.iter().take(remaining).map(borrow_line));
+    }
+  }
 
   // CHANGELOG
-  let bottom_text = Paragraph::new(Text::from(changelog_lines))
+  let bottom_text = Paragraph::new(Text::from(visible))
     .block(Block::default())
     .style(app.user_config.theme.base_style())
-    .wrap(Wrap { trim: false })
-    .scroll((app.home_scroll, 0));
+    .wrap(Wrap { trim: false });
   f.render_widget(bottom_text, changelog_area);
 }
 
@@ -440,6 +455,62 @@ fn wrap_segments_with_indent(
   lines
 }
 
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::App;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  // draw_home layout at 100x40: margin 2 -> inner rows 2..38, banner rows
+  // 2..9, changelog rows 9..38. Row strings exclude the outer border columns.
+  fn rendered_rows(app: &App) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    terminal.draw(|f| draw_home(f, app, f.area())).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..40)
+      .map(|y| {
+        (2..98)
+          .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+          .collect::<String>()
+      })
+      .collect()
+  }
+
+  #[test]
+  fn home_changelog_scroll_shifts_rows_one_to_one() {
+    let mut app = App::default();
+    let rows_at_top = rendered_rows(&app);
+    assert!(
+      rows_at_top[9..38].iter().any(|row| !row.trim().is_empty()),
+      "changelog area should have content"
+    );
+
+    app.home_scroll = 3;
+    let rows_scrolled = rendered_rows(&app);
+    for y in 9..35 {
+      assert_eq!(
+        rows_scrolled[y],
+        rows_at_top[y + 3],
+        "scrolling by 3 should shift row {} up by exactly 3 rows",
+        y + 3
+      );
+    }
+  }
+
+  #[test]
+  fn home_changelog_scroll_past_end_renders_blank() {
+    let mut app = App::default();
+    app.home_scroll = u16::MAX;
+    let rows = rendered_rows(&app);
+    for (y, row) in rows.iter().enumerate().take(38).skip(9) {
+      assert!(
+        row.trim().is_empty(),
+        "row {y} should be blank when scrolled past the end: {row:?}"
+      );
+    }
+  }
+}
+
 fn build_changelog_lines(
   changelog: &str,
   theme: &crate::core::user_config::Theme,
@@ -448,18 +519,40 @@ fn build_changelog_lines(
   let mut lines: Vec<Line<'static>> = vec![];
   let max_width = usize::from(max_width);
 
-  lines.push(Line::from(Span::styled(
-    format!(
-      "Log located in /tmp/spotatui_logs/spotatuilog{}",
-      std::process::id()
-    ),
-    Style::default().fg(theme.hint),
-  )));
+  // Every line is wrapped to max_width here so that one cached line is one
+  // rendered row: draw_home slices this list by the scroll offset instead of
+  // paying Paragraph's per-frame wrap composition over everything above it.
+  let push_wrapped = |lines: &mut Vec<Line<'static>>, segments: &[StyledSegment]| {
+    lines.extend(wrap_segments_with_indent(
+      segments,
+      max_width,
+      "",
+      Style::default(),
+      "",
+      Style::default(),
+    ));
+  };
 
-  lines.push(Line::from(Span::styled(
-    "Please report any bugs or missing features to https://github.com/LargeModGames/spotatui",
-    Style::default().fg(theme.hint),
-  )));
+  push_wrapped(
+    &mut lines,
+    &[StyledSegment {
+      text: format!(
+        "Log located in /tmp/spotatui_logs/spotatuilog{}",
+        std::process::id()
+      ),
+      style: Style::default().fg(theme.hint),
+    }],
+  );
+
+  push_wrapped(
+    &mut lines,
+    &[StyledSegment {
+      text:
+        "Please report any bugs or missing features to https://github.com/LargeModGames/spotatui"
+          .to_string(),
+      style: Style::default().fg(theme.hint),
+    }],
+  );
   lines.push(Line::from(""));
 
   for line in changelog.lines() {
@@ -479,27 +572,30 @@ fn build_changelog_lines(
       continue;
     }
 
-    let styled_line = if line.starts_with("# ") {
-      Line::from(Span::styled(
-        line.trim_start_matches("# ").to_string(),
-        Style::default()
-          .fg(theme.banner)
-          .add_modifier(Modifier::BOLD),
-      ))
+    if line.starts_with("# ") {
+      push_wrapped(
+        &mut lines,
+        &[StyledSegment {
+          text: line.trim_start_matches("# ").to_string(),
+          style: Style::default()
+            .fg(theme.banner)
+            .add_modifier(Modifier::BOLD),
+        }],
+      );
     } else if line.starts_with("## [") {
-      Line::from(Span::styled(
-        format!("═══ {} ═══", line.trim_start_matches("## ")),
-        Style::default()
-          .fg(theme.active)
-          .add_modifier(Modifier::BOLD),
-      ))
+      push_wrapped(
+        &mut lines,
+        &[StyledSegment {
+          text: format!("═══ {} ═══", line.trim_start_matches("## ")),
+          style: Style::default()
+            .fg(theme.active)
+            .add_modifier(Modifier::BOLD),
+        }],
+      );
     } else {
       let segments = parse_markdown_inline(line, Style::default().fg(theme.text));
-      let line_spans = segments_to_spans(segments);
-      Line::from(line_spans)
-    };
-
-    lines.push(styled_line);
+      push_wrapped(&mut lines, &segments);
+    }
   }
 
   lines
