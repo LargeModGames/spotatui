@@ -152,7 +152,13 @@ The playback table has these fields:
 
 ```
 {
-  track = { uri, name, artists = { ... }, album, duration_ms } or nil,
+  track = {
+    uri, name, artists = { ... }, album, duration_ms,
+    id, album_id,
+    artist_refs = { { id, name }, ... },
+    is_playable, is_local, track_number, explicit,
+    image_url,
+  } or nil,
   is_playing = bool,
   progress_ms = number,
   shuffle = bool,
@@ -164,6 +170,14 @@ The playback table has these fields:
 
 `repeat` is a Lua reserved word, so index it with `pb["repeat"]`, not `pb.repeat`. (The matching
 action is named `set_repeat` for the same reason.)
+
+The track's additional fields: `id` is the Spotify base62 track id (`nil` for local/unknown
+tracks); `album_id` is the album's base62 id, when known; `artist_refs` is an array of
+`{ id, name }` navigable artist references, populated when the source provides per-artist data
+and empty when only the combined `artists` display list is available (e.g. native-playback
+snapshots); `is_playable` and `is_local` default to `true`/`false`; `track_number` defaults to
+`0` and `explicit` to `false` when unknown; `image_url` is a directly-fetchable cover-art URL
+when the source provides one (e.g. Subsonic, YouTube), otherwise `nil`.
 
 The cached reads for playlists, queue and search results refresh when the underlying data
 changes; they are cheap to call but can be empty until the app has actually fetched that data.
@@ -268,7 +282,8 @@ tick. If the app stalls past several interval periods, the interval fires once a
   `artist`, `artists`, `recently_played`, `devices`, `queue`, `settings`, `help`, `lyrics`,
   `cover_art`, `miniplayer`, `analysis`, `discover`, `podcasts`, `podcast_episodes`,
   `recommendations`, `party`, `friends`, `local_browser`, `create_playlist`, `dialog`,
-  `announcement`, `exit_prompt`, `error`, and `plugin:<name>` for plugin screens.
+  `announcement`, `recap_prompt`, `exit_prompt`, `error`, `stats`, and `plugin:<name>` for
+  plugin screens.
 
 ### Persistent storage
 
