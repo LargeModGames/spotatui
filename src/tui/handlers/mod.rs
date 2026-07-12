@@ -599,7 +599,12 @@ fn handle_jump_to_context(app: &mut App) {
         rspotify::model::enums::Type::Album => handle_jump_to_album(app),
         rspotify::model::enums::Type::Artist => handle_jump_to_artist_album(app),
         rspotify::model::enums::Type::Playlist => {
-          app.dispatch(IoEvent::GetPlaylistItems(play_context.uri.clone(), 0));
+          if let Some(playlist_id) = crate::infra::network::ids::playlist_id(&play_context.uri) {
+            app.open_playlist_tracks(
+              playlist_id,
+              crate::core::app::TrackTableContext::MyPlaylists,
+            );
+          }
         }
         _ => {}
       }

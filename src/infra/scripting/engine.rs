@@ -129,6 +129,42 @@ impl ScriptEngine {
   /// `plugins/<name>/main.lua` (falling back to `init.lua`). Each group is sorted by filename.
   /// Missing files/dir are fine. A failing file logs an error and queues a Notify effect but
   /// never aborts the others. Returns the number of plugins loaded successfully.
+  /// Cheap discovery-only mirror of [`Self::load_user_scripts`]: reports
+  /// whether any loadable script exists (`init.lua`, `plugins/*.lua`, or
+  /// `plugins/<name>/{main,init}.lua`) so the runner can skip constructing
+  /// the Lua VM (and its HTTP client) entirely when there is nothing to
+  /// load. Keep the discovery rules in sync with `load_user_scripts`.
+  pub fn has_user_scripts(config_dir: &Path) -> bool {
+    if config_dir.join("init.lua").is_file() {
+      return true;
+    }
+    let plugins_dir = config_dir.join("plugins");
+    if !plugins_dir.is_dir() {
+      return false;
+    }
+    std::fs::read_dir(&plugins_dir)
+      .into_iter()
+      .flatten()
+      .flatten()
+      .map(|e| e.path())
+      .any(|p| {
+        let hidden = p
+          .file_name()
+          .and_then(|n| n.to_str())
+          .is_none_or(|n| n.starts_with('.'));
+        if hidden {
+          return false;
+        }
+        if p.is_file() {
+          p.extension().and_then(|e| e.to_str()) == Some("lua")
+        } else if p.is_dir() {
+          ["main.lua", "init.lua"].iter().any(|f| p.join(f).is_file())
+        } else {
+          false
+        }
+      })
+  }
+
   pub fn load_user_scripts(&mut self, config_dir: &Path) -> usize {
     *self.shared.config_dir.borrow_mut() = Some(config_dir.to_path_buf());
     let mut loaded = 0;

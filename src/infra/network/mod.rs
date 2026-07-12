@@ -278,6 +278,11 @@ pub struct Network {
   pub token_cache_path: PathBuf,
   /// In-flight in-TUI Spotify login, if any (see `begin_spotify_login`).
   pending_login: Option<PendingLogin>,
+  /// TTL caches so re-visiting the same artist/album skips the round trip +
+  /// pacing tax (see `metadata::MetadataTtlCache`).
+  artist_cache: metadata::MetadataTtlCache<metadata::CachedArtistData>,
+  album_cache: metadata::MetadataTtlCache<rspotify::model::album::FullAlbum>,
+  album_tracks_cache: metadata::MetadataTtlCache<Vec<rspotify::model::track::SimplifiedTrack>>,
 }
 
 impl Network {
@@ -299,6 +304,9 @@ impl Network {
       party_incoming_rx: None,
       token_cache_path,
       pending_login: None,
+      artist_cache: Default::default(),
+      album_cache: Default::default(),
+      album_tracks_cache: Default::default(),
     }
   }
 
@@ -319,6 +327,9 @@ impl Network {
       party_incoming_rx: None,
       token_cache_path,
       pending_login: None,
+      artist_cache: Default::default(),
+      album_cache: Default::default(),
+      album_tracks_cache: Default::default(),
     }
   }
 
@@ -387,6 +398,36 @@ impl Network {
         | IoEvent::DeleteYouTubePlaylist(_)
         | IoEvent::AddTrackToYouTubePlaylist(..)
         | IoEvent::RemoveTrackFromYouTubePlaylist(..)
+    )
+  }
+
+  /// Events that run on the concurrent service lane in `start_tokio`: a strict
+  /// subset of [`Self::event_bypasses_spotify_auth`] whose handlers touch only
+  /// `self.app` (plus their own HTTP clients / `spawn_blocking`) — never the
+  /// Spotify client, API pacing, or `Network` state (party connection, pending
+  /// login, search limits) — so they can execute on a detached task with a
+  /// throwaway `Network` instead of head-of-line-blocking the serial pump.
+  /// Keep in sync with the handlers: an event listed here MUST NOT read or
+  /// write anything on `Network` besides `app`.
+  pub fn runs_on_service_lane(io_event: &IoEvent) -> bool {
+    #[cfg(feature = "cover-art")]
+    if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+      return true;
+    }
+    matches!(
+      io_event,
+      IoEvent::FetchGlobalSongCount
+        | IoEvent::IncrementGlobalSongCount
+        | IoEvent::FetchAnnouncements
+        | IoEvent::GetLyrics(..)
+        | IoEvent::GetFriendCode
+        | IoEvent::GetFriends
+        | IoEvent::AddFriendByCode(_)
+        | IoEvent::AddFriendByUserId(_)
+        | IoEvent::UnfollowFriend(_)
+        | IoEvent::SearchFriendUsers(_)
+        | IoEvent::LoadListeningStats(_)
+        | IoEvent::GenerateRecap(_)
     )
   }
 

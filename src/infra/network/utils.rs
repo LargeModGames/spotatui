@@ -216,17 +216,12 @@ impl UtilsNetwork for Network {
       return;
     }
 
-    let client = match reqwest::Client::builder()
-      .timeout(Duration::from_secs(5))
-      .build()
-    {
-      Ok(client) => client,
-      Err(_) => return,
-    };
+    let client = super::requests::shared_http_client();
 
     let response = match client
       .get(&resolved_url)
       .header(reqwest::header::ACCEPT, "application/json")
+      .timeout(Duration::from_secs(5))
       .send()
       .await
     {

@@ -663,7 +663,11 @@ impl StreamingPlayer {
 
   /// Activate the device (make it the active playback device)
   pub fn activate(&self) {
-    let _ = self.spirc.activate();
+    // Not fatal (transfer() is the reliable route), but a failure here used to
+    // vanish entirely, hiding zombie sessions from the logs.
+    if let Err(e) = self.spirc.activate() {
+      log::warn!("spirc activate failed: {e:?}");
+    }
   }
 
   /// Transfer playback to this device via Spotify Connect.

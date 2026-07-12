@@ -130,10 +130,16 @@ pub struct RadioSource {
   http: reqwest::Client,
 }
 
-impl RadioSource {
-  pub fn new() -> Self {
-    RadioSource {
-      http: reqwest::Client::builder()
+/// Process-wide radio-browser HTTP client. Dispatch constructs a fresh
+/// `RadioSource` per event, so the client (TLS state + connection pool) is
+/// built once and cheaply cloned into each source — otherwise every radio
+/// action pays a fresh TLS handshake (same pattern as `shared_http_client`
+/// on the Spotify path).
+fn shared_radio_client() -> reqwest::Client {
+  static RADIO_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+  RADIO_HTTP_CLIENT
+    .get_or_init(|| {
+      reqwest::Client::builder()
         .user_agent(USER_AGENT)
         // Blanket per-request timeout so a mirror that connects then stalls the
         // body can never hang the pump. The per-mirror `tokio::time::timeout` in
@@ -143,7 +149,15 @@ impl RadioSource {
         .build()
         // Falls back to a default client only if TLS init fails, which would
         // break every other request in the app too.
-        .unwrap_or_default(),
+        .unwrap_or_default()
+    })
+    .clone()
+}
+
+impl RadioSource {
+  pub fn new() -> Self {
+    RadioSource {
+      http: shared_radio_client(),
     }
   }
 

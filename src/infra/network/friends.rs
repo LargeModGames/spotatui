@@ -109,6 +109,7 @@ async fn fetch_friends(token: &str) -> Result<Vec<FriendEntry>> {
     .into_iter()
     .map(|u| FriendEntry {
       id: u.id,
+      name_lower: u.name.to_lowercase(),
       name: u.name,
       is_online: u.is_online,
       now_playing: u.now_playing.map(|np| FriendNowPlaying {

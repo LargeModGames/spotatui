@@ -248,6 +248,20 @@ impl SortState {
   }
 }
 
+/// Sort by a precomputed key — one key per item (O(n) allocations) instead of
+/// one per comparison (O(n log n)) — honoring the sort direction. Stable in
+/// both directions: equal keys keep their prior relative order.
+pub fn sort_by_key_with_order<T, K: Ord, F: FnMut(&T) -> K>(
+  items: &mut [T],
+  order: SortOrder,
+  mut key: F,
+) {
+  match order {
+    SortOrder::Ascending => items.sort_by_cached_key(|item| key(item)),
+    SortOrder::Descending => items.sort_by_cached_key(|item| std::cmp::Reverse(key(item))),
+  }
+}
+
 pub struct Sorter {
   state: SortState,
 }

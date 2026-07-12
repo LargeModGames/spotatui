@@ -214,17 +214,24 @@ impl UserNetwork for Network {
       }
     };
 
-    let mut all_tracks = Vec::new();
-
-    // 2. Get top tracks for each artist
-    for artist in artists {
+    // 2. Get top tracks for each artist, concurrently — the pacing limiter
+    // allows a burst of 5, sized to exactly this fan-out shape.
+    let this: &Self = self;
+    let track_fetches = artists.iter().map(|artist| {
       let path = format!("artists/{}/top-tracks", artist.id.id());
-      if let Ok(res) = self
-        .spotify_get_typed::<ArtistTopTracksResponse>(&path, &[])
-        .await
-      {
-        all_tracks.extend(res.tracks);
+      async move {
+        this
+          .spotify_get_typed::<ArtistTopTracksResponse>(&path, &[])
+          .await
       }
+    });
+    let mut all_tracks = Vec::new();
+    for res in futures::future::join_all(track_fetches)
+      .await
+      .into_iter()
+      .flatten()
+    {
+      all_tracks.extend(res.tracks);
     }
 
     // 3. Shuffle

@@ -581,18 +581,30 @@ pub async fn start_ui(
   #[cfg(feature = "internet-radio")]
   let mut radio_stream_started = false;
 
+  // The Lua VM (plus its HTTP client) is only constructed when the user
+  // actually has script files; a zero-plugin install skips the engine — and
+  // its per-tick `on_tick` dispatch — entirely.
   #[cfg(feature = "scripting")]
-  let mut script_engine: Option<ScriptEngine> = match ScriptEngine::new() {
-    Ok(mut engine) => {
-      if let Some(config_dir) = crate::core::user_config::default_app_config_dir() {
-        let loaded = engine.load_user_scripts(&config_dir);
-        info!("loaded {loaded} lua plugin file(s)");
+  let mut script_engine: Option<ScriptEngine> = {
+    let config_dir = crate::core::user_config::default_app_config_dir();
+    match config_dir {
+      Some(config_dir) if ScriptEngine::has_user_scripts(&config_dir) => {
+        match ScriptEngine::new() {
+          Ok(mut engine) => {
+            let loaded = engine.load_user_scripts(&config_dir);
+            info!("loaded {loaded} lua plugin file(s)");
+            Some(engine)
+          }
+          Err(e) => {
+            log::error!("failed to initialize lua scripting engine: {e}");
+            None
+          }
+        }
       }
-      Some(engine)
-    }
-    Err(e) => {
-      log::error!("failed to initialize lua scripting engine: {e}");
-      None
+      _ => {
+        info!("no lua plugin files found; scripting engine not started");
+        None
+      }
     }
   };
 
@@ -807,6 +819,7 @@ pub async fn start_ui(
         #[cfg(feature = "streaming")]
         app.flush_pending_native_seek();
         app.flush_pending_api_seek();
+        app.flush_pending_source_seek();
         app.flush_pending_volume();
         app.flush_config_save(false);
 
@@ -1115,13 +1128,15 @@ pub async fn start_ui(
         // Persist the active non-Spotify session so it resumes on next launch.
         // Throttled to avoid churning the file every tick; a Some -> None
         // transition (queue ended, or switched to Spotify) clears it instead.
-        match app.current_persisted_session() {
-          Some(session) => {
-            let due = last_session_save
-              .map(|t| t.elapsed() >= SESSION_SAVE_INTERVAL)
-              .unwrap_or(true);
-            if due {
-              last_session_save = Some(Instant::now());
+        if app.has_persistable_session() {
+          let due = last_session_save
+            .map(|t| t.elapsed() >= SESSION_SAVE_INTERVAL)
+            .unwrap_or(true);
+          if due {
+            last_session_save = Some(Instant::now());
+            // Snapshot (clones the queue) only when a save is actually due,
+            // not on every tick.
+            if let Some(session) = app.current_persisted_session() {
               // Fire-and-forget on the blocking pool: file I/O never blocks the
               // UI tick, and a dropped handle still runs to completion.
               tokio::task::spawn_blocking(move || {
@@ -1132,21 +1147,20 @@ pub async fn start_ui(
                 }
               });
             }
-            session_was_present = true;
           }
-          None => {
-            if session_was_present {
-              last_session_save = None;
-              tokio::task::spawn_blocking(|| {
-                if let Ok(path) = crate::core::persisted_playback::default_session_path() {
-                  if let Err(e) = crate::core::persisted_playback::clear(&path) {
-                    log::warn!("[session] failed to clear playback session: {e}");
-                  }
+          session_was_present = true;
+        } else {
+          if session_was_present {
+            last_session_save = None;
+            tokio::task::spawn_blocking(|| {
+              if let Ok(path) = crate::core::persisted_playback::default_session_path() {
+                if let Err(e) = crate::core::persisted_playback::clear(&path) {
+                  log::warn!("[session] failed to clear playback session: {e}");
                 }
-              });
-            }
-            session_was_present = false;
+              }
+            });
           }
+          session_was_present = false;
         }
 
         #[cfg(feature = "streaming")]

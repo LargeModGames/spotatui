@@ -1,5 +1,5 @@
 use crate::core::config::{ClientConfig, ConfigPaths, NCSPOT_CLIENT_ID};
-use crate::infra::redirect_uri::redirect_uri_web_server;
+use crate::infra::redirect_uri::redirect_uri_web_server_async;
 use anyhow::{anyhow, Result};
 use log::{info, warn};
 use rspotify::{
@@ -41,6 +41,12 @@ pub struct AuthenticatedClient {
   pub token_cache_path: PathBuf,
   #[cfg(feature = "streaming")]
   pub redirect_uri: String,
+  /// The `/me` response captured while validating the cached token, so later
+  /// startup steps (the native-streaming account probe) can reuse it instead
+  /// of paying a second round trip. `None` when validation didn't run (fresh
+  /// interactive login).
+  #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+  pub me: Option<rspotify::model::PrivateUser>,
 }
 
 // Manual token cache helpers since rspotify's built-in caching isn't working.
@@ -238,12 +244,15 @@ pub async fn refresh_token_and_cache(
   Ok(expiry)
 }
 
+/// Returns the `/me` response when the cached token was validated with one,
+/// so callers can reuse it instead of re-fetching (`None` after a fresh
+/// interactive login, which skips the validation call).
 async fn ensure_auth_token(
   spotify: &mut AuthCodePkceSpotify,
   token_cache_path: &PathBuf,
   auth_port: u16,
   interactive: bool,
-) -> Result<()> {
+) -> Result<Option<rspotify::model::PrivateUser>> {
   let mut needs_auth = match load_token_from_file(spotify, token_cache_path).await {
     Ok(true) => false,
     Ok(false) => {
@@ -275,31 +284,35 @@ async fn ensure_auth_token(
     }
   }
 
+  let mut validated_me = None;
   if !needs_auth {
-    if let Err(e) = spotify.me().await {
-      let err_text = e.to_string();
-      let err_text_lower = err_text.to_lowercase();
-      let should_reauth = err_text_lower.contains("401")
-        || err_text_lower.contains("unauthorized")
-        || err_text_lower.contains("status code 400")
-        || err_text_lower.contains("invalid_grant")
-        || err_text_lower.contains("access token expired")
-        || err_text_lower.contains("token expired");
+    match spotify.me().await {
+      Ok(user) => validated_me = Some(user),
+      Err(e) => {
+        let err_text = e.to_string();
+        let err_text_lower = err_text.to_lowercase();
+        let should_reauth = err_text_lower.contains("401")
+          || err_text_lower.contains("unauthorized")
+          || err_text_lower.contains("status code 400")
+          || err_text_lower.contains("invalid_grant")
+          || err_text_lower.contains("access token expired")
+          || err_text_lower.contains("token expired");
 
-      if should_reauth {
-        info!("cached authentication token is invalid, re-authentication required");
-        if token_cache_path.exists() {
-          if let Err(remove_err) = fs::remove_file(token_cache_path) {
-            info!(
-              "failed to remove stale token cache {}: {}",
-              token_cache_path.display(),
-              remove_err
-            );
+        if should_reauth {
+          info!("cached authentication token is invalid, re-authentication required");
+          if token_cache_path.exists() {
+            if let Err(remove_err) = fs::remove_file(token_cache_path) {
+              info!(
+                "failed to remove stale token cache {}: {}",
+                token_cache_path.display(),
+                remove_err
+              );
+            }
           }
+          needs_auth = true;
+        } else {
+          return Err(anyhow!(e));
         }
-        needs_auth = true;
-      } else {
-        return Err(anyhow!(e));
       }
     }
   }
@@ -331,7 +344,10 @@ async fn ensure_auth_token(
       auth_port
     );
 
-    match redirect_uri_web_server(auth_port) {
+    // Async server, same as the in-TUI login path: the blocking variant used
+    // to park a tokio worker thread in a std accept() loop with no timeout,
+    // which could hang the whole login on startup (#364).
+    match redirect_uri_web_server_async(auth_port).await {
       Ok(url) => {
         if let Some(code) = spotify.parse_response_code(&url) {
           info!("authorization code received, requesting access token");
@@ -363,7 +379,7 @@ async fn ensure_auth_token(
     }
   }
 
-  Ok(())
+  Ok(validated_me)
 }
 
 /// Authenticate the Spotify client, trying the primary client id then the
@@ -405,6 +421,7 @@ async fn authenticate_candidates(
   #[cfg(feature = "streaming")]
   let mut selected_redirect_uri = client_config.get_redirect_uri();
   let mut last_auth_error = None;
+  let mut validated_me = None;
 
   for (index, client_id) in client_candidates.iter().enumerate() {
     let token_cache_path = token_cache_path_for_client(&config_paths.token_cache_path, client_id);
@@ -417,7 +434,8 @@ async fn authenticate_candidates(
       ensure_auth_token(&mut candidate, &token_cache_path, auth_port, interactive).await;
 
     match auth_result {
-      Ok(()) => {
+      Ok(me) => {
+        validated_me = me;
         if *client_id == NCSPOT_CLIENT_ID {
           info!(
             "Using ncspot shared client ID. If it breaks in the future, configure fallback_client_id in client.yml."
@@ -456,6 +474,7 @@ async fn authenticate_candidates(
     token_cache_path,
     #[cfg(feature = "streaming")]
     redirect_uri: selected_redirect_uri,
+    me: validated_me,
   })
 }
 

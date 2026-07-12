@@ -147,6 +147,33 @@ pub struct SubsonicSource {
   http: Client,
 }
 
+/// Process-wide Subsonic HTTP client. Dispatch constructs a fresh
+/// `SubsonicSource` per event, so the client (which owns the TLS state and
+/// connection pool) is built once and cheaply cloned into each source —
+/// otherwise every Subsonic action pays a fresh TLS handshake (same pattern
+/// as `shared_http_client` on the Spotify path).
+///
+/// A bare `Client::new()` has no timeouts: a server that connects then
+/// stalls the body wedges the serial IoEvent pump permanently, killing
+/// transport for every source. Bound both the handshake and the whole
+/// request. `.timeout()` applies per request, so it also caps the streamed
+/// download in `download_track` (each chunk read must make progress within
+/// the window) without needing a separate wrapper there.
+fn shared_subsonic_client() -> Client {
+  static SUBSONIC_HTTP_CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+  SUBSONIC_HTTP_CLIENT
+    .get_or_init(|| {
+      Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        // Falls back to a default (untimed) client only if TLS init fails, which
+        // would break every other request in the app too.
+        .unwrap_or_default()
+    })
+    .clone()
+}
+
 impl SubsonicSource {
   /// Create a new source for the given server.
   ///
@@ -163,19 +190,7 @@ impl SubsonicSource {
       base_url: base_url.trim_end_matches('/').to_string(),
       username: username.into(),
       password: password.into(),
-      // A bare `Client::new()` has no timeouts: a server that connects then
-      // stalls the body wedges the serial IoEvent pump permanently, killing
-      // transport for every source. Bound both the handshake and the whole
-      // request. `.timeout()` applies per request, so it also caps the streamed
-      // download in `download_track` (each chunk read must make progress within
-      // the window) without needing a separate wrapper there.
-      http: Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        // Falls back to a default (untimed) client only if TLS init fails, which
-        // would break every other request in the app too.
-        .unwrap_or_default(),
+      http: shared_subsonic_client(),
     }
   }
 

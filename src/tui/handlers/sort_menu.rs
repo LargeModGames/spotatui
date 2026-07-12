@@ -131,83 +131,47 @@ fn get_sort_state_mut(app: &mut App, ctx: SortContext) -> &mut crate::core::sort
 }
 
 fn sort_saved_albums(app: &mut App) {
-  use crate::core::sort::SortOrder;
+  use crate::core::sort::sort_by_key_with_order;
 
   let sort_state = app.album_sort;
 
   // Sort library.saved_albums pages
   for page in &mut app.library.saved_albums.pages {
-    page.items.sort_by(|a, b| {
-      let cmp = match sort_state.field {
-        SortField::Default => std::cmp::Ordering::Equal,
-        SortField::Name => a
-          .album
-          .name
-          .to_lowercase()
-          .cmp(&b.album.name.to_lowercase()),
-        SortField::Artist => {
-          let artist_a = a
-            .album
-            .artists
-            .first()
-            .map(|a| a.name.to_lowercase())
-            .unwrap_or_default();
-          let artist_b = b
-            .album
-            .artists
-            .first()
-            .map(|a| a.name.to_lowercase())
-            .unwrap_or_default();
-          artist_a.cmp(&artist_b)
-        }
-        SortField::DateAdded => a.added_at.cmp(&b.added_at),
-        _ => std::cmp::Ordering::Equal,
-      };
-
-      if sort_state.order == SortOrder::Descending {
-        cmp.reverse()
-      } else {
-        cmp
+    match sort_state.field {
+      SortField::Name => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
+        a.album.name.to_lowercase()
+      }),
+      SortField::Artist => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
+        a.album
+          .artists
+          .first()
+          .map(|artist| artist.name.to_lowercase())
+          .unwrap_or_default()
+      }),
+      SortField::DateAdded => {
+        sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.added_at.clone())
       }
-    });
+      _ => {}
+    }
   }
 }
 
 fn sort_saved_artists(app: &mut App) {
-  use crate::core::sort::SortOrder;
+  use crate::core::sort::sort_by_key_with_order;
 
   let sort_state = app.artist_sort;
+  if sort_state.field != SortField::Name {
+    return;
+  }
 
   // Sort library.saved_artists pages
   for page in &mut app.library.saved_artists.pages {
-    page.items.sort_by(|a, b| {
-      let cmp = match sort_state.field {
-        SortField::Default => std::cmp::Ordering::Equal,
-        SortField::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        _ => std::cmp::Ordering::Equal,
-      };
-
-      if sort_state.order == SortOrder::Descending {
-        cmp.reverse()
-      } else {
-        cmp
-      }
-    });
+    sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.name.to_lowercase());
   }
 
   // Also sort the app.artists vec
-  app.artists.sort_by(|a, b| {
-    let cmp = match sort_state.field {
-      SortField::Default => std::cmp::Ordering::Equal,
-      SortField::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-      _ => std::cmp::Ordering::Equal,
-    };
-
-    if sort_state.order == SortOrder::Descending {
-      cmp.reverse()
-    } else {
-      cmp
-    }
+  sort_by_key_with_order(&mut app.artists, sort_state.order, |a| {
+    a.name.to_lowercase()
   });
 }
 
