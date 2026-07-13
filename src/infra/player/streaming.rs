@@ -8,6 +8,7 @@ use librespot_core::{
   authentication::Credentials,
   cache::Cache,
   config::{DeviceType, SessionConfig},
+  error::ErrorKind,
   session::Session,
   spclient::TransferRequest,
   SpotifyUri,
@@ -156,8 +157,6 @@ const SPOTIFY_PLAYER_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 const SPOTIFY_PLAYER_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
 
 fn request_streaming_oauth_credentials() -> Result<Credentials> {
-  println!("Streaming authentication required - opening browser...");
-
   let client_builder = OAuthClientBuilder::new(
     SPOTIFY_PLAYER_CLIENT_ID,
     SPOTIFY_PLAYER_REDIRECT_URI,
@@ -174,6 +173,34 @@ fn request_streaming_oauth_credentials() -> Result<Credentials> {
     .map_err(|e| anyhow!("OAuth authentication failed: {:?}", e))?;
 
   Ok(Credentials::with_access_token(token.access_token))
+}
+
+/// Populate the reusable credential cache before the TUI enters raw mode.
+/// Deferred player initialization and recovery can then remain cache-only.
+pub fn ensure_streaming_credentials_cached() -> Result<()> {
+  let cache_path = get_default_cache_path();
+  if let Some(path) = cache_path.as_ref() {
+    std::fs::create_dir_all(path)?;
+  }
+  let cache = Cache::new(cache_path, None, None, None)?;
+  if cache.credentials().is_none() {
+    println!("Streaming authentication required - opening browser...");
+    let credentials = request_streaming_oauth_credentials()?;
+    cache.save_credentials(&credentials);
+  }
+  Ok(())
+}
+
+pub fn streaming_credentials_are_cached() -> Result<bool> {
+  let cache_path = get_default_cache_path();
+  if let Some(path) = cache_path.as_ref() {
+    std::fs::create_dir_all(path)?;
+  }
+  Ok(
+    Cache::new(cache_path, None, None, None)?
+      .credentials()
+      .is_some(),
+  )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,14 +238,14 @@ fn clear_cached_streaming_credentials(cache_path: &Option<PathBuf>) {
 
   match std::fs::remove_file(&credentials_path) {
     Ok(()) => {
-      println!(
+      info!(
         "Cleared cached streaming credentials at {}",
         credentials_path.display()
       );
     }
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
     Err(e) => {
-      eprintln!(
+      warn!(
         "Failed to clear cached streaming credentials at {}: {}",
         credentials_path.display(),
         e
@@ -456,6 +483,19 @@ impl StreamingPlayer {
           retried_with_fresh_credentials = true;
         }
         Ok(Err(e)) => {
+          // Only discard cached credentials when Spotify actually rejected them.
+          // A transient failure (network down, service unavailable) must NOT wipe
+          // valid credentials and force a browser re-auth next launch — same
+          // reasoning as the timeout arm below.
+          if matches!(auth_mode, StreamingAuthMode::CacheOnly)
+            && used_cached_credentials
+            && matches!(
+              e.kind,
+              ErrorKind::Unauthenticated | ErrorKind::PermissionDenied
+            )
+          {
+            clear_cached_streaming_credentials(&cache_path);
+          }
           warn!("Spirc creation error: {:?}", e);
           return Err(anyhow!("Failed to create Spirc: {:?}", e));
         }

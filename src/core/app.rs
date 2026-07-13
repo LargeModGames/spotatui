@@ -982,11 +982,15 @@ pub struct QueueState {
   pub queue: Vec<PlayableInfo>,
 }
 
-/// The string payload of `IoEvent::StartPlayback`: (context uri, playable
-/// uris, offset). Parked on `App::pending_start_playback` while the native
-/// backend is recovering, then replayed.
 #[cfg(feature = "streaming")]
-pub type PendingStartPlayback = (Option<String>, Option<Vec<String>>, Option<usize>);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingStartPlayback {
+  pub context_uri: Option<String>,
+  pub uris: Option<Vec<String>>,
+  pub offset: Option<usize>,
+  pub parked_at: Instant,
+  pub recovery_attempts: u8,
+}
 
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
@@ -1042,6 +1046,10 @@ pub struct App {
   /// Status of the current track's cover art, driving the placeholder message.
   #[cfg(feature = "cover-art")]
   pub cover_art_status: CoverArtStatus,
+  /// Image key currently desired by the UI. Detached decode results for older
+  /// keys are discarded.
+  #[cfg(feature = "cover-art")]
+  pub desired_cover_art_key: Option<String>,
   // Inputs:
   // input is the string for input;
   // input_idx is the index of the cursor in terms of character;
@@ -1165,6 +1173,9 @@ pub struct App {
   pub pending_announcements: Vec<Announcement>,
   pub lyrics: Option<Vec<(u128, String)>>,
   pub lyrics_status: LyricsStatus,
+  /// Title/artist pair whose lyrics response is currently desired. Detached
+  /// service responses must match this before mutating visible state.
+  pub desired_lyrics_identity: Option<(String, String)>,
   pub global_song_count: Option<u64>,
   pub global_song_count_failed: bool,
   // Settings screen state
@@ -1285,6 +1296,9 @@ pub struct App {
   /// Incremented every time the playlist track table is reloaded to guard stale prefetch tasks
   pub playlist_tracks_prefetch_generation: u64,
   pub playlist_tracks_prefetch_in_flight: HashSet<u32>,
+  /// Playlist ids whose full track list is being fetched for sorting. Further
+  /// sort changes reuse the active fetch and apply the newest sort at completion.
+  pub playlist_sort_fetch_in_flight: HashSet<String>,
   /// Playlist id whose page-1 open fetch is in flight, so spamming Enter on a
   /// playlist doesn't queue duplicate full fetches. Cleared when the response
   /// (or its error) lands.
@@ -1555,6 +1569,7 @@ impl Default for App {
       pending_announcements: Vec::new(),
       lyrics: None,
       lyrics_status: LyricsStatus::default(),
+      desired_lyrics_identity: None,
       global_song_count: None,
       global_song_count_failed: false,
       // Settings defaults
@@ -1610,6 +1625,7 @@ impl Default for App {
       playlist_tracks_prefetch_generation: 0,
       pending_playlist_open: None,
       playlist_tracks_prefetch_in_flight: HashSet::new(),
+      playlist_sort_fetch_in_flight: HashSet::new(),
       is_volume_change_in_flight: false,
       config_save_due: None,
       pending_volume: None,
@@ -1638,6 +1654,8 @@ impl Default for App {
       cover_art: crate::tui::cover_art::CoverArt::new(),
       #[cfg(feature = "cover-art")]
       cover_art_status: CoverArtStatus::default(),
+      #[cfg(feature = "cover-art")]
+      desired_cover_art_key: None,
       friends: Vec::new(),
       friends_loading: false,
       friend_code: None,
@@ -1823,6 +1841,9 @@ impl App {
   pub fn current_persisted_playback(
     &self,
   ) -> Option<crate::core::persisted_playback::PersistedPlayback> {
+    if !self.has_persistable_playback() {
+      return None;
+    }
     #[cfg(any(
       feature = "youtube",
       feature = "subsonic",
@@ -2217,15 +2238,19 @@ impl App {
     self.seek_ms = None;
     self.native_load_watchdog = None;
     // Playback requests park for replay until recovery resolves (see
-    // `replay_pending_start_playback`).
-    self.native_backend_pending = true;
+    // `replay_pending_start_playback`). Only enter the pending state when the
+    // recovery request was actually accepted.
     if reselect_device {
       self.current_playback_context = None;
     }
 
     self.set_status_message("Native streaming disconnected; attempting recovery.", 8);
     if let Some(tx) = &self.streaming_recovery_tx {
-      let _ = tx.send(crate::infra::player::StreamingRecoveryRequest { reselect_device });
+      self.native_backend_pending = tx
+        .send(crate::infra::player::StreamingRecoveryRequest { reselect_device })
+        .is_ok();
+    } else {
+      self.native_backend_pending = false;
     }
     self.dispatch(IoEvent::GetCurrentPlayback);
   }
@@ -2240,17 +2265,39 @@ impl App {
     uris: Option<Vec<String>>,
     offset: Option<usize>,
   ) {
-    self.pending_start_playback = Some((context_uri, uris, offset));
+    let same_request = self.pending_start_playback.as_ref().is_some_and(|pending| {
+      pending.context_uri == context_uri && pending.uris == uris && pending.offset == offset
+    });
+    if !same_request {
+      self.pending_start_playback = Some(PendingStartPlayback {
+        context_uri,
+        uris,
+        offset,
+        parked_at: Instant::now(),
+        recovery_attempts: 0,
+      });
+    }
   }
 
   /// Replay a parked StartPlayback through the normal dispatch path. No-op
   /// when nothing is parked.
   #[cfg(feature = "streaming")]
   pub fn replay_pending_start_playback(&mut self) {
-    if let Some((context_uri, uris, offset)) = self.pending_start_playback.take() {
-      self.set_status_message("Resuming playback request…", 4);
-      self.dispatch(IoEvent::StartPlayback(context_uri, uris, offset));
+    const MAX_PARKED_AGE: Duration = Duration::from_secs(30);
+    let Some(pending) = self.pending_start_playback.clone() else {
+      return;
+    };
+    if pending.parked_at.elapsed() > MAX_PARKED_AGE {
+      self.pending_start_playback = None;
+      self.set_status_message("Playback request expired during native recovery.", 6);
+      return;
     }
+    self.set_status_message("Resuming playback request…", 4);
+    self.dispatch(IoEvent::StartPlayback(
+      pending.context_uri,
+      pending.uris,
+      pending.offset,
+    ));
   }
 
   pub fn playlist_is_editable(&self, playlist: &PlaylistInfo) -> bool {
@@ -2546,16 +2593,37 @@ impl App {
     #[cfg(feature = "streaming")]
     {
       const NATIVE_LOAD_WATCHDOG: Duration = Duration::from_secs(5);
+      let watchdog_window = NATIVE_LOAD_WATCHDOG.saturating_mul(
+        u32::from(
+          self
+            .pending_start_playback
+            .as_ref()
+            .map_or(0, |pending| pending.recovery_attempts),
+        ) + 1,
+      );
       if self
         .native_load_watchdog
-        .is_some_and(|armed| armed.elapsed() >= NATIVE_LOAD_WATCHDOG)
+        .is_some_and(|armed| armed.elapsed() >= watchdog_window)
       {
         self.native_load_watchdog = None;
-        log::warn!(
-          "no player event within {}s of native load; forcing session recovery",
-          NATIVE_LOAD_WATCHDOG.as_secs()
-        );
-        self.force_native_streaming_recovery(true);
+        const MAX_RECOVERY_ATTEMPTS: u8 = 2;
+        if let Some(pending) = self.pending_start_playback.as_mut() {
+          if pending.recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+            self.pending_start_playback = None;
+            self.set_status_message(
+              "Native playback did not respond after recovery; request dropped.",
+              8,
+            );
+          } else {
+            pending.recovery_attempts += 1;
+            log::warn!(
+              "no player event within {}s of native load; forcing recovery attempt {}",
+              NATIVE_LOAD_WATCHDOG.as_secs(),
+              pending.recovery_attempts
+            );
+            self.force_native_streaming_recovery(true);
+          }
+        }
       }
     }
 
@@ -3894,6 +3962,8 @@ impl App {
           if is_playing { "paused" } else { "playing" }
         );
         if is_playing {
+          self.pending_start_playback = None;
+          self.native_load_watchdog = None;
           player.pause();
           // Update UI state immediately
           if let Some(ctx) = &mut self.current_playback_context {
@@ -3936,6 +4006,11 @@ impl App {
 
   pub fn previous_track(&mut self) {
     info!("playing previous track or restarting current track");
+    #[cfg(feature = "streaming")]
+    {
+      self.pending_start_playback = None;
+      self.native_load_watchdog = None;
+    }
     // The native queue owns playback: a forward-only queue has no "previous",
     // so restart the current queued track. The queue router intercepts the
     // dispatched event for both decoded and Spotify queue slots.
@@ -3998,6 +4073,11 @@ impl App {
 
   pub fn force_previous_track(&mut self) {
     info!("force skipping to previous track");
+    #[cfg(feature = "streaming")]
+    {
+      self.pending_start_playback = None;
+      self.native_load_watchdog = None;
+    }
     // The native queue owns playback: restart the current queued track (the
     // queue router intercepts the event for both slot kinds).
     if self.queue_owns_playback() {
@@ -4039,6 +4119,11 @@ impl App {
 
   pub fn next_track(&mut self) {
     info!("skipping to next track");
+    #[cfg(feature = "streaming")]
+    {
+      self.pending_start_playback = None;
+      self.native_load_watchdog = None;
+    }
     // The native queue owns playback: skip to the next queued item (or resume
     // the suspended context when the queue drains).
     if self.queue_owns_playback() {
@@ -6512,6 +6597,47 @@ mod tests {
   use rspotify::prelude::Id;
   use std::collections::HashMap;
   use std::sync::mpsc::channel;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn parked_playback_retries_are_keyed_to_the_request() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(
+      Some("spotify:playlist:first".to_string()),
+      Some(vec!["spotify:track:first".to_string()]),
+      Some(1),
+    );
+    app
+      .pending_start_playback
+      .as_mut()
+      .unwrap()
+      .recovery_attempts = 2;
+
+    app.park_start_playback(
+      Some("spotify:playlist:first".to_string()),
+      Some(vec!["spotify:track:first".to_string()]),
+      Some(1),
+    );
+    assert_eq!(
+      app
+        .pending_start_playback
+        .as_ref()
+        .unwrap()
+        .recovery_attempts,
+      2
+    );
+
+    app.park_start_playback(Some("spotify:playlist:second".to_string()), None, None);
+    assert_eq!(
+      app
+        .pending_start_playback
+        .as_ref()
+        .unwrap()
+        .recovery_attempts,
+      0
+    );
+  }
 
   #[allow(deprecated)]
   fn full_track(id: &str, name: &str) -> FullTrack {

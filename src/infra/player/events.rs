@@ -440,6 +440,8 @@ async fn handle_player_events(
         // A TrackChanged proves the session is processing loads: disarm the
         // zombie-session watchdog.
         app.native_load_watchdog = None;
+        app.pending_start_playback = None;
+        app.native_backend_pending = false;
         app.native_track_info = Some(app::NativeTrackInfo {
           name: audio_item.name.clone(),
           artists_display: artists.join(", "),
@@ -634,12 +636,15 @@ async fn handle_player_events(
         // failure was completely silent (#282). Surface it to the user.
         consecutive_unavailable += 1;
 
-        // Clear the ghost native track so the playbar doesn't show a track that
-        // never actually plays, mirroring the EndOfTrack/Stopped arms. Use
-        // try_lock to avoid stalling on the render loop; skipping a reset is fine.
-        if let Ok(mut app) = app.try_lock() {
+        // Clear the ghost native track and the request/watchdog together so an
+        // unavailable track cannot be replayed as a supposed session failure.
+        {
+          let mut app = app.lock().await;
           app.song_progress_ms = 0;
           app.native_track_info = None;
+          app.native_load_watchdog = None;
+          app.pending_start_playback = None;
+          app.native_backend_pending = false;
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
           }
@@ -672,6 +677,12 @@ async fn handle_player_events(
             "Several tracks in a row couldn't be played natively, so playback was stopped. They may be unavailable on your account or region. Press 'd' to switch to an official Spotify Connect device.",
             20,
           );
+        }
+      }
+      PlayerEvent::Loading { .. } | PlayerEvent::Preloading { .. } => {
+        let mut app = app.lock().await;
+        if app.native_load_watchdog.is_some() {
+          app.native_load_watchdog = Some(std::time::Instant::now());
         }
       }
       _ => {}

@@ -1062,6 +1062,9 @@ impl PlaybackNetwork for Network {
     // (e.g. consecutive tracks that share an album cover): just mark it loaded.
     {
       let mut app = self.app.lock().await;
+      if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
+        return;
+      }
       if app.cover_art.get_url().as_deref() == Some(key.as_str()) {
         app.cover_art_status = CoverArtStatus::Loaded;
         return;
@@ -1085,6 +1088,9 @@ impl PlaybackNetwork for Network {
     };
 
     let mut app = self.app.lock().await;
+    if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
+      return;
+    }
     match result {
       Ok(img) => {
         app.cover_art.store_decoded(key, img);
@@ -1490,6 +1496,12 @@ impl PlaybackNetwork for Network {
   }
 
   async fn pause_playback(&mut self) {
+    #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      app.pending_start_playback = None;
+      app.native_load_watchdog = None;
+    }
     // Check if using native streaming
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
@@ -1525,6 +1537,12 @@ impl PlaybackNetwork for Network {
 
   async fn next_track(&mut self) {
     #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      app.pending_start_playback = None;
+      app.native_load_watchdog = None;
+    }
+    #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.next();
       return;
@@ -1544,6 +1562,12 @@ impl PlaybackNetwork for Network {
   }
 
   async fn previous_track(&mut self) {
+    #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      app.pending_start_playback = None;
+      app.native_load_watchdog = None;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.prev();

@@ -860,12 +860,16 @@ pub async fn start_ui(
                 // episodes have no lyrics, so skip the lookup and show the
                 // not-found message rather than stale lyrics.
                 if snapshot.item_kind == PlaybackItemKind::Track {
+                  let title = snapshot.metadata.title.clone();
+                  let artist = snapshot.primary_artist();
+                  app.desired_lyrics_identity = Some((title.clone(), artist.clone()));
                   app.dispatch(IoEvent::GetLyrics(
-                    snapshot.metadata.title.clone(),
-                    snapshot.primary_artist(),
+                    title,
+                    artist,
                     snapshot.metadata.duration_ms as f64 / 1000.0,
                   ));
                 } else {
+                  app.desired_lyrics_identity = None;
                   app.lyrics = None;
                   app.lyrics_status = crate::core::app::LyricsStatus::NotFound;
                   app
@@ -874,6 +878,7 @@ pub async fn start_ui(
                 }
               }
               None => {
+                app.desired_lyrics_identity = None;
                 // Nothing is playing: reset so no stale lyrics linger.
                 app.lyrics = None;
                 app.lyrics_status = crate::core::app::LyricsStatus::NotStarted;
@@ -908,6 +913,7 @@ pub async fn start_ui(
             };
             match desired {
               Some(request) => {
+                app.desired_cover_art_key = Some(request.key().to_string());
                 if last_cover_art_key.as_deref() != Some(request.key()) {
                   last_cover_art_key = Some(request.key().to_string());
                   // Keep the previous image on screen until the new one
@@ -917,6 +923,7 @@ pub async fn start_ui(
                 }
               }
               None => {
+                app.desired_cover_art_key = None;
                 // No art to show (radio, art disabled, nothing playing): drop
                 // any stale image once, so the pane shows the placeholder.
                 if last_cover_art_key.take().is_some() || app.cover_art.available() {

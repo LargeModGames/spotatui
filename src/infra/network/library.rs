@@ -389,12 +389,22 @@ async fn fetch_all_playlist_tracks_and_sort_task(
   token_cache_path: std::path::PathBuf,
   playlist_id: PlaylistId<'static>,
 ) {
+  let playlist_id_string = playlist_id.id().to_string();
   let mut all_tracks = Vec::new();
   let mut offset = 0u32;
   let limit = 50u32;
   let path = format!("playlists/{}/items", playlist_id.id());
 
   loop {
+    {
+      let mut app = app.lock().await;
+      if !app.is_playlist_track_table_active_for(&playlist_id) {
+        app
+          .playlist_sort_fetch_in_flight
+          .remove(&playlist_id_string);
+        return;
+      }
+    }
     let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
     match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
       &spotify,
@@ -423,6 +433,9 @@ async fn fetch_all_playlist_tracks_and_sort_task(
       }
       Err(e) => {
         let mut app = app.lock().await;
+        app
+          .playlist_sort_fetch_in_flight
+          .remove(&playlist_id_string);
         app.handle_error(anyhow!(e));
         return;
       }
@@ -431,6 +444,9 @@ async fn fetch_all_playlist_tracks_and_sort_task(
 
   // Apply sort if any
   let mut app = app.lock().await;
+  app
+    .playlist_sort_fetch_in_flight
+    .remove(&playlist_id_string);
 
   use crate::core::sort::Sorter;
   let sorter = Sorter::new(app.playlist_sort);
@@ -451,25 +467,48 @@ async fn finish_playlists_fetch(
   has_more: bool,
   limit: u32,
   generation: u64,
+  original_selection: (Option<String>, usize, Option<usize>),
+  page_one_selection: (Option<String>, usize, Option<usize>),
+  previous_complete: (
+    Vec<PlaylistInfo>,
+    Option<Vec<PlaylistFolderNode>>,
+    Vec<PlaylistFolderItem>,
+  ),
 ) {
+  let mut pagination_error = None;
   if has_more {
     let mut offset = limit;
     loop {
-      let page = match spotify_get_typed_compat_for_with_refresh::<Page<SimplifiedPlaylist>>(
-        &spotify,
-        "me/playlists",
-        &[("limit", limit.to_string()), ("offset", offset.to_string())],
-        &token_cache_path,
-        &app,
-      )
-      .await
       {
-        Ok(page) => page,
-        Err(e) => {
-          log::warn!("background playlist page fetch failed at offset {offset}: {e}");
-          break;
+        let app = app.lock().await;
+        if app.playlist_refresh_generation != generation {
+          return;
+        }
+      }
+      let mut attempts = 0u8;
+      let page = loop {
+        match spotify_get_typed_compat_for_with_refresh::<Page<SimplifiedPlaylist>>(
+          &spotify,
+          "me/playlists",
+          &[("limit", limit.to_string()), ("offset", offset.to_string())],
+          &token_cache_path,
+          &app,
+        )
+        .await
+        {
+          Ok(page) => break Some(page),
+          Err(e) if attempts < 2 => {
+            attempts += 1;
+            log::warn!("playlist page fetch failed at offset {offset}; retry {attempts}/2: {e}");
+            tokio::time::sleep(Duration::from_millis(250 * u64::from(attempts))).await;
+          }
+          Err(e) => {
+            pagination_error = Some(e.to_string());
+            break None;
+          }
         }
       };
+      let Some(page) = page else { break };
       if page.items.is_empty() {
         break;
       }
@@ -479,6 +518,28 @@ async fn finish_playlists_fetch(
       }
       offset += limit;
     }
+  }
+
+  if let Some(error) = pagination_error {
+    log::warn!("playlist refresh incomplete: {error}");
+    let mut app = app.lock().await;
+    if app.playlist_refresh_generation != generation {
+      return;
+    }
+    let (previous_playlists, previous_nodes, previous_items) = previous_complete;
+    if !previous_playlists.is_empty() {
+      app.all_playlists = previous_playlists;
+      app._playlist_folder_nodes = previous_nodes;
+      app.playlist_folder_items = previous_items;
+      reconcile_playlist_selection(
+        &mut app,
+        original_selection.0.as_deref(),
+        original_selection.1,
+        original_selection.2,
+      );
+    }
+    app.set_status_message("Playlist refresh incomplete; kept the previous list.", 8);
+    return;
   }
 
   #[cfg(feature = "streaming")]
@@ -502,10 +563,18 @@ async fn finish_playlists_fetch(
   if app.playlist_refresh_generation != generation {
     return;
   }
-  // Re-read the selection: the user may have navigated since page 1 landed.
-  let preferred_playlist_id = app.get_selected_playlist_id();
-  let preferred_folder_id = app.current_playlist_folder_id;
-  let preferred_selected_index = app.selected_playlist_index;
+  // Restore the original selection only if the user has not navigated since
+  // page 1 was published. Otherwise their newer choice wins.
+  let current_selection = (
+    app.get_selected_playlist_id(),
+    app.current_playlist_folder_id,
+    app.selected_playlist_index,
+  );
+  let preferred = if current_selection == page_one_selection {
+    original_selection
+  } else {
+    current_selection
+  };
 
   app.all_playlists = all_playlists;
   app
@@ -514,17 +583,12 @@ async fn finish_playlists_fetch(
   app._playlist_folder_nodes = folder_nodes;
   app.playlist_folder_items = folder_items;
 
-  reconcile_playlist_selection(
-    &mut app,
-    preferred_playlist_id.as_deref(),
-    preferred_folder_id,
-    preferred_selected_index,
-  );
+  reconcile_playlist_selection(&mut app, preferred.0.as_deref(), preferred.1, preferred.2);
 }
 
 impl LibraryNetwork for Network {
   async fn get_current_user_playlists(&mut self) {
-    let (preferred_playlist_id, preferred_folder_id, preferred_selected_index) = {
+    let original_selection = {
       let app = self.app.lock().await;
       (
         app.get_selected_playlist_id(),
@@ -572,24 +636,52 @@ impl LibraryNetwork for Network {
     let has_more = first_page.next.is_some() && !first_page.items.is_empty();
     let mapped_first = map_page(&first_page, PlaylistInfo::from_simplified);
 
-    let generation = {
+    let (generation, page_one_selection, previous_complete) = {
       let mut app = self.app.lock().await;
+      let had_previous_complete = !app.all_playlists.is_empty();
+      // Snapshot the existing complete list only when background pagination can
+      // fail partway (`has_more`) and there is something worth restoring. A
+      // single-page refresh or a first-ever load never uses this, so skip the
+      // clone in the common case.
+      let previous_complete = if has_more && had_previous_complete {
+        (
+          app.all_playlists.clone(),
+          app._playlist_folder_nodes.clone(),
+          app.playlist_folder_items.clone(),
+        )
+      } else {
+        (Vec::new(), None, Vec::new())
+      };
       app.playlist_refresh_generation = app.playlist_refresh_generation.wrapping_add(1);
       app.playlists = Some(mapped_first);
-      app.all_playlists = first_items.clone();
-      app
-        .plugin_data_generations
-        .bump(crate::core::app::PluginDataKind::Playlists);
-      // Flat items for now; the folder structure is reconciled when the
-      // background fetch delivers the rootlist.
-      app.playlist_folder_items = build_flat_playlist_items(&first_items);
-      reconcile_playlist_selection(
-        &mut app,
-        preferred_playlist_id.as_deref(),
-        preferred_folder_id,
-        preferred_selected_index,
+      let selected_is_in_first_page = original_selection.0.as_ref().is_some_and(|selected| {
+        first_items
+          .iter()
+          .any(|playlist| playlist.id.as_deref() == Some(selected.as_str()))
+      });
+      if !had_previous_complete || original_selection.0.is_none() || selected_is_in_first_page {
+        app.all_playlists = first_items.clone();
+        app
+          .plugin_data_generations
+          .bump(crate::core::app::PluginDataKind::Playlists);
+        app.playlist_folder_items = build_flat_playlist_items(&first_items);
+        reconcile_playlist_selection(
+          &mut app,
+          original_selection.0.as_deref(),
+          original_selection.1,
+          original_selection.2,
+        );
+      }
+      let page_one_selection = (
+        app.get_selected_playlist_id(),
+        app.current_playlist_folder_id,
+        app.selected_playlist_index,
       );
-      app.playlist_refresh_generation
+      (
+        app.playlist_refresh_generation,
+        page_one_selection,
+        previous_complete,
+      )
     };
 
     let spotify = self.spotify().clone();
@@ -604,6 +696,9 @@ impl LibraryNetwork for Network {
         has_more,
         limit,
         generation,
+        original_selection,
+        page_one_selection,
+        previous_complete,
       )
       .await;
     });
@@ -1121,6 +1216,15 @@ impl LibraryNetwork for Network {
     // playlist is 60 pages, 15s+), so it runs detached instead of
     // head-of-line-blocking playback controls and polling on the serial pump.
     // `apply_sorted_playlist_tracks_if_current` already guards a stale result.
+    {
+      let mut app = self.app.lock().await;
+      if !app
+        .playlist_sort_fetch_in_flight
+        .insert(playlist_id.id().to_string())
+      {
+        return;
+      }
+    }
     let spotify = self.spotify().clone();
     let app = Arc::clone(&self.app);
     let token_cache_path = self.token_cache_path.clone();

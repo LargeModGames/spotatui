@@ -42,12 +42,22 @@ pub async fn redirect_uri_web_server_async(port: u16) -> Result<String, ()> {
 /// Accept-loop extracted so tests can inject a pre-bound listener (port 0) and
 /// avoid races caused by hard-coding a port that might already be in use.
 async fn run_accept_loop(listener: tokio::net::TcpListener) -> Result<String, ()> {
+  const MAX_CONSECUTIVE_ACCEPT_ERRORS: u8 = 20;
+  let mut consecutive_accept_errors = 0u8;
   loop {
     let mut stream = match listener.accept().await {
-      Ok((stream, _)) => stream,
+      Ok((stream, _)) => {
+        consecutive_accept_errors = 0;
+        stream
+      }
       Err(e) => {
+        consecutive_accept_errors = consecutive_accept_errors.saturating_add(1);
         log::warn!("[login] callback accept error: {e}");
-        return Err(());
+        if consecutive_accept_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+          return Err(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        continue;
       }
     };
 
