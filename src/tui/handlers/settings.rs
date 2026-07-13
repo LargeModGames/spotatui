@@ -485,8 +485,17 @@ fn handle_preset_edit(key: Key, app: &mut App) {
 }
 
 fn save_settings(app: &mut App) -> bool {
+  #[cfg(feature = "telemetry")]
+  let global_count_was_enabled = app.user_config.behavior.enable_global_song_count;
   // Apply settings to user_config and save to file
   app.apply_settings_changes();
+
+  // If the user just turned the global counter on, fetch the current count now so
+  // the home banner reflects it without waiting for the next launch.
+  #[cfg(feature = "telemetry")]
+  if !global_count_was_enabled && app.user_config.behavior.enable_global_song_count {
+    app.dispatch(crate::infra::network::IoEvent::FetchGlobalSongCount);
+  }
   #[cfg(target_os = "macos")]
   if app.user_config.keys.open_settings != Key::Ctrl(',') {
     app.keybinding_runtime.effective_open_settings = None;

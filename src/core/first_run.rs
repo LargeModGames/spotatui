@@ -86,10 +86,8 @@ async fn apply_selections(
     client_config.init_default_spotify_config()?;
   }
   user_config.behavior.active_source = active;
-  // Persisting the config here writes `enable_global_song_count`, which suppresses
-  // the later opt-in prompt. Default it to opt-out so we never enable anonymous
-  // telemetry for a user who was never asked (they can enable it in config.yml).
-  user_config.behavior.enable_global_song_count = false;
+  // The global song counter opt-in is asked before this picker runs, so the
+  // user's choice already sits on `user_config`; save_config persists it here.
   user_config.save_config()?;
 
   // Collect credentials / check prerequisites for each chosen free source.

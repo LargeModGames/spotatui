@@ -5409,6 +5409,13 @@ impl App {
           description: "Show a popup once a month when your listening recap is ready".to_string(),
           value: SettingValue::Bool(self.user_config.behavior.enable_monthly_recap_prompt),
         },
+        #[cfg(feature = "telemetry")]
+        SettingItem {
+          id: "behavior.enable_global_song_count".to_string(),
+          name: "Global Song Counter".to_string(),
+          description: "Contribute to the anonymous worldwide song counter. No personal info, song names, or history are sent; only a simple increment when a new song starts.".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.enable_global_song_count),
+        },
         #[cfg(feature = "self-update")]
         SettingItem {
           id: "behavior.disable_auto_update".to_string(),
@@ -6034,6 +6041,12 @@ impl App {
         "behavior.enable_monthly_recap_prompt" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_monthly_recap_prompt = *v;
+          }
+        }
+        #[cfg(feature = "telemetry")]
+        "behavior.enable_global_song_count" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.enable_global_song_count = *v;
           }
         }
         #[cfg(feature = "self-update")]

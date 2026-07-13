@@ -833,6 +833,105 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   }
 }
 
+/// Prompt once for the anonymous global song counter opt-in and persist the
+/// choice into `config.yml`. Asked before the first-run source picker so the
+/// answer applies to whichever source(s) the user sets up. Non-interactive runs
+/// default to opt-out so telemetry is never enabled for a user we couldn't ask.
+fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
+  use crossterm::tty::IsTty;
+
+  let config_paths = match &user_config.path_to_config {
+    Some(path) => path,
+    None => {
+      user_config.get_or_build_paths()?;
+      user_config.path_to_config.as_ref().unwrap()
+    }
+  };
+
+  // A genuine first run has no `client.yml` yet — the source picker keys off the
+  // same signal, so asking here keeps the two in step even when a stale config
+  // (e.g. one silently opted out by an older build) already carries the setting.
+  // Outside a first run, only ask when the config predates the setting.
+  let client_yml_exists = config_paths
+    .config_file_path
+    .parent()
+    .map(|dir| dir.join("client.yml").exists())
+    .unwrap_or(false);
+
+  let config_has_answer = config_paths.config_file_path.exists() && {
+    let config_string = fs::read_to_string(&config_paths.config_file_path)?;
+    !config_string.trim().is_empty() && config_string.contains("enable_global_song_count")
+  };
+
+  let should_prompt = !client_yml_exists || !config_has_answer;
+
+  if !should_prompt {
+    return Ok(());
+  }
+
+  let interactive = io::stdin().is_tty() && io::stdout().is_tty();
+  let enable = if interactive {
+    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("Global Song Counter");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("\nspotatui can contribute to a global counter showing total");
+    println!("songs played by all users worldwide.");
+    println!("\nPrivacy: This feature is completely anonymous.");
+    println!("• No personal information is collected");
+    println!("• No song names, artists, or listening history");
+    println!("• Only a simple increment when a new song starts");
+    println!("\nWould you like to participate? (Y/n): ");
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim().to_lowercase();
+    input.is_empty() || input == "y" || input == "yes"
+  } else {
+    // Never enable anonymous telemetry for a user we couldn't prompt.
+    false
+  };
+
+  user_config.behavior.enable_global_song_count = enable;
+
+  let config_yml = if config_paths.config_file_path.exists() {
+    fs::read_to_string(&config_paths.config_file_path).unwrap_or_default()
+  } else {
+    String::new()
+  };
+
+  let mut config: serde_yaml::Value = if config_yml.trim().is_empty() {
+    serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+  } else {
+    serde_yaml::from_str(&config_yml)?
+  };
+
+  if let serde_yaml::Value::Mapping(ref mut map) = config {
+    let behavior = map
+      .entry(serde_yaml::Value::String("behavior".to_string()))
+      .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+
+    if let serde_yaml::Value::Mapping(ref mut behavior_map) = behavior {
+      behavior_map.insert(
+        serde_yaml::Value::String("enable_global_song_count".to_string()),
+        serde_yaml::Value::Bool(enable),
+      );
+    }
+  }
+
+  let updated_config = serde_yaml::to_string(&config)?;
+  fs::write(&config_paths.config_file_path, updated_config)?;
+
+  if interactive {
+    if enable {
+      println!("Thank you for participating!\n");
+    } else {
+      println!("Opted out. You can change this anytime in Settings -> Behavior.\n");
+    }
+  }
+
+  Ok(())
+}
+
 pub async fn run() -> Result<()> {
   setup_logging()?;
   info!("spotatui {} starting up", env!("CARGO_PKG_VERSION"));
@@ -983,6 +1082,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       validate_tick_rate_milliseconds(tick_rate, "Tick rate")?;
   }
 
+  // Global song counter opt-in (interactive TUI only). Asked before the source
+  // picker so the choice applies no matter which source(s) the user sets up.
+  if matches.subcommand_name().is_none() {
+    prompt_global_song_count_opt_in(&mut user_config)?;
+  }
+
   let mut client_config = ClientConfig::new();
   // First-run source picker (interactive TUI only): lets the user pick a free
   // source and skip Spotify entirely. Must run before `load_config`, which would
@@ -1020,83 +1125,6 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     } else {
       client_config.mark_auth_setup_migrated()?;
       println!("Skipped. You can run this anytime with `spotatui --reconfigure-auth`.\n");
-    }
-  }
-
-  // Prompt for global song count opt-in if missing (only for interactive TUI, not CLI)
-  // Keep this after client setup so first-run UX asks for auth mode first.
-  if matches.subcommand_name().is_none() {
-    let config_paths_check = match &user_config.path_to_config {
-      Some(path) => path,
-      None => {
-        user_config.get_or_build_paths()?;
-        user_config.path_to_config.as_ref().unwrap()
-      }
-    };
-
-    let should_prompt = if config_paths_check.config_file_path.exists() {
-      let config_string = fs::read_to_string(&config_paths_check.config_file_path)?;
-      config_string.trim().is_empty() || !config_string.contains("enable_global_song_count")
-    } else {
-      let client_yml_path = config_paths_check
-        .config_file_path
-        .parent()
-        .map(|p| p.join("client.yml"));
-      client_yml_path.is_some_and(|p| p.exists())
-    };
-
-    if should_prompt {
-      println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      println!("Global Song Counter");
-      println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      println!("\nspotatui can contribute to a global counter showing total");
-      println!("songs played by all users worldwide.");
-      println!("\nPrivacy: This feature is completely anonymous.");
-      println!("• No personal information is collected");
-      println!("• No song names, artists, or listening history");
-      println!("• Only a simple increment when a new song starts");
-      println!("\nWould you like to participate? (Y/n): ");
-
-      let mut input = String::new();
-      io::stdin().read_line(&mut input)?;
-      let input = input.trim().to_lowercase();
-
-      let enable = input.is_empty() || input == "y" || input == "yes";
-      user_config.behavior.enable_global_song_count = enable;
-
-      let config_yml = if config_paths_check.config_file_path.exists() {
-        fs::read_to_string(&config_paths_check.config_file_path).unwrap_or_default()
-      } else {
-        String::new()
-      };
-
-      let mut config: serde_yaml::Value = if config_yml.trim().is_empty() {
-        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
-      } else {
-        serde_yaml::from_str(&config_yml)?
-      };
-
-      if let serde_yaml::Value::Mapping(ref mut map) = config {
-        let behavior = map
-          .entry(serde_yaml::Value::String("behavior".to_string()))
-          .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
-
-        if let serde_yaml::Value::Mapping(ref mut behavior_map) = behavior {
-          behavior_map.insert(
-            serde_yaml::Value::String("enable_global_song_count".to_string()),
-            serde_yaml::Value::Bool(enable),
-          );
-        }
-      }
-
-      let updated_config = serde_yaml::to_string(&config)?;
-      fs::write(&config_paths_check.config_file_path, updated_config)?;
-
-      if enable {
-        println!("Thank you for participating!\n");
-      } else {
-        println!("Opted out. You can change this anytime in ~/.config/spotatui/config.yml\n");
-      }
     }
   }
 
