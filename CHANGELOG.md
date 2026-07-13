@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Startup login no longer hangs**: On a fresh install or with a stale token, the auth wizard's "Waiting for authorization callback" step ran a blocking callback server on the async runtime, which could park a worker thread and hang startup before the browser redirect was ever served. The wizard now uses the same async callback server as the in-TUI login ([#364](https://github.com/LargeModGames/spotatui/issues/364)).
+- **First-run double login completes without a restart**: On a fresh first run, both OAuth consents (the Web API login and the native-streaming "Spotify for Desktop" login) use callback port 8989 back-to-back, and the second could fail because the first server hadn't fully released the port — forcing a quit-and-relaunch to finish the streaming login. The streaming flow now waits for the port to be free before opening its consent, so both logins succeed in one run.
+- **Playback keys pressed during streaming recovery are no longer lost**: If native streaming is mid-recovery when you hit play, the request is stashed and replayed once the session is back (with a 30s recency gate), instead of being silently swallowed. Transfer/activate errors are surfaced, and pressing play with no usable backend shows a status message instead of the Error screen.
+- **Home banner animates again**: The banner gradient's animation tick was gated on the Home block having keyboard focus, which was almost never the case; it now runs whenever the Home screen is displayed.
+- **Playlist sidebar robustness**: Refreshing playlists no longer clobbers the folder you have open or your selection, and a playlist list that fails to paginate fully keeps the previous complete list instead of silently publishing a truncated one. Playlist folders also reconcile correctly after deferred streaming startup.
+- **Stale cover art and lyrics races**: Cover-art and lyrics results are now dropped unless they match the currently playing track, so a slow fetch can no longer overwrite the display with data for a previous song.
+
+### Performance
+
+- **Instant startup**: The TUI now appears immediately; the update check, token validation, and librespot session init run as background tasks, startup reuses one `/me` response instead of three round trips, and the first page of playlists is shown right away with the rest (and rootlist folders) fetched in the background.
+- **Concurrent event pump**: Non-Spotify work (lyrics, cover art, Subsonic/radio/local sources, telemetry) runs on a concurrent service lane, so a slow Spotify API call no longer head-of-line-blocks everything behind it. Playlists open on `Enter` immediately with a loading state.
+- **Track tables render only visible rows**: Tables format just the rows that fit on screen instead of the entire backing collection every frame (10k-track frame draw: 58ms → 2.5ms in debug builds), and the track table keeps its scroll position anchored while the cursor moves within the visible rows.
+- **Home screen frame cost**: The changelog pane and banner gradient are cached instead of being rebuilt (and deep-cloned) every frame, changelog lines are pre-wrapped, and scrolling no longer re-composes every line above the offset — frame cost no longer grows with scroll depth.
+- **Less redundant work per input**: A keypress no longer triggers a second full redraw, API pacing allows bursts of 5 so fan-outs (search, artist pages) start immediately, config saves from volume/resize/shuffle keys are debounced instead of hitting disk per key repeat, and album/artist metadata is cached with HTTP clients reused across requests.
+
 ## [v0.40.2] 2026-07-10
 
 ### Fixed

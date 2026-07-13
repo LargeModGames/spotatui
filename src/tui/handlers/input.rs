@@ -188,7 +188,12 @@ fn attempt_process_uri(app: &mut App, input: &str, base: &str, sep: &str) -> boo
 
   let (playlist_id, matched) = spotify_resource_id(base, input, sep, "playlist");
   if matched {
-    app.dispatch(IoEvent::GetPlaylistItems(playlist_id, 0));
+    if let Some(playlist_id) = crate::infra::network::ids::playlist_id(&playlist_id) {
+      app.open_playlist_tracks(
+        playlist_id,
+        crate::core::app::TrackTableContext::MyPlaylists,
+      );
+    }
     return true;
   }
 

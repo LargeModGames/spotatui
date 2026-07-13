@@ -204,17 +204,16 @@ pub fn handler(key: Key, app: &mut App) {
               app.selected_playlist_index = Some(0);
             }
             PlaylistFolderItem::Playlist { index, .. } => {
-              // Open the playlist tracks. The dispatch carries the string id; the
-              // app-state view still tracks an rspotify PlaylistId (deferred).
+              // Open the playlist tracks: navigates immediately with the
+              // cleared table as the loading state (see open_playlist_tracks).
               let index = *index;
               if let Some(id_str) = app.all_playlists.get(index).and_then(|p| p.id.clone()) {
                 if let Ok(playlist_id) = PlaylistId::from_id(id_str.as_str()) {
                   app.active_playlist_index = Some(index);
-                  app.reset_playlist_tracks_view(
+                  app.open_playlist_tracks(
                     playlist_id.into_static(),
                     TrackTableContext::MyPlaylists,
                   );
-                  app.dispatch(IoEvent::GetPlaylistItems(id_str, app.playlist_offset));
                 }
               }
             }
@@ -277,6 +276,40 @@ mod tests {
       _ => panic!("expected playlist page fetch"),
     }
 
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn enter_playlist_navigates_immediately_and_dedups_inflight_open() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.all_playlists = vec![playlist_info(
+      "37i9dQZF1DXcBWIGoYBM5M",
+      "Test Playlist",
+      "spotatui-test-user",
+      false,
+    )];
+    app.playlist_folder_items = vec![PlaylistFolderItem::Playlist {
+      index: 0,
+      current_id: 0,
+    }];
+    app.selected_playlist_index = Some(0);
+
+    handler(Key::Enter, &mut app);
+
+    // The screen opens on the press itself, not on response arrival.
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+    match rx.recv().unwrap() {
+      IoEvent::GetPlaylistItems(_, 0) => {}
+      _ => panic!("expected playlist page fetch"),
+    }
+
+    // Pressing Enter again while the same open is in flight (after navigating
+    // back to the sidebar) re-opens the screen but dispatches no duplicate
+    // fetch.
+    app.pop_navigation_stack();
+    handler(Key::Enter, &mut app);
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
     assert!(rx.try_recv().is_err());
   }
 

@@ -374,6 +374,7 @@ fn on_enter(app: &mut App) {
     context,
     selected_index,
     tracks,
+    ..
   } = &app.track_table;
   if let Some(context) = &context {
     match context {

@@ -1,5 +1,5 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use mlua::{Lua, LuaSerdeExt, Value};
@@ -129,82 +129,34 @@ impl ScriptEngine {
   /// `plugins/<name>/main.lua` (falling back to `init.lua`). Each group is sorted by filename.
   /// Missing files/dir are fine. A failing file logs an error and queues a Notify effect but
   /// never aborts the others. Returns the number of plugins loaded successfully.
+  /// Cheap discovery-only mirror of [`Self::load_user_scripts`]: reports
+  /// whether any loadable script exists (`init.lua`, `plugins/*.lua`, or
+  /// `plugins/<name>/{main,init}.lua`) so the runner can skip constructing
+  /// the Lua VM (and its HTTP client) entirely when there is nothing to
+  /// load. Keep the discovery rules in sync with `load_user_scripts`.
+  pub fn has_user_scripts(config_dir: &Path) -> bool {
+    !discover_user_scripts(config_dir).is_empty()
+  }
+
   pub fn load_user_scripts(&mut self, config_dir: &Path) -> usize {
     *self.shared.config_dir.borrow_mut() = Some(config_dir.to_path_buf());
     let mut loaded = 0;
 
-    let init_path = config_dir.join("init.lua");
-    if init_path.is_file() && self.load_file(&init_path, "init.lua") {
-      loaded += 1;
-    }
-
-    let plugins_dir = config_dir.join("plugins");
-    if plugins_dir.is_dir() {
-      let entries: Vec<_> = std::fs::read_dir(&plugins_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .collect();
-
-      // Single-file plugins: plugins/<name>.lua. Real files only (a directory named
-      // `foo.lua` is handled by the directory branch below), and hidden files are skipped to
-      // match the directory branch and avoid loading OS cruft like `._foo.lua`.
-      let mut files: Vec<_> = entries
-        .iter()
-        .filter(|p| p.is_file())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("lua"))
-        .filter(|p| {
-          p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| !n.starts_with('.'))
-        })
-        .cloned()
-        .collect();
-      files.sort();
-      for path in files {
-        let name = path
-          .file_name()
-          .and_then(|n| n.to_str())
-          .unwrap_or("plugin")
-          .to_string();
-        if self.load_file(&path, &name) {
-          loaded += 1;
-        }
-      }
-
-      // Directory plugins: plugins/<name>/main.lua (or init.lua). These are how git-installed
-      // plugins (`spotatui plugin add`) ship. Hidden dirs (e.g. dotfiles) are ignored.
-      let mut dirs: Vec<_> = entries
-        .iter()
-        .filter(|p| p.is_dir())
-        .filter(|p| {
-          p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| !n.starts_with('.'))
-        })
-        .cloned()
-        .collect();
-      dirs.sort();
-      for dir in dirs {
-        let name = dir
-          .file_name()
-          .and_then(|n| n.to_str())
-          .unwrap_or("plugin")
-          .to_string();
-        let entry = ["main.lua", "init.lua"]
-          .iter()
-          .map(|f| dir.join(f))
-          .find(|p| p.is_file());
-        let Some(entry) = entry else {
-          continue;
-        };
+    for (path, module_dir) in discover_user_scripts(config_dir) {
+      let name = module_dir
+        .as_ref()
+        .and_then(|dir| dir.file_name())
+        .or_else(|| path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("plugin")
+        .to_string();
+      if let Some(dir) = module_dir {
         if let Err(e) = self.add_plugin_module_path(&dir) {
           log::warn!("[lua] failed to extend package.path for plugin '{name}': {e}");
         }
-        if self.load_file(&entry, &name) {
-          loaded += 1;
-        }
+      }
+      if self.load_file(&path, &name) {
+        loaded += 1;
       }
     }
 
@@ -1103,6 +1055,46 @@ impl ScriptEngine {
     let effects: Vec<ScriptEffect> = self.shared.effects.borrow_mut().drain(..).collect();
     apply_effects(effects, app);
   }
+}
+
+fn discover_user_scripts(config_dir: &Path) -> Vec<(PathBuf, Option<PathBuf>)> {
+  let mut discovered = Vec::new();
+  let init = config_dir.join("init.lua");
+  if init.is_file() {
+    discovered.push((init, None));
+  }
+  let plugins_dir = config_dir.join("plugins");
+  let entries: Vec<_> = std::fs::read_dir(&plugins_dir)
+    .into_iter()
+    .flatten()
+    .flatten()
+    .map(|entry| entry.path())
+    .filter(|path| {
+      path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| !name.starts_with('.'))
+    })
+    .collect();
+  let mut files: Vec<_> = entries
+    .iter()
+    .filter(|path| path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("lua"))
+    .cloned()
+    .collect();
+  files.sort();
+  discovered.extend(files.into_iter().map(|path| (path, None)));
+  let mut dirs: Vec<_> = entries.into_iter().filter(|path| path.is_dir()).collect();
+  dirs.sort();
+  for dir in dirs {
+    if let Some(entry) = ["main.lua", "init.lua"]
+      .iter()
+      .map(|name| dir.join(name))
+      .find(|path| path.is_file())
+    {
+      discovered.push((entry, Some(dir)));
+    }
+  }
+  discovered
 }
 
 /// Serialize the plugin-facing snapshot for a data kind from `App` state.

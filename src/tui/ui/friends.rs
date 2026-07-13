@@ -535,7 +535,7 @@ pub fn filtered_friends(app: &App) -> Vec<&FriendEntry> {
         FriendFilter::All => true,
         FriendFilter::Online => f.is_online,
       };
-      let passes_search = q.is_empty() || f.name.to_lowercase().contains(&q);
+      let passes_search = q.is_empty() || f.name_lower.contains(&q);
       passes_filter && passes_search
     })
     .collect()

@@ -509,9 +509,21 @@ fn select_clicked_content_table_item(
   let selected_index =
     content_table_selected_index(active_block, app).min(item_count.saturating_sub(1));
 
-  let Some(clicked_index) =
-    table_item_index_from_click(table_area, mouse_row, selected_index, item_count)
-  else {
+  // The track table anchors its view to a persisted scroll offset (the cursor
+  // can sit anywhere in the window), so clicks must use that offset instead of
+  // re-deriving one from the selection.
+  let anchored_offset = match active_block {
+    ActiveBlock::TrackTable => Some(app.track_table.scroll_offset.get()),
+    _ => None,
+  };
+
+  let Some(clicked_index) = table_item_index_from_click(
+    table_area,
+    mouse_row,
+    selected_index,
+    anchored_offset,
+    item_count,
+  ) else {
     return;
   };
 
@@ -651,6 +663,7 @@ fn table_item_index_from_click(
   table_area: Rect,
   mouse_row: u16,
   selected_index: usize,
+  anchored_offset: Option<usize>,
   item_count: usize,
 ) -> Option<usize> {
   if item_count == 0 || table_area.height <= 5 {
@@ -668,7 +681,7 @@ fn table_item_index_from_click(
     return None;
   }
 
-  let offset = table_scroll_offset(selected_index, visible_rows);
+  let offset = anchored_offset.unwrap_or_else(|| table_scroll_offset(selected_index, visible_rows));
 
   let row_index = (mouse_row - first_data_row) as usize;
   let row_index = row_index.min(visible_rows.saturating_sub(1));
@@ -1923,8 +1936,22 @@ mod tests {
     let selected_index = 15;
     let item_count = 40;
 
-    let first = table_item_index_from_click(area, 2, selected_index, item_count);
-    let second = table_item_index_from_click(area, 3, selected_index, item_count);
+    let first = table_item_index_from_click(area, 2, selected_index, None, item_count);
+    let second = table_item_index_from_click(area, 3, selected_index, None, item_count);
+
+    assert_eq!(first, Some(9));
+    assert_eq!(second, Some(10));
+  }
+
+  #[test]
+  fn table_click_mapping_uses_anchored_offset_when_present() {
+    let area = Rect::new(0, 0, 80, 12);
+    let item_count = 40;
+
+    // Cursor sits mid-window (selection 12) while the view is anchored at
+    // row 9; the first data row must map to the anchor, not the selection.
+    let first = table_item_index_from_click(area, 2, 12, Some(9), item_count);
+    let second = table_item_index_from_click(area, 3, 12, Some(9), item_count);
 
     assert_eq!(first, Some(9));
     assert_eq!(second, Some(10));

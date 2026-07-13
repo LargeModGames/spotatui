@@ -1,0 +1,33 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "spotatui",
+  "description": "A fast, standalone terminal music player in Rust: native Spotify streaming plus local, Subsonic, radio, and YouTube sources.",
+  "folders": [
+    "docs",
+    "examples"
+  ],
+  "excludeFolders": [
+    "src",
+    "target",
+    "worker-relay",
+    "snap",
+    "graphify-out",
+    "spotatui.wiki",
+    ".github"
+  ],
+  "excludeFiles": [
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "how_to_release.md"
+  ],
+  "rules": [
+    "spotatui is a terminal application, not a library. A plain `cargo run` builds the Spotify-only default; use `cargo run --features all-sources` to enable the Local, Subsonic, Radio, and YouTube sources.",
+    "Native streaming (librespot) and audio visualization are part of the default features; the slim CI build uses `--no-default-features --features telemetry`.",
+    "Keybindings and most behavior are user-configurable via the YAML config; see docs/configuration.md and examples/config.example.yml.",
+    "The Lua scripting/plugin API is documented in docs/scripting.md with runnable examples under examples/plugins/."
+  ]
+}

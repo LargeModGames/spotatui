@@ -709,7 +709,7 @@ pub struct KeyBindingsString {
   generate_recap: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct KeyBindings {
   pub back: Key,
   pub move_up: Key,

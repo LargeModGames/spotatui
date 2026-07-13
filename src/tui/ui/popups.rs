@@ -12,15 +12,23 @@ use ratatui::{
 
 use super::help::get_help_docs;
 
-pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
-  let [area] = f
-    .area()
-    .layout(&Layout::vertical([Constraint::Percentage(100)]).margin(2));
+/// Formatted help rows are static per session except for terminal width and
+/// keybinding changes, so cache them instead of rebuilding ~80 owned Strings
+/// (plus per-cell char-count truncation) on every redraw while help is open.
+struct HelpMenuCache {
+  width: usize,
+  keys: crate::core::user_config::KeyBindings,
+  header: String,
+  rows: Vec<String>,
+}
 
+static HELP_MENU_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<HelpMenuCache>>> =
+  std::sync::OnceLock::new();
+
+fn build_help_rows(app: &App, total_width: usize) -> (String, Vec<String>) {
   // Create a one-column table to avoid flickering due to non-determinism when
   // resolving constraints on widths of table columns.
   // Calculate column widths based on available terminal width
-  let total_width = area.width as usize;
   let col1_width = (total_width as f32 * 0.40) as usize;
   let col2_width = (total_width as f32 * 0.30) as usize;
   let col3_width = total_width.saturating_sub(col1_width + col2_width + 2);
@@ -37,8 +45,8 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
     }
   };
 
-  let format_row = |r: Vec<String>| -> Vec<String> {
-    vec![format!(
+  let format_row = |r: Vec<String>| -> String {
+    format!(
       "{:<w1$}  {:<w2$}  {:<w3$}",
       truncate(&r[0], col1_width),
       truncate(&r[1], col2_width),
@@ -46,26 +54,50 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
       w1 = col1_width,
       w2 = col2_width,
       w3 = col3_width,
-    )]
+    )
   };
 
-  let help_menu_style = app.user_config.theme.base_style();
   let header = ["Description", "Event", "Context"];
   let header = format_row(header.iter().map(|s| s.to_string()).collect());
+  let rows = get_help_docs(app).into_iter().map(format_row).collect();
+  (header, rows)
+}
 
-  let help_docs = get_help_docs(app);
-  let help_docs = help_docs
-    .into_iter()
-    .map(format_row)
-    .collect::<Vec<Vec<String>>>();
-  let help_docs = &help_docs[app.help_menu_offset as usize..];
+pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
+  let [area] = f
+    .area()
+    .layout(&Layout::vertical([Constraint::Percentage(100)]).margin(2));
+
+  let total_width = area.width as usize;
+
+  let cache_slot = HELP_MENU_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+  let mut cache = cache_slot.lock().unwrap();
+  let stale = cache
+    .as_ref()
+    .is_none_or(|c| c.width != total_width || c.keys != app.user_config.keys);
+  if stale {
+    let (header, rows) = build_help_rows(app, total_width);
+    *cache = Some(HelpMenuCache {
+      width: total_width,
+      keys: app.user_config.keys.clone(),
+      header,
+      rows,
+    });
+  }
+  let cache = cache.as_ref().expect("help cache populated above");
+
+  let help_menu_style = app.user_config.theme.base_style();
+  let header = &cache.header;
+  let help_docs = &cache.rows[app.help_menu_offset as usize..];
+  // Only the rows that fit the area can render; don't build Rows for the rest.
+  let help_docs = &help_docs[..help_docs.len().min(area.height as usize)];
 
   let rows = help_docs
     .iter()
-    .map(|item| Row::new(item.clone()).style(help_menu_style));
+    .map(|item| Row::new([item.as_str()]).style(help_menu_style));
 
   let help_menu = Table::new(rows, &[Constraint::Percentage(100)])
-    .header(Row::new(header))
+    .header(Row::new([header.as_str()]))
     .block(
       Block::default()
         .borders(Borders::ALL)

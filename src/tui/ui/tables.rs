@@ -62,6 +62,81 @@ struct AlbumUi {
   selected_index: usize,
   items: Vec<TableItem>,
   title: String,
+  offset: usize,
+}
+
+fn table_visible_rows(app: &App, layout_chunk: Rect) -> usize {
+  // Clamp the configured padding to half the table height so an oversized
+  // value can never zero out the visible-row count (which would pin the
+  // scroll offset to 0 and make off-screen rows unreachable).
+  let padding = app
+    .user_config
+    .behavior
+    .table_scroll_padding
+    .min(layout_chunk.height / 2);
+  layout_chunk
+    .height
+    .checked_sub(padding)
+    .map(|height| height as usize)
+    .unwrap_or(0)
+}
+
+fn window_at<T>(offset: usize, layout_chunk: Rect, items: &[T]) -> (usize, &[T]) {
+  // The scroll offset math works with fewer rows than the drawable area (that
+  // gap is the scroll padding below the selection), but the table still
+  // renders rows into it, so slice a full chunk-height of rows to fill every
+  // line.
+  let offset = offset.min(items.len());
+  let end = items
+    .len()
+    .min(offset.saturating_add(layout_chunk.height as usize));
+  (offset, &items[offset..end])
+}
+
+/// Slice a backing collection down to the rows that can be visible in this
+/// layout, so callers only format the viewport instead of the whole
+/// collection. Returns the scroll offset and the visible slice; the offset
+/// math must stay in sync with what `draw_table` expects.
+fn visible_window<'a, T>(
+  app: &App,
+  layout_chunk: Rect,
+  selected_index: usize,
+  items: &'a [T],
+) -> (usize, &'a [T]) {
+  let visible_rows = table_visible_rows(app, layout_chunk);
+  window_at(
+    table_scroll_offset(selected_index, visible_rows),
+    layout_chunk,
+    items,
+  )
+}
+
+/// Like `visible_window`, but anchored to a persisted scroll offset: the
+/// cursor moves within the visible rows without moving the view, and the view
+/// scrolls only when the cursor reaches the top visible row (going up) or the
+/// padded bottom row (going down). The updated offset is written back to
+/// `scroll_offset` so the next frame and the mouse handler see it.
+fn visible_window_anchored<'a, T>(
+  app: &App,
+  layout_chunk: Rect,
+  selected_index: usize,
+  scroll_offset: &std::cell::Cell<usize>,
+  items: &'a [T],
+) -> (usize, &'a [T]) {
+  let visible_rows = table_visible_rows(app, layout_chunk);
+  let max_cursor_row = visible_rows.saturating_sub(1);
+
+  let anchor = scroll_offset.get().min(items.len().saturating_sub(1));
+  let offset = if selected_index < anchor {
+    selected_index
+  } else if selected_index > anchor.saturating_add(max_cursor_row) {
+    selected_index - max_cursor_row
+  } else {
+    anchor
+  };
+  scroll_offset.set(offset);
+
+  window_at(offset, layout_chunk, items)
 }
 
 fn table_columns(app: &App, table: TableColumnSet, layout_width: u16) -> Vec<ResolvedColumn> {
@@ -237,8 +312,13 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 
   if let Some(saved_artists) = app.library.saved_artists.get_results(None) {
-    let items = saved_artists
-      .items
+    let (offset, visible) = visible_window(
+      app,
+      layout_chunk,
+      app.artists_list_index,
+      &saved_artists.items,
+    );
+    let items = visible
       .iter()
       .map(|item| TableItem {
         id: item.id.clone().unwrap_or_default(),
@@ -253,6 +333,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       ("Artists", &header),
       &items,
       app.artists_list_index,
+      offset,
       highlight_state,
     )
   } else {
@@ -263,6 +344,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       ("Artists", &header),
       &[],
       app.artists_list_index,
+      0,
       highlight_state,
     )
   }
@@ -280,8 +362,9 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 
   if let Some(saved_shows) = app.library.saved_shows.get_results(None) {
-    let items = saved_shows
-      .items
+    let (offset, visible) =
+      visible_window(app, layout_chunk, app.shows_list_index, &saved_shows.items);
+    let items = visible
       .iter()
       .map(|show| podcast_table_item(show, &columns))
       .collect::<Vec<TableItem>>();
@@ -293,6 +376,7 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       ("Podcasts", &header),
       &items,
       app.shows_list_index,
+      offset,
       highlight_state,
     )
   };
@@ -313,26 +397,37 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       app
         .selected_album_simplified
         .as_ref()
-        .map(|selected_album_simplified| AlbumUi {
-          items: selected_album_simplified
-            .tracks
-            .items
-            .iter()
-            .map(|item| track_table_item(item, &columns))
-            .collect::<Vec<TableItem>>(),
-          title: format!(
-            "{} by {}",
-            selected_album_simplified.album.name,
-            join_artist_names(&selected_album_simplified.album.artists)
-          ),
-          selected_index: selected_album_simplified.selected_index,
+        .map(|selected_album_simplified| {
+          let (offset, visible) = visible_window(
+            app,
+            layout_chunk,
+            selected_album_simplified.selected_index,
+            &selected_album_simplified.tracks.items,
+          );
+          AlbumUi {
+            items: visible
+              .iter()
+              .map(|item| track_table_item(item, &columns))
+              .collect::<Vec<TableItem>>(),
+            title: format!(
+              "{} by {}",
+              selected_album_simplified.album.name,
+              join_artist_names(&selected_album_simplified.album.artists)
+            ),
+            selected_index: selected_album_simplified.selected_index,
+            offset,
+          }
         })
     }
-    AlbumTableContext::Full => match app.selected_album_full.clone() {
-      Some(selected_album) => Some(AlbumUi {
-        items: selected_album
-          .album
-          .tracks
+    AlbumTableContext::Full => app.selected_album_full.as_ref().map(|selected_album| {
+      let (offset, visible) = visible_window(
+        app,
+        layout_chunk,
+        app.saved_album_tracks_index,
+        &selected_album.album.tracks,
+      );
+      AlbumUi {
+        items: visible
           .iter()
           .map(|item| track_table_item(item, &columns))
           .collect::<Vec<TableItem>>(),
@@ -342,9 +437,9 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           join_artist_names(&selected_album.album.artists)
         ),
         selected_index: app.saved_album_tracks_index,
-      }),
-      None => None,
-    },
+        offset,
+      }
+    }),
   };
 
   if let Some(album_ui) = album_ui {
@@ -355,6 +450,7 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       (&album_ui.title, &header),
       &album_ui.items,
       album_ui.selected_index,
+      album_ui.offset,
       highlight_state,
     );
   };
@@ -370,9 +466,14 @@ pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
     current_route.hovered_block == ActiveBlock::TrackTable,
   );
 
-  let items = app
-    .track_table
-    .tracks
+  let (offset, visible) = visible_window_anchored(
+    app,
+    layout_chunk,
+    app.track_table.selected_index,
+    &app.track_table.scroll_offset,
+    &app.track_table.tracks,
+  );
+  let items = visible
     .iter()
     .map(|item| track_table_item(item, &columns))
     .collect::<Vec<TableItem>>();
@@ -395,6 +496,7 @@ pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
     (&recommendations_ui[..], &header),
     &items,
     app.track_table.selected_index,
+    offset,
     highlight_state,
   )
 }
@@ -409,9 +511,14 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::TrackTable,
   );
 
-  let items = app
-    .track_table
-    .tracks
+  let (offset, visible) = visible_window_anchored(
+    app,
+    layout_chunk,
+    app.track_table.selected_index,
+    &app.track_table.scroll_offset,
+    &app.track_table.tracks,
+  );
+  let items = visible
     .iter()
     .map(|item| track_table_item(item, &columns))
     .collect::<Vec<TableItem>>();
@@ -437,6 +544,7 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     (&title, &header),
     &items,
     app.track_table.selected_index,
+    offset,
     highlight_state,
   )
 }
@@ -455,8 +563,9 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let selected_song_index = app.album_list_index;
 
   if let Some(saved_albums) = app.library.saved_albums.get_results(None) {
-    let items = saved_albums
-      .items
+    let (offset, visible) =
+      visible_window(app, layout_chunk, selected_song_index, &saved_albums.items);
+    let items = visible
       .iter()
       .map(|saved_album| album_table_item(saved_album, &columns, app))
       .collect::<Vec<TableItem>>();
@@ -468,6 +577,7 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       ("Saved Albums", &header),
       &items,
       selected_song_index,
+      offset,
       highlight_state,
     )
   };
@@ -485,8 +595,9 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 
   if let Some(episodes) = app.library.show_episodes.get_results(None) {
-    let items = episodes
-      .items
+    let (offset, visible) =
+      visible_window(app, layout_chunk, app.episode_list_index, &episodes.items);
+    let items = visible
       .iter()
       .map(|episode| episode_table_item(episode, &columns, app))
       .collect::<Vec<TableItem>>();
@@ -519,6 +630,7 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       (&title, &header),
       &items,
       app.episode_list_index,
+      offset,
       highlight_state,
     );
   };
@@ -538,8 +650,13 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
 
     let selected_song_index = app.recently_played.index;
 
-    let items = recently_played
-      .items
+    let (offset, visible) = visible_window(
+      app,
+      layout_chunk,
+      selected_song_index,
+      &recently_played.items,
+    );
+    let items = visible
       .iter()
       .map(|item| track_table_item(item, &columns))
       .collect::<Vec<TableItem>>();
@@ -551,27 +668,30 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
       ("Recently Played Tracks", &header),
       &items,
       selected_song_index,
+      offset,
       highlight_state,
     )
   };
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_table(
   f: &mut Frame<'_>,
   app: &App,
   layout_chunk: Rect,
   table_layout: (&str, &TableHeader), // (title, header colums)
-  items: &[TableItem], // The nested vector must have the same length as the `header_columns`
+  items: &[TableItem], // Visible window only (see `visible_window`); same length as `header_columns`
   selected_index: usize,
+  offset: usize, // Index of `items[0]` within the full backing collection
   highlight_state: (bool, bool),
 ) {
   let selected_style = get_color(highlight_state, app.user_config.theme)
     .add_modifier(Modifier::BOLD | Modifier::REVERSED);
 
-  let track_playing_index = app.current_playback_context.to_owned().and_then(|ctx| {
-    ctx.item.and_then(|item| match item {
+  let track_playing_index = app.current_playback_context.as_ref().and_then(|ctx| {
+    ctx.item.as_ref().and_then(|item| match item {
       PlayableItem::Track(track) => {
-        let track_id_str = track.id.map(|id| id.id().to_string());
+        let track_id_str = track.id.as_ref().map(|id| id.id().to_string());
         items.iter().position(|item| {
           track_id_str
             .as_ref()
@@ -589,25 +709,7 @@ fn draw_table(
 
   let (title, header) = table_layout;
 
-  // Make sure that the selected item is visible on the page. Need to add some rows of padding
-  // to chunk height for header and header space to get a true table height
-  // Clamp the configured padding to half the table height so an oversized
-  // value can never zero out the visible-row count (which would pin the
-  // scroll offset to 0 and make off-screen rows unreachable).
-  let padding = app
-    .user_config
-    .behavior
-    .table_scroll_padding
-    .min(layout_chunk.height / 2);
-  let visible_rows = layout_chunk
-    .height
-    .checked_sub(padding)
-    .map(|height| height as usize)
-    .unwrap_or(0);
-
-  let offset = table_scroll_offset(selected_index, visible_rows);
-
-  let rows = items.iter().skip(offset).enumerate().map(|(i, item)| {
+  let rows = items.iter().enumerate().map(|(i, item)| {
     let mut formatted_row = item.format.clone();
     let mut style = app.user_config.theme.base_style(); // default styling
 
@@ -617,18 +719,14 @@ fn draw_table(
         // First check if the song should be highlighted because it is currently playing.
         // The marker goes on the title cell, falling back to the first cell when the
         // user's column config omits `title` so the playing row is never unmarked.
-        if let Some(track_playing_offset_index) =
-          track_playing_index.and_then(|idx| idx.checked_sub(offset))
-        {
-          if i == track_playing_offset_index {
-            let title_idx = header.get_index(ColumnId::Title).unwrap_or(0);
-            if let Some(cell) = formatted_row.get_mut(title_idx) {
-              cell.insert_str(0, &app.user_config.padded_playing_icon());
-            }
-            style = Style::default()
-              .fg(app.user_config.theme.active)
-              .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
+        if track_playing_index == Some(i) {
+          let title_idx = header.get_index(ColumnId::Title).unwrap_or(0);
+          if let Some(cell) = formatted_row.get_mut(title_idx) {
+            cell.insert_str(0, &app.user_config.padded_playing_icon());
           }
+          style = Style::default()
+            .fg(app.user_config.theme.active)
+            .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
         }
 
         // Show this the liked icon if the song is liked
@@ -638,20 +736,14 @@ fn draw_table(
           }
         }
       }
-      TableId::PodcastEpisodes => {
-        if let Some(track_playing_offset_index) =
-          track_playing_index.and_then(|idx| idx.checked_sub(offset))
-        {
-          if i == track_playing_offset_index {
-            let name_idx = header.get_index(ColumnId::Title).unwrap_or(0);
-            if let Some(cell) = formatted_row.get_mut(name_idx) {
-              cell.insert_str(0, &app.user_config.padded_playing_icon());
-            }
-            style = Style::default()
-              .fg(app.user_config.theme.active)
-              .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
-          }
+      TableId::PodcastEpisodes if track_playing_index == Some(i) => {
+        let name_idx = header.get_index(ColumnId::Title).unwrap_or(0);
+        if let Some(cell) = formatted_row.get_mut(name_idx) {
+          cell.insert_str(0, &app.user_config.padded_playing_icon());
         }
+        style = Style::default()
+          .fg(app.user_config.theme.active)
+          .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
       }
       _ => {}
     }
@@ -726,6 +818,103 @@ mod tests {
       public: None,
       image_url: None,
     }
+  }
+
+  fn track(i: u32) -> TrackInfo {
+    TrackInfo {
+      uri: Some(format!("spotify:track:{i:022}")),
+      name: format!("Track {i}"),
+      artists: vec![format!("Artist {i}")],
+      album: format!("Album {i}"),
+      duration_ms: 180_000,
+      id: Some(format!("{i:022}")),
+      album_id: None,
+      artist_refs: Vec::new(),
+      is_playable: true,
+      is_local: false,
+      track_number: i + 1,
+      explicit: false,
+      image_url: None,
+    }
+  }
+
+  #[test]
+  fn song_table_fills_rows_below_scroll_padding() {
+    let mut app = App::default();
+    app.track_table.tracks = (0..30).map(track).collect();
+    app.track_table.selected_index = 15;
+
+    // Height 12 with the default scroll padding of 5: the scroll offset math
+    // treats 7 rows as visible, but the drawable area holds 9 data rows
+    // (12 minus 2 borders and 1 header). The rows past the padding window
+    // must still be filled with the following tracks, not left blank.
+    let area = Rect::new(0, 0, 80, 12);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let content: String = (0..area.height)
+      .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect();
+
+    for i in [15, 16, 17] {
+      assert!(
+        content.contains(&format!("Track {i}")),
+        "row for track {i} should be rendered: {content}"
+      );
+    }
+    assert!(
+      !content.contains("Track 18"),
+      "track 18 is below the drawable area and should not be rendered: {content}"
+    );
+  }
+
+  #[test]
+  fn song_table_view_stays_anchored_until_cursor_hits_top() {
+    let mut app = App::default();
+    app.track_table.tracks = (0..30).map(track).collect();
+
+    let area = Rect::new(0, 0, 80, 12);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    let first_data_row = |terminal: &Terminal<TestBackend>| -> String {
+      let buffer = terminal.backend().buffer();
+      (0..area.width)
+        .filter_map(|x| buffer.cell((x, 2)).map(|c| c.symbol().to_string()))
+        .collect()
+    };
+
+    // Scroll down to row 15: with height 12 and default padding 5 the offset
+    // math treats 7 rows as visible, so the view lands at offset 9.
+    app.track_table.selected_index = 15;
+    terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
+    assert!(
+      first_data_row(&terminal).contains("Track 9"),
+      "view should scroll to offset 9"
+    );
+
+    // Moving the cursor back up within the window must NOT move the view.
+    app.track_table.selected_index = 12;
+    terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
+    assert!(
+      first_data_row(&terminal).contains("Track 9"),
+      "view should stay anchored while the cursor moves inside the window"
+    );
+
+    // At the top visible row the view still holds...
+    app.track_table.selected_index = 9;
+    terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
+    assert!(
+      first_data_row(&terminal).contains("Track 9"),
+      "cursor on the top visible row should not scroll yet"
+    );
+
+    // ...and only going past it scrolls the view up.
+    app.track_table.selected_index = 8;
+    terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
+    assert!(
+      first_data_row(&terminal).contains("Track 8"),
+      "going above the top visible row should scroll the view up"
+    );
   }
 
   #[test]

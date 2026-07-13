@@ -17,7 +17,7 @@ pub fn decrease_sidebar_width(app: &mut App) {
     .behavior
     .sidebar_width_percent
     .saturating_sub(SIDEBAR_STEP);
-  let _ = app.user_config.save_config();
+  app.schedule_config_save();
 }
 
 /// Increase sidebar width by SIDEBAR_STEP percent (maximum 100%).
@@ -28,7 +28,7 @@ pub fn increase_sidebar_width(app: &mut App) {
     .sidebar_width_percent
     .saturating_add(SIDEBAR_STEP)
     .min(100);
-  let _ = app.user_config.save_config();
+  app.schedule_config_save();
 }
 
 /// Decrease playbar height by PLAYBAR_STEP rows (minimum 0 = hidden).
@@ -38,7 +38,7 @@ pub fn decrease_playbar_height(app: &mut App) {
     .behavior
     .playbar_height_rows
     .saturating_sub(PLAYBAR_STEP);
-  let _ = app.user_config.save_config();
+  app.schedule_config_save();
 }
 
 /// Increase playbar height by PLAYBAR_STEP rows (capped at MAX_PLAYBAR_ROWS).
@@ -49,7 +49,7 @@ pub fn increase_playbar_height(app: &mut App) {
     .playbar_height_rows
     .saturating_add(PLAYBAR_STEP)
     .min(MAX_PLAYBAR_ROWS);
-  let _ = app.user_config.save_config();
+  app.schedule_config_save();
 }
 
 /// Decrease the library section height within the sidebar (minimum 0% = hidden).
@@ -59,7 +59,7 @@ pub fn decrease_library_height(app: &mut App) {
     .behavior
     .library_height_percent
     .saturating_sub(LIBRARY_STEP);
-  let _ = app.user_config.save_config();
+  app.schedule_config_save();
 }
 
 /// Increase the library section height within the sidebar (maximum 100%).
@@ -70,7 +70,7 @@ pub fn increase_library_height(app: &mut App) {
     .library_height_percent
     .saturating_add(LIBRARY_STEP)
     .min(100);
-  let _ = app.user_config.save_config();
+  app.schedule_config_save();
 }
 
 /// Reset all pane sizes to their defaults.
@@ -78,7 +78,7 @@ pub fn reset_layout(app: &mut App) {
   app.user_config.behavior.sidebar_width_percent = DEFAULT_SIDEBAR_WIDTH;
   app.user_config.behavior.playbar_height_rows = DEFAULT_PLAYBAR_HEIGHT;
   app.user_config.behavior.library_height_percent = DEFAULT_LIBRARY_HEIGHT;
-  let _ = app.user_config.save_config();
+  app.schedule_config_save();
 }
 
 #[cfg(test)]

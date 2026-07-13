@@ -63,6 +63,11 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
     }
 
     if active_streaming_player(&ctx.app).await.is_some() {
+      // A live player already exists (e.g. a queued duplicate request): the
+      // pending window is over, so replay anything parked against it.
+      let mut app = ctx.app.lock().await;
+      app.native_backend_pending = false;
+      app.replay_pending_start_playback();
       continue;
     }
 
@@ -107,6 +112,11 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
               false,
             ));
           }
+          // Replay the request that triggered (or arrived during) recovery.
+          // Dispatched after AutoSelectStreamingDevice, so the serial pump
+          // completes the device selection before the playback starts.
+          app.native_backend_pending = false;
+          app.replay_pending_start_playback();
         }
 
         spawn_player_event_handler(PlayerEventContext {
@@ -126,7 +136,15 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       Err(e) => {
         info!("native streaming recovery failed: {}", e);
         let mut app = ctx.app.lock().await;
-        app.set_status_message(format!("Native recovery failed: {}", e), 8);
+        app.native_backend_pending = false;
+        if app.pending_start_playback.take().is_some() {
+          app.set_status_message(
+            format!("Native recovery failed; playback request dropped: {}", e),
+            8,
+          );
+        } else {
+          app.set_status_message(format!("Native recovery failed: {}", e), 8);
+        }
       }
     }
   }
@@ -269,6 +287,11 @@ async fn handle_player_events(
         {
           let mut app_lock = app.lock().await;
           app_lock.native_is_playing = Some(true);
+          // A real Playing event proves the session is alive: disarm the load
+          // watchdog and drop any request parked for its potential recovery.
+          app_lock.native_load_watchdog = None;
+          app_lock.pending_start_playback = None;
+          app_lock.native_backend_pending = false;
         }
 
         if let Ok(mut app) = app.try_lock() {
@@ -414,6 +437,11 @@ async fn handle_player_events(
         }
 
         let mut app = app.lock().await;
+        // A TrackChanged proves the session is processing loads: disarm the
+        // zombie-session watchdog.
+        app.native_load_watchdog = None;
+        app.pending_start_playback = None;
+        app.native_backend_pending = false;
         app.native_track_info = Some(app::NativeTrackInfo {
           name: audio_item.name.clone(),
           artists_display: artists.join(", "),
@@ -608,12 +636,15 @@ async fn handle_player_events(
         // failure was completely silent (#282). Surface it to the user.
         consecutive_unavailable += 1;
 
-        // Clear the ghost native track so the playbar doesn't show a track that
-        // never actually plays, mirroring the EndOfTrack/Stopped arms. Use
-        // try_lock to avoid stalling on the render loop; skipping a reset is fine.
-        if let Ok(mut app) = app.try_lock() {
+        // Clear the ghost native track and the request/watchdog together so an
+        // unavailable track cannot be replayed as a supposed session failure.
+        {
+          let mut app = app.lock().await;
           app.song_progress_ms = 0;
           app.native_track_info = None;
+          app.native_load_watchdog = None;
+          app.pending_start_playback = None;
+          app.native_backend_pending = false;
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
           }
@@ -646,6 +677,12 @@ async fn handle_player_events(
             "Several tracks in a row couldn't be played natively, so playback was stopped. They may be unavailable on your account or region. Press 'd' to switch to an official Spotify Connect device.",
             20,
           );
+        }
+      }
+      PlayerEvent::Loading { .. } | PlayerEvent::Preloading { .. } => {
+        let mut app = app.lock().await;
+        if app.native_load_watchdog.is_some() {
+          app.native_load_watchdog = Some(std::time::Instant::now());
         }
       }
       _ => {}

@@ -581,18 +581,30 @@ pub async fn start_ui(
   #[cfg(feature = "internet-radio")]
   let mut radio_stream_started = false;
 
+  // The Lua VM (plus its HTTP client) is only constructed when the user
+  // actually has script files; a zero-plugin install skips the engine — and
+  // its per-tick `on_tick` dispatch — entirely.
   #[cfg(feature = "scripting")]
-  let mut script_engine: Option<ScriptEngine> = match ScriptEngine::new() {
-    Ok(mut engine) => {
-      if let Some(config_dir) = crate::core::user_config::default_app_config_dir() {
-        let loaded = engine.load_user_scripts(&config_dir);
-        info!("loaded {loaded} lua plugin file(s)");
+  let mut script_engine: Option<ScriptEngine> = {
+    let config_dir = crate::core::user_config::default_app_config_dir();
+    match config_dir {
+      Some(config_dir) if ScriptEngine::has_user_scripts(&config_dir) => {
+        match ScriptEngine::new() {
+          Ok(mut engine) => {
+            let loaded = engine.load_user_scripts(&config_dir);
+            info!("loaded {loaded} lua plugin file(s)");
+            Some(engine)
+          }
+          Err(e) => {
+            log::error!("failed to initialize lua scripting engine: {e}");
+            None
+          }
+        }
       }
-      Some(engine)
-    }
-    Err(e) => {
-      log::error!("failed to initialize lua scripting engine: {e}");
-      None
+      _ => {
+        info!("no lua plugin files found; scripting engine not started");
+        None
+      }
     }
   };
 
@@ -638,10 +650,12 @@ pub async fn start_ui(
       };
 
       let current_route = app.get_current_route();
-      let animation_active = matches!(
-        current_route.active_block,
-        ActiveBlock::Analysis | ActiveBlock::Home
-      ) || app.liked_song_animation_frame.is_some();
+      // The banner animates whenever the Home screen is displayed, regardless
+      // of which block has focus (on Home the focused block is usually Empty
+      // or Library, not Home), so gate the fast tick on the route.
+      let animation_active = current_route.id == RouteId::Home
+        || current_route.active_block == ActiveBlock::Analysis
+        || app.liked_song_animation_frame.is_some();
       let current_tick_rate = if animation_active {
         app.user_config.behavior.animation_tick_rate_milliseconds
       } else {
@@ -805,7 +819,9 @@ pub async fn start_ui(
         #[cfg(feature = "streaming")]
         app.flush_pending_native_seek();
         app.flush_pending_api_seek();
+        app.flush_pending_source_seek();
         app.flush_pending_volume();
+        app.flush_config_save(false);
 
         #[cfg(feature = "scripting")]
         if let Some(engine) = script_engine.as_mut() {
@@ -844,12 +860,16 @@ pub async fn start_ui(
                 // episodes have no lyrics, so skip the lookup and show the
                 // not-found message rather than stale lyrics.
                 if snapshot.item_kind == PlaybackItemKind::Track {
+                  let title = snapshot.metadata.title.clone();
+                  let artist = snapshot.primary_artist();
+                  app.desired_lyrics_identity = Some((title.clone(), artist.clone()));
                   app.dispatch(IoEvent::GetLyrics(
-                    snapshot.metadata.title.clone(),
-                    snapshot.primary_artist(),
+                    title,
+                    artist,
                     snapshot.metadata.duration_ms as f64 / 1000.0,
                   ));
                 } else {
+                  app.desired_lyrics_identity = None;
                   app.lyrics = None;
                   app.lyrics_status = crate::core::app::LyricsStatus::NotFound;
                   app
@@ -858,6 +878,7 @@ pub async fn start_ui(
                 }
               }
               None => {
+                app.desired_lyrics_identity = None;
                 // Nothing is playing: reset so no stale lyrics linger.
                 app.lyrics = None;
                 app.lyrics_status = crate::core::app::LyricsStatus::NotStarted;
@@ -892,6 +913,7 @@ pub async fn start_ui(
             };
             match desired {
               Some(request) => {
+                app.desired_cover_art_key = Some(request.key().to_string());
                 if last_cover_art_key.as_deref() != Some(request.key()) {
                   last_cover_art_key = Some(request.key().to_string());
                   // Keep the previous image on screen until the new one
@@ -901,6 +923,7 @@ pub async fn start_ui(
                 }
               }
               None => {
+                app.desired_cover_art_key = None;
                 // No art to show (radio, art disabled, nothing playing): drop
                 // any stale image once, so the pane shows the placeholder.
                 if last_cover_art_key.take().is_some() || app.cover_art.available() {
@@ -1112,13 +1135,15 @@ pub async fn start_ui(
         // Persist the active non-Spotify session so it resumes on next launch.
         // Throttled to avoid churning the file every tick; a Some -> None
         // transition (queue ended, or switched to Spotify) clears it instead.
-        match app.current_persisted_session() {
-          Some(session) => {
-            let due = last_session_save
-              .map(|t| t.elapsed() >= SESSION_SAVE_INTERVAL)
-              .unwrap_or(true);
-            if due {
-              last_session_save = Some(Instant::now());
+        if app.has_persistable_session() {
+          let due = last_session_save
+            .map(|t| t.elapsed() >= SESSION_SAVE_INTERVAL)
+            .unwrap_or(true);
+          if due {
+            last_session_save = Some(Instant::now());
+            // Snapshot (clones the queue) only when a save is actually due,
+            // not on every tick.
+            if let Some(session) = app.current_persisted_session() {
               // Fire-and-forget on the blocking pool: file I/O never blocks the
               // UI tick, and a dropped handle still runs to completion.
               tokio::task::spawn_blocking(move || {
@@ -1129,21 +1154,20 @@ pub async fn start_ui(
                 }
               });
             }
-            session_was_present = true;
           }
-          None => {
-            if session_was_present {
-              last_session_save = None;
-              tokio::task::spawn_blocking(|| {
-                if let Ok(path) = crate::core::persisted_playback::default_session_path() {
-                  if let Err(e) = crate::core::persisted_playback::clear(&path) {
-                    log::warn!("[session] failed to clear playback session: {e}");
-                  }
+          session_was_present = true;
+        } else {
+          if session_was_present {
+            last_session_save = None;
+            tokio::task::spawn_blocking(|| {
+              if let Ok(path) = crate::core::persisted_playback::default_session_path() {
+                if let Err(e) = crate::core::persisted_playback::clear(&path) {
+                  log::warn!("[session] failed to clear playback session: {e}");
                 }
-              });
-            }
-            session_was_present = false;
+              }
+            });
           }
+          session_was_present = false;
         }
 
         #[cfg(feature = "streaming")]
@@ -1286,6 +1310,13 @@ pub async fn start_ui(
   if let Some(engine) = script_engine.as_mut() {
     let mut app = app.lock().await;
     engine.on_quit(&mut app);
+  }
+
+  // A volume/resize/shuffle change may still be inside its debounce window;
+  // persist it before the process exits.
+  {
+    let mut app = app.lock().await;
+    app.flush_config_save(true);
   }
 
   #[cfg(feature = "streaming")]

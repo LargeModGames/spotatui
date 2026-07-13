@@ -9,7 +9,7 @@ use crate::infra::player::{select_native, PlaybackBackend};
 use anyhow::anyhow;
 use chrono::TimeDelta;
 #[cfg(feature = "streaming")]
-use log::info;
+use log::{info, warn};
 use reqwest::Method;
 #[cfg(feature = "streaming")]
 use rspotify::model::device::DevicePayload;
@@ -383,6 +383,24 @@ fn spotify_payload_confirms_native_device(payload: &DevicePayload, native_device
 fn is_no_active_device_error(e: &anyhow::Error) -> bool {
   let text = e.to_string().to_ascii_lowercase();
   text.contains("no_active_device") || text.contains("no active device")
+}
+
+/// While a native backend is expected to materialize (recovery in flight, or
+/// the deferred startup init still running), a transport command that 404s
+/// with NO_ACTIVE_DEVICE is expected noise — surface a status message instead
+/// of routing to the full-screen Error. Returns true when the error was
+/// handled that way.
+#[cfg(feature = "streaming")]
+async fn suppressed_no_device_error_while_pending(network: &Network, e: &anyhow::Error) -> bool {
+  if !is_no_active_device_error(e) {
+    return false;
+  }
+  let mut app = network.app.lock().await;
+  if !app.native_backend_pending {
+    return false;
+  }
+  app.set_status_message("Reconnecting native streaming…", 5);
+  true
 }
 
 fn api_confirms_native_info_is_current(
@@ -1044,6 +1062,9 @@ impl PlaybackNetwork for Network {
     // (e.g. consecutive tracks that share an album cover): just mark it loaded.
     {
       let mut app = self.app.lock().await;
+      if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
+        return;
+      }
       if app.cover_art.get_url().as_deref() == Some(key.as_str()) {
         app.cover_art_status = CoverArtStatus::Loaded;
         return;
@@ -1067,6 +1088,9 @@ impl PlaybackNetwork for Network {
     };
 
     let mut app = self.app.lock().await;
+    if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
+      return;
+    }
     match result {
       Ok(img) => {
         app.cover_art.store_decoded(key, img);
@@ -1112,6 +1136,17 @@ impl PlaybackNetwork for Network {
     // Check if we should use native streaming for playback
     #[cfg(feature = "streaming")]
     if request_native_streaming_recovery_if_disconnected(self).await {
+      // Park the request instead of dropping it: the recovery handler replays
+      // it once the new session and device selection are in place, so the
+      // press that detected the disconnect still plays.
+      let mut app = self.app.lock().await;
+      app.park_start_playback(
+        context_id.as_ref().map(|c| c.uri()),
+        uris
+          .as_ref()
+          .map(|list| list.iter().map(|u| u.uri()).collect()),
+        offset,
+      );
       return;
     }
 
@@ -1149,7 +1184,11 @@ impl PlaybackNetwork for Network {
       };
 
       if should_transfer {
-        let _ = player.transfer(None);
+        // A failed transfer on a zombie session used to vanish silently; the
+        // load watchdog below is the recovery net, but keep the evidence.
+        if let Err(e) = player.transfer(None) {
+          warn!("native transfer failed: {e}");
+        }
       }
 
       player.activate();
@@ -1274,6 +1313,13 @@ impl PlaybackNetwork for Network {
         }
       }
 
+      // Keep the string form for the load watchdog: if the session turns out
+      // to be a zombie (load accepted, no player event follows), recovery
+      // replays this exact request.
+      let parked_context = context_id.as_ref().map(|c| c.uri());
+      let parked_uris = uris
+        .as_ref()
+        .map(|list| list.iter().map(|u| u.uri()).collect::<Vec<_>>());
       let Some(request) = native_load_request(context_id, uris, offset) else {
         return;
       };
@@ -1284,8 +1330,11 @@ impl PlaybackNetwork for Network {
         app.handle_error(anyhow!("Failed to start native playback: {}", e));
       } else {
         let _ = player.set_shuffle(desired_shuffle_state);
-        // Optimistic UI update
+        // Optimistic UI update; the watchdog corrects it if no player event
+        // ever confirms the load (zombie session).
         let mut app = self.app.lock().await;
+        app.park_start_playback(parked_context, parked_uris, offset);
+        app.native_load_watchdog = Some(Instant::now());
         if let Some(ctx) = &mut app.current_playback_context {
           ctx.is_playing = true;
           ctx.shuffle_state = desired_shuffle_state;
@@ -1363,6 +1412,10 @@ impl PlaybackNetwork for Network {
                 );
               }
 
+              let parked_context = context_id.as_ref().map(|c| c.uri());
+              let parked_uris = uris
+                .as_ref()
+                .map(|list| list.iter().map(|u| u.uri()).collect::<Vec<_>>());
               if let Some(request) = native_load_request(context_id, uris, offset) {
                 info!("default Spotify playback had no active device; falling back to native load");
                 if let Err(load_err) = player.load(request) {
@@ -1371,6 +1424,9 @@ impl PlaybackNetwork for Network {
                 } else {
                   let _ = player.set_shuffle(desired_shuffle_state);
                   let mut app = self.app.lock().await;
+                  // Same zombie-session net as the direct load route.
+                  app.park_start_playback(parked_context, parked_uris, offset);
+                  app.native_load_watchdog = Some(Instant::now());
                   if let Some(ctx) = &mut app.current_playback_context {
                     ctx.is_playing = true;
                     ctx.shuffle_state = desired_shuffle_state;
@@ -1412,6 +1468,25 @@ impl PlaybackNetwork for Network {
               return;
             }
           }
+
+          // No usable backend right now, but one may materialize shortly
+          // (recovery in flight, or deferred startup init still running):
+          // park the request for replay instead of routing to the
+          // full-screen error, which is what made every press during the
+          // recovery window cost a paced round trip ending on Error.
+          let mut app = self.app.lock().await;
+          if app.native_backend_pending {
+            app.park_start_playback(
+              context_id.as_ref().map(|c| c.uri()),
+              uris
+                .as_ref()
+                .map(|list| list.iter().map(|u| u.uri()).collect()),
+              offset,
+            );
+            app.set_status_message("Reconnecting native streaming; playback will resume.", 6);
+            return;
+          }
+          drop(app);
         }
 
         let mut app = self.app.lock().await;
@@ -1421,6 +1496,12 @@ impl PlaybackNetwork for Network {
   }
 
   async fn pause_playback(&mut self) {
+    #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      app.pending_start_playback = None;
+      app.native_load_watchdog = None;
+    }
     // Check if using native streaming
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
@@ -1444,6 +1525,10 @@ impl PlaybackNetwork for Network {
         }
       }
       Err(e) => {
+        #[cfg(feature = "streaming")]
+        if suppressed_no_device_error_while_pending(self, &e).await {
+          return;
+        }
         let mut app = self.app.lock().await;
         app.handle_error(anyhow!(e));
       }
@@ -1451,6 +1536,12 @@ impl PlaybackNetwork for Network {
   }
 
   async fn next_track(&mut self) {
+    #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      app.pending_start_playback = None;
+      app.native_load_watchdog = None;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.next();
@@ -1461,12 +1552,22 @@ impl PlaybackNetwork for Network {
       .spotify_api_request_json(Method::POST, "me/player/next", &[], None)
       .await
     {
+      #[cfg(feature = "streaming")]
+      if suppressed_no_device_error_while_pending(self, &e).await {
+        return;
+      }
       let mut app = self.app.lock().await;
       app.handle_error(anyhow!(e));
     }
   }
 
   async fn previous_track(&mut self) {
+    #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      app.pending_start_playback = None;
+      app.native_load_watchdog = None;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.prev();
@@ -1477,6 +1578,10 @@ impl PlaybackNetwork for Network {
       .spotify_api_request_json(Method::POST, "me/player/previous", &[], None)
       .await
     {
+      #[cfg(feature = "streaming")]
+      if suppressed_no_device_error_while_pending(self, &e).await {
+        return;
+      }
       let mut app = self.app.lock().await;
       app.handle_error(anyhow!(e));
     }
@@ -1486,8 +1591,13 @@ impl PlaybackNetwork for Network {
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.prev();
-      tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-      player.prev();
+      // The second prev (which actually skips back once the position has reset
+      // to 0) runs on a detached task so the intentional 500ms gap doesn't
+      // block every other IoEvent on the serial pump.
+      tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        player.prev();
+      });
       return;
     }
 
@@ -1498,20 +1608,26 @@ impl PlaybackNetwork for Network {
       .spotify_api_request_json(Method::POST, "me/player/previous", &[], None)
       .await
     {
+      #[cfg(feature = "streaming")]
+      if suppressed_no_device_error_while_pending(self, &e).await {
+        return;
+      }
       let mut app = self.app.lock().await;
       app.handle_error(anyhow!(e));
       return;
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    if let Err(e) = self
-      .spotify_api_request_json(Method::POST, "me/player/previous", &[], None)
-      .await
-    {
-      let mut app = self.app.lock().await;
-      app.handle_error(anyhow!(e));
-    }
+    // Re-dispatch the second call after the delay instead of sleeping on the
+    // pump: a plain PreviousTrack with the position back at 0 skips to the
+    // previous track, which is exactly the second half of the double-press
+    // semantics.
+    let io_tx = self.app.lock().await.io_tx_clone();
+    tokio::spawn(async move {
+      tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+      if let Some(io_tx) = io_tx {
+        let _ = io_tx.send(IoEvent::PreviousTrack);
+      }
+    });
   }
 
   async fn seek(&mut self, position_ms: u32) {
@@ -1530,6 +1646,10 @@ impl PlaybackNetwork for Network {
       )
       .await
     {
+      #[cfg(feature = "streaming")]
+      if suppressed_no_device_error_while_pending(self, &e).await {
+        return;
+      }
       let mut app = self.app.lock().await;
       app.handle_error(anyhow!(e));
     }
@@ -1562,6 +1682,10 @@ impl PlaybackNetwork for Network {
         }
       }
       Err(e) => {
+        #[cfg(feature = "streaming")]
+        if suppressed_no_device_error_while_pending(self, &e).await {
+          return;
+        }
         let mut app = self.app.lock().await;
         app.handle_error(anyhow!(e));
       }
@@ -1596,6 +1720,10 @@ impl PlaybackNetwork for Network {
         }
       }
       Err(e) => {
+        #[cfg(feature = "streaming")]
+        if suppressed_no_device_error_while_pending(self, &e).await {
+          return;
+        }
         let mut app = self.app.lock().await;
         app.handle_error(anyhow!(e));
       }
@@ -1644,10 +1772,17 @@ impl PlaybackNetwork for Network {
         // Keep pending_volume set — cleared when get_current_playback confirms
       }
       Err(e) => {
+        {
+          let mut app = self.app.lock().await;
+          app.is_volume_change_in_flight = false;
+          app.pending_volume = None;
+          app.last_dispatched_volume = None;
+        }
+        #[cfg(feature = "streaming")]
+        if suppressed_no_device_error_while_pending(self, &e).await {
+          return;
+        }
         let mut app = self.app.lock().await;
-        app.is_volume_change_in_flight = false;
-        app.pending_volume = None;
-        app.last_dispatched_volume = None;
         app.handle_error(anyhow!(e));
       }
     }

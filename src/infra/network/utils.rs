@@ -72,6 +72,7 @@ pub trait UtilsNetwork {
 
 impl UtilsNetwork for Network {
   async fn get_lyrics(&mut self, track: String, artist: String, duration: f64) {
+    let request_identity = (track.clone(), artist.clone());
     let client = super::requests::shared_http_client();
     let query = vec![
       ("track_name", track.clone()),
@@ -82,6 +83,9 @@ impl UtilsNetwork for Network {
     // Update state to loading
     {
       let mut app = self.app.lock().await;
+      if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
+        return;
+      }
       app.lyrics_status = LyricsStatus::Loading;
       app.lyrics = None;
     }
@@ -105,6 +109,9 @@ impl UtilsNetwork for Network {
               .unwrap_or_default();
 
             let mut app = self.app.lock().await;
+            if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
+              return;
+            }
             if !synced.is_empty() {
               app.lyrics = Some(synced);
               app.lyrics_status = LyricsStatus::Found;
@@ -123,6 +130,9 @@ impl UtilsNetwork for Network {
               .bump(crate::core::app::PluginDataKind::Lyrics);
           } else {
             let mut app = self.app.lock().await;
+            if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
+              return;
+            }
             app.lyrics_status = LyricsStatus::NotFound;
             app
               .plugin_data_generations
@@ -130,6 +140,9 @@ impl UtilsNetwork for Network {
           }
         } else {
           let mut app = self.app.lock().await;
+          if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
+            return;
+          }
           app.lyrics_status = LyricsStatus::NotFound;
           app
             .plugin_data_generations
@@ -138,6 +151,9 @@ impl UtilsNetwork for Network {
       }
       Err(_) => {
         let mut app = self.app.lock().await;
+        if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
+          return;
+        }
         app.lyrics_status = LyricsStatus::NotFound;
         app
           .plugin_data_generations
@@ -216,17 +232,12 @@ impl UtilsNetwork for Network {
       return;
     }
 
-    let client = match reqwest::Client::builder()
-      .timeout(Duration::from_secs(5))
-      .build()
-    {
-      Ok(client) => client,
-      Err(_) => return,
-    };
+    let client = super::requests::shared_http_client();
 
     let response = match client
       .get(&resolved_url)
       .header(reqwest::header::ACCEPT, "application/json")
+      .timeout(Duration::from_secs(5))
       .send()
       .await
     {

@@ -13,7 +13,7 @@ Simple values (numbers, toggles, icons, positions) can also be changed live in t
 
 A typo in `config.yml` never prevents the app from starting. Structural mistakes — an unknown sort field, a bad template placeholder, an invalid column id, an icon that is too wide — are logged as warnings and the affected value falls back to its built-in default. Warnings go to the log file whose path is printed at startup (`/tmp/spotatui_logs/spotatuilog<pid>`).
 
-Only two kinds of errors are fatal: YAML syntax errors (the file cannot be parsed at all) and out-of-range numeric values that predate this policy (`volume_increment` outside 0–100, a zero tick rate, an unparseable `auto_update_delay`).
+Only two kinds of errors are fatal: YAML syntax errors (the file cannot be parsed at all) and a handful of out-of-range numeric values that bypass the warn-and-fallback policy: `volume_increment` outside 0–100, a tick rate (or animation tick rate) outside 1–999ms, an unparseable `auto_update_delay`, `playback_poll_seconds` below 1, and `like_animation_frames` below 1.
 
 ## Behavior
 
@@ -23,16 +23,19 @@ Only two kinds of errors are fatal: YAML syntax errors (the file cannot be parse
 behavior:
   # Timing
   seek_milliseconds: 5000          # seek step for < / >
-  tick_rate_milliseconds: 250      # UI event-loop cadence
-  playback_poll_seconds: 5         # how often playback state is polled (min 1;
+  tick_rate_milliseconds: 250      # UI event-loop cadence (1..=999, fatal if outside)
+  animation_tick_rate_milliseconds: 16
+                                   # animation-only cadence, e.g. the like-heart burst
+                                   #   (1..=999, fatal if outside)
+  playback_poll_seconds: 5         # how often playback state is polled (min 1, fatal if 0;
                                    #   near track end the app polls faster regardless)
   status_message_ttl_percent: 100  # scales how long status messages stay visible
                                    #   (10..=1000; 200 = twice as long)
-  like_animation_frames: 10        # length of the heart burst when liking a track (min 1)
+  like_animation_frames: 10        # length of the heart burst when liking a track (min 1, fatal if 0)
 
   # Volume
-  volume_increment: 1              # step for + / - (0..=100, fatal if outside)
-  volume_percent: 70               # startup volume
+  volume_increment: 10             # step for + / - (0..=100, fatal if outside)
+  volume_percent: 100              # startup volume
 
   # Scrolling
   table_scroll_padding: 5          # rows kept visible below the selection before
@@ -52,6 +55,7 @@ behavior:
 | `discover` | Discover | |
 | `artists` | Followed Artists | `library` |
 | `album_list` | Saved Albums | `albums` |
+| `stats` | Stats | |
 
 Unknown values fall back to `home` with a warning.
 
@@ -219,4 +223,4 @@ The ▶ now-playing marker attaches to the `title` column, or to the first colum
 
 ## Keybindings, theme, and plugins
 
-The `keybindings:` section rebinds ~40 named actions (`back: q`, `next_track: n`, modifier syntax like `ctrl-s` / `alt-,`), and `theme:` sets a preset plus 18 individual color slots (`"R, G, B"` or named colors) — both are easiest to edit from the in-app Settings screen, which writes them back to this file. `plugin_commands:` maps extra keys to Lua plugin commands. See [`examples/config.example.yml`](../examples/config.example.yml) and the [scripting docs](scripting.md).
+The `keybindings:` section rebinds ~40 named actions (`back: q`, `next_track: n`, modifier syntax like `ctrl-s` / `alt-,`), and `theme:` sets a preset plus 16 individual color slots (`"R, G, B"` or named colors) — both are easiest to edit from the in-app Settings screen, which writes them back to this file. `plugin_commands:` maps extra keys to Lua plugin commands. See [`examples/config.example.yml`](../examples/config.example.yml) and the [scripting docs](scripting.md).

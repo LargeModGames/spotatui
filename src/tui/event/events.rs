@@ -71,8 +71,10 @@ impl Events {
       loop {
         let tick_rate = Duration::from_millis(event_tick_rate_milliseconds.load(Ordering::Relaxed));
 
-        // poll for tick rate duration, if no event, sent tick event.
-        if event::poll(tick_rate).unwrap() {
+        // Poll only until the next tick is due, so input events don't push the
+        // tick schedule back.
+        let poll_timeout = tick_rate.saturating_sub(last_tick.elapsed());
+        if event::poll(poll_timeout).unwrap() {
           match event::read().unwrap() {
             // Only process key press events, not release or repeat.
             // This fixes duplicate key events on Windows where both
@@ -96,11 +98,18 @@ impl Events {
           }
         }
 
-        // If send fails, the receiver has been dropped (app is closing)
+        // Only send a tick when one is actually due. Ticks used to be sent
+        // unconditionally here, so every keypress enqueued an extra Tick right
+        // after its Input, and the main loop drew two full frames per
+        // keystroke. Input events keep their own immediate redraw; the tick
+        // cadence stays fixed at tick_rate regardless of input.
         let elapsed = last_tick.elapsed();
-        last_tick = Instant::now();
-        if event_tx.send(Event::Tick(elapsed)).is_err() {
-          break;
+        if elapsed >= tick_rate {
+          last_tick = Instant::now();
+          // If send fails, the receiver has been dropped (app is closing)
+          if event_tx.send(Event::Tick(elapsed)).is_err() {
+            break;
+          }
         }
       }
     });

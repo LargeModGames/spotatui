@@ -1,13 +1,9 @@
-use std::{
-  io::prelude::*,
-  net::{TcpListener, TcpStream},
-};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// Shared acceptance logic for both the blocking and async callback servers:
-/// given a raw HTTP request, return the full callback URL when it carries an
-/// OAuth `code=` query parameter, else `None` (browser noise like /favicon.ico,
-/// pre-flight requests, or malformed input).
+/// Acceptance logic for the callback server: given a raw HTTP request, return
+/// the full callback URL when it carries an OAuth `code=` query parameter,
+/// else `None` (browser noise like /favicon.ico, pre-flight requests, or
+/// malformed input).
 fn extract_callback_url(request: &str) -> Option<String> {
   let split: Vec<&str> = request.split_whitespace().collect();
   if split.len() <= 1 {
@@ -29,64 +25,13 @@ fn extract_callback_url(request: &str) -> Option<String> {
   Some(format!("http://{}{}", host, path))
 }
 
-pub fn redirect_uri_web_server(port: u16) -> Result<String, ()> {
-  let listener = TcpListener::bind(format!("127.0.0.1:{}", port));
-
-  match listener {
-    Ok(listener) => {
-      for stream in listener.incoming() {
-        match stream {
-          Ok(stream) => {
-            if let Some(url) = handle_connection(stream) {
-              return Ok(url);
-            }
-          }
-          Err(e) => {
-            println!("Error: {}", e);
-          }
-        };
-      }
-    }
-    Err(e) => {
-      println!("Error: {}", e);
-    }
-  }
-
-  Err(())
-}
-
-fn handle_connection(mut stream: TcpStream) -> Option<String> {
-  // The request will be quite large (> 512) so just assign plenty just in case
-  let mut buffer = [0; 1000];
-  let _ = stream.read(&mut buffer).unwrap();
-
-  // convert buffer into string and 'parse' the URL
-  match String::from_utf8(buffer.to_vec()) {
-    Ok(request) => {
-      if let Some(full_url) = extract_callback_url(&request) {
-        respond_with_success(stream);
-        return Some(full_url);
-      }
-
-      // Browser noise / malformed pre-flight — send 400 silently; the loop keeps
-      // waiting for the real OAuth callback.
-      send_error_response("Not a callback request".to_string(), stream);
-    }
-    Err(e) => {
-      let msg = format!("Invalid UTF-8 sequence: {}", e);
-      println!("Error: {}", msg);
-      send_error_response(msg, stream);
-    }
-  };
-
-  None
-}
-
-/// Async variant of [`redirect_uri_web_server`] for in-TUI Spotify login: it never
-/// blocks the caller's task (the network event pump), so the UI keeps rendering
-/// while the browser round-trips. Returns the callback URL, or `Err(())` on
-/// bind/accept failure. The caller applies the overall timeout (e.g. via
-/// `tokio::time::timeout`) so an abandoned login doesn't leak the listener.
+/// OAuth callback server, used by both the pre-TUI startup login and the
+/// in-TUI login flow: it never blocks the caller's thread (the old blocking
+/// variant parked a tokio worker in a std accept() loop with no timeout and
+/// could hang the startup login entirely, #364). Returns the callback URL, or
+/// `Err(())` on bind/accept failure. Callers that need an overall timeout
+/// (e.g. the in-TUI flow) apply it via `tokio::time::timeout` so an abandoned
+/// login doesn't leak the listener.
 pub async fn redirect_uri_web_server_async(port: u16) -> Result<String, ()> {
   let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
     .await
@@ -97,12 +42,22 @@ pub async fn redirect_uri_web_server_async(port: u16) -> Result<String, ()> {
 /// Accept-loop extracted so tests can inject a pre-bound listener (port 0) and
 /// avoid races caused by hard-coding a port that might already be in use.
 async fn run_accept_loop(listener: tokio::net::TcpListener) -> Result<String, ()> {
+  const MAX_CONSECUTIVE_ACCEPT_ERRORS: u8 = 20;
+  let mut consecutive_accept_errors = 0u8;
   loop {
     let mut stream = match listener.accept().await {
-      Ok((stream, _)) => stream,
+      Ok((stream, _)) => {
+        consecutive_accept_errors = 0;
+        stream
+      }
       Err(e) => {
+        consecutive_accept_errors = consecutive_accept_errors.saturating_add(1);
         log::warn!("[login] callback accept error: {e}");
-        return Err(());
+        if consecutive_accept_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+          return Err(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        continue;
       }
     };
 
@@ -138,61 +93,14 @@ async fn write_async_response(
   stream.flush().await
 }
 
-fn respond_with_success(mut stream: TcpStream) {
-  let contents = include_str!("redirect_uri.html");
-
-  let response = format!(
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-    contents.len(),
-    contents
-  );
-
-  stream.write_all(response.as_bytes()).unwrap();
-  stream.flush().unwrap();
-  // Give the browser time to receive the response before closing
-  std::thread::sleep(std::time::Duration::from_millis(100));
-}
-
-fn send_error_response(error_message: String, mut stream: TcpStream) {
-  let body = format!("400 - Bad Request - {}", error_message);
-  let response = format!(
-    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-    body.len(),
-    body
-  );
-
-  let _ = stream.write_all(response.as_bytes());
-  let _ = stream.flush();
-  std::thread::sleep(std::time::Duration::from_millis(100));
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
 
-  fn send_to_handle_connection(request: &[u8]) -> Option<String> {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let request = request.to_vec();
-    let writer_thread = std::thread::spawn(move || {
-      let mut client = TcpStream::connect(addr).unwrap();
-      client.write_all(&request).unwrap();
-      // Read and discard the response so handle_connection's write doesn't block
-      let mut buf = Vec::new();
-      let _ = client.read_to_end(&mut buf);
-    });
-
-    let (server_side, _) = listener.accept().unwrap();
-    let result = handle_connection(server_side);
-    writer_thread.join().unwrap();
-    result
-  }
-
   #[test]
   fn valid_callback_returns_url_with_code() {
-    let request = b"GET /login?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
-    let url = send_to_handle_connection(request);
+    let request = "GET /login?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
+    let url = extract_callback_url(request);
     assert!(url.is_some());
     let url = url.unwrap();
     assert!(
@@ -208,31 +116,27 @@ mod tests {
   }
 
   #[test]
-  fn whitespace_only_request_returns_none_without_printing() {
+  fn whitespace_only_request_returns_none() {
     // Whitespace-only payload: split_whitespace() returns empty vec (len 0 ≤ 1) → None silently
-    let result = send_to_handle_connection(b" \r\n\r\n");
-    assert!(result.is_none());
+    assert!(extract_callback_url(" \r\n\r\n").is_none());
   }
 
   #[test]
   fn preflight_single_token_returns_none() {
     // A single token (no path) also triggers the malformed branch → None, no panic
-    let result = send_to_handle_connection(b"GET");
-    assert!(result.is_none());
+    assert!(extract_callback_url("GET").is_none());
   }
 
   #[test]
   fn favicon_request_returns_none() {
-    let request = b"GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
-    let result = send_to_handle_connection(request);
-    assert!(result.is_none());
+    let request = "GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
+    assert!(extract_callback_url(request).is_none());
   }
 
   #[test]
   fn root_request_returns_none() {
-    let request = b"GET / HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
-    let result = send_to_handle_connection(request);
-    assert!(result.is_none());
+    let request = "GET / HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
+    assert!(extract_callback_url(request).is_none());
   }
 
   // --- async server tests --------------------------------------------------

@@ -18,6 +18,60 @@ use rspotify::model::{
 use rspotify::prelude::*;
 use serde::Deserialize;
 
+/// Minimal id-keyed TTL cache for metadata responses, so re-entering the same
+/// album/artist from a list within the TTL doesn't pay a fresh round trip plus
+/// the pacing tax. Deliberately tiny: no LRU crate, oldest-entry eviction at
+/// capacity, entries expire on read.
+pub(super) struct MetadataTtlCache<T> {
+  entries: std::collections::HashMap<String, (std::time::Instant, T)>,
+}
+
+const METADATA_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+const METADATA_CACHE_CAP: usize = 32;
+
+impl<T> Default for MetadataTtlCache<T> {
+  fn default() -> Self {
+    Self {
+      entries: std::collections::HashMap::new(),
+    }
+  }
+}
+
+impl<T: Clone> MetadataTtlCache<T> {
+  pub(super) fn get(&mut self, key: &str) -> Option<T> {
+    match self.entries.get(key) {
+      Some((stored_at, value)) if stored_at.elapsed() < METADATA_CACHE_TTL => Some(value.clone()),
+      Some(_) => {
+        self.entries.remove(key);
+        None
+      }
+      None => None,
+    }
+  }
+
+  pub(super) fn put(&mut self, key: String, value: T) {
+    if self.entries.len() >= METADATA_CACHE_CAP && !self.entries.contains_key(&key) {
+      if let Some(oldest) = self
+        .entries
+        .iter()
+        .min_by_key(|(_, (stored_at, _))| *stored_at)
+        .map(|(k, _)| k.clone())
+      {
+        self.entries.remove(&oldest);
+      }
+    }
+    self.entries.insert(key, (std::time::Instant::now(), value));
+  }
+}
+
+/// The raw responses `get_artist` assembles, cached as one unit.
+#[derive(Clone)]
+pub(super) struct CachedArtistData {
+  top_tracks: Vec<FullTrack>,
+  related_artists: Vec<FullArtist>,
+  album_items: Vec<SimplifiedAlbum>,
+}
+
 #[derive(Deserialize)]
 struct ArtistTopTracksResponse {
   tracks: Vec<FullTrack>,
@@ -94,66 +148,85 @@ impl MetadataNetwork for Network {
     country: Option<Country>,
   ) {
     let artist_id_str = artist_id.id().to_string();
-    let artist_path = format!("artists/{}", artist_id.id());
-    let top_tracks_path = format!("{}/top-tracks", artist_path);
-    let related_artists_path = format!("{}/related-artists", artist_path);
-    let mut top_tracks_query = Vec::new();
-    if let Some(country) = country {
-      top_tracks_query.push(("market", country_code(country)));
-    }
+    let cache_key = format!("{}:{:?}", artist_id_str, country);
 
-    let (top_tracks_res, related_artists_res) = tokio::join!(
-      self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
-      self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
-    );
-
-    let top_tracks = match top_tracks_res {
-      Ok(res) => res.tracks,
-      Err(e) => {
-        self.handle_error(anyhow!(e)).await;
-        return;
-      }
-    };
-    let related_artists = match related_artists_res {
-      Ok(res) => res.artists,
-      Err(e) => {
-        self.handle_error(anyhow!(e)).await;
-        return;
-      }
-    };
-
-    let mut album_items = Vec::new();
-    let mut offset = 0u32;
-    let limit = 50u32;
-    loop {
-      let mut query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+    let cached = self.artist_cache.get(&cache_key);
+    let CachedArtistData {
+      top_tracks,
+      related_artists,
+      album_items,
+    } = if let Some(data) = cached {
+      data
+    } else {
+      let artist_path = format!("artists/{}", artist_id.id());
+      let top_tracks_path = format!("{}/top-tracks", artist_path);
+      let related_artists_path = format!("{}/related-artists", artist_path);
+      let mut top_tracks_query = Vec::new();
       if let Some(country) = country {
-        query.push(("market", country_code(country)));
+        top_tracks_query.push(("market", country_code(country)));
       }
-      let page = match self
-        .spotify_get_typed::<Page<SimplifiedAlbum>>(&format!("{}/albums", artist_path), &query)
-        .await
-      {
-        Ok(page) => page,
+
+      let (top_tracks_res, related_artists_res) = tokio::join!(
+        self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
+        self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
+      );
+
+      let top_tracks = match top_tracks_res {
+        Ok(res) => res.tracks,
         Err(e) => {
           self.handle_error(anyhow!(e)).await;
           return;
         }
       };
-      let next = page.next.is_some();
-      album_items.extend(page.items);
-      if !next {
-        break;
+      let related_artists = match related_artists_res {
+        Ok(res) => res.artists,
+        Err(e) => {
+          self.handle_error(anyhow!(e)).await;
+          return;
+        }
+      };
+
+      let mut album_items = Vec::new();
+      let mut offset = 0u32;
+      let limit = 50u32;
+      loop {
+        let mut query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+        if let Some(country) = country {
+          query.push(("market", country_code(country)));
+        }
+        let page = match self
+          .spotify_get_typed::<Page<SimplifiedAlbum>>(&format!("{}/albums", artist_path), &query)
+          .await
+        {
+          Ok(page) => page,
+          Err(e) => {
+            self.handle_error(anyhow!(e)).await;
+            return;
+          }
+        };
+        let next = page.next.is_some();
+        album_items.extend(page.items);
+        if !next {
+          break;
+        }
+        offset += limit;
       }
-      offset += limit;
-    }
+
+      let data = CachedArtistData {
+        top_tracks,
+        related_artists,
+        album_items,
+      };
+      self.artist_cache.put(cache_key, data.clone());
+      data
+    };
 
     // Convert rspotify types to domain types before storing — conversion stays
     // inside infra/network per the multi-source boundary contract.
     let albums_rspotify_page = Page {
       items: album_items,
       href: String::new(),
-      limit,
+      limit: 50,
       next: None,
       offset: 0,
       previous: None,
@@ -209,7 +282,19 @@ impl MetadataNetwork for Network {
   async fn get_album_tracks(&mut self, album: Box<SimplifiedAlbum>) {
     let album_id = album.id.clone();
     if let Some(id) = album_id {
-      match fetch_album_tracks_from(self, id.id(), 0).await {
+      let fetched = match self.album_tracks_cache.get(id.id()) {
+        Some(tracks) => Ok(tracks),
+        None => match fetch_album_tracks_from(self, id.id(), 0).await {
+          Ok(tracks) => {
+            self
+              .album_tracks_cache
+              .put(id.id().to_string(), tracks.clone());
+            Ok(tracks)
+          }
+          Err(e) => Err(e),
+        },
+      };
+      match fetched {
         Ok(track_items) => {
           let album_info = crate::core::plugin_api::AlbumInfo::from(album.as_ref());
           // Check if these tracks are liked (before `track_items` is consumed).
@@ -243,23 +328,34 @@ impl MetadataNetwork for Network {
   }
 
   async fn get_album(&mut self, album_id: AlbumId<'static>) {
-    match self
-      .spotify_get_typed::<FullAlbum>(&format!("albums/{}", album_id.id()), &[])
-      .await
-    {
+    let fetched = if let Some(album) = self.album_cache.get(album_id.id()) {
+      Ok(album)
+    } else {
+      self
+        .spotify_get_typed::<FullAlbum>(&format!("albums/{}", album_id.id()), &[])
+        .await
+    };
+    match fetched {
       Ok(mut album) => {
         // A full album embeds only the first page of its tracklist (50 tracks
         // max); fetch the rest so longer albums render completely.
         if album.tracks.next.is_some() {
           let offset = album.tracks.items.len() as u32;
           match fetch_album_tracks_from(self, album_id.id(), offset).await {
-            Ok(rest) => album.tracks.items.extend(rest),
+            Ok(rest) => {
+              album.tracks.items.extend(rest);
+              // Mark the tracklist complete so a cache hit doesn't re-page.
+              album.tracks.next = None;
+            }
             Err(e) => {
               self.handle_error(anyhow!(e)).await;
               return;
             }
           }
         }
+        self
+          .album_cache
+          .put(album_id.id().to_string(), album.clone());
         let album_info = crate::core::plugin_api::AlbumInfo::from(&album);
         let mut app = self.app.lock().await;
         // Check if these tracks are liked.

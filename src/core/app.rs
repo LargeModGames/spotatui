@@ -402,6 +402,9 @@ impl RouteId {
 pub struct FriendEntry {
   pub id: String,
   pub name: String,
+  /// Lowercased `name`, precomputed once so the per-frame search filter
+  /// doesn't allocate per friend per frame.
+  pub name_lower: String,
   pub is_online: bool,
   pub now_playing: Option<FriendNowPlaying>,
   /// Total listening time in milliseconds (from spotatui.com)
@@ -567,6 +570,10 @@ pub struct TrackTable {
   pub tracks: Vec<TrackInfo>,
   pub selected_index: usize,
   pub context: Option<TrackTableContext>,
+  /// First row shown in the table. Persisted across frames so the cursor can
+  /// move within the visible window without dragging the view (the view only
+  /// scrolls when the cursor reaches an edge). Updated during draw, hence Cell.
+  pub scroll_offset: std::cell::Cell<usize>,
 }
 
 fn sort_playlist_track_matches(matches: &mut [(FullTrack, usize)], sort_state: SortState) {
@@ -975,6 +982,16 @@ pub struct QueueState {
   pub queue: Vec<PlayableInfo>,
 }
 
+#[cfg(feature = "streaming")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingStartPlayback {
+  pub context_uri: Option<String>,
+  pub uris: Option<Vec<String>>,
+  pub offset: Option<usize>,
+  pub parked_at: Instant,
+  pub recovery_attempts: u8,
+}
+
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
   /// Spotify's API comes back with the same value — otherwise a slow poll
@@ -1029,6 +1046,10 @@ pub struct App {
   /// Status of the current track's cover art, driving the placeholder message.
   #[cfg(feature = "cover-art")]
   pub cover_art_status: CoverArtStatus,
+  /// Image key currently desired by the UI. Detached decode results for older
+  /// keys are discarded.
+  #[cfg(feature = "cover-art")]
+  pub desired_cover_art_key: Option<String>,
   // Inputs:
   // input is the string for input;
   // input_idx is the index of the cursor in terms of character;
@@ -1083,6 +1104,10 @@ pub struct App {
   pub last_api_seek: Option<Instant>,
   /// Pending seek position for API (throttled to avoid overwhelming Spotify API)
   pub pending_api_seek: Option<u32>,
+  /// Last time a decoded-source seek was dispatched (for throttling drags)
+  pub last_source_seek: Option<Instant>,
+  /// Pending decoded-source seek position (throttled; drags coalesce to the last target)
+  pub pending_source_seek: Option<u32>,
   pub track_table: TrackTable,
   pub episode_table_context: EpisodeTableContext,
   pub selected_show_simplified: Option<SelectedShow>,
@@ -1148,6 +1173,9 @@ pub struct App {
   pub pending_announcements: Vec<Announcement>,
   pub lyrics: Option<Vec<(u128, String)>>,
   pub lyrics_status: LyricsStatus,
+  /// Title/artist pair whose lyrics response is currently desired. Detached
+  /// service responses must match this before mutating visible state.
+  pub desired_lyrics_identity: Option<(String, String)>,
   pub global_song_count: Option<u64>,
   pub global_song_count_failed: bool,
   // Settings screen state
@@ -1261,17 +1289,31 @@ pub struct App {
   /// Current folder ID being viewed (0 = root)
   pub current_playlist_folder_id: usize,
   /// Incremented every time playlists are refreshed to guard stale background tasks
-  pub _playlist_refresh_generation: u64,
+  pub playlist_refresh_generation: u64,
   /// Incremented every time the saved tracks view is reloaded to guard stale prefetch tasks
   pub saved_tracks_prefetch_generation: u64,
   pub saved_tracks_prefetch_in_flight: HashSet<u32>,
   /// Incremented every time the playlist track table is reloaded to guard stale prefetch tasks
   pub playlist_tracks_prefetch_generation: u64,
   pub playlist_tracks_prefetch_in_flight: HashSet<u32>,
+  /// Playlist ids whose full track list is being fetched for sorting. Further
+  /// sort changes reuse the active fetch and apply the newest sort at completion.
+  pub playlist_sort_fetch_in_flight: HashSet<String>,
+  /// Playlist id whose page-1 open fetch is in flight, so spamming Enter on a
+  /// playlist doesn't queue duplicate full fetches. Cleared when the response
+  /// (or its error) lands.
+  pub pending_playlist_open: Option<String>,
   /// Tracks whether a ChangeVolume request is on its way to Spotify.
   /// When true, we hold off on sending another one — rapid key presses
   /// just update `pending_volume` and the latest value wins.
   pub is_volume_change_in_flight: bool,
+  /// Deadline for a debounced config save scheduled by an auto-repeating key
+  /// (volume, panel resize, shuffle). Those keys used to call `save_config()`
+  /// synchronously per repeat, paying a full read, YAML parse, rebuild,
+  /// serialize, and write on the UI thread, dozens of times per second while
+  /// held. The tick handler flushes this once the debounce window passes;
+  /// shutdown flushes it unconditionally.
+  pub config_save_due: Option<Instant>,
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
@@ -1303,6 +1345,22 @@ pub struct App {
   #[cfg(feature = "streaming")]
   pub streaming_recovery_tx:
     Option<tokio::sync::mpsc::UnboundedSender<crate::infra::player::StreamingRecoveryRequest>>,
+  /// A StartPlayback request parked while no usable backend exists (native
+  /// session recovering, or startup init still materializing one). Replayed
+  /// once the backend is ready so the user's press isn't silently dropped.
+  #[cfg(feature = "streaming")]
+  pub pending_start_playback: Option<PendingStartPlayback>,
+  /// True while a native backend may materialize soon (recovery in flight, or
+  /// the deferred startup init still running). While set, a playback request
+  /// that finds no active device parks itself for replay instead of routing
+  /// to the full-screen error.
+  #[cfg(feature = "streaming")]
+  pub native_backend_pending: bool,
+  /// Armed when a native load is issued; a Playing/TrackChanged event disarms
+  /// it. If it fires, the session is a zombie (passes `is_connected` but
+  /// silently drops Spirc commands) and recovery is forced.
+  #[cfg(feature = "streaming")]
+  pub native_load_watchdog: Option<Instant>,
   /// Reference to MPRIS manager for emitting Seeked signals after native seeks
   #[cfg(all(feature = "mpris", target_os = "linux"))]
   pub mpris_manager: Option<Arc<crate::infra::mpris::MprisManager>>,
@@ -1479,6 +1537,8 @@ impl Default for App {
       pending_native_seek: None,
       last_api_seek: None,
       pending_api_seek: None,
+      last_source_seek: None,
+      pending_source_seek: None,
       selected_device_index: None,
       selected_playlist_index: None,
       active_playlist_index: None,
@@ -1509,6 +1569,7 @@ impl Default for App {
       pending_announcements: Vec::new(),
       lyrics: None,
       lyrics_status: LyricsStatus::default(),
+      desired_lyrics_identity: None,
       global_song_count: None,
       global_song_count_failed: false,
       // Settings defaults
@@ -1558,12 +1619,15 @@ impl Default for App {
       _playlist_folder_nodes: None,
       playlist_folder_items: Vec::new(),
       current_playlist_folder_id: 0,
-      _playlist_refresh_generation: 0,
+      playlist_refresh_generation: 0,
       saved_tracks_prefetch_generation: 0,
       saved_tracks_prefetch_in_flight: HashSet::new(),
       playlist_tracks_prefetch_generation: 0,
+      pending_playlist_open: None,
       playlist_tracks_prefetch_in_flight: HashSet::new(),
+      playlist_sort_fetch_in_flight: HashSet::new(),
       is_volume_change_in_flight: false,
+      config_save_due: None,
       pending_volume: None,
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
@@ -1578,12 +1642,20 @@ impl Default for App {
       youtube_playback: None,
       #[cfg(feature = "streaming")]
       streaming_recovery_tx: None,
+      #[cfg(feature = "streaming")]
+      pending_start_playback: None,
+      #[cfg(feature = "streaming")]
+      native_backend_pending: false,
+      #[cfg(feature = "streaming")]
+      native_load_watchdog: None,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
       mpris_manager: None,
       #[cfg(feature = "cover-art")]
       cover_art: crate::tui::cover_art::CoverArt::new(),
       #[cfg(feature = "cover-art")]
       cover_art_status: CoverArtStatus::default(),
+      #[cfg(feature = "cover-art")]
+      desired_cover_art_key: None,
       friends: Vec::new(),
       friends_loading: false,
       friend_code: None,
@@ -1698,23 +1770,19 @@ impl App {
       return;
     }
     if let Some(page) = self.recently_played.result.as_mut() {
-      page.items.sort_by(|a, b| {
-        let order = match sort_state.field {
-          SortField::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-          SortField::Artist => {
-            let artist_a = a.artists.first().map(|s| s.to_lowercase());
-            let artist_b = b.artists.first().map(|s| s.to_lowercase());
-            artist_a.cmp(&artist_b)
-          }
-          SortField::Album => a.album.to_lowercase().cmp(&b.album.to_lowercase()),
-          _ => std::cmp::Ordering::Equal,
-        };
-        if sort_state.order == SortOrder::Descending {
-          order.reverse()
-        } else {
-          order
+      use crate::core::sort::sort_by_key_with_order;
+      match sort_state.field {
+        SortField::Name => {
+          sort_by_key_with_order(&mut page.items, sort_state.order, |t| t.name.to_lowercase())
         }
-      });
+        SortField::Artist => sort_by_key_with_order(&mut page.items, sort_state.order, |t| {
+          t.artists.first().map(|s| s.to_lowercase())
+        }),
+        SortField::Album => sort_by_key_with_order(&mut page.items, sort_state.order, |t| {
+          t.album.to_lowercase()
+        }),
+        _ => {}
+      }
     }
   }
 
@@ -1773,6 +1841,9 @@ impl App {
   pub fn current_persisted_playback(
     &self,
   ) -> Option<crate::core::persisted_playback::PersistedPlayback> {
+    if !self.has_persistable_playback() {
+      return None;
+    }
     #[cfg(any(
       feature = "youtube",
       feature = "subsonic",
@@ -1880,6 +1951,41 @@ impl App {
       queue.insert(0, track.clone());
     }
     Some(crate::core::persisted_playback::PersistedSession { playback, queue })
+  }
+
+  /// Cheap presence check for `current_persisted_session`: same decision
+  /// logic, no snapshot allocation. Lets the tick loop skip building the
+  /// snapshot (which clones the whole native queue) unless a save is due.
+  pub fn has_persistable_session(&self) -> bool {
+    self.has_persistable_playback()
+      || !self.native_queue.is_empty()
+      || self.queue_now_track().is_some()
+  }
+
+  fn has_persistable_playback(&self) -> bool {
+    // Mirrors `current_persisted_playback`: a decoded context suspended past
+    // its end (resume_index == None) does not persist.
+    #[cfg(any(feature = "youtube", feature = "subsonic", feature = "local-files"))]
+    {
+      let context_resumable = !matches!(self.suspended_resume(), Some((None, _)));
+      #[cfg(feature = "youtube")]
+      if self.youtube_playback.is_some() && context_resumable {
+        return true;
+      }
+      #[cfg(feature = "subsonic")]
+      if self.subsonic_playback.is_some() && context_resumable {
+        return true;
+      }
+      #[cfg(feature = "local-files")]
+      if self.local_playback.is_some() && context_resumable {
+        return true;
+      }
+    }
+    #[cfg(feature = "internet-radio")]
+    if self.radio_playback.is_some() {
+      return true;
+    }
+    false
   }
 
   #[allow(dead_code)]
@@ -2105,10 +2211,21 @@ impl App {
       return false;
     }
 
-    // Stop the old spirc before dropping our reference so the dead session
-    // doesn't linger as a ghost Connect device (#297).
-    player.shutdown();
-    self.streaming_player = None;
+    self.force_native_streaming_recovery(reselect_device);
+    true
+  }
+
+  /// Tear down the current native session — even one that still passes
+  /// `is_connected` — and request recovery. Called by the disconnect check
+  /// above and by the load watchdog, which catches zombie sessions (half-open
+  /// TCP: `is_connected` true, Spirc commands silently dropped).
+  #[cfg(feature = "streaming")]
+  pub fn force_native_streaming_recovery(&mut self, reselect_device: bool) {
+    if let Some(player) = self.streaming_player.take() {
+      // Stop the old spirc before dropping our reference so the dead session
+      // doesn't linger as a ghost Connect device (#297).
+      player.shutdown();
+    }
     self.is_streaming_active = false;
     self.native_activation_pending = false;
     self.native_device_id = None;
@@ -2119,16 +2236,68 @@ impl App {
     self.last_track_id = None;
     self.last_device_activation = None;
     self.seek_ms = None;
+    self.native_load_watchdog = None;
+    // Playback requests park for replay until recovery resolves (see
+    // `replay_pending_start_playback`). Only enter the pending state when the
+    // recovery request was actually accepted.
     if reselect_device {
       self.current_playback_context = None;
     }
 
     self.set_status_message("Native streaming disconnected; attempting recovery.", 8);
     if let Some(tx) = &self.streaming_recovery_tx {
-      let _ = tx.send(crate::infra::player::StreamingRecoveryRequest { reselect_device });
+      self.native_backend_pending = tx
+        .send(crate::infra::player::StreamingRecoveryRequest { reselect_device })
+        .is_ok();
+    } else {
+      self.native_backend_pending = false;
     }
     self.dispatch(IoEvent::GetCurrentPlayback);
-    true
+  }
+
+  /// Park a StartPlayback request (string form, as `IoEvent::StartPlayback`
+  /// carries it) for replay once a usable backend exists. A newer request
+  /// replaces an older one — the user's latest intent wins.
+  #[cfg(feature = "streaming")]
+  pub fn park_start_playback(
+    &mut self,
+    context_uri: Option<String>,
+    uris: Option<Vec<String>>,
+    offset: Option<usize>,
+  ) {
+    let same_request = self.pending_start_playback.as_ref().is_some_and(|pending| {
+      pending.context_uri == context_uri && pending.uris == uris && pending.offset == offset
+    });
+    if !same_request {
+      self.pending_start_playback = Some(PendingStartPlayback {
+        context_uri,
+        uris,
+        offset,
+        parked_at: Instant::now(),
+        recovery_attempts: 0,
+      });
+    }
+  }
+
+  /// Replay a parked StartPlayback through the normal dispatch path. No-op
+  /// when nothing is parked.
+  #[cfg(feature = "streaming")]
+  pub fn replay_pending_start_playback(&mut self) {
+    const MAX_PARKED_AGE: Duration = Duration::from_secs(30);
+    let Some(pending) = self.pending_start_playback.clone() else {
+      return;
+    };
+    if pending.parked_at.elapsed() > MAX_PARKED_AGE {
+      self.pending_start_playback = None;
+      self.set_status_message("Playback request expired during native recovery.", 6);
+      return;
+    }
+    self.set_status_message("Resuming playback request…", 4);
+    self.dispatch(IoEvent::StartPlayback(
+      pending.context_uri,
+      pending.uris,
+      pending.offset,
+    ));
   }
 
   pub fn playlist_is_editable(&self, playlist: &PlaylistInfo) -> bool {
@@ -2417,6 +2586,47 @@ impl App {
       }
     }
 
+    // Load watchdog: a native load that produces no Playing/TrackChanged
+    // event within the window means the session is a zombie (passes
+    // `is_connected`, drops Spirc commands) — force recovery; the parked
+    // request replays once the new session is up.
+    #[cfg(feature = "streaming")]
+    {
+      const NATIVE_LOAD_WATCHDOG: Duration = Duration::from_secs(5);
+      let watchdog_window = NATIVE_LOAD_WATCHDOG.saturating_mul(
+        u32::from(
+          self
+            .pending_start_playback
+            .as_ref()
+            .map_or(0, |pending| pending.recovery_attempts),
+        ) + 1,
+      );
+      if self
+        .native_load_watchdog
+        .is_some_and(|armed| armed.elapsed() >= watchdog_window)
+      {
+        self.native_load_watchdog = None;
+        const MAX_RECOVERY_ATTEMPTS: u8 = 2;
+        if let Some(pending) = self.pending_start_playback.as_mut() {
+          if pending.recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+            self.pending_start_playback = None;
+            self.set_status_message(
+              "Native playback did not respond after recovery; request dropped.",
+              8,
+            );
+          } else {
+            pending.recovery_attempts += 1;
+            log::warn!(
+              "no player event within {}s of native load; forcing recovery attempt {}",
+              NATIVE_LOAD_WATCHDOG.as_secs(),
+              pending.recovery_attempts
+            );
+            self.force_native_streaming_recovery(true);
+          }
+        }
+      }
+    }
+
     self.poll_current_playback();
     let playing_now = self.user_config.behavior.keepawake_enabled
       && self
@@ -2617,9 +2827,10 @@ impl App {
     // duration internally). Radio returns None here, so its playbar drags are
     // correct no-ops. Never read the stale Spotify context duration for a source.
     if self.active_source_position_ms().is_some() {
-      self.song_progress_ms = position_ms as u128;
-      self.seek_ms = None;
-      self.dispatch(IoEvent::Seek(position_ms));
+      // Decoded `.seek()` can re-decode forward for many codecs, so a mouse
+      // drag must not dispatch one seek per drag event; coalesce to the last
+      // target with the same throttle-and-flush pattern as the other backends.
+      self.queue_source_seek(position_ms);
       return;
     }
     if let Some(CurrentPlaybackContext {
@@ -2659,6 +2870,46 @@ impl App {
 
       // Fallback: API-based seek for external devices (with throttling)
       self.queue_api_seek(new_progress);
+    }
+  }
+
+  /// Queue a decoded-source (local/Subsonic/YouTube) seek with throttling
+  fn queue_source_seek(&mut self, position_ms: u32) {
+    // Always update UI immediately
+    self.song_progress_ms = position_ms as u128;
+    self.seek_ms = None;
+
+    const SOURCE_SEEK_THROTTLE_MS: u128 = 50;
+    let should_seek_now = self
+      .last_source_seek
+      .is_none_or(|t| t.elapsed().as_millis() >= SOURCE_SEEK_THROTTLE_MS);
+
+    if should_seek_now {
+      self.execute_source_seek(position_ms);
+    } else {
+      // Queue the seek - will be flushed by tick loop or next seek
+      self.pending_source_seek = Some(position_ms);
+    }
+  }
+
+  /// Execute a decoded-source seek and update tracking state
+  fn execute_source_seek(&mut self, position_ms: u32) {
+    self.pending_source_seek = None;
+    self.last_source_seek = Some(Instant::now());
+    self.dispatch(IoEvent::Seek(position_ms));
+  }
+
+  /// Flush any pending decoded-source seek (called from tick loop)
+  pub fn flush_pending_source_seek(&mut self) {
+    if let Some(position) = self.pending_source_seek {
+      const SOURCE_SEEK_THROTTLE_MS: u128 = 50;
+      let should_flush = self
+        .last_source_seek
+        .is_none_or(|t| t.elapsed().as_millis() >= SOURCE_SEEK_THROTTLE_MS);
+
+      if should_flush {
+        self.execute_source_seek(position);
+      }
     }
   }
 
@@ -2752,6 +3003,29 @@ impl App {
   ///
   /// We intentionally don't clear `pending_volume` here — it sticks around until
   /// `get_current_playback` sees the matching value come back from the API.
+  /// Schedule a debounced config save. Hot paths (volume, panel resize,
+  /// shuffle) call this instead of `save_config()` so a held key doesn't pay
+  /// disk + YAML work on every auto-repeat; the save lands once, shortly
+  /// after the last change.
+  pub fn schedule_config_save(&mut self) {
+    const CONFIG_SAVE_DEBOUNCE_MS: u64 = 500;
+    self.config_save_due = Some(Instant::now() + Duration::from_millis(CONFIG_SAVE_DEBOUNCE_MS));
+  }
+
+  /// Flush a scheduled config save once its debounce window has passed, or
+  /// immediately when `force` is set (shutdown).
+  pub fn flush_config_save(&mut self, force: bool) {
+    let Some(due) = self.config_save_due else {
+      return;
+    };
+    if force || Instant::now() >= due {
+      self.config_save_due = None;
+      if let Err(e) = self.user_config.save_config() {
+        self.handle_error(anyhow!("Failed to save config: {}", e));
+      }
+    }
+  }
+
   pub fn flush_pending_volume(&mut self) {
     if self.is_volume_change_in_flight {
       return; // previous request still processing
@@ -2822,7 +3096,7 @@ impl App {
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume));
         self.user_config.behavior.volume_percent = next_volume;
-        let _ = self.user_config.save_config();
+        self.schedule_config_save();
         self.pending_volume = Some(next_volume);
         return;
       }
@@ -2837,7 +3111,7 @@ impl App {
             ctx.device.volume_percent = Some(next_volume.into());
           }
           self.user_config.behavior.volume_percent = next_volume;
-          let _ = self.user_config.save_config();
+          self.schedule_config_save();
           self.pending_volume = Some(next_volume);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -2878,7 +3152,7 @@ impl App {
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume));
         self.user_config.behavior.volume_percent = next_volume;
-        let _ = self.user_config.save_config();
+        self.schedule_config_save();
         self.pending_volume = Some(next_volume);
         return;
       }
@@ -2893,7 +3167,7 @@ impl App {
             ctx.device.volume_percent = Some(next_volume.into());
           }
           self.user_config.behavior.volume_percent = next_volume;
-          let _ = self.user_config.save_config();
+          self.schedule_config_save();
           self.pending_volume = Some(next_volume);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -2939,7 +3213,7 @@ impl App {
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume_u8));
         self.user_config.behavior.volume_percent = next_volume_u8;
-        let _ = self.user_config.save_config();
+        self.schedule_config_save();
         self.pending_volume = Some(next_volume_u8);
         return;
       }
@@ -2954,7 +3228,7 @@ impl App {
             ctx.device.volume_percent = Some(next_volume_u8.into());
           }
           self.user_config.behavior.volume_percent = next_volume_u8;
-          let _ = self.user_config.save_config();
+          self.schedule_config_save();
           self.pending_volume = Some(next_volume_u8);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -3688,6 +3962,8 @@ impl App {
           if is_playing { "paused" } else { "playing" }
         );
         if is_playing {
+          self.pending_start_playback = None;
+          self.native_load_watchdog = None;
           player.pause();
           // Update UI state immediately
           if let Some(ctx) = &mut self.current_playback_context {
@@ -3730,6 +4006,11 @@ impl App {
 
   pub fn previous_track(&mut self) {
     info!("playing previous track or restarting current track");
+    #[cfg(feature = "streaming")]
+    {
+      self.pending_start_playback = None;
+      self.native_load_watchdog = None;
+    }
     // The native queue owns playback: a forward-only queue has no "previous",
     // so restart the current queued track. The queue router intercepts the
     // dispatched event for both decoded and Spotify queue slots.
@@ -3792,6 +4073,11 @@ impl App {
 
   pub fn force_previous_track(&mut self) {
     info!("force skipping to previous track");
+    #[cfg(feature = "streaming")]
+    {
+      self.pending_start_playback = None;
+      self.native_load_watchdog = None;
+    }
     // The native queue owns playback: restart the current queued track (the
     // queue router intercepts the event for both slot kinds).
     if self.queue_owns_playback() {
@@ -3833,6 +4119,11 @@ impl App {
 
   pub fn next_track(&mut self) {
     info!("skipping to next track");
+    #[cfg(feature = "streaming")]
+    {
+      self.pending_start_playback = None;
+      self.native_load_watchdog = None;
+    }
     // The native queue owns playback: skip to the next queued item (or resume
     // the suspended context when the queue drains).
     if self.queue_owns_playback() {
@@ -4093,6 +4384,33 @@ impl App {
     self.track_table.selected_index = 0;
     self.track_table.tracks.clear();
     self.track_table.context = Some(TrackTableContext::SavedTracks);
+  }
+
+  /// Open a playlist's track table: navigate immediately (the cleared table is
+  /// the loading state) and fetch page 1. The fetch response used to be what
+  /// pushed the route, so a queued or slow fetch made Enter look dead and
+  /// trained users to spam it — each press queuing another full fetch. Now
+  /// the screen opens on the first press, and a repeat press while the same
+  /// open is still in flight only re-ensures navigation instead of dispatching
+  /// a duplicate fetch.
+  pub fn open_playlist_tracks(
+    &mut self,
+    playlist_id: PlaylistId<'static>,
+    context: TrackTableContext,
+  ) {
+    let id_str = playlist_id.id().to_string();
+    if self.pending_playlist_open.as_deref() == Some(id_str.as_str()) {
+      // Same open already in flight: just make sure the screen is shown.
+      if self.get_current_route().id != RouteId::TrackTable {
+        self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+      }
+      return;
+    }
+    self.pending_playlist_open = Some(id_str.clone());
+    self.reset_playlist_tracks_view(playlist_id, context);
+    self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    self.set_status_message("Loading playlist…", 3);
+    self.dispatch(IoEvent::GetPlaylistItems(id_str, self.playlist_offset));
   }
 
   pub fn reset_playlist_tracks_view(
@@ -4401,8 +4719,12 @@ impl App {
   }
 
   pub fn shuffle(&mut self) {
-    if let Some(context) = &self.current_playback_context.clone() {
-      let new_shuffle_state = !context.shuffle_state;
+    if let Some(shuffle_state) = self
+      .current_playback_context
+      .as_ref()
+      .map(|context| context.shuffle_state)
+    {
+      let new_shuffle_state = !shuffle_state;
       info!("toggling shuffle: {}", new_shuffle_state);
 
       // Use native streaming player for instant control (bypasses event channel latency)
@@ -4417,7 +4739,7 @@ impl App {
             ctx.shuffle_state = new_shuffle_state;
           }
           self.user_config.behavior.shuffle_enabled = new_shuffle_state;
-          let _ = self.user_config.save_config();
+          self.schedule_config_save();
 
           // Notify MPRIS clients of the change
           #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -4770,8 +5092,11 @@ impl App {
   }
 
   pub fn repeat(&mut self) {
-    if let Some(context) = &self.current_playback_context.clone() {
-      let current_repeat_state = context.repeat_state;
+    if let Some(current_repeat_state) = self
+      .current_playback_context
+      .as_ref()
+      .map(|context| context.repeat_state)
+    {
       info!("toggling repeat mode: {:?}", current_repeat_state);
 
       // Use native streaming player for instant control (bypasses event channel latency)
@@ -6272,6 +6597,47 @@ mod tests {
   use rspotify::prelude::Id;
   use std::collections::HashMap;
   use std::sync::mpsc::channel;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn parked_playback_retries_are_keyed_to_the_request() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(
+      Some("spotify:playlist:first".to_string()),
+      Some(vec!["spotify:track:first".to_string()]),
+      Some(1),
+    );
+    app
+      .pending_start_playback
+      .as_mut()
+      .unwrap()
+      .recovery_attempts = 2;
+
+    app.park_start_playback(
+      Some("spotify:playlist:first".to_string()),
+      Some(vec!["spotify:track:first".to_string()]),
+      Some(1),
+    );
+    assert_eq!(
+      app
+        .pending_start_playback
+        .as_ref()
+        .unwrap()
+        .recovery_attempts,
+      2
+    );
+
+    app.park_start_playback(Some("spotify:playlist:second".to_string()), None, None);
+    assert_eq!(
+      app
+        .pending_start_playback
+        .as_ref()
+        .unwrap()
+        .recovery_attempts,
+      0
+    );
+  }
 
   #[allow(deprecated)]
   fn full_track(id: &str, name: &str) -> FullTrack {

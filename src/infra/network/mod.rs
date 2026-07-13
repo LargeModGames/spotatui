@@ -278,6 +278,11 @@ pub struct Network {
   pub token_cache_path: PathBuf,
   /// In-flight in-TUI Spotify login, if any (see `begin_spotify_login`).
   pending_login: Option<PendingLogin>,
+  /// TTL caches so re-visiting the same artist/album skips the round trip +
+  /// pacing tax (see `metadata::MetadataTtlCache`).
+  artist_cache: metadata::MetadataTtlCache<metadata::CachedArtistData>,
+  album_cache: metadata::MetadataTtlCache<rspotify::model::album::FullAlbum>,
+  album_tracks_cache: metadata::MetadataTtlCache<Vec<rspotify::model::track::SimplifiedTrack>>,
 }
 
 impl Network {
@@ -299,6 +304,9 @@ impl Network {
       party_incoming_rx: None,
       token_cache_path,
       pending_login: None,
+      artist_cache: Default::default(),
+      album_cache: Default::default(),
+      album_tracks_cache: Default::default(),
     }
   }
 
@@ -319,6 +327,9 @@ impl Network {
       party_incoming_rx: None,
       token_cache_path,
       pending_login: None,
+      artist_cache: Default::default(),
+      album_cache: Default::default(),
+      album_tracks_cache: Default::default(),
     }
   }
 
@@ -390,8 +401,45 @@ impl Network {
     )
   }
 
+  /// Events that run on the concurrent service lane in `start_tokio`: a strict
+  /// subset of [`Self::event_bypasses_spotify_auth`] whose handlers touch only
+  /// `self.app` (plus their own HTTP clients / `spawn_blocking`) — never the
+  /// Spotify client, API pacing, or `Network` state (party connection, pending
+  /// login, search limits) — so they can execute on a detached task with a
+  /// throwaway `Network` instead of head-of-line-blocking the serial pump.
+  /// Keep in sync with the handlers: an event listed here MUST NOT read or
+  /// write anything on `Network` besides `app`.
+  pub fn runs_on_service_lane(io_event: &IoEvent) -> bool {
+    if !Self::event_bypasses_spotify_auth(io_event) {
+      return false;
+    }
+    #[cfg(feature = "cover-art")]
+    if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+      return true;
+    }
+    matches!(
+      io_event,
+      IoEvent::FetchGlobalSongCount
+        | IoEvent::IncrementGlobalSongCount
+        | IoEvent::FetchAnnouncements
+        | IoEvent::GetLyrics(..)
+        | IoEvent::GetFriendCode
+        | IoEvent::GetFriends
+        | IoEvent::AddFriendByCode(_)
+        | IoEvent::AddFriendByUserId(_)
+        | IoEvent::UnfollowFriend(_)
+        | IoEvent::SearchFriendUsers(_)
+        | IoEvent::LoadListeningStats(_)
+        | IoEvent::GenerateRecap(_)
+    )
+  }
+
   #[allow(clippy::cognitive_complexity)]
   pub async fn handle_network_event(&mut self, io_event: IoEvent) {
+    let pending_playlist_id = match &io_event {
+      IoEvent::GetPlaylistItems(id, _) => Some(id.clone()),
+      _ => None,
+    };
     // Events whose handlers never touch the Spotify client run regardless of
     // whether a Spotify session exists (see `event_bypasses_spotify_auth`).
     // Everything else is Spotify-bound: when launched against a free source with
@@ -409,9 +457,21 @@ impl Network {
           .await;
         let mut app = self.app.lock().await;
         app.is_loading = false;
+        if pending_playlist_id
+          .as_deref()
+          .is_some_and(|id| app.pending_playlist_open.as_deref() == Some(id))
+        {
+          app.pending_playlist_open = None;
+        }
         return;
       }
       if !self.ensure_authentication_fresh(false).await {
+        if let Some(id) = pending_playlist_id.as_deref() {
+          let mut app = self.app.lock().await;
+          if app.pending_playlist_open.as_deref() == Some(id) {
+            app.pending_playlist_open = None;
+          }
+        }
         return;
       }
     }
@@ -445,6 +505,12 @@ impl Network {
       IoEvent::GetPlaylistItems(playlist_id, playlist_offset) => {
         if let Some(id) = ids::playlist_id(&playlist_id) {
           self.get_playlist_tracks(id, playlist_offset).await;
+        } else {
+          let mut app = self.app.lock().await;
+          if app.pending_playlist_open.as_deref() == Some(playlist_id.as_str()) {
+            app.pending_playlist_open = None;
+          }
+          app.set_status_message("Invalid playlist identifier.", 5);
         }
       }
       IoEvent::SearchPlaylistTracks(playlist_id, query) => {
@@ -1458,6 +1524,29 @@ mod tests {
     ))
   }
 
+  #[test]
+  fn every_service_lane_event_bypasses_spotify_auth() {
+    use crate::infra::history::RecapPeriod;
+    let events = [
+      IoEvent::FetchGlobalSongCount,
+      IoEvent::IncrementGlobalSongCount,
+      IoEvent::FetchAnnouncements,
+      IoEvent::GetLyrics(String::new(), String::new(), 0.0),
+      IoEvent::GetFriendCode,
+      IoEvent::GetFriends,
+      IoEvent::AddFriendByCode(String::new()),
+      IoEvent::AddFriendByUserId(String::new()),
+      IoEvent::UnfollowFriend(String::new()),
+      IoEvent::SearchFriendUsers(String::new()),
+      IoEvent::LoadListeningStats(RecapPeriod::SevenDays),
+      IoEvent::GenerateRecap(RecapPeriod::SevenDays),
+    ];
+    for event in events {
+      assert!(Network::runs_on_service_lane(&event));
+      assert!(Network::event_bypasses_spotify_auth(&event));
+    }
+  }
+
   #[tokio::test]
   async fn pre_event_auth_failure_clears_loading_state() {
     let expired_token_without_refresh = Token {
@@ -1495,5 +1584,23 @@ mod tests {
     assert!(!app.auth_refresh_in_progress);
 
     let _ = std::fs::remove_file(token_cache_path);
+  }
+
+  #[tokio::test]
+  async fn auth_gate_clears_pending_playlist_open() {
+    let (io_tx, _io_rx) = std::sync::mpsc::channel();
+    let app = Arc::new(Mutex::new(App::new(
+      io_tx,
+      UserConfig::new(),
+      Some(SystemTime::now()),
+    )));
+    app.lock().await.pending_playlist_open = Some("playlist-id".to_string());
+    let mut network = Network::new(None, ClientConfig::new(), &app, temp_token_cache_path());
+
+    network
+      .handle_network_event(IoEvent::GetPlaylistItems("playlist-id".to_string(), 0))
+      .await;
+
+    assert!(app.lock().await.pending_playlist_open.is_none());
   }
 }

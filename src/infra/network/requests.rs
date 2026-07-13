@@ -15,8 +15,14 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+// Leaky-bucket pacing state: the theoretical arrival time (GCRA "TAT") of the
+// next request. Sustained throughput is one request per SPOTIFY_API_MIN_INTERVAL,
+// with up to SPOTIFY_API_BURST requests allowed to start at once so the
+// concurrent fan-outs (search joins five queries, the artist page two) aren't
+// artificially staggered.
 static SPOTIFY_API_PACING: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 const SPOTIFY_API_MIN_INTERVAL: Duration = Duration::from_millis(250);
+const SPOTIFY_API_BURST: u32 = 5;
 const SPOTIFY_API_BASE_URL: &str = "https://api.spotify.com/v1/";
 
 static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -58,17 +64,26 @@ fn response_is_json(response: &reqwest::Response) -> bool {
 }
 
 pub async fn pace_spotify_api_call() {
-  let pacing_lock = SPOTIFY_API_PACING.get_or_init(|| Mutex::new(None));
-  let mut last_request_started_at = pacing_lock.lock().await;
+  // Reserve a start slot under the lock, then sleep OUTSIDE it. The previous
+  // implementation held the lock across the sleep, which serialized every
+  // "concurrent" tokio::join! call site into 250ms-apart starts (adding ~1s of
+  // pure pacing to every search).
+  let burst_allowance = SPOTIFY_API_MIN_INTERVAL * (SPOTIFY_API_BURST - 1);
+  let start_at = {
+    let pacing_lock = SPOTIFY_API_PACING.get_or_init(|| Mutex::new(None));
+    let mut theoretical_arrival = pacing_lock.lock().await;
+    let now = Instant::now();
+    // Clamp to `now` so idle time never banks more than one burst of credit.
+    let tat = theoretical_arrival.map_or(now, |t| t.max(now));
+    *theoretical_arrival = Some(tat + SPOTIFY_API_MIN_INTERVAL);
+    // A call may start up to `burst_allowance` ahead of its theoretical slot.
+    tat.checked_sub(burst_allowance).map_or(now, |t| t.max(now))
+  };
 
-  if let Some(last) = *last_request_started_at {
-    let elapsed = last.elapsed();
-    if elapsed < SPOTIFY_API_MIN_INTERVAL {
-      tokio::time::sleep(SPOTIFY_API_MIN_INTERVAL - elapsed).await;
-    }
+  let now = Instant::now();
+  if start_at > now {
+    tokio::time::sleep(start_at - now).await;
   }
-
-  *last_request_started_at = Some(Instant::now());
 }
 
 pub async fn spotify_api_request_json_for_with_refresh(

@@ -324,14 +324,10 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
         if let Some(playlist) = playlists_result.items.get(index) {
           if let Some(ref id_str) = playlist.id {
             if let Ok(playlist_id) = PlaylistId::from_id(id_str.as_str()) {
-              // Go to playlist tracks table. The app-state view still tracks an
-              // rspotify PlaylistId (deferred); the dispatch carries the string id.
-              let id_owned = id_str.clone();
-              app.reset_playlist_tracks_view(
-                playlist_id.into_static(),
-                TrackTableContext::PlaylistSearch,
-              );
-              app.dispatch(IoEvent::GetPlaylistItems(id_owned, app.playlist_offset));
+              // Go to playlist tracks table: navigates immediately with the
+              // cleared table as the loading state (see open_playlist_tracks).
+              app
+                .open_playlist_tracks(playlist_id.into_static(), TrackTableContext::PlaylistSearch);
             }
           }
         };
