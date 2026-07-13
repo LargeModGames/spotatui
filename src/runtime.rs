@@ -625,6 +625,18 @@ async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) {
   }
 }
 
+fn should_run_network_startup_behavior(
+  streaming_deferred: bool,
+  has_saved_sonos: bool,
+  sonos_owns_playback: bool,
+) -> bool {
+  if has_saved_sonos {
+    sonos_owns_playback
+  } else {
+    !streaming_deferred
+  }
+}
+
 #[cfg(not(feature = "self-update"))]
 async fn run_auto_update(_matches: &ArgMatches, _user_config: &UserConfig) {}
 
@@ -1646,12 +1658,15 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         // Sonos room is restored independently and can apply Play/Pause here,
         // even without a Spotatui Spotify OAuth session.
         #[cfg(feature = "streaming")]
-        let startup_behavior_runs_here = saved_sonos_uuid.is_some() || !streaming_attempted;
+        let streaming_deferred = streaming_attempted;
         #[cfg(not(feature = "streaming"))]
-        let startup_behavior_runs_here = true;
-        let selected_target_available = saved_sonos_uuid.is_none()
-          || network.app.lock().await.sonos_owns_playback();
-        if startup_behavior_runs_here && selected_target_available {
+        let streaming_deferred = false;
+        let sonos_owns_playback = network.app.lock().await.sonos_owns_playback();
+        if should_run_network_startup_behavior(
+          streaming_deferred,
+          saved_sonos_uuid.is_some(),
+          sonos_owns_playback,
+        ) {
           match initial_startup_behavior {
             StartupBehavior::Continue => {}
             StartupBehavior::Play => {
@@ -2634,7 +2649,7 @@ async fn route_decoded_windows_event(
 
 #[cfg(test)]
 mod tests {
-  use super::{startup_device_decision, StartupDeviceEvent};
+  use super::{should_run_network_startup_behavior, startup_device_decision, StartupDeviceEvent};
   use crate::core::user_config::StartupBehavior;
   use rspotify::model::{device::Device, DeviceType};
 
@@ -2667,6 +2682,24 @@ mod tests {
       NATIVE_NAME,
     )
     .event
+  }
+
+  #[test]
+  fn available_saved_sonos_runs_startup_behavior_in_network_task() {
+    assert!(should_run_network_startup_behavior(true, true, true));
+    assert!(should_run_network_startup_behavior(false, true, true));
+  }
+
+  #[test]
+  fn unavailable_saved_sonos_does_not_fall_through_to_another_backend() {
+    assert!(!should_run_network_startup_behavior(true, true, false));
+    assert!(!should_run_network_startup_behavior(false, true, false));
+  }
+
+  #[test]
+  fn deferred_native_startup_owns_non_sonos_startup_behavior() {
+    assert!(!should_run_network_startup_behavior(true, false, false));
+    assert!(should_run_network_startup_behavior(false, false, false));
   }
 
   #[test]

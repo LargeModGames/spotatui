@@ -9,6 +9,8 @@ const AV_TRANSPORT_URN: &str = "urn:schemas-upnp-org:service:AVTransport:1";
 const RENDERING_CONTROL_URN: &str = "urn:schemas-upnp-org:service:RenderingControl:1";
 const ZONE_GROUP_TOPOLOGY_URN: &str = "urn:schemas-upnp-org:service:ZoneGroupTopology:1";
 const MAX_SONOS_RESPONSE_BYTES: usize = 1_048_576;
+const SPOTIFY_ACCOUNT_CACHE_TTL: Duration = Duration::from_secs(300);
+const SPOTIFY_ACCOUNT_FAILURE_CACHE_TTL: Duration = Duration::from_secs(30);
 
 pub struct SonosTransport {
   client: reqwest::Client,
@@ -192,11 +194,14 @@ impl SonosTransport {
       .as_deref()
       .and_then(spotify_account_from_track_uri)
     {
-      self
-        .spotify_accounts
-        .lock()
-        .await
-        .insert(room.uuid.clone(), (vec![account], Instant::now()));
+      let mut cache = self.spotify_accounts.lock().await;
+      let (accounts, fetched_at) = cache
+        .entry(room.uuid.clone())
+        .or_insert_with(|| (Vec::new(), Instant::now()));
+      if !accounts.contains(&account) {
+        accounts.push(account);
+      }
+      *fetched_at = Instant::now();
     }
 
     Ok(SonosPlaybackSnapshot {
@@ -329,7 +334,12 @@ impl SonosTransport {
 
   async fn spotify_accounts_for_room(&self, room: &SonosRoom) -> Result<Vec<SpotifyAccount>> {
     if let Some((accounts, fetched_at)) = self.spotify_accounts.lock().await.get(&room.uuid) {
-      if fetched_at.elapsed() < Duration::from_secs(300) {
+      let ttl = if accounts.is_empty() {
+        SPOTIFY_ACCOUNT_FAILURE_CACHE_TTL
+      } else {
+        SPOTIFY_ACCOUNT_CACHE_TTL
+      };
+      if fetched_at.elapsed() < ttl {
         return Ok(accounts.clone());
       }
     }
@@ -667,6 +677,9 @@ fn parse_sonos_duration_ms(value: &str) -> Option<u32> {
   let minutes = minutes.parse::<u64>().ok()?;
   let (seconds, fractional) = seconds.split_once('.').unwrap_or((seconds, ""));
   let seconds = seconds.parse::<u64>().ok()?;
+  if minutes >= 60 || seconds >= 60 {
+    return None;
+  }
   let fractional_ms = if fractional.is_empty() {
     0
   } else {
@@ -728,6 +741,8 @@ mod tests {
     assert_eq!(parse_sonos_duration_ms("0:01:23"), Some(83_000));
     assert_eq!(parse_sonos_duration_ms("1:02:03"), Some(3_723_000));
     assert_eq!(parse_sonos_duration_ms("0:00:01.500"), Some(1_500));
+    assert_eq!(parse_sonos_duration_ms("0:60:00"), None);
+    assert_eq!(parse_sonos_duration_ms("0:00:60"), None);
     assert_eq!(parse_sonos_duration_ms("NOT_IMPLEMENTED"), None);
   }
 

@@ -300,7 +300,7 @@ pub struct Network {
   pub small_search_limit: u32,
   pub client_config: ClientConfig,
   pub app: Arc<Mutex<App>>,
-  sonos_transport: Option<crate::infra::sonos::SonosTransport>,
+  sonos_transport: Option<Arc<crate::infra::sonos::SonosTransport>>,
   #[cfg(feature = "streaming")]
   native_idle_recovery: playback::NativeIdleRecoveryState,
   pub party_connection: Option<sync::PartyConnection>,
@@ -329,7 +329,9 @@ impl Network {
       small_search_limit: 4,
       client_config,
       app: Arc::clone(app),
-      sonos_transport: crate::infra::sonos::SonosTransport::new().ok(),
+      sonos_transport: crate::infra::sonos::SonosTransport::new()
+        .ok()
+        .map(Arc::new),
       native_idle_recovery: playback::NativeIdleRecoveryState::default(),
       party_connection: None,
       party_incoming_rx: None,
@@ -354,7 +356,9 @@ impl Network {
       small_search_limit: 4,
       client_config,
       app: Arc::clone(app),
-      sonos_transport: crate::infra::sonos::SonosTransport::new().ok(),
+      sonos_transport: crate::infra::sonos::SonosTransport::new()
+        .ok()
+        .map(Arc::new),
       party_connection: None,
       party_incoming_rx: None,
       token_cache_path,

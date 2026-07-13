@@ -27,7 +27,6 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "streaming")]
 use librespot_connect::{LoadRequest, LoadRequestOptions, PlayingTrack};
-#[cfg(feature = "streaming")]
 use std::sync::Arc;
 
 const MAX_API_PLAYBACK_URIS: usize = 100;
@@ -1775,13 +1774,19 @@ impl PlaybackNetwork for Network {
   async fn force_previous_track(&mut self) {
     if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
       let result = match self.sonos_transport.as_ref() {
-        Some(transport) => match transport.previous(&room).await {
-          Ok(()) => {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            transport.previous(&room).await
+        Some(transport) => {
+          let result = transport.previous(&room).await;
+          if result.is_ok() {
+            let transport = Arc::clone(transport);
+            tokio::spawn(async move {
+              tokio::time::sleep(Duration::from_millis(500)).await;
+              if let Err(error) = transport.previous(&room).await {
+                log::debug!("second Sonos previous command failed: {error}");
+              }
+            });
           }
-          Err(error) => Err(error),
-        },
+          result
+        }
         None => Err(anyhow!("could not initialize the Sonos HTTP client")),
       };
       if let Err(error) = result {
@@ -2340,6 +2345,12 @@ impl PlaybackNetwork for Network {
   }
 
   async fn ensure_playback_continues(&mut self, previous_track_id: String) {
+    // Sonos advances its own queue. A delayed event from the previously active
+    // backend must not use stale Spotify state to skip the Sonos queue.
+    if self.app.lock().await.sonos_owns_playback() {
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     if is_native_streaming_active_for_playback(self).await {
       // Native player handles queue automatically
