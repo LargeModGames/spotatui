@@ -83,7 +83,7 @@ librespot-metadata = { version = "0.8", optional = true }
 librespot-protocol = { version = "0.8", optional = true, default-features = false }
 protobuf = { version = "3.7", optional = true }
 futures = "0.3.32"
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 url = "2.5"
 keepawake = "0.6"
 
