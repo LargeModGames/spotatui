@@ -177,7 +177,7 @@ impl RadioSource {
   /// GET `path` from the first responding mirror, in shuffled order.
   async fn get_from_any_mirror(&self, path: &str) -> Result<String> {
     let mut mirrors = MIRRORS;
-    mirrors.shuffle(&mut rand::thread_rng());
+    mirrors.shuffle(&mut rand::rng());
 
     let mut last_err = anyhow!("no radio-browser mirrors configured");
     for base in mirrors {

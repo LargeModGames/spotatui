@@ -32,7 +32,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
 use md5::{Digest, Md5};
-use rand::Rng;
+use rand::RngExt;
 use reqwest::Client;
 
 use crate::core::plugin_api::{
@@ -203,10 +203,10 @@ impl SubsonicSource {
   /// Generate a random 12-character alphanumeric salt.
   fn generate_salt(&self) -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..12)
       .map(|_| {
-        let idx = rng.gen_range(0..CHARSET.len());
+        let idx = rng.random_range(0..CHARSET.len());
         CHARSET[idx] as char
       })
       .collect()

@@ -5,7 +5,6 @@ use crate::core::app::{
 };
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rand::{thread_rng, Rng};
 use rspotify::prelude::Id;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -257,7 +256,7 @@ fn play_random_song(app: &mut App) {
           app.dispatch(IoEvent::StartPlayback(
             context_id,
             None,
-            Some(thread_rng().gen_range(0..val as usize)),
+            Some(rand::random_range(0..val as usize)),
           ));
         }
       }
@@ -270,7 +269,7 @@ fn play_random_song(app: &mut App) {
           .filter_map(|track| track.uri.clone())
           .collect();
         if !playable_ids.is_empty() {
-          let rand_idx = thread_rng().gen_range(0..playable_ids.len());
+          let rand_idx = rand::random_range(0..playable_ids.len());
           app.dispatch(IoEvent::StartPlayback(
             None,
             Some(playable_ids),
@@ -289,7 +288,7 @@ fn play_random_song(app: &mut App) {
           }
         }
         if !playable_ids.is_empty() {
-          let rand_idx = thread_rng().gen_range(0..playable_ids.len());
+          let rand_idx = rand::random_range(0..playable_ids.len());
           app.dispatch(IoEvent::StartPlayback(
             None,
             Some(playable_ids),
@@ -306,7 +305,7 @@ fn play_random_song(app: &mut App) {
           .filter_map(|track| track.uri.clone())
           .collect();
         if !playable_ids.is_empty() {
-          let rand_idx = thread_rng().gen_range(0..playable_ids.len());
+          let rand_idx = rand::random_range(0..playable_ids.len());
           app.dispatch(IoEvent::StartPlayback(
             Some(playable_ids[rand_idx].clone()),
             None,
@@ -324,7 +323,7 @@ fn play_random_song(app: &mut App) {
           .filter_map(|track| track.uri.clone())
           .collect();
         if !playable_ids.is_empty() {
-          let rand_idx = thread_rng().gen_range(0..playable_ids.len());
+          let rand_idx = rand::random_range(0..playable_ids.len());
           app.dispatch(IoEvent::StartPlayback(
             None,
             Some(playable_ids),

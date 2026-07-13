@@ -229,7 +229,7 @@ impl UserNetwork for Network {
 
     // 3. Shuffle
     {
-      let mut rng = rand::thread_rng();
+      let mut rng = rand::rng();
       all_tracks.shuffle(&mut rng);
     }
 

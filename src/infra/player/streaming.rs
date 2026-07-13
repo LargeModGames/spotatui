@@ -730,9 +730,9 @@ fn get_or_create_device_id(cache_path: Option<&std::path::Path>) -> Option<Strin
 
 /// Hyphenated UUID-v4-shaped string, matching librespot's default device id format.
 fn new_device_id_string() -> String {
-  use rand::RngCore;
+  use rand::Rng;
   let mut b = [0u8; 16];
-  rand::thread_rng().fill_bytes(&mut b);
+  rand::rng().fill_bytes(&mut b);
   b[6] = (b[6] & 0x0f) | 0x40;
   b[8] = (b[8] & 0x3f) | 0x80;
   format!(

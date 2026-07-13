@@ -4,7 +4,6 @@ use crate::infra::network::{IoEvent, Network};
 use super::util::{Flag, Format, FormatType, JumpDirection, Type};
 
 use anyhow::{anyhow, Result};
-use rand::{thread_rng, Rng};
 use rspotify::model::{
   context::CurrentPlaybackContext, idtypes::Id, playlist::FullPlaylist, PlayableItem,
 };
@@ -486,7 +485,7 @@ impl CliApp {
           {
             Ok(p) => {
               let num = p.items.total;
-              Some(thread_rng().gen_range(0..num) as usize)
+              Some(rand::random_range(0..num) as usize)
             }
             Err(e) => {
               self

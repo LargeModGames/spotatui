@@ -30,7 +30,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 use crate::core::plugin_api::{PlaylistInfo, TrackInfo};
@@ -148,10 +148,10 @@ pub fn save(path: &Path, file: &PlaylistsFile) -> Result<()> {
 /// `file`.
 fn generate_id(file: &PlaylistsFile) -> String {
   const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-  let mut rng = rand::thread_rng();
+  let mut rng = rand::rng();
   loop {
     let id: String = (0..12)
-      .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
+      .map(|_| CHARSET[rng.random_range(0..CHARSET.len())] as char)
       .collect();
     if !file.playlists.iter().any(|p| p.id == id) {
       return id;
