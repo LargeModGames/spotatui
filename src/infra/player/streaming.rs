@@ -28,6 +28,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
@@ -156,7 +157,40 @@ const SPOTIFY_PLAYER_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 /// spotify-player's redirect_uri - must match what's registered with their client_id
 const SPOTIFY_PLAYER_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
 
+fn wait_for_oauth_callback_port(
+  address: &str,
+  max_wait: Duration,
+  retry_delay: Duration,
+) -> Result<()> {
+  let deadline = Instant::now() + max_wait;
+  loop {
+    match std::net::TcpListener::bind(address) {
+      Ok(listener) => {
+        drop(listener);
+        return Ok(());
+      }
+      Err(_) if Instant::now() < deadline => {
+        std::thread::sleep(retry_delay.min(deadline.saturating_duration_since(Instant::now())));
+      }
+      Err(error) => {
+        return Err(anyhow!(
+          "OAuth callback port {address} did not become available: {error}"
+        ));
+      }
+    }
+  }
+}
+
 fn request_streaming_oauth_credentials() -> Result<Credentials> {
+  // The Web API and streaming OAuth clients both use port 8989. On a fresh
+  // profile their callback servers run back-to-back, so wait for the first
+  // listener to be fully released before librespot opens the second consent.
+  wait_for_oauth_callback_port(
+    "127.0.0.1:8989",
+    Duration::from_secs(5),
+    Duration::from_millis(50),
+  )?;
+
   let client_builder = OAuthClientBuilder::new(
     SPOTIFY_PLAYER_CLIENT_ID,
     SPOTIFY_PLAYER_REDIRECT_URI,
@@ -802,7 +836,27 @@ fn new_device_id_string() -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{get_or_create_device_id, new_device_id_string, should_retry_with_fresh_credentials};
+  use super::{
+    get_or_create_device_id, new_device_id_string, should_retry_with_fresh_credentials,
+    wait_for_oauth_callback_port,
+  };
+  use std::time::Duration;
+
+  #[test]
+  fn oauth_callback_port_waits_for_previous_listener_to_release() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let release = std::thread::spawn(move || {
+      std::thread::sleep(Duration::from_millis(100));
+      drop(listener);
+    });
+
+    wait_for_oauth_callback_port(&address, Duration::from_secs(1), Duration::from_millis(10))
+      .expect("callback port should become available after the first listener exits");
+    release.join().unwrap();
+
+    std::net::TcpListener::bind(address).expect("callback port should remain available");
+  }
 
   #[test]
   fn auth_failure_with_cached_creds_triggers_retry() {
