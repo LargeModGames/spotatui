@@ -69,9 +69,12 @@ behavior:
 # playbar keys: state, device, source, queue, shuffle, repeat, volume, party
 # window_title keys: title, artist ({artist} includes its own " — " separator
 # and renders empty when unknown)
+# In playbar_status_source only, {shuffle} and {repeat} carry their own
+# " | Label: value" prefix and render empty for sources without those controls
+# (internet radio, native queue slots), so their labels never show up blank.
 format:
   playbar_status: "{state} ({device} | Shuffle: {shuffle} | Repeat: {repeat} | Volume: {volume}%){party}"
-  playbar_status_source: "{state} ({source}{queue} | Volume: {volume}%)"
+  playbar_status_source: "{state} ({source}{queue}{shuffle}{repeat} | Volume: {volume}%)"
   window_title: "{title}{artist}"
 
 # --- Table columns (config-only) ---

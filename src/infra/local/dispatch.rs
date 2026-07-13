@@ -33,13 +33,12 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 
-use super::{
-  file_uri_to_path, next_index, prev_index, track_info_from_path, LocalPlaybackState, LocalSource,
-};
+use super::{file_uri_to_path, track_info_from_path, LocalPlaybackState, LocalSource};
 use crate::core::app::{App, TrackTableContext};
 use crate::core::source::MediaSource;
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
+use crate::infra::queue::{advance_index, replay_file};
 
 /// Whether a URI is owned by the local-files source.
 fn is_file_uri(uri: &str) -> bool {
@@ -122,6 +121,14 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     // Skip backward. `ForcePreviousTrack` (restart-or-previous) behaves the same
     // here: there is no "restart current vs go back" distinction for local files.
     IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => skip(app, Direction::Prev).await,
+    // Repeat-one auto-advance: replay the current track (dispatched by the runner
+    // tick only while a local file owns the session).
+    IoEvent::ReplayCurrentTrack => replay_current(app).await,
+    // Explicit repeat-mode set (e.g. a plugin's `set_repeat`): store it as the
+    // decoded repeat mode while a queueable decoded source owns playback (the
+    // method's ownership gate excludes a context suspended under the native
+    // queue), so it never reaches the Spotify context.
+    IoEvent::Repeat(state) => app.lock().await.set_decoded_repeat_from_state(*state),
     _ => false,
   }
 }
@@ -143,6 +150,9 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
   // blocking decode in `play_index`.
   let target = {
     let mut guard = app.lock().await;
+    // Repeat-all wraps at the ends; Off/Repeat-one clamp (manual skip advances
+    // normally under repeat-one — only *auto* advance replays).
+    let mode = guard.decoded_repeat;
     let Some(local) = guard.local_playback.as_mut() else {
       return false; // not ours — let Spotify handle it
     };
@@ -152,10 +162,8 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
     // the sink. (We can't unqueue an already-dispatched auto-advance, so a Next
     // pressed mid-advance may skip one extra track — benign and accepted.)
     local.advancing = true;
-    match direction {
-      Direction::Next => next_index(local.index, local.queue.len()),
-      Direction::Prev => prev_index(local.index, local.queue.len()),
-    }
+    let forward = matches!(direction, Direction::Next);
+    advance_index(local.index, local.queue.len(), mode, forward)
   };
 
   match target {
@@ -169,6 +177,45 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
     }
   }
   // Either way the event is ours and must not fall through to Spotify.
+  true
+}
+
+/// Replay the current local track (repeat-one auto-advance) via [`replay_file`];
+/// a drained rodio sink cannot seek, so the file is re-decoded from disk. On any
+/// failure (bad index/URI or decode error) the session is **torn down** rather
+/// than left with an empty sink — otherwise the runner tick would see
+/// end-of-track again next tick and re-fire replay forever.
+///
+/// Returns `true` when a local file owns the session (event consumed), `false`
+/// otherwise.
+async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
+  let target = {
+    let mut guard = app.lock().await;
+    let Some(local) = guard.local_playback.as_mut() else {
+      return false; // not ours — let Spotify handle it
+    };
+    local.advancing = true;
+    local
+      .queue
+      .get(local.index)
+      .and_then(|uri| file_uri_to_path(uri).ok())
+      .map(|path| (Arc::clone(&local.player), path))
+  };
+  let replayed = match target {
+    Some((player, path)) => replay_file(player, path).await,
+    None => false,
+  };
+  if replayed {
+    // Same track, same metadata: just clear the in-flight guard.
+    if let Some(local) = app.lock().await.local_playback.as_mut() {
+      local.advancing = false;
+    }
+  } else {
+    if let Some(local) = app.lock().await.local_playback.take() {
+      local.player.stop();
+    }
+    set_error(app, "Cannot replay local file".to_string()).await;
+  }
   true
 }
 
@@ -263,7 +310,7 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
       // throughout the decode above, so `advancing` starts `false`.
       let display_name = info.name.clone();
       let mut app = app.lock().await;
-      app.local_playback = Some(LocalPlaybackState {
+      let mut state = LocalPlaybackState {
         player,
         queue,
         index,
@@ -272,7 +319,15 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
         album: info.album,
         duration_ms: info.duration_ms,
         advancing: false,
-      });
+        shuffle_backup: None,
+      };
+      // Honor the player-global decoded shuffle for the freshly-built queue so it
+      // persists across contexts like Spotify (the just-decoded start track stays
+      // playing, moved to the front).
+      if app.decoded_shuffle {
+        state.set_shuffle(true);
+      }
+      app.local_playback = Some(state);
       app.set_status_message(format!("\u{266a} {display_name}"), 4);
     }
     Ok(Err(e)) => set_error(app, format!("Cannot play local file: {e}")).await,

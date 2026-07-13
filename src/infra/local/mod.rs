@@ -45,31 +45,24 @@ pub struct LocalPlaybackState {
   /// "don't treat the pre-playback empty sink as end-of-track" invariant: it
   /// covers the analogous mid-change decode window.
   pub advancing: bool,
+  /// Backup of the pre-shuffle queue order while shuffle is on (`None` when the
+  /// queue is in natural order). Set by [`set_shuffle(true)`](Self::set_shuffle)
+  /// and consumed by `set_shuffle(false)` to restore order + index exactly.
+  pub shuffle_backup: Option<crate::infra::queue::ShuffleBackup>,
 }
 
-/// The index of the track after `current` in a queue of `len` tracks, clamped
-/// at the end.
-///
-/// Returns `None` when `current` is already the last track (or the queue is
-/// empty), signalling "no next track" — the caller treats that as end-of-queue
-/// (auto-advance tears the session down; a manual Next is a no-op).
-pub fn next_index(current: usize, len: usize) -> Option<usize> {
-  if len == 0 || current + 1 >= len {
-    None
-  } else {
-    Some(current + 1)
-  }
-}
-
-/// The index of the track before `current`, clamped at the start.
-///
-/// Returns `None` when `current` is already the first track (or the queue is
-/// empty), signalling "no previous track" — a manual Previous is then a no-op.
-pub fn prev_index(current: usize, len: usize) -> Option<usize> {
-  if len == 0 || current == 0 {
-    None
-  } else {
-    Some(current - 1)
+impl LocalPlaybackState {
+  /// Turn in-place shuffle on or off for this session — see
+  /// [`toggle_shuffle`](crate::infra::queue::toggle_shuffle) for the shared
+  /// semantics (current track stays playing at the front; un-shuffle restores
+  /// order + index; idempotent).
+  pub fn set_shuffle(&mut self, on: bool) {
+    crate::infra::queue::toggle_shuffle(
+      &mut self.queue,
+      &mut self.index,
+      &mut self.shuffle_backup,
+      on,
+    );
   }
 }
 
@@ -889,60 +882,6 @@ mod tests {
     let src = LocalSource::new("/tmp/music");
     assert_eq!(src.name(), "Local Files");
     assert_eq!(src.scheme(), "file");
-  }
-
-  // ---------------------------------------------------------------------------
-  // Queue index math (next/prev clamp + auto-advance selection)
-  // ---------------------------------------------------------------------------
-
-  #[test]
-  fn next_index_advances_until_last() {
-    // A 3-track queue: 0 -> 1 -> 2 -> (end).
-    assert_eq!(next_index(0, 3), Some(1));
-    assert_eq!(next_index(1, 3), Some(2));
-    assert_eq!(
-      next_index(2, 3),
-      None,
-      "advancing past the last track signals end-of-queue"
-    );
-  }
-
-  #[test]
-  fn next_index_clamps_at_end_and_handles_empty() {
-    assert_eq!(next_index(0, 1), None, "single-track queue has no next");
-    assert_eq!(next_index(0, 0), None, "empty queue has no next");
-    // A defensively out-of-range index still yields None rather than panicking.
-    assert_eq!(next_index(9, 3), None);
-  }
-
-  #[test]
-  fn prev_index_rewinds_until_first() {
-    assert_eq!(prev_index(2, 3), Some(1));
-    assert_eq!(prev_index(1, 3), Some(0));
-    assert_eq!(
-      prev_index(0, 3),
-      None,
-      "rewinding before the first track is a no-op"
-    );
-  }
-
-  #[test]
-  fn prev_index_handles_empty() {
-    assert_eq!(prev_index(0, 0), None, "empty queue has no previous");
-  }
-
-  #[test]
-  fn auto_advance_selects_the_following_track() {
-    // Auto-advance reuses next_index; verify it picks the *immediately*
-    // following queue entry (not a random or wrapped one).
-    let queue = ["a.mp3", "b.mp3", "c.mp3"];
-    let from = 0;
-    let to = next_index(from, queue.len()).expect("there is a next track");
-    assert_eq!(to, 1);
-    assert_eq!(queue[to], "b.mp3");
-
-    // From the last track, auto-advance reports end-of-queue (teardown).
-    assert_eq!(next_index(queue.len() - 1, queue.len()), None);
   }
 
   #[test]

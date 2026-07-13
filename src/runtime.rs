@@ -1702,6 +1702,9 @@ async fn restore_playback_session(
       index,
       position_ms,
       paused,
+      repeat,
+      shuffle_on,
+      shuffle,
     } => {
       if queue.is_empty() {
         return;
@@ -1712,14 +1715,26 @@ async fn restore_playback_session(
         &IoEvent::StartPlayback(None, Some(queue), Some(index)),
       )
       .await;
-      let guard = app.lock().await;
-      if let Some(s) = guard.local_playback.as_ref() {
+      let mut guard = app.lock().await;
+      // Only adopt the persisted modes if the source actually started; a decode
+      // failure would otherwise leave the player-global flags set with no source.
+      // Trust the persisted intent (`shuffle_on`) for the flag and restore the
+      // backup as-is (the start path above did not re-shuffle because
+      // `decoded_shuffle` is still off). When the two disagree — a toggle deferred
+      // at exit — the runner's `reconcile_decoded_shuffle` re-syncs the queue
+      // order to the flag on the next tick.
+      if guard.local_playback.is_some() {
+        guard.decoded_repeat = repeat;
+        guard.decoded_shuffle = shuffle_on;
+      }
+      if let Some(s) = guard.local_playback.as_mut() {
         if position_ms > 0 {
           let _ = s.player.seek(Duration::from_millis(position_ms));
         }
         if resolve_paused(paused) {
           s.player.pause();
         }
+        s.shuffle_backup = shuffle;
       }
     }
     #[cfg(feature = "subsonic")]
@@ -1728,6 +1743,9 @@ async fn restore_playback_session(
       index,
       position_ms,
       paused,
+      repeat,
+      shuffle_on,
+      shuffle,
     } => {
       let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
       if uris.is_empty() {
@@ -1740,14 +1758,19 @@ async fn restore_playback_session(
         &IoEvent::StartPlayback(None, Some(uris), Some(index)),
       )
       .await;
-      let guard = app.lock().await;
-      if let Some(s) = guard.subsonic_playback.as_ref() {
+      let mut guard = app.lock().await;
+      if guard.subsonic_playback.is_some() {
+        guard.decoded_repeat = repeat;
+        guard.decoded_shuffle = shuffle_on;
+      }
+      if let Some(s) = guard.subsonic_playback.as_mut() {
         if position_ms > 0 {
           let _ = s.player.seek(Duration::from_millis(position_ms));
         }
         if resolve_paused(paused) {
           s.player.pause();
         }
+        s.shuffle_backup = shuffle;
       }
     }
     #[cfg(feature = "youtube")]
@@ -1756,6 +1779,9 @@ async fn restore_playback_session(
       index,
       position_ms,
       paused,
+      repeat,
+      shuffle_on,
+      shuffle,
     } => {
       let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
       if uris.is_empty() {
@@ -1767,14 +1793,19 @@ async fn restore_playback_session(
         &IoEvent::StartPlayback(None, Some(uris), Some(index)),
       )
       .await;
-      let guard = app.lock().await;
-      if let Some(s) = guard.youtube_playback.as_ref() {
+      let mut guard = app.lock().await;
+      if guard.youtube_playback.is_some() {
+        guard.decoded_repeat = repeat;
+        guard.decoded_shuffle = shuffle_on;
+      }
+      if let Some(s) = guard.youtube_playback.as_mut() {
         if position_ms > 0 {
           let _ = s.player.seek(Duration::from_millis(position_ms));
         }
         if resolve_paused(paused) {
           s.player.pause();
         }
+        s.shuffle_backup = shuffle;
       }
     }
     #[cfg(feature = "internet-radio")]
@@ -2222,10 +2253,36 @@ async fn route_decoded_mpris_event(
       mpris_manager.emit_seeked(new_position_ms as u64);
       true
     }
-    // Shuffle/loop don't apply to single-file local playback. Volume is handled
-    // by the top-level `set_volume_percent`, which already routes to whichever
-    // decoded source owns the sink. Leave all three to the existing handling.
-    MprisEvent::SetShuffle(_) | MprisEvent::SetLoopStatus(_) | MprisEvent::SetVolume(_) => false,
+    // Shuffle/repeat drive the player-global decoded state so an external
+    // controller changes the audible decoded source, not the stale Spotify
+    // context. A queueable source (Local/Subsonic/YouTube) consumes them;
+    // radio (no queue) and Spotify fall through to the existing handling.
+    // Volume is handled by the top-level `set_volume_percent`.
+    MprisEvent::SetShuffle(on) => {
+      if app_lock.set_decoded_shuffle(*on) {
+        drop(app_lock);
+        mpris_manager.set_shuffle(*on);
+        true
+      } else {
+        false
+      }
+    }
+    MprisEvent::SetLoopStatus(status) => {
+      use crate::infra::queue::RepeatMode;
+      let mode = match status {
+        mpris::LoopStatusEvent::None => RepeatMode::Off,
+        mpris::LoopStatusEvent::Track => RepeatMode::Track,
+        mpris::LoopStatusEvent::Playlist => RepeatMode::Context,
+      };
+      if app_lock.set_decoded_repeat(mode) {
+        drop(app_lock);
+        mpris_manager.set_loop_status(*status);
+        true
+      } else {
+        false
+      }
+    }
+    MprisEvent::SetVolume(_) => false,
   }
 }
 

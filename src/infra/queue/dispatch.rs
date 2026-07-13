@@ -1032,7 +1032,7 @@ mod tests {
       let mut guard = app.lock().await;
       guard.native_queue.push(tracks[2].clone());
       guard.queue_suspended = Some(crate::core::queue::SuspendedContext::Subsonic {
-        resume_index: crate::infra::subsonic::next_index(0, tracks.len()),
+        resume_index: crate::infra::queue::next_index(0, tracks.len()),
         resume_position_ms: 0,
       });
       if let Some(s) = guard.subsonic_playback.as_mut() {

@@ -164,7 +164,7 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // cover art / lyrics via the shared track-change detector.
   #[cfg(feature = "audio-decode")]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
-    return Some(source_snapshot(
+    let mut snapshot = source_snapshot(
       d.track.name.clone(),
       d.track.artists.clone(),
       d.track.album.clone(),
@@ -174,7 +174,13 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
       d.player.position().as_millis(),
       !d.player.is_paused(),
       app,
-    ));
+    );
+    // The native queue ignores the decoded shuffle/repeat modes (they belong to
+    // the suspended source resumed once the queue drains), so don't advertise
+    // them — mirroring the radio override and the playbar's hidden controls.
+    snapshot.shuffle = false;
+    snapshot.repeat = None;
+    return Some(snapshot);
   }
 
   #[cfg(feature = "local-files")]
@@ -250,6 +256,9 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
       app,
     );
     snapshot.is_live = true;
+    // Radio is an infinite stream with no queue: repeat/shuffle don't apply.
+    snapshot.shuffle = false;
+    snapshot.repeat = None;
     return Some(snapshot);
   }
 
@@ -260,8 +269,8 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
 /// is a directly-fetchable cover-art URL when the source provides one (Subsonic
 /// getCoverArt, YouTube thumbnail) and `None` otherwise (local files carry
 /// embedded art fetched separately; radio has none). Sources are always treated
-/// as a single track and take shuffle from the user config (no per-source
-/// shuffle state).
+/// as a single track; shuffle/repeat come from the player-global decoded state
+/// (the radio caller overrides them since a live stream has no queue).
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
@@ -280,6 +289,14 @@ fn source_snapshot(
   is_playing: bool,
   app: &App,
 ) -> PlaybackSnapshot {
+  // The decoded repeat is source-neutral; translate to the Spotify-shaped
+  // `RepeatState` here at the snapshot boundary.
+  use crate::infra::queue::RepeatMode;
+  let repeat = match app.decoded_repeat {
+    RepeatMode::Off => RepeatState::Off,
+    RepeatMode::Context => RepeatState::Context,
+    RepeatMode::Track => RepeatState::Track,
+  };
   PlaybackSnapshot {
     metadata: PlaybackMetadata {
       title,
@@ -296,8 +313,8 @@ fn source_snapshot(
     progress_ms,
     is_playing,
     is_live: false,
-    shuffle: app.user_config.behavior.shuffle_enabled,
-    repeat: None,
+    shuffle: app.decoded_shuffle,
+    repeat: Some(repeat),
   }
 }
 

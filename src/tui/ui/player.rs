@@ -879,6 +879,11 @@ struct LocalPlaybarView {
   /// An infinite live stream (internet radio): `duration_ms` is meaningless,
   /// so the seek bar renders as a full LIVE indicator with elapsed time only.
   live: bool,
+  /// Whether the decoded shuffle/repeat controls apply here. `true` for a
+  /// queueable source that owns playback (Local/Subsonic/YouTube); `false` for
+  /// internet radio and native queue slots, whose playbar drops the mode
+  /// segments entirely rather than showing blank `Shuffle:`/`Repeat:` labels.
+  show_modes: bool,
 }
 
 /// Render the playbar for an active local-file playback session.
@@ -902,6 +907,7 @@ fn draw_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     // Only show the indicator for multi-track queues; a single file is noise.
     queue_position: (local.queue.len() > 1).then(|| (local.index + 1, local.queue.len())),
     live: false,
+    show_modes: true,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -925,6 +931,7 @@ fn draw_subsonic_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     queue_position: (subsonic.tracks.len() > 1)
       .then(|| (subsonic.index + 1, subsonic.tracks.len())),
     live: false,
+    show_modes: true,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -947,6 +954,7 @@ fn draw_youtube_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     volume_percent: app.user_config.behavior.volume_percent,
     queue_position: (youtube.tracks.len() > 1).then(|| (youtube.index + 1, youtube.tracks.len())),
     live: false,
+    show_modes: true,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -979,6 +987,7 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     volume_percent: app.user_config.behavior.volume_percent,
     queue_position: None,
     live: true,
+    show_modes: false,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -1012,9 +1021,28 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     Some((current, total)) => format!(" | {current}/{total}"),
     None => String::new(),
   };
+  // Decoded (Local / Subsonic / YouTube) shuffle + repeat, worded like the
+  // Spotify playbar (Off / Track / All). Each carries its own ` | Label: value`
+  // prefix (values pre-padded to the `{:-3}` / `{:-5}` widths so the default
+  // template reproduces today's output byte-for-byte); contexts without the
+  // controls (radio, native queue slots) render them empty so the whole segment
+  // — label included — disappears instead of leaking a blank control.
+  use crate::infra::queue::RepeatMode;
+  let (shuffle_text, repeat_text) = if view.show_modes {
+    let shuffle = if app.decoded_shuffle { "On" } else { "Off" };
+    let repeat = match app.decoded_repeat {
+      RepeatMode::Off => "Off",
+      RepeatMode::Track => "Track",
+      RepeatMode::Context => "All",
+    };
+    (
+      format!(" | Shuffle: {shuffle:<3}"),
+      format!(" | Repeat: {repeat:<5}"),
+    )
+  } else {
+    (String::new(), String::new())
+  };
   // Build the title from the configurable playbar_status_source template.
-  // Values are pre-padded to match the original `{:-N}` format widths so the
-  // default template reproduces today's output byte-for-byte.
   let title = app.user_config.format.playbar_status_source.render(&[
     // state — left-aligned to 7 cols (matches `{:-7}`)
     &format!("{:<7}", play_title),
@@ -1022,9 +1050,9 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     "",
     view.source_label,
     &queue_label,
-    // shuffle / repeat / volume / party — unused in the source template
-    "",
-    "",
+    // shuffle / repeat — self-contained ` | Label: value` segments (or empty)
+    &shuffle_text,
+    &repeat_text,
     // volume — left-aligned to 2 (matches `{:-2}`)
     &format!("{:<2}", view.volume_percent),
     "",
@@ -1150,6 +1178,9 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       volume_percent: app.user_config.behavior.volume_percent,
       queue_position: None,
       live: false,
+      // The native queue ignores the decoded shuffle/repeat modes (they belong
+      // to the suspended source resumed once the queue drains), so hide them.
+      show_modes: false,
     };
     render_local_playbar(f, app, layout_chunk, &view);
     return;
@@ -1168,6 +1199,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       volume_percent: app.user_config.behavior.volume_percent,
       queue_position: None,
       live: false,
+      show_modes: false,
     };
     render_local_playbar(f, app, layout_chunk, &view);
     return;
@@ -1909,12 +1941,17 @@ mod tests {
       volume_percent: 80,
       queue_position: Some((3, 12)),
       live: false,
+      show_modes: true,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("My Local Song"),
       "track name should render: {content}"
+    );
+    assert!(
+      content.contains("Shuffle:") && content.contains("Repeat:"),
+      "a queueable source should show the shuffle/repeat controls: {content}"
     );
     assert!(
       content.contains("Playing"),
@@ -1947,6 +1984,7 @@ mod tests {
       volume_percent: 50,
       queue_position: None,
       live: false,
+      show_modes: true,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
     assert!(content.contains("Paused"), "should show Paused: {content}");
@@ -1972,12 +2010,17 @@ mod tests {
       volume_percent: 80,
       queue_position: None,
       live: true,
+      show_modes: false,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("SomaFM Groove Salad"),
       "station name should render: {content}"
+    );
+    assert!(
+      !content.contains("Shuffle:") && !content.contains("Repeat:"),
+      "radio has no queue, so the shuffle/repeat controls must stay hidden: {content}"
     );
     assert!(
       content.contains("Boards of Canada - Olson"),

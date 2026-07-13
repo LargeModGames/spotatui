@@ -34,13 +34,14 @@ use anyhow::{Context, Result};
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
-use super::{next_index, prev_index, track_id_from_uri, SubsonicPlaybackState, SubsonicSource};
+use super::{track_id_from_uri, SubsonicPlaybackState, SubsonicSource};
 use crate::core::app::{App, SearchResultBlock, TrackTableContext};
 use crate::core::pagination::Paged;
 use crate::core::plugin_api::TrackInfo;
 use crate::core::source::{MediaSource, Searcher};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
+use crate::infra::queue::{advance_index, replay_file};
 
 /// Environment variable that overrides the configured Subsonic password. Prefer
 /// it over the plaintext config field so the secret is never written to disk.
@@ -126,6 +127,14 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
     },
     IoEvent::NextTrack => skip(app, Direction::Next).await,
     IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => skip(app, Direction::Prev).await,
+    // Repeat-one auto-advance: replay the current track (dispatched by the runner
+    // tick only while Subsonic owns the session).
+    IoEvent::ReplayCurrentTrack => replay_current(app).await,
+    // Explicit repeat-mode set (e.g. a plugin's `set_repeat`): store it as the
+    // decoded repeat mode while a queueable decoded source owns playback (the
+    // method's ownership gate excludes a context suspended under the native
+    // queue), so it never reaches the Spotify context.
+    IoEvent::Repeat(state) => app.lock().await.set_decoded_repeat_from_state(*state),
     _ => false,
   }
 }
@@ -280,6 +289,15 @@ fn find_track<'a>(
 }
 
 /// Release the other two backends so only subsonic holds the output device.
+#[cfg_attr(
+  not(any(
+    feature = "streaming",
+    feature = "local-files",
+    feature = "internet-radio",
+    feature = "youtube"
+  )),
+  allow(unused_variables)
+)]
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
   // Pause native Spotify so librespot releases the device.
   #[cfg(feature = "streaming")]
@@ -415,14 +433,20 @@ async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx:
       let display = tracks[index].name.clone();
       let mut guard = app.lock().await;
       // Publish the session exactly once, now that the source is decoding.
-      guard.subsonic_playback = Some(SubsonicPlaybackState {
+      let mut state = SubsonicPlaybackState {
         player,
         source,
         tracks,
         index,
         advancing: false,
         tempfile: tmp,
-      });
+        shuffle_backup: None,
+      };
+      // Honor the player-global decoded shuffle for the freshly-built queue.
+      if guard.decoded_shuffle {
+        state.set_shuffle(true);
+      }
+      guard.subsonic_playback = Some(state);
       guard.set_status_message(format!("\u{266a} {display}"), 4);
     }
     Ok(Err(e)) => set_error(app, format!("Cannot play Subsonic track: {e}")).await,
@@ -435,15 +459,15 @@ async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx:
 async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
   let target = {
     let mut guard = app.lock().await;
+    // Repeat-all wraps at the ends; Off/Repeat-one clamp.
+    let mode = guard.decoded_repeat;
     let Some(s) = guard.subsonic_playback.as_mut() else {
       return false; // not ours
     };
     // Guard the empty-sink download window from spurious auto-advance.
     s.advancing = true;
-    match direction {
-      Direction::Next => next_index(s.index, s.tracks.len()),
-      Direction::Prev => prev_index(s.index, s.tracks.len()),
-    }
+    let forward = matches!(direction, Direction::Next);
+    advance_index(s.index, s.tracks.len(), mode, forward)
   };
 
   match target {
@@ -455,6 +479,31 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
         s.advancing = false;
       }
     }
+  }
+  true
+}
+
+/// Replay the current Subsonic track (repeat-one auto-advance) via
+/// [`replay_file`]. Re-decodes the **already-downloaded tempfile** — no second
+/// network fetch — and on failure tears the session down (rather than leaving
+/// an empty sink that would re-fire replay every tick). Returns `true` if
+/// Subsonic owns the session.
+async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
+  let (player, path) = {
+    let mut guard = app.lock().await;
+    let Some(s) = guard.subsonic_playback.as_mut() else {
+      return false; // not ours
+    };
+    s.advancing = true;
+    (Arc::clone(&s.player), s.tempfile.path().to_path_buf())
+  };
+  if replay_file(player, path).await {
+    if let Some(s) = app.lock().await.subsonic_playback.as_mut() {
+      s.advancing = false;
+    }
+  } else {
+    teardown_subsonic(app).await;
+    set_error(app, "Cannot replay Subsonic track".to_string()).await;
   }
   true
 }

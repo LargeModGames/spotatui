@@ -68,6 +68,18 @@ pub enum PersistedPlayback {
     index: usize,
     position_ms: u64,
     paused: bool,
+    #[serde(default)]
+    repeat: crate::infra::queue::RepeatMode,
+    /// The user's shuffle *intent* (`decoded_shuffle`). Stored separately from
+    /// `shuffle` because a toggle deferred while a track change is in flight can
+    /// leave the two temporarily disagreeing; the restore trusts this flag and
+    /// reconciles the queue order to it.
+    #[serde(default)]
+    shuffle_on: bool,
+    /// The applied shuffle permutation, for restoring the original order on
+    /// un-shuffle. May be absent while `shuffle_on` is set (deferred toggle).
+    #[serde(default)]
+    shuffle: Option<crate::infra::queue::ShuffleBackup>,
   },
   /// Subsonic: full track metadata (from the API) plus the queue position.
   Subsonic {
@@ -75,6 +87,12 @@ pub enum PersistedPlayback {
     index: usize,
     position_ms: u64,
     paused: bool,
+    #[serde(default)]
+    repeat: crate::infra::queue::RepeatMode,
+    #[serde(default)]
+    shuffle_on: bool,
+    #[serde(default)]
+    shuffle: Option<crate::infra::queue::ShuffleBackup>,
   },
   /// YouTube: full track metadata (from `yt-dlp`) plus the queue position.
   YouTube {
@@ -82,6 +100,12 @@ pub enum PersistedPlayback {
     index: usize,
     position_ms: u64,
     paused: bool,
+    #[serde(default)]
+    repeat: crate::infra::queue::RepeatMode,
+    #[serde(default)]
+    shuffle_on: bool,
+    #[serde(default)]
+    shuffle: Option<crate::infra::queue::ShuffleBackup>,
   },
   /// Radio: a single station to reconnect to. A stream has no seekable
   /// position, so none is stored.
@@ -153,6 +177,7 @@ pub fn clear(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::infra::queue::RepeatMode;
 
   fn track(uri: &str, name: &str) -> TrackInfo {
     TrackInfo {
@@ -184,6 +209,30 @@ mod tests {
   }
 
   #[test]
+  fn shuffle_intent_round_trips_independently_of_the_backup() {
+    // A shuffle toggled while a track change is in flight is deferred, so the
+    // intent (`shuffle_on: true`) can be persisted while the permutation
+    // (`shuffle`) has not been applied yet. Both must survive independently so
+    // the restore trusts the flag and reconciles the order to it.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("last_session.yml");
+    let s = session(
+      Some(PersistedPlayback::Local {
+        queue: vec!["file:///a.mp3".to_string(), "file:///b.mp3".to_string()],
+        index: 0,
+        position_ms: 0,
+        paused: false,
+        repeat: RepeatMode::Context,
+        shuffle_on: true,
+        shuffle: None,
+      }),
+      vec![],
+    );
+    save(&path, &s).unwrap();
+    assert_eq!(load(&path).unwrap(), Some(s));
+  }
+
+  #[test]
   fn save_then_load_round_trips_a_youtube_playback() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("last_session.yml");
@@ -193,6 +242,9 @@ mod tests {
         index: 1,
         position_ms: 42_000,
         paused: true,
+        repeat: RepeatMode::Track,
+        shuffle_on: false,
+        shuffle: None,
       }),
       vec![],
     );
@@ -210,6 +262,9 @@ mod tests {
         index: 0,
         position_ms: 5_000,
         paused: false,
+        repeat: RepeatMode::Off,
+        shuffle_on: false,
+        shuffle: None,
       }),
       vec![
         track("spotify:track:xyz", "Queued A"),
@@ -247,6 +302,9 @@ mod tests {
       index: 1,
       position_ms: 12_345,
       paused: true,
+      repeat: RepeatMode::Off,
+      shuffle_on: false,
+      shuffle: None,
     };
     let legacy_yaml = serde_yaml::to_string(&legacy).unwrap();
     std::fs::write(&path, legacy_yaml).unwrap();
@@ -269,6 +327,9 @@ mod tests {
           index: 0,
           position_ms: 0,
           paused: false,
+          repeat: RepeatMode::Off,
+          shuffle_on: false,
+          shuffle: None,
         }),
         vec![],
       ),

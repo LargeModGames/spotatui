@@ -127,6 +127,15 @@ pub enum IoEvent {
   /// `infra::queue::dispatch::route_queue_event` (wired first in the pump); it
   /// never reaches the Spotify network handler.
   AdvanceNativeQueue,
+  /// Replay the current track of the active decoded source (repeat-one). Consumed
+  /// by the per-source routers (`route_local_event` / `route_subsonic_event` /
+  /// `route_youtube_event`); it never reaches the Spotify network handler. Only
+  /// dispatched by the runner tick under a decoded source feature.
+  #[cfg_attr(
+    not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+    allow(dead_code)
+  )]
+  ReplayCurrentTrack,
   /// Resume a suspended native-streaming Spotify context after the native queue
   /// drains (context URI, resume-track URI). Re-loads the context on the native
   /// device via the existing `start_playback` machinery. `allow(dead_code)`:
@@ -717,6 +726,9 @@ impl Network {
       // Consumed by the queue router before it reaches the network; only lands
       // here if the router somehow let it through. No Spotify work to do.
       IoEvent::AdvanceNativeQueue => {}
+      // Consumed by a per-source router when a decoded source owns playback; only
+      // lands here otherwise (e.g. Spotify is playing). No Spotify work to do.
+      IoEvent::ReplayCurrentTrack => {}
       IoEvent::ResumeSpotifyContext(context_uri, resume_track_uri) => {
         self
           .resume_spotify_context(context_uri, resume_track_uri)
