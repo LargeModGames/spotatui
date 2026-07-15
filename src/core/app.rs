@@ -3906,7 +3906,9 @@ impl App {
   /// internet radio (an infinite stream with no queue) and the native queue slot
   /// (a suspended context is not the active source). This is the gate for the
   /// decoded repeat/shuffle controls, which only make sense over a real queue.
-  fn active_queueable_decoded_source(&self) -> bool {
+  /// Also gates which playbar buttons are drawn and clickable (see
+  /// `playbar_supported_controls`).
+  pub(crate) fn active_queueable_decoded_source(&self) -> bool {
     // The native queue owning the sink is out of scope for repeat/shuffle; any
     // per-source `*_playback` below is then a suspended context, not active.
     if self.queue_owns_playback() {

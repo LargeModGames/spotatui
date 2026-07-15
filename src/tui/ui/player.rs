@@ -321,7 +321,12 @@ fn cover_playbar_controls_area(
   progress_area: Rect,
   behavior: &crate::core::user_config::BehaviorConfig,
 ) -> Rect {
-  let required_width = playbar_controls_required_width(behavior);
+  // Reserve room for the full control row: this only decides *whether* a controls
+  // row fits, and which controls actually apply depends on the owning source
+  // (`playbar_supported_controls`), which this layout pass has no `App` to ask.
+  // Sizing for the widest case keeps the row appearing in exactly the same
+  // situations as before, just with fewer buttons drawn in it.
+  let required_width = playbar_controls_required_width(behavior, &PLAYBAR_CONTROLS);
   let controls_y = progress_area.y.saturating_sub(1);
   let image_bottom = image_area.y.saturating_add(image_area.height);
 
@@ -356,15 +361,66 @@ fn cover_playbar_artist_area(
   Rect::new(text_area.x, y, text_area.width, height)
 }
 
+/// The controls that apply to whatever currently owns playback.
+///
+/// Rendering and hit-testing both go through this, so a button that is drawn is
+/// always one that works. They used to disagree — the row drew all eight while
+/// hit-testing accepted only Play/Pause — which left inert Shuffle/Repeat
+/// buttons sitting on the local playbar, inviting a click that did nothing.
+fn playbar_supported_controls(app: &App) -> Vec<PlaybarControl> {
+  playbar_supported_controls_for(
+    non_spotify_source_playback_active(app),
+    app.active_queueable_decoded_source(),
+  )
+}
+
+/// The pure core of [`playbar_supported_controls`], taking the two facts it
+/// depends on rather than an [`App`]: a real `LocalPlaybackState` needs an
+/// `Arc<LocalPlayer>` holding an open audio device, so the whole support matrix
+/// would otherwise be untestable.
+///
+/// Deliberately blind to `current_playback_context`: [`draw_playbar`] checks every
+/// decoded source *before* it looks at the Spotify context and returns early, so
+/// whenever a source owns playback the playbar on screen is that source's. Gating
+/// these controls on a Spotify context that may merely be cached from an earlier
+/// session would offer buttons for a track the user cannot see or hear.
+fn playbar_supported_controls_for(
+  non_spotify_active: bool,
+  queueable_decoded: bool,
+) -> Vec<PlaybarControl> {
+  let mut controls = PLAYBAR_CONTROLS.to_vec();
+
+  // No decoded source: the Spotify playbar is on screen and drives everything.
+  if !non_spotify_active {
+    return controls;
+  }
+
+  // Every decoded source routes play/pause and volume to its own player, rather
+  // than the paused librespot (see `App::toggle_playback` / `App::increase_volume`).
+  // Prev/Next/Shuffle/Repeat additionally need a finite track queue to act on,
+  // which internet radio (an endless stream) and the native queue slot don't
+  // have. Liking needs a Spotify item id, which no decoded source has.
+  controls.retain(|control| match control {
+    PlaybarControl::PlayPause | PlaybarControl::VolumeDown | PlaybarControl::VolumeUp => true,
+    PlaybarControl::Prev
+    | PlaybarControl::Next
+    | PlaybarControl::Shuffle
+    | PlaybarControl::Repeat => queueable_decoded,
+    PlaybarControl::Like => false,
+  });
+  controls
+}
+
 fn playbar_control_hitboxes_in_area(
   controls_area: Rect,
   behavior: &crate::core::user_config::BehaviorConfig,
+  controls: &[PlaybarControl],
 ) -> Vec<PlaybarControlHitbox> {
   if controls_area.width == 0 || controls_area.height == 0 {
     return Vec::new();
   }
 
-  let required_width = playbar_controls_required_width(behavior);
+  let required_width = playbar_controls_required_width(behavior, controls);
   let start_x = if controls_area.width > required_width {
     controls_area
       .x
@@ -376,9 +432,9 @@ fn playbar_control_hitboxes_in_area(
   let mut x = start_x;
   let y = controls_area.y.saturating_add(controls_area.height / 2);
   let right = controls_area.x.saturating_add(controls_area.width);
-  let mut hitboxes = Vec::with_capacity(PLAYBAR_CONTROLS.len());
+  let mut hitboxes = Vec::with_capacity(controls.len());
 
-  for control in PLAYBAR_CONTROLS {
+  for control in controls.iter().copied() {
     let label = control.label(behavior);
     let width = unicode_width::UnicodeWidthStr::width(label.as_ref()) as u16;
     if x.saturating_add(width) > right {
@@ -399,8 +455,11 @@ fn playbar_control_hitboxes_in_area(
   hitboxes
 }
 
-fn playbar_controls_required_width(behavior: &crate::core::user_config::BehaviorConfig) -> u16 {
-  PLAYBAR_CONTROLS
+fn playbar_controls_required_width(
+  behavior: &crate::core::user_config::BehaviorConfig,
+  controls: &[PlaybarControl],
+) -> u16 {
+  controls
     .iter()
     .enumerate()
     .fold(0u16, |width, (idx, control)| {
@@ -419,24 +478,14 @@ pub(crate) fn playbar_control_hitboxes(
   }
 
   let controls_area = playbar_layout_areas(app, playbar_area).controls_area;
-  let mut hitboxes: Vec<(PlaybarControl, Rect)> =
-    playbar_control_hitboxes_in_area(controls_area, &app.user_config.behavior)
-      .into_iter()
-      .map(|hitbox| (hitbox.control, hitbox.rect))
-      .collect();
-
-  // A non-Spotify source only has a verified-correct route for Play/Pause
-  // (`App::toggle_playback` branches on the owning source before falling
-  // back to librespot). Next/Prev/Shuffle/volume have no such per-source
-  // guard yet (transport-2/3, tracked separately) and would otherwise drive
-  // paused librespot instead of the audible source — so keep those hitboxes
-  // out of the click surface until that routing lands, rather than wiring a
-  // click that acts on the wrong player.
-  if non_spotify_source_playback_active(app) && app.current_playback_context.is_none() {
-    hitboxes.retain(|(control, _)| *control == PlaybarControl::PlayPause);
-  }
-
-  hitboxes
+  playbar_control_hitboxes_in_area(
+    controls_area,
+    &app.user_config.behavior,
+    &playbar_supported_controls(app),
+  )
+  .into_iter()
+  .map(|hitbox| (hitbox.control, hitbox.rect))
+  .collect()
 }
 
 fn playbar_controls_available(app: &App) -> bool {
@@ -589,7 +638,11 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
 
 fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
   let controls_style = Style::default().fg(app.user_config.theme.playbar_text);
-  for hitbox in playbar_control_hitboxes_in_area(controls_area, &app.user_config.behavior) {
+  for hitbox in playbar_control_hitboxes_in_area(
+    controls_area,
+    &app.user_config.behavior,
+    &playbar_supported_controls(app),
+  ) {
     let control = Paragraph::new(Span::styled(
       hitbox.control.label(&app.user_config.behavior).into_owned(),
       controls_style,
@@ -1752,16 +1805,86 @@ mod tests {
   }
 
   #[test]
+  fn spotify_playback_keeps_every_playbar_control() {
+    // No decoded source owns playback, so the Spotify playbar is on screen.
+    assert_eq!(
+      playbar_supported_controls_for(false, false),
+      PLAYBAR_CONTROLS.to_vec()
+    );
+  }
+
+  #[test]
+  fn a_cached_spotify_context_does_not_resurrect_controls_for_a_decoded_source() {
+    // Regression: this gate used to bail out to the full control set whenever
+    // `current_playback_context` was `Some`, which is the common case for anyone
+    // who has ever signed in to Spotify — so local files got all eight buttons
+    // back, including Like. `draw_playbar` consults every decoded source before
+    // the Spotify context and returns early, so the context says nothing about
+    // which playbar is actually on screen and must not be consulted here.
+    let local = playbar_supported_controls_for(true, true);
+    assert!(!local.contains(&PlaybarControl::Like));
+    let radio = playbar_supported_controls_for(true, false);
+    assert!(!radio.contains(&PlaybarControl::Shuffle));
+  }
+
+  #[test]
+  fn queueable_decoded_source_gets_transport_and_modes_but_not_like() {
+    // Regression: Shuffle/Repeat were drawn but not clickable for local files,
+    // because the row rendered every control while hit-testing kept only
+    // Play/Pause. Both now come from this list, so a drawn button always works.
+    let controls = playbar_supported_controls_for(true, true);
+    for expected in [
+      PlaybarControl::Prev,
+      PlaybarControl::PlayPause,
+      PlaybarControl::Next,
+      PlaybarControl::Shuffle,
+      PlaybarControl::Repeat,
+      PlaybarControl::VolumeDown,
+      PlaybarControl::VolumeUp,
+    ] {
+      assert!(
+        controls.contains(&expected),
+        "{expected:?} routes to the decoded source, so it should be offered: {controls:?}"
+      );
+    }
+    // Liking needs a Spotify item id, which a decoded source has no way to supply.
+    assert!(!controls.contains(&PlaybarControl::Like));
+  }
+
+  #[test]
+  fn radio_only_gets_the_controls_a_live_stream_can_honour() {
+    // Radio (and the native queue slot) report `queueable_decoded = false`: there
+    // is no finite track list to skip through or shuffle, so offering those
+    // buttons would invite a click that falls through to the wrong player.
+    let controls = playbar_supported_controls_for(true, false);
+    assert_eq!(
+      controls,
+      vec![
+        PlaybarControl::PlayPause,
+        PlaybarControl::VolumeDown,
+        PlaybarControl::VolumeUp,
+      ]
+    );
+  }
+
+  #[test]
   fn control_hitboxes_handle_zero_sized_area() {
     let behavior = crate::core::user_config::UserConfig::new().behavior;
-    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 0, 0), &behavior).is_empty());
-    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 10, 0), &behavior).is_empty());
+    assert!(
+      playbar_control_hitboxes_in_area(Rect::new(0, 0, 0, 0), &behavior, &PLAYBAR_CONTROLS)
+        .is_empty()
+    );
+    assert!(
+      playbar_control_hitboxes_in_area(Rect::new(0, 0, 10, 0), &behavior, &PLAYBAR_CONTROLS)
+        .is_empty()
+    );
   }
 
   #[test]
   fn control_hitboxes_truncate_for_tiny_widths() {
     let behavior = crate::core::user_config::UserConfig::new().behavior;
-    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(5, 10, 8, 1), &behavior);
+    let hitboxes =
+      playbar_control_hitboxes_in_area(Rect::new(5, 10, 8, 1), &behavior, &PLAYBAR_CONTROLS);
     assert_eq!(hitboxes.len(), 1);
     assert_eq!(hitboxes[0].control, PlaybarControl::Prev);
     assert_eq!(hitboxes[0].rect, Rect::new(5, 10, 6, 1));
@@ -1770,7 +1893,8 @@ mod tests {
   #[test]
   fn control_hitboxes_include_all_controls_when_wide_enough() {
     let behavior = crate::core::user_config::UserConfig::new().behavior;
-    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(0, 0, 200, 1), &behavior);
+    let hitboxes =
+      playbar_control_hitboxes_in_area(Rect::new(0, 0, 200, 1), &behavior, &PLAYBAR_CONTROLS);
     assert_eq!(hitboxes.len(), PLAYBAR_CONTROLS.len());
     assert_eq!(hitboxes[0].control, PlaybarControl::Prev);
     assert_eq!(
