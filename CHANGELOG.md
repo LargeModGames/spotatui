@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Shuffle and repeat for Local Files, Subsonic, and YouTube**: The shuffle (`Ctrl+s`) and repeat (`Ctrl+r`) keys now work when one of the decoded sources owns playback, not just on Spotify. Repeat cycles Off → Track → All exactly as it does for Spotify: **All** wraps the context from the last track back to the first, **Track** replays the current song. Shuffle reorders in place and keeps the currently playing song playing (it becomes the new first track), so toggling it never interrupts audio; turning it back off restores the original order and keeps your place in it. Both modes, plus the shuffle order itself, survive a restart along with the rest of the playback session in `last_session.yml`. The modes are also routed through MPRIS, so `playerctl shuffle`/`loop` and desktop media controls drive them. Internet radio and native queue slots have no track queue of their own, so their playbar and MPRIS snapshot drop the shuffle/repeat controls entirely rather than showing inert ones — which is why the default `format.playbar_status_source` template gained self-contained `{shuffle}`/`{repeat}` segments (see `docs/configuration.md`).
+
 ### Fixed
 
 - **Startup login no longer hangs**: On a fresh install or with a stale token, the auth wizard's "Waiting for authorization callback" step ran a blocking callback server on the async runtime, which could park a worker thread and hang startup before the browser redirect was ever served. The wizard now uses the same async callback server as the in-TUI login ([#364](https://github.com/LargeModGames/spotatui/issues/364)).

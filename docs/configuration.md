@@ -154,7 +154,7 @@ All eight keys are optional; omit a key (or set it to an empty string) to keep t
 ```yaml
 format:
   playbar_status: "{state} ({device} | Shuffle: {shuffle} | Repeat: {repeat} | Volume: {volume}%){party}"
-  playbar_status_source: "{state} ({source}{queue} | Volume: {volume}%)"
+  playbar_status_source: "{state} ({source}{queue}{shuffle}{repeat} | Volume: {volume}%)"
   window_title: "{title}{artist}"
 ```
 
@@ -162,7 +162,12 @@ The defaults above reproduce the built-in output exactly.
 
 ### `playbar_status` (Spotify playback) and `playbar_status_source` (local/Subsonic/Radio/YouTube playback)
 
-Both templates accept the same keys; keys that don't apply to the current mode render empty:
+Both templates accept the same keys; keys that don't apply to the current mode render empty.
+
+`{shuffle}` and `{repeat}` render differently in each template, so the two are not interchangeable:
+
+- In `playbar_status`, they are bare values you label yourself (hence the `Shuffle: {shuffle}` in the default).
+- In `playbar_status_source`, they come pre-composed with their own ` | Shuffle: ` / ` | Repeat: ` prefix, like `{queue}` and `{party}`. This lets the whole segment — label included — disappear for sources that have no such control (internet radio, and native queue slots), rather than leaving a blank `Shuffle:` behind. Don't write your own label around them there.
 
 | Key | Renders as | Notes |
 |---|---|---|
@@ -170,8 +175,8 @@ Both templates accept the same keys; keys that don't apply to the current mode r
 | `{device}` | Spotify device name | Spotify playback only |
 | `{source}` | active source label (e.g. `Local`, `Subsonic`) | source playback only |
 | `{queue}` | ` \| 3/12` queue position, or empty | source playback only |
-| `{shuffle}` | `On` / `Off` | padded to 3 characters |
-| `{repeat}` | `Off` / `Track` / `All` | padded to 5 characters |
+| `{shuffle}` | `On` / `Off` | padded to 3 characters. In `playbar_status_source`: pre-composed as ` \| Shuffle: On `, empty for radio/queue slots |
+| `{repeat}` | `Off` / `Track` / `All` | padded to 5 characters. In `playbar_status_source`: pre-composed as ` \| Repeat: All  `, empty for radio/queue slots |
 | `{volume}` | volume percentage number | append your own `%` |
 | `{party}` | ` \| Party: 3 listeners` / ` \| Party: following <host>`, or empty | pre-composed with its own separator |
 
