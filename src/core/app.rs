@@ -6131,6 +6131,13 @@ impl App {
             value: SettingValue::Color(color_to_string(self.user_config.theme.banner)),
           },
           SettingItem {
+            id: "behavior.banner_gradient".to_string(),
+            name: "Banner Gradient".to_string(),
+            description: "Animated RGB gradient on the home banner; off uses the Banner Color"
+              .to_string(),
+            value: SettingValue::Bool(self.user_config.behavior.banner_gradient),
+          },
+          SettingItem {
             id: "theme.hint".to_string(),
             name: "Hint Color".to_string(),
             description: "Color for hints".to_string(),
@@ -6275,6 +6282,11 @@ impl App {
         "behavior.enable_text_emphasis" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_text_emphasis = *v;
+          }
+        }
+        "behavior.banner_gradient" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.banner_gradient = *v;
           }
         }
         "behavior.show_loading_indicator" => {
@@ -6931,6 +6943,22 @@ impl App {
       if let Some((_, color)) = mappings.iter().find(|(id, _)| *id == setting.id) {
         setting.value = SettingValue::Color(color_to_string(*color));
       }
+    }
+  }
+
+  /// Sync the Banner Gradient toggle to a newly selected preset's default
+  /// (Terminal defaults to off so the banner follows the terminal palette).
+  /// Custom keeps whatever the user chose.
+  pub fn sync_banner_gradient_setting(&mut self, preset: crate::core::user_config::ThemePreset) {
+    if preset == crate::core::user_config::ThemePreset::Custom {
+      return;
+    }
+    if let Some(setting) = self
+      .settings_items
+      .iter_mut()
+      .find(|s| s.id == "behavior.banner_gradient")
+    {
+      setting.value = SettingValue::Bool(preset.default_banner_gradient());
     }
   }
 }

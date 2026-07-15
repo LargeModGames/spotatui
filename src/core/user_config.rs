@@ -263,6 +263,13 @@ impl ThemePreset {
     presets[prev_idx]
   }
 
+  /// Default banner-gradient state for this preset. The Terminal preset
+  /// exists to follow the terminal's ANSI palette live, which the gradient's
+  /// fixed RGB colors would defeat, so it defaults to a solid banner.
+  pub fn default_banner_gradient(&self) -> bool {
+    !matches!(self, ThemePreset::Terminal)
+  }
+
   /// Get the theme colors for this preset
   pub fn to_theme(self) -> Theme {
     match self {
@@ -776,6 +783,7 @@ pub struct BehaviorConfigString {
   pub tick_rate_milliseconds: Option<u64>,
   pub animation_tick_rate_milliseconds: Option<u64>,
   pub enable_text_emphasis: Option<bool>,
+  pub banner_gradient: Option<bool>,
   pub show_loading_indicator: Option<bool>,
   pub enforce_wide_search_bar: Option<bool>,
   pub group_folders_first: Option<bool>,
@@ -855,6 +863,9 @@ pub struct BehaviorConfig {
   pub tick_rate_milliseconds: u64,
   pub animation_tick_rate_milliseconds: u64,
   pub enable_text_emphasis: bool,
+  /// When false, the home banner is drawn in the theme's banner color instead
+  /// of the animated RGB gradient, so ANSI palettes (e.g. pywal) restyle it live.
+  pub banner_gradient: bool,
   pub show_loading_indicator: bool,
   pub enforce_wide_search_bar: bool,
   pub group_folders_first: bool,
@@ -1168,6 +1179,7 @@ impl UserConfig {
         tick_rate_milliseconds: DEFAULT_TICK_RATE_MILLISECONDS,
         animation_tick_rate_milliseconds: DEFAULT_ANIMATION_TICK_RATE_MILLISECONDS,
         enable_text_emphasis: true,
+        banner_gradient: true,
         show_loading_indicator: true,
         enforce_wide_search_bar: false,
         group_folders_first: false,
@@ -1401,6 +1413,15 @@ impl UserConfig {
     Ok(())
   }
 
+  /// Resolve the effective banner-gradient state once both the behavior and
+  /// theme sections have loaded: an explicit `banner_gradient` in the config
+  /// always wins; otherwise the theme preset decides (the Terminal preset
+  /// defaults to a solid banner so it can follow the terminal palette).
+  fn resolve_banner_gradient(&mut self, explicit: Option<bool>) {
+    self.behavior.banner_gradient =
+      explicit.unwrap_or_else(|| self.current_preset.default_banner_gradient());
+  }
+
   pub fn load_behaviorconfig(&mut self, behavior_config: BehaviorConfigString) -> Result<()> {
     if let Some(behavior_string) = behavior_config.seek_milliseconds {
       self.behavior.seek_milliseconds = behavior_string;
@@ -1450,6 +1471,10 @@ impl UserConfig {
 
     if let Some(text_emphasis) = behavior_config.enable_text_emphasis {
       self.behavior.enable_text_emphasis = text_emphasis;
+    }
+
+    if let Some(banner_gradient) = behavior_config.banner_gradient {
+      self.behavior.banner_gradient = banner_gradient;
     }
 
     if let Some(loading_indicator) = behavior_config.show_loading_indicator {
@@ -1958,12 +1983,17 @@ impl UserConfig {
         self.load_keybindings(keybindings)?;
       }
 
+      let explicit_banner_gradient = config_yml
+        .behavior
+        .as_ref()
+        .and_then(|behavior| behavior.banner_gradient);
       if let Some(behavior) = config_yml.behavior {
         self.load_behaviorconfig(behavior)?;
       }
       if let Some(theme) = config_yml.theme {
         self.load_theme(theme)?;
       }
+      self.resolve_banner_gradient(explicit_banner_gradient);
       if let Some(plugin_commands) = config_yml.plugin_commands {
         self.load_plugin_commands(plugin_commands);
       }
@@ -2044,6 +2074,7 @@ impl UserConfig {
       tick_rate_milliseconds: Some(self.behavior.tick_rate_milliseconds),
       animation_tick_rate_milliseconds: Some(self.behavior.animation_tick_rate_milliseconds),
       enable_text_emphasis: Some(self.behavior.enable_text_emphasis),
+      banner_gradient: Some(self.behavior.banner_gradient),
       show_loading_indicator: Some(self.behavior.show_loading_indicator),
       enforce_wide_search_bar: Some(self.behavior.enforce_wide_search_bar),
       group_folders_first: Some(self.behavior.group_folders_first),
@@ -2613,6 +2644,27 @@ mod tests {
     ] {
       assert_eq!(parse_theme_item(&color_to_string(color)).unwrap(), color);
     }
+  }
+
+  #[test]
+  fn banner_gradient_defaults_off_for_terminal_preset_unless_explicit() {
+    use super::{ThemePreset, UserConfig};
+
+    let mut config = UserConfig::new();
+
+    // No explicit config value: the preset decides
+    config.current_preset = ThemePreset::Terminal;
+    config.resolve_banner_gradient(None);
+    assert!(!config.behavior.banner_gradient);
+
+    config.current_preset = ThemePreset::Default;
+    config.resolve_banner_gradient(None);
+    assert!(config.behavior.banner_gradient);
+
+    // An explicit value always wins over the preset default
+    config.current_preset = ThemePreset::Terminal;
+    config.resolve_banner_gradient(Some(true));
+    assert!(config.behavior.banner_gradient);
   }
 
   #[test]
