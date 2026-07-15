@@ -324,7 +324,11 @@ fn restore_in_place<T>(items: &mut Vec<T>, backup: &ShuffleBackup, current: usiz
 /// Returns whether playback restarted. On `false` the caller must tear its
 /// session down — an empty sink left in place would read as end-of-track and
 /// re-fire replay every runner tick.
-#[cfg(feature = "audio-decode")]
+///
+/// Gated on the *queueable* decoded sources rather than `audio-decode`: replay
+/// is the repeat-one path of a finite track list. Internet radio decodes audio
+/// too, but a live stream has no track to re-decode.
+#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
 pub async fn replay_file(
   player: std::sync::Arc<crate::infra::audio::LocalPlayer>,
   path: std::path::PathBuf,
@@ -338,7 +342,12 @@ pub async fn replay_file(
 /// A queued *decoded* track playing through the shared [`LocalPlayer`] sink
 /// (local file, Subsonic, or YouTube). Kept separate from the per-source
 /// `*_playback` structs so the underlying context is preserved for resume.
-#[cfg(feature = "audio-decode")]
+///
+/// Gated on exactly those three sources, not `audio-decode`: they are the ones
+/// [`dispatch::try_play_queued`] can play. Internet radio pulls `audio-decode`
+/// in as well, but a live stream is never a queue item, so a radio-only build
+/// can never construct this.
+#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
 pub struct DecodedQueuePlayback {
   /// The output-device sink. Shared (`Arc::ptr_eq`) with the suspended context's
   /// player when there is one, so no second device is opened.
@@ -368,13 +377,21 @@ pub struct DecodedQueuePlayback {
 
 /// What the native queue's playback slot is currently playing.
 ///
-/// A slim build (neither native streaming nor a decoded source) cannot play a
-/// queued track at all, so this type is gated to builds that can; the
-/// `App::queue_now` field shares that gate, and every call site goes through the
-/// unconditional `App::queue_owns_playback()` accessor.
-#[cfg(any(feature = "streaming", feature = "audio-decode"))]
+/// A build with no *queueable* source (neither native streaming nor a decoded
+/// source that owns a finite track list) cannot play a queued track at all, so
+/// this type is gated to builds that can; the `App::queue_now` field shares that
+/// gate, and every call site goes through the unconditional
+/// `App::queue_owns_playback()` accessor. Note internet radio is deliberately
+/// absent from both halves of the gate: it decodes audio, but a `radio:` URI is
+/// never a queue item, so it can neither fill nor own this slot.
+#[cfg(any(
+  feature = "streaming",
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "youtube"
+))]
 pub enum QueueNowPlaying {
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
   Decoded(DecodedQueuePlayback),
   /// A Spotify track playing via native streaming (`player.load`, no Spirc
   /// context).

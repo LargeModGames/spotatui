@@ -162,7 +162,7 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // The native queue slot playing a decoded track wins over every per-source
   // context: it is what is actually audible, and it drives the playbar / MPRIS /
   // cover art / lyrics via the shared track-change detector.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let mut snapshot = source_snapshot(
       d.track.name.clone(),

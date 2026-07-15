@@ -1152,7 +1152,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // suspended context (whose `*_playback` is still `Some`) and not the stale
   // Spotify context (still cached when a Spotify context was suspended).
   // Checked first so the playbar always shows what is actually audible.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let source_label = d
       .track
