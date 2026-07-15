@@ -119,9 +119,17 @@ fn update_macos_metadata(
 ) {
   // Local-file playback owns its own state and never populates the Spotify
   // playback context, so Now Playing must read metadata, play state, and
-  // position straight from the live local player when local is active.
+  // position straight from the live local player when local is active. Skipped
+  // while the native queue owns the sink: `local_playback` is then a *suspended*
+  // context, so fall through to the snapshot path, which describes the queued
+  // track actually playing. Mirrors the same filter on the MPRIS twin in
+  // `crate::tui::runner::update_mpris_state`.
   #[cfg(feature = "local-files")]
-  if let Some(local) = app.local_playback.as_ref() {
+  if let Some(local) = app
+    .local_playback
+    .as_ref()
+    .filter(|_| !app.queue_owns_playback())
+  {
     use crate::infra::media_metadata::{select_media_metadata, LocalMediaMetadata};
 
     let is_playing = !local.player.is_paused();
@@ -1702,6 +1710,9 @@ async fn restore_playback_session(
       index,
       position_ms,
       paused,
+      repeat,
+      shuffle_on,
+      shuffle,
     } => {
       if queue.is_empty() {
         return;
@@ -1712,14 +1723,26 @@ async fn restore_playback_session(
         &IoEvent::StartPlayback(None, Some(queue), Some(index)),
       )
       .await;
-      let guard = app.lock().await;
-      if let Some(s) = guard.local_playback.as_ref() {
+      let mut guard = app.lock().await;
+      // Only adopt the persisted modes if the source actually started; a decode
+      // failure would otherwise leave the player-global flags set with no source.
+      // Trust the persisted intent (`shuffle_on`) for the flag and restore the
+      // backup as-is (the start path above did not re-shuffle because
+      // `decoded_shuffle` is still off). When the two disagree — a toggle deferred
+      // at exit — the runner's `reconcile_decoded_shuffle` re-syncs the queue
+      // order to the flag on the next tick.
+      if guard.local_playback.is_some() {
+        guard.decoded_repeat = repeat;
+        guard.decoded_shuffle = shuffle_on;
+      }
+      if let Some(s) = guard.local_playback.as_mut() {
         if position_ms > 0 {
           let _ = s.player.seek(Duration::from_millis(position_ms));
         }
         if resolve_paused(paused) {
           s.player.pause();
         }
+        s.shuffle_backup = shuffle;
       }
     }
     #[cfg(feature = "subsonic")]
@@ -1728,6 +1751,9 @@ async fn restore_playback_session(
       index,
       position_ms,
       paused,
+      repeat,
+      shuffle_on,
+      shuffle,
     } => {
       let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
       if uris.is_empty() {
@@ -1740,14 +1766,19 @@ async fn restore_playback_session(
         &IoEvent::StartPlayback(None, Some(uris), Some(index)),
       )
       .await;
-      let guard = app.lock().await;
-      if let Some(s) = guard.subsonic_playback.as_ref() {
+      let mut guard = app.lock().await;
+      if guard.subsonic_playback.is_some() {
+        guard.decoded_repeat = repeat;
+        guard.decoded_shuffle = shuffle_on;
+      }
+      if let Some(s) = guard.subsonic_playback.as_mut() {
         if position_ms > 0 {
           let _ = s.player.seek(Duration::from_millis(position_ms));
         }
         if resolve_paused(paused) {
           s.player.pause();
         }
+        s.shuffle_backup = shuffle;
       }
     }
     #[cfg(feature = "youtube")]
@@ -1756,6 +1787,9 @@ async fn restore_playback_session(
       index,
       position_ms,
       paused,
+      repeat,
+      shuffle_on,
+      shuffle,
     } => {
       let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
       if uris.is_empty() {
@@ -1767,14 +1801,19 @@ async fn restore_playback_session(
         &IoEvent::StartPlayback(None, Some(uris), Some(index)),
       )
       .await;
-      let guard = app.lock().await;
-      if let Some(s) = guard.youtube_playback.as_ref() {
+      let mut guard = app.lock().await;
+      if guard.youtube_playback.is_some() {
+        guard.decoded_repeat = repeat;
+        guard.decoded_shuffle = shuffle_on;
+      }
+      if let Some(s) = guard.youtube_playback.as_mut() {
         if position_ms > 0 {
           let _ = s.player.seek(Duration::from_millis(position_ms));
         }
         if resolve_paused(paused) {
           s.player.pause();
         }
+        s.shuffle_backup = shuffle;
       }
     }
     #[cfg(feature = "internet-radio")]
@@ -2174,6 +2213,31 @@ async fn route_decoded_mpris_event(
   use mpris::MprisEvent;
 
   let mut app_lock = app.lock().await;
+
+  // The native queue slot owns playback: shuffle/repeat mean nothing over an
+  // explicit queue, whatever it suspended, so reject them here rather than in the
+  // match below. A queued *Spotify* track has no decoded player and would
+  // otherwise take the early return underneath and let the Spotify handler mutate
+  // the suspended context — the one state where MPRIS and the keyboard
+  // (`App::shuffle` / `App::repeat`, which no-op) would disagree. The corrective
+  // push matches what the snapshot reports for a queue slot, so the runner's
+  // dedup cache converges instead of stranding the property.
+  if app_lock.queue_owns_playback() {
+    match event {
+      MprisEvent::SetShuffle(_) => {
+        drop(app_lock);
+        mpris_manager.set_shuffle(false);
+        return true;
+      }
+      MprisEvent::SetLoopStatus(_) => {
+        drop(app_lock);
+        mpris_manager.set_loop_status(mpris::LoopStatusEvent::None);
+        return true;
+      }
+      _ => {}
+    }
+  }
+
   // Read the live source-player state up front, then drop the borrow so the
   // immutable read does not conflict with the `&mut self` dispatch calls below.
   let Some(player) = app_lock.active_decoded_player() else {
@@ -2222,10 +2286,51 @@ async fn route_decoded_mpris_event(
       mpris_manager.emit_seeked(new_position_ms as u64);
       true
     }
-    // Shuffle/loop don't apply to single-file local playback. Volume is handled
-    // by the top-level `set_volume_percent`, which already routes to whichever
-    // decoded source owns the sink. Leave all three to the existing handling.
-    MprisEvent::SetShuffle(_) | MprisEvent::SetLoopStatus(_) | MprisEvent::SetVolume(_) => false,
+    // Shuffle/repeat drive the player-global decoded state so an external
+    // controller changes the audible decoded source, not the stale Spotify
+    // context. A queueable source (Local/Subsonic/YouTube) consumes them; the
+    // sources that cannot honour them reject them (below) rather than falling
+    // through. Only Spotify (no decoded player at all, so this function returned
+    // early) reaches the Spotify handling.
+    // Volume is handled by the top-level `set_volume_percent`.
+    MprisEvent::SetShuffle(on) => {
+      if app_lock.set_decoded_shuffle(*on) {
+        drop(app_lock);
+        mpris_manager.set_shuffle(*on);
+      } else {
+        // A decoded source owns playback but has no shuffle of its own: radio is
+        // an endless stream, and the queue slot plays an explicit list over a
+        // suspended context. Consume the event instead of falling through to the
+        // Spotify handler, which would flip shuffle on the user's real device for
+        // a source they are not listening to (and persist it to their config).
+        // Push the true value back so the client's optimistic flip is corrected:
+        // the runner re-pushes only when the snapshot *changes* against its own
+        // cache, and it never sees this out-of-band write, so leaving the client
+        // at the rejected value would strand the property there for the session.
+        drop(app_lock);
+        mpris_manager.set_shuffle(false);
+      }
+      true
+    }
+    MprisEvent::SetLoopStatus(status) => {
+      use crate::infra::queue::RepeatMode;
+      let mode = match status {
+        mpris::LoopStatusEvent::None => RepeatMode::Off,
+        mpris::LoopStatusEvent::Track => RepeatMode::Track,
+        mpris::LoopStatusEvent::Playlist => RepeatMode::Context,
+      };
+      if app_lock.set_decoded_repeat(mode) {
+        drop(app_lock);
+        mpris_manager.set_loop_status(*status);
+      } else {
+        // Rejected for the same reason as `SetShuffle` above, and corrected back
+        // to the `None` the snapshot reports for these sources.
+        drop(app_lock);
+        mpris_manager.set_loop_status(mpris::LoopStatusEvent::None);
+      }
+      true
+    }
+    MprisEvent::SetVolume(_) => false,
   }
 }
 

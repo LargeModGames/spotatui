@@ -321,7 +321,12 @@ fn cover_playbar_controls_area(
   progress_area: Rect,
   behavior: &crate::core::user_config::BehaviorConfig,
 ) -> Rect {
-  let required_width = playbar_controls_required_width(behavior);
+  // Reserve room for the full control row: this only decides *whether* a controls
+  // row fits, and which controls actually apply depends on the owning source
+  // (`playbar_supported_controls`), which this layout pass has no `App` to ask.
+  // Sizing for the widest case keeps the row appearing in exactly the same
+  // situations as before, just with fewer buttons drawn in it.
+  let required_width = playbar_controls_required_width(behavior, &PLAYBAR_CONTROLS);
   let controls_y = progress_area.y.saturating_sub(1);
   let image_bottom = image_area.y.saturating_add(image_area.height);
 
@@ -356,15 +361,90 @@ fn cover_playbar_artist_area(
   Rect::new(text_area.x, y, text_area.width, height)
 }
 
+/// The controls that apply to whatever currently owns playback.
+///
+/// Rendering and hit-testing both go through this, so a button that is drawn is
+/// always one that works. They used to disagree — the row drew all eight while
+/// hit-testing accepted only Play/Pause — which left inert Shuffle/Repeat
+/// buttons sitting on the local playbar, inviting a click that did nothing.
+fn playbar_supported_controls(app: &App) -> Vec<PlaybarControl> {
+  playbar_supported_controls_for(
+    app.queue_owns_playback(),
+    non_spotify_source_playback_active(app),
+    app.active_queueable_decoded_source(),
+  )
+}
+
+/// The pure core of [`playbar_supported_controls`], taking the three facts it
+/// depends on rather than an [`App`]: a real `LocalPlaybackState` needs an
+/// `Arc<LocalPlayer>` holding an open audio device, so the whole support matrix
+/// would otherwise be untestable.
+///
+/// Deliberately blind to `current_playback_context`: [`draw_playbar`] checks the
+/// queue slot and every decoded source *before* it looks at the Spotify context
+/// and returns early, so whenever either owns playback the playbar on screen is
+/// theirs. Gating these controls on a Spotify context that may merely be cached
+/// from an earlier session would offer buttons for a track the user cannot see
+/// or hear.
+fn playbar_supported_controls_for(
+  queue_owns_playback: bool,
+  non_spotify_active: bool,
+  queueable_decoded: bool,
+) -> Vec<PlaybarControl> {
+  let mut controls = PLAYBAR_CONTROLS.to_vec();
+
+  // The native queue slot owns the sink, so `draw_playbar` renders the *queued*
+  // track over a suspended context with the mode indicators hidden. Transport
+  // still works and stays offered: `App::next_track` advances the queue and
+  // `App::previous_track` restarts the queued track, both via the queue router.
+  // Dropped: Shuffle/Repeat have no queue-slot state to show (`App::shuffle` /
+  // `App::repeat` no-op here), and Like acts on `current_playback_context` —
+  // under a suspended *Spotify* context that is a different track than the one on
+  // screen, so the button would save a song the user is not listening to.
+  // Checked before `non_spotify_active`, which is false in exactly that case (a
+  // suspended Spotify context sets no `*_playback`) and would otherwise hand back
+  // all eight controls.
+  if queue_owns_playback {
+    controls.retain(|control| {
+      !matches!(
+        control,
+        PlaybarControl::Like | PlaybarControl::Shuffle | PlaybarControl::Repeat
+      )
+    });
+    return controls;
+  }
+
+  // No decoded source: the Spotify playbar is on screen and drives everything.
+  if !non_spotify_active {
+    return controls;
+  }
+
+  // Every decoded source routes play/pause and volume to its own player, rather
+  // than the paused librespot (see `App::toggle_playback` / `App::increase_volume`).
+  // Prev/Next/Shuffle/Repeat additionally need a finite track queue to act on,
+  // which internet radio (an endless stream) and the native queue slot don't
+  // have. Liking needs a Spotify item id, which no decoded source has.
+  controls.retain(|control| match control {
+    PlaybarControl::PlayPause | PlaybarControl::VolumeDown | PlaybarControl::VolumeUp => true,
+    PlaybarControl::Prev
+    | PlaybarControl::Next
+    | PlaybarControl::Shuffle
+    | PlaybarControl::Repeat => queueable_decoded,
+    PlaybarControl::Like => false,
+  });
+  controls
+}
+
 fn playbar_control_hitboxes_in_area(
   controls_area: Rect,
   behavior: &crate::core::user_config::BehaviorConfig,
+  controls: &[PlaybarControl],
 ) -> Vec<PlaybarControlHitbox> {
   if controls_area.width == 0 || controls_area.height == 0 {
     return Vec::new();
   }
 
-  let required_width = playbar_controls_required_width(behavior);
+  let required_width = playbar_controls_required_width(behavior, controls);
   let start_x = if controls_area.width > required_width {
     controls_area
       .x
@@ -376,9 +456,9 @@ fn playbar_control_hitboxes_in_area(
   let mut x = start_x;
   let y = controls_area.y.saturating_add(controls_area.height / 2);
   let right = controls_area.x.saturating_add(controls_area.width);
-  let mut hitboxes = Vec::with_capacity(PLAYBAR_CONTROLS.len());
+  let mut hitboxes = Vec::with_capacity(controls.len());
 
-  for control in PLAYBAR_CONTROLS {
+  for control in controls.iter().copied() {
     let label = control.label(behavior);
     let width = unicode_width::UnicodeWidthStr::width(label.as_ref()) as u16;
     if x.saturating_add(width) > right {
@@ -399,8 +479,11 @@ fn playbar_control_hitboxes_in_area(
   hitboxes
 }
 
-fn playbar_controls_required_width(behavior: &crate::core::user_config::BehaviorConfig) -> u16 {
-  PLAYBAR_CONTROLS
+fn playbar_controls_required_width(
+  behavior: &crate::core::user_config::BehaviorConfig,
+  controls: &[PlaybarControl],
+) -> u16 {
+  controls
     .iter()
     .enumerate()
     .fold(0u16, |width, (idx, control)| {
@@ -419,27 +502,27 @@ pub(crate) fn playbar_control_hitboxes(
   }
 
   let controls_area = playbar_layout_areas(app, playbar_area).controls_area;
-  let mut hitboxes: Vec<(PlaybarControl, Rect)> =
-    playbar_control_hitboxes_in_area(controls_area, &app.user_config.behavior)
-      .into_iter()
-      .map(|hitbox| (hitbox.control, hitbox.rect))
-      .collect();
-
-  // A non-Spotify source only has a verified-correct route for Play/Pause
-  // (`App::toggle_playback` branches on the owning source before falling
-  // back to librespot). Next/Prev/Shuffle/volume have no such per-source
-  // guard yet (transport-2/3, tracked separately) and would otherwise drive
-  // paused librespot instead of the audible source — so keep those hitboxes
-  // out of the click surface until that routing lands, rather than wiring a
-  // click that acts on the wrong player.
-  if non_spotify_source_playback_active(app) && app.current_playback_context.is_none() {
-    hitboxes.retain(|(control, _)| *control == PlaybarControl::PlayPause);
-  }
-
-  hitboxes
+  playbar_control_hitboxes_in_area(
+    controls_area,
+    &app.user_config.behavior,
+    &playbar_supported_controls(app),
+  )
+  .into_iter()
+  .map(|hitbox| (hitbox.control, hitbox.rect))
+  .collect()
 }
 
 fn playbar_controls_available(app: &App) -> bool {
+  // The queue slot owns playback, so `draw_playbar` is rendering the queued track
+  // and `playbar_supported_controls` offers the controls that drive it. Checked
+  // first because neither fact below need hold: queueing from an idle app
+  // suspends nothing, leaving every `*_playback` `None` and (for a user who never
+  // started Spotify) no context either — which used to draw those controls while
+  // hit-testing returned no boxes, so they were inert.
+  if app.queue_owns_playback() {
+    return true;
+  }
+
   if app.current_playback_context.as_ref().is_some_and(|ctx| {
     ctx.item.is_some() || (app.is_streaming_active && app.native_device_id.is_some())
   }) {
@@ -589,7 +672,11 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
 
 fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
   let controls_style = Style::default().fg(app.user_config.theme.playbar_text);
-  for hitbox in playbar_control_hitboxes_in_area(controls_area, &app.user_config.behavior) {
+  for hitbox in playbar_control_hitboxes_in_area(
+    controls_area,
+    &app.user_config.behavior,
+    &playbar_supported_controls(app),
+  ) {
     let control = Paragraph::new(Span::styled(
       hitbox.control.label(&app.user_config.behavior).into_owned(),
       controls_style,
@@ -879,6 +966,11 @@ struct LocalPlaybarView {
   /// An infinite live stream (internet radio): `duration_ms` is meaningless,
   /// so the seek bar renders as a full LIVE indicator with elapsed time only.
   live: bool,
+  /// Whether the decoded shuffle/repeat controls apply here. `true` for a
+  /// queueable source that owns playback (Local/Subsonic/YouTube); `false` for
+  /// internet radio and native queue slots, whose playbar drops the mode
+  /// segments entirely rather than showing blank `Shuffle:`/`Repeat:` labels.
+  show_modes: bool,
 }
 
 /// Render the playbar for an active local-file playback session.
@@ -902,6 +994,7 @@ fn draw_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     // Only show the indicator for multi-track queues; a single file is noise.
     queue_position: (local.queue.len() > 1).then(|| (local.index + 1, local.queue.len())),
     live: false,
+    show_modes: true,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -925,6 +1018,7 @@ fn draw_subsonic_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     queue_position: (subsonic.tracks.len() > 1)
       .then(|| (subsonic.index + 1, subsonic.tracks.len())),
     live: false,
+    show_modes: true,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -947,6 +1041,7 @@ fn draw_youtube_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     volume_percent: app.user_config.behavior.volume_percent,
     queue_position: (youtube.tracks.len() > 1).then(|| (youtube.index + 1, youtube.tracks.len())),
     live: false,
+    show_modes: true,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -979,6 +1074,7 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     volume_percent: app.user_config.behavior.volume_percent,
     queue_position: None,
     live: true,
+    show_modes: false,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -1012,9 +1108,28 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     Some((current, total)) => format!(" | {current}/{total}"),
     None => String::new(),
   };
+  // Decoded (Local / Subsonic / YouTube) shuffle + repeat, worded like the
+  // Spotify playbar (Off / Track / All). Each carries its own ` | Label: value`
+  // prefix (values pre-padded to the `{:-3}` / `{:-5}` widths so the default
+  // template reproduces today's output byte-for-byte); contexts without the
+  // controls (radio, native queue slots) render them empty so the whole segment
+  // — label included — disappears instead of leaking a blank control.
+  use crate::infra::queue::RepeatMode;
+  let (shuffle_text, repeat_text) = if view.show_modes {
+    let shuffle = if app.decoded_shuffle { "On" } else { "Off" };
+    let repeat = match app.decoded_repeat {
+      RepeatMode::Off => "Off",
+      RepeatMode::Track => "Track",
+      RepeatMode::Context => "All",
+    };
+    (
+      format!(" | Shuffle: {shuffle:<3}"),
+      format!(" | Repeat: {repeat:<5}"),
+    )
+  } else {
+    (String::new(), String::new())
+  };
   // Build the title from the configurable playbar_status_source template.
-  // Values are pre-padded to match the original `{:-N}` format widths so the
-  // default template reproduces today's output byte-for-byte.
   let title = app.user_config.format.playbar_status_source.render(&[
     // state — left-aligned to 7 cols (matches `{:-7}`)
     &format!("{:<7}", play_title),
@@ -1022,9 +1137,9 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     "",
     view.source_label,
     &queue_label,
-    // shuffle / repeat / volume / party — unused in the source template
-    "",
-    "",
+    // shuffle / repeat — self-contained ` | Label: value` segments (or empty)
+    &shuffle_text,
+    &repeat_text,
     // volume — left-aligned to 2 (matches `{:-2}`)
     &format!("{:<2}", view.volume_percent),
     "",
@@ -1124,7 +1239,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // suspended context (whose `*_playback` is still `Some`) and not the stale
   // Spotify context (still cached when a Spotify context was suspended).
   // Checked first so the playbar always shows what is actually audible.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let source_label = d
       .track
@@ -1150,6 +1265,9 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       volume_percent: app.user_config.behavior.volume_percent,
       queue_position: None,
       live: false,
+      // The native queue ignores the decoded shuffle/repeat modes (they belong
+      // to the suspended source resumed once the queue drains), so hide them.
+      show_modes: false,
     };
     render_local_playbar(f, app, layout_chunk, &view);
     return;
@@ -1168,6 +1286,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       volume_percent: app.user_config.behavior.volume_percent,
       queue_position: None,
       live: false,
+      show_modes: false,
     };
     render_local_playbar(f, app, layout_chunk, &view);
     return;
@@ -1720,16 +1839,110 @@ mod tests {
   }
 
   #[test]
+  fn spotify_playback_keeps_every_playbar_control() {
+    // No decoded source owns playback, so the Spotify playbar is on screen.
+    assert_eq!(
+      playbar_supported_controls_for(false, false, false),
+      PLAYBAR_CONTROLS.to_vec()
+    );
+  }
+
+  #[test]
+  fn a_cached_spotify_context_does_not_resurrect_controls_for_a_decoded_source() {
+    // Regression: this gate used to bail out to the full control set whenever
+    // `current_playback_context` was `Some`, which is the common case for anyone
+    // who has ever signed in to Spotify — so local files got all eight buttons
+    // back, including Like. `draw_playbar` consults every decoded source before
+    // the Spotify context and returns early, so the context says nothing about
+    // which playbar is actually on screen and must not be consulted here.
+    let local = playbar_supported_controls_for(false, true, true);
+    assert!(!local.contains(&PlaybarControl::Like));
+    let radio = playbar_supported_controls_for(false, true, false);
+    assert!(!radio.contains(&PlaybarControl::Shuffle));
+  }
+
+  #[test]
+  fn queueable_decoded_source_gets_transport_and_modes_but_not_like() {
+    // Regression: Shuffle/Repeat were drawn but not clickable for local files,
+    // because the row rendered every control while hit-testing kept only
+    // Play/Pause. Both now come from this list, so a drawn button always works.
+    let controls = playbar_supported_controls_for(false, true, true);
+    for expected in [
+      PlaybarControl::Prev,
+      PlaybarControl::PlayPause,
+      PlaybarControl::Next,
+      PlaybarControl::Shuffle,
+      PlaybarControl::Repeat,
+      PlaybarControl::VolumeDown,
+      PlaybarControl::VolumeUp,
+    ] {
+      assert!(
+        controls.contains(&expected),
+        "{expected:?} routes to the decoded source, so it should be offered: {controls:?}"
+      );
+    }
+    // Liking needs a Spotify item id, which a decoded source has no way to supply.
+    assert!(!controls.contains(&PlaybarControl::Like));
+  }
+
+  #[test]
+  fn radio_only_gets_the_controls_a_live_stream_can_honour() {
+    // Radio reports `queueable_decoded = false`: there is no finite track list to
+    // skip through or shuffle, so offering those buttons would invite a click
+    // that falls through to the wrong player.
+    let controls = playbar_supported_controls_for(false, true, false);
+    assert_eq!(
+      controls,
+      vec![
+        PlaybarControl::PlayPause,
+        PlaybarControl::VolumeDown,
+        PlaybarControl::VolumeUp,
+      ]
+    );
+  }
+
+  #[test]
+  fn queue_slot_drops_like_and_the_modes_but_keeps_transport() {
+    // Regression: a queued track playing over a suspended *Spotify* context sets
+    // no `*_playback`, so `non_spotify_active` was false and the gate handed back
+    // all eight controls over the queue slot's playbar — whose Like button saves
+    // `current_playback_context`'s item, i.e. the suspended Spotify track rather
+    // than the queued one on screen. Both suspended-context shapes must agree.
+    //
+    // Prev/Next stay: unlike radio, the queue *can* honour them (`next_track`
+    // dispatches AdvanceNativeQueue, `previous_track` restarts the queued track),
+    // so dropping them would hide controls that work.
+    let over_spotify = playbar_supported_controls_for(true, false, false);
+    let over_decoded = playbar_supported_controls_for(true, true, false);
+    let expected = vec![
+      PlaybarControl::Prev,
+      PlaybarControl::PlayPause,
+      PlaybarControl::Next,
+      PlaybarControl::VolumeDown,
+      PlaybarControl::VolumeUp,
+    ];
+    assert_eq!(over_spotify, expected);
+    assert_eq!(over_decoded, expected);
+  }
+
+  #[test]
   fn control_hitboxes_handle_zero_sized_area() {
     let behavior = crate::core::user_config::UserConfig::new().behavior;
-    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 0, 0), &behavior).is_empty());
-    assert!(playbar_control_hitboxes_in_area(Rect::new(0, 0, 10, 0), &behavior).is_empty());
+    assert!(
+      playbar_control_hitboxes_in_area(Rect::new(0, 0, 0, 0), &behavior, &PLAYBAR_CONTROLS)
+        .is_empty()
+    );
+    assert!(
+      playbar_control_hitboxes_in_area(Rect::new(0, 0, 10, 0), &behavior, &PLAYBAR_CONTROLS)
+        .is_empty()
+    );
   }
 
   #[test]
   fn control_hitboxes_truncate_for_tiny_widths() {
     let behavior = crate::core::user_config::UserConfig::new().behavior;
-    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(5, 10, 8, 1), &behavior);
+    let hitboxes =
+      playbar_control_hitboxes_in_area(Rect::new(5, 10, 8, 1), &behavior, &PLAYBAR_CONTROLS);
     assert_eq!(hitboxes.len(), 1);
     assert_eq!(hitboxes[0].control, PlaybarControl::Prev);
     assert_eq!(hitboxes[0].rect, Rect::new(5, 10, 6, 1));
@@ -1738,7 +1951,8 @@ mod tests {
   #[test]
   fn control_hitboxes_include_all_controls_when_wide_enough() {
     let behavior = crate::core::user_config::UserConfig::new().behavior;
-    let hitboxes = playbar_control_hitboxes_in_area(Rect::new(0, 0, 200, 1), &behavior);
+    let hitboxes =
+      playbar_control_hitboxes_in_area(Rect::new(0, 0, 200, 1), &behavior, &PLAYBAR_CONTROLS);
     assert_eq!(hitboxes.len(), PLAYBAR_CONTROLS.len());
     assert_eq!(hitboxes[0].control, PlaybarControl::Prev);
     assert_eq!(
@@ -1909,12 +2123,17 @@ mod tests {
       volume_percent: 80,
       queue_position: Some((3, 12)),
       live: false,
+      show_modes: true,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("My Local Song"),
       "track name should render: {content}"
+    );
+    assert!(
+      content.contains("Shuffle:") && content.contains("Repeat:"),
+      "a queueable source should show the shuffle/repeat controls: {content}"
     );
     assert!(
       content.contains("Playing"),
@@ -1947,6 +2166,7 @@ mod tests {
       volume_percent: 50,
       queue_position: None,
       live: false,
+      show_modes: true,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
     assert!(content.contains("Paused"), "should show Paused: {content}");
@@ -1972,12 +2192,17 @@ mod tests {
       volume_percent: 80,
       queue_position: None,
       live: true,
+      show_modes: false,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("SomaFM Groove Salad"),
       "station name should render: {content}"
+    );
+    assert!(
+      !content.contains("Shuffle:") && !content.contains("Repeat:"),
+      "radio has no queue, so the shuffle/repeat controls must stay hidden: {content}"
     );
     assert!(
       content.contains("Boards of Canada - Olson"),

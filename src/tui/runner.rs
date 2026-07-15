@@ -371,9 +371,16 @@ fn update_mpris_state(manager: &mpris::MprisManager, state: &mut MprisState, app
 
   // Local-file playback owns its own state and never populates the Spotify
   // playback context, so it takes a dedicated path that reads metadata, play
-  // state, and position straight from the live local player.
+  // state, and position straight from the live local player. Skipped while the
+  // native queue owns the sink: `local_playback` is then a *suspended* context,
+  // so fall through to the snapshot path, which renders the queue slot and
+  // clears its shuffle/repeat instead of publishing this context's stale modes.
   #[cfg(feature = "local-files")]
-  if let Some(local) = app.local_playback.as_ref() {
+  if let Some(local) = app
+    .local_playback
+    .as_ref()
+    .filter(|_| !app.queue_owns_playback())
+  {
     use crate::infra::media_metadata::{select_media_metadata, LocalMediaMetadata};
 
     let is_playing = !local.player.is_paused();
@@ -416,6 +423,23 @@ fn update_mpris_state(manager: &mpris::MprisManager, state: &mut MprisState, app
     }
 
     manager.set_position(position_ms);
+
+    // Local playback carries the decoded shuffle/repeat modes; push them like
+    // the snapshot branch below so keyboard and MPRIS toggles reach clients
+    // (this dedicated branch returns before the snapshot path runs).
+    if state.last_shuffle != Some(app.decoded_shuffle) {
+      manager.set_shuffle(app.decoded_shuffle);
+      state.last_shuffle = Some(app.decoded_shuffle);
+    }
+    let loop_status = match app.decoded_repeat {
+      crate::infra::queue::RepeatMode::Off => mpris::LoopStatusEvent::None,
+      crate::infra::queue::RepeatMode::Track => mpris::LoopStatusEvent::Track,
+      crate::infra::queue::RepeatMode::Context => mpris::LoopStatusEvent::Playlist,
+    };
+    if state.last_loop != Some(loop_status) {
+      manager.set_loop_status(loop_status);
+      state.last_loop = Some(loop_status);
+    }
     return;
   }
 
@@ -450,16 +474,17 @@ fn update_mpris_state(manager: &mpris::MprisManager, state: &mut MprisState, app
       state.last_shuffle = Some(snapshot.shuffle);
     }
 
-    if let Some(repeat_state) = snapshot.repeat {
-      let loop_status = match repeat_state {
-        RepeatState::Off => mpris::LoopStatusEvent::None,
-        RepeatState::Track => mpris::LoopStatusEvent::Track,
-        RepeatState::Context => mpris::LoopStatusEvent::Playlist,
-      };
-      if state.last_loop != Some(loop_status) {
-        manager.set_loop_status(loop_status);
-        state.last_loop = Some(loop_status);
-      }
+    // A `None` repeat means the source has no repeat control (native queue,
+    // radio); reset to `None` rather than leaving a stale Track/Playlist that a
+    // prior decoded context pushed.
+    let loop_status = match snapshot.repeat {
+      Some(RepeatState::Track) => mpris::LoopStatusEvent::Track,
+      Some(RepeatState::Context) => mpris::LoopStatusEvent::Playlist,
+      Some(RepeatState::Off) | None => mpris::LoopStatusEvent::None,
+    };
+    if state.last_loop != Some(loop_status) {
+      manager.set_loop_status(loop_status);
+      state.last_loop = Some(loop_status);
     }
   } else if state.last_metadata.is_some() {
     manager.set_stopped();
@@ -939,23 +964,10 @@ pub async fn start_ui(
           }
         }
 
-        // Local-file playback reads its progress live from the player at render
-        // time; the only state it self-manages here is end-of-track. When the
-        // sink drains and no track change is already in flight (`!advancing`):
-        //   - if a next queued track exists, mark the advance in flight (atomic
-        //     check-and-set under this single borrow, so two ticks can't both
-        //     dispatch) and dispatch `NextTrack`, which `route_local_event`
-        //     turns into a `play_index` of the next file;
-        //   - otherwise the queue is exhausted, so drop the session (which
-        //     releases the output device).
-        //
-        // The `advancing` guard also protects the brief empty-sink window during
-        // a track change's decode — the same class of guard as the
-        // "don't treat the pre-playback empty sink as end-of-track" invariant.
         // Native queue slot: when the queued track finishes, advance the queue
         // (play the next queued item, or resume the suspended context). Runs
         // before the per-source blocks so it takes precedence over them.
-        #[cfg(feature = "audio-decode")]
+        #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
         {
           use crate::infra::queue::QueueNowPlaying;
           let advance = match app.queue_now.as_mut() {
@@ -970,99 +982,72 @@ pub async fn start_ui(
           }
         }
 
+        // Decoded-source auto-advance, one macro invocation per source (the
+        // blocks are identical except for which `*_playback` session and queue
+        // field they read). Each session reads its progress live from the
+        // player at render time; the only state self-managed here is
+        // end-of-track. When the sink drains and no track change is already in
+        // flight (`!advancing`), `advance_decision` picks the move: advance /
+        // replay (repeat-one) / suspend to the native queue / tear down.
+        //
+        // Decide under one borrow, then act after the borrow ends. `advancing`
+        // is set *synchronously here* (atomic check-and-set, before
+        // dispatching) because the sink stays empty for the whole decode — or,
+        // for Subsonic/YouTube, multi-second download — window; without it the
+        // next tick would re-dispatch and skip several tracks per advance.
+        #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+        macro_rules! decoded_auto_advance {
+          ($app:ident, $playback:ident, $queue:ident) => {
+            if !$app.queue_owns_playback() {
+              use crate::infra::queue::{advance_decision, next_index, Decision};
+              let queue_len = $app.native_queue.len();
+              let repeat = $app.decoded_repeat;
+              let decision = $app.$playback.as_ref().map(|s| {
+                advance_decision(
+                  s.player.is_finished(),
+                  s.advancing,
+                  next_index(s.index, s.$queue.len()).is_some(),
+                  queue_len,
+                  repeat,
+                )
+              });
+              match decision {
+                Some(d @ (Decision::AdvanceContext | Decision::RepeatTrack)) => {
+                  if let Some(s) = $app.$playback.as_mut() {
+                    s.advancing = true; // atomic check-and-set: one dispatch only
+                  }
+                  $app.dispatch(if d == Decision::RepeatTrack {
+                    crate::infra::network::IoEvent::ReplayCurrentTrack
+                  } else {
+                    crate::infra::network::IoEvent::NextTrack
+                  });
+                }
+                Some(Decision::SuspendToQueue) => {
+                  // End-of-track handoff: under Repeat One the context resumes
+                  // the same track, so a queued song can't consume the repeat.
+                  $app.suspend_active_decoded_context_for_skip(
+                    crate::infra::queue::SuspendCause::AutoAdvance,
+                  );
+                  $app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
+                }
+                Some(Decision::Teardown) => $app.$playback = None,
+                Some(Decision::None) | None => {}
+              }
+            }
+          };
+        }
         #[cfg(feature = "local-files")]
-        if !app.queue_owns_playback() {
-          // Decide under one borrow, then act after the borrow ends. With items
-          // in the native queue a finished track suspends the context and hands
-          // the sink to the queue instead of advancing/tearing down.
-          use crate::infra::queue::{advance_decision, Decision};
-          let queue_len = app.native_queue.len();
-          let decision = app.local_playback.as_ref().map(|local| {
-            advance_decision(
-              local.player.is_finished(),
-              local.advancing,
-              crate::infra::local::next_index(local.index, local.queue.len()).is_some(),
-              queue_len,
-            )
-          });
-          match decision {
-            Some(Decision::AdvanceContext) => {
-              if let Some(local) = app.local_playback.as_mut() {
-                local.advancing = true; // atomic check-and-set: one dispatch only
-              }
-              app.dispatch(crate::infra::network::IoEvent::NextTrack);
-            }
-            Some(Decision::SuspendToQueue) => {
-              app.suspend_active_decoded_context_for_skip();
-              app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
-            }
-            Some(Decision::Teardown) => app.local_playback = None,
-            Some(Decision::None) | None => {}
-          }
-        }
-
-        // Subsonic auto-advance — same check-and-set as local. `advancing` is set
-        // *synchronously here* (before dispatching NextTrack) because the sink is
-        // empty for the whole multi-second download window; without it the next
-        // tick would re-dispatch and skip several tracks per advance.
+        decoded_auto_advance!(app, local_playback, queue);
         #[cfg(feature = "subsonic")]
-        if !app.queue_owns_playback() {
-          use crate::infra::queue::{advance_decision, Decision};
-          let queue_len = app.native_queue.len();
-          let decision = app.subsonic_playback.as_ref().map(|subsonic| {
-            advance_decision(
-              subsonic.player.is_finished(),
-              subsonic.advancing,
-              crate::infra::subsonic::next_index(subsonic.index, subsonic.tracks.len()).is_some(),
-              queue_len,
-            )
-          });
-          match decision {
-            Some(Decision::AdvanceContext) => {
-              if let Some(subsonic) = app.subsonic_playback.as_mut() {
-                subsonic.advancing = true; // atomic check-and-set: one dispatch only
-              }
-              app.dispatch(crate::infra::network::IoEvent::NextTrack);
-            }
-            Some(Decision::SuspendToQueue) => {
-              app.suspend_active_decoded_context_for_skip();
-              app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
-            }
-            Some(Decision::Teardown) => app.subsonic_playback = None,
-            Some(Decision::None) | None => {}
-          }
-        }
-
-        // YouTube auto-advance — same check-and-set as Subsonic; the yt-dlp
-        // download window is even longer, so the `advancing` guard matters
-        // just as much here.
+        decoded_auto_advance!(app, subsonic_playback, tracks);
         #[cfg(feature = "youtube")]
-        if !app.queue_owns_playback() {
-          use crate::infra::queue::{advance_decision, Decision};
-          let queue_len = app.native_queue.len();
-          let decision = app.youtube_playback.as_ref().map(|youtube| {
-            advance_decision(
-              youtube.player.is_finished(),
-              youtube.advancing,
-              crate::infra::youtube::next_index(youtube.index, youtube.tracks.len()).is_some(),
-              queue_len,
-            )
-          });
-          match decision {
-            Some(Decision::AdvanceContext) => {
-              if let Some(youtube) = app.youtube_playback.as_mut() {
-                youtube.advancing = true; // atomic check-and-set: one dispatch only
-              }
-              app.dispatch(crate::infra::network::IoEvent::NextTrack);
-            }
-            Some(Decision::SuspendToQueue) => {
-              app.suspend_active_decoded_context_for_skip();
-              app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
-            }
-            Some(Decision::Teardown) => app.youtube_playback = None,
-            Some(Decision::None) | None => {}
-          }
-        }
+        decoded_auto_advance!(app, youtube_playback, tracks);
+
+        // Apply any shuffle toggle that was deferred while a track change was in
+        // flight, now that the advance may have committed (a cheap no-op when the
+        // queue order already matches the decoded shuffle state).
+        #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+        app.reconcile_decoded_shuffle();
 
         // Internet radio has no queue to auto-advance; instead the tick watches
         // for a live stream that dies (server disconnect or the ring buffer
@@ -1092,7 +1077,7 @@ pub async fn start_ui(
         // The native queue slot owns the sink when playing a decoded track; read
         // progress from its player first (it may share the suspended context's
         // player, in which case a per-source block below reads the same value).
-        #[cfg(feature = "audio-decode")]
+        #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
         if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
           source_owns_playback = true;
           app.song_progress_ms = d.player.position().as_millis();

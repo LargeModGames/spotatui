@@ -100,6 +100,10 @@ pub struct SubsonicPlaybackState {
   pub advancing: bool,
   /// The downloaded audio for the current track, kept alive while it plays.
   pub tempfile: tempfile::NamedTempFile,
+  /// Backup of the pre-shuffle track order while shuffle is on (`None` in natural
+  /// order). Set by [`set_shuffle(true)`](Self::set_shuffle); restored exactly by
+  /// `set_shuffle(false)`.
+  pub shuffle_backup: Option<crate::infra::queue::ShuffleBackup>,
 }
 
 impl SubsonicPlaybackState {
@@ -107,24 +111,18 @@ impl SubsonicPlaybackState {
   pub fn current(&self) -> Option<&TrackInfo> {
     self.tracks.get(self.index)
   }
-}
 
-/// The index of the track after `current` in a queue of `len`, or `None` at the
-/// end. Copied from `infra::local` (which is not compiled without `local-files`).
-pub fn next_index(current: usize, len: usize) -> Option<usize> {
-  if len == 0 || current + 1 >= len {
-    None
-  } else {
-    Some(current + 1)
-  }
-}
-
-/// The index of the track before `current`, or `None` at the start.
-pub fn prev_index(current: usize, len: usize) -> Option<usize> {
-  if len == 0 || current == 0 {
-    None
-  } else {
-    Some(current - 1)
+  /// Turn in-place shuffle on or off — see
+  /// [`toggle_shuffle`](crate::infra::queue::toggle_shuffle) for the shared
+  /// semantics (current track stays playing at the front; un-shuffle restores
+  /// order + index; idempotent).
+  pub fn set_shuffle(&mut self, on: bool) {
+    crate::infra::queue::toggle_shuffle(
+      &mut self.tracks,
+      &mut self.index,
+      &mut self.shuffle_backup,
+      on,
+    );
   }
 }
 

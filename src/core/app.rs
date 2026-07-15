@@ -8,7 +8,12 @@ use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds
 use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
 use crate::infra::network::sync::{PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
-#[cfg(any(feature = "streaming", feature = "audio-decode"))]
+#[cfg(any(
+  feature = "streaming",
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "youtube"
+))]
 use crate::infra::queue::QueueNowPlaying;
 use crate::tui::event::Key;
 use anyhow::anyhow;
@@ -24,7 +29,16 @@ use rspotify::{
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-#[cfg(any(feature = "streaming", all(feature = "mpris", target_os = "linux")))]
+// Bare `Arc` here is only ever named by the streaming player, the MPRIS manager,
+// and the decoded queue-slot accessors below (whose gate is the queueable
+// sources, not `audio-decode` — a radio-only build has no queue slot).
+#[cfg(any(
+  feature = "streaming",
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "youtube",
+  all(feature = "mpris", target_os = "linux")
+))]
 use std::sync::Arc;
 use std::{
   cmp::{max, min},
@@ -44,6 +58,8 @@ use rspotify::model::{
   enums::{CurrentlyPlayingType, RepeatState},
   DeviceType,
 };
+
+use crate::infra::queue::RepeatMode;
 
 /// Sidebar library entries. The "Local Files" entry only appears when the
 /// `local-files` feature is built in (otherwise there is nothing to browse).
@@ -1030,9 +1046,15 @@ pub struct App {
   /// What the native queue's playback slot is currently playing, if anything.
   /// Overlays the per-source `*_playback` contexts without mutating them (those
   /// are the context to resume). Gated to builds that can actually play a queued
-  /// track — every read goes through the unconditional
+  /// track — i.e. native streaming or a source with a finite track list, which
+  /// excludes internet radio — and every read goes through the unconditional
   /// [`Self::queue_owns_playback`] accessor.
-  #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+  #[cfg(any(
+    feature = "streaming",
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "youtube"
+  ))]
   pub queue_now: Option<crate::infra::queue::QueueNowPlaying>,
   /// Bounded retry guard for the native-Spotify queue slot. When a queued
   /// Spotify track is playing via a direct `player.load` (no Spirc context) and
@@ -1317,6 +1339,17 @@ pub struct App {
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
+  /// Player-global repeat mode for the decoded (non-Spotify) sources
+  /// (Local / Subsonic / YouTube). Decoded sources have no Spotify
+  /// `current_playback_context`, so their repeat lives here instead of in
+  /// `current_playback_context.repeat_state`. Consulted by the auto-advance /
+  /// skip logic and rendered in the source playbar. Radio (an infinite stream)
+  /// and the native queue ignore it.
+  pub decoded_repeat: RepeatMode,
+  /// Player-global shuffle flag for the decoded (non-Spotify) sources. When set,
+  /// the owning source's own queue is reordered in place (see `ShuffleBackup`),
+  /// keeping the current track playing.
+  pub decoded_shuffle: bool,
   /// The active local-file playback session (multi-source Phase 3), or `None`
   /// when Spotify owns playback. Decoupled from Spotify/librespot state: the
   /// local playbar reads progress and pause state live from the player here, so
@@ -1497,7 +1530,12 @@ impl Default for App {
       queue_selected_index: 0,
       native_queue: Vec::new(),
       queue_suspended: None,
-      #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+      #[cfg(any(
+        feature = "streaming",
+        feature = "local-files",
+        feature = "subsonic",
+        feature = "youtube"
+      ))]
       queue_now: None,
       #[cfg(feature = "streaming")]
       spotify_queue_guard_reloads: 0,
@@ -1632,6 +1670,8 @@ impl Default for App {
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
       streaming_player: None,
+      decoded_repeat: RepeatMode::Off,
+      decoded_shuffle: false,
       #[cfg(feature = "local-files")]
       local_playback: None,
       #[cfg(feature = "subsonic")]
@@ -1864,6 +1904,9 @@ impl App {
             index,
             position_ms,
             paused: false,
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
           });
         }
         Some((None, _)) => {}
@@ -1873,6 +1916,9 @@ impl App {
             index: s.index,
             position_ms: s.player.position().as_millis() as u64,
             paused: s.player.is_paused(),
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
           });
         }
       }
@@ -1886,6 +1932,9 @@ impl App {
             index,
             position_ms,
             paused: false,
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
           });
         }
         Some((None, _)) => {}
@@ -1895,6 +1944,9 @@ impl App {
             index: s.index,
             position_ms: s.player.position().as_millis() as u64,
             paused: s.player.is_paused(),
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
           });
         }
       }
@@ -1908,6 +1960,9 @@ impl App {
             index,
             position_ms,
             paused: false,
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
           });
         }
         Some((None, _)) => {}
@@ -1917,6 +1972,9 @@ impl App {
             index: s.index,
             position_ms: s.player.position().as_millis() as u64,
             paused: s.player.is_paused(),
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
           });
         }
       }
@@ -3416,14 +3474,25 @@ impl App {
 
   /// Whether the native queue's playback slot currently owns the output (either a
   /// decoded queued track or a native-streamed Spotify one). The single gated
-  /// entry point for every queue-ownership check; reduces to `false` in a slim
-  /// build where the slot cannot exist.
+  /// entry point for every queue-ownership check; reduces to `false` in a build
+  /// where the slot cannot exist (slim, or one whose only decoded source is
+  /// internet radio, which is never queueable).
   pub fn queue_owns_playback(&self) -> bool {
-    #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+    #[cfg(any(
+      feature = "streaming",
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "youtube"
+    ))]
     {
       self.queue_now.is_some()
     }
-    #[cfg(not(any(feature = "streaming", feature = "audio-decode")))]
+    #[cfg(not(any(
+      feature = "streaming",
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "youtube"
+    )))]
     {
       false
     }
@@ -3450,8 +3519,11 @@ impl App {
   }
 
   /// The queue slot's player when it is playing a *decoded* queued track (local /
-  /// Subsonic / YouTube). `None` for a Spotify slot or an empty slot.
-  #[cfg(feature = "audio-decode")]
+  /// Subsonic / YouTube). `None` for a Spotify slot or an empty slot. Gated on
+  /// exactly those three sources: they are the decoded ones a queue item can
+  /// name, so a build whose only decoded source is internet radio has no
+  /// decoded slot to look up.
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
   pub fn queue_now_decoded_player(&self) -> Option<&Arc<crate::infra::audio::LocalPlayer>> {
     match self.queue_now.as_ref()? {
       QueueNowPlaying::Decoded(d) => Some(&d.player),
@@ -3462,7 +3534,7 @@ impl App {
 
   /// Take the queue slot, returning its player when it was a decoded track (so
   /// the caller can stop it). Clears [`Self::queue_now`] either way.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
   pub fn take_queue_now_decoded_player(&mut self) -> Option<Arc<crate::infra::audio::LocalPlayer>> {
     match self.queue_now.take() {
       Some(QueueNowPlaying::Decoded(d)) => Some(d.player),
@@ -3474,16 +3546,26 @@ impl App {
   /// persistence to prepend it back onto the saved queue so a mid-queue quit
   /// doesn't lose the in-flight track.
   fn queue_now_track(&self) -> Option<&TrackInfo> {
-    #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+    #[cfg(any(
+      feature = "streaming",
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "youtube"
+    ))]
     {
       match self.queue_now.as_ref()? {
-        #[cfg(feature = "audio-decode")]
+        #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
         QueueNowPlaying::Decoded(d) => Some(&d.track),
         #[cfg(feature = "streaming")]
         QueueNowPlaying::Spotify { track } => Some(track),
       }
     }
-    #[cfg(not(any(feature = "streaming", feature = "audio-decode")))]
+    #[cfg(not(any(
+      feature = "streaming",
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "youtube"
+    )))]
     {
       None
     }
@@ -3501,10 +3583,36 @@ impl App {
   /// runner tick leaves it alone. Radio is torn down (a live stream can't share
   /// the sink) and its station stashed for reconnect. A no-op when no decoded
   /// context is active. Called before handing the sink to the native queue.
-  pub(crate) fn suspend_active_decoded_context_for_skip(&mut self) {
+  ///
+  /// `cause` decides where the context resumes under Repeat One: an auto-advance
+  /// handoff replays the repeated track, a manual Next advances past it. See
+  /// [`crate::infra::queue::resume_index_after_queue`].
+  pub(crate) fn suspend_active_decoded_context_for_skip(
+    &mut self,
+    #[cfg_attr(
+      not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+      allow(unused_variables)
+    )]
+    cause: crate::infra::queue::SuspendCause,
+  ) {
+    // `resume_index_after_queue` applies the per-mode wrap/clamp: Repeat All
+    // wraps at the end (last -> first) so a skip at the final track resumes the
+    // first one rather than reading as exhausted (`None`); Repeat One resumes
+    // the *same* track on an auto-advance (a queued song must not consume the
+    // repeat) but advances on a manual skip; Off clamps to `None` at the boundary.
+    #[cfg_attr(
+      not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+      allow(unused_variables)
+    )]
+    let repeat = self.decoded_repeat;
     #[cfg(feature = "local-files")]
     if let Some(local) = self.local_playback.as_mut() {
-      let resume_index = crate::infra::local::next_index(local.index, local.queue.len());
+      let resume_index = crate::infra::queue::resume_index_after_queue(
+        local.index,
+        local.queue.len(),
+        repeat,
+        cause,
+      );
       local.advancing = true;
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::Local {
         resume_index,
@@ -3514,7 +3622,8 @@ impl App {
     }
     #[cfg(feature = "subsonic")]
     if let Some(s) = self.subsonic_playback.as_mut() {
-      let resume_index = crate::infra::subsonic::next_index(s.index, s.tracks.len());
+      let resume_index =
+        crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
       s.advancing = true;
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::Subsonic {
         resume_index,
@@ -3524,7 +3633,8 @@ impl App {
     }
     #[cfg(feature = "youtube")]
     if let Some(s) = self.youtube_playback.as_mut() {
-      let resume_index = crate::infra::youtube::next_index(s.index, s.tracks.len());
+      let resume_index =
+        crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
       s.advancing = true;
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::YouTube {
         resume_index,
@@ -3727,7 +3837,7 @@ impl App {
     playing_base62_id: &str,
   ) -> Option<String> {
     let queued_uri = match self.queue_now.as_ref()? {
-      #[cfg(feature = "audio-decode")]
+      #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
       QueueNowPlaying::Decoded(_) => return None,
       QueueNowPlaying::Spotify { track } => track.uri.clone(),
     }?;
@@ -3762,7 +3872,7 @@ impl App {
   fn active_decoded_source(&self) -> bool {
     // The native queue slot playing a decoded track owns the sink even when no
     // per-source `*_playback` context is set (e.g. queueing from an idle app).
-    #[cfg(feature = "audio-decode")]
+    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
     if self.queue_now_decoded_player().is_some() {
       return true;
     }
@@ -3790,6 +3900,187 @@ impl App {
     false
   }
 
+  /// Whether a *queueable* decoded source (Local / Subsonic / YouTube) — one with
+  /// its own track queue — currently owns playback. Unlike
+  /// [`active_decoded_source`](Self::active_decoded_source) this **excludes**
+  /// internet radio (an infinite stream with no queue) and the native queue slot
+  /// (a suspended context is not the active source). This is the gate for the
+  /// decoded repeat/shuffle controls, which only make sense over a real queue.
+  /// Also gates which playbar buttons are drawn and clickable (see
+  /// `playbar_supported_controls`).
+  pub(crate) fn active_queueable_decoded_source(&self) -> bool {
+    // The native queue owning the sink is out of scope for repeat/shuffle; any
+    // per-source `*_playback` below is then a suspended context, not active.
+    if self.queue_owns_playback() {
+      return false;
+    }
+    #[cfg(feature = "local-files")]
+    if self.local_playback.is_some() {
+      return true;
+    }
+    #[cfg(feature = "subsonic")]
+    if self.subsonic_playback.is_some() {
+      return true;
+    }
+    #[cfg(feature = "youtube")]
+    if self.youtube_playback.is_some() {
+      return true;
+    }
+    false
+  }
+
+  /// Apply the current [`decoded_shuffle`](Self::decoded_shuffle) flag to whatever
+  /// queueable decoded source owns playback: reorder its queue when turning on,
+  /// or restore the original order when turning off. The currently-playing track
+  /// is unaffected (it stays at the front), so audio continues uninterrupted.
+  /// Call only when [`active_queueable_decoded_source`](Self::active_queueable_decoded_source)
+  /// holds, so exactly one branch applies.
+  #[cfg_attr(
+    not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+    allow(unused_variables)
+  )]
+  fn apply_decoded_shuffle(&mut self) {
+    let on = self.decoded_shuffle;
+    // While a track change is in flight (`advancing`), an async `play_index`
+    // has captured a numeric target it will commit later; reordering the queue
+    // now would make that target identify a different track. Defer the reorder —
+    // [`reconcile_decoded_shuffle`](Self::reconcile_decoded_shuffle), driven by
+    // the runner tick, applies it once the advance commits.
+    #[cfg(feature = "local-files")]
+    if let Some(s) = self.local_playback.as_mut() {
+      if !s.advancing {
+        s.set_shuffle(on);
+      }
+      return;
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(s) = self.subsonic_playback.as_mut() {
+      if !s.advancing {
+        s.set_shuffle(on);
+      }
+      return;
+    }
+    #[cfg(feature = "youtube")]
+    if let Some(s) = self.youtube_playback.as_mut() {
+      if !s.advancing {
+        s.set_shuffle(on);
+      }
+    }
+  }
+
+  /// Re-sync the active queueable source's queue order to `decoded_shuffle` when
+  /// a shuffle toggle was deferred by [`apply_decoded_shuffle`](Self::apply_decoded_shuffle)
+  /// because a track change was in flight. Driven by the runner tick, so it lands
+  /// as soon as the advance commits (`advancing` clears). A no-op whenever the
+  /// order already matches `decoded_shuffle`, so it is cheap to call every tick.
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  pub(crate) fn reconcile_decoded_shuffle(&mut self) {
+    // The native queue owns the sink: any per-source struct is a suspended
+    // context whose order is reconciled when it resumes, not now.
+    if self.queue_owns_playback() {
+      return;
+    }
+    let on = self.decoded_shuffle;
+    #[cfg(feature = "local-files")]
+    if let Some(s) = self.local_playback.as_mut() {
+      if !s.advancing && s.shuffle_backup.is_some() != on {
+        s.set_shuffle(on);
+      }
+      return;
+    }
+    #[cfg(feature = "subsonic")]
+    if let Some(s) = self.subsonic_playback.as_mut() {
+      if !s.advancing && s.shuffle_backup.is_some() != on {
+        s.set_shuffle(on);
+      }
+      return;
+    }
+    #[cfg(feature = "youtube")]
+    if let Some(s) = self.youtube_playback.as_mut() {
+      if !s.advancing && s.shuffle_backup.is_some() != on {
+        s.set_shuffle(on);
+      }
+    }
+  }
+
+  /// Store a Spotify `RepeatState` as the decoded repeat mode. Used by the
+  /// source routers to honor an explicit `IoEvent::Repeat` (e.g. a plugin's
+  /// `set_repeat`) while a queueable decoded source owns playback, so it updates
+  /// `decoded_repeat` instead of falling through to the Spotify context. The
+  /// keyboard / MPRIS / `cycle_repeat` paths already update it directly.
+  ///
+  /// Returns whether it consumed the event: `false` (leaving it to the Spotify
+  /// handler) when the native queue owns playback or no queueable decoded source
+  /// is active — the same ownership gate as the MPRIS mode setters, so a
+  /// suspended context under the queue is never touched.
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  pub(crate) fn set_decoded_repeat_from_state(
+    &mut self,
+    state: rspotify::model::enums::RepeatState,
+  ) -> bool {
+    // `RepeatState` is only imported under `streaming`, but this method compiles
+    // for decoded-only builds too, so refer to it via a local alias.
+    use rspotify::model::enums::RepeatState as Rs;
+    if !self.active_queueable_decoded_source() {
+      return false;
+    }
+    self.decoded_repeat = match state {
+      Rs::Off => RepeatMode::Off,
+      Rs::Context => RepeatMode::Context,
+      Rs::Track => RepeatMode::Track,
+    };
+    true
+  }
+
+  /// Set the decoded shuffle to an explicit value from an external media
+  /// controller (MPRIS), reordering the active source's queue. Returns whether a
+  /// queueable decoded source consumed it. A `false` return does **not** mean
+  /// "hand this to Spotify": the caller rejects the request and corrects the
+  /// client's property instead, because reaching this method at all means a
+  /// decoded source (radio, or the queue slot) owns playback and the Spotify
+  /// context is not what the user is listening to.
+  #[cfg(all(
+    feature = "mpris",
+    target_os = "linux",
+    any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "internet-radio",
+      feature = "youtube"
+    )
+  ))]
+  pub fn set_decoded_shuffle(&mut self, on: bool) -> bool {
+    if !self.active_queueable_decoded_source() {
+      return false;
+    }
+    if self.decoded_shuffle != on {
+      self.decoded_shuffle = on;
+      self.apply_decoded_shuffle();
+    }
+    true
+  }
+
+  /// Set the decoded repeat mode to an explicit value from an external media
+  /// controller (MPRIS). Returns whether a queueable decoded source consumed it
+  /// (see [`set_decoded_shuffle`](Self::set_decoded_shuffle)).
+  #[cfg(all(
+    feature = "mpris",
+    target_os = "linux",
+    any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "internet-radio",
+      feature = "youtube"
+    )
+  ))]
+  pub fn set_decoded_repeat(&mut self, mode: RepeatMode) -> bool {
+    if !self.active_queueable_decoded_source() {
+      return false;
+    }
+    self.decoded_repeat = mode;
+    true
+  }
+
   /// The player of whichever decoded source (local file, Subsonic, internet
   /// radio, or YouTube) currently owns the session, or `None` when Spotify (or
   /// nothing) owns it. All four sources decode through the same `LocalPlayer`
@@ -3812,7 +4103,7 @@ impl App {
     allow(dead_code)
   )]
   pub fn active_decoded_player(&self) -> Option<&std::sync::Arc<crate::infra::audio::LocalPlayer>> {
-    #[cfg(feature = "audio-decode")]
+    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
     if let Some(p) = self.queue_now_decoded_player() {
       return Some(p);
     }
@@ -3848,7 +4139,7 @@ impl App {
   /// and seek keys become correct no-ops for radio. In a build with all seekable
   /// source features off this reduces to `None`.
   fn active_source_position_ms(&self) -> Option<u128> {
-    #[cfg(feature = "audio-decode")]
+    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
     if let Some(p) = self.queue_now_decoded_player() {
       return Some(p.position().as_millis());
     }
@@ -3875,7 +4166,7 @@ impl App {
   pub fn toggle_playback(&mut self) {
     // The native queue slot owns the sink: toggle its player directly (covers the
     // idle-app case where no per-source context is set).
-    #[cfg(feature = "audio-decode")]
+    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
     if let Some(player) = self.queue_now_decoded_player() {
       if player.is_paused() {
         player.resume();
@@ -4133,8 +4424,10 @@ impl App {
     }
     // A decoded context is playing with items waiting in the queue: suspend it
     // (skip semantics — resume at the context's next track) and start the queue.
+    // An explicit Next advances the context even under Repeat One, matching the
+    // per-source skip paths: repeat-one only replays on *auto* advance.
     if self.active_decoded_source() && !self.native_queue.is_empty() {
-      self.suspend_active_decoded_context_for_skip();
+      self.suspend_active_decoded_context_for_skip(crate::infra::queue::SuspendCause::ManualSkip);
       self.song_progress_ms = 0;
       self.dispatch(IoEvent::AdvanceNativeQueue);
       return;
@@ -4719,6 +5012,33 @@ impl App {
   }
 
   pub fn shuffle(&mut self) {
+    // Decoded (non-Spotify) sources: toggle the player-global decoded shuffle and
+    // reorder the owning source's queue in place (the current track stays at the
+    // front, so playback continues uninterrupted).
+    if self.active_queueable_decoded_source() {
+      self.decoded_shuffle = !self.decoded_shuffle;
+      self.apply_decoded_shuffle();
+      let label = if self.decoded_shuffle {
+        "Shuffle: On"
+      } else {
+        "Shuffle: Off"
+      };
+      self.set_status_message(label, 2);
+      return;
+    }
+
+    // A decoded source owns playback but has no queue to shuffle: internet radio
+    // is an endless stream, and the native queue slot plays an explicit list over
+    // a suspended context. Both hide the shuffle button and blank shuffle in the
+    // MPRIS snapshot, so the key must no-op to match. Falling through would flip
+    // shuffle on the user's real Spotify device for a source they are not
+    // listening to, invisibly: the playbar on screen is the decoded one, so
+    // nothing would reflect the change.
+    if self.active_decoded_source() || self.queue_owns_playback() {
+      self.set_status_message("Shuffle does not apply to this source", 2);
+      return;
+    }
+
     if let Some(shuffle_state) = self
       .current_playback_context
       .as_ref()
@@ -5092,6 +5412,28 @@ impl App {
   }
 
   pub fn repeat(&mut self) {
+    // Decoded (non-Spotify) sources have no `current_playback_context`; cycle the
+    // player-global decoded repeat instead, mirroring Spotify's
+    // Off -> Repeat All -> Repeat One -> Off.
+    if self.active_queueable_decoded_source() {
+      self.decoded_repeat = self.decoded_repeat.next();
+      let label = match self.decoded_repeat {
+        RepeatMode::Off => "Repeat: Off",
+        RepeatMode::Context => "Repeat: All",
+        RepeatMode::Track => "Repeat: One",
+      };
+      self.set_status_message(label, 2);
+      return;
+    }
+
+    // See `shuffle`: radio and the queue slot have no repeat of their own, and
+    // falling through would cycle repeat on the user's real Spotify device with
+    // nothing on screen to show for it.
+    if self.active_decoded_source() || self.queue_owns_playback() {
+      self.set_status_message("Repeat does not apply to this source", 2);
+      return;
+    }
+
     if let Some(current_repeat_state) = self
       .current_playback_context
       .as_ref()
@@ -5103,8 +5445,6 @@ impl App {
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() {
         if let Some(ref player) = self.streaming_player {
-          use rspotify::model::enums::RepeatState;
-
           // Try to set repeat on the native player (pass current state, not next)
           let _ = player.set_repeat(current_repeat_state);
 

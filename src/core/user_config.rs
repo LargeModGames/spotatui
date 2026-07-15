@@ -981,7 +981,11 @@ pub struct FormatConfigString {
 pub struct FormatConfig {
   /// Spotify playbar title: `"{state} ({device} | Shuffle: {shuffle} | Repeat: {repeat} | Volume: {volume}%){party}"`
   pub playbar_status: Template,
-  /// Local-source playbar title: `"{state} ({source}{queue} | Volume: {volume}%)"`
+  /// Local-source playbar title: `"{state} ({source}{queue}{shuffle}{repeat} | Volume: {volume}%)"`.
+  /// The `{shuffle}` / `{repeat}` placeholders carry their own ` | Label: value`
+  /// prefix (like `{artist}` in the window title) and render empty for sources
+  /// without the controls (internet radio, native queue slots), so their labels
+  /// never leak as blank controls.
   pub playbar_status_source: Template,
   /// Window title: `"{state}: {artist} - {title}"`
   pub window_title: Template,
@@ -991,9 +995,11 @@ impl FormatConfig {
   /// Today's hardcoded Spotify playbar format string.
   pub const DEFAULT_PLAYBAR_STATUS: &'static str =
     "{state} ({device} | Shuffle: {shuffle} | Repeat: {repeat} | Volume: {volume}%){party}";
-  /// Today's hardcoded local-source playbar format string.
+  /// Today's hardcoded local-source playbar format string. `{shuffle}` and
+  /// `{repeat}` include their own ` | Label: value` prefix so they can render
+  /// empty (hiding the whole segment) for sources without those controls.
   pub const DEFAULT_PLAYBAR_STATUS_SOURCE: &'static str =
-    "{state} ({source}{queue} | Volume: {volume}%)";
+    "{state} ({source}{queue}{shuffle}{repeat} | Volume: {volume}%)";
   /// Today's hardcoded window-title format string: `"{title} — {artist}"`.
   /// (The artist segment is composed by the call site and omitted when empty.)
   pub const DEFAULT_WINDOW_TITLE: &'static str = "{title}{artist}";

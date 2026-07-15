@@ -111,10 +111,23 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   } else {
     context.map(|context| context.is_playing).unwrap_or(false)
   };
-  let shuffle = context
-    .map(|context| context.shuffle_state)
-    .unwrap_or(app.user_config.behavior.shuffle_enabled);
-  let repeat = context.map(|context| context.repeat_state);
+  // The native queue slot has no shuffle/repeat of its own: it plays an explicit
+  // list over a *suspended* context, and the playbar hides both indicators. A
+  // queued *decoded* track is blanked in `source_playback_snapshot`; a queued
+  // *Spotify* track reaches this path instead (a suspended Spotify context sets
+  // no `*_playback`), so blank it here too. Otherwise MPRIS would advertise — and
+  // let a client change — the suspended context's modes for a track the user has
+  // no shuffle/repeat control over, disagreeing with the keyboard, which no-ops.
+  let queue_owns_playback = app.queue_owns_playback();
+  let shuffle = !queue_owns_playback
+    && context
+      .map(|context| context.shuffle_state)
+      .unwrap_or(app.user_config.behavior.shuffle_enabled);
+  let repeat = if queue_owns_playback {
+    None
+  } else {
+    context.map(|context| context.repeat_state)
+  };
   let context_uri = context
     .and_then(|ctx| ctx.context.as_ref())
     .map(|context| context.uri.clone());
@@ -162,9 +175,9 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // The native queue slot playing a decoded track wins over every per-source
   // context: it is what is actually audible, and it drives the playbar / MPRIS /
   // cover art / lyrics via the shared track-change detector.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
-    return Some(source_snapshot(
+    let mut snapshot = source_snapshot(
       d.track.name.clone(),
       d.track.artists.clone(),
       d.track.album.clone(),
@@ -174,7 +187,23 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
       d.player.position().as_millis(),
       !d.player.is_paused(),
       app,
-    ));
+    );
+    // The native queue ignores the decoded shuffle/repeat modes (they belong to
+    // the suspended source resumed once the queue drains), so don't advertise
+    // them — mirroring the radio override and the playbar's hidden controls.
+    snapshot.shuffle = false;
+    snapshot.repeat = None;
+    return Some(snapshot);
+  }
+
+  // A queued *Spotify* track owns the sink (a decoded one returned above): every
+  // `*_playback` below is then a suspended context, not what is audible, so
+  // reporting one would publish the wrong track *and* its stale shuffle/repeat.
+  // Fall through to the Spotify snapshot, which describes the queued track and
+  // blanks the modes for a queue slot. Mirrors the same filter the runner applies
+  // to its dedicated local-playback path.
+  if app.queue_owns_playback() {
+    return None;
   }
 
   #[cfg(feature = "local-files")]
@@ -250,6 +279,9 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
       app,
     );
     snapshot.is_live = true;
+    // Radio is an infinite stream with no queue: repeat/shuffle don't apply.
+    snapshot.shuffle = false;
+    snapshot.repeat = None;
     return Some(snapshot);
   }
 
@@ -260,8 +292,8 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
 /// is a directly-fetchable cover-art URL when the source provides one (Subsonic
 /// getCoverArt, YouTube thumbnail) and `None` otherwise (local files carry
 /// embedded art fetched separately; radio has none). Sources are always treated
-/// as a single track and take shuffle from the user config (no per-source
-/// shuffle state).
+/// as a single track; shuffle/repeat come from the player-global decoded state
+/// (the radio caller overrides them since a live stream has no queue).
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
@@ -280,6 +312,14 @@ fn source_snapshot(
   is_playing: bool,
   app: &App,
 ) -> PlaybackSnapshot {
+  // The decoded repeat is source-neutral; translate to the Spotify-shaped
+  // `RepeatState` here at the snapshot boundary.
+  use crate::infra::queue::RepeatMode;
+  let repeat = match app.decoded_repeat {
+    RepeatMode::Off => RepeatState::Off,
+    RepeatMode::Context => RepeatState::Context,
+    RepeatMode::Track => RepeatState::Track,
+  };
   PlaybackSnapshot {
     metadata: PlaybackMetadata {
       title,
@@ -296,8 +336,8 @@ fn source_snapshot(
     progress_ms,
     is_playing,
     is_live: false,
-    shuffle: app.user_config.behavior.shuffle_enabled,
-    repeat: None,
+    shuffle: app.decoded_shuffle,
+    repeat: Some(repeat),
   }
 }
 

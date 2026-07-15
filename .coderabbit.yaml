@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+language: en-US
+tone_instructions: >-
+  Write plainly and directly. Do not use em-dashes; use commas, colons, or
+  separate sentences instead. Prefer concrete detail over praise.
+
+reviews:
+  profile: chill
+  # Approve only once review comments are resolved and checks pass.
+  request_changes_workflow: true
+  poem: false
+
+  path_filters:
+    - "!Cargo.lock"
+    - "!flake.lock"
+    - "!spotatui.wiki/**"
+    - "!target/**"
+
+  path_instructions:
+    - path: "src/tui/handlers/**/*.rs"
+      instructions: |
+        Handlers must never call async Spotify code directly; they dispatch work
+        with `app.dispatch(IoEvent::SomeVariant)`.
+
+        Global key actions must match against `app.user_config.keys.<action>`
+        rather than hard-coded key literals.
+
+        Closing a dialog requires all three of `app.dialog = None`,
+        `app.confirm = false`, and `app.clear_playlist_track_dialog_state()`.
+        Flag any close path that misses one.
+
+        New screens need a `pub fn handler(key: Key, app: &mut App)` registered
+        in the `handle_block_events` match arm in `src/tui/handlers/mod.rs`.
+
+    - path: "src/tui/ui/**/*.rs"
+      instructions: |
+        UI code renders from `App` state only. It must not mutate state or
+        perform I/O. Flag any network or blocking call in a draw function.
+
+    - path: "src/infra/network/**/*.rs"
+      instructions: |
+        Spotify API calls are `IoEvent` variants declared in `mod.rs` and
+        implemented in the matching concern file. Data returned page-by-page
+        should use `ScrollableResultPages<T>`.
+
+    - path: "src/**/*.rs"
+      instructions: |
+        User feedback goes through `app.show_status_message(msg, ttl_ms)`; never
+        assign to `app.status_message` directly.
+
+        Code behind a feature flag (streaming, cover-art, local-files, subsonic,
+        internet-radio, youtube, scripting, mpris, discord-rpc) must compile in
+        the slim build (`--no-default-features --features telemetry`). Flag
+        unguarded use of a gated item.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Feature-flag changes in Cargo.toml usually need the matching matrix
+        entry in ci.yml and the shipped feature list in cd.yml updated too.
+
+  # Outside contributions arrive from forks, but review and merge run through
+  # the maintainer, so reviewer suggestions have nobody useful to name.
+  suggested_reviewers: false
+  in_progress_fortune: false
+
+  tools:
+    github-checks:
+      # Default is 90s, which a 3-job Rust matrix build never finishes in, so
+      # CodeRabbit would stop waiting and review without CI results. 15m is the
+      # schema maximum.
+      timeout_ms: 900000
+
+  pre_merge_checks:
+    # A Rust TUI does not document 80% of its functions; the default threshold
+    # would warn on nearly every PR.
+    docstrings:
+      mode: "off"
+    title:
+      mode: warning
+      requirements: >-
+        Title must use a conventional-commit prefix already in use in this repo
+        (feat:, fix:, perf:, refactor:, docs:, chore:, ci:, test:), optionally
+        scoped, e.g. `chore(deps): ...`. Keep the subject concise and
+        imperative.
+
+  finishing_touches:
+    simplify:
+      enabled: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # Do not silently stop reviewing long-running branches.
+    auto_pause_after_reviewed_commits: 0
+    # Dependency bumps and contributor-list updates are mechanical; a full
+    # review on each is noise.
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "allcontributors[bot]"
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    # Listed explicitly because an explicit list may replace CodeRabbit's
+    # built-in defaults rather than extend them; the first three are defaults
+    # we do not want to lose.
+    filePatterns:
+      - "**/CLAUDE.md"
+      - "**/AGENTS.md"
+      - ".github/copilot-instructions.md"
+      - "CONTRIBUTING.md"
