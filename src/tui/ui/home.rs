@@ -65,12 +65,21 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     .border_style(get_color(highlight_state, app.user_config.theme));
   f.render_widget(welcome, layout_chunk);
 
-  // Banner gradient is recomputed each frame for animation
-  let gradient_lines = build_banner_gradient_lines(&app.user_config.theme, app.animation_tick);
+  // Banner gradient is recomputed each frame for animation. When disabled,
+  // the banner uses the theme's banner color directly so ANSI palettes
+  // (e.g. pywal with the Terminal preset) restyle it live (#336).
+  let banner_text = if app.user_config.behavior.banner_gradient {
+    Text::from(build_banner_gradient_lines(
+      &app.user_config.theme,
+      app.animation_tick,
+    ))
+  } else {
+    Text::styled(BANNER, Style::default().fg(app.user_config.theme.banner))
+  };
   let base_changelog_lines = get_changelog_cache(&app.user_config.theme, changelog_area.width);
 
   // Contains the banner
-  let top_text = Paragraph::new(Text::from(gradient_lines))
+  let top_text = Paragraph::new(banner_text)
     .style(app.user_config.theme.base_style())
     .block(Block::default());
   f.render_widget(top_text, banner_area);
@@ -495,6 +504,37 @@ mod tests {
         y + 3
       );
     }
+  }
+
+  #[test]
+  fn banner_gradient_toggle_switches_between_rgb_and_theme_color() {
+    fn banner_fg(app: &App) -> Color {
+      let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+      terminal.draw(|f| draw_home(f, app, f.area())).unwrap();
+      let buffer = terminal.backend().buffer();
+      for y in 2..9u16 {
+        for x in 2..98u16 {
+          if let Some(cell) = buffer.cell((x, y)) {
+            if cell.symbol() == "█" {
+              return cell.fg;
+            }
+          }
+        }
+      }
+      panic!("no banner glyph found in banner rows");
+    }
+
+    let mut app = App::default();
+    assert!(
+      matches!(banner_fg(&app), Color::Rgb(..)),
+      "gradient banner should render RGB colors"
+    );
+
+    // With the gradient off, the banner uses the theme's banner color as-is,
+    // so an ANSI color (Terminal preset) passes through to the terminal.
+    app.user_config.behavior.banner_gradient = false;
+    app.user_config.theme = crate::core::user_config::ThemePreset::Terminal.to_theme();
+    assert_eq!(banner_fg(&app), app.user_config.theme.banner);
   }
 
   #[test]

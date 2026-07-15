@@ -411,6 +411,7 @@ fn enter_edit_mode(app: &mut App) {
         p => p.to_theme(),
       };
       app.sync_theme_color_settings(&preview_theme);
+      app.sync_banner_gradient_setting(next);
       return;
     }
 
@@ -466,6 +467,7 @@ fn handle_preset_edit(key: Key, app: &mut App) {
           p => p.to_theme(),
         };
         app.sync_theme_color_settings(&preview_theme);
+        app.sync_banner_gradient_setting(next);
       }
     }
   }
@@ -528,6 +530,41 @@ mod tests {
       .iter()
       .position(|setting| matches!(setting.value, SettingValue::Bool(_)))
       .expect("expected a boolean setting")
+  }
+
+  #[test]
+  fn cycling_preset_to_terminal_turns_banner_gradient_setting_off() {
+    let mut app = App::default();
+    app.settings_category = SettingsCategory::Theme;
+    open_settings(&mut app);
+
+    app.settings_selected_index = app
+      .settings_items
+      .iter()
+      .position(|s| s.id == "theme.preset")
+      .expect("expected the preset setting");
+
+    fn banner_gradient(app: &App) -> bool {
+      match &app
+        .settings_items
+        .iter()
+        .find(|s| s.id == "behavior.banner_gradient")
+        .expect("expected the banner gradient setting")
+        .value
+      {
+        SettingValue::Bool(v) => *v,
+        other => panic!("expected a bool setting, got {other:?}"),
+      }
+    }
+    assert!(banner_gradient(&app));
+
+    // Default (Cyan) -> Terminal (ANSI): gradient defaults off
+    handler(Key::Enter, &mut app);
+    assert!(!banner_gradient(&app));
+
+    // Terminal (ANSI) -> Pookie Pink: gradient default restored
+    handler(Key::Enter, &mut app);
+    assert!(banner_gradient(&app));
   }
 
   #[test]
