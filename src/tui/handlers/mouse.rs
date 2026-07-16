@@ -1,4 +1,4 @@
-use super::{common_key_events, library, playbar, playlist, settings};
+use super::{common_key_events, library, lyrics_view, playbar, playlist, settings};
 use crate::core::app::{
   ActiveBlock, App, RouteId, SettingValue, SettingsCategory, LIBRARY_OPTIONS,
 };
@@ -26,12 +26,23 @@ pub fn handler(mouse: MouseEvent, app: &mut App) {
   }
 
   if current_route_id == RouteId::LyricsView {
-    handle_fullscreen_playbar_mouse(
-      ActiveBlock::LyricsView,
-      fullscreen_view_playbar_area(app),
-      mouse,
-      app,
-    );
+    let playbar_area = fullscreen_view_playbar_area(app);
+    let over_playbar =
+      playbar_area.is_some_and(|area| rect_contains(area, mouse.column, mouse.row));
+    if !over_playbar {
+      match mouse.kind {
+        MouseEventKind::ScrollUp => {
+          lyrics_view::scroll_by(app, -1);
+          return;
+        }
+        MouseEventKind::ScrollDown => {
+          lyrics_view::scroll_by(app, 1);
+          return;
+        }
+        _ => {}
+      }
+    }
+    handle_fullscreen_playbar_mouse(ActiveBlock::LyricsView, playbar_area, mouse, app);
     return;
   }
 

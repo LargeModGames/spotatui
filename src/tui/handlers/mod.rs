@@ -548,8 +548,15 @@ fn handle_escape(app: &mut App) {
     ActiveBlock::Party => {
       app.pop_navigation_stack();
     }
+    ActiveBlock::LyricsView => {
+      // Esc first leaves lyrics browsing mode; a second Esc closes the view.
+      if app.lyrics_view.manual_index.is_some() {
+        app.lyrics_view.manual_index = None;
+      } else {
+        app.pop_navigation_stack();
+      }
+    }
     ActiveBlock::SelectDevice
-    | ActiveBlock::LyricsView
     | ActiveBlock::CoverArtView
     | ActiveBlock::MiniPlayer
     | ActiveBlock::PluginScreen => {

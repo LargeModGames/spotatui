@@ -7,6 +7,7 @@ pub mod friends;
 pub mod help;
 pub mod home;
 pub mod library;
+pub mod lyrics;
 pub mod player;
 pub mod plugin_screen;
 pub mod popups;
@@ -26,10 +27,11 @@ pub use self::discover::draw_discover;
 pub use self::friends::draw_friends;
 pub use self::home::draw_home;
 pub use self::library::draw_user_block;
+pub use self::lyrics::draw_lyrics_view;
 #[cfg(feature = "cover-art")]
 pub use self::player::draw_cover_art_view;
 pub use self::player::draw_miniplayer;
-pub use self::player::{draw_device_list, draw_lyrics_view, draw_playbar};
+pub use self::player::{draw_device_list, draw_playbar};
 pub use self::plugin_screen::draw_plugin_screen;
 pub use self::popups::{
   draw_announcement_prompt, draw_dialog, draw_error_screen, draw_exit_prompt, draw_help_menu,

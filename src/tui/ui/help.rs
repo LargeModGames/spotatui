@@ -154,6 +154,27 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("General"),
     ],
     vec![
+      String::from("Scroll lyrics (pauses auto-follow)"),
+      format!(
+        "{}/{} | <Up>/<Down> | <Ctrl+p>/<Ctrl+n>",
+        key_bindings.move_up, key_bindings.move_down
+      ),
+      String::from("Lyrics view"),
+    ],
+    vec![
+      String::from("Resume following the current lyric line"),
+      String::from("f or <Esc>"),
+      String::from("Lyrics view"),
+    ],
+    vec![
+      String::from("Nudge lyric timing earlier/later"),
+      format!(
+        "{}/{} | <Right>/<Left> | <Ctrl+f>/<Ctrl+b>",
+        key_bindings.move_right, key_bindings.move_left
+      ),
+      String::from("Lyrics view"),
+    ],
+    vec![
       String::from("Toggle miniplayer view"),
       key_bindings.miniplayer_view.to_string(),
       String::from("General"),

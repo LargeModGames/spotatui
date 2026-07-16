@@ -682,6 +682,8 @@ pub async fn start_ui(
       let animation_active = (current_route.id == RouteId::Home
         && app.user_config.behavior.banner_gradient)
         || current_route.active_block == ActiveBlock::Analysis
+        || (current_route.id == RouteId::LyricsView
+          && app.lyrics_status == crate::core::app::LyricsStatus::Found)
         || app.liked_song_animation_frame.is_some();
       let current_tick_rate = if animation_active {
         app.user_config.behavior.animation_tick_rate_milliseconds
@@ -879,6 +881,7 @@ pub async fn start_ui(
           let identity = snapshot.as_ref().map(track_identity);
           if identity != last_track_identity {
             last_track_identity = identity;
+            app.lyrics_view.reset();
             match snapshot.as_ref() {
               Some(snapshot) => {
                 use crate::infra::media_metadata::PlaybackItemKind;

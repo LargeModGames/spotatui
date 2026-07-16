@@ -1,10 +1,15 @@
+#[cfg(feature = "cover-art")]
+use crate::core::layout::fullscreen_view_layout;
+#[cfg(feature = "cover-art")]
+use ratatui::layout::Alignment;
+
 use crate::core::{
   app::{ActiveBlock, App, SourceFocus},
-  layout::{fullscreen_view_layout, miniplayer_playbar_area},
+  layout::miniplayer_playbar_area,
   source::Source,
 };
 use ratatui::{
-  layout::{Alignment, Constraint, Layout, Position, Rect},
+  layout::{Constraint, Layout, Position, Rect},
   style::{Modifier, Style},
   text::{Line, Span, Text},
   widgets::{
@@ -695,15 +700,6 @@ fn center_rect_within(bounds: Rect, size: Rect) -> Rect {
   }
 }
 
-pub fn draw_lyrics_view(f: &mut Frame<'_>, app: &App) {
-  let (content_area, playbar_area) = fullscreen_view_layout(&app.user_config.behavior, f.area());
-
-  draw_lyrics(f, app, content_area);
-  if let Some(playbar_area) = playbar_area {
-    draw_playbar(f, app, playbar_area);
-  }
-}
-
 #[cfg(feature = "cover-art")]
 pub fn draw_cover_art_view(f: &mut Frame<'_>, app: &App) {
   let (content_area, playbar_area) = fullscreen_view_layout(&app.user_config.behavior, f.area());
@@ -834,105 +830,6 @@ fn extract_track_info(app: &App) -> (Option<String>, Option<String>) {
       Some(snapshot.primary_artist()),
     ),
     None => (None, None),
-  }
-}
-
-fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
-  use crate::core::app::LyricsStatus;
-
-  // Draw bordered block first
-  let block = Block::default()
-    .borders(Borders::ALL)
-    .title(" Lyrics ")
-    .style(Style::default().fg(app.user_config.theme.inactive));
-  f.render_widget(block.clone(), area);
-
-  let inner_area = block.inner(area);
-
-  if app.lyrics_status != LyricsStatus::Found {
-    let text = match app.lyrics_status {
-      LyricsStatus::Loading => "Loading lyrics...",
-      LyricsStatus::NotFound => "No lyrics found for this track.",
-      LyricsStatus::NotStarted => "Waiting for track update...",
-      LyricsStatus::Found => "",
-    };
-
-    if !text.is_empty() {
-      let p = Paragraph::new(text)
-        .style(Style::default().fg(app.user_config.theme.inactive))
-        .alignment(Alignment::Center);
-
-      // Center vertically in inner area
-      let vertical_center = inner_area.y + inner_area.height / 2;
-      let top_area = Rect {
-        x: inner_area.x,
-        y: vertical_center.saturating_sub(0), // Just one line centered
-        width: inner_area.width,
-        height: 1,
-      };
-      f.render_widget(p, top_area);
-    }
-    return;
-  }
-
-  if let Some(lyrics) = &app.lyrics {
-    if lyrics.is_empty() {
-      return;
-    }
-
-    let current_time = app.song_progress_ms;
-    let mut active_idx = 0;
-    for (i, (time, _)) in lyrics.iter().enumerate() {
-      if *time <= current_time {
-        active_idx = i;
-      } else {
-        break;
-      }
-    }
-
-    // Target position for active line: Vertical center of inner_area
-    let target_row = inner_area.y + (inner_area.height / 2);
-
-    let area_height = inner_area.height as i32;
-    let area_y = inner_area.y as i32;
-
-    // Loop through all visible rows of the screen area
-    for row in 0..area_height {
-      let screen_y = area_y + row;
-
-      // screen_y = target_row + (line_idx - active_idx)
-      // line_idx = screen_y - target_row + active_idx
-
-      let offset_from_target = screen_y - (target_row as i32);
-      let line_idx = active_idx as i32 + offset_from_target;
-
-      if line_idx >= 0 && line_idx < lyrics.len() as i32 {
-        let (_, text) = &lyrics[line_idx as usize];
-        let is_active = line_idx == active_idx as i32;
-
-        // Use explicit RGB colors for cross-terminal compatibility
-        // Some terminals (like Kitty with custom themes) remap ANSI colors
-        let style = if is_active {
-          Style::default()
-            .fg(app.user_config.theme.highlighted_lyrics) // Use theme color for highlighted lyrics
-            .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
-        } else {
-          Style::default().fg(app.user_config.theme.inactive) // Dim gray for inactive lines
-        };
-
-        let p = Paragraph::new(text.clone())
-          .style(style)
-          .alignment(Alignment::Center);
-
-        let line_rect = Rect {
-          x: inner_area.x,
-          y: screen_y as u16,
-          width: inner_area.width,
-          height: 1,
-        };
-        f.render_widget(p, line_rect);
-      }
-    }
   }
 }
 
