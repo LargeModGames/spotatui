@@ -3,6 +3,7 @@ pub mod ids;
 pub mod library;
 pub mod mapping;
 pub mod metadata;
+pub mod native_shuffle;
 pub mod playback;
 pub mod recommend;
 pub mod requests;
@@ -142,6 +143,22 @@ pub enum IoEvent {
   /// only constructed under `streaming`, but the handler arm is unconditional.
   #[allow(dead_code)]
   ResumeSpotifyContext(Option<String>, Option<String>),
+  /// Toggle the native-Spotify client-side shuffle session on/off: reorder the
+  /// app-owned track list and reload it into Spirc (building a session
+  /// mid-playback when possible; falls back to Spirc shuffle otherwise).
+  #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+  ToggleNativeShuffleSession(bool),
+  /// Re-randomize the shuffle session for a fresh repeat-all lap (dispatched
+  /// when the last track wraps back to the first).
+  #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+  ReshuffleNativeShuffleLap,
+  /// Resume the suspended shuffle session at the given index once the native
+  /// queue drains (`None` = session exhausted, finish instead). The `u64` is the
+  /// session generation the resume was snapshotted from; the handler applies the
+  /// index only while the live session still matches, so a session replaced
+  /// mid-drain cannot inherit a stale index.
+  #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+  ResumeNativeShuffleSession(Option<usize>, u64),
   IncrementGlobalSongCount,
   FetchGlobalSongCount,
   FetchAnnouncements,
@@ -734,6 +751,25 @@ impl Network {
           .resume_spotify_context(context_uri, resume_track_uri)
           .await;
       }
+      #[cfg(feature = "streaming")]
+      IoEvent::ToggleNativeShuffleSession(on) => {
+        self.toggle_native_shuffle_session(on).await;
+      }
+      #[cfg(feature = "streaming")]
+      IoEvent::ReshuffleNativeShuffleLap => {
+        self.reshuffle_native_shuffle_lap().await;
+      }
+      #[cfg(feature = "streaming")]
+      IoEvent::ResumeNativeShuffleSession(resume_index, generation) => {
+        self
+          .resume_native_shuffle_session(resume_index, generation)
+          .await;
+      }
+      // Only constructed under `streaming`; inert otherwise.
+      #[cfg(not(feature = "streaming"))]
+      IoEvent::ToggleNativeShuffleSession(_)
+      | IoEvent::ReshuffleNativeShuffleLap
+      | IoEvent::ResumeNativeShuffleSession(_, _) => {}
       IoEvent::IncrementGlobalSongCount => {
         self.increment_global_song_count().await;
       }

@@ -95,7 +95,7 @@ fn country_code(country: Country) -> String {
 /// Fetch an album's tracklist from `offset` onward, following pagination until
 /// the API reports no further page. Spotify caps each response at 50 tracks,
 /// so albums longer than that need this loop to come back complete.
-async fn fetch_album_tracks_from(
+pub(super) async fn fetch_album_tracks_from(
   network: &Network,
   album_id: &str,
   mut offset: u32,

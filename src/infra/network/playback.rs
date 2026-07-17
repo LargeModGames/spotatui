@@ -1133,6 +1133,14 @@ impl PlaybackNetwork for Network {
         .unwrap_or(app.user_config.behavior.shuffle_enabled)
     };
 
+    // Any explicit new playback target invalidates the app-owned shuffle
+    // session; the interception below re-creates one when it applies. A bare
+    // resume (no context, no uris) keeps the session.
+    #[cfg(feature = "streaming")]
+    if context_id.is_some() || uris.is_some() {
+      self.app.lock().await.clear_native_shuffle_session();
+    }
+
     // Check if we should use native streaming for playback
     #[cfg(feature = "streaming")]
     if request_native_streaming_recovery_if_disconnected(self).await {
@@ -1209,6 +1217,18 @@ impl PlaybackNetwork for Network {
           native_preference_update,
         );
       }
+      // Client-side shuffle: when shuffle is on and the target is a playlist,
+      // album, or Liked Songs, the app owns the play order (a pre-shuffled
+      // flat list loaded via `from_tracks`) instead of delegating shuffle to
+      // Spirc/Spotify — see `native_shuffle`.
+      if desired_shuffle_state
+        && self
+          .try_start_native_shuffled_playback(&player, &context_id, &uris, offset)
+          .await
+      {
+        return;
+      }
+
       let native_route = resolve_native_playback_route(self, &context_id).await;
 
       // For resume playback (no context, no uris)
@@ -1789,6 +1809,10 @@ impl PlaybackNetwork for Network {
   }
 
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
+    // A device change moves playback off the session's `from_tracks` load;
+    // the app-owned shuffle order no longer describes what plays.
+    #[cfg(feature = "streaming")]
+    self.app.lock().await.clear_native_shuffle_session();
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = transfer_playback_backend(self, &device_id).await {
       let activation_time = Instant::now();
