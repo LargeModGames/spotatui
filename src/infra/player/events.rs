@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 #[derive(Clone, Copy, Default)]
 pub struct StreamingRecoveryRequest {
   pub reselect_device: bool,
+  pub resume_playback: bool,
 }
 
 /// Bundled context for player event handling tasks.
@@ -60,14 +61,19 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
   while let Some(mut request) = ctx.recovery_rx.recv().await {
     while let Ok(next_request) = ctx.recovery_rx.try_recv() {
       request.reselect_device |= next_request.reselect_device;
+      request.resume_playback |= next_request.resume_playback;
     }
 
-    if active_streaming_player(&ctx.app).await.is_some() {
+    if let Some(player) = active_streaming_player(&ctx.app).await {
       // A live player already exists (e.g. a queued duplicate request): the
       // pending window is over, so replay anything parked against it.
       let mut app = ctx.app.lock().await;
       app.native_backend_pending = false;
+      let has_pending_start = app.pending_start_playback.is_some();
       app.replay_pending_start_playback();
+      if request.resume_playback && !has_pending_start {
+        player.play();
+      }
       continue;
     }
 
@@ -106,10 +112,12 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           }
           app.streaming_player = Some(Arc::clone(&recovered_player));
           app.set_status_message("Native streaming recovered.", 6);
-          if request.reselect_device {
+          let resume_playback = request.resume_playback && app.pending_start_playback.is_none();
+          if request.reselect_device || resume_playback {
             app.dispatch(IoEvent::AutoSelectStreamingDevice(
               ctx.client_config.streaming_device_name.clone(),
               false,
+              resume_playback,
             ));
           }
           // Replay the request that triggered (or arrived during) recovery.
@@ -477,6 +485,12 @@ async fn handle_player_events(
         }
       }
       PlayerEvent::Stopped { .. } => {
+        // Spirc emits Stopped before its event channel closes when Spotify
+        // Connect transfers playback away. Clear this before recovery decides
+        // whether to resume, so we do not steal playback back (#254). An abrupt
+        // session drop has no Stopped event and preserves the playing state.
+        shared_is_playing.store(false, Ordering::Relaxed);
+
         #[cfg(all(feature = "mpris", target_os = "linux"))]
         if let Some(ref mpris) = mpris_manager {
           mpris.set_stopped();
@@ -748,7 +762,9 @@ async fn disconnect_streaming_player(
   // Spotify Connect sends SessionDisconnected when the user intentionally moves
   // playback to another device. At that point the API context can still be the
   // old native device, so only reselect native for non-Connect-disconnect paths.
-  let reselect_device = allow_reselect_device && current_playback_matches_native(&app_lock, player);
+  let playback_matches_native = current_playback_matches_native(&app_lock, player);
+  let reselect_device = allow_reselect_device && playback_matches_native;
+  let resume_playback = playback_matches_native && shared_is_playing.load(Ordering::Relaxed);
 
   app_lock.streaming_player = None;
   // Stop the old Connect session so it doesn't linger as a ghost device (#297).
@@ -773,5 +789,8 @@ async fn disconnect_streaming_player(
   shared_position.store(0, Ordering::Relaxed);
   shared_is_playing.store(false, Ordering::Relaxed);
 
-  Some(StreamingRecoveryRequest { reselect_device })
+  Some(StreamingRecoveryRequest {
+    reselect_device,
+    resume_playback,
+  })
 }

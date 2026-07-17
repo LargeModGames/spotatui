@@ -110,7 +110,7 @@ pub enum IoEvent {
   GetAlbum(String),
   TransferPlaybackToDevice(String, bool),
   #[allow(dead_code)]
-  AutoSelectStreamingDevice(String, bool), // Auto-select a device by name (used for native streaming)
+  AutoSelectStreamingDevice(String, bool, bool), // device name, persist ID, resume playback
   GetAlbumForTrack(String),
   CurrentUserSavedTracksContains(Vec<String>),
   GetCurrentUserSavedShows(Option<u32>),
@@ -681,9 +681,9 @@ impl Network {
           .await;
       }
       #[cfg(feature = "streaming")]
-      IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id) => {
+      IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id, resume_playback) => {
         self
-          .auto_select_streaming_device(device_name, persist_device_id)
+          .auto_select_streaming_device(device_name, persist_device_id, resume_playback)
           .await;
       }
       #[cfg(not(feature = "streaming"))]

@@ -2470,6 +2470,7 @@ impl App {
   /// TCP: `is_connected` true, Spirc commands silently dropped).
   #[cfg(feature = "streaming")]
   pub fn force_native_streaming_recovery(&mut self, reselect_device: bool) {
+    let resume_playback = self.native_is_playing == Some(true);
     if let Some(player) = self.streaming_player.take() {
       // Stop the old spirc before dropping our reference so the dead session
       // doesn't linger as a ghost Connect device (#297).
@@ -2496,7 +2497,10 @@ impl App {
     self.set_status_message("Native streaming disconnected; attempting recovery.", 8);
     if let Some(tx) = &self.streaming_recovery_tx {
       self.native_backend_pending = tx
-        .send(crate::infra::player::StreamingRecoveryRequest { reselect_device })
+        .send(crate::infra::player::StreamingRecoveryRequest {
+          reselect_device,
+          resume_playback,
+        })
         .is_ok();
     } else {
       self.native_backend_pending = false;

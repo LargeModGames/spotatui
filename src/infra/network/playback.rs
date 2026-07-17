@@ -54,7 +54,12 @@ pub trait PlaybackNetwork {
   async fn change_volume(&mut self, volume: u8);
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool);
   #[cfg(feature = "streaming")]
-  async fn auto_select_streaming_device(&mut self, device_name: String, persist_device_id: bool);
+  async fn auto_select_streaming_device(
+    &mut self,
+    device_name: String,
+    persist_device_id: bool,
+    resume_playback: bool,
+  );
   async fn ensure_playback_continues(&mut self, previous_track_id: String);
   /// Resume a native-Spotify context suspended under the native queue, targeting
   /// the resume track via an offset URI. Falls back to playing just the track
@@ -1888,7 +1893,12 @@ impl PlaybackNetwork for Network {
   }
 
   #[cfg(feature = "streaming")]
-  async fn auto_select_streaming_device(&mut self, device_name: String, persist_device_id: bool) {
+  async fn auto_select_streaming_device(
+    &mut self,
+    device_name: String,
+    persist_device_id: bool,
+    resume_playback: bool,
+  ) {
     if let Some(player) = current_streaming_player(self).await {
       let activation_time = Instant::now();
       let native_device_id = player.device_id();
@@ -1925,6 +1935,9 @@ impl PlaybackNetwork for Network {
         let _ = player.transfer(None);
       }
       player.activate();
+      if resume_playback {
+        player.play();
+      }
       self
         .native_idle_recovery
         .settle_current_episode(activation_time);
