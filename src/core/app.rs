@@ -875,10 +875,6 @@ pub enum NativeTrackKind {
 /// suspend/resume never reshuffles the remaining order.
 #[cfg(feature = "streaming")]
 pub struct NativeSpotifyShuffleSession {
-  /// The context this session was built from (playlist/album URI; `None` for
-  /// Liked Songs). Bookkeeping only — never sent to Spotify.
-  #[allow(dead_code)]
-  pub context_uri: Option<String>,
   /// The URI list currently loaded into Spirc, in play order (shuffled while
   /// [`Self::shuffled`] is true).
   pub order: Vec<String>,

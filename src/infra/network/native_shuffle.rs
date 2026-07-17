@@ -269,9 +269,8 @@ impl Network {
       _ => return false,
     };
 
-    let (context_uri, original, order, fetch) = match target {
+    let (original, order, fetch) = match target {
       ShuffleTarget::Playlist { id, selected_uri } => (
-        Some(id.uri()),
         vec![selected_uri.clone()],
         vec![selected_uri],
         Some(FullFetch::Playlist(id)),
@@ -294,17 +293,11 @@ impl Network {
           return false;
         }
         let selected = selected.min(uris.len() - 1);
-        (
-          Some(id.uri()),
-          uris.clone(),
-          shuffled_order(uris, selected),
-          None,
-        )
+        (uris.clone(), shuffled_order(uris, selected), None)
       }
       ShuffleTarget::SavedTracks { list, selected } => {
         let selected = selected.min(list.len() - 1);
         (
-          None,
           list.clone(),
           shuffled_order(list, selected),
           Some(FullFetch::SavedTracks),
@@ -316,7 +309,6 @@ impl Network {
       let mut app = self.app.lock().await;
       let generation = app.next_native_shuffle_generation();
       app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
-        context_uri,
         order: order.clone(),
         original,
         index: 0,
@@ -493,7 +485,6 @@ impl Network {
           let mut app = self.app.lock().await;
           let generation = app.next_native_shuffle_generation();
           app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
-            context_uri: Some(context_uri),
             order: vec![current_uri.clone()],
             original: vec![current_uri],
             index: 0,
@@ -532,7 +523,6 @@ impl Network {
           let generation = app.next_native_shuffle_generation();
           let order = shuffled_order(uris.clone(), first);
           app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
-            context_uri: Some(context_uri),
             order: order.clone(),
             original: uris,
             index: 0,
@@ -665,24 +655,28 @@ impl Network {
   }
 }
 
-/// All track URIs of a playlist, in playlist order, capped at
-/// [`MAX_NATIVE_SHUFFLE_TRACKS`]. Returns `(uris, truncated)`. Episodes and
-/// unplayable items are skipped.
+/// Walk a paginated Spotify collection at `path`, mapping each item to a track
+/// URI via `extract` (items yielding `None` are skipped), in native pagination
+/// order and capped at [`MAX_NATIVE_SHUFFLE_TRACKS`]. Returns `(uris,
+/// truncated)`, where `truncated` is true when the cap cut the list short.
 #[cfg(feature = "streaming")]
-async fn fetch_playlist_uris(
+async fn paginate_uris<Item>(
   spotify: &AuthCodePkceSpotify,
   token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
-  playlist_id: &PlaylistId<'static>,
-) -> anyhow::Result<(Vec<String>, bool)> {
-  let path = format!("playlists/{}/items", playlist_id.id());
+  path: &str,
+  extract: impl Fn(&Item) -> Option<String>,
+) -> anyhow::Result<(Vec<String>, bool)>
+where
+  Item: serde::de::DeserializeOwned,
+{
   let limit = 50u32;
   let mut offset = 0u32;
   let mut uris = Vec::new();
   loop {
-    let page = spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    let page = spotify_get_typed_compat_for_with_refresh::<Page<Item>>(
       spotify,
-      &path,
+      path,
       &[("limit", limit.to_string()), ("offset", offset.to_string())],
       token_cache_path,
       app,
@@ -690,10 +684,8 @@ async fn fetch_playlist_uris(
     .await?;
     let has_next = page.next.is_some();
     for item in &page.items {
-      if let Some(PlayableItem::Track(track)) = item.item.as_ref() {
-        if let Some(id) = track.id.as_ref() {
-          uris.push(id.uri());
-        }
+      if let Some(uri) = extract(item) {
+        uris.push(uri);
       }
     }
     if uris.len() >= MAX_NATIVE_SHUFFLE_TRACKS {
@@ -709,6 +701,30 @@ async fn fetch_playlist_uris(
   Ok((uris, false))
 }
 
+/// All track URIs of a playlist, in playlist order, capped at
+/// [`MAX_NATIVE_SHUFFLE_TRACKS`]. Returns `(uris, truncated)`. Episodes and
+/// unplayable items are skipped.
+#[cfg(feature = "streaming")]
+async fn fetch_playlist_uris(
+  spotify: &AuthCodePkceSpotify,
+  token_cache_path: &Path,
+  app: &Arc<Mutex<App>>,
+  playlist_id: &PlaylistId<'static>,
+) -> anyhow::Result<(Vec<String>, bool)> {
+  let path = format!("playlists/{}/items", playlist_id.id());
+  paginate_uris(
+    spotify,
+    token_cache_path,
+    app,
+    &path,
+    |item: &PlaylistItem| match item.item.as_ref() {
+      Some(PlayableItem::Track(track)) => track.id.as_ref().map(|id| id.uri()),
+      _ => None,
+    },
+  )
+  .await
+}
+
 /// All Liked Songs track URIs, newest first (the library's native order),
 /// capped at [`MAX_NATIVE_SHUFFLE_TRACKS`]. Returns `(uris, truncated)`.
 #[cfg(feature = "streaming")]
@@ -717,35 +733,31 @@ async fn fetch_saved_track_uris(
   token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
 ) -> anyhow::Result<(Vec<String>, bool)> {
-  let limit = 50u32;
-  let mut offset = 0u32;
-  let mut uris = Vec::new();
-  loop {
-    let page = spotify_get_typed_compat_for_with_refresh::<Page<SavedTrack>>(
-      spotify,
-      "me/tracks",
-      &[("limit", limit.to_string()), ("offset", offset.to_string())],
-      token_cache_path,
-      app,
-    )
-    .await?;
-    let has_next = page.next.is_some();
-    for item in &page.items {
-      if let Some(id) = item.track.id.as_ref() {
-        uris.push(id.uri());
-      }
-    }
-    if uris.len() >= MAX_NATIVE_SHUFFLE_TRACKS {
-      let truncated = uris.len() > MAX_NATIVE_SHUFFLE_TRACKS || has_next;
-      uris.truncate(MAX_NATIVE_SHUFFLE_TRACKS);
-      return Ok((uris, truncated));
-    }
-    if !has_next {
-      break;
-    }
-    offset = page.offset.saturating_add(page.limit);
-  }
-  Ok((uris, false))
+  paginate_uris(
+    spotify,
+    token_cache_path,
+    app,
+    "me/tracks",
+    |item: &SavedTrack| item.track.id.as_ref().map(|id| id.uri()),
+  )
+  .await
+}
+
+/// Re-anchor the currently-playing track when the play order is being replaced
+/// by `target`: find the occurrence in `target` matching the current track's
+/// rank among the tracks played so far (`order[..=index]`), so a duplicated
+/// track lands on the matching copy rather than always the first. Falls back to
+/// index 0 when the current track is absent from `target`.
+#[cfg(feature = "streaming")]
+fn reanchor_by_rank(order: &[String], index: usize, target: &[String]) -> usize {
+  let index = index.min(order.len().saturating_sub(1));
+  order
+    .get(index)
+    .and_then(|uri| {
+      let rank = order[..=index].iter().filter(|u| *u == uri).count();
+      nth_occurrence(target, uri, rank)
+    })
+    .unwrap_or(0)
 }
 
 /// Fold a finished full-context fetch into the live session and reload Spirc
@@ -800,19 +812,9 @@ async fn finish_full_context_fetch(
             None
           } else {
             let old_index = session.index.min(session.order.len().saturating_sub(1));
-            let current_uri = session.order.get(old_index).cloned();
             let restored = session.original.clone();
             // Anchor on the current track's rank so a duplicate doesn't jump.
-            let new_index = current_uri
-              .as_ref()
-              .and_then(|uri| {
-                let rank = session.order[..=old_index]
-                  .iter()
-                  .filter(|u| *u == uri)
-                  .count();
-                nth_occurrence(&restored, uri, rank)
-              })
-              .unwrap_or(0);
+            let new_index = reanchor_by_rank(&session.order, old_index, &restored);
             session.order = restored;
             session.index = new_index;
             if queue_active {
@@ -863,15 +865,7 @@ async fn finish_full_context_fetch(
             // Next follows the real tracklist. Anchor on the occurrence matching
             // the current track's rank among the tracks played so far, so a
             // duplicated track isn't reloaded at an earlier copy.
-            let prev = session.index.min(session.order.len().saturating_sub(1));
-            let current_uri = session.order.get(prev).cloned();
-            let index = current_uri
-              .as_ref()
-              .and_then(|uri| {
-                let rank = session.order[..=prev].iter().filter(|u| *u == uri).count();
-                nth_occurrence(&fetched, uri, rank)
-              })
-              .unwrap_or(0);
+            let index = reanchor_by_rank(&session.order, session.index, &fetched);
             let changed = session.order != fetched;
             session.original = fetched.clone();
             session.order = fetched;
