@@ -343,6 +343,8 @@ pub struct StreamingPlayer {
   #[allow(dead_code)]
   state: Arc<Mutex<PlayerState>>,
   spirc_alive: Arc<AtomicBool>,
+  shutdown_requested: Arc<AtomicBool>,
+  spirc_exit_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 #[allow(dead_code)]
@@ -550,10 +552,18 @@ impl StreamingPlayer {
     // Connect sessions even if the player thread is still running.
     let spirc_alive = Arc::new(AtomicBool::new(true));
     let spirc_alive_for_task = Arc::clone(&spirc_alive);
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    let shutdown_requested_for_task = Arc::clone(&shutdown_requested);
+    let (spirc_exit_tx, spirc_exit_rx) = tokio::sync::watch::channel(false);
     let spirc_handle = tokio::spawn(spirc_task);
     tokio::spawn(async move {
+      // The task result (saved playback state on session loss) is intentionally
+      // discarded: restore is handled app-side via the playback snapshot.
       let _ = spirc_handle.await;
       spirc_alive_for_task.store(false, Ordering::Relaxed);
+      if !shutdown_requested_for_task.load(Ordering::Relaxed) {
+        let _ = spirc_exit_tx.send(true);
+      }
     });
 
     info!("Streaming connection established!");
@@ -566,6 +576,8 @@ impl StreamingPlayer {
       config,
       state: Arc::new(Mutex::new(PlayerState::default())),
       spirc_alive,
+      shutdown_requested,
+      spirc_exit_rx,
     })
   }
 
@@ -757,8 +769,15 @@ impl StreamingPlayer {
 
   /// Shutdown the player
   pub fn shutdown(&self) {
+    self.shutdown_requested.store(true, Ordering::Relaxed);
     self.spirc_alive.store(false, Ordering::Relaxed);
     let _ = self.spirc.shutdown();
+  }
+
+  /// Receiver that flips to `true` when the spirc task exits without an
+  /// intentional shutdown (e.g. session TCP loss).
+  pub fn spirc_exit_receiver(&self) -> tokio::sync::watch::Receiver<bool> {
+    self.spirc_exit_rx.clone()
   }
 
   /// Get a channel to receive player events (track changes, play/pause, seek, etc.)
@@ -771,6 +790,7 @@ impl Drop for StreamingPlayer {
   fn drop(&mut self) {
     // Backstop: stop the spirc when the last reference drops so a replaced
     // player can't linger as a ghost Connect device (#297). Idempotent.
+    self.shutdown_requested.store(true, Ordering::Relaxed);
     self.spirc_alive.store(false, Ordering::Relaxed);
     let _ = self.spirc.shutdown();
   }

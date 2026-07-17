@@ -241,9 +241,62 @@ async fn handle_player_events(
   let mut consecutive_unavailable: u32 = 0;
   const UNAVAILABLE_ESCALATION_THRESHOLD: u32 = 3;
 
-  while let Some(event) = event_rx.recv().await {
+  // The ported librespot fork ends the spirc task promptly on session loss
+  // (instead of emitting SessionDisconnected via handle_disconnect), so watch
+  // for that exit here. Hybrid policy: recover immediately when idle; while
+  // buffered audio still plays, defer until it stalls so the session drop
+  // never cuts audible playback short. `audibly_playing` mirrors the event
+  // stream locally because `shared_is_playing` is not cleared by
+  // Stopped/EndOfTrack, and the stall check must be order-independent.
+  let mut spirc_exit_rx = player.spirc_exit_receiver();
+  let mut watch_spirc_exit = true;
+  let mut session_lost = false;
+  let mut audibly_playing = shared_is_playing.load(Ordering::Relaxed);
+
+  loop {
+    let event = tokio::select! {
+      maybe_event = event_rx.recv() => match maybe_event {
+        Some(event) => event,
+        None => break,
+      },
+      changed = spirc_exit_rx.changed(), if watch_spirc_exit => {
+        watch_spirc_exit = false;
+        if changed.is_err() || !*spirc_exit_rx.borrow() {
+          // Sender dropped without firing: intentional shutdown, nothing to do.
+          continue;
+        }
+        session_lost = true;
+        if audibly_playing {
+          info!("spirc exited unexpectedly while playing; deferring recovery until playback stalls");
+          continue;
+        }
+        info!("spirc exited unexpectedly while idle; requesting native recovery");
+        if let Some(request) = disconnect_streaming_player(
+          &app,
+          &player,
+          &shared_position,
+          &shared_is_playing,
+          "Native streaming connection lost; attempting recovery.",
+          true,
+        )
+        .await
+        {
+          let _ = recovery_tx.send(request);
+        }
+        return;
+      }
+    };
+
     if !is_current_streaming_player(&app, &player).await {
       continue;
+    }
+
+    match &event {
+      PlayerEvent::Playing { .. } => audibly_playing = true,
+      PlayerEvent::Paused { .. } | PlayerEvent::Stopped { .. } | PlayerEvent::EndOfTrack { .. } => {
+        audibly_playing = false;
+      }
+      _ => {}
     }
 
     match event {
@@ -582,11 +635,19 @@ async fn handle_player_events(
 
         if should_ensure_playback {
           let app = Arc::clone(&app);
+          let player = Arc::clone(&player);
+          let spirc_exit_rx = player.spirc_exit_receiver();
           let previous_track_id = track_id.to_string();
           tokio::spawn(async move {
             // Keep the event consumer free so Loading/TrackChanged can prove a
             // healthy self-advance before the fallback runs.
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // If the spirc exited meanwhile (session loss) or this player was
+            // replaced, the recovery restore path owns the continuation;
+            // dispatching here would double-transition the recovered player.
+            if *spirc_exit_rx.borrow() || !is_current_streaming_player(&app, &player).await {
+              return;
+            }
             app
               .lock()
               .await
@@ -741,6 +802,26 @@ async fn handle_player_events(
       }
       PlayerEvent::Preloading { .. } => {}
       _ => {}
+    }
+
+    // Deferred hybrid recovery: once the spirc is gone and nothing is audibly
+    // playing anymore, replace the dead backend. Runs after the arms above so
+    // EndOfTrack still records its queue/stop-after-current decisions first.
+    if session_lost && !audibly_playing {
+      info!("buffered playback ended after session loss; requesting native recovery");
+      if let Some(request) = disconnect_streaming_player(
+        &app,
+        &player,
+        &shared_position,
+        &shared_is_playing,
+        "Native streaming connection lost; attempting recovery.",
+        true,
+      )
+      .await
+      {
+        let _ = recovery_tx.send(request);
+      }
+      return;
     }
   }
 
