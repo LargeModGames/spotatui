@@ -456,6 +456,9 @@ async fn handle_player_events(
         app.song_progress_ms = 0;
         let playing_id = audio_item.track_id.to_string();
         app.last_track_id = Some(playing_id.clone());
+        // Keep the client-side shuffle session pointed at what Spirc actually
+        // plays (also detects a completed repeat-all lap for the reshuffle).
+        app.sync_native_shuffle_index(&playing_id);
         app.instant_since_last_current_playback_poll = std::time::Instant::now();
         app.dispatch(IoEvent::GetCurrentPlayback);
 
@@ -756,6 +759,7 @@ async fn disconnect_streaming_player(
   app_lock.native_is_playing = Some(false);
   app_lock.native_track_info = None;
   app_lock.native_playback_origin = None;
+  app_lock.clear_native_shuffle_session();
   app_lock.song_progress_ms = 0;
   app_lock.last_track_id = None;
   app_lock.last_device_activation = None;

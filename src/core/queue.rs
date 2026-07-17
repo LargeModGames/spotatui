@@ -72,6 +72,12 @@ pub enum SuspendedContext {
     context_uri: Option<String>,
     resume_track_uri: Option<String>,
   },
+  /// A native-Spotify client-side shuffle session
+  /// ([`App::native_spotify_shuffle`](crate::core::app::App::native_spotify_shuffle)):
+  /// resumes by index into the session's app-owned play order, with no context
+  /// reload and no reshuffle.
+  #[cfg(feature = "streaming")]
+  SpotifyShuffled { resume_index: Option<usize> },
   #[cfg(feature = "local-files")]
   Local {
     resume_index: Option<usize>,

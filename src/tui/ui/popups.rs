@@ -185,6 +185,10 @@ fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
     return match ctx {
       #[cfg(feature = "streaming")]
       SuspendedContext::Spotify { .. } => spotify_mirror(max),
+      // A client-side shuffle session resumes a flat track list; the Web-API
+      // mirror is the best available metadata for its upcoming rows.
+      #[cfg(feature = "streaming")]
+      SuspendedContext::SpotifyShuffled { .. } => spotify_mirror(max),
       #[cfg(feature = "local-files")]
       SuspendedContext::Local { resume_index, .. } => {
         match (resume_index, app.local_playback.as_ref()) {

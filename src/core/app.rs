@@ -867,6 +867,97 @@ pub enum NativeTrackKind {
   Episode,
 }
 
+/// App-owned play order for native-Spotify shuffle. When shuffle is on and a
+/// Spotify context (playlist/album/Liked Songs) starts on the native streaming
+/// device, the app builds this session and loads a flat, pre-shuffled URI list
+/// into Spirc (`LoadRequest::from_tracks`) instead of delegating shuffle to
+/// Spirc/Spotify — so every track plays exactly once per pass and a queue
+/// suspend/resume never reshuffles the remaining order.
+#[cfg(feature = "streaming")]
+pub struct NativeSpotifyShuffleSession {
+  /// The context this session was built from (playlist/album URI; `None` for
+  /// Liked Songs). Bookkeeping only — never sent to Spotify.
+  #[allow(dead_code)]
+  pub context_uri: Option<String>,
+  /// The URI list currently loaded into Spirc, in play order (shuffled while
+  /// [`Self::shuffled`] is true).
+  pub order: Vec<String>,
+  /// The context's original order — grows to the full context when the
+  /// background fetch completes. Restored on shuffle-off.
+  pub original: Vec<String>,
+  /// Index into `order` of the currently-playing track (synced from
+  /// `PlayerEvent::TrackChanged`).
+  pub index: usize,
+  /// Whether `order` is currently shuffled.
+  pub shuffled: bool,
+  /// False while the background full-context fetch is still running.
+  pub fetch_complete: bool,
+  /// Stamp guarding stale background fetches from writing into a newer session.
+  pub generation: u64,
+  /// Set to the index we just loaded into Spirc whenever the session issues a
+  /// `from_tracks` reload; consumed by the next `TrackChanged` so a reload is
+  /// confirmed in place rather than mistaken for a forward advance (which would
+  /// mis-map a duplicate track id onto a later occurrence).
+  pub pending_reload_index: Option<usize>,
+  /// Set when the user issues a manual skip so the next `TrackChanged` is read
+  /// as an explicit advance in that direction (`Some(true)` = Next, `Some(false)`
+  /// = Previous) rather than a repeat-one auto replay, which stays put.
+  /// Distinguishes an explicit skip to a duplicate track id from a replay of it
+  /// and resolves the duplicate in the skipped direction.
+  pub pending_manual_skip: Option<bool>,
+}
+
+/// Whether a `spotify:track:<id>` URI refers to librespot's base62 track id
+/// (the form `PlayerEvent::TrackChanged` reports).
+#[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+pub(crate) fn uri_matches_base62_id(uri: &str, base62_id: &str) -> bool {
+  uri.rsplit(':').next() == Some(base62_id)
+}
+
+/// How playback moved to the track a `TrackChanged` reports, so the wrap-search
+/// resolves a duplicate id to the right occurrence.
+#[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShuffleStep {
+  /// Sequential forward move (auto-advance or a manual Next): the next
+  /// occurrence at or after `prev + 1`.
+  Forward,
+  /// A manual Previous: the previous occurrence at or before `prev - 1`.
+  Backward,
+  /// A repeat-one auto replay: stay on the current occurrence (`prev` first).
+  Stay,
+}
+
+/// Resolve which index of `order` a `TrackChanged` for `playing_base62_id`
+/// refers to, given the previously-known index `prev` and how playback moved
+/// ([`ShuffleStep`]).
+///
+/// `prev` is always searched last, so a duplicate track resolves to the
+/// upcoming (`Forward`) or previous (`Backward`) copy, while a unique-track
+/// re-fire still lands on `prev`. `Stay` checks `prev` first, so a repeat-one
+/// replay keeps its index. Returns `None` when the id is not in `order`.
+#[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+pub(crate) fn shuffle_advance_index(
+  order: &[String],
+  prev: usize,
+  playing_base62_id: &str,
+  step: ShuffleStep,
+) -> Option<usize> {
+  let len = order.len();
+  if len == 0 {
+    return None;
+  }
+  let prev = prev.min(len - 1);
+  (0..len).find_map(|k| {
+    let i = match step {
+      ShuffleStep::Stay => (prev + k) % len,
+      ShuffleStep::Forward => (prev + 1 + k) % len,
+      ShuffleStep::Backward => (prev + len - 1 - k) % len,
+    };
+    uri_matches_base62_id(&order[i], playing_base62_id).then_some(i)
+  })
+}
+
 /// Immediate track info from native player for instant UI updates
 /// Used to display track info immediately when skipping, before API responds
 #[derive(Clone, Debug, Default)]
@@ -1315,6 +1406,14 @@ pub struct App {
   /// Tracks whether the current native playback was started from a Spotify context
   /// or from a raw URI-list/native-only route.
   pub native_playback_origin: Option<NativePlaybackOrigin>,
+  /// The app-owned native-Spotify shuffle session, when client-side shuffle
+  /// owns the current native playback (see [`NativeSpotifyShuffleSession`]).
+  #[cfg(feature = "streaming")]
+  pub native_spotify_shuffle: Option<NativeSpotifyShuffleSession>,
+  /// Monotonic generation for [`Self::native_spotify_shuffle`]; bumped on every
+  /// session create/clear so stale background fetches are discarded.
+  #[cfg(feature = "streaming")]
+  pub native_shuffle_generation: u64,
   /// Prevent idle/sleep during playback
   pub keepawake: Option<keepawake::KeepAwake>,
   /// Timestamp of the last native device activation
@@ -1717,6 +1816,10 @@ impl Default for App {
       pending_play_file: None,
       native_is_playing: None,
       native_playback_origin: None,
+      #[cfg(feature = "streaming")]
+      native_spotify_shuffle: None,
+      #[cfg(feature = "streaming")]
+      native_shuffle_generation: 0,
       keepawake: None,
       last_device_activation: None,
       native_activation_pending: false,
@@ -3835,6 +3938,20 @@ impl App {
   /// handler degrades gracefully (context-only, or track-only, or "finished").
   #[cfg(feature = "streaming")]
   pub(crate) fn suspend_native_spotify_context_for_queue(&mut self) {
+    // A client-side shuffle session resumes by index into its app-owned order
+    // (no context reload, no reshuffle) — the whole point of the session is
+    // that a queue interruption cannot regenerate the remaining shuffle order.
+    if let Some(session) = self.native_spotify_shuffle.as_ref() {
+      let resume_index = crate::infra::queue::resume_index_after_queue(
+        session.index,
+        session.order.len(),
+        self.native_shuffle_repeat_mode(),
+        crate::infra::queue::SuspendCause::AutoAdvance,
+      );
+      self.queue_suspended =
+        Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index });
+      return;
+    }
     let context_uri = self
       .current_playback_context
       .as_ref()
@@ -3863,6 +3980,21 @@ impl App {
   #[cfg(feature = "streaming")]
   pub(crate) fn suspend_native_spotify_context_mid_track(&mut self) {
     if !self.is_native_streaming_active_for_playback() {
+      return;
+    }
+    // Mid-track semantics for a client-side shuffle session: resume the track
+    // that was playing, at its position in the app-owned order.
+    if let Some(session) = self.native_spotify_shuffle.as_ref() {
+      let resume_index = if session.index < session.order.len() {
+        Some(session.index)
+      } else {
+        None
+      };
+      self.queue_suspended =
+        Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index });
+      if let Some(player) = self.streaming_player.as_ref() {
+        player.pause();
+      }
       return;
     }
     let context_uri = self
@@ -3897,6 +4029,135 @@ impl App {
     });
     if let Some(player) = self.streaming_player.as_ref() {
       player.pause();
+    }
+  }
+
+  /// Drop the native-Spotify shuffle session and invalidate any in-flight
+  /// background fetch for it.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn clear_native_shuffle_session(&mut self) {
+    self.native_shuffle_generation = self.native_shuffle_generation.wrapping_add(1);
+    self.native_spotify_shuffle = None;
+  }
+
+  /// The generation stamp for a new shuffle session (also invalidates fetches
+  /// for any previous session).
+  #[cfg(feature = "streaming")]
+  pub(crate) fn next_native_shuffle_generation(&mut self) -> u64 {
+    self.native_shuffle_generation = self.native_shuffle_generation.wrapping_add(1);
+    self.native_shuffle_generation
+  }
+
+  /// The current repeat state as the source-neutral [`RepeatMode`] used by the
+  /// queue engine's index math.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_shuffle_repeat_mode(&self) -> crate::infra::queue::RepeatMode {
+    match self
+      .current_playback_context
+      .as_ref()
+      .map(|ctx| ctx.repeat_state)
+    {
+      Some(RepeatState::Context) => crate::infra::queue::RepeatMode::Context,
+      Some(RepeatState::Track) => crate::infra::queue::RepeatMode::Track,
+      _ => crate::infra::queue::RepeatMode::Off,
+    }
+  }
+
+  /// Whether native playback is currently in the playing (not paused) state.
+  /// A client-side shuffle reload (`from_tracks`) must preserve this instead of
+  /// unconditionally starting playback, so toggling shuffle while paused does
+  /// not resume it. `native_is_playing` is the authoritative native state
+  /// (updated by player events); the context flag is only a fallback, matching
+  /// how the media-metadata snapshot reads it.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_shuffle_is_playing(&self) -> bool {
+    self
+      .native_is_playing
+      .or_else(|| {
+        self
+          .current_playback_context
+          .as_ref()
+          .map(|ctx| ctx.is_playing)
+      })
+      .unwrap_or(true)
+  }
+
+  /// Flag the client-side shuffle session so the next `TrackChanged` is read as
+  /// an explicit skip (`forward` = Next, else Previous) rather than a repeat-one
+  /// auto replay. Called from the native Next/Previous transport paths before
+  /// driving Spirc, so a duplicate track resolves in the skipped direction.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn mark_native_shuffle_manual_skip(&mut self, forward: bool) {
+    if let Some(session) = self.native_spotify_shuffle.as_mut() {
+      session.pending_manual_skip = Some(forward);
+    }
+  }
+
+  /// Keep the shuffle session's index in step with what Spirc is actually
+  /// playing (called from `PlayerEvent::TrackChanged` with librespot's base62
+  /// track id). Also detects a completed repeat-all lap (last track wrapping
+  /// back to the first) and dispatches a fresh lap reshuffle, matching
+  /// Spotify's own per-lap reshuffle behavior.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn sync_native_shuffle_index(&mut self, playing_base62_id: &str) {
+    // While a queued track owns playback the session is suspended; a queued
+    // track that also appears in the playlist must not move the session index.
+    if self.queue_owns_playback() {
+      return;
+    }
+    // Repeat-one replays the current track in place (no reload), so an *auto*
+    // TrackChanged for it must keep the index on the current occurrence — but a
+    // *manual* skip (below) advances even under repeat-one.
+    let repeat_one = self.native_shuffle_repeat_mode() == crate::infra::queue::RepeatMode::Track;
+    let lap_wrapped = {
+      let Some(session) = self.native_spotify_shuffle.as_mut() else {
+        return;
+      };
+      let len = session.order.len();
+      if len == 0 {
+        return;
+      }
+      let prev = session.index.min(len - 1);
+      // A reload we just issued (`playing_track = Index(k)`) makes Spirc emit a
+      // TrackChanged for `order[k]`; confirm that index rather than treating it
+      // as a forward advance (which would mis-map a duplicate id to a later
+      // copy). A reload is never a lap wrap. This is checked before the skip
+      // logic even when a manual skip is also pending: Spirc emits the reload's
+      // event before the skip's, so confirming it here and leaving the skip flag
+      // for the skip's own (next) event keeps both in order.
+      //
+      // Residual, intentionally unhandled: a reload's confirmation event and a
+      // manual-skip event to an *adjacent duplicate* of the reloaded track are
+      // indistinguishable by track id, and whether Spirc emits one event or two
+      // is an internal timing race it does not expose. The mis-mapping is a
+      // wrong occurrence of the *same* track, negligible in practice (a human
+      // skip lands well after the reload event) and self-correcting on the next
+      // non-duplicate transition — so it is not worth sub-event bookkeeping.
+      if let Some(k) = session.pending_reload_index.take() {
+        if k < len && uri_matches_base62_id(&session.order[k], playing_base62_id) {
+          session.index = k;
+          return;
+        }
+      }
+      // A manual skip carries its direction and always advances (even under
+      // repeat-one); otherwise an auto replay stays put under repeat-one and a
+      // normal auto-advance moves forward.
+      let step = match session.pending_manual_skip.take() {
+        Some(true) => ShuffleStep::Forward,
+        Some(false) => ShuffleStep::Backward,
+        None if repeat_one => ShuffleStep::Stay,
+        None => ShuffleStep::Forward,
+      };
+      let Some(new_index) = shuffle_advance_index(&session.order, prev, playing_base62_id, step)
+      else {
+        return;
+      };
+      session.index = new_index;
+      session.shuffled && len > 1 && prev == len - 1 && new_index == 0
+    };
+    if lap_wrapped && self.native_shuffle_repeat_mode() == crate::infra::queue::RepeatMode::Context
+    {
+      self.dispatch(IoEvent::ReshuffleNativeShuffleLap);
     }
   }
 
@@ -4469,6 +4730,8 @@ impl App {
       // If less than 3 seconds in, go to previous track
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() {
+        // A manual Previous advances the shuffle session even under repeat-one.
+        self.mark_native_shuffle_manual_skip(false);
         if let Some(ref player) = self.streaming_player {
           player.activate();
           player.prev();
@@ -4514,6 +4777,8 @@ impl App {
     }
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
+      // A manual Previous advances the shuffle session even under repeat-one.
+      self.mark_native_shuffle_manual_skip(false);
       if let Some(ref player) = self.streaming_player {
         player.activate();
         // First prev() restarts the current track (if past Spotify's ~3s threshold).
@@ -4585,6 +4850,8 @@ impl App {
         self.dispatch(IoEvent::AdvanceNativeQueue);
         return;
       }
+      // A manual Next advances the shuffle session even under repeat-one.
+      self.mark_native_shuffle_manual_skip(true);
       if let Some(ref player) = self.streaming_player {
         player.activate();
         player.next();
@@ -5176,27 +5443,26 @@ impl App {
       let new_shuffle_state = !shuffle_state;
       info!("toggling shuffle: {}", new_shuffle_state);
 
-      // Use native streaming player for instant control (bypasses event channel latency)
+      // Native streaming: the network handler reorders the client-side shuffle
+      // session and reloads it (building one mid-playback when it can); it
+      // falls back to Spirc shuffle for contexts the session doesn't cover.
       #[cfg(feature = "streaming")]
-      if self.is_native_streaming_active_for_playback() {
-        if let Some(ref player) = self.streaming_player {
-          // Try to set shuffle on the native player
-          let _ = player.set_shuffle(new_shuffle_state);
+      if self.is_native_streaming_active_for_playback() && self.streaming_player.is_some() {
+        self.dispatch(IoEvent::ToggleNativeShuffleSession(new_shuffle_state));
 
-          // Update UI state immediately
-          if let Some(ctx) = &mut self.current_playback_context {
-            ctx.shuffle_state = new_shuffle_state;
-          }
-          self.user_config.behavior.shuffle_enabled = new_shuffle_state;
-          self.schedule_config_save();
-
-          // Notify MPRIS clients of the change
-          #[cfg(all(feature = "mpris", target_os = "linux"))]
-          if let Some(ref mpris) = self.mpris_manager {
-            mpris.set_shuffle(new_shuffle_state);
-          }
-          return;
+        // Update UI state immediately
+        if let Some(ctx) = &mut self.current_playback_context {
+          ctx.shuffle_state = new_shuffle_state;
         }
+        self.user_config.behavior.shuffle_enabled = new_shuffle_state;
+        self.schedule_config_save();
+
+        // Notify MPRIS clients of the change
+        #[cfg(all(feature = "mpris", target_os = "linux"))]
+        if let Some(ref mpris) = self.mpris_manager {
+          mpris.set_shuffle(new_shuffle_state);
+        }
+        return;
       }
 
       // Fallback to API-based shuffle for external devices
@@ -7107,6 +7373,85 @@ mod tests {
   use rspotify::prelude::Id;
   use std::collections::HashMap;
   use std::sync::mpsc::channel;
+
+  fn track_uris(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|id| format!("spotify:track:{id}")).collect()
+  }
+
+  #[test]
+  fn shuffle_advance_moves_onto_the_next_track_including_a_duplicate() {
+    let order = track_uris(&["a", "b", "b", "c"]);
+    // From "a" (0) the next "b" is the occurrence at index 1.
+    assert_eq!(
+      shuffle_advance_index(&order, 0, "b", ShuffleStep::Forward),
+      Some(1)
+    );
+    // Playing the *next* "b" (a sequential advance from index 1) must resolve
+    // to index 2, not stick on the current occurrence at index 1.
+    assert_eq!(
+      shuffle_advance_index(&order, 1, "b", ShuffleStep::Forward),
+      Some(2)
+    );
+    assert_eq!(
+      shuffle_advance_index(&order, 2, "c", ShuffleStep::Forward),
+      Some(3)
+    );
+  }
+
+  #[test]
+  fn shuffle_advance_wraps_and_reports_missing_ids() {
+    let order = track_uris(&["a", "b", "c"]);
+    // Last -> first wrap (repeat-all lap).
+    assert_eq!(
+      shuffle_advance_index(&order, 2, "a", ShuffleStep::Forward),
+      Some(0)
+    );
+    assert_eq!(
+      shuffle_advance_index(&order, 1, "z", ShuffleStep::Forward),
+      None
+    );
+    assert_eq!(
+      shuffle_advance_index(&[], 0, "a", ShuffleStep::Forward),
+      None
+    );
+  }
+
+  #[test]
+  fn shuffle_advance_stays_on_current_for_repeat_one() {
+    let order = track_uris(&["a", "b", "a", "c"]);
+    // Repeat-one replays index 0's "a" in place; it must not jump to the
+    // duplicate "a" at index 2.
+    assert_eq!(
+      shuffle_advance_index(&order, 0, "a", ShuffleStep::Stay),
+      Some(0)
+    );
+    // A unique track under repeat-one likewise keeps its index.
+    assert_eq!(
+      shuffle_advance_index(&order, 1, "b", ShuffleStep::Stay),
+      Some(1)
+    );
+  }
+
+  #[test]
+  fn shuffle_advance_backward_resolves_the_previous_duplicate() {
+    // Manual Previous through duplicates: from index 3 ("b"), Previous plays
+    // "a" and must resolve to index 2 (the previous occurrence), not index 0.
+    let order = track_uris(&["a", "b", "a", "b"]);
+    assert_eq!(
+      shuffle_advance_index(&order, 3, "a", ShuffleStep::Backward),
+      Some(2)
+    );
+    // Forward from the same spot would instead find the earlier copy.
+    assert_eq!(
+      shuffle_advance_index(&order, 3, "a", ShuffleStep::Forward),
+      Some(0)
+    );
+    // First -> last wrap going backward.
+    assert_eq!(
+      shuffle_advance_index(&track_uris(&["a", "b", "c"]), 0, "c", ShuffleStep::Backward),
+      Some(2)
+    );
+  }
 
   #[test]
   fn active_lyric_index_picks_last_started_line() {

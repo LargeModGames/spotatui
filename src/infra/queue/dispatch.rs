@@ -685,6 +685,20 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       }
     }
     #[cfg(feature = "streaming")]
+    Some(SuspendedContext::SpotifyShuffled { resume_index }) => {
+      // The network handler reloads the session's app-owned track list at the
+      // resume index — same order, no refetch, no reshuffle. Stop the decoded
+      // queue slot if one exists.
+      #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+      if let Some(player) = queue_player {
+        player.stop();
+      }
+      app
+        .lock()
+        .await
+        .dispatch(IoEvent::ResumeNativeShuffleSession(resume_index));
+    }
+    #[cfg(feature = "streaming")]
     Some(SuspendedContext::Spotify {
       context_uri,
       resume_track_uri,
