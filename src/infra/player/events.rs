@@ -67,7 +67,13 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       // pending window is over, so replay anything parked against it.
       let mut app = ctx.app.lock().await;
       app.native_backend_pending = false;
-      app.replay_pending_start_playback();
+      if app.pending_start_playback.is_some() {
+        app.replay_pending_start_playback();
+      } else if request.reselect_device {
+        if let Some(generation) = app.native_playback_restore_generation() {
+          app.dispatch(IoEvent::RestoreNativePlayback(generation));
+        }
+      }
       continue;
     }
 
@@ -105,22 +111,11 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
             }
           }
           app.streaming_player = Some(Arc::clone(&recovered_player));
-          app.set_status_message("Native streaming recovered.", 6);
-          if request.reselect_device {
-            app.dispatch(IoEvent::AutoSelectStreamingDevice(
-              ctx.client_config.streaming_device_name.clone(),
-              false,
-            ));
-          }
-          // Replay the request that triggered (or arrived during) recovery.
-          // Dispatched after AutoSelectStreamingDevice, so the serial pump
-          // completes the device selection before the playback starts.
           app.native_backend_pending = false;
-          app.replay_pending_start_playback();
         }
 
         spawn_player_event_handler(PlayerEventContext {
-          player: recovered_player,
+          player: Arc::clone(&recovered_player),
           app: Arc::clone(&ctx.app),
           shared_position: Arc::clone(&ctx.shared_position),
           shared_is_playing: Arc::clone(&ctx.shared_is_playing),
@@ -132,11 +127,34 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           #[cfg(all(feature = "windows-media", target_os = "windows"))]
           windows_media_manager: ctx.windows_media_manager.clone(),
         });
+
+        let mut app = ctx.app.lock().await;
+        if request.reselect_device {
+          app.dispatch(IoEvent::AutoSelectStreamingDevice(
+            ctx.client_config.streaming_device_name.clone(),
+            false,
+          ));
+        }
+        // A new explicit playback request wins over restoring older intent.
+        // Both paths are queued after device selection on the serial IoEvent pump.
+        if app.pending_start_playback.is_some() {
+          app.replay_pending_start_playback();
+        } else if request.reselect_device {
+          if let Some(generation) = app.native_playback_restore_generation() {
+            app.dispatch(IoEvent::RestoreNativePlayback(generation));
+          } else {
+            app.set_status_message("Native streaming recovered.", 6);
+          }
+        } else {
+          app.set_status_message("Native streaming recovered.", 6);
+        }
       }
       Err(e) => {
         info!("native streaming recovery failed: {}", e);
         let mut app = ctx.app.lock().await;
         app.native_backend_pending = false;
+        app.native_restore_pending = None;
+        app.native_load_watchdog = None;
         if app.pending_start_playback.take().is_some() {
           app.set_status_message(
             format!("Native recovery failed; playback request dropped: {}", e),
@@ -271,6 +289,7 @@ async fn handle_player_events(
         // Playback is actually working: reset the failure streak.
         consecutive_unavailable = 0;
         shared_is_playing.store(true, Ordering::Relaxed);
+        let track_uri = track_id.to_string();
 
         #[cfg(all(feature = "mpris", target_os = "linux"))]
         if let Some(ref mpris) = mpris_manager {
@@ -292,9 +311,16 @@ async fn handle_player_events(
           app_lock.native_is_playing = Some(true);
           // A real Playing event proves the session is alive: disarm the load
           // watchdog and drop any request parked for its potential recovery.
-          app_lock.native_load_watchdog = None;
+          let restore_confirmed =
+            app_lock.observe_native_playback_state(track_uri.clone(), position_ms, true);
+          if app_lock.native_restore_pending.is_none() {
+            app_lock.native_load_watchdog = None;
+          }
           app_lock.pending_start_playback = None;
           app_lock.native_backend_pending = false;
+          if restore_confirmed {
+            app_lock.set_status_message("Native playback restored.", 5);
+          }
         }
 
         if let Ok(mut app) = app.try_lock() {
@@ -307,9 +333,8 @@ async fn handle_player_events(
 
           app.instant_since_last_current_playback_poll = std::time::Instant::now();
 
-          let track_id_str = track_id.to_string();
-          if app.last_track_id.as_ref() != Some(&track_id_str) {
-            app.last_track_id = Some(track_id_str);
+          if app.last_track_id.as_ref() != Some(&track_uri) {
+            app.last_track_id = Some(track_uri);
             app.dispatch(IoEvent::GetCurrentPlayback);
           }
           if app.pending_stop_after_track {
@@ -323,10 +348,11 @@ async fn handle_player_events(
       }
       PlayerEvent::Paused {
         play_request_id: _,
-        track_id: _,
+        track_id,
         position_ms,
       } => {
         shared_is_playing.store(false, Ordering::Relaxed);
+        let track_uri = track_id.to_string();
 
         #[cfg(all(feature = "mpris", target_os = "linux"))]
         if let Some(ref mpris) = mpris_manager {
@@ -346,6 +372,14 @@ async fn handle_player_events(
         {
           let mut app_lock = app.lock().await;
           app_lock.native_is_playing = Some(false);
+          let restore_confirmed =
+            app_lock.observe_native_playback_state(track_uri, position_ms, false);
+          if app_lock.native_restore_pending.is_none() {
+            app_lock.native_load_watchdog = None;
+          }
+          if restore_confirmed {
+            app_lock.set_status_message("Native playback restored in paused state.", 5);
+          }
         }
 
         if let Ok(mut app) = app.try_lock() {
@@ -376,6 +410,7 @@ async fn handle_player_events(
         if let Ok(mut app) = app.try_lock() {
           app.song_progress_ms = position_ms as u128;
           app.seek_ms = None;
+          app.set_native_recovery_position(position_ms);
 
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.progress = Some(TimeDelta::milliseconds(position_ms as i64));
@@ -442,7 +477,9 @@ async fn handle_player_events(
         let mut app = app.lock().await;
         // A TrackChanged proves the session is processing loads: disarm the
         // zombie-session watchdog.
-        app.native_load_watchdog = None;
+        if app.native_restore_pending.is_none() {
+          app.native_load_watchdog = None;
+        }
         app.pending_start_playback = None;
         app.native_backend_pending = false;
         app.native_track_info = Some(app::NativeTrackInfo {
@@ -455,6 +492,7 @@ async fn handle_player_events(
 
         app.song_progress_ms = 0;
         let playing_id = audio_item.track_id.to_string();
+        app.observe_native_track_changed(playing_id.clone(), kind);
         app.last_track_id = Some(playing_id.clone());
         app.instant_since_last_current_playback_poll = std::time::Instant::now();
         app.dispatch(IoEvent::GetCurrentPlayback);
@@ -522,10 +560,8 @@ async fn handle_player_events(
 
         // Full `lock().await`, not `try_lock`: this arm decides whether the
         // native queue takes over, and a dropped decision here strands the
-        // queue (nothing advances, nothing continues). The render loop holds
-        // the app mutex a large fraction of the time, so a single try_lock
-        // attempt loses this race routinely.
-        {
+        // queue (nothing advances, nothing continues).
+        let should_ensure_playback = {
           let mut app = app.lock().await;
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
@@ -535,22 +571,27 @@ async fn handle_player_events(
           app.native_track_info = None;
           if app.user_config.behavior.stop_after_current_track {
             app.pending_stop_after_track = true;
-          }
-        }
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        {
-          let mut app = app.lock().await;
-          if !app.user_config.behavior.stop_after_current_track {
+            false
+          } else {
             // The native queue takes priority: a queued Spotify track that just
             // ended advances the queue; a context track that ended while items
-            // wait suspends the context (preempting Spirc's self-advance) and
-            // hands off to the queue. Only when neither applies do we fall back
-            // to the normal continue-playback path.
-            if !app.handle_native_spotify_track_end() {
-              app.dispatch(IoEvent::EnsurePlaybackContinues(track_id.to_string()));
-            }
+            // wait suspends the context and hands off to the queue.
+            !app.handle_native_spotify_track_end()
           }
+        };
+
+        if should_ensure_playback {
+          let app = Arc::clone(&app);
+          let previous_track_id = track_id.to_string();
+          tokio::spawn(async move {
+            // Keep the event consumer free so Loading/TrackChanged can prove a
+            // healthy self-advance before the fallback runs.
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            app
+              .lock()
+              .await
+              .dispatch(IoEvent::EnsurePlaybackContinues(previous_track_id));
+          });
         }
       }
       PlayerEvent::VolumeChanged { volume } => {
@@ -586,6 +627,9 @@ async fn handle_player_events(
         position_ms,
       } => {
         shared_position.store(position_ms as u64, Ordering::Relaxed);
+        if let Ok(mut app) = app.try_lock() {
+          app.set_native_recovery_position(position_ms);
+        }
 
         #[cfg(all(feature = "mpris", target_os = "linux"))]
         if let Some(ref mpris) = mpris_manager {
@@ -618,13 +662,14 @@ async fn handle_player_events(
           windows_media.set_stopped();
         }
 
+        let unexpected_disconnect = !player.is_connected();
         if let Some(request) = disconnect_streaming_player(
           &app,
           &player,
           &shared_position,
           &shared_is_playing,
           "Native streaming disconnected; attempting recovery.",
-          false,
+          unexpected_disconnect,
         )
         .await
         {
@@ -646,6 +691,7 @@ async fn handle_player_events(
           app.song_progress_ms = 0;
           app.native_track_info = None;
           app.native_load_watchdog = None;
+          app.native_restore_pending = None;
           app.pending_start_playback = None;
           app.native_backend_pending = false;
           if let Some(ref mut ctx) = app.current_playback_context {
@@ -682,12 +728,18 @@ async fn handle_player_events(
           );
         }
       }
-      PlayerEvent::Loading { .. } | PlayerEvent::Preloading { .. } => {
+      PlayerEvent::Loading {
+        track_id,
+        position_ms,
+        ..
+      } => {
         let mut app = app.lock().await;
+        app.observe_native_loading(track_id.to_string(), position_ms);
         if app.native_load_watchdog.is_some() {
           app.native_load_watchdog = Some(std::time::Instant::now());
         }
       }
+      PlayerEvent::Preloading { .. } => {}
       _ => {}
     }
   }
@@ -746,6 +798,15 @@ async fn disconnect_streaming_player(
   // playback to another device. At that point the API context can still be the
   // old native device, so only reselect native for non-Connect-disconnect paths.
   let reselect_device = allow_reselect_device && current_playback_matches_native(&app_lock, player);
+  if reselect_device {
+    let position_ms = u32::try_from(shared_position.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
+    let is_playing = shared_is_playing.load(Ordering::Relaxed);
+    app_lock.prepare_native_playback_recovery(position_ms, is_playing);
+  } else {
+    // An intentional Spotify Connect transfer must not be undone by a later
+    // native recovery attempt.
+    app_lock.clear_native_playback_recovery();
+  }
 
   app_lock.streaming_player = None;
   // Stop the old Connect session so it doesn't linger as a ghost device (#297).

@@ -2034,6 +2034,7 @@ async fn handle_mpris_events(
         #[cfg(feature = "streaming")]
         if let Some(ref player) = current_player {
           player.play();
+          app.lock().await.set_native_playback_intent(true);
           continue;
         }
         let mut app_lock = app.lock().await;
@@ -2043,6 +2044,7 @@ async fn handle_mpris_events(
         #[cfg(feature = "streaming")]
         if let Some(ref player) = current_player {
           player.pause();
+          app.lock().await.set_native_playback_intent(false);
           continue;
         }
         let mut app_lock = app.lock().await;
@@ -2072,6 +2074,7 @@ async fn handle_mpris_events(
         #[cfg(feature = "streaming")]
         if let Some(ref player) = current_player {
           player.stop();
+          app.lock().await.set_native_playback_intent(false);
           continue;
         }
         let mut app_lock = app.lock().await;
@@ -2088,6 +2091,7 @@ async fn handle_mpris_events(
           shared_position.store(new_position_ms as u64, Ordering::Relaxed);
           if let Ok(mut app_lock) = app.try_lock() {
             app_lock.song_progress_ms = new_position_ms as u128;
+            app_lock.set_native_recovery_position(new_position_ms);
           }
           mpris_manager.emit_seeked(new_position_ms as u64);
           continue;
@@ -2111,6 +2115,7 @@ async fn handle_mpris_events(
           shared_position.store(new_position_ms as u64, Ordering::Relaxed);
           if let Ok(mut app_lock) = app.try_lock() {
             app_lock.song_progress_ms = new_position_ms as u128;
+            app_lock.set_native_recovery_position(new_position_ms);
           }
           mpris_manager.emit_seeked(new_position_ms as u64);
           continue;
@@ -2130,6 +2135,7 @@ async fn handle_mpris_events(
           } else {
             mpris_manager.set_shuffle(shuffle);
             let mut app_lock = app.lock().await;
+            app_lock.set_native_recovery_shuffle(shuffle);
             if let Some(ref mut ctx) = app_lock.current_playback_context {
               ctx.shuffle_state = shuffle;
             }
@@ -2162,6 +2168,7 @@ async fn handle_mpris_events(
           } else {
             mpris_manager.set_loop_status(loop_status);
             let mut app_lock = app.lock().await;
+            app_lock.set_native_recovery_repeat(repeat_state);
             if let Some(ref mut ctx) = app_lock.current_playback_context {
               ctx.repeat_state = repeat_state;
             }

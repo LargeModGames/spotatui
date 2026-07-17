@@ -61,6 +61,10 @@ pub enum IoEvent {
   GetCurrentSavedTracks(Option<u32>),
   /// Context URI (album/artist/playlist), specific playable URIs, start offset.
   StartPlayback(Option<String>, Option<Vec<String>>, Option<usize>),
+  /// Restore a generation-guarded native playback snapshot after rebuilding
+  /// the librespot backend. This is a direct Spirc load and does not use the Web API.
+  #[cfg(feature = "streaming")]
+  RestoreNativePlayback(u64),
   UpdateSearchLimits(u32, u32),
   Seek(u32),
   NextTrack,
@@ -368,6 +372,10 @@ impl Network {
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
       return true;
     }
+    #[cfg(feature = "streaming")]
+    if matches!(io_event, IoEvent::RestoreNativePlayback(_)) {
+      return true;
+    }
     matches!(
       io_event,
       IoEvent::RefreshAuthentication
@@ -534,6 +542,10 @@ impl Network {
         let context = context_uri.as_deref().and_then(ids::play_context_id);
         let uris = uris.map(|v| ids::playable_ids(&v));
         self.start_playback(context, uris, offset).await;
+      }
+      #[cfg(feature = "streaming")]
+      IoEvent::RestoreNativePlayback(generation) => {
+        self.restore_native_playback(generation).await;
       }
       IoEvent::UpdateSearchLimits(large_search_limit, small_search_limit) => {
         self.large_search_limit = large_search_limit;

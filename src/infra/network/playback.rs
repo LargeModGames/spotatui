@@ -1,7 +1,7 @@
 use super::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::core::{
-  app::{App, NativePlaybackOrigin},
+  app::{App, NativePlaybackOrigin, NativePlaybackRecoverySnapshot},
   config::ClientConfig,
 };
 #[cfg(feature = "streaming")]
@@ -24,7 +24,9 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "streaming")]
-use librespot_connect::{LoadRequest, LoadRequestOptions, PlayingTrack};
+use librespot_connect::{
+  LoadContextOptions, LoadRequest, LoadRequestOptions, Options as LoadOptions, PlayingTrack,
+};
 #[cfg(feature = "streaming")]
 use std::sync::Arc;
 
@@ -44,6 +46,8 @@ pub trait PlaybackNetwork {
     uris: Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
   );
+  #[cfg(feature = "streaming")]
+  async fn restore_native_playback(&mut self, generation: u64);
   async fn pause_playback(&mut self);
   async fn next_track(&mut self);
   async fn previous_track(&mut self);
@@ -153,6 +157,10 @@ fn playable_item_name(item: &PlayableItem) -> Option<&str> {
   }
 }
 
+fn spotify_item_identity(value: &str) -> &str {
+  value.rsplit(':').next().unwrap_or(value)
+}
+
 #[cfg(feature = "streaming")]
 #[derive(Debug, PartialEq, Eq)]
 enum NativePlaybackRoute {
@@ -204,10 +212,6 @@ impl NativeIdleRecoveryState {
       self.player_instance = player_instance;
       self.phase = NativeIdleRecoveryPhase::Armed;
     }
-  }
-
-  fn observe_available_playback(&mut self) {
-    self.phase = NativeIdleRecoveryPhase::Armed;
   }
 
   fn should_attempt_idle_recovery(&mut self, now: Instant) -> bool {
@@ -731,6 +735,36 @@ fn native_load_request(
   }
 }
 
+#[cfg(feature = "streaming")]
+fn native_restore_load_request(snapshot: &NativePlaybackRecoverySnapshot) -> Option<LoadRequest> {
+  let mut options = LoadRequestOptions {
+    start_playing: snapshot.desired_playing,
+    seek_to: snapshot.restore_position_ms(),
+    context_options: Some(LoadContextOptions::Options(LoadOptions {
+      shuffle: snapshot.shuffle,
+      repeat: matches!(snapshot.repeat, RepeatState::Context | RepeatState::Track),
+      repeat_track: snapshot.repeat == RepeatState::Track,
+    })),
+    playing_track: snapshot
+      .expected_track_uri()
+      .map(|uri| PlayingTrack::Uri(uri.to_string())),
+  };
+
+  if options.playing_track.is_none() {
+    options.playing_track = snapshot
+      .offset
+      .and_then(|i| u32::try_from(i).ok())
+      .map(PlayingTrack::Index);
+  }
+
+  if let Some(context_uri) = snapshot.context_uri.clone() {
+    Some(LoadRequest::from_context_uri(context_uri, options))
+  } else {
+    let uris = snapshot.uris.clone()?;
+    (!uris.is_empty()).then(|| LoadRequest::from_tracks(uris, options))
+  }
+}
+
 impl PlaybackNetwork for Network {
   async fn get_current_playback(&mut self) {
     // When using native streaming, the Spotify API returns stale server-side state
@@ -782,8 +816,6 @@ impl PlaybackNetwork for Network {
     match context {
       #[allow(unused_mut)]
       Ok(Some(mut c)) => {
-        #[cfg(feature = "streaming")]
-        self.native_idle_recovery.observe_available_playback();
         app.instant_since_last_current_playback_poll = Instant::now();
 
         // Detect whether the native spotatui streaming device is the active Spotify device.
@@ -1208,6 +1240,24 @@ impl PlaybackNetwork for Network {
           &native_device_id,
           native_preference_update,
         );
+        if context_id.is_none() && uris.is_none() {
+          app.set_native_playback_intent(true);
+        } else {
+          let repeat = app
+            .current_playback_context
+            .as_ref()
+            .map_or(RepeatState::Off, |ctx| ctx.repeat_state);
+          app.record_native_playback_request(
+            context_id.as_ref().map(|context| context.uri()),
+            uris
+              .as_ref()
+              .map(|items| items.iter().map(|item| item.uri()).collect()),
+            offset,
+            true,
+            desired_shuffle_state,
+            repeat,
+          );
+        }
       }
       let native_route = resolve_native_playback_route(self, &context_id).await;
 
@@ -1424,6 +1474,18 @@ impl PlaybackNetwork for Network {
                 } else {
                   let _ = player.set_shuffle(desired_shuffle_state);
                   let mut app = self.app.lock().await;
+                  let repeat = app
+                    .current_playback_context
+                    .as_ref()
+                    .map_or(RepeatState::Off, |ctx| ctx.repeat_state);
+                  app.record_native_playback_request(
+                    parked_context.clone(),
+                    parked_uris.clone(),
+                    offset,
+                    true,
+                    desired_shuffle_state,
+                    repeat,
+                  );
                   // Same zombie-session net as the direct load route.
                   app.park_start_playback(parked_context, parked_uris, offset);
                   app.native_load_watchdog = Some(Instant::now());
@@ -1495,6 +1557,79 @@ impl PlaybackNetwork for Network {
     }
   }
 
+  #[cfg(feature = "streaming")]
+  async fn restore_native_playback(&mut self, generation: u64) {
+    let (player, snapshot) = {
+      let mut app = self.app.lock().await;
+      if app.pending_start_playback.is_some() {
+        return;
+      }
+      let Some(player) = app
+        .streaming_player
+        .as_ref()
+        .filter(|player| player.is_connected())
+        .cloned()
+      else {
+        app.force_native_streaming_recovery(true);
+        return;
+      };
+      let Some(snapshot) = app.begin_native_playback_restore(generation) else {
+        return;
+      };
+      app.native_load_watchdog = Some(Instant::now());
+      app.set_status_message("Native connection restored; restoring playback.", 6);
+      (player, snapshot)
+    };
+
+    let Some(request) = native_restore_load_request(&snapshot) else {
+      let mut app = self.app.lock().await;
+      if app.native_playback_restore_generation() == Some(generation) {
+        app.native_restore_pending = None;
+        app.native_load_watchdog = None;
+        app.set_status_message(
+          "Native connection recovered, but there was no playback state to restore.",
+          8,
+        );
+      }
+      return;
+    };
+
+    info!(
+      "restoring native playback generation {} track {:?} position {} playing {}",
+      generation,
+      snapshot.expected_track_uri(),
+      snapshot.restore_position_ms(),
+      snapshot.desired_playing
+    );
+    player.activate();
+    if let Err(e) = player.load(request) {
+      warn!(
+        "failed to issue native playback restore generation {}: {}",
+        generation, e
+      );
+      let mut app = self.app.lock().await;
+      if app.native_playback_restore_generation() == Some(generation) {
+        app.native_restore_pending = None;
+        app.native_load_watchdog = None;
+        app.set_status_message("Native playback restore failed; reconnecting again.", 8);
+        app.force_native_streaming_recovery(true);
+      }
+      return;
+    }
+
+    let mut app = self.app.lock().await;
+    if app.native_playback_restore_generation() == Some(generation) {
+      app.is_streaming_active = true;
+      app.native_is_playing = Some(snapshot.desired_playing);
+      app.song_progress_ms = snapshot.restore_position_ms() as u128;
+      if let Some(ctx) = &mut app.current_playback_context {
+        ctx.is_playing = snapshot.desired_playing;
+        ctx.shuffle_state = snapshot.shuffle;
+        ctx.repeat_state = snapshot.repeat;
+      }
+    }
+  }
+
   async fn pause_playback(&mut self) {
     #[cfg(feature = "streaming")]
     {
@@ -1508,6 +1643,8 @@ impl PlaybackNetwork for Network {
       player.pause();
       // Update UI state immediately
       let mut app = self.app.lock().await;
+      app.set_native_playback_intent(false);
+      app.native_is_playing = Some(false);
       if let Some(ctx) = &mut app.current_playback_context {
         ctx.is_playing = false;
       }
@@ -1634,6 +1771,11 @@ impl PlaybackNetwork for Network {
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.seek(position_ms);
+      self
+        .app
+        .lock()
+        .await
+        .set_native_recovery_position(position_ms);
       return;
     }
 
@@ -1660,6 +1802,7 @@ impl PlaybackNetwork for Network {
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       let _ = player.set_shuffle(shuffle_state);
       let mut app = self.app.lock().await;
+      app.set_native_recovery_shuffle(shuffle_state);
       if let Some(ctx) = &mut app.current_playback_context {
         ctx.shuffle_state = shuffle_state;
       }
@@ -1697,6 +1840,7 @@ impl PlaybackNetwork for Network {
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       let _ = player.set_repeat(repeat_state);
       let mut app = self.app.lock().await;
+      app.set_native_recovery_repeat(repeat_state);
       if let Some(ctx) = &mut app.current_playback_context {
         ctx.repeat_state = repeat_state;
       }
@@ -1859,6 +2003,7 @@ impl PlaybackNetwork for Network {
         // If transferring away from native, update flag
         app.is_streaming_active = false;
         app.native_playback_origin = None;
+        app.clear_native_playback_recovery();
       }
     }
   }
@@ -1955,9 +2100,26 @@ impl PlaybackNetwork for Network {
 
   async fn ensure_playback_continues(&mut self, previous_track_id: String) {
     #[cfg(feature = "streaming")]
-    if is_native_streaming_active_for_playback(self).await {
-      // Native player handles queue automatically
-      return;
+    let native_active = is_native_streaming_active_for_playback(self).await;
+    #[cfg(feature = "streaming")]
+    if native_active {
+      let (transition_advanced, raw_next) = {
+        let app = self.app.lock().await;
+        (
+          app.native_transition_has_advanced(&previous_track_id),
+          app.native_raw_list_next_request(&previous_track_id),
+        )
+      };
+      if transition_advanced {
+        return;
+      }
+      if let Some(next) = raw_next {
+        let uris = next
+          .uris
+          .map(|items| crate::infra::network::ids::playable_ids(&items));
+        self.start_playback(None, uris, next.offset).await;
+        return;
+      }
     }
 
     // Check if we are paused/stopped
@@ -1967,25 +2129,48 @@ impl PlaybackNetwork for Network {
 
     if let Ok(Some(ctx)) = context {
       if !ctx.is_playing {
-        // If we are stopped but shouldn't be (e.g. track finished), try to skip to next
-        // Use a heuristic: if the current item is the SAME as the previous one and we are at 0:00,
-        // it might mean Spotify stopped. Or if we are just null.
-        if let Some(item) = ctx.item {
-          let current_id = match item {
-            PlayableItem::Track(t) => t.id.map(|id| id.id().to_string()),
-            PlayableItem::Episode(e) => Some(e.id.id().to_string()),
-            _ => None,
-          };
+        let current_id = ctx.item.as_ref().and_then(|item| match item {
+          PlayableItem::Track(t) => t.id.as_ref().map(|id| id.id().to_string()),
+          PlayableItem::Episode(e) => Some(e.id.id().to_string()),
+          _ => None,
+        });
+        let still_on_finished_track = current_id.as_deref().is_some_and(|current| {
+          spotify_item_identity(current) == spotify_item_identity(&previous_track_id)
+        }) && ctx
+          .progress
+          .map(|d: TimeDelta| d.num_milliseconds())
+          .unwrap_or(0)
+          == 0;
 
-          if current_id == Some(previous_track_id)
-            && ctx
-              .progress
-              .map(|d: TimeDelta| d.num_milliseconds())
-              .unwrap_or(0)
-              == 0
-          {
-            self.next_track().await;
+        if still_on_finished_track {
+          #[cfg(feature = "streaming")]
+          if native_active {
+            let native_device_id = self.app.lock().await.native_device_id.clone();
+            let Some(native_device_id) = native_device_id else {
+              let mut app = self.app.lock().await;
+              app.force_native_streaming_recovery(true);
+              return;
+            };
+            if let Err(e) = self
+              .spotify_api_request_json(
+                Method::POST,
+                "me/player/next",
+                &[("device_id", native_device_id)],
+                None,
+              )
+              .await
+            {
+              warn!("failed to advance stalled native playback via Web API: {e}");
+              self.app.lock().await.force_native_streaming_recovery(true);
+            }
+            return;
           }
+
+          self.next_track().await;
+        } else if current_id.is_some() {
+          // Spirc may already have selected the next item but left it paused.
+          // Resume that item instead of issuing another skip and losing a track.
+          self.start_playback(None, None, None).await;
         }
       }
     }
@@ -2183,6 +2368,38 @@ mod tests {
     assert_eq!(trimmed[offset.unwrap()].uri(), uris[149].uri());
   }
 
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn native_restore_request_preserves_paused_position_and_options() {
+    let snapshot = NativePlaybackRecoverySnapshot {
+      generation: 7,
+      context_uri: Some("spotify:playlist:context".to_string()),
+      uris: None,
+      offset: Some(3),
+      current_track_uri: Some("spotify:track:current".to_string()),
+      loading_track_uri: None,
+      position_ms: 42_000,
+      desired_playing: false,
+      shuffle: true,
+      repeat: RepeatState::Track,
+      recovery_attempts: 1,
+    };
+
+    let request = native_restore_load_request(&snapshot).unwrap();
+
+    assert!(!request.start_playing);
+    assert_eq!(request.seek_to, 42_000);
+    assert!(matches!(
+      request.playing_track.as_ref(),
+      Some(PlayingTrack::Uri(uri)) if uri == "spotify:track:current"
+    ));
+    assert!(matches!(
+      request.context_options.as_ref(),
+      Some(LoadContextOptions::Options(options))
+        if options.shuffle && options.repeat && options.repeat_track
+    ));
+  }
+
   #[test]
   fn api_playback_offset_uses_track_uri_for_context_playback() {
     let uris = vec![
@@ -2345,15 +2562,17 @@ mod tests {
 
   #[cfg(feature = "streaming")]
   #[test]
-  fn healthy_playback_rearms_idle_recovery() {
+  fn stale_api_playback_does_not_rearm_idle_recovery() {
     let mut recovery = NativeIdleRecoveryState::default();
     recovery.observe_player_instance(Some(1));
     let started_at = Instant::now();
 
     assert!(recovery.should_attempt_idle_recovery(started_at));
-    recovery.observe_available_playback();
-
-    assert!(recovery.should_attempt_idle_recovery(started_at + Duration::from_millis(1)));
+    assert!(recovery.should_attempt_idle_recovery(started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL));
+    recovery.observe_player_instance(Some(1));
+    assert!(
+      !recovery.should_attempt_idle_recovery(started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL * 2)
+    );
   }
 
   #[cfg(feature = "streaming")]
