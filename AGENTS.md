@@ -10,6 +10,11 @@ cargo run
 
 # Slim build — no librespot/audio; fastest iteration, used by CI
 cargo run --no-default-features --features telemetry
+
+# With the free alternative sources (Local/Subsonic/Radio/YouTube). These are NOT
+# in `default`, so a plain `cargo run` is Spotify-only; use the `all-sources` alias
+# (or list them individually) to exercise the first-run source picker and playback.
+cargo run --features all-sources
 ```
 
 ## CI Checks (run before opening a PR)
@@ -92,7 +97,7 @@ For `ScrollableResultPages<Page<T>>` caches specifically:
 
 ### Status messages
 
-Show feedback with `app.show_status_message(msg, ttl_ms)`. Do not write directly to `app.status_message`.
+Show feedback through the status-message helpers; never write `app.status_message` directly. In sync handlers/UI use `app.set_status_message(msg, ttl_secs)`; in the async network layer use `self.show_status_message(msg, ttl_secs)`. The TTL is in seconds.
 
 ### Dialog state cleanup
 
