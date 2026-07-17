@@ -3647,6 +3647,27 @@ impl App {
     }
   }
 
+  /// The Spotify URI of the track playing through the queue slot, when the slot
+  /// holds a native-streamed Spotify track. `None` for a decoded slot, an empty
+  /// slot, or a slot whose track carries no URI. This is the resolution target
+  /// for track-level actions (e.g. Like) while the slot owns playback: the
+  /// cached `current_playback_context` still names the suspended context's
+  /// track, so it must not be consulted.
+  pub(crate) fn queue_now_spotify_track_uri(&self) -> Option<String> {
+    #[cfg(feature = "streaming")]
+    {
+      match self.queue_now.as_ref()? {
+        #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+        QueueNowPlaying::Decoded(_) => None,
+        QueueNowPlaying::Spotify { track } => track.uri.clone(),
+      }
+    }
+    #[cfg(not(feature = "streaming"))]
+    {
+      None
+    }
+  }
+
   /// The queue slot's player when it is playing a *decoded* queued track (local /
   /// Subsonic / YouTube). `None` for a Spotify slot or an empty slot. Gated on
   /// exactly those three sources: they are the decoded ones a queue item can
