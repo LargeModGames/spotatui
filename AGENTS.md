@@ -25,6 +25,13 @@ cargo clippy --no-default-features --features telemetry -- -D warnings
 cargo test --no-default-features --features telemetry
 ```
 
+These slim commands are the *fast local gate*, not the full picture. GitHub Actions
+(`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` across a three-leg
+matrix — `default` (streaming + audio-viz), `all-sources` (the full release feature
+set from `cd.yml`), and `slim` — so `#[cfg(feature = "…")]` tests (e.g. `streaming`)
+that the slim command skips still run in CI. To reproduce a leg locally, run
+`cargo test` (default) or `cargo test --features all-sources`.
+
 ## Run a Single Test
 
 ```bash
