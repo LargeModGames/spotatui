@@ -3933,19 +3933,25 @@ impl App {
   /// Either field is `None` when the corresponding state is unknown; the resume
   /// handler degrades gracefully (context-only, or track-only, or "finished").
   #[cfg(feature = "streaming")]
-  pub(crate) fn suspend_native_spotify_context_for_queue(&mut self) {
+  pub(crate) fn suspend_native_spotify_context_for_queue(
+    &mut self,
+    cause: crate::infra::queue::SuspendCause,
+  ) {
     // A client-side shuffle session resumes by index into its app-owned order
     // (no context reload, no reshuffle) — the whole point of the session is
     // that a queue interruption cannot regenerate the remaining shuffle order.
     if let Some(session) = self.native_spotify_shuffle.as_ref() {
+      let generation = session.generation;
       let resume_index = crate::infra::queue::resume_index_after_queue(
         session.index,
         session.order.len(),
         self.native_shuffle_repeat_mode(),
-        crate::infra::queue::SuspendCause::AutoAdvance,
+        cause,
       );
-      self.queue_suspended =
-        Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index });
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::SpotifyShuffled {
+        resume_index,
+        generation,
+      });
       return;
     }
     let context_uri = self
@@ -3981,13 +3987,16 @@ impl App {
     // Mid-track semantics for a client-side shuffle session: resume the track
     // that was playing, at its position in the app-owned order.
     if let Some(session) = self.native_spotify_shuffle.as_ref() {
+      let generation = session.generation;
       let resume_index = if session.index < session.order.len() {
         Some(session.index)
       } else {
         None
       };
-      self.queue_suspended =
-        Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index });
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::SpotifyShuffled {
+        resume_index,
+        generation,
+      });
       if let Some(player) = self.streaming_player.as_ref() {
         player.pause();
       }
@@ -4192,7 +4201,7 @@ impl App {
       return true;
     }
     if !self.native_queue.is_empty() {
-      self.suspend_native_spotify_context_for_queue();
+      self.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::AutoAdvance);
       // Preempt Spirc: after a direct `player.load`, Spirc may try to advance to
       // the next context track on its own. Pausing first stops that before the
       // queue slot takes the sink.
@@ -4838,7 +4847,8 @@ impl App {
       // Spirc-advancing the context. (`queue_owns_playback` is already handled
       // above, so here the context, not a queued track, is playing.)
       if !self.native_queue.is_empty() {
-        self.suspend_native_spotify_context_for_queue();
+        self
+          .suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::ManualSkip);
         if let Some(player) = self.streaming_player.as_ref() {
           player.pause();
         }
@@ -7751,7 +7761,7 @@ mod tests {
       ],
     });
 
-    app.suspend_native_spotify_context_for_queue();
+    app.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::AutoAdvance);
 
     match app.queue_suspended {
       Some(SuspendedContext::Spotify {
@@ -7774,7 +7784,7 @@ mod tests {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
 
-    app.suspend_native_spotify_context_for_queue();
+    app.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::AutoAdvance);
 
     match app.queue_suspended {
       Some(SuspendedContext::Spotify {
@@ -7785,6 +7795,69 @@ mod tests {
         assert!(resume_track_uri.is_none());
       }
       other => panic!("expected a Spotify suspension, got {other:?}"),
+    }
+  }
+
+  /// A suspended shuffle resume is bound to its session's generation, and the
+  /// suspend cause is honored under repeat-one: an auto advance replays the
+  /// current track (keeps the repeat alive across the queue) while a manual Next
+  /// advances past it.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn suspend_native_shuffle_binds_generation_and_honors_cause() {
+    use crate::core::queue::SuspendedContext;
+    use crate::infra::queue::SuspendCause;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    // Repeat-one is the only mode where AutoAdvance and ManualSkip diverge.
+    let mut ctx = context_playing("spotify:playlist:ctx");
+    ctx.repeat_state = RepeatState::Track;
+    app.current_playback_context = Some(ctx);
+    let session = || NativeSpotifyShuffleSession {
+      order: vec![
+        "spotify:track:a".to_string(),
+        "spotify:track:b".to_string(),
+        "spotify:track:c".to_string(),
+      ],
+      original: Vec::new(),
+      index: 1,
+      shuffled: true,
+      fetch_complete: true,
+      generation: 42,
+      pending_reload_index: None,
+      pending_manual_skip: None,
+    };
+
+    // Auto advance under repeat-one replays the current index in place.
+    app.native_spotify_shuffle = Some(session());
+    app.suspend_native_spotify_context_for_queue(SuspendCause::AutoAdvance);
+    match app.queue_suspended {
+      Some(SuspendedContext::SpotifyShuffled {
+        resume_index,
+        generation,
+      }) => {
+        assert_eq!(
+          resume_index,
+          Some(1),
+          "auto advance replays the current track"
+        );
+        assert_eq!(generation, 42, "resume is bound to the session generation");
+      }
+      other => panic!("expected a shuffled suspension, got {other:?}"),
+    }
+
+    // A manual Next advances past the current track even under repeat-one.
+    app.native_spotify_shuffle = Some(session());
+    app.suspend_native_spotify_context_for_queue(SuspendCause::ManualSkip);
+    match app.queue_suspended {
+      Some(SuspendedContext::SpotifyShuffled { resume_index, .. }) => {
+        assert_eq!(
+          resume_index,
+          Some(2),
+          "manual skip advances past the current track"
+        );
+      }
+      other => panic!("expected a shuffled suspension, got {other:?}"),
     }
   }
 

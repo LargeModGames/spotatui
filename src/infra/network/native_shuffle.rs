@@ -595,11 +595,21 @@ impl Network {
   /// Handler for `IoEvent::ResumeNativeShuffleSession`: the native queue
   /// drained — reload the session's unchanged play order at the resume index.
   /// This is the path that used to reload (and reshuffle) the whole context.
-  pub(super) async fn resume_native_shuffle_session(&mut self, resume_index: Option<usize>) {
+  pub(super) async fn resume_native_shuffle_session(
+    &mut self,
+    resume_index: Option<usize>,
+    generation: u64,
+  ) {
     let action = {
       let mut guard = self.app.lock().await;
+      // The suspend snapshotted a specific session; a session replaced while the
+      // queue drained bumps the generation, so a stale resume must not touch it.
+      let session_matches = guard
+        .native_spotify_shuffle
+        .as_ref()
+        .is_some_and(|s| s.generation == generation);
       match resume_index {
-        Some(index) => {
+        Some(index) if session_matches => {
           let player = guard.streaming_player.clone();
           match guard.native_spotify_shuffle.as_mut() {
             Some(session) if index < session.order.len() => {
@@ -613,9 +623,21 @@ impl Network {
             }
           }
         }
+        Some(_) => {
+          // The stored index belongs to a session that is no longer active. If a
+          // newer session replaced it, leave that one playing untouched;
+          // otherwise the session is simply gone, so note the queue finished.
+          if guard.native_spotify_shuffle.is_none() {
+            guard.set_status_message("Queue finished", 3);
+          }
+          None
+        }
         None => {
-          // Session exhausted under repeat-off: nothing left to resume.
-          guard.clear_native_shuffle_session();
+          // Session exhausted under repeat-off: nothing left to resume. Only tear
+          // down the session we suspended — a newer one must be left running.
+          if session_matches {
+            guard.clear_native_shuffle_session();
+          }
           guard.set_status_message("Queue finished", 3);
           None
         }
@@ -779,7 +801,7 @@ async fn finish_full_context_fetch(
     // The resume point the suspend already computed (same-track handoff vs a
     // plain advance), captured so the fold can remap it rather than clobber it.
     let suspended_resume: Option<Option<usize>> = match &guard.queue_suspended {
-      Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index }) => {
+      Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index, .. }) => {
         Some(*resume_index)
       }
       _ => None,
@@ -907,7 +929,7 @@ async fn finish_full_context_fetch(
     // Re-point the suspended resume index into the folded-in order so the
     // queue drains back into the full context, not the partial one.
     if let Some(resume) = resume_update {
-      if let Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index }) =
+      if let Some(crate::core::queue::SuspendedContext::SpotifyShuffled { resume_index, .. }) =
         guard.queue_suspended.as_mut()
       {
         *resume_index = resume;

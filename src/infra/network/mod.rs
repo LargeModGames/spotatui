@@ -153,9 +153,12 @@ pub enum IoEvent {
   #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
   ReshuffleNativeShuffleLap,
   /// Resume the suspended shuffle session at the given index once the native
-  /// queue drains (`None` = session exhausted, finish instead).
+  /// queue drains (`None` = session exhausted, finish instead). The `u64` is the
+  /// session generation the resume was snapshotted from; the handler applies the
+  /// index only while the live session still matches, so a session replaced
+  /// mid-drain cannot inherit a stale index.
   #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
-  ResumeNativeShuffleSession(Option<usize>),
+  ResumeNativeShuffleSession(Option<usize>, u64),
   IncrementGlobalSongCount,
   FetchGlobalSongCount,
   FetchAnnouncements,
@@ -757,14 +760,16 @@ impl Network {
         self.reshuffle_native_shuffle_lap().await;
       }
       #[cfg(feature = "streaming")]
-      IoEvent::ResumeNativeShuffleSession(resume_index) => {
-        self.resume_native_shuffle_session(resume_index).await;
+      IoEvent::ResumeNativeShuffleSession(resume_index, generation) => {
+        self
+          .resume_native_shuffle_session(resume_index, generation)
+          .await;
       }
       // Only constructed under `streaming`; inert otherwise.
       #[cfg(not(feature = "streaming"))]
       IoEvent::ToggleNativeShuffleSession(_)
       | IoEvent::ReshuffleNativeShuffleLap
-      | IoEvent::ResumeNativeShuffleSession(_) => {}
+      | IoEvent::ResumeNativeShuffleSession(_, _) => {}
       IoEvent::IncrementGlobalSongCount => {
         self.increment_global_song_count().await;
       }

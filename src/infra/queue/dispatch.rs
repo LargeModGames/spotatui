@@ -685,7 +685,10 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       }
     }
     #[cfg(feature = "streaming")]
-    Some(SuspendedContext::SpotifyShuffled { resume_index }) => {
+    Some(SuspendedContext::SpotifyShuffled {
+      resume_index,
+      generation,
+    }) => {
       // The network handler reloads the session's app-owned track list at the
       // resume index — same order, no refetch, no reshuffle. Stop the decoded
       // queue slot if one exists.
@@ -696,7 +699,10 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       app
         .lock()
         .await
-        .dispatch(IoEvent::ResumeNativeShuffleSession(resume_index));
+        .dispatch(IoEvent::ResumeNativeShuffleSession(
+          resume_index,
+          generation,
+        ));
     }
     #[cfg(feature = "streaming")]
     Some(SuspendedContext::Spotify {
@@ -923,6 +929,21 @@ mod tests {
     )))
   }
 
+  /// Like [`test_app`] but keeps the receiver so a test can inspect the events
+  /// the drain path dispatches.
+  #[cfg(feature = "streaming")]
+  fn test_app_with_rx() -> (Arc<Mutex<App>>, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    (
+      Arc::new(Mutex::new(App::new(
+        tx,
+        UserConfig::new(),
+        Some(SystemTime::now()),
+      ))),
+      rx,
+    )
+  }
+
   /// A queued item whose source feature is off in this build must be skipped
   /// with an actionable status message — never panic, never stall the queue.
   /// In the slim CI build every alternative source is unavailable, so a
@@ -1024,6 +1045,57 @@ mod tests {
     let guard = app.lock().await;
     assert!(!guard.queue_owns_playback());
     assert!(guard.queue_suspended.is_none());
+  }
+
+  /// When the queue drains over a suspended shuffle session, the resume forwards
+  /// both the snapshotted index *and* the session generation, so the handler can
+  /// preserve the existing shuffle order (reloading it in place at that index)
+  /// while rejecting a resume whose session was replaced mid-drain.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn resume_shuffled_forwards_index_and_generation() {
+    use crate::core::queue::SuspendedContext;
+    let (app, rx) = test_app_with_rx();
+    app.lock().await.queue_suspended = Some(SuspendedContext::SpotifyShuffled {
+      resume_index: Some(2),
+      generation: 7,
+    });
+
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+
+    assert!(
+      matches!(
+        rx.try_recv(),
+        Ok(IoEvent::ResumeNativeShuffleSession(Some(2), 7))
+      ),
+      "the drain must forward the resume index and its session generation"
+    );
+    assert!(app.lock().await.queue_suspended.is_none());
+  }
+
+  /// An exhausted shuffle session (`resume_index == None`) still forwards its
+  /// generation, so the handler finishes the *right* session and leaves a newer
+  /// one running.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn resume_exhausted_shuffled_forwards_none_and_generation() {
+    use crate::core::queue::SuspendedContext;
+    let (app, rx) = test_app_with_rx();
+    app.lock().await.queue_suspended = Some(SuspendedContext::SpotifyShuffled {
+      resume_index: None,
+      generation: 4,
+    });
+
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+
+    assert!(
+      matches!(
+        rx.try_recv(),
+        Ok(IoEvent::ResumeNativeShuffleSession(None, 4))
+      ),
+      "an exhausted session still forwards its generation"
+    );
+    assert!(app.lock().await.queue_suspended.is_none());
   }
 
   /// A live end-to-end queue test: browse a Subsonic playlist, start it, queue a
