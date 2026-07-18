@@ -762,9 +762,8 @@ async fn disconnect_streaming_player(
   // Spotify Connect sends SessionDisconnected when the user intentionally moves
   // playback to another device. At that point the API context can still be the
   // old native device, so only reselect native for non-Connect-disconnect paths.
-  let playback_matches_native = current_playback_matches_native(&app_lock, player);
-  let reselect_device = allow_reselect_device && playback_matches_native;
-  let resume_playback = playback_matches_native && shared_is_playing.load(Ordering::Relaxed);
+  let reselect_device = allow_reselect_device && current_playback_matches_native(&app_lock, player);
+  let resume_playback = reselect_device && shared_is_playing.load(Ordering::Relaxed);
 
   app_lock.streaming_player = None;
   // Stop the old Connect session so it doesn't linger as a ghost device (#297).
