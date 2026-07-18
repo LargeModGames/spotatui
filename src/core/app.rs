@@ -2957,6 +2957,22 @@ impl App {
     snapshot.next_raw_list_request(previous_track_uri)
   }
 
+  /// True when native playback is a raw URI list (no context) that has no track
+  /// after `previous_track_uri`: the list ran out with repeat off. Ending here
+  /// is a legitimate stop, not a stall.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_raw_list_playback_exhausted(&self, previous_track_uri: &str) -> bool {
+    let Some(snapshot) = self.native_playback_recovery.as_ref() else {
+      return false;
+    };
+    snapshot.context_uri.is_none()
+      && snapshot.uris.as_ref().is_some_and(|uris| !uris.is_empty())
+      && !self.native_transition_has_advanced(previous_track_uri)
+      && self
+        .native_raw_list_next_request(previous_track_uri)
+        .is_none()
+  }
+
   #[cfg(feature = "streaming")]
   pub(crate) fn native_transition_has_advanced(&self, previous_track_uri: &str) -> bool {
     let Some(snapshot) = self.native_playback_recovery.as_ref() else {
@@ -8357,6 +8373,64 @@ mod tests {
         .as_slice()
       )
     );
+  }
+
+  #[cfg(feature = "streaming")]
+  fn raw_list_app(offset: usize, repeat: RepeatState) -> App {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec![
+        "spotify:track:first".to_string(),
+        "spotify:track:second".to_string(),
+      ]),
+      Some(offset),
+      true,
+      false,
+      repeat,
+    );
+    app
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn raw_list_is_exhausted_after_the_last_track_with_repeat_off() {
+    let app = raw_list_app(1, RepeatState::Off);
+    assert!(app.native_raw_list_playback_exhausted("second"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn raw_list_is_not_exhausted_mid_list_or_while_repeating() {
+    let app = raw_list_app(0, RepeatState::Off);
+    assert!(!app.native_raw_list_playback_exhausted("first"));
+
+    let app = raw_list_app(1, RepeatState::Context);
+    assert!(!app.native_raw_list_playback_exhausted("second"));
+
+    let app = raw_list_app(1, RepeatState::Track);
+    assert!(!app.native_raw_list_playback_exhausted("second"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn raw_list_is_not_exhausted_for_context_playback_or_advanced_transitions() {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      Some("spotify:playlist:ctx".to_string()),
+      Some(vec!["spotify:track:first".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    assert!(!app.native_raw_list_playback_exhausted("first"));
+
+    // A transition onto another track means playback advanced; the list is in
+    // use, not exhausted.
+    let mut app = raw_list_app(1, RepeatState::Off);
+    app.observe_native_loading("spotify:track:other".to_string(), 0);
+    assert!(!app.native_raw_list_playback_exhausted("second"));
   }
 
   #[allow(deprecated)]

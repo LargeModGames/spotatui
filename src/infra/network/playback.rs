@@ -2209,11 +2209,12 @@ impl PlaybackNetwork for Network {
     let native_active = is_native_streaming_active_for_playback(self).await;
     #[cfg(feature = "streaming")]
     if native_active {
-      let (transition_advanced, raw_next) = {
+      let (transition_advanced, raw_next, raw_list_exhausted) = {
         let app = self.app.lock().await;
         (
           app.native_transition_has_advanced(&previous_track_id),
           app.native_raw_list_next_request(&previous_track_id),
+          app.native_raw_list_playback_exhausted(&previous_track_id),
         )
       };
       if transition_advanced {
@@ -2224,6 +2225,15 @@ impl PlaybackNetwork for Network {
           .uris
           .map(|items| crate::infra::network::ids::playable_ids(&items));
         self.start_playback(None, uris, next.offset).await;
+        return;
+      }
+      if raw_list_exhausted {
+        // A raw URI list with repeat off has no track after the one that just
+        // ended, so stopping is the correct outcome. Record stopped intent so
+        // the progress watchdog does not read the silence as a stall and
+        // rebuild the backend, and so a later recovery cannot replay the
+        // final track.
+        self.app.lock().await.set_native_playback_intent(false);
         return;
       }
     }

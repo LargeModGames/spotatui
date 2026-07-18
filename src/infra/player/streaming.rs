@@ -169,11 +169,13 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
         Ok(saved) => saved,
         Err(error) => {
           warn!("Spirc task failed: {error}");
-          ctx
+          let mut router = ctx
             .command_router
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .mode = SpircCommandMode::Failed;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+          router.mode = SpircCommandMode::Failed;
+          router.deferred.clear();
+          drop(router);
           let _ = ctx
             .connection_state_tx
             .send(StreamingConnectionState::Failed { generation });
@@ -210,11 +212,13 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
 
     let Some(saved_state) = saved_state else {
       warn!("Spirc task exited without recoverable playback state");
-      ctx
+      let mut router = ctx
         .command_router
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .mode = SpircCommandMode::Failed;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      router.mode = SpircCommandMode::Failed;
+      router.deferred.clear();
+      drop(router);
       let _ = ctx
         .connection_state_tx
         .send(StreamingConnectionState::Failed { generation });
@@ -279,20 +283,33 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
     match reconnect_result {
       Ok(Ok((replacement_spirc, replacement_task))) => {
         {
-          let mut connection = ctx
-            .connection
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-          *connection = ActiveConnection {
-            spirc: replacement_spirc,
-            session: replacement_session,
-          };
-        }
-        {
           let mut router = ctx
             .command_router
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+          // shutdown() may have run while the reconnect was completing; it only
+          // reached the previous Spirc. Installing the replacement would revive
+          // the router and leak the new session as a ghost Connect device
+          // (#297), so tear it down instead. Holding the router lock for the
+          // install keeps shutdown() ordered before or after the whole swap.
+          if router.mode == SpircCommandMode::Shutdown {
+            drop(router);
+            let _ = replacement_spirc.shutdown();
+            replacement_session.shutdown();
+            // Drive the task so it processes the shutdown command and exits.
+            tokio::spawn(replacement_task);
+            return;
+          }
+          {
+            let mut connection = ctx
+              .connection
+              .write()
+              .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *connection = ActiveConnection {
+              spirc: replacement_spirc,
+              session: replacement_session,
+            };
+          }
           router.mode = SpircCommandMode::Connected;
           let commands = std::mem::take(&mut router.deferred);
           let connection = ctx
@@ -316,11 +333,13 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
       }
       Ok(Err(error)) => {
         replacement_session.shutdown();
-        ctx
+        let mut router = ctx
           .command_router
           .lock()
-          .unwrap_or_else(std::sync::PoisonError::into_inner)
-          .mode = SpircCommandMode::Failed;
+          .unwrap_or_else(std::sync::PoisonError::into_inner);
+        router.mode = SpircCommandMode::Failed;
+        router.deferred.clear();
+        drop(router);
         warn!(
           "Spotify access-point fast reconnect generation {} failed: {:?}",
           generation, error
@@ -332,11 +351,13 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
       }
       Err(_) => {
         replacement_session.shutdown();
-        ctx
+        let mut router = ctx
           .command_router
           .lock()
-          .unwrap_or_else(std::sync::PoisonError::into_inner)
-          .mode = SpircCommandMode::Failed;
+          .unwrap_or_else(std::sync::PoisonError::into_inner);
+        router.mode = SpircCommandMode::Failed;
+        router.deferred.clear();
+        drop(router);
         warn!(
           "Spotify access-point fast reconnect generation {} timed out after {}s",
           generation,

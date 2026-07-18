@@ -756,6 +756,11 @@ async fn handle_player_events(
           windows_media.set_stopped();
         }
 
+        // Recovery and queue continuation compare against the bare Web API
+        // id, while librespot formats this event as a full Spotify URI.
+        let ended_uri = track_id.to_string();
+        let previous_track_id = app::base62_id_of(&ended_uri).to_string();
+
         // Full `lock().await`, not `try_lock`: this arm decides whether the
         // native queue takes over, and a dropped decision here strands the
         // queue (nothing advances, nothing continues).
@@ -771,21 +776,28 @@ async fn handle_player_events(
             app.pending_stop_after_track = true;
             app.set_native_playback_intent(false);
             false
-          } else {
+          } else if app.handle_native_spotify_track_end() {
             // The native queue takes priority: a queued Spotify track that just
             // ended advances the queue; a context track that ended while items
             // wait suspends the context (preempting Spirc's self-advance) and
-            // hands off to the queue. Only when neither applies do we fall back
-            // to the normal continue-playback path.
-            !app.handle_native_spotify_track_end()
+            // hands off to the queue.
+            false
+          } else if app.native_raw_list_playback_exhausted(&previous_track_id) {
+            // The raw URI list ran out with repeat off: stopping here is
+            // legitimate, so record stopped intent instead of arming the
+            // watchdog. This must happen under this lock, before the watchdog
+            // could arm: the serial network pump that runs
+            // `ensure_playback_continues` can lag past the stall window.
+            app.set_native_playback_intent(false);
+            false
+          } else {
+            // Neither the queue nor list exhaustion applies: fall back to the
+            // normal continue-playback path.
+            true
           }
         };
 
         if should_ensure_playback {
-          // Recovery and queue continuation compare against the bare Web API
-          // id, while librespot formats this event as a full Spotify URI.
-          let ended_uri = track_id.to_string();
-          let previous_track_id = app::base62_id_of(&ended_uri).to_string();
           pending_end_of_track = Some(previous_track_id.clone());
           progress_watchdog_armed = true;
           last_progress_at = Instant::now();
