@@ -31,7 +31,7 @@ fn include_native_streaming_device(app: &crate::core::app::App, payload: &mut De
     return;
   };
 
-  if !player.is_connected() {
+  if !player.is_available() {
     return;
   }
 

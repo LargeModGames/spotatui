@@ -461,7 +461,7 @@ async fn current_streaming_player(
 async fn is_native_streaming_active_for_playback(network: &Network) -> bool {
   let app = network.app.lock().await;
   let streaming_player = app.streaming_player.clone();
-  let player_connected = streaming_player.as_ref().is_some_and(|p| p.is_connected());
+  let player_connected = streaming_player.as_ref().is_some_and(|p| p.is_available());
 
   if !player_connected {
     return false;
@@ -604,7 +604,7 @@ async fn should_activate_native_streaming_for_playback(network: &Network) -> boo
     return false;
   };
 
-  if !player.is_connected() {
+  if !player.is_available() {
     return false;
   }
 
@@ -776,14 +776,14 @@ impl PlaybackNetwork for Network {
     self.native_idle_recovery.observe_player_instance(
       streaming_player
         .as_ref()
-        .filter(|player| player.is_connected())
+        .filter(|player| player.is_available())
         .map(|player| Arc::as_ptr(player) as usize),
     );
     #[cfg(feature = "streaming")]
     // Check if native streaming is active by examining the pre-fetched player
     // (avoids redundant lock call from is_native_streaming_active)
     let local_state: Option<(Option<u8>, bool, rspotify::model::RepeatState, Option<bool>)> =
-      if streaming_player.as_ref().is_some_and(|p| p.is_connected()) {
+      if streaming_player.as_ref().is_some_and(|p| p.is_available()) {
         let app = self.app.lock().await;
         if let Some(ref ctx) = app.current_playback_context {
           let volume = streaming_player.as_ref().map(|p| p.get_volume());
@@ -1425,7 +1425,7 @@ impl PlaybackNetwork for Network {
         #[cfg(feature = "streaming")]
         if is_no_active_device_error(&e) {
           if let Some(player) = current_streaming_player(self).await {
-            if player.is_connected() {
+            if player.is_available() {
               let requested_origin =
                 requested_native_playback_origin(self, &context_id, &uris).await;
               let activation_time = Instant::now();

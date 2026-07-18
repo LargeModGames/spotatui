@@ -2507,7 +2507,7 @@ impl App {
       return false;
     };
 
-    if player.is_connected() {
+    if player.is_available() {
       return false;
     }
 
@@ -2883,7 +2883,10 @@ impl App {
     self.set_status_message("Native streaming disconnected; attempting recovery.", 8);
     if let Some(tx) = &self.streaming_recovery_tx {
       self.native_backend_pending = tx
-        .send(crate::infra::player::StreamingRecoveryRequest { reselect_device })
+        .send(crate::infra::player::StreamingRecoveryRequest {
+          reselect_device,
+          continue_after_track: None,
+        })
         .is_ok();
     } else {
       self.native_backend_pending = false;
@@ -3284,7 +3287,18 @@ impl App {
             .map_or(restore_attempts, |pending| pending.recovery_attempts),
         ) + 1,
       );
-      if self
+      let native_reconnecting = self
+        .streaming_player
+        .as_ref()
+        .is_some_and(|player| player.is_recovering());
+      if native_reconnecting {
+        // A command accepted during the bounded fast-reconnect window is
+        // intentionally deferred by StreamingPlayer. Start its response window
+        // after the replacement Spirc exists, not while it is still connecting.
+        if let Some(watchdog) = self.native_load_watchdog.as_mut() {
+          *watchdog = Instant::now();
+        }
+      } else if self
         .native_load_watchdog
         .is_some_and(|armed| armed.elapsed() >= watchdog_window)
       {
@@ -4015,16 +4029,18 @@ impl App {
   }
 
   /// Check if native streaming is the active playback device
-  /// Returns true only if the player is connected AND it's the currently active device
+  /// Returns true while the player is connected or reconnecting and it is the
+  /// currently active device.
   #[cfg(feature = "streaming")]
   fn is_native_streaming_active_for_playback(&self) -> bool {
-    // Check if player exists and is connected
-    let player_connected = self
+    // Keep routing controls to the native backend during its bounded in-place
+    // reconnect; StreamingPlayer queues Spirc-dependent commands in that window.
+    let player_available = self
       .streaming_player
       .as_ref()
-      .is_some_and(|p| p.is_connected());
+      .is_some_and(|p| p.is_available());
 
-    if !player_connected {
+    if !player_available {
       return false;
     }
 

@@ -318,13 +318,13 @@ async fn play_queued_youtube(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
 
 /// Play a queued Spotify track through the native streaming player via a direct
 /// `player.load` (no Spirc context), publishing a Spotify queue slot. Requires a
-/// connected streaming player; otherwise the item is skipped like any other
+/// available streaming player; otherwise the item is skipped like any other
 /// unplayable one. Any decoded audio is silenced first so librespot doesn't play
 /// over it.
 #[cfg(feature = "streaming")]
 async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) -> bool {
   let player = { app.lock().await.streaming_player.clone() };
-  let Some(player) = player.filter(|p| p.is_connected()) else {
+  let Some(player) = player.filter(|p| p.is_available()) else {
     set_status(
       app,
       format!(
