@@ -25,6 +25,13 @@ cargo clippy --no-default-features --features telemetry -- -D warnings
 cargo test --no-default-features --features telemetry
 ```
 
+These slim commands are the *fast local gate*, not the full picture. GitHub Actions
+(`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` across a three-leg
+matrix — `default` (streaming + audio-viz), `all-sources` (the full release feature
+set from `cd.yml`), and `slim` — so `#[cfg(feature = "…")]` tests (e.g. `streaming`)
+that the slim command skips still run in CI. To reproduce a leg locally, run
+`cargo test` (default) or `cargo test --features all-sources`.
+
 ## Run a Single Test
 
 ```bash
@@ -86,9 +93,18 @@ Call `app.dispatch(IoEvent::SomeVariant)` from a handler — never call async Sp
 
 Use `ScrollableResultPages<T>` (defined in `src/core/app.rs`) for any data that comes back page-by-page from the Spotify API.
 
+For `ScrollableResultPages<Page<T>>` caches specifically:
+- key and dedupe cached pages by `page.offset`, not by insertion order
+- preserve the active visible page by offset when inserting new cached pages
+- treat sparse caches as valid; next/previous page logic must target adjacent offsets, not cache index +/- 1
+- keep visible table state separate from cache state; background prefetch must not append directly into `track_table.tracks`
+- guard background prefetch with a generation/session value so stale tasks cannot write into a reloaded view
+- when a page is already cached, prefer rendering it synchronously from app state instead of routing through another async event
+- for playlist track tables, use `playlist_track_table_id` as the current table identity; `active_playlist_index` is sidebar selection state only
+
 ### Status messages
 
-Show feedback with `app.show_status_message(msg, ttl_ms)`. Do not write directly to `app.status_message`.
+Show feedback through the status-message helpers; never write `app.status_message` directly. In sync handlers/UI use `app.set_status_message(msg, ttl_secs)`; in the async network layer use `self.show_status_message(msg, ttl_secs)`. The TTL is in seconds.
 
 ### Dialog state cleanup
 
@@ -104,3 +120,9 @@ Always check `app.user_config.keys.<action>` instead of hard-coding key literals
 - `--no-default-features --features telemetry` is the minimal build used for CI and fast iteration.
 - Platform-specific audio backends (ALSA, PipeWire, PortAudio, Rodio) are gated behind their own features.
 - `cover-art` feature enables album art rendering via `ratatui-image`.
+
+### Native streaming playback
+
+- For native streaming (`spotatui` as the active playback device), URI-list playback without a Spotify context should stay on the direct native `player.load(...)` path in `src/infra/network/playback.rs`.
+- Do not reroute liked songs / saved-track playback on the active native device through Spotify Web API `start_uris_playback(..., device_id=native_device)` as a recovery strategy. That path regressed first-track startup in manual testing even when the UI showed playback starting.
+- If native playback behavior is being changed, verify it with the full `cargo run` build, not only the slim telemetry build.

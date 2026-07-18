@@ -515,8 +515,9 @@ async fn handle_player_events(
 
           app.instant_since_last_current_playback_poll = std::time::Instant::now();
 
-          if app.last_track_id.as_ref() != Some(&track_uri) {
-            app.last_track_id = Some(track_uri);
+          let track_id_str = app::base62_id_of(&track_uri).to_string();
+          if app.last_track_id.as_ref() != Some(&track_id_str) {
+            app.last_track_id = Some(track_id_str);
             app.dispatch(IoEvent::GetCurrentPlayback);
           }
           if app.pending_stop_after_track {
@@ -674,9 +675,17 @@ async fn handle_player_events(
         });
 
         app.song_progress_ms = 0;
-        let playing_id = audio_item.track_id.to_string();
-        app.observe_native_track_changed(playing_id.clone(), kind);
+        // librespot 0.8's `SpotifyUri` Display is the full `spotify:track:<id>`
+        // URI; app-side ids (shuffle index sync, the queue guard,
+        // `last_track_id`) are bare base62, so normalize at the event boundary.
+        // The restore observer keeps the full URI (it canonicalizes internally).
+        let playing_uri = audio_item.track_id.to_string();
+        app.observe_native_track_changed(playing_uri.clone(), kind);
+        let playing_id = app::base62_id_of(&playing_uri).to_string();
         app.last_track_id = Some(playing_id.clone());
+        // Keep the client-side shuffle session pointed at what Spirc actually
+        // plays (also detects a completed repeat-all lap for the reshuffle).
+        app.sync_native_shuffle_index(&playing_id);
         app.instant_since_last_current_playback_poll = std::time::Instant::now();
         app.dispatch(IoEvent::GetCurrentPlayback);
 
@@ -765,13 +774,18 @@ async fn handle_player_events(
           } else {
             // The native queue takes priority: a queued Spotify track that just
             // ended advances the queue; a context track that ended while items
-            // wait suspends the context and hands off to the queue.
+            // wait suspends the context (preempting Spirc's self-advance) and
+            // hands off to the queue. Only when neither applies do we fall back
+            // to the normal continue-playback path.
             !app.handle_native_spotify_track_end()
           }
         };
 
         if should_ensure_playback {
-          let previous_track_id = track_id.to_string();
+          // Recovery and queue continuation compare against the bare Web API
+          // id, while librespot formats this event as a full Spotify URI.
+          let ended_uri = track_id.to_string();
+          let previous_track_id = app::base62_id_of(&ended_uri).to_string();
           pending_end_of_track = Some(previous_track_id.clone());
           progress_watchdog_armed = true;
           last_progress_at = Instant::now();
@@ -1135,6 +1149,11 @@ async fn disconnect_streaming_player(
   app_lock.native_is_playing = Some(false);
   app_lock.native_track_info = None;
   app_lock.native_playback_origin = None;
+  // Clearing the session below bumps its generation, which would turn a
+  // shuffled queue suspension into a silent no-op at resume time; convert it
+  // to a context snapshot first (while the cached context is still around).
+  app_lock.convert_shuffled_suspension_to_context(None);
+  app_lock.clear_native_shuffle_session();
   app_lock.song_progress_ms = 0;
   app_lock.last_track_id = None;
   app_lock.last_device_activation = None;

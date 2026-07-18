@@ -19,7 +19,7 @@ use rspotify::model::{
 use rspotify::{prelude::*, AuthCodePkceSpotify};
 use serde_json::json;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "streaming")]
@@ -299,6 +299,34 @@ impl Network {
     Ok(all_results)
   }
 
+  /// Resolve liked state for bare track ids inline and merge it: the CLI's
+  /// synchronous path. The `IoEvent` handler defers to the detached worker
+  /// instead (it must not block the TUI's serial pump), which the CLI cannot
+  /// await for a result.
+  pub(crate) async fn resolve_liked_state_now(&mut self, ids: &[String]) {
+    let uris: Vec<String> = ids.iter().map(|id| format!("spotify:track:{id}")).collect();
+    match self.library_contains_uris(&uris).await {
+      Ok(is_saved_vec) => {
+        let mut app = self.app.lock().await;
+        for (i, id) in ids.iter().enumerate() {
+          match is_saved_vec.get(i) {
+            Some(true) => {
+              app.liked_song_ids_set.insert(id.clone());
+            }
+            Some(false) => {
+              app.liked_song_ids_set.remove(id);
+            }
+            None => {}
+          }
+        }
+      }
+      Err(e) => {
+        let mut app = self.app.lock().await;
+        app.set_status_message(format!("Could not check liked track state: {e}"), 5);
+      }
+    }
+  }
+
   async fn library_save_uris(&self, uris: &[String]) -> anyhow::Result<()> {
     if uris.is_empty() {
       return Ok(());
@@ -383,6 +411,82 @@ impl Network {
 /// Detached body of `fetch_all_playlist_tracks_and_sort`. On a page failure
 /// the error routes through `App::handle_error` exactly as the inline version
 /// did.
+/// Single detached worker draining [`App::liked_lookup_pending`] in 40-uri
+/// batches, merging each batch into `liked_song_ids_set` as it lands. Runs off
+/// the IoEvent pump: a big playlist's liked-state sweep is 8-15 batches at
+/// 1-2s each, which used to head-of-line-block playback controls (a
+/// skip-to-queued-track waited ~20s behind it, #386). One worker at a time
+/// (`liked_lookup_worker_running`), so rapid navigation coalesces into the
+/// deduped pending set instead of parallel request floods.
+async fn liked_lookup_worker_task(
+  spotify: AuthCodePkceSpotify,
+  app: Arc<Mutex<App>>,
+  token_cache_path: std::path::PathBuf,
+) {
+  const BATCH: usize = 40;
+  loop {
+    let (batch, epoch) = {
+      let mut guard = app.lock().await;
+      if guard.liked_lookup_pending.is_empty() {
+        guard.liked_lookup_worker_running = false;
+        return;
+      }
+      let batch: Vec<String> = guard
+        .liked_lookup_pending
+        .iter()
+        .take(BATCH)
+        .cloned()
+        .collect();
+      for id in &batch {
+        guard.liked_lookup_pending.remove(id);
+      }
+      (batch, guard.liked_state_epoch)
+    };
+    let uris: Vec<String> = batch
+      .iter()
+      .map(|id| format!("spotify:track:{id}"))
+      .collect();
+    let result = spotify_get_typed_compat_for_with_refresh::<Vec<bool>>(
+      &spotify,
+      "me/library/contains",
+      &[("uris", uris.join(","))],
+      &token_cache_path,
+      &app,
+    )
+    .await;
+    let mut guard = app.lock().await;
+    match result {
+      Ok(is_saved_vec) => {
+        if guard.liked_state_epoch != epoch {
+          // A local like/unlike landed while this read was in flight; the
+          // response may predate it, so re-read instead of applying it.
+          guard.liked_lookup_pending.extend(batch);
+          continue;
+        }
+        for (i, id) in batch.into_iter().enumerate() {
+          match is_saved_vec.get(i) {
+            Some(true) => {
+              guard.liked_song_ids_set.insert(id);
+            }
+            Some(false) => {
+              guard.liked_song_ids_set.remove(&id);
+            }
+            None => {}
+          }
+        }
+      }
+      Err(e) => {
+        // Stop rather than hammer a failing endpoint; the ids stay pending and
+        // the next dispatch restarts the worker.
+        guard.liked_lookup_pending.extend(batch);
+        guard.liked_lookup_worker_running = false;
+        guard.set_status_message(format!("Could not check liked track state: {e}"), 5);
+        return;
+      }
+    }
+  }
+}
+
 async fn fetch_all_playlist_tracks_and_sort_task(
   spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
@@ -1175,40 +1279,42 @@ impl LibraryNetwork for Network {
       } else {
         let mut app = self.app.lock().await;
         app.liked_song_ids_set.remove(id_str);
+        app.liked_state_epoch = app.liked_state_epoch.wrapping_add(1);
       }
     } else if let Err(e) = self.library_save_uris(&[uri]).await {
       self.handle_error(anyhow!(e)).await;
     } else {
       let mut app = self.app.lock().await;
       app.liked_song_ids_set.insert(id_str.to_string());
+      app.liked_state_epoch = app.liked_state_epoch.wrapping_add(1);
     }
   }
 
   async fn current_user_saved_tracks_contains(&mut self, ids: Vec<TrackId<'static>>) {
-    let uris: Vec<String> = ids
-      .iter()
-      .map(|id| format!("spotify:track:{}", id.id()))
-      .collect();
-
-    match self.library_contains_uris(&uris).await {
-      Ok(is_saved_vec) => {
-        let mut app = self.app.lock().await;
-        for (i, id) in ids.iter().enumerate() {
-          if let Some(is_liked) = is_saved_vec.get(i) {
-            if *is_liked {
-              app.liked_song_ids_set.insert(id.id().to_string());
-            } else if app.liked_song_ids_set.contains(id.id()) {
-              app.liked_song_ids_set.remove(id.id());
-            }
-          };
-        }
+    // Enqueue and let the single detached worker resolve: these lookups are
+    // UI garnish and must never head-of-line-block playback events on the
+    // serial pump (see `liked_lookup_worker_task`).
+    let spawn = {
+      let mut app = self.app.lock().await;
+      for id in &ids {
+        app.liked_lookup_pending.insert(id.id().to_string());
       }
-      Err(e) => {
-        let mut app = self.app.lock().await;
-        app.status_message = Some(format!("Could not check liked track state: {}", e));
-        app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(5));
+      if app.liked_lookup_pending.is_empty() || app.liked_lookup_worker_running {
+        false
+      } else {
+        app.liked_lookup_worker_running = true;
+        true
       }
+    };
+    if !spawn {
+      return;
     }
+    let spotify = self.spotify().clone();
+    let app = Arc::clone(&self.app);
+    let token_cache_path = self.token_cache_path.clone();
+    tokio::spawn(async move {
+      liked_lookup_worker_task(spotify, app, token_cache_path).await;
+    });
   }
 
   async fn fetch_all_playlist_tracks_and_sort(&mut self, playlist_id: PlaylistId<'static>) {

@@ -72,6 +72,26 @@ pub enum SuspendedContext {
     context_uri: Option<String>,
     resume_track_uri: Option<String>,
   },
+  /// A native-Spotify client-side shuffle session
+  /// ([`App::native_spotify_shuffle`](crate::core::app::App::native_spotify_shuffle)):
+  /// resumes by index into the session's app-owned play order, with no context
+  /// reload and no reshuffle. `generation` binds the resume to the session it was
+  /// snapshotted from, so a session replaced while the queue drains cannot
+  /// inherit a stale index (the resume handler applies the index only while the
+  /// live session's generation still matches).
+  #[cfg(feature = "streaming")]
+  SpotifyShuffled {
+    resume_index: Option<usize>,
+    generation: u64,
+    /// Context snapshot taken at suspension time (context uri + the mirror
+    /// queue's head), so this can be converted to a [`Self::Spotify`] resume
+    /// when the session it indexes into is invalidated while the queue plays
+    /// (disconnect recovery, failed context fetch). Captured at creation:
+    /// by conversion time `current_playback_context` may describe the queued
+    /// track instead of the suspended context.
+    context_uri: Option<String>,
+    resume_track_uri: Option<String>,
+  },
   #[cfg(feature = "local-files")]
   Local {
     resume_index: Option<usize>,

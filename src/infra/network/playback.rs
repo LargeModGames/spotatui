@@ -696,6 +696,76 @@ async fn resolve_native_playback_route(
   }
 }
 
+/// Start a context on the native device through the Web API (`me/player/play`
+/// with `device_id`), mirroring shuffle state. The direct spirc load is the
+/// primary route (#386); this covers a load the player rejected outright and
+/// the watchdog-recovery replay of a load that was accepted but silently
+/// failed to resolve its context.
+#[cfg(feature = "streaming")]
+async fn start_native_context_via_api(
+  network: &mut Network,
+  device_id: String,
+  context: PlayContextId<'static>,
+  uris: Option<&[PlayableId<'static>]>,
+  offset: Option<usize>,
+  desired_shuffle_state: bool,
+) {
+  let body = api_playback_body(Some(&context), uris, offset);
+  match network
+    .spotify_api_request_json(
+      Method::PUT,
+      "me/player/play",
+      &[("device_id", device_id.clone())],
+      body,
+    )
+    .await
+  {
+    Ok(_) => {
+      if let Err(e) = network
+        .spotify_api_request_json(
+          Method::PUT,
+          "me/player/shuffle",
+          &[
+            ("state", desired_shuffle_state.to_string()),
+            ("device_id", device_id),
+          ],
+          None,
+        )
+        .await
+      {
+        let mut app = network.app.lock().await;
+        app.handle_error(anyhow!(e));
+      }
+
+      let mut app = network.app.lock().await;
+      app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(6);
+      if let Some(ctx) = &mut app.current_playback_context {
+        ctx.is_playing = true;
+        ctx.shuffle_state = desired_shuffle_state;
+      }
+      app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
+      // Keep the recovery chain alive: if the API accepted the start but the
+      // native device never emits a player event, the watchdog fires again and
+      // the bounded attempt counter eventually drops the request with a
+      // message instead of leaving it parked forever.
+      app.park_start_playback(
+        Some(context.uri()),
+        uris.map(|list| list.iter().map(|u| u.uri()).collect()),
+        offset,
+      );
+      app.native_load_watchdog = Some(Instant::now());
+      app.dispatch(IoEvent::GetCurrentPlayback);
+    }
+    Err(e) => {
+      let mut app = network.app.lock().await;
+      // Both routes failed for this request; drop the parked copy so an
+      // unrelated later recovery can't replay it.
+      app.pending_start_playback = None;
+      app.handle_error(anyhow!("Failed to start native playback: {}", e));
+    }
+  }
+}
+
 #[cfg(feature = "streaming")]
 fn native_load_request(
   context_id: Option<PlayContextId<'static>>,
@@ -1165,6 +1235,14 @@ impl PlaybackNetwork for Network {
         .unwrap_or(app.user_config.behavior.shuffle_enabled)
     };
 
+    // Any explicit new playback target invalidates the app-owned shuffle
+    // session; the interception below re-creates one when it applies. A bare
+    // resume (no context, no uris) keeps the session.
+    #[cfg(feature = "streaming")]
+    if context_id.is_some() || uris.is_some() {
+      self.app.lock().await.clear_native_shuffle_session();
+    }
+
     // Check if we should use native streaming for playback
     #[cfg(feature = "streaming")]
     if request_native_streaming_recovery_if_disconnected(self).await {
@@ -1259,6 +1337,18 @@ impl PlaybackNetwork for Network {
           );
         }
       }
+      // Client-side shuffle: when shuffle is on and the target is a playlist,
+      // album, or Liked Songs, the app owns the play order (a pre-shuffled
+      // flat list loaded via `from_tracks`) instead of delegating shuffle to
+      // Spirc/Spotify — see `native_shuffle`.
+      if desired_shuffle_state
+        && self
+          .try_start_native_shuffled_playback(&player, &context_id, &uris, offset)
+          .await
+      {
+        return;
+      }
+
       let native_route = resolve_native_playback_route(self, &context_id).await;
 
       // For resume playback (no context, no uris)
@@ -1310,59 +1400,6 @@ impl PlaybackNetwork for Network {
         return;
       }
 
-      if let (NativePlaybackRoute::ContextApi { device_id }, Some(context)) =
-        (&native_route, context_id.clone())
-      {
-        info!(
-          "starting native playback via Spotify context route on device {}",
-          device_id
-        );
-        let body = api_playback_body(Some(&context), uris.as_deref(), offset);
-        match self
-          .spotify_api_request_json(
-            Method::PUT,
-            "me/player/play",
-            &[("device_id", device_id.clone())],
-            body,
-          )
-          .await
-        {
-          Ok(_) => {
-            if let Err(e) = self
-              .spotify_api_request_json(
-                Method::PUT,
-                "me/player/shuffle",
-                &[
-                  ("state", desired_shuffle_state.to_string()),
-                  ("device_id", device_id.clone()),
-                ],
-                None,
-              )
-              .await
-            {
-              let mut app = self.app.lock().await;
-              app.handle_error(anyhow!(e));
-            }
-
-            let mut app = self.app.lock().await;
-            app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(6);
-            if let Some(ctx) = &mut app.current_playback_context {
-              ctx.is_playing = true;
-              ctx.shuffle_state = desired_shuffle_state;
-            }
-            app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
-            app.dispatch(IoEvent::GetCurrentPlayback);
-            return;
-          }
-          Err(e) => {
-            info!(
-                "native context playback via Spotify API failed; falling back to direct native load: {}",
-                e
-              );
-          }
-        }
-      }
-
       // Keep the string form for the load watchdog: if the session turns out
       // to be a zombie (load accepted, no player event follows), recovery
       // replays this exact request.
@@ -1370,26 +1407,91 @@ impl PlaybackNetwork for Network {
       let parked_uris = uris
         .as_ref()
         .map(|list| list.iter().map(|u| u.uri()).collect::<Vec<_>>());
-      let Some(request) = native_load_request(context_id, uris, offset) else {
+
+      // Native context starts take the direct spirc load first
+      // (`from_context_uri`): context resolution happens inside librespot's
+      // connect task, so a slow or degraded Spotify session cannot stall the
+      // serial IoEvent pump the way a `me/player/play` round trip can (one
+      // stalled call blocks every queued playback command for the full
+      // timeout-and-retry cycle, #386). The watchdog covers silent failures;
+      // the Web API context route remains as fallback for a load the player
+      // rejects outright.
+      let api_fallback = match (&native_route, &context_id) {
+        (NativePlaybackRoute::ContextApi { device_id }, Some(context)) => {
+          Some((device_id.clone(), context.clone()))
+        }
+        _ => None,
+      };
+
+      // A watchdog-recovery replay means a direct load of this same request
+      // was already accepted once and failed silently (the context never
+      // resolved); take the Web API context route this time instead of
+      // looping through the same silent failure until the request is dropped.
+      let retry_via_api = {
+        let app = self.app.lock().await;
+        app.pending_start_playback.as_ref().is_some_and(|pending| {
+          pending.recovery_attempts > 0
+            && pending.context_uri == parked_context
+            && pending.uris == parked_uris
+            && pending.offset == offset
+        })
+      };
+      if retry_via_api {
+        if let Some((device_id, context)) = api_fallback.clone() {
+          info!(
+            "recovery replay: starting native playback via Spotify context route on device {device_id}"
+          );
+          start_native_context_via_api(
+            self,
+            device_id,
+            context,
+            uris.as_deref(),
+            offset,
+            desired_shuffle_state,
+          )
+          .await;
+          return;
+        }
+      }
+
+      let Some(request) = native_load_request(context_id, uris.clone(), offset) else {
         return;
       };
 
       info!("starting native playback via direct load route");
-      if let Err(e) = player.load(request) {
-        let mut app = self.app.lock().await;
-        app.handle_error(anyhow!("Failed to start native playback: {}", e));
-      } else {
-        let _ = player.set_shuffle(desired_shuffle_state);
-        // Optimistic UI update; the watchdog corrects it if no player event
-        // ever confirms the load (zombie session).
-        let mut app = self.app.lock().await;
-        app.park_start_playback(parked_context, parked_uris, offset);
-        app.native_load_watchdog = Some(Instant::now());
-        if let Some(ctx) = &mut app.current_playback_context {
-          ctx.is_playing = true;
-          ctx.shuffle_state = desired_shuffle_state;
+      match player.load(request) {
+        Ok(()) => {
+          let _ = player.set_shuffle(desired_shuffle_state);
+          // Optimistic UI update; the watchdog corrects it if no player event
+          // ever confirms the load (zombie session).
+          let mut app = self.app.lock().await;
+          app.park_start_playback(parked_context, parked_uris, offset);
+          app.native_load_watchdog = Some(Instant::now());
+          if let Some(ctx) = &mut app.current_playback_context {
+            ctx.is_playing = true;
+            ctx.shuffle_state = desired_shuffle_state;
+          }
+          app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
         }
-        app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
+        Err(load_err) => {
+          let Some((device_id, context)) = api_fallback else {
+            let mut app = self.app.lock().await;
+            app.handle_error(anyhow!("Failed to start native playback: {}", load_err));
+            return;
+          };
+          info!(
+            "direct native load failed ({load_err}); falling back to Spotify context route on device {device_id}"
+          );
+          start_native_context_via_api(
+            self,
+            device_id,
+            context,
+            uris.as_deref(),
+            offset,
+            desired_shuffle_state,
+          )
+          .await;
+        }
       }
       return;
     }
@@ -1933,6 +2035,10 @@ impl PlaybackNetwork for Network {
   }
 
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
+    // A device change moves playback off the session's `from_tracks` load;
+    // the app-owned shuffle order no longer describes what plays.
+    #[cfg(feature = "streaming")]
+    self.app.lock().await.clear_native_shuffle_session();
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = transfer_playback_backend(self, &device_id).await {
       let activation_time = Instant::now();

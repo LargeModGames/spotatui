@@ -23,13 +23,9 @@ impl CliApp {
   }
 
   async fn is_a_saved_track(&mut self, id: &str) -> bool {
-    // Update the liked_song_ids_set
-    self
-      .net
-      .handle_network_event(IoEvent::CurrentUserSavedTracksContains(
-        vec![id.to_string()],
-      ))
-      .await;
+    // The IoEvent handler defers to a detached worker (it must not block the
+    // TUI's serial pump); the CLI needs the answer before returning.
+    self.net.resolve_liked_state_now(&[id.to_string()]).await;
     self.net.app.lock().await.liked_song_ids_set.contains(id)
   }
 

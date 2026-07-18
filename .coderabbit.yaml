@@ -45,8 +45,10 @@ reviews:
 
     - path: "src/**/*.rs"
       instructions: |
-        User feedback goes through `app.show_status_message(msg, ttl_ms)`; never
-        assign to `app.status_message` directly.
+        User feedback goes through the status-message helpers, never by
+        assigning `app.status_message` directly: `app.set_status_message(msg,
+        ttl_secs)` in sync handlers/UI, or `self.show_status_message(msg,
+        ttl_secs)` in the async network layer. The TTL is in seconds.
 
         Code behind a feature flag (streaming, cover-art, local-files, subsonic,
         internet-radio, youtube, scripting, mpris, discord-rpc) must compile in
