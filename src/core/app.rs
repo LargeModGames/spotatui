@@ -4593,9 +4593,13 @@ impl App {
     }
 
     // Spotify queue playback has no item in `current_playback_context`; route
-    // the intended transport action using the librespot state instead.
+    // the intended transport action using the librespot state instead. Flip the
+    // state optimistically so rapid toggles alternate instead of both reading
+    // the stale pre-router value and dispatching the same action twice.
     if self.queue_now_is_spotify() {
-      if self.native_is_playing.unwrap_or(false) {
+      let is_playing = self.native_is_playing.unwrap_or(false);
+      self.native_is_playing = Some(!is_playing);
+      if is_playing {
         self.dispatch(IoEvent::PausePlayback);
       } else {
         self.dispatch(IoEvent::StartPlayback(None, None, None));
@@ -7978,6 +7982,17 @@ mod tests {
 
     assert!(app.queue_now_is_spotify());
     assert!(matches!(rx.recv().unwrap(), IoEvent::PausePlayback));
+    assert_eq!(app.native_is_playing, Some(false));
+
+    // A second toggle before the router echoes back the new state must read
+    // the optimistically flipped value and dispatch the opposite action.
+    app.toggle_playback();
+
+    assert!(matches!(
+      rx.recv().unwrap(),
+      IoEvent::StartPlayback(None, None, None)
+    ));
+    assert_eq!(app.native_is_playing, Some(true));
   }
 
   #[cfg(feature = "streaming")]
