@@ -367,16 +367,20 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
 struct RecoveringSink {
   inner: Option<Box<dyn audio_backend::Sink>>,
   make_sink: Box<dyn Fn() -> Box<dyn audio_backend::Sink>>,
+  error: Arc<std::sync::Mutex<Option<String>>>,
+  failed: bool,
 }
 
 impl RecoveringSink {
-  fn new<F>(make_sink: F) -> Self
+  fn new<F>(make_sink: F, error: Arc<std::sync::Mutex<Option<String>>>) -> Self
   where
     F: Fn() -> Box<dyn audio_backend::Sink> + 'static,
   {
     Self {
       inner: None,
       make_sink: Box::new(make_sink),
+      error,
+      failed: false,
     }
   }
 
@@ -448,7 +452,14 @@ impl RecoveringSink {
 
 impl audio_backend::Sink for RecoveringSink {
   fn start(&mut self) -> audio_backend::SinkResult<()> {
-    self.with_inner("start", |sink| sink.start())
+    self.failed = false;
+    if let Err(err) = self.with_inner("start", |sink| sink.start()) {
+      *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.to_string());
+      self.failed = true;
+    }
+    // A sink error must not invalidate librespot's player thread. Keep consuming
+    // packets silently so the TUI can surface the failure and remain usable.
+    Ok(())
   }
 
   fn stop(&mut self) -> audio_backend::SinkResult<()> {
@@ -467,7 +478,14 @@ impl audio_backend::Sink for RecoveringSink {
     packet: AudioPacket,
     converter: &mut Converter,
   ) -> audio_backend::SinkResult<()> {
-    self.with_inner("write", |sink| sink.write(packet, converter))
+    if self.failed {
+      return Ok(());
+    }
+    if let Err(err) = self.with_inner("write", |sink| sink.write(packet, converter)) {
+      *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.to_string());
+      self.failed = true;
+    }
+    Ok(())
   }
 }
 
@@ -676,6 +694,7 @@ pub struct StreamingPlayer {
   shutdown_tx: tokio::sync::watch::Sender<bool>,
   connection_state_tx: tokio::sync::watch::Sender<StreamingConnectionState>,
   connection_state_rx: tokio::sync::watch::Receiver<StreamingConnectionState>,
+  audio_backend_error: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[allow(dead_code)]
@@ -789,14 +808,17 @@ impl StreamingPlayer {
       })?;
 
     // Create player
+    let audio_backend_error = Arc::new(std::sync::Mutex::new(None));
+    let sink_error = Arc::clone(&audio_backend_error);
     let player = Player::new(
       player_config,
       session.clone(),
       mixer.get_soft_volume(),
       move || {
-        Box::new(RecoveringSink::new(move || {
-          backend(requested_device.clone(), AudioFormat::default())
-        }))
+        Box::new(RecoveringSink::new(
+          move || backend(requested_device.clone(), AudioFormat::default()),
+          Arc::clone(&sink_error),
+        ))
       },
     );
 
@@ -915,6 +937,7 @@ impl StreamingPlayer {
       shutdown_tx,
       connection_state_tx,
       connection_state_rx,
+      audio_backend_error,
     })
   }
 
@@ -983,6 +1006,14 @@ impl StreamingPlayer {
 
   pub fn connection_state(&self) -> StreamingConnectionState {
     *self.connection_state_rx.borrow()
+  }
+
+  pub fn take_audio_backend_error(&self) -> Option<String> {
+    self
+      .audio_backend_error
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .take()
   }
 
   /// Play a track by its Spotify URI (e.g., "spotify:track:xxxx")
