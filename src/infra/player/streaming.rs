@@ -62,7 +62,7 @@ enum DeferredPlayerCommand {
   RepeatTrack(bool),
   Activate,
   Transfer(Option<TransferRequest>),
-  DirectLoad(SpotifyUri),
+  DirectLoad(SpotifyUri, bool),
 }
 
 impl DeferredPlayerCommand {
@@ -94,8 +94,8 @@ impl DeferredPlayerCommand {
       Self::RepeatTrack(repeat) => spirc.repeat_track(repeat),
       Self::Activate => spirc.activate(),
       Self::Transfer(request) => spirc.transfer(request),
-      Self::DirectLoad(uri) => {
-        player.load(uri, true, 0);
+      Self::DirectLoad(uri, start_playing) => {
+        player.load(uri, start_playing, 0);
         Ok(())
       }
     }
@@ -998,10 +998,26 @@ impl StreamingPlayer {
     let spotify_uri =
       SpotifyUri::from_uri(uri).map_err(|e| anyhow!("Invalid Spotify URI '{}': {:?}", uri, e))?;
 
-    self.route_command(DeferredPlayerCommand::DirectLoad(spotify_uri))?;
+    self.route_command(DeferredPlayerCommand::DirectLoad(spotify_uri, true))?;
 
     let mut state = self.state.lock().await;
     state.is_playing = true;
+    state.track_id = Some(uri.to_string());
+    state.position_ms = 0;
+
+    Ok(())
+  }
+
+  /// Load a track by URI without starting playback. Used to restore a paused
+  /// queue slot after recovery so the user's pause survives the rebuild.
+  pub async fn load_uri_paused(&self, uri: &str) -> Result<()> {
+    let spotify_uri =
+      SpotifyUri::from_uri(uri).map_err(|e| anyhow!("Invalid Spotify URI '{}': {:?}", uri, e))?;
+
+    self.route_command(DeferredPlayerCommand::DirectLoad(spotify_uri, false))?;
+
+    let mut state = self.state.lock().await;
+    state.is_playing = false;
     state.track_id = Some(uri.to_string());
     state.position_ms = 0;
 

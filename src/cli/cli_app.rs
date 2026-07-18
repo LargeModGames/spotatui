@@ -23,6 +23,11 @@ impl CliApp {
   }
 
   async fn is_a_saved_track(&mut self, id: &str) -> Result<bool> {
+    // Tracks without an ID (e.g. local files) can't be saved; asking the API
+    // about `spotify:track:` would only fail the whole status output.
+    if id.is_empty() {
+      return Ok(false);
+    }
     // The IoEvent handler defers to a detached worker (it must not block the
     // TUI's serial pump); the CLI needs the answer before returning.
     self.net.resolve_liked_state_now(&[id.to_string()]).await?;

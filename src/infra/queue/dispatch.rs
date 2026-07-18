@@ -124,14 +124,22 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       if let Some(player) = { app.lock().await.streaming_player.clone() } {
         player.pause();
       }
-      app.lock().await.native_is_playing = Some(false);
+      let mut guard = app.lock().await;
+      guard.native_is_playing = Some(false);
+      // Teardown overwrites `native_is_playing`; the slot's own desired state
+      // must survive a full recovery so replay doesn't restart a paused track.
+      guard.queue_slot_desired_playing = false;
+      guard.set_native_playback_intent(false);
       Some(true)
     }
     IoEvent::StartPlayback(None, None, None) => {
       if let Some(player) = { app.lock().await.streaming_player.clone() } {
         player.play();
       }
-      app.lock().await.native_is_playing = Some(true);
+      let mut guard = app.lock().await;
+      guard.native_is_playing = Some(true);
+      guard.queue_slot_desired_playing = true;
+      guard.set_native_playback_intent(true);
       Some(true)
     }
     IoEvent::NextTrack => {
@@ -375,6 +383,8 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
     });
     // Fresh slot: reset the Spirc self-advance retry budget.
     guard.spotify_queue_guard_reloads = 0;
+    // A fresh slot always starts playing; pause/resume flip this afterwards.
+    guard.queue_slot_desired_playing = true;
   }
   player.activate();
   if let Err(e) = player.play_uri(uri).await {
@@ -388,6 +398,52 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
     guard.set_status_message(format!("\u{266a} {} (queue)", track.name), 4);
     preload_next_queued_spotify(&guard);
   }
+  true
+}
+
+/// Replay the currently-published Spotify queue slot on the streaming player.
+/// Used after a full native recovery: the slot's direct load may have been
+/// discarded with the replaced player, and for a queue playing over an idle
+/// app there is no snapshot-driven restore to ever start it again. Honors the
+/// slot's desired-playing state so a user's pause survives the rebuild.
+#[cfg(feature = "streaming")]
+pub async fn replay_published_spotify_slot(app: &Arc<Mutex<App>>) -> bool {
+  use crate::infra::queue::QueueNowPlaying;
+  let slot = {
+    let guard = app.lock().await;
+    match guard.queue_now.as_ref() {
+      Some(QueueNowPlaying::Spotify { track }) => track
+        .uri
+        .clone()
+        .map(|uri| (track.clone(), uri, guard.queue_slot_desired_playing)),
+      _ => None,
+    }
+  };
+  let Some((track, uri, desired_playing)) = slot else {
+    return false;
+  };
+  if desired_playing {
+    return play_queued_spotify(app, &track, &uri).await;
+  }
+  // The slot was paused when the backend was replaced: reload it without
+  // starting playback so resume works against a loaded track.
+  let player = {
+    app
+      .lock()
+      .await
+      .streaming_player
+      .clone()
+      .filter(|p| p.is_available())
+  };
+  let Some(player) = player else {
+    return false;
+  };
+  player.activate();
+  if let Err(e) = player.load_uri_paused(&uri).await {
+    set_status(app, format!("Cannot restore {}: {e}", track.name)).await;
+    return false;
+  }
+  app.lock().await.native_is_playing = Some(false);
   true
 }
 
@@ -1062,6 +1118,37 @@ mod tests {
     let guard = app.lock().await;
     assert!(!guard.queue_owns_playback());
     assert!(guard.queue_suspended.is_none());
+  }
+
+  /// Pause/resume of the Spotify queue slot must persist desired-playing state
+  /// that survives a backend teardown, so a recovery replay of the slot honors
+  /// a user's pause instead of restarting the track.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn spotify_slot_pause_and_resume_track_desired_playing() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_slot_desired_playing = true;
+    }
+
+    assert!(route_queue_event(&app, &IoEvent::PausePlayback).await);
+    {
+      let guard = app.lock().await;
+      assert!(!guard.queue_slot_desired_playing);
+      assert_eq!(guard.native_is_playing, Some(false));
+    }
+
+    assert!(route_queue_event(&app, &IoEvent::StartPlayback(None, None, None)).await);
+    {
+      let guard = app.lock().await;
+      assert!(guard.queue_slot_desired_playing);
+      assert_eq!(guard.native_is_playing, Some(true));
+    }
   }
 
   /// When the queue drains over a suspended shuffle session, the resume forwards

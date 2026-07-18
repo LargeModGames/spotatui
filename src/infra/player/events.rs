@@ -156,8 +156,15 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         }
         // A new explicit playback request wins over restoring older intent.
         // Both paths are queued after device selection on the serial IoEvent pump.
+        let mut replay_queue_slot = false;
         if app.pending_start_playback.is_some() {
           app.replay_pending_start_playback();
+        } else if app.queue_now_is_spotify() {
+          // The published queue slot outranks snapshot restore: its direct
+          // load was discarded with the replaced player, and for a queue
+          // playing over an idle app there is no snapshot whose TrackChanged
+          // would trigger the reload guard.
+          replay_queue_slot = true;
         } else if let Some(previous_track_id) = request.continue_after_track {
           if app.native_transition_has_advanced(&previous_track_id) {
             if let Some(generation) = app.native_playback_restore_generation() {
@@ -174,6 +181,12 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           }
         } else {
           app.set_status_message("Native streaming recovered.", 6);
+        }
+        drop(app);
+        if replay_queue_slot
+          && crate::infra::queue::dispatch::replay_published_spotify_slot(&ctx.app).await
+        {
+          info!("replayed published Spotify queue slot after native recovery");
         }
       }
       Err(e) => {
@@ -695,6 +708,7 @@ async fn handle_player_events(
         // (bounded). NOTE: pending the live experiment in the plan (Risk #1),
         // this mitigation is unverified without a real Spotify session.
         let reload_uri = app.spotify_queue_guard_reload_uri(&playing_id);
+        let slot_desired_playing = app.queue_slot_desired_playing;
         let end_of_track_transition_advanced = pending_end_of_track
           .as_deref()
           .is_some_and(|previous| app.native_transition_has_advanced(previous));
@@ -704,9 +718,7 @@ async fn handle_player_events(
         }
         if let Some(uri) = reload_uri {
           info!("spirc advanced off the queued track; reissuing {}", uri);
-          if let Err(e) = player.play_uri(&uri).await {
-            info!("failed to reissue queued Spotify track: {}", e);
-          }
+          reissue_published_queue_slot(&player, &uri, slot_desired_playing).await;
         }
       }
       PlayerEvent::Stopped { .. } => {
@@ -764,6 +776,7 @@ async fn handle_player_events(
         // Full `lock().await`, not `try_lock`: this arm decides whether the
         // native queue takes over, and a dropped decision here strands the
         // queue (nothing advances, nothing continues).
+        let mut reissue_queue_slot: Option<(String, bool)> = None;
         let should_ensure_playback = {
           let mut app = app.lock().await;
           if let Some(ref mut ctx) = app.current_playback_context {
@@ -775,6 +788,14 @@ async fn handle_player_events(
           if app.user_config.behavior.stop_after_current_track {
             app.pending_stop_after_track = true;
             app.set_native_playback_intent(false);
+            false
+          } else if let Some(uri) = app.spotify_queue_guard_reload_uri(&previous_track_id) {
+            // The published Spotify queue slot is not the track that just
+            // ended, so the slot never started (its direct load was deferred
+            // during an in-place reconnect and possibly discarded). Reissue it
+            // instead of letting the advance below consume the never-played
+            // item; the guard's reload budget bounds the retries.
+            reissue_queue_slot = Some((uri, app.queue_slot_desired_playing));
             false
           } else if app.handle_native_spotify_track_end() {
             // The native queue takes priority: a queued Spotify track that just
@@ -796,6 +817,14 @@ async fn handle_player_events(
             true
           }
         };
+
+        if let Some((uri, desired_playing)) = reissue_queue_slot {
+          info!(
+            "queue slot did not start before the previous track ended; reissuing {}",
+            uri
+          );
+          reissue_published_queue_slot(&player, &uri, desired_playing).await;
+        }
 
         if should_ensure_playback {
           pending_end_of_track = Some(previous_track_id.clone());
@@ -1008,6 +1037,24 @@ async fn handle_player_events(
 
 fn recovery_watchdog_should_escalate(desired_playing: bool, stalled_for: Duration) -> bool {
   desired_playing && stalled_for >= STALLED_PLAYBACK_RECOVERY_TIMEOUT
+}
+
+/// Reissue the published Spotify queue slot, honoring its desired-playing
+/// state: a slot the user paused is reloaded silently so a stale Spirc event
+/// cannot restart it.
+async fn reissue_published_queue_slot(
+  player: &Arc<StreamingPlayer>,
+  uri: &str,
+  desired_playing: bool,
+) {
+  let result = if desired_playing {
+    player.play_uri(uri).await
+  } else {
+    player.load_uri_paused(uri).await
+  };
+  if let Err(e) = result {
+    info!("failed to reissue queued Spotify track: {}", e);
+  }
 }
 
 fn unavailable_is_transport_related(

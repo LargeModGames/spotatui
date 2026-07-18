@@ -1391,6 +1391,12 @@ pub struct App {
   /// queue slot is published; capped so a genuinely-gone track can't loop.
   #[cfg(feature = "streaming")]
   pub spotify_queue_guard_reloads: u8,
+  /// Whether the published Spotify queue slot should be playing. Set on
+  /// publish, flipped by the slot's pause/resume transport arms. Unlike
+  /// `native_is_playing` this survives a backend teardown, so a recovery
+  /// replay of the slot can honor a user's pause.
+  #[cfg(feature = "streaming")]
+  pub queue_slot_desired_playing: bool,
   #[cfg(feature = "cover-art")]
   pub cover_art: crate::tui::cover_art::CoverArt,
   /// Status of the current track's cover art, driving the placeholder message.
@@ -1904,6 +1910,8 @@ impl Default for App {
       queue_now: None,
       #[cfg(feature = "streaming")]
       spotify_queue_guard_reloads: 0,
+      #[cfg(feature = "streaming")]
+      queue_slot_desired_playing: true,
       input: vec![],
       input_idx: 0,
       input_cursor_position: 0,
