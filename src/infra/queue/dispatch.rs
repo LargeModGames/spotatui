@@ -120,6 +120,20 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
     return None;
   }
   match event {
+    IoEvent::PausePlayback => {
+      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+        player.pause();
+      }
+      app.lock().await.native_is_playing = Some(false);
+      Some(true)
+    }
+    IoEvent::StartPlayback(None, None, None) => {
+      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+        player.play();
+      }
+      app.lock().await.native_is_playing = Some(true);
+      Some(true)
+    }
     IoEvent::NextTrack => {
       advance_native_queue(app).await;
       Some(true)
@@ -996,7 +1010,7 @@ mod tests {
 
   #[cfg(feature = "streaming")]
   #[tokio::test]
-  async fn bare_resume_does_not_clear_spotify_queue_slot() {
+  async fn spotify_queue_slot_consumes_transport_controls() {
     use crate::core::queue::SuspendedContext;
     use crate::infra::queue::QueueNowPlaying;
     let app = test_app();
@@ -1011,11 +1025,13 @@ mod tests {
       });
     }
 
-    assert!(!route_queue_event(&app, &IoEvent::StartPlayback(None, None, None)).await);
+    assert!(route_queue_event(&app, &IoEvent::PausePlayback).await);
+    assert!(route_queue_event(&app, &IoEvent::StartPlayback(None, None, None)).await);
 
     let guard = app.lock().await;
     assert!(guard.queue_now_is_spotify());
     assert!(guard.queue_suspended.is_some());
+    assert_eq!(guard.native_is_playing, Some(true));
   }
 
   #[cfg(feature = "streaming")]
