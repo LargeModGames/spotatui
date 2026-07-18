@@ -22,11 +22,11 @@ impl CliApp {
     Self { net, config }
   }
 
-  async fn is_a_saved_track(&mut self, id: &str) -> bool {
+  async fn is_a_saved_track(&mut self, id: &str) -> Result<bool> {
     // The IoEvent handler defers to a detached worker (it must not block the
     // TUI's serial pump); the CLI needs the answer before returning.
-    self.net.resolve_liked_state_now(&[id.to_string()]).await;
-    self.net.app.lock().await.liked_song_ids_set.contains(id)
+    self.net.resolve_liked_state_now(&[id.to_string()]).await?;
+    Ok(self.net.app.lock().await.liked_song_ids_set.contains(id))
   }
 
   pub fn format_output(&self, mut format: String, values: Vec<Format>) -> String {
@@ -367,14 +367,14 @@ impl CliApp {
         let id_string = id.id().to_string();
         // Want to like but is already liked -> do nothing
         // Want to like and is not liked yet -> like
-        if s && !self.is_a_saved_track(&id_string).await {
+        if s && !self.is_a_saved_track(&id_string).await? {
           self
             .net
             .handle_network_event(IoEvent::ToggleSaveTrack(id.uri()))
             .await;
         // Want to dislike but is already disliked -> do nothing
         // Want to dislike and is liked currently -> remove like
-        } else if !s && self.is_a_saved_track(&id_string).await {
+        } else if !s && self.is_a_saved_track(&id_string).await? {
           self
             .net
             .handle_network_event(IoEvent::ToggleSaveTrack(id.uri()))
@@ -438,7 +438,7 @@ impl CliApp {
         hs.push(Format::Flags((
           context.repeat_state,
           context.shuffle_state,
-          self.is_a_saved_track(&id).await,
+          self.is_a_saved_track(&id).await?,
         )));
         hs
       }

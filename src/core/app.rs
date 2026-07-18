@@ -1199,9 +1199,13 @@ pub struct PendingStartPlayback {
   pub recovery_attempts: u8,
 }
 
+/// Track identity for recovery matching: the bare id for `spotify:<kind>:<id>`
+/// URIs, the full string otherwise. Delegates to [`base62_id_of`] so
+/// `spotify:local:` URIs keep their full identity (their last segment is a
+/// duration shared across unrelated local tracks).
 #[cfg(feature = "streaming")]
 fn spotify_item_identity(value: &str) -> &str {
-  value.rsplit(':').next().unwrap_or(value)
+  base62_id_of(value)
 }
 
 #[cfg(feature = "streaming")]

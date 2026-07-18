@@ -302,29 +302,24 @@ impl Network {
   /// Resolve liked state for bare track ids inline and merge it: the CLI's
   /// synchronous path. The `IoEvent` handler defers to the detached worker
   /// instead (it must not block the TUI's serial pump), which the CLI cannot
-  /// await for a result.
-  pub(crate) async fn resolve_liked_state_now(&mut self, ids: &[String]) {
+  /// await for a result. Failures propagate so the CLI reports them instead
+  /// of acting on stale membership.
+  pub(crate) async fn resolve_liked_state_now(&mut self, ids: &[String]) -> anyhow::Result<()> {
     let uris: Vec<String> = ids.iter().map(|id| format!("spotify:track:{id}")).collect();
-    match self.library_contains_uris(&uris).await {
-      Ok(is_saved_vec) => {
-        let mut app = self.app.lock().await;
-        for (i, id) in ids.iter().enumerate() {
-          match is_saved_vec.get(i) {
-            Some(true) => {
-              app.liked_song_ids_set.insert(id.clone());
-            }
-            Some(false) => {
-              app.liked_song_ids_set.remove(id);
-            }
-            None => {}
-          }
+    let is_saved_vec = self.library_contains_uris(&uris).await?;
+    let mut app = self.app.lock().await;
+    for (i, id) in ids.iter().enumerate() {
+      match is_saved_vec.get(i) {
+        Some(true) => {
+          app.liked_song_ids_set.insert(id.clone());
         }
-      }
-      Err(e) => {
-        let mut app = self.app.lock().await;
-        app.set_status_message(format!("Could not check liked track state: {e}"), 5);
+        Some(false) => {
+          app.liked_song_ids_set.remove(id);
+        }
+        None => {}
       }
     }
+    Ok(())
   }
 
   async fn library_save_uris(&self, uris: &[String]) -> anyhow::Result<()> {
@@ -424,6 +419,8 @@ async fn liked_lookup_worker_task(
   token_cache_path: std::path::PathBuf,
 ) {
   const BATCH: usize = 40;
+  const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+  let mut consecutive_failures = 0u32;
   loop {
     let (batch, epoch) = {
       let mut guard = app.lock().await;
@@ -457,6 +454,7 @@ async fn liked_lookup_worker_task(
     let mut guard = app.lock().await;
     match result {
       Ok(is_saved_vec) => {
+        consecutive_failures = 0;
         if guard.liked_state_epoch != epoch {
           // A local like/unlike landed while this read was in flight; the
           // response may predate it, so re-read instead of applying it.
@@ -475,9 +473,21 @@ async fn liked_lookup_worker_task(
           }
         }
       }
+      Err(_) if consecutive_failures + 1 < MAX_CONSECUTIVE_FAILURES => {
+        // Transient failure: back off and retry from THIS worker, so ids
+        // enqueued while the request was in flight (which saw the running
+        // flag and did not spawn) are not stranded without a worker.
+        guard.liked_lookup_pending.extend(batch);
+        consecutive_failures += 1;
+        drop(guard);
+        tokio::time::sleep(std::time::Duration::from_secs(u64::from(
+          2 * consecutive_failures,
+        )))
+        .await;
+      }
       Err(e) => {
-        // Stop rather than hammer a failing endpoint; the ids stay pending and
-        // the next dispatch restarts the worker.
+        // Persistently failing: stop rather than hammer the endpoint. The ids
+        // stay pending and the next dispatch restarts the worker.
         guard.liked_lookup_pending.extend(batch);
         guard.liked_lookup_worker_running = false;
         guard.set_status_message(format!("Could not check liked track state: {e}"), 5);
