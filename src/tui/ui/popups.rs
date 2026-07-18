@@ -10,14 +10,15 @@ use ratatui::{
   Frame,
 };
 
-use super::help::get_help_docs;
+use super::help::get_filtered_help_docs;
 
-/// Formatted help rows are static per session except for terminal width and
-/// keybinding changes, so cache them instead of rebuilding ~80 owned Strings
-/// (plus per-cell char-count truncation) on every redraw while help is open.
+/// Formatted help rows are static between terminal-width, keybinding, or filter
+/// changes, so cache them instead of rebuilding ~80 owned Strings (plus
+/// per-cell char-count truncation) on every redraw while Help is open.
 struct HelpMenuCache {
   width: usize,
   keys: crate::core::user_config::KeyBindings,
+  filter: String,
   header: String,
   rows: Vec<String>,
 }
@@ -28,7 +29,7 @@ static HELP_MENU_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<HelpMenuCach
 fn build_help_rows(app: &App, total_width: usize) -> (String, Vec<String>) {
   // Create a one-column table to avoid flickering due to non-determinism when
   // resolving constraints on widths of table columns.
-  // Calculate column widths based on available terminal width
+  // Calculate column widths based on available terminal width.
   let col1_width = (total_width as f32 * 0.40) as usize;
   let col2_width = (total_width as f32 * 0.30) as usize;
   let col3_width = total_width.saturating_sub(col1_width + col2_width + 2);
@@ -59,7 +60,12 @@ fn build_help_rows(app: &App, total_width: usize) -> (String, Vec<String>) {
 
   let header = ["Description", "Event", "Context"];
   let header = format_row(header.iter().map(|s| s.to_string()).collect());
-  let rows = get_help_docs(app).into_iter().map(format_row).collect();
+  // Filter before formatting/truncating so narrow terminals do not make hidden
+  // parts of descriptions or contexts unsearchable.
+  let rows = get_filtered_help_docs(app)
+    .into_iter()
+    .map(format_row)
+    .collect();
   (header, rows)
 }
 
@@ -67,19 +73,24 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   let [area] = f
     .area()
     .layout(&Layout::vertical([Constraint::Percentage(100)]).margin(2));
+  let [table_area, filter_area] = area.layout(&Layout::vertical([
+    Constraint::Min(0),
+    Constraint::Length(1),
+  ]));
 
-  let total_width = area.width as usize;
+  let total_width = table_area.width as usize;
 
   let cache_slot = HELP_MENU_CACHE.get_or_init(|| std::sync::Mutex::new(None));
   let mut cache = cache_slot.lock().unwrap();
-  let stale = cache
-    .as_ref()
-    .is_none_or(|c| c.width != total_width || c.keys != app.user_config.keys);
+  let stale = cache.as_ref().is_none_or(|c| {
+    c.width != total_width || c.keys != app.user_config.keys || c.filter != app.help_filter
+  });
   if stale {
     let (header, rows) = build_help_rows(app, total_width);
     *cache = Some(HelpMenuCache {
       width: total_width,
       keys: app.user_config.keys.clone(),
+      filter: app.help_filter.clone(),
       header,
       rows,
     });
@@ -88,13 +99,24 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
 
   let help_menu_style = app.user_config.theme.base_style();
   let header = &cache.header;
-  let help_docs = &cache.rows[app.help_menu_offset as usize..];
-  // Only the rows that fit the area can render; don't build Rows for the rest.
-  let help_docs = &help_docs[..help_docs.len().min(area.height as usize)];
+  let start = (app.help_menu_offset as usize).min(cache.rows.len());
+  // Two border rows plus the table header leave this many data rows. This is
+  // also the value used by the runner for page-size calculations.
+  let visible_count = table_area.height.saturating_sub(3) as usize;
+  let end = start.saturating_add(visible_count).min(cache.rows.len());
+  let help_docs = &cache.rows[start..end];
 
-  let rows = help_docs
-    .iter()
-    .map(|item| Row::new([item.as_str()]).style(help_menu_style));
+  let rows: Vec<Row<'_>> = if cache.rows.is_empty() && !app.help_filter.is_empty() {
+    vec![
+      Row::new([format!("No help rows match '{}'", app.help_filter)])
+        .style(Style::default().fg(app.user_config.theme.inactive)),
+    ]
+  } else {
+    help_docs
+      .iter()
+      .map(|item| Row::new([item.as_str()]).style(help_menu_style))
+      .collect()
+  };
 
   let help_menu = Table::new(rows, &[Constraint::Percentage(100)])
     .header(Row::new([header.as_str()]))
@@ -102,14 +124,107 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
       Block::default()
         .borders(Borders::ALL)
         .style(help_menu_style)
-        .title(Span::styled(
-          "Help (press <Esc> to go back)",
-          help_menu_style,
-        ))
+        .title(Span::styled("Help", help_menu_style))
         .border_style(help_menu_style),
     )
     .style(help_menu_style);
-  f.render_widget(help_menu, area);
+  f.render_widget(help_menu, table_area);
+
+  let theme = app.user_config.theme;
+  let filter_line = if app.help_filter_editing {
+    Line::from(vec![
+      Span::styled("Filter: ", Style::default().fg(theme.active)),
+      Span::styled(app.help_filter.clone(), help_menu_style),
+      Span::styled("▏", Style::default().fg(theme.active)),
+      Span::styled(
+        "  <Enter>: apply  <Esc>: cancel search",
+        Style::default().fg(theme.inactive),
+      ),
+    ])
+  } else if !app.help_filter.is_empty() {
+    Line::from(vec![
+      Span::styled(
+        format!("matches for '{}'", app.help_filter),
+        Style::default().fg(theme.active),
+      ),
+      Span::styled(
+        format!(" ({})  <Esc>: clear filter", cache.rows.len()),
+        Style::default().fg(theme.inactive),
+      ),
+    ])
+  } else {
+    Line::from(vec![
+      Span::styled(
+        app.user_config.keys.search.to_string(),
+        Style::default().fg(theme.active),
+      ),
+      Span::styled(
+        ": filter rows  <Esc>: go back",
+        Style::default().fg(theme.inactive),
+      ),
+    ])
+  };
+  f.render_widget(
+    Paragraph::new(filter_line).style(help_menu_style),
+    filter_area,
+  );
+}
+
+#[cfg(test)]
+mod help_menu_tests {
+  use super::*;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  fn rendered_help(app: &App) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| draw_help_menu(f, app)).unwrap();
+    let buffer = terminal.backend().buffer();
+
+    (0..30)
+      .map(|y| {
+        (0..100)
+          .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol().to_string()))
+          .collect::<String>()
+      })
+      .collect::<Vec<_>>()
+      .join("\n")
+  }
+
+  #[test]
+  fn help_menu_renders_only_filtered_rows_and_live_prompt() {
+    let mut app = App::default();
+    app.help_filter = "volume".to_string();
+    app.help_filter_editing = true;
+
+    let rendered = rendered_help(&app);
+
+    assert!(rendered.contains("Increase volume by 10%"));
+    assert!(rendered.contains("Decrease volume by 10%"));
+    assert!(!rendered.contains("Jump to start of playlist"));
+    assert!(rendered.contains("Filter: volume▏"));
+    assert!(rendered.contains("<Enter>: apply  <Esc>: cancel search"));
+  }
+
+  #[test]
+  fn help_menu_shows_back_hint_when_filter_is_inactive() {
+    let rendered = rendered_help(&App::default());
+
+    assert!(rendered.contains("<Esc>: go back"));
+    assert!(!rendered.contains("press <Esc> to go back"));
+  }
+
+  #[test]
+  fn help_menu_renders_no_matches_and_clamps_a_stale_offset() {
+    let mut app = App::default();
+    app.help_filter = "not-a-real-help-row".to_string();
+    app.help_menu_offset = u32::MAX;
+
+    let rendered = rendered_help(&app);
+
+    assert!(rendered.contains("No help rows match 'not-a-real-help-row'"));
+    assert!(rendered.contains("matches for 'not-a-real-help-row' (0)"));
+    assert!(rendered.contains("<Esc>: clear filter"));
+  }
 }
 
 fn queue_item_line(item: &PlayableInfo) -> String {

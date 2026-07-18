@@ -201,7 +201,7 @@ fn handle_input_mouse(mouse: MouseEvent, input_area: Rect, app: &mut App) {
 
 fn handle_help_mouse(mouse: MouseEvent, app: &mut App) {
   if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-    app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
+    super::help_menu::open(app);
   }
 }
 

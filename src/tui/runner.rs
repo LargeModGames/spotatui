@@ -275,6 +275,17 @@ fn back_key_clears_playlist_filter(app: &mut App, active_block: ActiveBlock) -> 
   }
 }
 
+/// The runner normally handles the configurable back key before `handle_app`.
+/// Help's inline filter must get first chance while it is being edited (so `q`
+/// can be query text), when opening the filter, and when Esc should clear a
+/// confirmed filter rather than close Help.
+fn help_menu_captures_key_before_back(app: &App, key: Key) -> bool {
+  app.get_current_route().active_block == ActiveBlock::HelpMenu
+    && (app.help_filter_editing
+      || key == app.user_config.keys.search
+      || (key == Key::Esc && !app.help_filter.is_empty()))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -362,6 +373,31 @@ mod tests {
 
     assert!(app.active_playlist_track_filter.is_none());
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  }
+
+  #[test]
+  fn help_filter_captures_back_key_while_editing() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
+    app.help_filter_editing = true;
+
+    assert!(help_menu_captures_key_before_back(
+      &app,
+      app.user_config.keys.back
+    ));
+  }
+
+  #[test]
+  fn confirmed_help_filter_captures_escape_but_not_normal_back_key() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
+    app.help_filter = "volume".to_string();
+
+    assert!(help_menu_captures_key_before_back(&app, Key::Esc));
+    assert!(!help_menu_captures_key_before_back(
+      &app,
+      app.user_config.keys.back
+    ));
   }
 }
 
@@ -792,6 +828,8 @@ pub async fn start_ui(
           }
         } else if current_active_block == ActiveBlock::Input {
           handlers::input_handler(key, &mut app);
+        } else if help_menu_captures_key_before_back(&app, key) {
+          handlers::handle_app(key, &mut app);
         } else if key == app.user_config.keys.back {
           if !back_key_clears_playlist_filter(&mut app, current_active_block) {
             if current_active_block == ActiveBlock::Settings {

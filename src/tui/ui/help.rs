@@ -1,5 +1,36 @@
 use crate::core::app::App;
 
+/// Return Help rows matching the active filter.
+/// Whitespace-separated terms are ANDed and matching is case-insensitive unless
+/// a term contains an uppercase ASCII character.
+pub fn get_filtered_help_docs(app: &App) -> Vec<Vec<String>> {
+  filter_help_docs(get_help_docs(app), &app.help_filter)
+}
+
+fn filter_help_docs(rows: Vec<Vec<String>>, filter: &str) -> Vec<Vec<String>> {
+  let terms = filter.split_whitespace().collect::<Vec<_>>();
+  if terms.is_empty() {
+    return rows;
+  }
+
+  rows
+    .into_iter()
+    .filter(|row| {
+      terms
+        .iter()
+        .all(|term| row.iter().any(|field| help_field_contains(field, term)))
+    })
+    .collect()
+}
+
+fn help_field_contains(field: &str, term: &str) -> bool {
+  if term.chars().any(|c| c.is_ascii_uppercase()) {
+    field.contains(term)
+  } else {
+    field.to_lowercase().contains(&term.to_lowercase())
+  }
+}
+
 pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
   let key_bindings = &app.user_config.keys;
   vec![
@@ -132,6 +163,11 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("Enter input for search"),
       key_bindings.search.to_string(),
       String::from("General"),
+    ],
+    vec![
+      String::from("Filter help rows"),
+      key_bindings.search.to_string(),
+      String::from("Help menu"),
     ],
     vec![
       String::from("Pause/Resume playback"),
@@ -436,4 +472,51 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("General"),
     ],
   ]
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn rows() -> Vec<Vec<String>> {
+    vec![
+      vec![
+        "Increase volume by 10%".to_string(),
+        "+".to_string(),
+        "General".to_string(),
+      ],
+      vec![
+        "Search tracks in current playlist".to_string(),
+        "<Ctrl+f>".to_string(),
+        "Track table (playlist views)".to_string(),
+      ],
+      vec![
+        "Open settings".to_string(),
+        "<Alt+,>".to_string(),
+        "General".to_string(),
+      ],
+    ]
+  }
+
+  #[test]
+  fn help_filter_matches_terms_across_columns() {
+    let filtered = filter_help_docs(rows(), "ctrl playlist");
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0][0], "Search tracks in current playlist");
+  }
+
+  #[test]
+  fn help_filter_uses_smart_case() {
+    assert_eq!(filter_help_docs(rows(), "VOLUME").len(), 0);
+    assert_eq!(filter_help_docs(rows(), "volume").len(), 1);
+    assert_eq!(filter_help_docs(rows(), "Increase").len(), 1);
+  }
+
+  #[test]
+  fn empty_help_filter_preserves_all_rows_and_order() {
+    let rows = rows();
+
+    assert_eq!(filter_help_docs(rows.clone(), "   "), rows);
+  }
 }
