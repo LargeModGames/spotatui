@@ -478,12 +478,18 @@ impl audio_backend::Sink for RecoveringSink {
     packet: AudioPacket,
     converter: &mut Converter,
   ) -> audio_backend::SinkResult<()> {
+    // Unlike start(), write errors must propagate: a blocking sink.write() is
+    // librespot's only backpressure, and its packet-error path pauses playback
+    // without exiting the process.
     if self.failed {
-      return Ok(());
+      return Err(audio_backend::SinkError::NotConnected(
+        "Audio sink unavailable".to_string(),
+      ));
     }
     if let Err(err) = self.with_inner("write", |sink| sink.write(packet, converter)) {
       *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.to_string());
       self.failed = true;
+      return Err(err);
     }
     Ok(())
   }
