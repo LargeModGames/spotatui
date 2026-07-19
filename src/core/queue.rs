@@ -83,6 +83,14 @@ pub enum SuspendedContext {
   SpotifyShuffled {
     resume_index: Option<usize>,
     generation: u64,
+    /// Context snapshot taken at suspension time (context uri + the mirror
+    /// queue's head), so this can be converted to a [`Self::Spotify`] resume
+    /// when the session it indexes into is invalidated while the queue plays
+    /// (disconnect recovery, failed context fetch). Captured at creation:
+    /// by conversion time `current_playback_context` may describe the queued
+    /// track instead of the suspended context.
+    context_uri: Option<String>,
+    resume_track_uri: Option<String>,
   },
   #[cfg(feature = "local-files")]
   Local {

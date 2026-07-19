@@ -314,6 +314,7 @@ impl Network {
         index: 0,
         shuffled: true,
         fetch_complete: fetch.is_none(),
+        fetch_failed: false,
         generation,
         // The load below plays index 0; confirm that on the first TrackChanged.
         pending_reload_index: Some(0),
@@ -490,6 +491,7 @@ impl Network {
             index: 0,
             shuffled: true,
             fetch_complete: false,
+            fetch_failed: false,
             generation,
             // No reload here: Spirc keeps playing its own context.
             pending_reload_index: None,
@@ -528,6 +530,7 @@ impl Network {
             index: 0,
             shuffled: true,
             fetch_complete: true,
+            fetch_failed: false,
             generation,
             // The reload below plays index 0.
             pending_reload_index: Some(0),
@@ -666,11 +669,26 @@ impl Network {
     let app = Arc::clone(&self.app);
     let token_cache_path = self.token_cache_path.clone();
     tokio::spawn(async move {
-      let result = match kind {
-        FullFetch::Playlist(id) => {
-          fetch_playlist_uris(&spotify, &token_cache_path, &app, &id).await
+      // A failed fetch strands a lazily-seeded session on its single seed
+      // track (nothing to advance into), so retry transient API failures
+      // before declaring it failed for good.
+      const FETCH_ATTEMPTS: u32 = 3;
+      let mut attempt = 0u32;
+      let result = loop {
+        let result = match &kind {
+          FullFetch::Playlist(id) => {
+            fetch_playlist_uris(&spotify, &token_cache_path, &app, id).await
+          }
+          FullFetch::SavedTracks => fetch_saved_track_uris(&spotify, &token_cache_path, &app).await,
+        };
+        attempt += 1;
+        match result {
+          Err(e) if attempt < FETCH_ATTEMPTS => {
+            info!("native shuffle: context fetch attempt {attempt} failed, retrying: {e}");
+            tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
+          }
+          result => break result,
         }
-        FullFetch::SavedTracks => fetch_saved_track_uris(&spotify, &token_cache_path, &app).await,
       };
       finish_full_context_fetch(&app, generation, result).await;
     });
@@ -811,6 +829,11 @@ async fn finish_full_context_fetch(
     // still folded in but Spirc is not reloaded; this carries the re-pointed
     // resume index out to `queue_suspended` once the session borrow ends.
     let mut resume_update: Option<Option<usize>> = None;
+    // Carries the seed-only fetch failure out of the session borrow: a
+    // suspension taken while the fetch was still in flight stored a shuffled
+    // resume into the seed-only order and must be converted to the context
+    // route (mirror of the suspend-time fallback).
+    let mut convert_suspend_to_context = false;
     let reload = {
       let Some(session) = guard.native_spotify_shuffle.as_mut() else {
         return;
@@ -821,10 +844,18 @@ async fn finish_full_context_fetch(
       session.fetch_complete = true;
       match result {
         Err(e) => {
+          session.fetch_failed = true;
           info!(
             "native shuffle: full-context fetch failed; shuffle covers the {} loaded tracks: {e}",
             session.order.len()
           );
+          // A seed-only session can't shuffle anything; tell the user instead
+          // of silently degrading (the queue-suspend path now falls back to
+          // the context route, see `suspend_native_spotify_context_for_queue`).
+          if session.order.len() <= 1 {
+            status = Some("Shuffle: failed to load the context's track list".to_string());
+            convert_suspend_to_context = true;
+          }
           // A shuffle-off deferred to fetch completion still needs applying, or
           // state stays inconsistent (`shuffled == false` yet the shuffled order
           // is loaded, and a repeat shuffle-off is a no-op, and a queue drain
@@ -935,6 +966,12 @@ async fn finish_full_context_fetch(
         *resume_index = resume;
       }
     }
+    // The seed-only fetch failed while this session's suspension already sat
+    // behind the queue: its shuffled resume dead-ends, so hand the drain to
+    // the context route instead.
+    if convert_suspend_to_context {
+      guard.convert_shuffled_suspension_to_context(Some(generation));
+    }
     reload.and_then(|(order, index)| player.map(|p| (p, order, index, seek_ms, start_playing)))
   };
   if let Some((player, order, index, seek_ms, start_playing)) = reload {
@@ -951,6 +988,70 @@ mod tests {
 
   fn uris(ids: &[&str]) -> Vec<String> {
     ids.iter().map(|id| format!("spotify:track:{id}")).collect()
+  }
+
+  /// A queue suspension taken while the seed-only context fetch was still in
+  /// flight stores a shuffled resume; when the fetch then fails for good, the
+  /// failure handler must convert that suspension to the context route so the
+  /// drain does not dead-end in "Queue finished".
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn failed_fetch_converts_a_suspended_seed_session_to_the_context() {
+    use crate::core::app::NativeSpotifyShuffleSession;
+    use crate::core::queue::SuspendedContext;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    rt.block_on(async {
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(
+        tx,
+        crate::core::user_config::UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      );
+      app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+        order: uris(&["seed"]),
+        original: uris(&["seed"]),
+        index: 0,
+        shuffled: true,
+        fetch_complete: false,
+        fetch_failed: false,
+        generation: 9,
+        pending_reload_index: None,
+        pending_manual_skip: None,
+      });
+      // The suspend computed from the seed-only order: an exhausted resume.
+      app.queue_suspended = Some(SuspendedContext::SpotifyShuffled {
+        resume_index: None,
+        generation: 9,
+        context_uri: Some("spotify:playlist:suspended".to_string()),
+        resume_track_uri: None,
+      });
+      let app = Arc::new(Mutex::new(app));
+
+      finish_full_context_fetch(&app, 9, Err(anyhow!("fetch failed"))).await;
+
+      let guard = app.lock().await;
+      match &guard.queue_suspended {
+        Some(SuspendedContext::Spotify { context_uri, .. }) => {
+          assert_eq!(
+            context_uri.as_deref(),
+            Some("spotify:playlist:suspended"),
+            "the context captured at suspension time must survive the conversion"
+          );
+        }
+        other => panic!("expected a context suspension, got {other:?}"),
+      }
+      assert!(
+        guard
+          .native_spotify_shuffle
+          .as_ref()
+          .is_some_and(|s| s.fetch_failed),
+        "the session must be marked failed for the suspend fallback"
+      );
+    });
   }
 
   #[test]

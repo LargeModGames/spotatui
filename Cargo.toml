@@ -195,18 +195,19 @@ suggests = "yt-dlp, ffmpeg"
 section = "utils"
 priority = "optional"
 
-# Native streaming fix: librespot 0.8.0 + backport of upstream PR #1722, which falls back
-# to the next CDN URL when one returns a non-206 status. Some Spotify CDN nodes return
-# HTTP 530, which broke native audio entirely; the official client just tries the next URL.
+# Native streaming fixes: librespot 0.8.0 + backport of upstream PR #1722 (fall back to the
+# next CDN URL when one returns a non-206 status, e.g. HTTP 530) + port of upstream PR #1692
+# (dealer reconnects handled in place without restarting spirc; prompt spirc-task exit with
+# saved playback state on session TCP loss instead of hanging, enabling seamless recovery).
 # Pinned to our maintained fork (spotatui-librespot) until a fixed librespot is published to
 # crates.io. Pinned by immutable `rev` (not a branch) so release builds stay reproducible even
 # as the `spotatui` branch advances. Note: crates.io publishes ignore [patch], so `cargo install`
 # users need the upstream release.
 [patch.crates-io]
-librespot-core     = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "28bcb231fe26f4db682eb85d1f7ae43aa1a83896" }
-librespot-audio    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "28bcb231fe26f4db682eb85d1f7ae43aa1a83896" }
-librespot-playback = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "28bcb231fe26f4db682eb85d1f7ae43aa1a83896" }
-librespot-connect  = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "28bcb231fe26f4db682eb85d1f7ae43aa1a83896" }
-librespot-oauth    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "28bcb231fe26f4db682eb85d1f7ae43aa1a83896" }
-librespot-metadata = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "28bcb231fe26f4db682eb85d1f7ae43aa1a83896" }
-librespot-protocol = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "28bcb231fe26f4db682eb85d1f7ae43aa1a83896" }
+librespot-core     = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "4e9e5c72f079ffe79743ba5245b894c0ab20ce5a" }
+librespot-audio    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "4e9e5c72f079ffe79743ba5245b894c0ab20ce5a" }
+librespot-playback = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "4e9e5c72f079ffe79743ba5245b894c0ab20ce5a" }
+librespot-connect  = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "4e9e5c72f079ffe79743ba5245b894c0ab20ce5a" }
+librespot-oauth    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "4e9e5c72f079ffe79743ba5245b894c0ab20ce5a" }
+librespot-metadata = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "4e9e5c72f079ffe79743ba5245b894c0ab20ce5a" }
+librespot-protocol = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "4e9e5c72f079ffe79743ba5245b894c0ab20ce5a" }

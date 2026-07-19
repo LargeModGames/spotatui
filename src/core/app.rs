@@ -888,6 +888,10 @@ pub struct NativeSpotifyShuffleSession {
   pub shuffled: bool,
   /// False while the background full-context fetch is still running.
   pub fetch_complete: bool,
+  /// The background full-context fetch failed for good (retries exhausted):
+  /// `order` never grew past its seed and the queue-suspend path must fall
+  /// back to the context route instead of a shuffled resume.
+  pub fetch_failed: bool,
   /// Stamp guarding stale background fetches from writing into a newer session.
   pub generation: u64,
   /// Set to the index we just loaded into Spirc whenever the session issues a
@@ -903,11 +907,26 @@ pub struct NativeSpotifyShuffleSession {
   pub pending_manual_skip: Option<bool>,
 }
 
-/// Whether a `spotify:track:<id>` URI refers to librespot's base62 track id
-/// (the form `PlayerEvent::TrackChanged` reports).
+/// The bare base62 id of a `spotify:<kind>:<id>` URI. librespot 0.8's
+/// `SpotifyUri` Display prints the full URI while every app-side comparison
+/// uses the bare id, so player-event handlers normalize through this once at
+/// the event boundary. Anything else passes through unchanged: a bare id, and
+/// notably `spotify:local:<artist>:<album>:<title>:<duration>` URIs, whose
+/// only unique identity is the full string (the last segment is a duration
+/// shared across unrelated local tracks).
+#[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+pub(crate) fn base62_id_of(uri_or_id: &str) -> &str {
+  let mut parts = uri_or_id.split(':');
+  match (parts.next(), parts.next(), parts.next(), parts.next()) {
+    (Some("spotify"), Some(kind), Some(id), None) if kind != "local" => id,
+    _ => uri_or_id,
+  }
+}
+
+/// Whether a `spotify:track:<id>` URI refers to the given bare base62 track id.
 #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
 pub(crate) fn uri_matches_base62_id(uri: &str, base62_id: &str) -> bool {
-  uri.rsplit(':').next() == Some(base62_id)
+  base62_id_of(uri) == base62_id
 }
 
 /// How playback moved to the track a `TrackChanged` reports, so the wrap-search
@@ -1180,6 +1199,165 @@ pub struct PendingStartPlayback {
   pub recovery_attempts: u8,
 }
 
+/// Track identity for recovery matching: the bare id for `spotify:<kind>:<id>`
+/// URIs, the full string otherwise. Delegates to [`base62_id_of`] so
+/// `spotify:local:` URIs keep their full identity (their last segment is a
+/// duration shared across unrelated local tracks).
+#[cfg(feature = "streaming")]
+fn spotify_item_identity(value: &str) -> &str {
+  base62_id_of(value)
+}
+
+#[cfg(feature = "streaming")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativePlaybackRecoverySnapshot {
+  pub generation: u64,
+  pub context_uri: Option<String>,
+  pub uris: Option<Vec<String>>,
+  pub offset: Option<usize>,
+  pub current_track_uri: Option<String>,
+  pub loading_track_uri: Option<String>,
+  pub track_duration_ms: Option<u32>,
+  pub position_ms: u32,
+  pub desired_playing: bool,
+  pub shuffle: bool,
+  pub repeat: RepeatState,
+  pub recovery_attempts: u8,
+}
+
+#[cfg(feature = "streaming")]
+impl NativePlaybackRecoverySnapshot {
+  pub fn expected_track_uri(&self) -> Option<&str> {
+    self
+      .loading_track_uri
+      .as_deref()
+      .or(self.current_track_uri.as_deref())
+      .or_else(|| {
+        let uris = self.uris.as_ref()?;
+        if self.context_uri.is_some() {
+          uris.first().map(String::as_str)
+        } else {
+          uris
+            .get(self.offset.unwrap_or(0))
+            .or_else(|| uris.first())
+            .map(String::as_str)
+        }
+      })
+  }
+
+  pub fn restore_position_ms(&self) -> u32 {
+    if self.loading_track_uri.is_some() {
+      0
+    } else {
+      self
+        .track_duration_ms
+        .map_or(self.position_ms, |duration_ms| {
+          if duration_ms == 0 {
+            self.position_ms
+          } else {
+            self.position_ms.min(duration_ms - 1)
+          }
+        })
+    }
+  }
+
+  pub fn completed_track_uri(&self) -> Option<&str> {
+    let duration_ms = self.track_duration_ms?;
+    if self.desired_playing
+      && self.loading_track_uri.is_none()
+      && duration_ms > 0
+      && self.position_ms >= duration_ms
+    {
+      self.current_track_uri.as_deref()
+    } else {
+      None
+    }
+  }
+
+  fn canonical_track_uri(&self, observed_track_id: &str, kind: Option<NativeTrackKind>) -> String {
+    if observed_track_id.starts_with("spotify:") {
+      return observed_track_id.to_string();
+    }
+    if let Some(uri) = self
+      .loading_track_uri
+      .iter()
+      .chain(self.current_track_uri.iter())
+      .chain(self.uris.iter().flatten())
+      .find(|uri| spotify_item_identity(uri) == spotify_item_identity(observed_track_id))
+    {
+      return uri.clone();
+    }
+
+    let kind = kind.unwrap_or_else(|| {
+      if self
+        .current_track_uri
+        .as_deref()
+        .is_some_and(|uri| uri.starts_with("spotify:episode:"))
+      {
+        NativeTrackKind::Episode
+      } else {
+        NativeTrackKind::Track
+      }
+    });
+    let item_type = match kind {
+      NativeTrackKind::Track => "track",
+      NativeTrackKind::Episode => "episode",
+    };
+    format!("spotify:{item_type}:{observed_track_id}")
+  }
+
+  fn update_offset_for_track(&mut self, track_uri: &str) {
+    let Some(uris) = self.uris.as_ref() else {
+      return;
+    };
+    if let Some(index) = uris
+      .iter()
+      .position(|uri| spotify_item_identity(uri) == spotify_item_identity(track_uri))
+    {
+      self.offset = Some(index);
+    }
+  }
+
+  fn next_raw_list_request(&self, previous_track_uri: &str) -> Option<PendingStartPlayback> {
+    if self.context_uri.is_some() {
+      return None;
+    }
+    let uris = self.uris.as_ref()?;
+    if uris.is_empty() {
+      return None;
+    }
+
+    let current_index = uris
+      .iter()
+      .position(|uri| spotify_item_identity(uri) == spotify_item_identity(previous_track_uri))
+      .or(self.offset)
+      .unwrap_or(0)
+      .min(uris.len() - 1);
+    let next_index = match self.repeat {
+      RepeatState::Track => current_index,
+      RepeatState::Context if current_index + 1 >= uris.len() => 0,
+      _ if current_index + 1 < uris.len() => current_index + 1,
+      _ => return None,
+    };
+
+    Some(PendingStartPlayback {
+      context_uri: None,
+      uris: Some(uris.clone()),
+      offset: Some(next_index),
+      parked_at: Instant::now(),
+      recovery_attempts: 0,
+    })
+  }
+}
+
+#[cfg(feature = "streaming")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativePlaybackRestoreAttempt {
+  pub generation: u64,
+  pub expected_track_uri: Option<String>,
+  pub desired_playing: bool,
+}
+
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
   /// Spotify's API comes back with the same value — otherwise a slow poll
@@ -1235,6 +1413,12 @@ pub struct App {
   /// queue slot is published; capped so a genuinely-gone track can't loop.
   #[cfg(feature = "streaming")]
   pub spotify_queue_guard_reloads: u8,
+  /// Whether the published Spotify queue slot should be playing. Set on
+  /// publish, flipped by the slot's pause/resume transport arms. Unlike
+  /// `native_is_playing` this survives a backend teardown, so a recovery
+  /// replay of the slot can honor a user's pause.
+  #[cfg(feature = "streaming")]
+  pub queue_slot_desired_playing: bool,
   #[cfg(feature = "cover-art")]
   pub cover_art: crate::tui::cover_art::CoverArt,
   /// Status of the current track's cover art, driving the placeholder message.
@@ -1257,6 +1441,16 @@ pub struct App {
   /// Horizontal scroll offset for the input box, computed during rendering.
   pub input_scroll_offset: Cell<u16>,
   pub liked_song_ids_set: HashSet<String>,
+  /// Liked-state lookups pending for the detached contains worker, as bare
+  /// base62 track ids (deduped). The `CurrentUserSavedTracksContains` handler
+  /// enqueues here instead of resolving on the serial IoEvent pump.
+  pub liked_lookup_pending: HashSet<String>,
+  /// Whether the single detached liked-lookup worker is currently draining
+  /// [`Self::liked_lookup_pending`].
+  pub liked_lookup_worker_running: bool,
+  /// Bumped on every local like/unlike so a detached liked-state read that
+  /// started before the mutation is re-read instead of clobbering it.
+  pub liked_state_epoch: u64,
   pub followed_artist_ids_set: HashSet<String>,
   pub saved_album_ids_set: HashSet<String>,
   pub saved_show_ids_set: HashSet<String>,
@@ -1579,6 +1773,17 @@ pub struct App {
   /// silently drops Spirc commands) and recovery is forced.
   #[cfg(feature = "streaming")]
   pub native_load_watchdog: Option<Instant>,
+  /// Durable native playback intent, independent of the current librespot
+  /// Session/Spirc instance. Used to restore the exact track or in-flight
+  /// transition after a transport-level recovery.
+  #[cfg(feature = "streaming")]
+  pub native_playback_recovery: Option<NativePlaybackRecoverySnapshot>,
+  /// A restore command has been issued for this generation and is waiting for
+  /// a matching Playing/Paused event from the replacement player.
+  #[cfg(feature = "streaming")]
+  pub native_restore_pending: Option<NativePlaybackRestoreAttempt>,
+  #[cfg(feature = "streaming")]
+  native_playback_generation: u64,
   /// Reference to MPRIS manager for emitting Seeked signals after native seeks
   #[cfg(all(feature = "mpris", target_os = "linux"))]
   pub mpris_manager: Option<Arc<crate::infra::mpris::MprisManager>>,
@@ -1701,6 +1906,9 @@ impl Default for App {
         selected_index: 0,
       },
       liked_song_ids_set: HashSet::new(),
+      liked_lookup_pending: HashSet::new(),
+      liked_lookup_worker_running: false,
+      liked_state_epoch: 0,
       followed_artist_ids_set: HashSet::new(),
       saved_album_ids_set: HashSet::new(),
       saved_show_ids_set: HashSet::new(),
@@ -1724,6 +1932,8 @@ impl Default for App {
       queue_now: None,
       #[cfg(feature = "streaming")]
       spotify_queue_guard_reloads: 0,
+      #[cfg(feature = "streaming")]
+      queue_slot_desired_playing: true,
       input: vec![],
       input_idx: 0,
       input_cursor_position: 0,
@@ -1879,6 +2089,12 @@ impl Default for App {
       native_backend_pending: false,
       #[cfg(feature = "streaming")]
       native_load_watchdog: None,
+      #[cfg(feature = "streaming")]
+      native_playback_recovery: None,
+      #[cfg(feature = "streaming")]
+      native_restore_pending: None,
+      #[cfg(feature = "streaming")]
+      native_playback_generation: 0,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
       mpris_manager: None,
       #[cfg(feature = "cover-art")]
@@ -2456,12 +2672,374 @@ impl App {
       return false;
     };
 
-    if player.is_connected() {
+    if player.is_available() {
       return false;
     }
 
     self.force_native_streaming_recovery(reselect_device);
     true
+  }
+
+  #[cfg(feature = "streaming")]
+  fn next_native_playback_generation(&mut self) -> u64 {
+    self.native_playback_generation = self.native_playback_generation.wrapping_add(1);
+    self.native_playback_generation
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn record_native_playback_request(
+    &mut self,
+    context_uri: Option<String>,
+    uris: Option<Vec<String>>,
+    offset: Option<usize>,
+    desired_playing: bool,
+    shuffle: bool,
+    repeat: RepeatState,
+  ) -> u64 {
+    let generation = self.next_native_playback_generation();
+    let current_track_uri = uris.as_ref().and_then(|items| {
+      if context_uri.is_some() {
+        items.first().cloned()
+      } else {
+        items
+          .get(offset.unwrap_or(0))
+          .or_else(|| items.first())
+          .cloned()
+      }
+    });
+    self.native_playback_recovery = Some(NativePlaybackRecoverySnapshot {
+      generation,
+      context_uri,
+      uris,
+      offset,
+      current_track_uri,
+      loading_track_uri: None,
+      track_duration_ms: None,
+      position_ms: 0,
+      desired_playing,
+      shuffle,
+      repeat,
+      recovery_attempts: 0,
+    });
+    self.native_restore_pending = None;
+    self.native_load_watchdog = None;
+    generation
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn set_native_playback_intent(&mut self, desired_playing: bool) {
+    if self.native_playback_recovery.is_none() {
+      self.native_restore_pending = None;
+      return;
+    }
+    let generation = self.next_native_playback_generation();
+    if let Some(snapshot) = self.native_playback_recovery.as_mut() {
+      snapshot.generation = generation;
+      snapshot.desired_playing = desired_playing;
+      snapshot.recovery_attempts = 0;
+    }
+    self.native_restore_pending = None;
+    self.native_load_watchdog = None;
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn set_native_recovery_position(&mut self, position_ms: u32) {
+    if let Some(snapshot) = self.native_playback_recovery.as_mut() {
+      snapshot.position_ms = position_ms;
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn set_native_recovery_shuffle(&mut self, shuffle: bool) {
+    if let Some(snapshot) = self.native_playback_recovery.as_mut() {
+      snapshot.shuffle = shuffle;
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn set_native_recovery_repeat(&mut self, repeat: RepeatState) {
+    if let Some(snapshot) = self.native_playback_recovery.as_mut() {
+      snapshot.repeat = repeat;
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn prepare_native_playback_recovery(
+    &mut self,
+    position_ms: u32,
+    is_playing: bool,
+  ) -> Option<u64> {
+    if self.native_playback_recovery.is_none() {
+      let context_uri = self
+        .current_playback_context
+        .as_ref()
+        .and_then(|ctx| ctx.context.as_ref())
+        .map(|ctx| ctx.uri.clone());
+      let current_track_uri = self
+        .current_playback_context
+        .as_ref()
+        .and_then(|ctx| ctx.item.as_ref())
+        .and_then(|item| match item {
+          PlayableItem::Track(track) => track.id.as_ref().map(|id| id.uri()),
+          PlayableItem::Episode(episode) => Some(episode.id.uri()),
+          PlayableItem::Unknown(_) => None,
+        })
+        .or_else(|| {
+          self.last_track_id.as_ref().map(|id| {
+            if id.starts_with("spotify:") {
+              id.clone()
+            } else {
+              let item_type = match self.native_track_info.as_ref().map(|info| info.kind) {
+                Some(NativeTrackKind::Episode) => "episode",
+                _ => "track",
+              };
+              format!("spotify:{item_type}:{id}")
+            }
+          })
+        });
+      if context_uri.is_some() || current_track_uri.is_some() {
+        let uris = context_uri
+          .is_none()
+          .then(|| current_track_uri.clone().into_iter().collect::<Vec<_>>());
+        let generation = self.next_native_playback_generation();
+        self.native_playback_recovery = Some(NativePlaybackRecoverySnapshot {
+          generation,
+          context_uri,
+          uris,
+          offset: Some(0),
+          current_track_uri,
+          loading_track_uri: None,
+          track_duration_ms: self.native_track_info.as_ref().map(|info| info.duration_ms),
+          position_ms,
+          desired_playing: is_playing,
+          shuffle: self.user_config.behavior.shuffle_enabled,
+          repeat: self
+            .current_playback_context
+            .as_ref()
+            .map_or(RepeatState::Off, |ctx| ctx.repeat_state),
+          recovery_attempts: 0,
+        });
+      }
+    }
+
+    let track_duration_ms = self.native_track_info.as_ref().map(|info| info.duration_ms);
+    let snapshot = self.native_playback_recovery.as_mut()?;
+    snapshot.position_ms = position_ms;
+    if snapshot.loading_track_uri.is_none() && snapshot.track_duration_ms.is_none() {
+      snapshot.track_duration_ms = track_duration_ms;
+    }
+    Some(snapshot.generation)
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn begin_native_playback_restore(
+    &mut self,
+    generation: u64,
+  ) -> Option<NativePlaybackRecoverySnapshot> {
+    let snapshot = self.native_playback_recovery.as_mut()?;
+    if snapshot.generation != generation {
+      return None;
+    }
+    snapshot.recovery_attempts = snapshot.recovery_attempts.saturating_add(1);
+    let attempt = NativePlaybackRestoreAttempt {
+      generation,
+      expected_track_uri: snapshot.expected_track_uri().map(str::to_string),
+      desired_playing: snapshot.desired_playing,
+    };
+    self.native_restore_pending = Some(attempt);
+    Some(snapshot.clone())
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_playback_restore_generation(&self) -> Option<u64> {
+    self
+      .native_playback_recovery
+      .as_ref()
+      .map(|snapshot| snapshot.generation)
+  }
+
+  #[cfg(feature = "streaming")]
+  fn native_restore_event_matches(&self, track_uri: &str) -> bool {
+    self
+      .native_restore_pending
+      .as_ref()
+      .and_then(|attempt| attempt.expected_track_uri.as_deref())
+      .is_none_or(|expected| spotify_item_identity(expected) == spotify_item_identity(track_uri))
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn observe_native_loading(&mut self, track_uri: String, position_ms: u32) {
+    if self.native_restore_pending.is_some() && !self.native_restore_event_matches(&track_uri) {
+      log::warn!(
+        "ignoring stale native Loading event during restore: expected {:?}, got {}",
+        self
+          .native_restore_pending
+          .as_ref()
+          .and_then(|attempt| attempt.expected_track_uri.as_deref()),
+        track_uri
+      );
+      return;
+    }
+    let canonical_track_uri = self
+      .native_playback_recovery
+      .as_ref()
+      .map_or(track_uri.clone(), |snapshot| {
+        snapshot.canonical_track_uri(&track_uri, None)
+      });
+    if let Some(snapshot) = self.native_playback_recovery.as_mut() {
+      snapshot.loading_track_uri = Some(canonical_track_uri);
+      snapshot.track_duration_ms = None;
+      snapshot.position_ms = position_ms;
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn observe_native_track_changed(
+    &mut self,
+    track_uri: String,
+    kind: NativeTrackKind,
+    duration_ms: u32,
+  ) {
+    if self.native_restore_pending.is_some() && !self.native_restore_event_matches(&track_uri) {
+      log::warn!(
+        "ignoring stale native TrackChanged event during restore: expected {:?}, got {}",
+        self
+          .native_restore_pending
+          .as_ref()
+          .and_then(|attempt| attempt.expected_track_uri.as_deref()),
+        track_uri
+      );
+      return;
+    }
+    let canonical_track_uri = self
+      .native_playback_recovery
+      .as_ref()
+      .map_or(track_uri.clone(), |snapshot| {
+        snapshot.canonical_track_uri(&track_uri, Some(kind))
+      });
+    if let Some(snapshot) = self.native_playback_recovery.as_mut() {
+      snapshot.current_track_uri = Some(canonical_track_uri.clone());
+      snapshot.loading_track_uri = None;
+      snapshot.track_duration_ms = Some(duration_ms);
+      snapshot.position_ms = 0;
+      snapshot.update_offset_for_track(&canonical_track_uri);
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn observe_native_playback_state(
+    &mut self,
+    track_uri: String,
+    position_ms: u32,
+    is_playing: bool,
+  ) -> bool {
+    let restore_matches = self.native_restore_event_matches(&track_uri);
+    let restore_confirmed = self.native_restore_pending.as_ref().is_some_and(|attempt| {
+      attempt.generation
+        == self
+          .native_playback_recovery
+          .as_ref()
+          .map_or(u64::MAX, |snapshot| snapshot.generation)
+        && restore_matches
+        && attempt.desired_playing == is_playing
+    });
+    let canonical_track_uri = self
+      .native_playback_recovery
+      .as_ref()
+      .map_or(track_uri.clone(), |snapshot| {
+        snapshot.canonical_track_uri(&track_uri, None)
+      });
+
+    if self.native_restore_pending.is_none() || restore_matches {
+      if let Some(snapshot) = self.native_playback_recovery.as_mut() {
+        snapshot.current_track_uri = Some(canonical_track_uri.clone());
+        snapshot.loading_track_uri = None;
+        snapshot.position_ms = position_ms;
+        snapshot.update_offset_for_track(&canonical_track_uri);
+        // A transport failure can emit Paused immediately before the event
+        // stream closes. Keep desired intent independent from observed state:
+        // explicit pause controls update it before issuing the command, while
+        // a successful Playing event may safely confirm play intent.
+        if self.native_restore_pending.is_none() && is_playing {
+          snapshot.desired_playing = true;
+        }
+        if restore_confirmed {
+          snapshot.recovery_attempts = 0;
+        }
+      }
+    }
+
+    if restore_confirmed {
+      self.native_restore_pending = None;
+      self.native_load_watchdog = None;
+    }
+    restore_confirmed
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_raw_list_next_request(
+    &self,
+    previous_track_uri: &str,
+  ) -> Option<PendingStartPlayback> {
+    let snapshot = self.native_playback_recovery.as_ref()?;
+    if snapshot
+      .loading_track_uri
+      .as_deref()
+      .is_some_and(|loading| {
+        spotify_item_identity(loading) != spotify_item_identity(previous_track_uri)
+      })
+      || snapshot
+        .current_track_uri
+        .as_deref()
+        .is_some_and(|current| {
+          spotify_item_identity(current) != spotify_item_identity(previous_track_uri)
+        })
+    {
+      return None;
+    }
+    snapshot.next_raw_list_request(previous_track_uri)
+  }
+
+  /// True when native playback is a raw URI list (no context) that has no track
+  /// after `previous_track_uri`: the list ran out with repeat off. Ending here
+  /// is a legitimate stop, not a stall.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_raw_list_playback_exhausted(&self, previous_track_uri: &str) -> bool {
+    let Some(snapshot) = self.native_playback_recovery.as_ref() else {
+      return false;
+    };
+    snapshot.context_uri.is_none()
+      && snapshot.uris.as_ref().is_some_and(|uris| !uris.is_empty())
+      && !self.native_transition_has_advanced(previous_track_uri)
+      && self
+        .native_raw_list_next_request(previous_track_uri)
+        .is_none()
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_transition_has_advanced(&self, previous_track_uri: &str) -> bool {
+    let Some(snapshot) = self.native_playback_recovery.as_ref() else {
+      return false;
+    };
+    snapshot
+      .loading_track_uri
+      .as_deref()
+      .is_some_and(|loading| {
+        spotify_item_identity(loading) != spotify_item_identity(previous_track_uri)
+      })
+      || snapshot
+        .current_track_uri
+        .as_deref()
+        .is_some_and(|current| {
+          spotify_item_identity(current) != spotify_item_identity(previous_track_uri)
+        })
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn clear_native_playback_recovery(&mut self) {
+    self.native_playback_recovery = None;
+    self.native_restore_pending = None;
+    self.native_load_watchdog = None;
   }
 
   /// Tear down the current native session — even one that still passes
@@ -2470,11 +3048,18 @@ impl App {
   /// TCP: `is_connected` true, Spirc commands silently dropped).
   #[cfg(feature = "streaming")]
   pub fn force_native_streaming_recovery(&mut self, reselect_device: bool) {
+    let position_ms = u32::try_from(self.song_progress_ms).unwrap_or(u32::MAX);
+    let is_playing = self.native_is_playing.unwrap_or(false);
+    self.prepare_native_playback_recovery(position_ms, is_playing);
     if let Some(player) = self.streaming_player.take() {
       // Stop the old spirc before dropping our reference so the dead session
       // doesn't linger as a ghost Connect device (#297).
       player.shutdown();
     }
+    // Unlike disconnect recovery, the shuffle session (and any shuffled queue
+    // suspension bound to its generation) is deliberately kept: the session is
+    // app-owned and player-independent, so a session-driven load resumes it on
+    // the replacement player.
     self.is_streaming_active = false;
     self.native_activation_pending = false;
     self.native_device_id = None;
@@ -2496,7 +3081,10 @@ impl App {
     self.set_status_message("Native streaming disconnected; attempting recovery.", 8);
     if let Some(tx) = &self.streaming_recovery_tx {
       self.native_backend_pending = tx
-        .send(crate::infra::player::StreamingRecoveryRequest { reselect_device })
+        .send(crate::infra::player::StreamingRecoveryRequest {
+          reselect_device,
+          continue_after_track: None,
+        })
         .is_ok();
     } else {
       self.native_backend_pending = false;
@@ -2879,15 +3467,36 @@ impl App {
     #[cfg(feature = "streaming")]
     {
       const NATIVE_LOAD_WATCHDOG: Duration = Duration::from_secs(5);
+      let restore_attempts = self
+        .native_restore_pending
+        .as_ref()
+        .and_then(|attempt| {
+          self
+            .native_playback_recovery
+            .as_ref()
+            .filter(|snapshot| snapshot.generation == attempt.generation)
+        })
+        .map_or(0, |snapshot| snapshot.recovery_attempts.saturating_sub(1));
       let watchdog_window = NATIVE_LOAD_WATCHDOG.saturating_mul(
         u32::from(
           self
             .pending_start_playback
             .as_ref()
-            .map_or(0, |pending| pending.recovery_attempts),
+            .map_or(restore_attempts, |pending| pending.recovery_attempts),
         ) + 1,
       );
-      if self
+      let native_reconnecting = self
+        .streaming_player
+        .as_ref()
+        .is_some_and(|player| player.is_recovering());
+      if native_reconnecting {
+        // A command accepted during the bounded fast-reconnect window is
+        // intentionally deferred by StreamingPlayer. Start its response window
+        // after the replacement Spirc exists, not while it is still connecting.
+        if let Some(watchdog) = self.native_load_watchdog.as_mut() {
+          *watchdog = Instant::now();
+        }
+      } else if self
         .native_load_watchdog
         .is_some_and(|armed| armed.elapsed() >= watchdog_window)
       {
@@ -2906,6 +3515,26 @@ impl App {
               "no player event within {}s of native load; forcing recovery attempt {}",
               NATIVE_LOAD_WATCHDOG.as_secs(),
               pending.recovery_attempts
+            );
+            self.force_native_streaming_recovery(true);
+          }
+        } else if let Some(attempt) = self.native_restore_pending.clone() {
+          let recovery_attempts = self
+            .native_playback_recovery
+            .as_ref()
+            .filter(|snapshot| snapshot.generation == attempt.generation)
+            .map_or(0, |snapshot| snapshot.recovery_attempts);
+          if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+            self.native_restore_pending = None;
+            self.set_status_message(
+              "Native connection recovered, but playback could not be restored.",
+              8,
+            );
+          } else {
+            log::warn!(
+              "native restore generation {} produced no matching player event; forcing recovery attempt {}",
+              attempt.generation,
+              recovery_attempts + 1
             );
             self.force_native_streaming_recovery(true);
           }
@@ -3253,10 +3882,11 @@ impl App {
   /// Execute a native seek and update tracking state
   #[cfg(feature = "streaming")]
   fn execute_native_seek(&mut self, position_ms: u32) {
-    if let Some(ref player) = self.streaming_player {
+    if let Some(player) = self.streaming_player.clone() {
       player.seek(position_ms);
       self.last_native_seek = Some(Instant::now());
       self.pending_native_seek = None;
+      self.set_native_recovery_position(position_ms);
 
       // Notify MPRIS clients that position jumped
       #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -3597,16 +4227,18 @@ impl App {
   }
 
   /// Check if native streaming is the active playback device
-  /// Returns true only if the player is connected AND it's the currently active device
+  /// Returns true while the player is connected or reconnecting and it is the
+  /// currently active device.
   #[cfg(feature = "streaming")]
   fn is_native_streaming_active_for_playback(&self) -> bool {
-    // Check if player exists and is connected
-    let player_connected = self
+    // Keep routing controls to the native backend during its bounded in-place
+    // reconnect; StreamingPlayer queues Spirc-dependent commands in that window.
+    let player_available = self
       .streaming_player
       .as_ref()
-      .is_some_and(|p| p.is_connected());
+      .is_some_and(|p| p.is_available());
 
-    if !player_connected {
+    if !player_available {
       return false;
     }
 
@@ -3962,19 +4594,46 @@ impl App {
     // (no context reload, no reshuffle) — the whole point of the session is
     // that a queue interruption cannot regenerate the remaining shuffle order.
     if let Some(session) = self.native_spotify_shuffle.as_ref() {
-      let generation = session.generation;
-      let resume_index = crate::infra::queue::resume_index_after_queue(
-        session.index,
-        session.order.len(),
-        self.native_shuffle_repeat_mode(),
-        cause,
-      );
-      self.queue_suspended = Some(crate::core::queue::SuspendedContext::SpotifyShuffled {
-        resume_index,
-        generation,
-      });
-      return;
+      // A lazily-seeded session whose context fetch failed for good has only
+      // its seed track — a shuffled resume would dead-end in "Queue finished",
+      // so fall through and snapshot the Spotify context instead.
+      if !(session.fetch_failed && session.order.len() <= 1) {
+        let generation = session.generation;
+        let resume_index = crate::infra::queue::resume_index_after_queue(
+          session.index,
+          session.order.len(),
+          self.native_shuffle_repeat_mode(),
+          cause,
+        );
+        let (context_uri, resume_track_uri) = self.spotify_context_snapshot_parts();
+        self.queue_suspended = Some(crate::core::queue::SuspendedContext::SpotifyShuffled {
+          resume_index,
+          generation,
+          context_uri,
+          resume_track_uri,
+        });
+        return;
+      }
     }
+    self.queue_suspended = Some(self.spotify_context_suspend_snapshot());
+  }
+
+  /// Snapshot the current Spotify context as a queue suspension: the resume
+  /// target is the mirror queue's head (the context's next track). Used by the
+  /// suspend fall-through above.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn spotify_context_suspend_snapshot(&self) -> crate::core::queue::SuspendedContext {
+    let (context_uri, resume_track_uri) = self.spotify_context_snapshot_parts();
+    crate::core::queue::SuspendedContext::Spotify {
+      context_uri,
+      resume_track_uri,
+    }
+  }
+
+  /// The live context snapshot pieces: the playing context's uri and the
+  /// Spotify mirror queue's head (the context's next track).
+  #[cfg(feature = "streaming")]
+  fn spotify_context_snapshot_parts(&self) -> (Option<String>, Option<String>) {
     let context_uri = self
       .current_playback_context
       .as_ref()
@@ -3988,9 +4647,57 @@ impl App {
         crate::core::plugin_api::PlayableInfo::Track(t) => t.uri.clone(),
         crate::core::plugin_api::PlayableInfo::Episode(e) => e.uri.clone(),
       });
-    self.queue_suspended = Some(crate::core::queue::SuspendedContext::Spotify {
+    if context_uri.is_some() || resume_track_uri.is_some() {
+      return (context_uri, resume_track_uri);
+    }
+    // Restored/direct-loaded playback has no server-side context and often an
+    // empty mirror queue, which used to snapshot `(None, None)` and dead-end
+    // the queue drain in "Queue finished" (no active playback after a queued
+    // song). The recovery snapshot still knows what was playing; consult it
+    // here, synchronously at suspend time, because the queued track's own
+    // direct load moves the recovery observer afterwards.
+    let Some(snapshot) = self.native_playback_recovery.as_ref() else {
+      return (None, None);
+    };
+    let next_track_uri = snapshot
+      .current_track_uri
+      .as_deref()
+      .and_then(|current| snapshot.next_raw_list_request(current))
+      .and_then(|request| {
+        let index = request.offset?;
+        request.uris?.into_iter().nth(index)
+      });
+    (snapshot.context_uri.clone(), next_track_uri)
+  }
+
+  /// Convert a shuffled queue suspension into a context snapshot. Called when
+  /// the shuffle session it indexes into is invalidated while suspended
+  /// (disconnect recovery, failed context fetch): the shuffled resume would be
+  /// a silent no-op and the queued tracks would drain into nothing. Prefers
+  /// the context captured at suspension time — by conversion time
+  /// `current_playback_context` may describe the queued track, not the
+  /// suspended context — and falls back to the live snapshot per field.
+  /// `only_generation` restricts the conversion to a suspension bound to that
+  /// session generation.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn convert_shuffled_suspension_to_context(&mut self, only_generation: Option<u64>) {
+    let Some(crate::core::queue::SuspendedContext::SpotifyShuffled {
+      generation,
       context_uri,
       resume_track_uri,
+      ..
+    }) = &self.queue_suspended
+    else {
+      return;
+    };
+    if only_generation.is_some_and(|g| *generation != g) {
+      return;
+    }
+    let stored = (context_uri.clone(), resume_track_uri.clone());
+    let live = self.spotify_context_snapshot_parts();
+    self.queue_suspended = Some(crate::core::queue::SuspendedContext::Spotify {
+      context_uri: stored.0.or(live.0),
+      resume_track_uri: stored.1.or(live.1),
     });
   }
 
@@ -4008,20 +4715,28 @@ impl App {
     // Mid-track semantics for a client-side shuffle session: resume the track
     // that was playing, at its position in the app-owned order.
     if let Some(session) = self.native_spotify_shuffle.as_ref() {
-      let generation = session.generation;
-      let resume_index = if session.index < session.order.len() {
-        Some(session.index)
-      } else {
-        None
-      };
-      self.queue_suspended = Some(crate::core::queue::SuspendedContext::SpotifyShuffled {
-        resume_index,
-        generation,
-      });
-      if let Some(player) = self.streaming_player.as_ref() {
-        player.pause();
+      // Same stranded-session fallback as the queue suspend: a seed-only
+      // session with a failed fetch would replay the seed and then dead-end,
+      // so fall through and resume through the context route instead.
+      if !(session.fetch_failed && session.order.len() <= 1) {
+        let generation = session.generation;
+        let resume_index = if session.index < session.order.len() {
+          Some(session.index)
+        } else {
+          None
+        };
+        let (context_uri, resume_track_uri) = self.spotify_context_snapshot_parts();
+        self.queue_suspended = Some(crate::core::queue::SuspendedContext::SpotifyShuffled {
+          resume_index,
+          generation,
+          context_uri,
+          resume_track_uri,
+        });
+        if let Some(player) = self.streaming_player.as_ref() {
+          player.pause();
+        }
+        return;
       }
-      return;
     }
     let context_uri = self
       .current_playback_context
@@ -4257,7 +4972,7 @@ impl App {
       QueueNowPlaying::Decoded(_) => return None,
       QueueNowPlaying::Spotify { track } => track.uri.clone(),
     }?;
-    let queued_id = queued_uri.rsplit(':').next().unwrap_or(queued_uri.as_str());
+    let queued_id = base62_id_of(&queued_uri);
     if queued_id == playing_base62_id {
       // The queued track is (re)confirmed playing: clear the retry budget.
       self.spotify_queue_guard_reloads = 0;
@@ -4668,7 +5383,7 @@ impl App {
         return;
       }
 
-      if let Some(ref player) = self.streaming_player {
+      if let Some(player) = self.streaming_player.clone() {
         let is_playing = self
           .native_is_playing
           .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
@@ -4680,6 +5395,7 @@ impl App {
         if is_playing {
           self.pending_start_playback = None;
           self.native_load_watchdog = None;
+          self.set_native_playback_intent(false);
           player.pause();
           // Update UI state immediately
           if let Some(ctx) = &mut self.current_playback_context {
@@ -4687,6 +5403,7 @@ impl App {
           }
           self.native_is_playing = Some(false);
         } else {
+          self.set_native_playback_intent(true);
           player.play();
           // Update UI state immediately
           if let Some(ctx) = &mut self.current_playback_context {
@@ -4751,10 +5468,11 @@ impl App {
       // If more than 3 seconds into the song, restart from beginning
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() {
-        if let Some(ref player) = self.streaming_player {
+        if let Some(player) = self.streaming_player.clone() {
           player.seek(0);
           self.song_progress_ms = 0;
           self.seek_ms = None;
+          self.set_native_recovery_position(0);
           return;
         }
       }
@@ -5484,6 +6202,9 @@ impl App {
       // falls back to Spirc shuffle for contexts the session doesn't cover.
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() && self.streaming_player.is_some() {
+        // Remember the desired state for a seamless-recovery replay, then let
+        // the network handler reorder/reload the client-side session.
+        self.set_native_recovery_shuffle(new_shuffle_state);
         self.dispatch(IoEvent::ToggleNativeShuffleSession(new_shuffle_state));
 
         // Update UI state immediately
@@ -5875,7 +6596,7 @@ impl App {
       // Use native streaming player for instant control (bypasses event channel latency)
       #[cfg(feature = "streaming")]
       if self.is_native_streaming_active_for_playback() {
-        if let Some(ref player) = self.streaming_player {
+        if let Some(player) = self.streaming_player.clone() {
           // Try to set repeat on the native player (pass current state, not next)
           let _ = player.set_repeat(current_repeat_state);
 
@@ -5885,6 +6606,7 @@ impl App {
             RepeatState::Context => RepeatState::Track,
             RepeatState::Track => RepeatState::Off,
           };
+          self.set_native_recovery_repeat(next_repeat_state);
 
           // Update UI state immediately
           if let Some(ctx) = &mut self.current_playback_context {
@@ -7590,6 +8312,207 @@ mod tests {
     );
   }
 
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn native_recovery_prefers_in_flight_loading_track() {
+    let mut app = App::default();
+    let generation = app.record_native_playback_request(
+      None,
+      Some(vec![
+        "spotify:track:current".to_string(),
+        "spotify:track:next".to_string(),
+      ]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    app.observe_native_playback_state("current".to_string(), 175_000, true);
+    app.observe_native_loading("next".to_string(), 0);
+
+    let snapshot = app.begin_native_playback_restore(generation).unwrap();
+
+    assert_eq!(snapshot.expected_track_uri(), Some("spotify:track:next"));
+    assert_eq!(snapshot.restore_position_ms(), 0);
+    assert!(snapshot.desired_playing);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn stale_native_event_does_not_confirm_restore_generation() {
+    let mut app = App::default();
+    let generation = app.record_native_playback_request(
+      None,
+      Some(vec!["spotify:track:expected".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    app.begin_native_playback_restore(generation).unwrap();
+
+    assert!(!app.observe_native_playback_state("spotify:track:stale".to_string(), 0, true));
+    assert!(app.native_restore_pending.is_some());
+
+    assert!(app.observe_native_playback_state("expected".to_string(), 12_000, true));
+    assert!(app.native_restore_pending.is_none());
+    assert_eq!(
+      app.native_playback_recovery.as_ref().unwrap().position_ms,
+      12_000
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn transport_pause_does_not_overwrite_explicit_play_intent() {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec!["spotify:track:current".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+
+    app.observe_native_playback_state("current".to_string(), 20_000, false);
+    app.prepare_native_playback_recovery(20_000, false);
+
+    assert!(
+      app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing
+    );
+
+    app.set_native_playback_intent(false);
+    assert!(
+      !app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn completed_track_during_transport_loss_is_detected_for_recovery() {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec![
+        "spotify:track:finished".to_string(),
+        "spotify:track:next".to_string(),
+      ]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    app.observe_native_track_changed("finished".to_string(), NativeTrackKind::Track, 389_094);
+
+    app.prepare_native_playback_recovery(395_562, false);
+
+    assert_eq!(
+      app
+        .native_playback_recovery
+        .as_ref()
+        .and_then(NativePlaybackRecoverySnapshot::completed_track_uri),
+      Some("spotify:track:finished")
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn native_raw_list_next_request_matches_uri_and_base62_forms() {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec![
+        "spotify:track:first".to_string(),
+        "spotify:track:second".to_string(),
+      ]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+
+    let request = app.native_raw_list_next_request("first").unwrap();
+
+    assert_eq!(request.offset, Some(1));
+    assert_eq!(
+      request.uris.as_deref(),
+      Some(
+        [
+          "spotify:track:first".to_string(),
+          "spotify:track:second".to_string(),
+        ]
+        .as_slice()
+      )
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  fn raw_list_app(offset: usize, repeat: RepeatState) -> App {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec![
+        "spotify:track:first".to_string(),
+        "spotify:track:second".to_string(),
+      ]),
+      Some(offset),
+      true,
+      false,
+      repeat,
+    );
+    app
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn raw_list_is_exhausted_after_the_last_track_with_repeat_off() {
+    let app = raw_list_app(1, RepeatState::Off);
+    assert!(app.native_raw_list_playback_exhausted("second"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn raw_list_is_not_exhausted_mid_list_or_while_repeating() {
+    let app = raw_list_app(0, RepeatState::Off);
+    assert!(!app.native_raw_list_playback_exhausted("first"));
+
+    let app = raw_list_app(1, RepeatState::Context);
+    assert!(!app.native_raw_list_playback_exhausted("second"));
+
+    let app = raw_list_app(1, RepeatState::Track);
+    assert!(!app.native_raw_list_playback_exhausted("second"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn raw_list_is_not_exhausted_for_context_playback_or_advanced_transitions() {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      Some("spotify:playlist:ctx".to_string()),
+      Some(vec!["spotify:track:first".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    assert!(!app.native_raw_list_playback_exhausted("first"));
+
+    // A transition onto another track means playback advanced; the list is in
+    // use, not exhausted.
+    let mut app = raw_list_app(1, RepeatState::Off);
+    app.observe_native_loading("spotify:track:other".to_string(), 0);
+    assert!(!app.native_raw_list_playback_exhausted("second"));
+  }
+
   #[allow(deprecated)]
   fn full_track(id: &str, name: &str) -> FullTrack {
     FullTrack {
@@ -7853,6 +8776,7 @@ mod tests {
       index: 1,
       shuffled: true,
       fetch_complete: true,
+      fetch_failed: false,
       generation: 42,
       pending_reload_index: None,
       pending_manual_skip: None,
@@ -7865,6 +8789,7 @@ mod tests {
       Some(SuspendedContext::SpotifyShuffled {
         resume_index,
         generation,
+        ..
       }) => {
         assert_eq!(
           resume_index,
@@ -7889,6 +8814,293 @@ mod tests {
       }
       other => panic!("expected a shuffled suspension, got {other:?}"),
     }
+  }
+
+  #[test]
+  fn base62_id_of_strips_the_uri_prefix() {
+    assert_eq!(
+      base62_id_of("spotify:track:6q02DsdnysAHuwmxFuI20c"),
+      "6q02DsdnysAHuwmxFuI20c"
+    );
+    assert_eq!(base62_id_of("spotify:episode:abc"), "abc");
+    // A bare id passes through unchanged.
+    assert_eq!(
+      base62_id_of("6q02DsdnysAHuwmxFuI20c"),
+      "6q02DsdnysAHuwmxFuI20c"
+    );
+    // A Spotify local-track URI's only unique identity is the full string;
+    // stripping to the last segment would collide tracks by duration.
+    assert_eq!(
+      base62_id_of("spotify:local:Artist:Album:Title:213"),
+      "spotify:local:Artist:Album:Title:213"
+    );
+  }
+
+  /// Regression for the frozen shuffle index: librespot 0.8's `TrackChanged`
+  /// reports the full `spotify:track:<id>` URI, and feeding that through
+  /// unnormalized made every order lookup miss, so `session.index` stayed at 0
+  /// for the whole session. The event boundary now normalizes to the bare id;
+  /// an auto advance must move the index to the playing track.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn sync_native_shuffle_index_advances_on_auto_track_changed() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+      order: vec![
+        "spotify:track:a".to_string(),
+        "spotify:track:b".to_string(),
+        "spotify:track:c".to_string(),
+      ],
+      original: Vec::new(),
+      index: 0,
+      shuffled: true,
+      fetch_complete: true,
+      fetch_failed: false,
+      generation: 1,
+      pending_reload_index: None,
+      pending_manual_skip: None,
+    });
+
+    // What the event boundary hands over for librespot's full-URI form.
+    let playing_uri = "spotify:track:b".to_string();
+    app.sync_native_shuffle_index(base62_id_of(&playing_uri));
+
+    assert_eq!(app.native_spotify_shuffle.as_ref().unwrap().index, 1);
+  }
+
+  /// Queue resume targets the track *after* the one that was playing: with the
+  /// index synced to 2, an auto-advance suspend under repeat Off stores resume
+  /// index 3. (The frozen index always produced 1, replaying or rewinding to
+  /// the second shuffled track after every queue drain.)
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn queue_resume_targets_the_track_after_the_synced_index() {
+    use crate::core::queue::SuspendedContext;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+      order: vec![
+        "spotify:track:a".to_string(),
+        "spotify:track:b".to_string(),
+        "spotify:track:c".to_string(),
+        "spotify:track:d".to_string(),
+      ],
+      original: Vec::new(),
+      index: 0,
+      shuffled: true,
+      fetch_complete: true,
+      fetch_failed: false,
+      generation: 7,
+      pending_reload_index: None,
+      pending_manual_skip: None,
+    });
+
+    let playing_uri = "spotify:track:c".to_string();
+    app.sync_native_shuffle_index(base62_id_of(&playing_uri));
+    app.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::AutoAdvance);
+
+    match app.queue_suspended {
+      Some(SuspendedContext::SpotifyShuffled { resume_index, .. }) => {
+        assert_eq!(resume_index, Some(3));
+      }
+      other => panic!("expected a shuffled suspension, got {other:?}"),
+    }
+  }
+
+  /// A playlist shuffle session whose background context fetch failed for good
+  /// is stuck on its seed track. Suspending for the queue must snapshot the
+  /// Spotify context (resumable through the context route) instead of storing
+  /// a shuffled resume that dead-ends in "Queue finished".
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn stranded_seed_only_shuffle_session_suspends_to_the_context() {
+    use crate::core::queue::SuspendedContext;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(context_playing("spotify:playlist:ctx"));
+    app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+      order: vec!["spotify:track:seed".to_string()],
+      original: vec!["spotify:track:seed".to_string()],
+      index: 0,
+      shuffled: true,
+      fetch_complete: true,
+      fetch_failed: true,
+      generation: 1,
+      pending_reload_index: None,
+      pending_manual_skip: None,
+    });
+
+    app.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::AutoAdvance);
+
+    match app.queue_suspended {
+      Some(SuspendedContext::Spotify { context_uri, .. }) => {
+        assert_eq!(context_uri.as_deref(), Some("spotify:playlist:ctx"));
+      }
+      other => panic!("expected a context suspension, got {other:?}"),
+    }
+  }
+
+  /// A genuinely one-track context (fetch succeeded, nothing more to play)
+  /// still suspends as a shuffled session: its `None` resume correctly means
+  /// "context exhausted" rather than a stranded fetch.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn exhausted_one_track_shuffle_session_still_suspends_shuffled() {
+    use crate::core::queue::SuspendedContext;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+      order: vec!["spotify:track:only".to_string()],
+      original: vec!["spotify:track:only".to_string()],
+      index: 0,
+      shuffled: true,
+      fetch_complete: true,
+      fetch_failed: false,
+      generation: 2,
+      pending_reload_index: None,
+      pending_manual_skip: None,
+    });
+
+    app.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::AutoAdvance);
+
+    match app.queue_suspended {
+      Some(SuspendedContext::SpotifyShuffled { resume_index, .. }) => {
+        assert_eq!(resume_index, None, "one-track context is exhausted");
+      }
+      other => panic!("expected a shuffled suspension, got {other:?}"),
+    }
+  }
+
+  /// Disconnect recovery clears the shuffle session, which orphans a shuffled
+  /// queue suspension (the generation check turns the resume into a silent
+  /// no-op and the queued tracks vanish). Converting it to a context snapshot
+  /// first keeps the drain resumable through the context route.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn shuffled_suspension_converts_to_context_when_session_is_cleared() {
+    use crate::core::queue::SuspendedContext;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(context_playing("spotify:playlist:ctx"));
+    app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+      order: vec!["spotify:track:a".to_string(), "spotify:track:b".to_string()],
+      original: Vec::new(),
+      index: 0,
+      shuffled: true,
+      fetch_complete: true,
+      fetch_failed: false,
+      generation: 5,
+      pending_reload_index: None,
+      pending_manual_skip: None,
+    });
+    // The suspension carries the context captured when it was created; by
+    // disconnect time the live context may describe the queued track instead.
+    app.queue_suspended = Some(SuspendedContext::SpotifyShuffled {
+      resume_index: Some(1),
+      generation: 5,
+      context_uri: Some("spotify:playlist:captured".to_string()),
+      resume_track_uri: None,
+    });
+
+    // What disconnect recovery does, in order.
+    app.convert_shuffled_suspension_to_context(None);
+    app.clear_native_shuffle_session();
+
+    match app.queue_suspended.take() {
+      Some(SuspendedContext::Spotify { context_uri, .. }) => {
+        assert_eq!(
+          context_uri.as_deref(),
+          Some("spotify:playlist:captured"),
+          "the suspension-time context wins over the live one"
+        );
+      }
+      other => panic!("expected a context suspension, got {other:?}"),
+    }
+
+    // Without a captured context the conversion falls back to the live one.
+    app.queue_suspended = Some(SuspendedContext::SpotifyShuffled {
+      resume_index: Some(1),
+      generation: 6,
+      context_uri: None,
+      resume_track_uri: None,
+    });
+    app.convert_shuffled_suspension_to_context(None);
+    match app.queue_suspended {
+      Some(SuspendedContext::Spotify { context_uri, .. }) => {
+        assert_eq!(context_uri.as_deref(), Some("spotify:playlist:ctx"));
+      }
+      other => panic!("expected a context suspension, got {other:?}"),
+    }
+  }
+
+  /// Restored/direct-loaded playback has no live context and no mirror queue;
+  /// the suspend fallback consults the recovery snapshot so the queue drain
+  /// resumes the next raw-list track instead of dead-ending in "Queue
+  /// finished" (observed as "No active playback" after a queued song).
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn empty_live_state_suspension_falls_back_to_the_recovery_snapshot() {
+    use crate::core::queue::SuspendedContext;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_playback_recovery = Some(NativePlaybackRecoverySnapshot {
+      generation: 1,
+      context_uri: None,
+      uris: Some(vec![
+        "spotify:track:a".to_string(),
+        "spotify:track:b".to_string(),
+        "spotify:track:c".to_string(),
+      ]),
+      offset: Some(0),
+      current_track_uri: Some("spotify:track:a".to_string()),
+      loading_track_uri: None,
+      track_duration_ms: None,
+      position_ms: 0,
+      desired_playing: true,
+      shuffle: false,
+      repeat: RepeatState::Off,
+      recovery_attempts: 0,
+    });
+
+    app.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::AutoAdvance);
+
+    match app.queue_suspended {
+      Some(SuspendedContext::Spotify {
+        context_uri,
+        resume_track_uri,
+      }) => {
+        assert_eq!(context_uri, None);
+        assert_eq!(
+          resume_track_uri.as_deref(),
+          Some("spotify:track:b"),
+          "the drain must resume the track after the one that was playing"
+        );
+      }
+      other => panic!("expected a context suspension, got {other:?}"),
+    }
+  }
+
+  /// The Spirc self-advance guard compares bare ids: the queued track's own
+  /// `TrackChanged` (normalized at the event boundary) reads as confirmation,
+  /// not as Spirc fighting back. (Comparing against the full URI reissued every
+  /// queued track up to the retry budget, restarting it from position 0.)
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn queue_guard_confirms_queued_track_from_normalized_event_id() {
+    use crate::infra::queue::QueueNowPlaying;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queue_track(Some("spotify:track:queued"), "Queued"),
+    });
+
+    let playing_uri = "spotify:track:queued".to_string();
+    assert_eq!(
+      app.spotify_queue_guard_reload_uri(base62_id_of(&playing_uri)),
+      None,
+      "the queued track's own TrackChanged must not trigger a reload"
+    );
   }
 
   /// When the native queue slot owns playback, `next_track` advances the queue

@@ -3,7 +3,7 @@
 //! Handles authentication, session management, and audio playback with Spotify Connect.
 
 use anyhow::{anyhow, Context, Result};
-use librespot_connect::{ConnectConfig, LoadRequest, Spirc};
+use librespot_connect::{ConnectConfig, LoadRequest, SavedPlaybackState, Spirc};
 use librespot_core::{
   authentication::Credentials,
   cache::Cache,
@@ -27,10 +27,342 @@ use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
+
+const FAST_SESSION_RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+type SpircTaskHandle = tokio::task::JoinHandle<Option<SavedPlaybackState>>;
+
+struct ActiveConnection {
+  spirc: Spirc,
+  session: Session,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpircCommandMode {
+  Connected,
+  Reconnecting,
+  Failed,
+  Shutdown,
+}
+
+enum DeferredPlayerCommand {
+  Load(LoadRequest),
+  Play,
+  Pause,
+  Stop,
+  Next,
+  Prev,
+  Seek(u32),
+  Shuffle(bool),
+  Repeat(bool),
+  RepeatTrack(bool),
+  Activate,
+  Transfer(Option<TransferRequest>),
+  DirectLoad(SpotifyUri, bool),
+}
+
+impl DeferredPlayerCommand {
+  fn apply(self, spirc: &Spirc, player: &Player) -> std::result::Result<(), librespot_core::Error> {
+    match self {
+      Self::Load(request) => spirc.load(request),
+      Self::Play => spirc.play(),
+      Self::Pause => spirc.pause(),
+      Self::Stop => {
+        player.stop();
+        Ok(())
+      }
+      Self::Next => spirc.next(),
+      Self::Prev => spirc.prev(),
+      Self::Seek(position_ms) => {
+        player.seek(position_ms);
+        Ok(())
+      }
+      Self::Shuffle(shuffle) => spirc.shuffle(shuffle),
+      Self::Repeat(repeat) => spirc.repeat(repeat),
+      Self::RepeatTrack(repeat) => spirc.repeat_track(repeat),
+      Self::Activate => spirc.activate(),
+      Self::Transfer(request) => spirc.transfer(request),
+      Self::DirectLoad(uri, start_playing) => {
+        player.load(uri, start_playing, 0);
+        Ok(())
+      }
+    }
+  }
+
+  fn apply_to_buffered_player(&self, player: &Player) {
+    match self {
+      Self::Play => player.play(),
+      Self::Pause => player.pause(),
+      Self::Stop => player.stop(),
+      Self::Seek(position_ms) => player.seek(*position_ms),
+      _ => {}
+    }
+  }
+}
+
+struct SpircCommandRouter {
+  mode: SpircCommandMode,
+  deferred: Vec<DeferredPlayerCommand>,
+}
+
+impl Default for SpircCommandRouter {
+  fn default() -> Self {
+    Self {
+      mode: SpircCommandMode::Connected,
+      deferred: Vec::new(),
+    }
+  }
+}
+
+/// Runtime state of the embedded Spotify Connect connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamingConnectionState {
+  Connected { generation: u64 },
+  Reconnecting { generation: u64 },
+  Failed { generation: u64 },
+  Shutdown,
+}
+
+impl StreamingConnectionState {
+  fn accepts_commands(self) -> bool {
+    matches!(self, Self::Connected { .. } | Self::Reconnecting { .. })
+  }
+}
+
+struct SpircSupervisorContext {
+  spirc_task: SpircTaskHandle,
+  connection: Arc<RwLock<ActiveConnection>>,
+  player: Arc<Player>,
+  mixer: Arc<SoftMixer>,
+  cache: Cache,
+  credentials: Credentials,
+  session_config: SessionConfig,
+  connect_config: ConnectConfig,
+  shutdown_requested: Arc<AtomicBool>,
+  shutdown_rx: tokio::sync::watch::Receiver<bool>,
+  connection_state_tx: tokio::sync::watch::Sender<StreamingConnectionState>,
+  command_router: Arc<std::sync::Mutex<SpircCommandRouter>>,
+}
+
+fn spawn_spirc_supervisor(ctx: SpircSupervisorContext) {
+  tokio::spawn(run_spirc_supervisor(ctx));
+}
+
+async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
+  let mut generation = 0_u64;
+
+  loop {
+    let saved_state = tokio::select! {
+      result = &mut ctx.spirc_task => match result {
+        Ok(saved) => saved,
+        Err(error) => {
+          warn!("Spirc task failed: {error}");
+          let mut router = ctx
+            .command_router
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+          router.mode = SpircCommandMode::Failed;
+          router.deferred.clear();
+          drop(router);
+          let _ = ctx
+            .connection_state_tx
+            .send(StreamingConnectionState::Failed { generation });
+          return;
+        }
+      },
+      changed = ctx.shutdown_rx.changed() => {
+        if changed.is_err() || *ctx.shutdown_rx.borrow() {
+          let mut router = ctx
+            .command_router
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+          router.mode = SpircCommandMode::Shutdown;
+          router.deferred.clear();
+          let _ = ctx.connection_state_tx.send(StreamingConnectionState::Shutdown);
+          return;
+        }
+        continue;
+      }
+    };
+
+    if ctx.shutdown_requested.load(Ordering::Relaxed) {
+      let mut router = ctx
+        .command_router
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      router.mode = SpircCommandMode::Shutdown;
+      router.deferred.clear();
+      let _ = ctx
+        .connection_state_tx
+        .send(StreamingConnectionState::Shutdown);
+      return;
+    }
+
+    let Some(saved_state) = saved_state else {
+      warn!("Spirc task exited without recoverable playback state");
+      let mut router = ctx
+        .command_router
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      router.mode = SpircCommandMode::Failed;
+      router.deferred.clear();
+      drop(router);
+      let _ = ctx
+        .connection_state_tx
+        .send(StreamingConnectionState::Failed { generation });
+      return;
+    };
+
+    generation = generation.wrapping_add(1);
+    info!(
+      "Spotify access-point session lost; starting fast reconnect generation {}",
+      generation
+    );
+    ctx
+      .command_router
+      .lock()
+      .unwrap_or_else(std::sync::PoisonError::into_inner)
+      .mode = SpircCommandMode::Reconnecting;
+    let _ = ctx
+      .connection_state_tx
+      .send(StreamingConnectionState::Reconnecting { generation });
+
+    let replacement_session = Session::new(ctx.session_config.clone(), Some(ctx.cache.clone()));
+    // Match librespot's standalone supervisor: the existing Player starts using
+    // the replacement Session before the restored Spirc begins processing events.
+    ctx.player.set_session(replacement_session.clone());
+    ctx
+      .connection
+      .write()
+      .unwrap_or_else(std::sync::PoisonError::into_inner)
+      .session = replacement_session.clone();
+
+    let reconnect = Spirc::with_saved_state(
+      ctx.connect_config.clone(),
+      replacement_session.clone(),
+      ctx.credentials.clone(),
+      Arc::clone(&ctx.player),
+      ctx.mixer.clone(),
+      Some(saved_state),
+    );
+
+    let reconnect_result = tokio::select! {
+      result = timeout(FAST_SESSION_RECONNECT_TIMEOUT, reconnect) => Some(result),
+      changed = ctx.shutdown_rx.changed() => {
+        if changed.is_err() || *ctx.shutdown_rx.borrow() {
+          replacement_session.shutdown();
+          let mut router = ctx
+            .command_router
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+          router.mode = SpircCommandMode::Shutdown;
+          router.deferred.clear();
+          let _ = ctx.connection_state_tx.send(StreamingConnectionState::Shutdown);
+          return;
+        }
+        None
+      }
+    };
+
+    let Some(reconnect_result) = reconnect_result else {
+      continue;
+    };
+
+    match reconnect_result {
+      Ok(Ok((replacement_spirc, replacement_task))) => {
+        {
+          let mut router = ctx
+            .command_router
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+          // shutdown() may have run while the reconnect was completing; it only
+          // reached the previous Spirc. Installing the replacement would revive
+          // the router and leak the new session as a ghost Connect device
+          // (#297), so tear it down instead. Holding the router lock for the
+          // install keeps shutdown() ordered before or after the whole swap.
+          if router.mode == SpircCommandMode::Shutdown {
+            drop(router);
+            let _ = replacement_spirc.shutdown();
+            replacement_session.shutdown();
+            // Drive the task so it processes the shutdown command and exits.
+            tokio::spawn(replacement_task);
+            return;
+          }
+          {
+            let mut connection = ctx
+              .connection
+              .write()
+              .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *connection = ActiveConnection {
+              spirc: replacement_spirc,
+              session: replacement_session,
+            };
+          }
+          router.mode = SpircCommandMode::Connected;
+          let commands = std::mem::take(&mut router.deferred);
+          let connection = ctx
+            .connection
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+          for command in commands {
+            if let Err(error) = command.apply(&connection.spirc, &ctx.player) {
+              warn!("deferred native command failed after fast reconnect: {error:?}");
+            }
+          }
+        }
+        ctx.spirc_task = tokio::spawn(replacement_task);
+        let _ = ctx
+          .connection_state_tx
+          .send(StreamingConnectionState::Connected { generation });
+        info!(
+          "Spotify access-point session fast reconnect generation {} established",
+          generation
+        );
+      }
+      Ok(Err(error)) => {
+        replacement_session.shutdown();
+        let mut router = ctx
+          .command_router
+          .lock()
+          .unwrap_or_else(std::sync::PoisonError::into_inner);
+        router.mode = SpircCommandMode::Failed;
+        router.deferred.clear();
+        drop(router);
+        warn!(
+          "Spotify access-point fast reconnect generation {} failed: {:?}",
+          generation, error
+        );
+        let _ = ctx
+          .connection_state_tx
+          .send(StreamingConnectionState::Failed { generation });
+        return;
+      }
+      Err(_) => {
+        replacement_session.shutdown();
+        let mut router = ctx
+          .command_router
+          .lock()
+          .unwrap_or_else(std::sync::PoisonError::into_inner);
+        router.mode = SpircCommandMode::Failed;
+        router.deferred.clear();
+        drop(router);
+        warn!(
+          "Spotify access-point fast reconnect generation {} timed out after {}s",
+          generation,
+          FAST_SESSION_RECONNECT_TIMEOUT.as_secs()
+        );
+        let _ = ctx
+          .connection_state_tx
+          .send(StreamingConnectionState::Failed { generation });
+        return;
+      }
+    }
+  }
+}
 
 struct RecoveringSink {
   inner: Option<Box<dyn audio_backend::Sink>>,
@@ -331,10 +663,8 @@ pub struct PlayerState {
 /// This player registers as a Spotify Connect device and handles
 /// native audio playback through the configured audio backend.
 pub struct StreamingPlayer {
-  #[allow(dead_code)]
-  spirc: Spirc,
-  #[allow(dead_code)]
-  session: Session,
+  connection: Arc<RwLock<ActiveConnection>>,
+  command_router: Arc<std::sync::Mutex<SpircCommandRouter>>,
   #[allow(dead_code)]
   player: Arc<Player>,
   #[allow(dead_code)]
@@ -342,14 +672,17 @@ pub struct StreamingPlayer {
   config: StreamingConfig,
   #[allow(dead_code)]
   state: Arc<Mutex<PlayerState>>,
-  spirc_alive: Arc<AtomicBool>,
+  shutdown_requested: Arc<AtomicBool>,
+  shutdown_tx: tokio::sync::watch::Sender<bool>,
+  connection_state_tx: tokio::sync::watch::Sender<StreamingConnectionState>,
+  connection_state_rx: tokio::sync::watch::Receiver<StreamingConnectionState>,
 }
 
 #[allow(dead_code)]
 impl StreamingPlayer {
-  /// Get a reference to the librespot session (for API calls like rootlist)
-  pub fn session(&self) -> &Session {
-    &self.session
+  /// Get the current librespot session (for API calls like rootlist).
+  pub fn session(&self) -> Session {
+    self.with_connection(|connection| connection.session.clone())
   }
 
   /// Create a new streaming player using librespot-oauth for authentication
@@ -415,7 +748,7 @@ impl StreamingPlayer {
     }
 
     // Create session (Spirc will handle connection)
-    let session = Session::new(session_config, Some(cache));
+    let session = Session::new(session_config.clone(), Some(cache.clone()));
 
     // Set up player configuration
     let player_config = PlayerConfig {
@@ -492,7 +825,7 @@ impl StreamingPlayer {
       let spirc_new = Spirc::new(
         connect_config.clone(),
         session.clone(),
-        credentials,
+        credentials.clone(),
         player.clone(),
         mixer.clone(),
       );
@@ -546,27 +879,74 @@ impl StreamingPlayer {
       }
     };
 
-    // Track the Spirc runtime lifecycle so liveness checks can detect dead
-    // Connect sessions even if the player thread is still running.
-    let spirc_alive = Arc::new(AtomicBool::new(true));
-    let spirc_alive_for_task = Arc::clone(&spirc_alive);
-    let spirc_handle = tokio::spawn(spirc_task);
-    tokio::spawn(async move {
-      let _ = spirc_handle.await;
-      spirc_alive_for_task.store(false, Ordering::Relaxed);
+    let connection = Arc::new(RwLock::new(ActiveConnection { spirc, session }));
+    let command_router = Arc::new(std::sync::Mutex::new(SpircCommandRouter::default()));
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let initial_connection_state = StreamingConnectionState::Connected { generation: 0 };
+    let (connection_state_tx, connection_state_rx) =
+      tokio::sync::watch::channel(initial_connection_state);
+
+    spawn_spirc_supervisor(SpircSupervisorContext {
+      spirc_task: tokio::spawn(spirc_task),
+      connection: Arc::clone(&connection),
+      player: Arc::clone(&player),
+      mixer: Arc::clone(&mixer),
+      cache,
+      credentials,
+      session_config,
+      connect_config,
+      shutdown_requested: Arc::clone(&shutdown_requested),
+      shutdown_rx,
+      connection_state_tx: connection_state_tx.clone(),
+      command_router: Arc::clone(&command_router),
     });
 
     info!("Streaming connection established!");
 
     Ok(Self {
-      spirc,
-      session,
+      connection,
+      command_router,
       player,
       mixer,
       config,
       state: Arc::new(Mutex::new(PlayerState::default())),
-      spirc_alive,
+      shutdown_requested,
+      shutdown_tx,
+      connection_state_tx,
+      connection_state_rx,
     })
+  }
+
+  fn with_connection<T>(&self, f: impl FnOnce(&ActiveConnection) -> T) -> T {
+    let connection = self
+      .connection
+      .read()
+      .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(&connection)
+  }
+
+  fn with_spirc<T>(&self, f: impl FnOnce(&Spirc) -> T) -> T {
+    self.with_connection(|connection| f(&connection.spirc))
+  }
+
+  fn route_command(&self, command: DeferredPlayerCommand) -> Result<()> {
+    let mut router = self
+      .command_router
+      .lock()
+      .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match router.mode {
+      SpircCommandMode::Connected => self
+        .with_connection(|connection| command.apply(&connection.spirc, &self.player))
+        .map_err(|error| anyhow!("Native playback command failed: {error:?}")),
+      SpircCommandMode::Reconnecting => {
+        command.apply_to_buffered_player(&self.player);
+        router.deferred.push(command);
+        Ok(())
+      }
+      SpircCommandMode::Failed => Err(anyhow!("Native streaming connection failed")),
+      SpircCommandMode::Shutdown => Err(anyhow!("Native streaming player is shut down")),
+    }
   }
 
   /// Get the device name
@@ -576,14 +956,33 @@ impl StreamingPlayer {
 
   /// Get the Spotify Connect device id for this session.
   pub fn device_id(&self) -> String {
-    self.session.device_id().to_string()
+    self.with_connection(|connection| connection.session.device_id().to_string())
   }
 
   /// Check if the session is connected
   pub fn is_connected(&self) -> bool {
-    self.spirc_alive.load(Ordering::Relaxed)
-      && !self.session.is_invalid()
+    matches!(
+      self.connection_state(),
+      StreamingConnectionState::Connected { .. }
+    ) && self.with_connection(|connection| !connection.session.is_invalid())
       && !self.player.is_invalid()
+  }
+
+  pub fn is_recovering(&self) -> bool {
+    matches!(
+      self.connection_state(),
+      StreamingConnectionState::Reconnecting { .. }
+    )
+  }
+
+  /// Whether the native backend can accept commands now or queue them for its
+  /// in-place reconnect.
+  pub fn is_available(&self) -> bool {
+    self.connection_state().accepts_commands()
+  }
+
+  pub fn connection_state(&self) -> StreamingConnectionState {
+    *self.connection_state_rx.borrow()
   }
 
   /// Play a track by its Spotify URI (e.g., "spotify:track:xxxx")
@@ -591,10 +990,26 @@ impl StreamingPlayer {
     let spotify_uri =
       SpotifyUri::from_uri(uri).map_err(|e| anyhow!("Invalid Spotify URI '{}': {:?}", uri, e))?;
 
-    self.player.load(spotify_uri, true, 0);
+    self.route_command(DeferredPlayerCommand::DirectLoad(spotify_uri, true))?;
 
     let mut state = self.state.lock().await;
     state.is_playing = true;
+    state.track_id = Some(uri.to_string());
+    state.position_ms = 0;
+
+    Ok(())
+  }
+
+  /// Load a track by URI without starting playback. Used to restore a paused
+  /// queue slot after recovery so the user's pause survives the rebuild.
+  pub async fn load_uri_paused(&self, uri: &str) -> Result<()> {
+    let spotify_uri =
+      SpotifyUri::from_uri(uri).map_err(|e| anyhow!("Invalid Spotify URI '{}': {:?}", uri, e))?;
+
+    self.route_command(DeferredPlayerCommand::DirectLoad(spotify_uri, false))?;
+
+    let mut state = self.state.lock().await;
+    state.is_playing = false;
     state.track_id = Some(uri.to_string());
     state.position_ms = 0;
 
@@ -606,10 +1021,7 @@ impl StreamingPlayer {
   /// Prefer this over `player.load()` when you want Connect state (queue, context)
   /// to stay consistent.
   pub fn load(&self, request: LoadRequest) -> Result<()> {
-    self
-      .spirc
-      .load(request)
-      .map_err(|e| anyhow!("Failed to load playback via Spirc: {:?}", e))
+    self.route_command(DeferredPlayerCommand::Load(request))
   }
 
   /// Play a track by its Spotify ID (will be converted to URI)
@@ -630,42 +1042,49 @@ impl StreamingPlayer {
 
   /// Pause playback
   pub fn pause(&self) {
-    // Prefer going through Spirc so Connect state stays consistent.
-    let _ = self.spirc.pause();
-    self.player.pause();
+    if let Err(error) = self.route_command(DeferredPlayerCommand::Pause) {
+      warn!("native pause failed: {error}");
+    }
   }
 
   /// Resume playback
   pub fn play(&self) {
-    // Prefer going through Spirc so Connect state stays consistent.
-    // Also call the underlying player directly as a best-effort fallback.
-    let _ = self.spirc.play();
-    self.player.play();
+    if let Err(error) = self.route_command(DeferredPlayerCommand::Play) {
+      warn!("native play failed: {error}");
+    }
   }
 
   /// Stop playback
   pub fn stop(&self) {
-    self.player.stop();
+    if let Err(error) = self.route_command(DeferredPlayerCommand::Stop) {
+      warn!("native stop failed: {error}");
+    }
   }
 
   /// Skip to the next track
   pub fn next(&self) {
-    let _ = self.spirc.next();
+    if let Err(error) = self.route_command(DeferredPlayerCommand::Next) {
+      warn!("native next failed: {error}");
+    }
   }
 
   /// Skip to the previous track
   pub fn prev(&self) {
-    let _ = self.spirc.prev();
+    if let Err(error) = self.route_command(DeferredPlayerCommand::Prev) {
+      warn!("native previous failed: {error}");
+    }
   }
 
   /// Seek to a position in the current track (in milliseconds)
   pub fn seek(&self, position_ms: u32) {
-    self.player.seek(position_ms);
+    if let Err(error) = self.route_command(DeferredPlayerCommand::Seek(position_ms)) {
+      warn!("native seek failed: {error}");
+    }
   }
 
   /// Toggle shuffle mode via the underlying Spotify Connect session
   pub fn set_shuffle(&self, shuffle: bool) -> Result<()> {
-    Ok(self.spirc.shuffle(shuffle)?)
+    self.route_command(DeferredPlayerCommand::Shuffle(shuffle))
   }
 
   /// Set repeat mode via the underlying Spotify Connect session
@@ -675,18 +1094,15 @@ impl StreamingPlayer {
 
     match current_state {
       RepeatState::Off => {
-        // Off -> Context: Enable context repeat
-        self.spirc.repeat(true)?;
-        self.spirc.repeat_track(false)?;
+        self.route_command(DeferredPlayerCommand::Repeat(true))?;
+        self.route_command(DeferredPlayerCommand::RepeatTrack(false))?;
       }
       RepeatState::Context => {
-        // Context -> Track: Enable track repeat, keep context repeat
-        self.spirc.repeat_track(true)?;
+        self.route_command(DeferredPlayerCommand::RepeatTrack(true))?;
       }
       RepeatState::Track => {
-        // Track -> Off: Disable both
-        self.spirc.repeat(false)?;
-        self.spirc.repeat_track(false)?;
+        self.route_command(DeferredPlayerCommand::Repeat(false))?;
+        self.route_command(DeferredPlayerCommand::RepeatTrack(false))?;
       }
     }
     Ok(())
@@ -698,16 +1114,16 @@ impl StreamingPlayer {
 
     match target_state {
       RepeatState::Off => {
-        self.spirc.repeat(false)?;
-        self.spirc.repeat_track(false)?;
+        self.route_command(DeferredPlayerCommand::Repeat(false))?;
+        self.route_command(DeferredPlayerCommand::RepeatTrack(false))?;
       }
       RepeatState::Context => {
-        self.spirc.repeat(true)?;
-        self.spirc.repeat_track(false)?;
+        self.route_command(DeferredPlayerCommand::Repeat(true))?;
+        self.route_command(DeferredPlayerCommand::RepeatTrack(false))?;
       }
       RepeatState::Track => {
-        self.spirc.repeat(true)?;
-        self.spirc.repeat_track(true)?;
+        self.route_command(DeferredPlayerCommand::Repeat(true))?;
+        self.route_command(DeferredPlayerCommand::RepeatTrack(true))?;
       }
     }
     Ok(())
@@ -739,8 +1155,8 @@ impl StreamingPlayer {
   pub fn activate(&self) {
     // Not fatal (transfer() is the reliable route), but a failure here used to
     // vanish entirely, hiding zombie sessions from the logs.
-    if let Err(e) = self.spirc.activate() {
-      log::warn!("spirc activate failed: {e:?}");
+    if let Err(error) = self.route_command(DeferredPlayerCommand::Activate) {
+      warn!("spirc activate failed: {error}");
     }
   }
 
@@ -749,16 +1165,31 @@ impl StreamingPlayer {
   /// This is the most reliable way to become the active device; `activate()`
   /// can be a no-op when we're not currently active.
   pub fn transfer(&self, request: Option<TransferRequest>) -> Result<()> {
-    self
-      .spirc
-      .transfer(request)
-      .map_err(|e| anyhow!("Failed to transfer playback via Spirc: {:?}", e))
+    self.route_command(DeferredPlayerCommand::Transfer(request))
   }
 
   /// Shutdown the player
   pub fn shutdown(&self) {
-    self.spirc_alive.store(false, Ordering::Relaxed);
-    let _ = self.spirc.shutdown();
+    self.shutdown_requested.store(true, Ordering::Relaxed);
+    {
+      let mut router = self
+        .command_router
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      router.mode = SpircCommandMode::Shutdown;
+      router.deferred.clear();
+    }
+    let _ = self
+      .connection_state_tx
+      .send(StreamingConnectionState::Shutdown);
+    let _ = self.shutdown_tx.send(true);
+    let _ = self.with_spirc(Spirc::shutdown);
+  }
+
+  pub fn connection_state_receiver(
+    &self,
+  ) -> tokio::sync::watch::Receiver<StreamingConnectionState> {
+    self.connection_state_rx.clone()
   }
 
   /// Get a channel to receive player events (track changes, play/pause, seek, etc.)
@@ -771,8 +1202,20 @@ impl Drop for StreamingPlayer {
   fn drop(&mut self) {
     // Backstop: stop the spirc when the last reference drops so a replaced
     // player can't linger as a ghost Connect device (#297). Idempotent.
-    self.spirc_alive.store(false, Ordering::Relaxed);
-    let _ = self.spirc.shutdown();
+    self.shutdown_requested.store(true, Ordering::Relaxed);
+    {
+      let mut router = self
+        .command_router
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      router.mode = SpircCommandMode::Shutdown;
+      router.deferred.clear();
+    }
+    let _ = self
+      .connection_state_tx
+      .send(StreamingConnectionState::Shutdown);
+    let _ = self.shutdown_tx.send(true);
+    let _ = self.with_spirc(Spirc::shutdown);
   }
 }
 
@@ -838,7 +1281,7 @@ fn new_device_id_string() -> String {
 mod tests {
   use super::{
     get_or_create_device_id, new_device_id_string, should_retry_with_fresh_credentials,
-    wait_for_oauth_callback_port,
+    wait_for_oauth_callback_port, StreamingConnectionState,
   };
   use std::time::Duration;
 
@@ -886,6 +1329,14 @@ mod tests {
   #[test]
   fn success_never_triggers_retry() {
     assert!(!should_retry_with_fresh_credentials(false, true, false));
+  }
+
+  #[test]
+  fn reconnecting_connection_remains_command_capable() {
+    assert!(StreamingConnectionState::Connected { generation: 0 }.accepts_commands());
+    assert!(StreamingConnectionState::Reconnecting { generation: 1 }.accepts_commands());
+    assert!(!StreamingConnectionState::Failed { generation: 1 }.accepts_commands());
+    assert!(!StreamingConnectionState::Shutdown.accepts_commands());
   }
 
   #[test]
