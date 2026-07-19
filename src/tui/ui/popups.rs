@@ -81,7 +81,9 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   let total_width = table_area.width as usize;
 
   let cache_slot = HELP_MENU_CACHE.get_or_init(|| std::sync::Mutex::new(None));
-  let mut cache = cache_slot.lock().unwrap();
+  let mut cache = cache_slot
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   let stale = cache.as_ref().is_none_or(|c| {
     c.width != total_width || c.keys != app.user_config.keys || c.filter != app.help_filter
   });
