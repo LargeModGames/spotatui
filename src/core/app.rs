@@ -1214,6 +1214,13 @@ pub struct App {
   pub sonos_now_playing: Option<SonosNowPlaying>,
   pub sonos_volume: Option<u8>,
   pub sonos_is_playing: Option<bool>,
+  /// Room whose current-playback poll is in a logged failure episode. Cleared
+  /// after the next successful poll so transient failures do not flood logs.
+  pub sonos_poll_error_room_uuid: Option<String>,
+  /// Dedicated Sonos control lane used for prompt backend handoff. The main
+  /// network event pump is serial and may still be starting/downloading a
+  /// decoded source when Sonos needs to be paused.
+  sonos_pause_tx: Option<tokio::sync::mpsc::UnboundedSender<SonosRoom>>,
   pub queue: Option<QueueState>,
   pub queue_selected_index: usize,
   /// The native cross-source playback queue (FIFO). Unlike [`Self::queue`]
@@ -1724,6 +1731,8 @@ impl Default for App {
       sonos_now_playing: None,
       sonos_volume: None,
       sonos_is_playing: None,
+      sonos_poll_error_room_uuid: None,
+      sonos_pause_tx: None,
       queue: None,
       queue_selected_index: 0,
       native_queue: Vec::new(),
@@ -3843,6 +3852,40 @@ impl App {
       .is_some_and(|uuid| self.sonos_rooms.iter().any(|room| room.uuid == *uuid))
       && !self.queue_owns_playback()
       && !self.active_decoded_source()
+  }
+
+  pub(crate) fn set_sonos_pause_sender(
+    &mut self,
+    sender: tokio::sync::mpsc::UnboundedSender<SonosRoom>,
+  ) {
+    self.sonos_pause_tx = Some(sender);
+  }
+
+  /// Relinquish a selected Sonos room before decoded playback takes over.
+  /// Prefer the dedicated control lane because the serial network event pump
+  /// may still be starting or downloading the replacement source.
+  #[cfg_attr(not(feature = "audio-decode"), allow(dead_code))]
+  pub fn release_sonos_playback(&mut self) {
+    if let Some(room_uuid) = self.selected_sonos_room_uuid.take() {
+      if let Some(room) = self
+        .sonos_rooms
+        .iter()
+        .find(|room| room.uuid == room_uuid)
+        .cloned()
+      {
+        let sent_to_control_lane = self
+          .sonos_pause_tx
+          .as_ref()
+          .is_some_and(|tx| tx.send(room).is_ok());
+        if !sent_to_control_lane {
+          self.dispatch(IoEvent::PauseSonosRoom(room_uuid));
+        }
+      }
+    }
+    self.sonos_now_playing = None;
+    self.sonos_is_playing = None;
+    self.sonos_volume = None;
+    self.sonos_poll_error_room_uuid = None;
   }
 
   /// Whether the queue slot is playing a Spotify track via native streaming.
@@ -8948,6 +8991,50 @@ mod tests {
     app.selected_sonos_room_uuid = Some("RINCON_MISSING".to_string());
 
     assert!(!app.sonos_owns_playback());
+  }
+
+  #[test]
+  fn releasing_sonos_dispatches_targeted_pause_and_clears_ownership() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+    app.sonos_is_playing = Some(true);
+
+    app.release_sonos_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::PauseSonosRoom(uuid)) if uuid == "RINCON_KITCHEN"
+    ));
+    assert!(app.selected_sonos_room_uuid.is_none());
+    assert!(app.sonos_is_playing.is_none());
+  }
+
+  #[test]
+  fn releasing_sonos_prefers_immediate_control_lane() {
+    let (tx, rx) = channel();
+    let (sonos_pause_tx, mut sonos_pause_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.set_sonos_pause_sender(sonos_pause_tx);
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+
+    app.release_sonos_playback();
+
+    assert!(matches!(
+      sonos_pause_rx.try_recv(),
+      Ok(room) if room.uuid == "RINCON_KITCHEN"
+    ));
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]

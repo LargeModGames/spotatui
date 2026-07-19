@@ -18,6 +18,15 @@ pub struct SonosSpotifyAttempt {
   pub enqueued_metadata: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SonosSpotifyPlaybackRequest {
+  Context(SonosSpotifyItem),
+  UriList {
+    items: Vec<SonosSpotifyItem>,
+    selected_index: u32,
+  },
+}
+
 impl SonosSpotifyItem {
   pub fn attempts(&self) -> &[SonosSpotifyAttempt] {
     &self.attempts
@@ -73,29 +82,34 @@ struct SpotifyMagic {
   legacy_flags: u32,
 }
 
-pub fn item_from_playback_request(
+pub fn playback_request_from_spotify(
   context_id: Option<&PlayContextId<'static>>,
   uris: Option<&[PlayableId<'static>]>,
   offset: Option<usize>,
-) -> Result<SonosSpotifyItem> {
-  let (spotify_uri, queue_track_offset) = if let Some(uris) = uris.filter(|uris| !uris.is_empty()) {
-    let index = offset.unwrap_or(0).min(uris.len().saturating_sub(1));
-    (
-      uris
-        .get(index)
-        .map(Id::uri)
-        .ok_or_else(|| anyhow!("No Spotify URI selected for Sonos playback"))?,
-      0,
-    )
-  } else if let Some(context) = context_id {
-    (context.uri(), offset.unwrap_or(0) as u32)
-  } else {
-    return Err(anyhow!(
-      "Sonos cannot start a new Spotify item until a track, album, playlist, show, or episode is selected"
-    ));
-  };
+) -> Result<SonosSpotifyPlaybackRequest> {
+  if let Some(context) = context_id {
+    let item = item_from_spotify_uri_with_queue_offset(
+      &context.uri(),
+      u32::try_from(offset.unwrap_or(0)).unwrap_or(u32::MAX),
+    )?;
+    return Ok(SonosSpotifyPlaybackRequest::Context(item));
+  }
 
-  item_from_spotify_uri_with_queue_offset(&spotify_uri, queue_track_offset)
+  if let Some(uris) = uris.filter(|uris| !uris.is_empty()) {
+    let selected_index = offset.unwrap_or(0).min(uris.len().saturating_sub(1));
+    let items = uris
+      .iter()
+      .map(|uri| item_from_spotify_uri(&uri.uri()))
+      .collect::<Result<Vec<_>>>()?;
+    return Ok(SonosSpotifyPlaybackRequest::UriList {
+      items,
+      selected_index: u32::try_from(selected_index).unwrap_or(u32::MAX),
+    });
+  }
+
+  Err(anyhow!(
+    "Sonos cannot start new Spotify playback until a track, album, playlist, show, or episode is selected"
+  ))
 }
 
 pub fn item_from_spotify_uri(spotify_uri: &str) -> Result<SonosSpotifyItem> {
@@ -324,14 +338,17 @@ mod tests {
         .into_static(),
     );
 
-    let item = item_from_playback_request(Some(&context), None, Some(4)).unwrap();
+    let request = playback_request_from_spotify(Some(&context), None, Some(4)).unwrap();
+    let SonosSpotifyPlaybackRequest::Context(item) = request else {
+      panic!("expected context playback");
+    };
 
     assert_eq!(item.spotify_uri, "spotify:album:0000000000000000000001");
     assert_eq!(item.queue_track_offset(), 4);
   }
 
   #[test]
-  fn uses_selected_uri_before_context() {
+  fn context_takes_precedence_and_preserves_playlist_continuation() {
     let context = PlayContextId::Album(
       rspotify::model::idtypes::AlbumId::from_id("0000000000000000000001")
         .unwrap()
@@ -350,9 +367,43 @@ mod tests {
       ),
     ];
 
-    let item = item_from_playback_request(Some(&context), Some(&uris), Some(1)).unwrap();
+    let request = playback_request_from_spotify(Some(&context), Some(&uris), Some(1)).unwrap();
+    let SonosSpotifyPlaybackRequest::Context(item) = request else {
+      panic!("expected context playback");
+    };
 
-    assert_eq!(item.spotify_uri, "spotify:track:0000000000000000000003");
+    assert_eq!(item.spotify_uri, "spotify:album:0000000000000000000001");
+    assert_eq!(item.queue_track_offset(), 1);
+  }
+
+  #[test]
+  fn uri_list_keeps_all_tracks_and_selected_index() {
+    let uris = vec![
+      PlayableId::Track(
+        rspotify::model::idtypes::TrackId::from_id("0000000000000000000002")
+          .unwrap()
+          .into_static(),
+      ),
+      PlayableId::Track(
+        rspotify::model::idtypes::TrackId::from_id("0000000000000000000003")
+          .unwrap()
+          .into_static(),
+      ),
+    ];
+
+    let request = playback_request_from_spotify(None, Some(&uris), Some(1)).unwrap();
+    let SonosSpotifyPlaybackRequest::UriList {
+      items,
+      selected_index,
+    } = request
+    else {
+      panic!("expected URI-list playback");
+    };
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].spotify_uri, "spotify:track:0000000000000000000002");
+    assert_eq!(items[1].spotify_uri, "spotify:track:0000000000000000000003");
+    assert_eq!(selected_index, 1);
   }
 
   #[test]

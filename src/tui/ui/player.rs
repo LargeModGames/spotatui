@@ -375,13 +375,14 @@ fn cover_playbar_artist_area(
 fn playbar_supported_controls(app: &App) -> Vec<PlaybarControl> {
   playbar_supported_controls_for(
     app.queue_owns_playback(),
+    app.sonos_owns_playback(),
     non_spotify_source_playback_active(app),
     app.active_queueable_decoded_source(),
   )
 }
 
-/// The pure core of [`playbar_supported_controls`], taking the three facts it
-/// depends on rather than an [`App`]: a real `LocalPlaybackState` needs an
+/// The pure core of [`playbar_supported_controls`], taking the ownership facts
+/// it depends on rather than an [`App`]: a real `LocalPlaybackState` needs an
 /// `Arc<LocalPlayer>` holding an open audio device, so the whole support matrix
 /// would otherwise be untestable.
 ///
@@ -393,23 +394,19 @@ fn playbar_supported_controls(app: &App) -> Vec<PlaybarControl> {
 /// or hear.
 fn playbar_supported_controls_for(
   queue_owns_playback: bool,
+  sonos_owns_playback: bool,
   non_spotify_active: bool,
   queueable_decoded: bool,
 ) -> Vec<PlaybarControl> {
   let mut controls = PLAYBAR_CONTROLS.to_vec();
 
-  // The native queue slot owns the sink, so `draw_playbar` renders the *queued*
-  // track over a suspended context with the mode indicators hidden. Transport
-  // still works and stays offered: `App::next_track` advances the queue and
-  // `App::previous_track` restarts the queued track, both via the queue router.
-  // Dropped: Shuffle/Repeat have no queue-slot state to show (`App::shuffle` /
-  // `App::repeat` no-op here), and Like acts on `current_playback_context` —
-  // under a suspended *Spotify* context that is a different track than the one on
-  // screen, so the button would save a song the user is not listening to.
-  // Checked before `non_spotify_active`, which is false in exactly that case (a
-  // suspended Spotify context sets no `*_playback`) and would otherwise hand back
-  // all eight controls.
-  if queue_owns_playback {
+  // The native queue slot or Sonos owns playback with mode indicators hidden.
+  // Transport controls still work and stay offered. Shuffle/Repeat have no
+  // supported state in either case, while Like would target either a suspended
+  // Spotify context or no current Spotify item at all. Checked before
+  // `non_spotify_active`, which can be false for both ownership modes and would
+  // otherwise hand back all eight controls.
+  if queue_owns_playback || sonos_owns_playback {
     controls.retain(|control| {
       !matches!(
         control,
@@ -1769,7 +1766,7 @@ mod tests {
   fn spotify_playback_keeps_every_playbar_control() {
     // No decoded source owns playback, so the Spotify playbar is on screen.
     assert_eq!(
-      playbar_supported_controls_for(false, false, false),
+      playbar_supported_controls_for(false, false, false, false),
       PLAYBAR_CONTROLS.to_vec()
     );
   }
@@ -1782,9 +1779,9 @@ mod tests {
     // back, including Like. `draw_playbar` consults every decoded source before
     // the Spotify context and returns early, so the context says nothing about
     // which playbar is actually on screen and must not be consulted here.
-    let local = playbar_supported_controls_for(false, true, true);
+    let local = playbar_supported_controls_for(false, false, true, true);
     assert!(!local.contains(&PlaybarControl::Like));
-    let radio = playbar_supported_controls_for(false, true, false);
+    let radio = playbar_supported_controls_for(false, false, true, false);
     assert!(!radio.contains(&PlaybarControl::Shuffle));
   }
 
@@ -1793,7 +1790,7 @@ mod tests {
     // Regression: Shuffle/Repeat were drawn but not clickable for local files,
     // because the row rendered every control while hit-testing kept only
     // Play/Pause. Both now come from this list, so a drawn button always works.
-    let controls = playbar_supported_controls_for(false, true, true);
+    let controls = playbar_supported_controls_for(false, false, true, true);
     for expected in [
       PlaybarControl::Prev,
       PlaybarControl::PlayPause,
@@ -1817,7 +1814,7 @@ mod tests {
     // Radio reports `queueable_decoded = false`: there is no finite track list to
     // skip through or shuffle, so offering those buttons would invite a click
     // that falls through to the wrong player.
-    let controls = playbar_supported_controls_for(false, true, false);
+    let controls = playbar_supported_controls_for(false, false, true, false);
     assert_eq!(
       controls,
       vec![
@@ -1839,8 +1836,8 @@ mod tests {
     // Prev/Next stay: unlike radio, the queue *can* honour them (`next_track`
     // dispatches AdvanceNativeQueue, `previous_track` restarts the queued track),
     // so dropping them would hide controls that work.
-    let over_spotify = playbar_supported_controls_for(true, false, false);
-    let over_decoded = playbar_supported_controls_for(true, true, false);
+    let over_spotify = playbar_supported_controls_for(true, false, false, false);
+    let over_decoded = playbar_supported_controls_for(true, false, true, false);
     let expected = vec![
       PlaybarControl::Prev,
       PlaybarControl::PlayPause,
@@ -1850,6 +1847,20 @@ mod tests {
     ];
     assert_eq!(over_spotify, expected);
     assert_eq!(over_decoded, expected);
+  }
+
+  #[test]
+  fn sonos_drops_like_and_unsupported_modes_but_keeps_transport() {
+    assert_eq!(
+      playbar_supported_controls_for(false, true, false, false),
+      vec![
+        PlaybarControl::Prev,
+        PlaybarControl::PlayPause,
+        PlaybarControl::Next,
+        PlaybarControl::VolumeDown,
+        PlaybarControl::VolumeUp,
+      ]
+    );
   }
 
   #[test]

@@ -1,7 +1,11 @@
 use crate::core::playback_target::SonosRoom;
-use crate::infra::sonos::spotify::SonosSpotifyItem;
+use crate::infra::sonos::spotify::{SonosSpotifyItem, SonosSpotifyPlaybackRequest};
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
+use std::sync::{
+  atomic::{AtomicU64, Ordering},
+  Arc,
+};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -16,6 +20,8 @@ pub struct SonosTransport {
   client: reqwest::Client,
   coordinators: Mutex<HashMap<String, (SonosRoom, Instant)>>,
   spotify_accounts: Mutex<HashMap<String, (Vec<SpotifyAccount>, Instant)>>,
+  queue_generation: AtomicU64,
+  queue_mutation: Mutex<()>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,20 +52,97 @@ impl SonosTransport {
         .context("failed to build Sonos HTTP client")?,
       coordinators: Mutex::new(HashMap::new()),
       spotify_accounts: Mutex::new(HashMap::new()),
+      queue_generation: AtomicU64::new(0),
+      queue_mutation: Mutex::new(()),
     })
   }
 
-  pub async fn play_spotify_item(&self, room: &SonosRoom, item: &SonosSpotifyItem) -> Result<()> {
-    match self
-      .enqueue_spotify_item_with_mode(room, item, true)
-      .await?
-    {
-      Some(first_track_number) if first_track_number > 0 => {
+  pub async fn play_spotify_request(
+    self: &Arc<Self>,
+    room: &SonosRoom,
+    request: &SonosSpotifyPlaybackRequest,
+  ) -> Result<()> {
+    // Invalidate any older URI-list preloader before waiting for its current
+    // queue mutation. Once we acquire the lock, clearing the queue is ordered
+    // after that final stale insertion.
+    let generation = self.queue_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let queue_guard = self.queue_mutation.lock().await;
+    self.clear_queue(room).await?;
+
+    match request {
+      SonosSpotifyPlaybackRequest::Context(item) => {
+        let first_track_number = self
+          .enqueue_spotify_item_with_mode(room, item, false)
+          .await?
+          .ok_or_else(|| anyhow!("Sonos did not report the inserted playlist position"))?;
         let track_number = first_track_number.saturating_add(item.queue_track_offset());
         self.play_queue_track(room, track_number).await
       }
-      _ => self.play(room).await,
+      SonosSpotifyPlaybackRequest::UriList {
+        items,
+        selected_index,
+      } => {
+        let selected_index = usize::try_from(*selected_index)
+          .unwrap_or(usize::MAX)
+          .min(items.len().saturating_sub(1));
+        let selected_item = items
+          .get(selected_index)
+          .ok_or_else(|| anyhow!("No Spotify tracks were supplied for Sonos playback"))?;
+        let first_track_number = self
+          .enqueue_spotify_item_with_mode(room, selected_item, false)
+          .await?
+          .ok_or_else(|| anyhow!("Sonos did not report an inserted queue position"))?;
+
+        // Start the selected song before loading continuation tracks. S1 boxes
+        // can take more than a second per AddURIToQueue call; front-loading a
+        // large Liked Songs page otherwise freezes the serial event pump for
+        // minutes and prevents every subsequent playback command.
+        self.play_queue_track(room, first_track_number).await?;
+        let remaining_items = items
+          .iter()
+          .skip(selected_index.saturating_add(1))
+          .cloned()
+          .collect::<Vec<_>>();
+        drop(queue_guard);
+        self.preload_spotify_items(room.clone(), remaining_items, generation);
+        Ok(())
+      }
     }
+  }
+
+  fn preload_spotify_items(
+    self: &Arc<Self>,
+    room: SonosRoom,
+    items: Vec<SonosSpotifyItem>,
+    generation: u64,
+  ) {
+    if items.is_empty() {
+      return;
+    }
+
+    let transport = Arc::clone(self);
+    tokio::spawn(async move {
+      for item in items {
+        if transport.queue_generation.load(Ordering::Acquire) != generation {
+          return;
+        }
+        let _queue_guard = transport.queue_mutation.lock().await;
+        if transport.queue_generation.load(Ordering::Acquire) != generation {
+          return;
+        }
+        if let Err(error) = transport
+          .enqueue_spotify_item_with_mode(&room, &item, false)
+          .await
+        {
+          log::error!("Sonos continuation preload stopped: {error:#}");
+          return;
+        }
+      }
+    });
+  }
+
+  pub(crate) fn queue_generation(&self) -> u64 {
+    self.queue_generation.load(Ordering::Acquire)
   }
 
   pub async fn enqueue_spotify_item(
@@ -67,6 +150,7 @@ impl SonosTransport {
     room: &SonosRoom,
     item: &SonosSpotifyItem,
   ) -> Result<Option<u32>> {
+    let _queue_guard = self.queue_mutation.lock().await;
     self.enqueue_spotify_item_with_mode(room, item, false).await
   }
 
@@ -109,6 +193,7 @@ impl SonosTransport {
     }
 
     Err(last_error.unwrap_or_else(|| anyhow!("Sonos rejected Spotify playback")))
+      .with_context(|| format!("failed to enqueue Spotify URI {}", item.spotify_uri))
   }
 
   pub async fn play(&self, room: &SonosRoom) -> Result<()> {
@@ -122,11 +207,21 @@ impl SonosTransport {
     self.av_transport_soap(room, "Pause", "").await.map(|_| ())
   }
 
+  /// Cancel URI-list continuation and wait for its current insertion before
+  /// pausing, so a relinquished room cannot keep receiving stale queue writes.
+  pub async fn pause_for_handoff(&self, room: &SonosRoom) -> Result<()> {
+    self.queue_generation.fetch_add(1, Ordering::AcqRel);
+    let _queue_guard = self.queue_mutation.lock().await;
+    self.pause(room).await
+  }
+
   pub async fn next(&self, room: &SonosRoom) -> Result<()> {
+    let _queue_guard = self.queue_mutation.lock().await;
     self.av_transport_soap(room, "Next", "").await.map(|_| ())
   }
 
   pub async fn previous(&self, room: &SonosRoom) -> Result<()> {
+    let _queue_guard = self.queue_mutation.lock().await;
     self
       .av_transport_soap(room, "Previous", "")
       .await
@@ -232,6 +327,20 @@ impl SonosTransport {
     })
   }
 
+  async fn clear_queue(&self, room: &SonosRoom) -> Result<()> {
+    match self
+      .av_transport_soap(room, "RemoveAllTracksFromQueue", "")
+      .await
+    {
+      Ok(_) => Ok(()),
+      // Sonos reports 804 when the queue is already empty. Inspect every
+      // anyhow context layer because coordinator/action diagnostics wrap the
+      // underlying SOAP fault.
+      Err(error) if error_chain_contains_upnp(&error, 804) => Ok(()),
+      Err(error) => Err(error),
+    }
+  }
+
   async fn add_uri_to_queue(
     &self,
     room: &SonosRoom,
@@ -298,6 +407,12 @@ impl SonosTransport {
         action_body,
       )
       .await
+      .with_context(|| {
+        format!(
+          "Sonos selected room {} ({}) resolved coordinator {} ({}) for {action}",
+          room.name, room.uuid, coordinator.name, coordinator.uuid
+        )
+      })
   }
 
   async fn av_transport_room(&self, room: &SonosRoom) -> SonosRoom {
@@ -639,6 +754,13 @@ fn unescape_xml(value: &str) -> String {
     .replace("&apos;", "'")
 }
 
+fn error_chain_contains_upnp(error: &anyhow::Error, code: u32) -> bool {
+  let needle = format!("UPnP error {code}");
+  error
+    .chain()
+    .any(|cause| cause.to_string().contains(&needle))
+}
+
 fn upnp_error_detail(xml: &str) -> Option<String> {
   let code = xml_text(xml, "errorCode")?;
   let description = xml_text(xml, "errorDescription").unwrap_or_default();
@@ -833,7 +955,7 @@ mod tests {
     let server_base = base.clone();
     let server = tokio::spawn(async move {
       let mut requests = Vec::new();
-      for _ in 0..6 {
+      for _ in 0..8 {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut request = Vec::new();
         loop {
@@ -869,7 +991,17 @@ mod tests {
             r#"<GetZoneGroupStateResponse><ZoneGroupState>&lt;ZoneGroups&gt;&lt;ZoneGroup Coordinator=&quot;RINCON_COORD&quot;&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_COORD&quot; ZoneName=&quot;Living Room&quot; Location=&quot;{server_base}/xml/device_description.xml&quot;/&gt;&lt;ZoneGroupMember UUID=&quot;RINCON_MEMBER&quot;/&gt;&lt;/ZoneGroup&gt;&lt;/ZoneGroups&gt;</ZoneGroupState></GetZoneGroupStateResponse>"#
           )
         } else if request.contains("AddURIToQueue") {
-          "<AddURIToQueueResponse><FirstTrackNumberEnqueued>4</FirstTrackNumberEnqueued></AddURIToQueueResponse>".to_string()
+          let queue_position = 4
+            + requests
+              .iter()
+              .filter(|request: &&String| request.contains("AddURIToQueue"))
+              .count();
+          if queue_position > 4 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+          }
+          format!(
+            "<AddURIToQueueResponse><FirstTrackNumberEnqueued>{queue_position}</FirstTrackNumberEnqueued></AddURIToQueueResponse>"
+          )
         } else {
           "<Response/>".to_string()
         };
@@ -888,20 +1020,35 @@ mod tests {
       name: "Bedroom".to_string(),
       location: format!("{base}/xml/device_description.xml"),
     };
-    let transport = SonosTransport::new().unwrap();
-    let item = crate::infra::sonos::spotify::item_from_spotify_uri("spotify:track:abc123").unwrap();
+    let transport = Arc::new(SonosTransport::new().unwrap());
+    let items = ["spotify:track:abc123", "spotify:track:def456"]
+      .iter()
+      .map(|uri| crate::infra::sonos::spotify::item_from_spotify_uri(uri).unwrap())
+      .collect();
 
-    transport.play_spotify_item(&room, &item).await.unwrap();
+    let request = SonosSpotifyPlaybackRequest::UriList {
+      items,
+      selected_index: 0,
+    };
+    let started_at = Instant::now();
+    transport
+      .play_spotify_request(&room, &request)
+      .await
+      .unwrap();
+    assert!(started_at.elapsed() < Duration::from_millis(1_500));
     let requests = server.await.unwrap();
 
-    assert!(requests[0].starts_with("GET /status/accounts "));
-    assert!(requests[1].contains("GetZoneGroupState"));
-    assert!(requests[2].contains("AddURIToQueue"));
-    assert!(requests[2].contains("sid=9&amp;sn=2"));
-    assert!(requests[3].contains("SetAVTransportURI"));
-    assert!(requests[3].contains("x-rincon-queue:RINCON_COORD#0"));
-    assert!(requests[4].contains("<Unit>TRACK_NR</Unit><Target>4</Target>"));
-    assert!(requests[5].contains("<u:Play"));
+    assert!(requests[0].contains("GetZoneGroupState"));
+    assert!(requests[1].contains("RemoveAllTracksFromQueue"));
+    assert!(requests[2].starts_with("GET /status/accounts "));
+    assert!(requests[3].contains("AddURIToQueue"));
+    assert!(requests[3].contains("sid=9&amp;sn=2"));
+    assert!(requests[4].contains("SetAVTransportURI"));
+    assert!(requests[4].contains("x-rincon-queue:RINCON_COORD#0"));
+    assert!(requests[5].contains("<Unit>TRACK_NR</Unit><Target>4</Target>"));
+    assert!(requests[6].contains("<u:Play"));
+    assert!(requests[7].contains("AddURIToQueue"));
+    assert!(requests[7].contains("spotify%3atrack%3adef456"));
   }
 
   #[test]
@@ -910,6 +1057,15 @@ mod tests {
     assert!(transport_state_is_playing(Some("TRANSITIONING")));
     assert!(!transport_state_is_playing(Some("STOPPED")));
     assert!(!transport_state_is_playing(None));
+  }
+
+  #[test]
+  fn detects_upnp_error_through_anyhow_context() {
+    let error = anyhow!("Sonos rejected action (UPnP error 804: Not a playlist)")
+      .context("resolved coordinator for RemoveAllTracksFromQueue");
+
+    assert!(error_chain_contains_upnp(&error, 804));
+    assert!(!error_chain_contains_upnp(&error, 800));
   }
 
   #[test]

@@ -1,3 +1,4 @@
+use crate::core::app::App;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::{IoEvent, Network};
 
@@ -11,6 +12,15 @@ use rspotify::model::{
 pub struct CliApp {
   pub net: Network,
   pub config: UserConfig,
+}
+
+fn clear_sonos_selection_for_spotify_device(app: &mut App) -> Option<String> {
+  let room_uuid = app.selected_sonos_room_uuid.take();
+  app.sonos_now_playing = None;
+  app.sonos_is_playing = None;
+  app.sonos_volume = None;
+  app.sonos_poll_error_room_uuid = None;
+  room_uuid
 }
 
 // Non-concurrent functions
@@ -125,35 +135,48 @@ impl CliApp {
 
   // spt ... -d ... (specify device to control)
   pub async fn set_device(&mut self, name: String) -> Result<()> {
-    // Change the device if specified by user.
-    let mut app = self.net.app.lock().await;
-    let devices = app
-      .devices
-      .as_ref()
-      .ok_or_else(|| anyhow!("no device available"))?;
-    let (device_index, device) = devices
-      .devices
-      .iter()
-      .enumerate()
-      .find(|(_, device)| device.name == name)
-      .ok_or_else(|| anyhow!("no device named '{name}' is available"))?;
-    let id = device
-      .id
-      .clone()
-      .ok_or_else(|| anyhow!("device '{}' has no usable id", device.name))?;
+    // Extract owned device data before issuing a direct Sonos pause; the CLI
+    // invokes Network synchronously and does not run the TUI event pump.
+    let (device_index, device_id, device_name, sonos_room_uuid) = {
+      let app = self.net.app.lock().await;
+      let devices = app
+        .devices
+        .as_ref()
+        .ok_or_else(|| anyhow!("no device available"))?;
+      let (device_index, device) = devices
+        .devices
+        .iter()
+        .enumerate()
+        .find(|(_, device)| device.name == name)
+        .ok_or_else(|| anyhow!("no device named '{name}' is available"))?;
+      let device_id = device
+        .id
+        .clone()
+        .ok_or_else(|| anyhow!("device '{}' has no usable id", device.name))?;
+      (
+        device_index,
+        device_id,
+        device.name.clone(),
+        app.selected_sonos_room_uuid.clone(),
+      )
+    };
+
     self
       .net
       .client_config
-      .set_device_id(id)
-      .map_err(|_| anyhow!("failed to use device with name '{}'", device.name))?;
+      .set_device_id(device_id)
+      .map_err(|_| anyhow!("failed to use device with name '{device_name}'"))?;
 
-    // An explicit Spotify CLI target overrides a restored Sonos preference for
-    // this invocation; otherwise subsequent commands would still route locally.
+    if let Some(room_uuid) = sonos_room_uuid {
+      self
+        .net
+        .handle_network_event(IoEvent::PauseSonosRoom(room_uuid))
+        .await;
+    }
+
+    let mut app = self.net.app.lock().await;
+    clear_sonos_selection_for_spotify_device(&mut app);
     app.selected_device_index = Some(device_index);
-    app.selected_sonos_room_uuid = None;
-    app.sonos_now_playing = None;
-    app.sonos_is_playing = None;
-    app.sonos_volume = None;
     Ok(())
   }
 
@@ -773,5 +796,27 @@ impl CliApp {
       // Enforced by clap
       _ => unreachable!(),
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn spotify_cli_device_selection_clears_sonos_ownership_state() {
+    let mut app = App::default();
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+    app.sonos_is_playing = Some(true);
+    app.sonos_volume = Some(42);
+    app.sonos_poll_error_room_uuid = Some("RINCON_KITCHEN".to_string());
+
+    let room_uuid = clear_sonos_selection_for_spotify_device(&mut app);
+
+    assert_eq!(room_uuid.as_deref(), Some("RINCON_KITCHEN"));
+    assert!(app.selected_sonos_room_uuid.is_none());
+    assert!(app.sonos_is_playing.is_none());
+    assert!(app.sonos_volume.is_none());
+    assert!(app.sonos_poll_error_room_uuid.is_none());
   }
 }

@@ -1888,6 +1888,34 @@ async fn restore_playback_session(
 }
 
 async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Network) {
+  // Sonos handoff controls must not wait behind this function's serial event
+  // pump. Starting a decoded source can include slow file probing or a YouTube
+  // download, so run room pauses on a small dedicated lane that shares the
+  // primary Network's transport and coordinator cache.
+  if let Some(transport) = network.sonos_transport() {
+    let (sonos_pause_tx, mut sonos_pause_rx) =
+      tokio::sync::mpsc::unbounded_channel::<crate::core::playback_target::SonosRoom>();
+    network
+      .app
+      .lock()
+      .await
+      .set_sonos_pause_sender(sonos_pause_tx);
+    let app = Arc::downgrade(&network.app);
+    tokio::spawn(async move {
+      while let Some(room) = sonos_pause_rx.recv().await {
+        if let Err(error) = transport.pause_for_handoff(&room).await {
+          log::error!("Sonos handoff pause error: {error:#}");
+          if let Some(app) = app.upgrade() {
+            app.lock().await.set_error_status_message(
+              format!("New playback started, but Sonos could not be paused: {error}"),
+              6,
+            );
+          }
+        }
+      }
+    });
+  }
+
   // Bridge the sync dispatch channel onto the async runtime: a dedicated
   // thread does blocking recv() and forwards into a tokio channel the pump can
   // await, replacing the old try_recv() + 5ms sleep poll (which added 0-5ms

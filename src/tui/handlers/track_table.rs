@@ -389,7 +389,7 @@ fn on_enter(app: &mut App) {
             app.dispatch(IoEvent::StartPlayback(
               context_id,
               Some(vec![playable_id]),
-              Some(0), // Play the first (and only) track in the URIs list
+              app.selected_playlist_track_position(),
             ));
           } else {
             // Fallback to context playback with offset
@@ -646,6 +646,33 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.track_table.context = Some(TrackTableContext::SavedTracks);
     (app, rx)
+  }
+
+  #[test]
+  fn playlist_playback_preserves_absolute_selected_position() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(
+      PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+        .unwrap()
+        .into_static(),
+    );
+    app.track_table.tracks = vec![
+      TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+      TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
+    ];
+    app.track_table.selected_index = 1;
+    app.playlist_track_positions = Some(vec![4, 7]);
+
+    on_enter(&mut app);
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(Some(context), Some(uris), Some(7)))
+        if context == "spotify:playlist:37i9dQZF1DX4WYpdgoIcn6"
+          && uris == vec!["spotify:track:0000000000000000000002"]
+    ));
   }
 
   #[test]

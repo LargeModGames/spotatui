@@ -112,6 +112,10 @@ pub enum IoEvent {
   GetAlbum(String),
   TransferPlaybackToDevice(String, bool),
   TransferPlaybackToSonosRoom(String, bool),
+  /// Pause a specific Sonos room during a backend handoff, even after another
+  /// source has taken playback ownership.
+  #[cfg_attr(not(feature = "audio-decode"), allow(dead_code))]
+  PauseSonosRoom(String),
   #[allow(dead_code)]
   AutoSelectStreamingDevice(String, bool), // Auto-select a device by name (used for native streaming)
   GetAlbumForTrack(String),
@@ -369,6 +373,10 @@ impl Network {
     }
   }
 
+  pub(crate) fn sonos_transport(&self) -> Option<Arc<crate::infra::sonos::SonosTransport>> {
+    self.sonos_transport.clone()
+  }
+
   /// Borrow the authenticated Spotify client. Only call this from handlers that
   /// run behind the auth gate in `handle_network_event`: that gate early-returns
   /// for every Spotify-bound event when `self.spotify` is `None`, so a handler
@@ -408,6 +416,7 @@ impl Network {
         | IoEvent::DiscoverSonosRooms
         | IoEvent::GetSonosPlayback
         | IoEvent::TransferPlaybackToSonosRoom(..)
+        | IoEvent::PauseSonosRoom(_)
         | IoEvent::UpdateSearchLimits(..)
         | IoEvent::GetFriendCode
         | IoEvent::GetFriends
@@ -721,6 +730,9 @@ impl Network {
         self
           .transfer_playback_to_sonos_room(room_uuid, persist_device_id)
           .await;
+      }
+      IoEvent::PauseSonosRoom(room_uuid) => {
+        self.pause_sonos_room(room_uuid).await;
       }
       #[cfg(feature = "streaming")]
       IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id) => {
