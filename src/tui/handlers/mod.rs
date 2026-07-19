@@ -123,6 +123,15 @@ pub fn handle_app(key: Key, app: &mut App) {
     return;
   }
 
+  // Help filtering is an inline modal input. Give it priority over global
+  // bindings so queries can contain keys such as d, n, p, q, or ?.
+  if app.get_current_route().active_block == ActiveBlock::HelpMenu
+    && (app.help_filter_editing || key == app.user_config.keys.search)
+  {
+    help_menu::handler(key, app);
+    return;
+  }
+
   if app.get_current_route().active_block == ActiveBlock::Settings
     && (app.settings_unsaved_prompt_visible || app.settings_edit_mode)
   {
@@ -233,7 +242,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       app.force_previous_track();
     }
     _ if key == app.user_config.keys.help => {
-      app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
+      help_menu::open(app);
     }
     _ if key == app.user_config.keys.show_queue => {
       app.dispatch(IoEvent::GetQueue);
@@ -540,7 +549,11 @@ fn handle_escape(app: &mut App) {
       app.clear_dialog_state();
     }
     ActiveBlock::HelpMenu => {
-      app.pop_navigation_stack();
+      if app.help_filter_editing || !app.help_filter.is_empty() {
+        help_menu::clear_filter(app);
+      } else {
+        app.pop_navigation_stack();
+      }
     }
     ActiveBlock::Queue => {
       app.pop_navigation_stack();

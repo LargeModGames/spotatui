@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Searchable Help menu**: Press the configured search key (`/` by default) while viewing Help to filter keybinding rows across descriptions, keys, and contexts. Multiple terms are matched together using smart-case matching; press `Enter` to apply the filter and `Esc` to clear it.
+
 - **Lyrics view: smooth scrolling, browsing, and a timing nudge**: The lyrics view now glides between lines with a short eased animation instead of snapping. Scroll with `↑`/`↓` (or the mouse wheel) to read ahead or behind: auto-follow pauses while you browse (the browsed line is highlighted and a hint row appears) and resumes with `f`, `Esc`, or automatically after 8 seconds without input. `Ctrl+d`/`Ctrl+u` page five lines at a time and `Ctrl+a`/`Ctrl+e` jump to the first/last line. For LRC files whose timestamps do not line up with your audio, `→`/`←` nudge the lyric timing half a second earlier/later per press; the current offset is shown in the block title and resets on track change. The title also notes "(timing estimated)" when LRCLIB only had plain lyrics, so synthesized line timings are no longer presented as real ones.
 
 - **Banner Gradient toggle**: A new setting (Settings → Theme → Banner Gradient, or `behavior.banner_gradient` in `config.yml`) turns off the home banner's animated RGB gradient and draws it in the theme's banner color instead. The Terminal (ANSI) preset defaults the gradient off so the banner follows the terminal palette out of the box — tools like pywal recolor it live along with the rest of the UI; an explicit `banner_gradient:` in the config overrides the preset default either way ([#336](https://github.com/LargeModGames/spotatui/issues/336)).

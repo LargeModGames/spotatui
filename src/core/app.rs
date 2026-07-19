@@ -1539,6 +1539,10 @@ pub struct App {
   pub help_menu_page: u32,
   pub help_menu_max_lines: u32,
   pub help_menu_offset: u32,
+  /// Text filter applied to the rows in the Help menu.
+  pub help_filter: String,
+  /// Whether typed keys are currently editing [`Self::help_filter`].
+  pub help_filter_editing: bool,
   pub is_loading: bool,
   io_tx: Option<Sender<IoEvent>>,
   pub is_fetching_current_playback: bool,
@@ -1986,6 +1990,8 @@ impl Default for App {
       help_menu_page: 0,
       help_menu_max_lines: 0,
       help_menu_offset: 0,
+      help_filter: String::new(),
+      help_filter_editing: false,
       is_loading: false,
       io_tx: None,
       is_fetching_current_playback: false,
@@ -6654,15 +6660,15 @@ impl App {
   }
 
   pub fn calculate_help_menu_offset(&mut self) {
-    let old_offset = self.help_menu_offset;
+    if self.help_menu_max_lines == 0 || self.help_docs_size == 0 {
+      self.help_menu_page = 0;
+      self.help_menu_offset = 0;
+      return;
+    }
 
-    if self.help_menu_max_lines < self.help_docs_size {
-      self.help_menu_offset = self.help_menu_page * self.help_menu_max_lines;
-    }
-    if self.help_menu_offset > self.help_docs_size {
-      self.help_menu_offset = old_offset;
-      self.help_menu_page -= 1;
-    }
+    let last_page = self.help_docs_size.saturating_sub(1) / self.help_menu_max_lines;
+    self.help_menu_page = self.help_menu_page.min(last_page);
+    self.help_menu_offset = self.help_menu_page * self.help_menu_max_lines;
   }
 
   /// Load settings for the current category into settings_items
