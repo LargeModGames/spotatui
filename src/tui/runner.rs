@@ -677,8 +677,7 @@ pub async fn start_ui(
       #[cfg(feature = "streaming")]
       if let Some(player) = app.streaming_player.clone() {
         if let Some(error) = player.take_audio_backend_error() {
-          player.pause();
-          app.native_is_playing = Some(false);
+          app.pause_native_playback();
           app.set_status_message(format!("Audio backend failed: {error}"), 15);
         }
       }

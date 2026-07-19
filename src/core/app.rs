@@ -5300,6 +5300,24 @@ impl App {
     None
   }
 
+  /// Pause native streaming playback with the full bookkeeping the pause
+  /// branch of [`toggle_playback`](Self::toggle_playback) does: clear any
+  /// parked StartPlayback and the load watchdog (either would resume or force
+  /// recovery against a backend we just gave up on), pause the player, and
+  /// flip the UI playing state.
+  #[cfg(feature = "streaming")]
+  pub fn pause_native_playback(&mut self) {
+    self.pending_start_playback = None;
+    self.native_load_watchdog = None;
+    if let Some(player) = &self.streaming_player {
+      player.pause();
+    }
+    if let Some(ctx) = &mut self.current_playback_context {
+      ctx.is_playing = false;
+    }
+    self.native_is_playing = Some(false);
+  }
+
   pub fn toggle_playback(&mut self) {
     // The native queue slot owns the sink: toggle its player directly (covers the
     // idle-app case where no per-source context is set).
