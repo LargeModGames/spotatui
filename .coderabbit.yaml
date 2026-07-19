@@ -84,6 +84,11 @@ reviews:
         (feat:, fix:, perf:, refactor:, docs:, chore:, ci:, test:), optionally
         scoped, e.g. `chore(deps): ...`. Keep the subject concise and
         imperative.
+    # A PR that says `Fixes #N` auto-closes the issue on merge, so a fix that
+    # covers only part of the issue's root cause silently loses the remainder.
+    # `error` because that is a wrong outcome, not a style nit.
+    issue_assessment:
+      mode: error
 
   finishing_touches:
     simplify:
@@ -91,7 +96,10 @@ reviews:
 
   auto_review:
     enabled: true
-    drafts: false
+    # Review drafts too. Large contributions sit in draft for a long time here,
+    # and feedback that only starts at ready-for-review arrives after the design
+    # is already settled.
+    drafts: true
     # Do not silently stop reviewing long-running branches.
     auto_pause_after_reviewed_commits: 0
     # Dependency bumps and contributor-list updates are mechanical; a full
