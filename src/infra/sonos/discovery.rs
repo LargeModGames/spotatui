@@ -39,11 +39,7 @@ pub async fn discover_rooms() -> Result<Vec<SonosRoom>> {
   let mut buf = vec![0_u8; 4096];
   let mut locations = HashSet::new();
 
-  loop {
-    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-      break;
-    };
-
+  while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
     let recv = tokio::time::timeout(remaining, socket.recv_from(&mut buf)).await;
     let Ok(Ok((len, source))) = recv else {
       break;
@@ -87,7 +83,7 @@ pub async fn discover_rooms() -> Result<Vec<SonosRoom>> {
   }
 
   let mut rooms = rooms_by_uuid.into_values().collect::<Vec<_>>();
-  rooms.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+  rooms.sort_by_key(|room| room.name.to_lowercase());
   Ok(rooms)
 }
 
