@@ -17,8 +17,8 @@
 //! ## Live-stream semantics
 //!
 //! A station is infinite, so several transport events are **consumed as
-//! no-ops** while radio owns the session — `Seek` (nothing to seek within) and
-//! `NextTrack`/`PreviousTrack` (no queue). Consuming them is load-bearing:
+//! no-ops** while radio owns the session — `Seek` (nothing to seek within),
+//! `Repeat`, and `NextTrack`/`PreviousTrack` (no queue). Consuming them is load-bearing:
 //! falling through would hand them to the Spotify dispatch, which would try to
 //! act on a Spotify session that isn't playing.
 
@@ -95,6 +95,7 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     },
     // Meaningless on a live stream — consume so they never reach Spotify.
     IoEvent::Seek(_) => player(app).await.is_some(),
+    IoEvent::Repeat(_) => player(app).await.is_some(),
     IoEvent::NextTrack | IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack
       if player(app).await.is_some() =>
     {
@@ -411,6 +412,13 @@ mod tests {
     assert!(!route_radio_event(&app, &IoEvent::PausePlayback).await);
     assert!(!route_radio_event(&app, &IoEvent::NextTrack).await);
     assert!(!route_radio_event(&app, &IoEvent::Seek(1000)).await);
+    assert!(
+      !route_radio_event(
+        &app,
+        &IoEvent::Repeat(rspotify::model::enums::RepeatState::Off)
+      )
+      .await
+    );
     assert!(!route_radio_event(&app, &IoEvent::StartPlayback(None, None, None)).await);
     // A Spotify start falls through (and there is nothing to tear down).
     assert!(
@@ -487,6 +495,13 @@ mod tests {
 
     // Live-stream semantics: Seek and Next/Prev are consumed as no-ops.
     assert!(route_radio_event(&app, &IoEvent::Seek(30_000)).await);
+    assert!(
+      route_radio_event(
+        &app,
+        &IoEvent::Repeat(rspotify::model::enums::RepeatState::Off)
+      )
+      .await
+    );
     assert!(route_radio_event(&app, &IoEvent::NextTrack).await);
     assert!(
       app.lock().await.radio_playback.is_some(),
