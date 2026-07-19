@@ -444,6 +444,7 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Ritze03"><img src="https://avatars.githubusercontent.com/u/63347117?v=4?s=100" width="100px;" alt="Ritze"/><br /><sub><b>Ritze</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Ritze03" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/issues?q=author%3ARitze03" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/itlogsandwich"><img src="https://avatars.githubusercontent.com/u/155230216?v=4?s=100" width="100px;" alt="Hansen"/><br /><sub><b>Hansen</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=itlogsandwich" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/yhay81"><img src="https://avatars.githubusercontent.com/u/11132792?v=4?s=100" width="100px;" alt="Yusuke Hayashi"/><br /><sub><b>Yusuke Hayashi</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=yhay81" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://felixzieger.de"><img src="https://avatars.githubusercontent.com/u/67903933?v=4?s=100" width="100px;" alt="Felix"/><br /><sub><b>Felix</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=felixzieger" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
