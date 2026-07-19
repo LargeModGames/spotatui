@@ -69,16 +69,8 @@ impl DeferredPlayerCommand {
   fn apply(self, spirc: &Spirc, player: &Player) -> std::result::Result<(), librespot_core::Error> {
     match self {
       Self::Load(request) => spirc.load(request),
-      Self::Play => {
-        let result = spirc.play();
-        player.play();
-        result
-      }
-      Self::Pause => {
-        let result = spirc.pause();
-        player.pause();
-        result
-      }
+      Self::Play => spirc.play(),
+      Self::Pause => spirc.pause(),
       Self::Stop => {
         player.stop();
         Ok(())

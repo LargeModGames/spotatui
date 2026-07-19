@@ -693,7 +693,7 @@ async fn handle_player_events(
         // `last_track_id`) are bare base62, so normalize at the event boundary.
         // The restore observer keeps the full URI (it canonicalizes internally).
         let playing_uri = audio_item.track_id.to_string();
-        app.observe_native_track_changed(playing_uri.clone(), kind);
+        app.observe_native_track_changed(playing_uri.clone(), kind, audio_item.duration_ms);
         let playing_id = app::base62_id_of(&playing_uri).to_string();
         app.last_track_id = Some(playing_id.clone());
         // Keep the client-side shuffle session pointed at what Spirc actually
@@ -1084,7 +1084,7 @@ async fn request_full_streaming_recovery(
   )
   .await
   {
-    request.continue_after_track = continue_after_track;
+    request.continue_after_track = continue_after_track.or(request.continue_after_track);
     let _ = recovery_tx.send(request);
   }
 }
@@ -1189,15 +1189,29 @@ async fn disconnect_streaming_player(
   // playback to another device. At that point the API context can still be the
   // old native device, so only reselect native for non-Connect-disconnect paths.
   let reselect_device = allow_reselect_device && current_playback_matches_native(&app_lock, player);
-  if reselect_device {
+  let continue_after_track = if reselect_device {
     let position_ms = u32::try_from(shared_position.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
     let is_playing = shared_is_playing.load(Ordering::Relaxed);
     app_lock.prepare_native_playback_recovery(position_ms, is_playing);
+    let completed_track = app_lock
+      .native_playback_recovery
+      .as_ref()
+      .and_then(|snapshot| snapshot.completed_track_uri())
+      .map(app::base62_id_of)
+      .map(str::to_string);
+    if let Some(track_id) = completed_track.as_deref() {
+      info!(
+        "native track {} completed while the transport was down; continuing after recovery",
+        track_id
+      );
+    }
+    completed_track
   } else {
     // An intentional Spotify Connect transfer must not be undone by a later
     // native recovery attempt.
     app_lock.clear_native_playback_recovery();
-  }
+    None
+  };
 
   app_lock.streaming_player = None;
   // Stop the old Connect session so it doesn't linger as a ghost device (#297).
@@ -1228,7 +1242,7 @@ async fn disconnect_streaming_player(
 
   Some(StreamingRecoveryRequest {
     reselect_device,
-    continue_after_track: None,
+    continue_after_track,
   })
 }
 

@@ -1217,6 +1217,7 @@ pub struct NativePlaybackRecoverySnapshot {
   pub offset: Option<usize>,
   pub current_track_uri: Option<String>,
   pub loading_track_uri: Option<String>,
+  pub track_duration_ms: Option<u32>,
   pub position_ms: u32,
   pub desired_playing: bool,
   pub shuffle: bool,
@@ -1248,7 +1249,28 @@ impl NativePlaybackRecoverySnapshot {
     if self.loading_track_uri.is_some() {
       0
     } else {
-      self.position_ms
+      self
+        .track_duration_ms
+        .map_or(self.position_ms, |duration_ms| {
+          if duration_ms == 0 {
+            self.position_ms
+          } else {
+            self.position_ms.min(duration_ms - 1)
+          }
+        })
+    }
+  }
+
+  pub fn completed_track_uri(&self) -> Option<&str> {
+    let duration_ms = self.track_duration_ms?;
+    if self.desired_playing
+      && self.loading_track_uri.is_none()
+      && duration_ms > 0
+      && self.position_ms >= duration_ms
+    {
+      self.current_track_uri.as_deref()
+    } else {
+      None
     }
   }
 
@@ -2692,6 +2714,7 @@ impl App {
       offset,
       current_track_uri,
       loading_track_uri: None,
+      track_duration_ms: None,
       position_ms: 0,
       desired_playing,
       shuffle,
@@ -2786,6 +2809,7 @@ impl App {
           offset: Some(0),
           current_track_uri,
           loading_track_uri: None,
+          track_duration_ms: self.native_track_info.as_ref().map(|info| info.duration_ms),
           position_ms,
           desired_playing: is_playing,
           shuffle: self.user_config.behavior.shuffle_enabled,
@@ -2798,8 +2822,12 @@ impl App {
       }
     }
 
+    let track_duration_ms = self.native_track_info.as_ref().map(|info| info.duration_ms);
     let snapshot = self.native_playback_recovery.as_mut()?;
     snapshot.position_ms = position_ms;
+    if snapshot.loading_track_uri.is_none() && snapshot.track_duration_ms.is_none() {
+      snapshot.track_duration_ms = track_duration_ms;
+    }
     Some(snapshot.generation)
   }
 
@@ -2860,12 +2888,18 @@ impl App {
       });
     if let Some(snapshot) = self.native_playback_recovery.as_mut() {
       snapshot.loading_track_uri = Some(canonical_track_uri);
+      snapshot.track_duration_ms = None;
       snapshot.position_ms = position_ms;
     }
   }
 
   #[cfg(feature = "streaming")]
-  pub(crate) fn observe_native_track_changed(&mut self, track_uri: String, kind: NativeTrackKind) {
+  pub(crate) fn observe_native_track_changed(
+    &mut self,
+    track_uri: String,
+    kind: NativeTrackKind,
+    duration_ms: u32,
+  ) {
     if self.native_restore_pending.is_some() && !self.native_restore_event_matches(&track_uri) {
       log::warn!(
         "ignoring stale native TrackChanged event during restore: expected {:?}, got {}",
@@ -2886,6 +2920,7 @@ impl App {
     if let Some(snapshot) = self.native_playback_recovery.as_mut() {
       snapshot.current_track_uri = Some(canonical_track_uri.clone());
       snapshot.loading_track_uri = None;
+      snapshot.track_duration_ms = Some(duration_ms);
       snapshot.position_ms = 0;
       snapshot.update_offset_for_track(&canonical_track_uri);
     }
@@ -8363,6 +8398,34 @@ mod tests {
 
   #[cfg(feature = "streaming")]
   #[test]
+  fn completed_track_during_transport_loss_is_detected_for_recovery() {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec![
+        "spotify:track:finished".to_string(),
+        "spotify:track:next".to_string(),
+      ]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    app.observe_native_track_changed("finished".to_string(), NativeTrackKind::Track, 389_094);
+
+    app.prepare_native_playback_recovery(395_562, false);
+
+    assert_eq!(
+      app
+        .native_playback_recovery
+        .as_ref()
+        .and_then(NativePlaybackRecoverySnapshot::completed_track_uri),
+      Some("spotify:track:finished")
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
   fn native_raw_list_next_request_matches_uri_and_base62_forms() {
     let mut app = App::default();
     app.record_native_playback_request(
@@ -8992,6 +9055,7 @@ mod tests {
       offset: Some(0),
       current_track_uri: Some("spotify:track:a".to_string()),
       loading_track_uri: None,
+      track_duration_ms: None,
       position_ms: 0,
       desired_playing: true,
       shuffle: false,

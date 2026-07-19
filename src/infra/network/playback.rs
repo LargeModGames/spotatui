@@ -2494,6 +2494,7 @@ mod tests {
       offset: Some(3),
       current_track_uri: Some("spotify:track:current".to_string()),
       loading_track_uri: None,
+      track_duration_ms: Some(60_000),
       position_ms: 42_000,
       desired_playing: false,
       shuffle: true,
@@ -2514,6 +2515,29 @@ mod tests {
       Some(LoadContextOptions::Options(options))
         if options.shuffle && options.repeat && options.repeat_track
     ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn native_restore_request_clamps_position_to_track_duration() {
+    let snapshot = NativePlaybackRecoverySnapshot {
+      generation: 8,
+      context_uri: None,
+      uris: Some(vec!["spotify:track:finished".to_string()]),
+      offset: Some(0),
+      current_track_uri: Some("spotify:track:finished".to_string()),
+      loading_track_uri: None,
+      track_duration_ms: Some(389_094),
+      position_ms: 395_562,
+      desired_playing: true,
+      shuffle: false,
+      repeat: RepeatState::Off,
+      recovery_attempts: 1,
+    };
+
+    let request = native_restore_load_request(&snapshot).unwrap();
+
+    assert_eq!(request.seek_to, 389_093);
   }
 
   #[test]
