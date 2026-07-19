@@ -674,6 +674,14 @@ pub async fn start_ui(
     let title_update = {
       let mut app = app.lock().await;
 
+      #[cfg(feature = "streaming")]
+      if let Some(player) = app.streaming_player.clone() {
+        if let Some(error) = player.take_audio_backend_error() {
+          app.pause_native_playback();
+          app.set_status_message(format!("Audio backend failed: {error}"), 15);
+        }
+      }
+
       #[cfg(all(feature = "mpris", target_os = "linux"))]
       {
         let current_is_streaming_active = app.is_streaming_active;

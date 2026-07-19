@@ -367,16 +367,20 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
 struct RecoveringSink {
   inner: Option<Box<dyn audio_backend::Sink>>,
   make_sink: Box<dyn Fn() -> Box<dyn audio_backend::Sink>>,
+  error: Arc<std::sync::Mutex<Option<String>>>,
+  failed: bool,
 }
 
 impl RecoveringSink {
-  fn new<F>(make_sink: F) -> Self
+  fn new<F>(make_sink: F, error: Arc<std::sync::Mutex<Option<String>>>) -> Self
   where
     F: Fn() -> Box<dyn audio_backend::Sink> + 'static,
   {
     Self {
       inner: None,
       make_sink: Box::new(make_sink),
+      error,
+      failed: false,
     }
   }
 
@@ -448,7 +452,21 @@ impl RecoveringSink {
 
 impl audio_backend::Sink for RecoveringSink {
   fn start(&mut self) -> audio_backend::SinkResult<()> {
-    self.with_inner("start", |sink| sink.start())
+    self.failed = false;
+    match self.with_inner("start", |sink| sink.start()) {
+      Ok(()) => {
+        // A working sink supersedes any stale error recorded before there was
+        // a player to surface it; leaving it would report a live failure later.
+        *self.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+      }
+      Err(err) => {
+        *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.to_string());
+        self.failed = true;
+      }
+    }
+    // A sink error must not invalidate librespot's player thread. Keep consuming
+    // packets silently so the TUI can surface the failure and remain usable.
+    Ok(())
   }
 
   fn stop(&mut self) -> audio_backend::SinkResult<()> {
@@ -467,7 +485,20 @@ impl audio_backend::Sink for RecoveringSink {
     packet: AudioPacket,
     converter: &mut Converter,
   ) -> audio_backend::SinkResult<()> {
-    self.with_inner("write", |sink| sink.write(packet, converter))
+    // Unlike start(), write errors must propagate: a blocking sink.write() is
+    // librespot's only backpressure, and its packet-error path pauses playback
+    // without exiting the process.
+    if self.failed {
+      return Err(audio_backend::SinkError::NotConnected(
+        "Audio sink unavailable".to_string(),
+      ));
+    }
+    if let Err(err) = self.with_inner("write", |sink| sink.write(packet, converter)) {
+      *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.to_string());
+      self.failed = true;
+      return Err(err);
+    }
+    Ok(())
   }
 }
 
@@ -676,6 +707,7 @@ pub struct StreamingPlayer {
   shutdown_tx: tokio::sync::watch::Sender<bool>,
   connection_state_tx: tokio::sync::watch::Sender<StreamingConnectionState>,
   connection_state_rx: tokio::sync::watch::Receiver<StreamingConnectionState>,
+  audio_backend_error: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[allow(dead_code)]
@@ -789,14 +821,17 @@ impl StreamingPlayer {
       })?;
 
     // Create player
+    let audio_backend_error = Arc::new(std::sync::Mutex::new(None));
+    let sink_error = Arc::clone(&audio_backend_error);
     let player = Player::new(
       player_config,
       session.clone(),
       mixer.get_soft_volume(),
       move || {
-        Box::new(RecoveringSink::new(move || {
-          backend(requested_device.clone(), AudioFormat::default())
-        }))
+        Box::new(RecoveringSink::new(
+          move || backend(requested_device.clone(), AudioFormat::default()),
+          Arc::clone(&sink_error),
+        ))
       },
     );
 
@@ -915,6 +950,7 @@ impl StreamingPlayer {
       shutdown_tx,
       connection_state_tx,
       connection_state_rx,
+      audio_backend_error,
     })
   }
 
@@ -983,6 +1019,14 @@ impl StreamingPlayer {
 
   pub fn connection_state(&self) -> StreamingConnectionState {
     *self.connection_state_rx.borrow()
+  }
+
+  pub fn take_audio_backend_error(&self) -> Option<String> {
+    self
+      .audio_backend_error
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .take()
   }
 
   /// Play a track by its Spotify URI (e.g., "spotify:track:xxxx")
@@ -1281,9 +1325,76 @@ fn new_device_id_string() -> String {
 mod tests {
   use super::{
     get_or_create_device_id, new_device_id_string, should_retry_with_fresh_credentials,
-    wait_for_oauth_callback_port, StreamingConnectionState,
+    wait_for_oauth_callback_port, RecoveringSink, StreamingConnectionState,
   };
+  use librespot_playback::{audio_backend, convert::Converter, decoder::AudioPacket};
+  use std::sync::Arc;
   use std::time::Duration;
+
+  struct StubSink {
+    start_result: fn() -> audio_backend::SinkResult<()>,
+  }
+
+  impl audio_backend::Sink for StubSink {
+    fn start(&mut self) -> audio_backend::SinkResult<()> {
+      (self.start_result)()
+    }
+
+    fn stop(&mut self) -> audio_backend::SinkResult<()> {
+      Ok(())
+    }
+
+    fn write(
+      &mut self,
+      _packet: AudioPacket,
+      _converter: &mut Converter,
+    ) -> audio_backend::SinkResult<()> {
+      Ok(())
+    }
+  }
+
+  fn failing_start() -> audio_backend::SinkResult<()> {
+    Err(audio_backend::SinkError::StateChange(
+      "stub backend failure".to_string(),
+    ))
+  }
+
+  fn stub_recovering_sink(
+    start_result: fn() -> audio_backend::SinkResult<()>,
+  ) -> (RecoveringSink, Arc<std::sync::Mutex<Option<String>>>) {
+    let error = Arc::new(std::sync::Mutex::new(None));
+    let sink = RecoveringSink::new(
+      move || Box::new(StubSink { start_result }) as Box<dyn audio_backend::Sink>,
+      Arc::clone(&error),
+    );
+    (sink, error)
+  }
+
+  #[test]
+  fn failing_backend_start_returns_ok_and_records_error() {
+    use audio_backend::Sink;
+
+    let (mut sink, error) = stub_recovering_sink(failing_start);
+
+    // The regression guard for #384: a failing backend must not propagate the
+    // error into librespot's player thread.
+    sink.start().expect("start() must fail softly");
+    assert!(sink.failed);
+    let recorded = error.lock().unwrap().take();
+    assert!(recorded.unwrap().contains("stub backend failure"));
+  }
+
+  #[test]
+  fn successful_start_clears_stale_backend_error() {
+    use audio_backend::Sink;
+
+    let (mut sink, error) = stub_recovering_sink(|| Ok(()));
+    *error.lock().unwrap() = Some("stale error from a previous sink".to_string());
+
+    sink.start().expect("start() should succeed");
+    assert!(!sink.failed);
+    assert!(error.lock().unwrap().is_none());
+  }
 
   #[test]
   fn oauth_callback_port_waits_for_previous_listener_to_release() {
