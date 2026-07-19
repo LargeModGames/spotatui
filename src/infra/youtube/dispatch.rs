@@ -435,8 +435,8 @@ fn snapshot_tracks(
 
 /// Release the other backends so only YouTube holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // In a youtube-only build every block below is compiled out.
-  let _ = app;
+  app.lock().await.release_sonos_playback();
+
   // Pause native Spotify so librespot releases the device.
   #[cfg(feature = "streaming")]
   {

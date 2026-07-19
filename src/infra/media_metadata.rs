@@ -75,6 +75,32 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
     return Some(snapshot);
   }
 
+  if app.sonos_owns_playback() {
+    let snapshot = app.sonos_now_playing.as_ref()?;
+    if app.selected_sonos_room_uuid.as_deref() != Some(snapshot.room_uuid.as_str()) {
+      return None;
+    }
+    return Some(PlaybackSnapshot {
+      metadata: PlaybackMetadata {
+        title: snapshot.title.clone()?,
+        artists: snapshot.artist.iter().cloned().collect(),
+        album: snapshot.album.clone().unwrap_or_default(),
+        image_url: None,
+        duration_ms: snapshot.duration_ms.unwrap_or_default(),
+      },
+      item_kind: PlaybackItemKind::Track,
+      item_id: None,
+      item_uri: snapshot.track_uri.clone(),
+      context_uri: None,
+      source: PlaybackSource::ExternalDevice,
+      progress_ms: app.song_progress_ms,
+      is_playing: snapshot.is_playing,
+      is_live: false,
+      shuffle: false,
+      repeat: None,
+    });
+  }
+
   let context = app.current_playback_context.as_ref();
   let use_native_metadata = app.is_streaming_active && app.native_track_info.is_some();
 
@@ -684,6 +710,40 @@ mod tests {
     );
     assert_eq!(snapshot.metadata.duration_ms, 2_400_000);
     assert!(!snapshot.is_playing);
+  }
+
+  #[test]
+  fn extracts_sonos_now_playing() {
+    let mut app = app();
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+    app
+      .sonos_rooms
+      .push(crate::core::playback_target::SonosRoom {
+        uuid: "RINCON_KITCHEN".to_string(),
+        name: "Kitchen".to_string(),
+        location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+      });
+    app.song_progress_ms = 42_000;
+    app.sonos_now_playing = Some(crate::core::playback_target::SonosNowPlaying {
+      room_uuid: "RINCON_KITCHEN".to_string(),
+      title: Some("Song".to_string()),
+      artist: Some("Artist".to_string()),
+      album: Some("Album".to_string()),
+      track_uri: Some("x-sonos-spotify:spotify%3atrack%3aabc123?sid=9&sn=2".to_string()),
+      duration_ms: Some(180_000),
+      position_ms: 42_000,
+      is_playing: true,
+      volume_percent: Some(25),
+    });
+
+    let snapshot = current_playback_snapshot(&app).unwrap();
+
+    assert_eq!(snapshot.metadata.title, "Song");
+    assert_eq!(snapshot.metadata.artists, vec!["Artist"]);
+    assert_eq!(snapshot.metadata.album, "Album");
+    assert_eq!(snapshot.progress_ms, 42_000);
+    assert!(snapshot.is_playing);
+    assert_eq!(snapshot.source, PlaybackSource::ExternalDevice);
   }
 
   #[test]

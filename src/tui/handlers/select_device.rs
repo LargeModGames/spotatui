@@ -1,5 +1,6 @@
 use super::common_key_events;
 use crate::core::app::{ActiveBlock, App, SourceFocus};
+use crate::core::playback_target::PlaybackTarget;
 use crate::core::source::Source;
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
@@ -24,12 +25,11 @@ pub fn handler(key: Key, app: &mut App) {
           common_key_events::on_down_press_handler(&Source::ALL, Some(app.source_list_index));
       }
       SourceFocus::Devices => {
-        if let Some(p) = &app.devices {
-          if let Some(selected_device_index) = app.selected_device_index {
-            let next_index =
-              common_key_events::on_down_press_handler(&p.devices, Some(selected_device_index));
-            app.selected_device_index = Some(next_index);
-          }
+        let targets = app.playback_targets();
+        if let Some(selected_device_index) = app.selected_device_index {
+          let next_index =
+            common_key_events::on_down_press_handler(&targets, Some(selected_device_index));
+          app.selected_device_index = Some(next_index);
         }
       }
     },
@@ -39,41 +39,35 @@ pub fn handler(key: Key, app: &mut App) {
           common_key_events::on_up_press_handler(&Source::ALL, Some(app.source_list_index));
       }
       SourceFocus::Devices => {
-        if let Some(p) = &app.devices {
-          if let Some(selected_device_index) = app.selected_device_index {
-            let next_index =
-              common_key_events::on_up_press_handler(&p.devices, Some(selected_device_index));
-            app.selected_device_index = Some(next_index);
-          }
+        let targets = app.playback_targets();
+        if let Some(selected_device_index) = app.selected_device_index {
+          let next_index =
+            common_key_events::on_up_press_handler(&targets, Some(selected_device_index));
+          app.selected_device_index = Some(next_index);
         }
       }
     },
     k if common_key_events::high_event(k) => {
-      if app.source_device_focus == SourceFocus::Devices {
-        if let Some(_p) = &app.devices {
-          if app.selected_device_index.is_some() {
-            app.selected_device_index = Some(common_key_events::on_high_press_handler());
-          }
-        }
+      if app.source_device_focus == SourceFocus::Devices
+        && app.selected_device_index.is_some()
+        && !app.playback_targets().is_empty()
+      {
+        app.selected_device_index = Some(common_key_events::on_high_press_handler());
       }
     }
     k if common_key_events::middle_event(k) => {
-      if app.source_device_focus == SourceFocus::Devices {
-        if let Some(p) = &app.devices {
-          if app.selected_device_index.is_some() {
-            let next_index = common_key_events::on_middle_press_handler(&p.devices);
-            app.selected_device_index = Some(next_index);
-          }
+      if app.source_device_focus == SourceFocus::Devices && app.selected_device_index.is_some() {
+        let targets = app.playback_targets();
+        if !targets.is_empty() {
+          app.selected_device_index = Some(common_key_events::on_middle_press_handler(&targets));
         }
       }
     }
     k if common_key_events::low_event(k) => {
-      if app.source_device_focus == SourceFocus::Devices {
-        if let Some(p) = &app.devices {
-          if app.selected_device_index.is_some() {
-            let next_index = common_key_events::on_low_press_handler(&p.devices);
-            app.selected_device_index = Some(next_index);
-          }
+      if app.source_device_focus == SourceFocus::Devices && app.selected_device_index.is_some() {
+        let targets = app.playback_targets();
+        if !targets.is_empty() {
+          app.selected_device_index = Some(common_key_events::on_low_press_handler(&targets));
         }
       }
     }
@@ -145,30 +139,58 @@ fn select_source(app: &mut App) {
   }
 }
 
-/// Existing behaviour: transfer Spotify playback to the highlighted device.
+/// Transfer Spotify playback to the highlighted Spotify Connect or Sonos target.
 fn transfer_to_selected_device(app: &mut App) {
   let Some(index) = app.selected_device_index else {
     app.set_status_message("No playback device selected", 4);
     return;
   };
 
-  let Some(devices) = &app.devices else {
-    app.set_status_message("No playback devices found", 4);
-    return;
-  };
-
-  let Some(device) = devices.devices.get(index) else {
+  let targets = app.playback_targets();
+  let Some(target) = targets.get(index).cloned() else {
     app.set_status_message("Selected playback device is no longer available", 4);
     return;
   };
 
-  let Some(device_id) = &device.id else {
-    app.set_status_message("Selected playback device has no Spotify device id", 4);
-    return;
-  };
-
-  let device_name = device.name.clone();
-  app.dispatch(IoEvent::TransferPlaybackToDevice(device_id.clone(), true));
-  app.set_status_message(format!("Switching playback to {}", device_name), 4);
+  match target {
+    PlaybackTarget::Spotify { id, name, .. } => {
+      app.dispatch(IoEvent::TransferPlaybackToDevice(id, true));
+      app.set_status_message(format!("Switching playback to {name}"), 4);
+    }
+    PlaybackTarget::Sonos { room, .. } => {
+      let room_name = room.name.clone();
+      app.dispatch(IoEvent::TransferPlaybackToSonosRoom(room.uuid, true));
+      app.set_status_message(format!("Selecting Sonos room {room_name}"), 4);
+    }
+  }
   app.pop_navigation_stack();
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::playback_target::SonosRoom;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  #[test]
+  fn selecting_sonos_dispatches_room_transfer() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.sonos_rooms.push(SonosRoom {
+      uuid: "RINCON_KITCHEN".to_string(),
+      name: "Kitchen".to_string(),
+      location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+    });
+    app.selected_device_index = Some(0);
+
+    transfer_to_selected_device(&mut app);
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::TransferPlaybackToSonosRoom(room_uuid, true))
+        if room_uuid == "RINCON_KITCHEN"
+    ));
+  }
 }

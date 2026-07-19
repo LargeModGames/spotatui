@@ -3,7 +3,6 @@
 //! This module provides native audio playback capabilities using the librespot library.
 //! It registers spotatui as a Spotify Connect device and handles audio streaming.
 
-#[cfg(feature = "streaming")]
 pub mod backend;
 #[cfg(feature = "streaming")]
 mod events;
@@ -11,7 +10,8 @@ mod events;
 mod streaming;
 
 #[cfg(feature = "streaming")]
-pub use backend::{select_native, PlaybackBackend};
+pub use backend::select_native;
+pub use backend::PlaybackBackend;
 #[cfg(feature = "streaming")]
 pub use events::*;
 #[cfg(feature = "streaming")]

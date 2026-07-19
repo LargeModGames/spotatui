@@ -200,11 +200,13 @@ fn snapshot_station(app: &App, uri: &str) -> TrackInfo {
 }
 
 /// Release the other backends so only radio holds the output device.
-async fn release_other_backends(_app: &Arc<Mutex<App>>) {
+async fn release_other_backends(app: &Arc<Mutex<App>>) {
+  app.lock().await.release_sonos_playback();
+
   // Pause native Spotify so librespot releases the device.
   #[cfg(feature = "streaming")]
   {
-    let streaming = _app.lock().await.streaming_player.clone();
+    let streaming = app.lock().await.streaming_player.clone();
     if let Some(player) = streaming {
       player.pause();
     }
@@ -212,7 +214,7 @@ async fn release_other_backends(_app: &Arc<Mutex<App>>) {
   // Tear down any local-file session (dropping it releases its device handle).
   #[cfg(feature = "local-files")]
   {
-    let local = _app.lock().await.local_playback.take();
+    let local = app.lock().await.local_playback.take();
     if let Some(local) = local {
       local.player.stop();
     }
@@ -220,7 +222,7 @@ async fn release_other_backends(_app: &Arc<Mutex<App>>) {
   // Tear down any Subsonic session.
   #[cfg(feature = "subsonic")]
   {
-    let subsonic = _app.lock().await.subsonic_playback.take();
+    let subsonic = app.lock().await.subsonic_playback.take();
     if let Some(subsonic) = subsonic {
       subsonic.player.stop();
     }
@@ -229,7 +231,7 @@ async fn release_other_backends(_app: &Arc<Mutex<App>>) {
   // dispatch never sees this radio: start).
   #[cfg(feature = "youtube")]
   {
-    let youtube = _app.lock().await.youtube_playback.take();
+    let youtube = app.lock().await.youtube_playback.take();
     if let Some(youtube) = youtube {
       youtube.player.stop();
     }

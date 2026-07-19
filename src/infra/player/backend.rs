@@ -1,12 +1,11 @@
 //! Playback transport backend abstraction.
 //!
 //! Playback transport (play/pause/next/seek/shuffle/repeat/volume) can be served
-//! two different ways depending on which Spotify device is active:
+//! by the embedded player, a selected Sonos room, or Spotify Connect.
 //!
-//! * **Native** — the embedded librespot [`StreamingPlayer`], driving audio
-//!   locally and controlling Spotify Connect state directly.
-//! * **Connect** — the Spotify Web API, controlling whatever remote device is
-//!   currently active.
+//! * **Native** — the embedded librespot player, driving audio locally.
+//! * **Sonos** — local UPnP/SOAP control of a selected room.
+//! * **Connect** — the Spotify Web API controlling the active remote device.
 //!
 //! Historically every transport operation branched inline on
 //! `is_streaming_active` (via the `network` playback helpers) to pick one of
@@ -19,9 +18,11 @@
 //! asymmetric activation logic in dedicated selector helpers. This type only
 //! models the resolved choice plus the player handle needed by the native arm.
 
-use std::sync::Arc;
-
+use crate::core::playback_target::SonosRoom;
+#[cfg(feature = "streaming")]
 use crate::infra::player::StreamingPlayer;
+#[cfg(feature = "streaming")]
+use std::sync::Arc;
 
 /// The resolved transport backend for a single playback operation.
 ///
@@ -29,7 +30,10 @@ use crate::infra::player::StreamingPlayer;
 /// lookup; `Connect` indicates the Spotify Web API path should be used.
 pub enum PlaybackBackend {
   /// Drive transport through the embedded librespot player.
+  #[cfg(feature = "streaming")]
   Native(Arc<StreamingPlayer>),
+  /// Drive transport through local Sonos SOAP endpoints.
+  Sonos(SonosRoom),
   /// Drive transport through the Spotify Web API.
   Connect,
 }
@@ -41,6 +45,7 @@ pub enum PlaybackBackend {
 /// player is absent (even if native streaming is nominally active) the operation
 /// falls through to the Web API, matching the historical
 /// `if is_native_active { if let Some(player) { .. } }` fallthrough.
+#[cfg(any(feature = "streaming", test))]
 pub fn select_native(is_native_active: bool, player_present: bool) -> bool {
   is_native_active && player_present
 }

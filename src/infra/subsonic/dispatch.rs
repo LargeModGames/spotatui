@@ -299,6 +299,8 @@ fn find_track<'a>(
   allow(unused_variables)
 )]
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
+  app.lock().await.release_sonos_playback();
+
   // Pause native Spotify so librespot releases the device.
   #[cfg(feature = "streaming")]
   {

@@ -10,7 +10,6 @@ pub mod media_metadata;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 pub mod mpris;
 pub mod network;
-#[cfg(feature = "streaming")]
 pub mod player;
 pub mod queue;
 #[cfg(feature = "internet-radio")]
@@ -18,6 +17,7 @@ pub mod radio;
 pub mod redirect_uri;
 #[cfg(feature = "scripting")]
 pub mod scripting;
+pub mod sonos;
 #[cfg(feature = "subsonic")]
 pub mod subsonic;
 #[cfg(feature = "youtube")]

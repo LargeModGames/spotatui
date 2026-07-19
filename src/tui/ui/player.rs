@@ -375,13 +375,14 @@ fn cover_playbar_artist_area(
 fn playbar_supported_controls(app: &App) -> Vec<PlaybarControl> {
   playbar_supported_controls_for(
     app.queue_owns_playback(),
+    app.sonos_owns_playback(),
     non_spotify_source_playback_active(app),
     app.active_queueable_decoded_source(),
   )
 }
 
-/// The pure core of [`playbar_supported_controls`], taking the three facts it
-/// depends on rather than an [`App`]: a real `LocalPlaybackState` needs an
+/// The pure core of [`playbar_supported_controls`], taking the ownership facts
+/// it depends on rather than an [`App`]: a real `LocalPlaybackState` needs an
 /// `Arc<LocalPlayer>` holding an open audio device, so the whole support matrix
 /// would otherwise be untestable.
 ///
@@ -393,23 +394,19 @@ fn playbar_supported_controls(app: &App) -> Vec<PlaybarControl> {
 /// or hear.
 fn playbar_supported_controls_for(
   queue_owns_playback: bool,
+  sonos_owns_playback: bool,
   non_spotify_active: bool,
   queueable_decoded: bool,
 ) -> Vec<PlaybarControl> {
   let mut controls = PLAYBAR_CONTROLS.to_vec();
 
-  // The native queue slot owns the sink, so `draw_playbar` renders the *queued*
-  // track over a suspended context with the mode indicators hidden. Transport
-  // still works and stays offered: `App::next_track` advances the queue and
-  // `App::previous_track` restarts the queued track, both via the queue router.
-  // Dropped: Shuffle/Repeat have no queue-slot state to show (`App::shuffle` /
-  // `App::repeat` no-op here), and Like acts on `current_playback_context` —
-  // under a suspended *Spotify* context that is a different track than the one on
-  // screen, so the button would save a song the user is not listening to.
-  // Checked before `non_spotify_active`, which is false in exactly that case (a
-  // suspended Spotify context sets no `*_playback`) and would otherwise hand back
-  // all eight controls.
-  if queue_owns_playback {
+  // The native queue slot or Sonos owns playback with mode indicators hidden.
+  // Transport controls still work and stay offered. Shuffle/Repeat have no
+  // supported state in either case, while Like would target either a suspended
+  // Spotify context or no current Spotify item at all. Checked before
+  // `non_spotify_active`, which can be false for both ownership modes and would
+  // otherwise hand back all eight controls.
+  if queue_owns_playback || sonos_owns_playback {
     controls.retain(|control| {
       !matches!(
         control,
@@ -524,7 +521,7 @@ fn playbar_controls_available(app: &App) -> bool {
   // suspends nothing, leaving every `*_playback` `None` and (for a user who never
   // started Spotify) no context either — which used to draw those controls while
   // hit-testing returned no boxes, so they were inert.
-  if app.queue_owns_playback() {
+  if app.queue_owns_playback() || app.sonos_owns_playback() {
     return true;
   }
 
@@ -629,11 +626,6 @@ impl PlaybarProgressLine {
 /// playback, or `None` when nothing is playing or the line is not rendered (e.g.
 /// the single-row playbar, or a terminal too narrow to fit the gauge).
 pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<PlaybarProgressLine> {
-  let item = app
-    .current_playback_context
-    .as_ref()
-    .and_then(|ctx| ctx.item.as_ref())?;
-
   let progress_area = playbar_layout_areas(app, playbar_area).progress_area;
   if progress_area.width == 0 || progress_area.height == 0 {
     return None;
@@ -641,9 +633,15 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
 
   // Duration as shown on the playbar (native track info preferred). Mirrors
   // draw_playbar's `display_duration_ms`, so keep the two in sync (player.rs ~761).
-  let duration_ms = if let Some(native_info) = &app.native_track_info {
+  let duration_ms = if app.sonos_owns_playback() {
+    app.sonos_now_playing.as_ref()?.duration_ms?
+  } else if let Some(native_info) = &app.native_track_info {
     native_info.duration_ms
   } else {
+    let item = app
+      .current_playback_context
+      .as_ref()
+      .and_then(|ctx| ctx.item.as_ref())?;
     match item {
       PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
       PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
@@ -838,16 +836,7 @@ fn extract_track_info(app: &App) -> (Option<String>, Option<String>) {
 ///
 /// Extracted from the live player so [`render_local_playbar`] is a pure function
 /// of plain values and can be unit-tested with `TestBackend` (no audio device).
-/// Gated to every build that can render one: the decoded sources plus the
-/// native queue slot (`streaming` covers a queued Spotify track).
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "internet-radio",
-  feature = "youtube",
-  feature = "streaming",
-  feature = "audio-decode"
-))]
+/// Shared by decoded sources, native queue slots, and Sonos playback.
 struct LocalPlaybarView {
   /// Source name shown in the playbar title, e.g. `"Local"` or `"Subsonic"`.
   source_label: &'static str,
@@ -868,6 +857,44 @@ struct LocalPlaybarView {
   /// internet radio and native queue slots, whose playbar drops the mode
   /// segments entirely rather than showing blank `Shuffle:`/`Repeat:` labels.
   show_modes: bool,
+}
+
+fn draw_sonos_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let room_name = app
+    .selected_sonos_room_uuid
+    .as_deref()
+    .and_then(|uuid| app.sonos_rooms.iter().find(|room| room.uuid == uuid))
+    .map(|room| room.name.as_str())
+    .unwrap_or("Sonos");
+  let snapshot = app.sonos_now_playing.as_ref().filter(|snapshot| {
+    app.selected_sonos_room_uuid.as_deref() == Some(snapshot.room_uuid.as_str())
+  });
+  let view = LocalPlaybarView {
+    source_label: "Sonos",
+    name: snapshot
+      .and_then(|snapshot| snapshot.title.clone())
+      .unwrap_or_else(|| format!("{room_name} — no active playback")),
+    artists: snapshot
+      .map(|snapshot| match (&snapshot.artist, &snapshot.album) {
+        (Some(artist), Some(album)) => format!("{artist} — {album}"),
+        (Some(artist), None) => artist.clone(),
+        (None, Some(album)) => album.clone(),
+        (None, None) => room_name.to_string(),
+      })
+      .unwrap_or_else(|| room_name.to_string()),
+    is_playing: app.sonos_is_playing.unwrap_or(false),
+    position_ms: app.song_progress_ms,
+    duration_ms: snapshot
+      .and_then(|snapshot| snapshot.duration_ms)
+      .unwrap_or(0) as u64,
+    volume_percent: app
+      .sonos_volume
+      .unwrap_or(app.user_config.behavior.volume_percent),
+    queue_position: None,
+    live: false,
+    show_modes: false,
+  };
+  render_local_playbar(f, app, layout_chunk, &view);
 }
 
 /// Render the playbar for an active local-file playback session.
@@ -976,14 +1003,6 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   render_local_playbar(f, app, layout_chunk, &view);
 }
 
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "internet-radio",
-  feature = "youtube",
-  feature = "streaming",
-  feature = "audio-decode"
-))]
 fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: &LocalPlaybarView) {
   let playbar_areas = playbar_layout_areas(app, layout_chunk);
 
@@ -1186,6 +1205,11 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       show_modes: false,
     };
     render_local_playbar(f, app, layout_chunk, &view);
+    return;
+  }
+
+  if app.sonos_owns_playback() {
+    draw_sonos_playbar(f, app, layout_chunk);
     return;
   }
 
@@ -1562,7 +1586,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   );
   let instructions_text: Vec<Line> = vec![
     Line::from(Span::raw(
-      "Choose your music source and Spotify playback device.",
+      "Choose your music source and Spotify Connect or Sonos playback target.",
     )),
     Line::from(Span::raw(move_instructions)),
     Line::from(Span::raw(
@@ -1638,9 +1662,9 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
   f.render_stateful_widget(source_list, source_area, &mut source_state);
 
-  // --- Devices panel (Spotify Connect only) ---
-  // Dimmed under any non-Spotify source (Local, Subsonic): device transfer is a
-  // Spotify Connect feature.
+  // --- Devices panel (Spotify Connect and Sonos) ---
+  // Sonos is a playback target for Spotify content, so this panel remains dimmed
+  // under non-Spotify sources.
   let non_spotify_active = app.active_source != Source::Spotify;
   let devices_focused = app.source_device_focus == SourceFocus::Devices && !non_spotify_active;
   let devices_color = if devices_focused {
@@ -1659,14 +1683,16 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     app.user_config.theme.base_style()
   };
 
-  let no_device_message = Span::raw("No devices found: Make sure a device is active");
-  let items: Vec<ListItem> = match &app.devices {
-    Some(payload) if !payload.devices.is_empty() => payload
-      .devices
+  let targets = app.playback_targets();
+  let items: Vec<ListItem> = if targets.is_empty() {
+    vec![ListItem::new(Span::raw(
+      "No targets found: activate Spotify Connect or check your Sonos network",
+    ))]
+  } else {
+    targets
       .iter()
-      .map(|device| ListItem::new(Span::raw(device.name.clone())))
-      .collect(),
-    _ => vec![ListItem::new(no_device_message)],
+      .map(|target| ListItem::new(Span::raw(target.label())))
+      .collect()
   };
 
   let mut state = ListState::default();
@@ -1699,6 +1725,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
 mod tests {
   use super::*;
   use chrono::Utc;
+  use ratatui::{backend::TestBackend, Terminal};
   use rspotify::model::{
     context::{Actions, CurrentPlaybackContext},
     device::Device,
@@ -1739,7 +1766,7 @@ mod tests {
   fn spotify_playback_keeps_every_playbar_control() {
     // No decoded source owns playback, so the Spotify playbar is on screen.
     assert_eq!(
-      playbar_supported_controls_for(false, false, false),
+      playbar_supported_controls_for(false, false, false, false),
       PLAYBAR_CONTROLS.to_vec()
     );
   }
@@ -1752,9 +1779,9 @@ mod tests {
     // back, including Like. `draw_playbar` consults every decoded source before
     // the Spotify context and returns early, so the context says nothing about
     // which playbar is actually on screen and must not be consulted here.
-    let local = playbar_supported_controls_for(false, true, true);
+    let local = playbar_supported_controls_for(false, false, true, true);
     assert!(!local.contains(&PlaybarControl::Like));
-    let radio = playbar_supported_controls_for(false, true, false);
+    let radio = playbar_supported_controls_for(false, false, true, false);
     assert!(!radio.contains(&PlaybarControl::Shuffle));
   }
 
@@ -1763,7 +1790,7 @@ mod tests {
     // Regression: Shuffle/Repeat were drawn but not clickable for local files,
     // because the row rendered every control while hit-testing kept only
     // Play/Pause. Both now come from this list, so a drawn button always works.
-    let controls = playbar_supported_controls_for(false, true, true);
+    let controls = playbar_supported_controls_for(false, false, true, true);
     for expected in [
       PlaybarControl::Prev,
       PlaybarControl::PlayPause,
@@ -1787,7 +1814,7 @@ mod tests {
     // Radio reports `queueable_decoded = false`: there is no finite track list to
     // skip through or shuffle, so offering those buttons would invite a click
     // that falls through to the wrong player.
-    let controls = playbar_supported_controls_for(false, true, false);
+    let controls = playbar_supported_controls_for(false, false, true, false);
     assert_eq!(
       controls,
       vec![
@@ -1809,8 +1836,8 @@ mod tests {
     // Prev/Next stay: unlike radio, the queue *can* honour them (`next_track`
     // dispatches AdvanceNativeQueue, `previous_track` restarts the queued track),
     // so dropping them would hide controls that work.
-    let over_spotify = playbar_supported_controls_for(true, false, false);
-    let over_decoded = playbar_supported_controls_for(true, true, false);
+    let over_spotify = playbar_supported_controls_for(true, false, false, false);
+    let over_decoded = playbar_supported_controls_for(true, false, true, false);
     let expected = vec![
       PlaybarControl::Prev,
       PlaybarControl::PlayPause,
@@ -1820,6 +1847,20 @@ mod tests {
     ];
     assert_eq!(over_spotify, expected);
     assert_eq!(over_decoded, expected);
+  }
+
+  #[test]
+  fn sonos_drops_like_and_unsupported_modes_but_keeps_transport() {
+    assert_eq!(
+      playbar_supported_controls_for(false, true, false, false),
+      vec![
+        PlaybarControl::Prev,
+        PlaybarControl::PlayPause,
+        PlaybarControl::Next,
+        PlaybarControl::VolumeDown,
+        PlaybarControl::VolumeUp,
+      ]
+    );
   }
 
   #[test]
@@ -2170,5 +2211,70 @@ mod tests {
       content.contains("Spotify") && content.contains("Local Files"),
       "both source rows should still render at 40x18: {content}"
     );
+  }
+
+  #[test]
+  fn source_picker_lists_sonos_rooms_as_playback_targets() {
+    let mut app = App::default();
+    app
+      .sonos_rooms
+      .push(crate::core::playback_target::SonosRoom {
+        uuid: "RINCON_KITCHEN".to_string(),
+        name: "Kitchen".to_string(),
+        location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+      });
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+
+    let content = render_picker(&app, 70, 28);
+
+    assert!(
+      content.contains("Kitchen (Sonos, selected)"),
+      "selected Sonos room should render: {content}"
+    );
+  }
+
+  #[test]
+  fn sonos_playbar_renders_room_and_now_playing() {
+    let mut app = App::default();
+    app.selected_sonos_room_uuid = Some("RINCON_KITCHEN".to_string());
+    app
+      .sonos_rooms
+      .push(crate::core::playback_target::SonosRoom {
+        uuid: "RINCON_KITCHEN".to_string(),
+        name: "Kitchen".to_string(),
+        location: "http://192.168.1.20:1400/xml/device_description.xml".to_string(),
+      });
+    app.sonos_now_playing = Some(crate::core::playback_target::SonosNowPlaying {
+      room_uuid: "RINCON_KITCHEN".to_string(),
+      title: Some("Everything in Its Right Place".to_string()),
+      artist: Some("Radiohead".to_string()),
+      album: Some("Kid A".to_string()),
+      track_uri: Some("x-sonos-spotify:spotify%3atrack%3aabc123?sid=9&sn=2".to_string()),
+      duration_ms: Some(250_000),
+      position_ms: 42_000,
+      is_playing: true,
+      volume_percent: Some(35),
+    });
+    app.sonos_is_playing = Some(true);
+    app.sonos_volume = Some(35);
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 6)).unwrap();
+    terminal
+      .draw(|f| {
+        let area = f.area();
+        draw_playbar(f, &app, area);
+      })
+      .unwrap();
+    let content = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect::<String>();
+
+    assert!(content.contains("Everything in Its Right Place"));
+    assert!(content.contains("Radiohead — Kid A"));
+    assert!(content.contains("Sonos"));
   }
 }

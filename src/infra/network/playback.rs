@@ -1,11 +1,13 @@
 use super::{IoEvent, Network};
+use crate::core::playback_target::{sonos_persisted_id, SonosNowPlaying, SonosRoom};
 #[cfg(feature = "streaming")]
 use crate::core::{
   app::{App, NativePlaybackOrigin},
   config::ClientConfig,
 };
 #[cfg(feature = "streaming")]
-use crate::infra::player::{select_native, PlaybackBackend};
+use crate::infra::player::select_native;
+use crate::infra::player::PlaybackBackend;
 use anyhow::anyhow;
 use chrono::TimeDelta;
 #[cfg(feature = "streaming")]
@@ -25,10 +27,45 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "streaming")]
 use librespot_connect::{LoadRequest, LoadRequestOptions, PlayingTrack};
-#[cfg(feature = "streaming")]
 use std::sync::Arc;
 
 const MAX_API_PLAYBACK_URIS: usize = 100;
+
+async fn selected_sonos_room(network: &Network) -> Option<SonosRoom> {
+  let app = network.app.lock().await;
+  if !app.sonos_owns_playback() {
+    return None;
+  }
+  let selected_uuid = app.selected_sonos_room_uuid.as_deref()?;
+  app
+    .sonos_rooms
+    .iter()
+    .find(|room| room.uuid == selected_uuid)
+    .cloned()
+}
+
+async fn handle_sonos_error(network: &Network, error: anyhow::Error) {
+  log::error!("Sonos playback error: {error:#}");
+  let mut app = network.app.lock().await;
+  app.set_error_status_message(format!("Sonos: {error}"), 6);
+}
+
+fn sonos_now_playing(
+  room_uuid: String,
+  snapshot: crate::infra::sonos::transport::SonosPlaybackSnapshot,
+) -> SonosNowPlaying {
+  SonosNowPlaying {
+    room_uuid,
+    title: snapshot.title,
+    artist: snapshot.artist,
+    album: snapshot.album,
+    track_uri: snapshot.track_uri,
+    duration_ms: snapshot.duration_ms,
+    position_ms: snapshot.position_ms,
+    is_playing: snapshot.is_playing,
+    volume_percent: snapshot.volume_percent,
+  }
+}
 
 #[cfg(feature = "streaming")]
 const MAX_NATIVE_IDLE_RECOVERY_ATTEMPTS: u8 = 2;
@@ -38,6 +75,7 @@ const NATIVE_IDLE_RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 pub trait PlaybackNetwork {
   async fn get_current_playback(&mut self);
+  async fn get_sonos_playback(&mut self);
   async fn start_playback(
     &mut self,
     context_id: Option<PlayContextId<'static>>,
@@ -53,6 +91,8 @@ pub trait PlaybackNetwork {
   async fn repeat(&mut self, repeat_state: RepeatState);
   async fn change_volume(&mut self, volume: u8);
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool);
+  async fn transfer_playback_to_sonos_room(&mut self, room_uuid: String, persist_device_id: bool);
+  async fn pause_sonos_room(&mut self, room_uuid: String);
   #[cfg(feature = "streaming")]
   async fn auto_select_streaming_device(&mut self, device_name: String, persist_device_id: bool);
   async fn ensure_playback_continues(&mut self, previous_track_id: String);
@@ -518,23 +558,28 @@ async fn is_native_streaming_active_for_playback(network: &Network) -> bool {
 /// awaited lookups happen in the same order as the original inline
 /// `if is_native_streaming_active_for_playback(..).await { if let Some(player) =
 /// current_streaming_player(..).await { .. } }` guard, so behaviour is identical.
-#[cfg(feature = "streaming")]
 async fn symmetric_playback_backend(network: &Network) -> PlaybackBackend {
-  let is_native_active = is_native_streaming_active_for_playback(network).await;
-  // Only look up the player when native is active, mirroring the original
-  // short-circuit (`if is_native { if let Some(player) ... }`) so the Connect
-  // path does not take the app lock the inline code never acquired.
-  let player = if is_native_active {
-    current_streaming_player(network).await
-  } else {
-    None
-  };
-  if select_native(is_native_active, player.is_some()) {
-    // `select_native` guarantees `player` is `Some` here.
-    PlaybackBackend::Native(player.expect("player present when native selected"))
-  } else {
-    PlaybackBackend::Connect
+  if let Some(room) = selected_sonos_room(network).await {
+    return PlaybackBackend::Sonos(room);
   }
+
+  #[cfg(feature = "streaming")]
+  {
+    let is_native_active = is_native_streaming_active_for_playback(network).await;
+    // Only look up the player when native is active, mirroring the original
+    // short-circuit (`if is_native { if let Some(player) ... }`) so the Connect
+    // path does not take the app lock the inline code never acquired.
+    let player = if is_native_active {
+      current_streaming_player(network).await
+    } else {
+      None
+    };
+    if select_native(is_native_active, player.is_some()) {
+      return PlaybackBackend::Native(player.expect("player present when native selected"));
+    }
+  }
+
+  PlaybackBackend::Connect
 }
 
 /// Resolve the transport backend for `start_playback`.
@@ -544,20 +589,26 @@ async fn symmetric_playback_backend(network: &Network) -> PlaybackBackend {
 /// activated for this playback. The `||` short-circuit and "fetch the player
 /// only when native applies" ordering are preserved exactly; a true predicate
 /// with a missing player still falls through to the Web API.
-#[cfg(feature = "streaming")]
 async fn start_playback_backend(network: &Network) -> PlaybackBackend {
-  let is_native_active = is_native_streaming_active_for_playback(network).await
-    || should_activate_native_streaming_for_playback(network).await;
-  let player = if is_native_active {
-    current_streaming_player(network).await
-  } else {
-    None
-  };
-  if select_native(is_native_active, player.is_some()) {
-    PlaybackBackend::Native(player.expect("player present when native selected"))
-  } else {
-    PlaybackBackend::Connect
+  if let Some(room) = selected_sonos_room(network).await {
+    return PlaybackBackend::Sonos(room);
   }
+
+  #[cfg(feature = "streaming")]
+  {
+    let is_native_active = is_native_streaming_active_for_playback(network).await
+      || should_activate_native_streaming_for_playback(network).await;
+    let player = if is_native_active {
+      current_streaming_player(network).await
+    } else {
+      None
+    };
+    if select_native(is_native_active, player.is_some()) {
+      return PlaybackBackend::Native(player.expect("player present when native selected"));
+    }
+  }
+
+  PlaybackBackend::Connect
 }
 
 /// Resolve the transport backend for `transfert_playback_to_device`.
@@ -732,7 +783,56 @@ fn native_load_request(
 }
 
 impl PlaybackNetwork for Network {
+  async fn get_sonos_playback(&mut self) {
+    let Some(room) = selected_sonos_room(self).await else {
+      let mut app = self.app.lock().await;
+      app.is_fetching_current_playback = false;
+      return;
+    };
+    let Some(transport) = self.sonos_transport.as_ref() else {
+      handle_sonos_error(self, anyhow!("could not initialize the Sonos HTTP client")).await;
+      let mut app = self.app.lock().await;
+      app.is_fetching_current_playback = false;
+      return;
+    };
+
+    match transport.now_playing(&room).await {
+      Ok(snapshot) => {
+        let now_playing = sonos_now_playing(room.uuid, snapshot);
+        let mut app = self.app.lock().await;
+        app.instant_since_last_current_playback_poll = Instant::now();
+        app.sonos_volume = now_playing.volume_percent.or(app.sonos_volume);
+        app.sonos_is_playing = Some(now_playing.is_playing);
+        app.sonos_poll_error_room_uuid = None;
+        app.song_progress_ms = now_playing.position_ms as u128;
+        app.sonos_now_playing = Some(now_playing);
+        app.current_playback_context = None;
+        app.is_streaming_active = false;
+        app.is_fetching_current_playback = false;
+      }
+      Err(error) => {
+        let mut app = self.app.lock().await;
+        app.instant_since_last_current_playback_poll = Instant::now();
+        app.is_fetching_current_playback = false;
+        let should_log = app.sonos_poll_error_room_uuid.as_deref() != Some(room.uuid.as_str());
+        app.sonos_poll_error_room_uuid = Some(room.uuid);
+        drop(app);
+        // Polling is observational: retain the last good snapshot and avoid a
+        // transient LAN connect failure flashing over otherwise healthy audio.
+        // Control-command failures remain user-visible through handle_sonos_error.
+        if should_log {
+          log::warn!("Sonos playback poll failed: {error:#}");
+        }
+      }
+    }
+  }
+
   async fn get_current_playback(&mut self) {
+    if self.app.lock().await.sonos_owns_playback() {
+      self.get_sonos_playback().await;
+      return;
+    }
+
     // When using native streaming, the Spotify API returns stale server-side state
     // that doesn't reflect recent local changes (volume, shuffle, repeat, play/pause).
     // We need to preserve these local states and restore them after getting the API response.
@@ -1141,6 +1241,42 @@ impl PlaybackNetwork for Network {
       self.app.lock().await.clear_native_shuffle_session();
     }
 
+    if let PlaybackBackend::Sonos(room) = start_playback_backend(self).await {
+      let Some(transport) = self.sonos_transport.as_ref() else {
+        handle_sonos_error(self, anyhow!("could not initialize the Sonos HTTP client")).await;
+        return;
+      };
+      let result = if context_id.is_none() && uris.is_none() {
+        transport.play(&room).await
+      } else {
+        match crate::infra::sonos::spotify::playback_request_from_spotify(
+          context_id.as_ref(),
+          uris.as_deref(),
+          offset,
+        ) {
+          Ok(request) => transport.play_spotify_request(&room, &request).await,
+          Err(error) => Err(error),
+        }
+      };
+
+      match result {
+        Ok(()) => {
+          let mut app = self.app.lock().await;
+          app.selected_sonos_room_uuid = Some(room.uuid);
+          app.sonos_poll_error_room_uuid = None;
+          app.sonos_is_playing = Some(true);
+          app.sonos_now_playing = None;
+          app.current_playback_context = None;
+          app.is_streaming_active = false;
+          app.native_playback_origin = None;
+          app.song_progress_ms = 0;
+          app.set_status_message(format!("Playing on Sonos: {}", room.name), 4);
+        }
+        Err(error) => handle_sonos_error(self, error).await,
+      }
+      return;
+    }
+
     // Check if we should use native streaming for playback
     #[cfg(feature = "streaming")]
     if request_native_streaming_recovery_if_disconnected(self).await {
@@ -1522,6 +1658,19 @@ impl PlaybackNetwork for Network {
       app.pending_start_playback = None;
       app.native_load_watchdog = None;
     }
+
+    if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
+      let result = match self.sonos_transport.as_ref() {
+        Some(transport) => transport.pause(&room).await,
+        None => Err(anyhow!("could not initialize the Sonos HTTP client")),
+      };
+      match result {
+        Ok(()) => self.app.lock().await.sonos_is_playing = Some(false),
+        Err(error) => handle_sonos_error(self, error).await,
+      }
+      return;
+    }
+
     // Check if using native streaming
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
@@ -1556,6 +1705,19 @@ impl PlaybackNetwork for Network {
   }
 
   async fn next_track(&mut self) {
+    if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
+      let result = match self.sonos_transport.as_ref() {
+        Some(transport) => transport.next(&room).await,
+        None => Err(anyhow!("could not initialize the Sonos HTTP client")),
+      };
+      if let Err(error) = result {
+        handle_sonos_error(self, error).await;
+      } else {
+        self.app.lock().await.song_progress_ms = 0;
+      }
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     {
       let mut app = self.app.lock().await;
@@ -1582,6 +1744,19 @@ impl PlaybackNetwork for Network {
   }
 
   async fn previous_track(&mut self) {
+    if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
+      let result = match self.sonos_transport.as_ref() {
+        Some(transport) => transport.previous(&room).await,
+        None => Err(anyhow!("could not initialize the Sonos HTTP client")),
+      };
+      if let Err(error) = result {
+        handle_sonos_error(self, error).await;
+      } else {
+        self.app.lock().await.song_progress_ms = 0;
+      }
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     {
       let mut app = self.app.lock().await;
@@ -1608,6 +1783,39 @@ impl PlaybackNetwork for Network {
   }
 
   async fn force_previous_track(&mut self) {
+    if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
+      let result = match self.sonos_transport.as_ref() {
+        Some(transport) => {
+          let result = transport.previous(&room).await;
+          if result.is_ok() {
+            let transport = Arc::clone(transport);
+            let queue_generation = transport.queue_generation();
+            let app = Arc::clone(&self.app);
+            let room_uuid = room.uuid.clone();
+            tokio::spawn(async move {
+              tokio::time::sleep(Duration::from_millis(500)).await;
+              let still_owns_room = {
+                let app = app.lock().await;
+                app.sonos_owns_playback()
+                  && app.selected_sonos_room_uuid.as_deref() == Some(room_uuid.as_str())
+              };
+              if still_owns_room && transport.queue_generation() == queue_generation {
+                if let Err(error) = transport.previous(&room).await {
+                  log::debug!("second Sonos previous command failed: {error}");
+                }
+              }
+            });
+          }
+          result
+        }
+        None => Err(anyhow!("could not initialize the Sonos HTTP client")),
+      };
+      if let Err(error) = result {
+        handle_sonos_error(self, error).await;
+      }
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.prev();
@@ -1651,6 +1859,19 @@ impl PlaybackNetwork for Network {
   }
 
   async fn seek(&mut self, position_ms: u32) {
+    if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
+      let result = match self.sonos_transport.as_ref() {
+        Some(transport) => transport.seek(&room, position_ms).await,
+        None => Err(anyhow!("could not initialize the Sonos HTTP client")),
+      };
+      if let Err(error) = result {
+        handle_sonos_error(self, error).await;
+      } else {
+        self.app.lock().await.song_progress_ms = position_ms as u128;
+      }
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.seek(position_ms);
@@ -1676,6 +1897,18 @@ impl PlaybackNetwork for Network {
   }
 
   async fn shuffle(&mut self, shuffle_state: bool) {
+    if matches!(
+      symmetric_playback_backend(self).await,
+      PlaybackBackend::Sonos(_)
+    ) {
+      self
+        .app
+        .lock()
+        .await
+        .set_status_message("Shuffle is not supported for Sonos yet", 4);
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       let _ = player.set_shuffle(shuffle_state);
@@ -1713,6 +1946,18 @@ impl PlaybackNetwork for Network {
   }
 
   async fn repeat(&mut self, repeat_state: RepeatState) {
+    if matches!(
+      symmetric_playback_backend(self).await,
+      PlaybackBackend::Sonos(_)
+    ) {
+      self
+        .app
+        .lock()
+        .await
+        .set_status_message("Repeat is not supported for Sonos yet", 4);
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       let _ = player.set_repeat(repeat_state);
@@ -1760,6 +2005,38 @@ impl PlaybackNetwork for Network {
   /// On error we bail and clear everything so the UI falls back to whatever
   /// the API last reported.
   async fn change_volume(&mut self, volume: u8) {
+    if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
+      let result = match self.sonos_transport.as_ref() {
+        Some(transport) => transport.set_volume(&room, volume).await,
+        None => Err(anyhow!("could not initialize the Sonos HTTP client")),
+      };
+      let mut app = self.app.lock().await;
+      app.is_volume_change_in_flight = false;
+      match result {
+        Ok(()) => {
+          let applied_volume = volume.min(100);
+          app.sonos_volume = Some(applied_volume);
+          app.last_dispatched_volume = Some(applied_volume);
+          if let Some(pending) = app.pending_volume {
+            if pending == applied_volume {
+              app.pending_volume = None;
+            } else {
+              // A newer keypress arrived while this request was in flight.
+              app.is_volume_change_in_flight = true;
+              app.dispatch(IoEvent::ChangeVolume(pending));
+            }
+          }
+        }
+        Err(error) => {
+          app.pending_volume = None;
+          app.last_dispatched_volume = None;
+          drop(app);
+          handle_sonos_error(self, error).await;
+        }
+      }
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.set_volume(volume);
@@ -1809,10 +2086,17 @@ impl PlaybackNetwork for Network {
   }
 
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
-    // A device change moves playback off the session's `from_tracks` load;
-    // the app-owned shuffle order no longer describes what plays.
-    #[cfg(feature = "streaming")]
-    self.app.lock().await.clear_native_shuffle_session();
+    {
+      let mut app = self.app.lock().await;
+      // A device change moves playback off the session's `from_tracks` load;
+      // the app-owned shuffle order no longer describes what plays.
+      #[cfg(feature = "streaming")]
+      app.clear_native_shuffle_session();
+      // Sonos is a local UPnP backend, not a Spotify Connect device, so
+      // Spotify's transfer endpoint cannot stop it for us.
+      app.release_sonos_playback();
+    }
+
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = transfer_playback_backend(self, &device_id).await {
       let activation_time = Instant::now();
@@ -1843,6 +2127,10 @@ impl PlaybackNetwork for Network {
       // — mirrors the non-native transfer branch below. Without this, the first
       // play can leak to the official Spotify client / 404 (#282).
       app.current_playback_context = None;
+      app.selected_sonos_room_uuid = None;
+      app.sonos_now_playing = None;
+      app.sonos_is_playing = None;
+      app.sonos_volume = None;
       app.last_device_activation = Some(activation_time);
       app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
       persist_native_device_id_if_needed(
@@ -1877,6 +2165,10 @@ impl PlaybackNetwork for Network {
         }
       }
       app.current_playback_context = None;
+      app.selected_sonos_room_uuid = None;
+      app.sonos_now_playing = None;
+      app.sonos_is_playing = None;
+      app.sonos_volume = None;
 
       #[cfg(feature = "streaming")]
       {
@@ -1887,8 +2179,140 @@ impl PlaybackNetwork for Network {
     }
   }
 
+  async fn transfer_playback_to_sonos_room(&mut self, room_uuid: String, persist_device_id: bool) {
+    let room = if let Some(room) = {
+      let app = self.app.lock().await;
+      app
+        .sonos_rooms
+        .iter()
+        .find(|room| room.uuid == room_uuid)
+        .cloned()
+    } {
+      Some(room)
+    } else {
+      match crate::infra::sonos::discovery::discover_rooms().await {
+        Ok(rooms) => {
+          let room = rooms.iter().find(|room| room.uuid == room_uuid).cloned();
+          self.app.lock().await.sonos_rooms = rooms;
+          room
+        }
+        Err(error) => {
+          handle_sonos_error(self, error).await;
+          None
+        }
+      }
+    };
+
+    let Some(room) = room else {
+      let mut app = self.app.lock().await;
+      // Keep the persisted preference for a future launch, but do not claim
+      // ownership in this process when there is no routable room endpoint.
+      app.selected_sonos_room_uuid = None;
+      app.sonos_now_playing = None;
+      app.sonos_is_playing = None;
+      app.set_error_status_message(
+        "Saved Sonos room is unavailable. Check that it is powered on and on this network.",
+        6,
+      );
+      return;
+    };
+
+    let snapshot = match self.sonos_transport.as_ref() {
+      Some(transport) => transport.now_playing(&room).await.ok(),
+      None => None,
+    };
+    let now_playing = snapshot.map(|snapshot| sonos_now_playing(room.uuid.clone(), snapshot));
+
+    if persist_device_id {
+      if let Err(error) = self
+        .client_config
+        .set_device_id(sonos_persisted_id(&room.uuid))
+      {
+        self.app.lock().await.handle_error(anyhow!(error));
+        return;
+      }
+    }
+
+    let mut app = self.app.lock().await;
+    #[cfg(feature = "streaming")]
+    if let Some(player) = app.streaming_player.as_ref() {
+      player.pause();
+    }
+    #[cfg(feature = "local-files")]
+    {
+      app.local_playback = None;
+    }
+    #[cfg(feature = "subsonic")]
+    {
+      app.subsonic_playback = None;
+    }
+    #[cfg(feature = "internet-radio")]
+    {
+      app.radio_playback = None;
+    }
+    #[cfg(feature = "youtube")]
+    {
+      app.youtube_playback = None;
+    }
+    #[cfg(any(feature = "streaming", feature = "audio-decode"))]
+    {
+      app.queue_now = None;
+    }
+    app.queue_suspended = None;
+    app.selected_sonos_room_uuid = Some(room.uuid.clone());
+    app.sonos_poll_error_room_uuid = None;
+    app.sonos_volume = now_playing
+      .as_ref()
+      .and_then(|snapshot| snapshot.volume_percent)
+      .or(Some(app.user_config.behavior.volume_percent));
+    app.sonos_is_playing = Some(
+      now_playing
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.is_playing),
+    );
+    if let Some(snapshot) = now_playing {
+      app.song_progress_ms = snapshot.position_ms as u128;
+      app.sonos_now_playing = Some(snapshot);
+    } else {
+      app.sonos_now_playing = None;
+    }
+    app.current_playback_context = None;
+    app.is_streaming_active = false;
+    app.native_playback_origin = None;
+    app.native_is_playing = None;
+    app.set_status_message(format!("Selected Sonos room: {}", room.name), 4);
+  }
+
+  async fn pause_sonos_room(&mut self, room_uuid: String) {
+    let room = {
+      let app = self.app.lock().await;
+      app
+        .sonos_rooms
+        .iter()
+        .find(|room| room.uuid == room_uuid)
+        .cloned()
+    };
+    let Some(room) = room else {
+      return;
+    };
+    let Some(transport) = self.sonos_transport.as_ref() else {
+      return;
+    };
+
+    if let Err(error) = transport.pause_for_handoff(&room).await {
+      log::error!("Sonos handoff pause error: {error:#}");
+      let mut app = self.app.lock().await;
+      app.set_error_status_message(
+        format!("New playback started, but Sonos could not be paused: {error}"),
+        6,
+      );
+    }
+  }
+
   #[cfg(feature = "streaming")]
   async fn auto_select_streaming_device(&mut self, device_name: String, persist_device_id: bool) {
+    self.app.lock().await.release_sonos_playback();
+
     if let Some(player) = current_streaming_player(self).await {
       let activation_time = Instant::now();
       let native_device_id = player.device_id();
@@ -1978,6 +2402,12 @@ impl PlaybackNetwork for Network {
   }
 
   async fn ensure_playback_continues(&mut self, previous_track_id: String) {
+    // Sonos advances its own queue. A delayed event from the previously active
+    // backend must not use stale Spotify state to skip the Sonos queue.
+    if self.app.lock().await.sonos_owns_playback() {
+      return;
+    }
+
     #[cfg(feature = "streaming")]
     if is_native_streaming_active_for_playback(self).await {
       // Native player handles queue automatically
@@ -2050,6 +2480,29 @@ impl PlaybackNetwork for Network {
   }
 
   async fn add_item_to_queue(&mut self, item: PlayableId<'static>) {
+    if let PlaybackBackend::Sonos(room) = symmetric_playback_backend(self).await {
+      let result = match (
+        self.sonos_transport.as_ref(),
+        crate::infra::sonos::spotify::item_from_spotify_uri(&item.uri()),
+      ) {
+        (Some(transport), Ok(item)) => transport
+          .enqueue_spotify_item(&room, &item)
+          .await
+          .map(|_| ()),
+        (None, _) => Err(anyhow!("could not initialize the Sonos HTTP client")),
+        (_, Err(error)) => Err(error),
+      };
+      match result {
+        Ok(()) => self
+          .app
+          .lock()
+          .await
+          .set_status_message("Added to Sonos queue", 3),
+        Err(error) => handle_sonos_error(self, error).await,
+      }
+      return;
+    }
+
     match self
       .spotify_api_request_json(
         Method::POST,
@@ -2072,6 +2525,19 @@ impl PlaybackNetwork for Network {
   }
 
   async fn get_queue(&mut self) {
+    if matches!(
+      symmetric_playback_backend(self).await,
+      PlaybackBackend::Sonos(_)
+    ) {
+      let mut app = self.app.lock().await;
+      app.queue = None;
+      app
+        .plugin_data_generations
+        .bump(crate::core::app::PluginDataKind::Queue);
+      app.set_status_message("Viewing the Sonos queue is not supported yet", 4);
+      return;
+    }
+
     match self
       .spotify_get_typed::<CurrentUserQueue>("me/player/queue", &[])
       .await

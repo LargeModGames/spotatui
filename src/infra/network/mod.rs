@@ -51,6 +51,8 @@ pub enum IoEvent {
   RefreshAuthentication,
   GetPlaylists,
   GetDevices,
+  DiscoverSonosRooms,
+  GetSonosPlayback,
   /// Refresh the device list without opening the device picker (plugin data reads).
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
   GetDevicesSilent,
@@ -109,6 +111,11 @@ pub enum IoEvent {
   UserArtistFollowCheck(Vec<String>),
   GetAlbum(String),
   TransferPlaybackToDevice(String, bool),
+  TransferPlaybackToSonosRoom(String, bool),
+  /// Pause a specific Sonos room during a backend handoff, even after another
+  /// source has taken playback ownership.
+  #[cfg_attr(not(feature = "audio-decode"), allow(dead_code))]
+  PauseSonosRoom(String),
   #[allow(dead_code)]
   AutoSelectStreamingDevice(String, bool), // Auto-select a device by name (used for native streaming)
   GetAlbumForTrack(String),
@@ -297,6 +304,7 @@ pub struct Network {
   pub small_search_limit: u32,
   pub client_config: ClientConfig,
   pub app: Arc<Mutex<App>>,
+  sonos_transport: Option<Arc<crate::infra::sonos::SonosTransport>>,
   #[cfg(feature = "streaming")]
   native_idle_recovery: playback::NativeIdleRecoveryState,
   pub party_connection: Option<sync::PartyConnection>,
@@ -325,6 +333,9 @@ impl Network {
       small_search_limit: 4,
       client_config,
       app: Arc::clone(app),
+      sonos_transport: crate::infra::sonos::SonosTransport::new()
+        .ok()
+        .map(Arc::new),
       native_idle_recovery: playback::NativeIdleRecoveryState::default(),
       party_connection: None,
       party_incoming_rx: None,
@@ -349,6 +360,9 @@ impl Network {
       small_search_limit: 4,
       client_config,
       app: Arc::clone(app),
+      sonos_transport: crate::infra::sonos::SonosTransport::new()
+        .ok()
+        .map(Arc::new),
       party_connection: None,
       party_incoming_rx: None,
       token_cache_path,
@@ -357,6 +371,10 @@ impl Network {
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
     }
+  }
+
+  pub(crate) fn sonos_transport(&self) -> Option<Arc<crate::infra::sonos::SonosTransport>> {
+    self.sonos_transport.clone()
   }
 
   /// Borrow the authenticated Spotify client. Only call this from handlers that
@@ -395,6 +413,10 @@ impl Network {
         | IoEvent::IncrementGlobalSongCount
         | IoEvent::FetchAnnouncements
         | IoEvent::GetLyrics(..)
+        | IoEvent::DiscoverSonosRooms
+        | IoEvent::GetSonosPlayback
+        | IoEvent::TransferPlaybackToSonosRoom(..)
+        | IoEvent::PauseSonosRoom(_)
         | IoEvent::UpdateSearchLimits(..)
         | IoEvent::GetFriendCode
         | IoEvent::GetFriends
@@ -460,6 +482,24 @@ impl Network {
     )
   }
 
+  fn event_can_route_to_sonos(io_event: &IoEvent) -> bool {
+    matches!(
+      io_event,
+      IoEvent::GetCurrentPlayback
+        | IoEvent::StartPlayback(..)
+        | IoEvent::Seek(_)
+        | IoEvent::NextTrack
+        | IoEvent::PreviousTrack
+        | IoEvent::ForcePreviousTrack
+        | IoEvent::Shuffle(_)
+        | IoEvent::Repeat(_)
+        | IoEvent::PausePlayback
+        | IoEvent::ChangeVolume(_)
+        | IoEvent::AddItemToQueue(_)
+        | IoEvent::GetQueue
+    )
+  }
+
   #[allow(clippy::cognitive_complexity)]
   pub async fn handle_network_event(&mut self, io_event: IoEvent) {
     let pending_playlist_id = match &io_event {
@@ -468,10 +508,10 @@ impl Network {
     };
     // Events whose handlers never touch the Spotify client run regardless of
     // whether a Spotify session exists (see `event_bypasses_spotify_auth`).
-    // Everything else is Spotify-bound: when launched against a free source with
-    // no Spotify session, point the user at the in-TUI login path instead of
-    // failing loudly; otherwise ensure the token is fresh before proceeding.
-    let bypass_auth = Self::event_bypasses_spotify_auth(&io_event);
+    // Playback events also bypass the gate while a discovered Sonos room owns
+    // playback; those handlers return before reaching `spotify()`.
+    let bypass_auth = Self::event_bypasses_spotify_auth(&io_event)
+      || (Self::event_can_route_to_sonos(&io_event) && self.app.lock().await.sonos_owns_playback());
 
     if !bypass_auth {
       if self.spotify.is_none() {
@@ -517,6 +557,12 @@ impl Network {
       }
       IoEvent::GetDevices => {
         self.get_devices(true).await;
+      }
+      IoEvent::DiscoverSonosRooms => {
+        self.discover_sonos_rooms().await;
+      }
+      IoEvent::GetSonosPlayback => {
+        self.get_sonos_playback().await;
       }
       IoEvent::GetDevicesSilent => {
         self.get_devices(false).await;
@@ -679,6 +725,14 @@ impl Network {
         self
           .transfert_playback_to_device(device_id, persist_device_id)
           .await;
+      }
+      IoEvent::TransferPlaybackToSonosRoom(room_uuid, persist_device_id) => {
+        self
+          .transfer_playback_to_sonos_room(room_uuid, persist_device_id)
+          .await;
+      }
+      IoEvent::PauseSonosRoom(room_uuid) => {
+        self.pause_sonos_room(room_uuid).await;
       }
       #[cfg(feature = "streaming")]
       IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id) => {
@@ -1593,6 +1647,22 @@ mod tests {
       assert!(Network::runs_on_service_lane(&event));
       assert!(Network::event_bypasses_spotify_auth(&event));
     }
+  }
+
+  #[test]
+  fn sonos_playback_events_can_bypass_spotify_auth() {
+    assert!(Network::event_can_route_to_sonos(&IoEvent::StartPlayback(
+      None, None, None
+    )));
+    assert!(Network::event_can_route_to_sonos(&IoEvent::PausePlayback));
+    assert!(Network::event_can_route_to_sonos(&IoEvent::Seek(1_000)));
+    assert!(Network::event_can_route_to_sonos(&IoEvent::ChangeVolume(
+      50
+    )));
+    assert!(Network::event_can_route_to_sonos(&IoEvent::AddItemToQueue(
+      "spotify:track:abc".to_string()
+    )));
+    assert!(!Network::event_can_route_to_sonos(&IoEvent::GetUser));
   }
 
   #[tokio::test]

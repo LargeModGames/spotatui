@@ -12,6 +12,8 @@
 
 - **Spotify-style shuffle for native streaming**: When shuffle is on and you start a playlist, album, or Liked Songs with spotatui as the playback device, the app now owns the shuffled play order itself instead of leaving it to Spotify. It shuffles the tracklist once (the song you picked plays first and everything else follows exactly once per pass), and on a queue suspend/resume it reloads that same order rather than reshuffling, so interrupting playback with the native queue no longer repeats songs you already heard. The full playlist or Liked Songs context loads in the background (capped at 3000 tracks) so playback starts instantly, turning shuffle off restores the original order and keeps your place, and each repeat-all lap reshuffles for a fresh order like the Spotify client does.
 
+- **Experimental Sonos playback targets**: Sonos S1/S2 rooms discovered over local SSDP/UPnP now appear beside Spotify Connect devices in the Source & Device picker. Selected rooms persist across launches and receive local play/pause, previous/next, seek, volume, now-playing, and queue-add commands. Standalone S1/S2 playback is hardware-validated; grouped-room transport is coordinator-aware but still awaits hardware validation. Queue viewing and shuffle/repeat remain follow-up work ([#251](https://github.com/LargeModGames/spotatui/issues/251)).
+
 ### Fixed
 
 - **Startup login no longer hangs**: On a fresh install or with a stale token, the auth wizard's "Waiting for authorization callback" step ran a blocking callback server on the async runtime, which could park a worker thread and hang startup before the browser redirect was ever served. The wizard now uses the same async callback server as the in-TUI login ([#364](https://github.com/LargeModGames/spotatui/issues/364)).
@@ -214,7 +216,6 @@
 - **Module path cleanup**: Updated imports to use the current `core`, `infra`, and `tui` module paths after the runtime split.
 - **Dependency maintenance**: Bumped `mpris-server` and the grouped Rust minor dependency set ([#226](https://github.com/LargeModGames/spotatui/pull/226), [#227](https://github.com/LargeModGames/spotatui/pull/227), [#236](https://github.com/LargeModGames/spotatui/pull/236)).
 
-
 ## [v0.38.1] - 2026-04-24
 
 ### Added
@@ -242,7 +243,6 @@
 - **Dependency maintenance**: Bumped `tui-bar-graph`, `self_update`, grouped Rust minor dependencies, `rustls-webpki`, and `openssl` ([#197](https://github.com/LargeModGames/spotatui/pull/197), [#204](https://github.com/LargeModGames/spotatui/pull/204), [#205](https://github.com/LargeModGames/spotatui/pull/205), [#213](https://github.com/LargeModGames/spotatui/pull/213), [#224](https://github.com/LargeModGames/spotatui/pull/224), [#225](https://github.com/LargeModGames/spotatui/pull/225)).
 - **CI maintenance**: Bumped `softprops/action-gh-release` from `2` to `3` in the Actions dependency group ([#212](https://github.com/LargeModGames/spotatui/pull/212)).
 - **Lint/format cleanup**: Fixed clippy errors and rustfmt issues after the post-`v0.38.0` changes ([#222](https://github.com/LargeModGames/spotatui/pull/222)).
-
 
 ## [v0.38.0] - 2026-03-23
 
@@ -278,9 +278,7 @@
 
 - **Void Linux installation guide**: Added README installation steps for Void Linux via the `Blackhole-vl` repository ([#171](https://github.com/LargeModGames/spotatui/pull/171)).
 
-
 ## [0.37.3] - 2026-03-06
-
 
 ### Added
 
@@ -366,7 +364,6 @@
 - **Announcement Fetching Controls**: Refactored announcement fetching to support environment-variable overrides and improved error handling.
 - **Documentation Updates**: Updated README content, including playback limitations for free Spotify accounts and Homebrew installation instructions for macOS.
 
-
 ### Fixed
 
 - **Playback Device Auto-Selection**: Fixed auto-select behavior for the `spotatui` playback device.
@@ -395,7 +392,6 @@
 
 - **Deterministic Duplicate Removal in Playlists**: Removing a track now targets only the selected occurrence by position instead of broadly deleting matching duplicates; when mutation payload safety cannot be guaranteed (for local/unavailable rows), spotatui now reports a clear status error instead of mutating the wrong rows ([#99](https://github.com/LargeModGames/spotatui/pull/99)).
 - **Recurring Spirc Startup Failures with Cached Streaming Credentials**: If Spirc initialization fails or times out while using cached streaming credentials, spotatui now clears stale `streaming_cache/credentials.json`, requests fresh streaming OAuth credentials, and retries initialization once before falling back.
-
 
 ## [0.36.1] - 2026-02-14
 
@@ -669,7 +665,6 @@
   - Ensures Spotify API returns updated track metadata after skipping
   - Prevents showing stale track information in the UI
   - Improves reliability of track transitions
-
 
 ## [0.33.8] - 2025-12-09
 

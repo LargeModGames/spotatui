@@ -6,6 +6,7 @@ pub mod format;
 pub mod layout;
 pub mod pagination;
 pub mod persisted_playback;
+pub mod playback_target;
 pub mod plugin_api;
 pub mod queue;
 pub mod sort;

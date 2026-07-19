@@ -1,4 +1,4 @@
-use crate::core::user_config::UserConfig;
+use crate::core::{playback_target::parse_sonos_persisted_id, user_config::UserConfig};
 use crate::infra::network::{IoEvent, Network};
 
 use super::{
@@ -18,6 +18,23 @@ pub async fn handle_matches(
 ) -> Result<String> {
   let mut cli = CliApp::new(net, config);
 
+  let saved_sonos_uuid = cli
+    .net
+    .client_config
+    .device_id
+    .as_deref()
+    .and_then(parse_sonos_persisted_id)
+    .map(str::to_string);
+  if let Some(room_uuid) = saved_sonos_uuid.as_ref() {
+    cli
+      .net
+      .handle_network_event(IoEvent::TransferPlaybackToSonosRoom(
+        room_uuid.clone(),
+        false,
+      ))
+      .await;
+  }
+
   cli.net.handle_network_event(IoEvent::GetDevices).await;
   cli
     .net
@@ -36,6 +53,7 @@ pub async fn handle_matches(
   // If the device_id is not specified, select the first available device
   let device_id = cli.net.client_config.device_id.clone();
   let needs_device = match &device_id {
+    Some(id) if parse_sonos_persisted_id(id).is_some() => false,
     Some(id) => !devices_list.contains(id),
     None => true,
   };
