@@ -4598,58 +4598,67 @@ impl App {
       return;
     }
 
-    // A queued Spotify track owns the sink via librespot: skip the per-source
-    // arms (any still-`Some` `*_playback` is a suspended context whose paused
-    // player must not be resumed on top of librespot) and fall through to the
-    // native-streaming control below.
-    if !self.queue_now_is_spotify() {
-      // Local-file playback owns the session: toggle the local sink directly. The
-      // playbar reads pause state live from the player, so nothing else to update.
-      #[cfg(feature = "local-files")]
-      if let Some(local) = &self.local_playback {
-        if local.player.is_paused() {
-          local.player.resume();
-        } else {
-          local.player.pause();
-        }
-        return;
+    // Spotify queue playback has no item in `current_playback_context`; route
+    // the intended transport action using the librespot state instead. Flip the
+    // state optimistically so rapid toggles alternate instead of both reading
+    // the stale pre-router value and dispatching the same action twice.
+    if self.queue_now_is_spotify() {
+      let is_playing = self.native_is_playing.unwrap_or(false);
+      self.native_is_playing = Some(!is_playing);
+      if is_playing {
+        self.dispatch(IoEvent::PausePlayback);
+      } else {
+        self.dispatch(IoEvent::StartPlayback(None, None, None));
       }
+      return;
+    }
 
-      // Subsonic playback owns the session the same way: toggle its sink directly.
-      #[cfg(feature = "subsonic")]
-      if let Some(subsonic) = &self.subsonic_playback {
-        if subsonic.player.is_paused() {
-          subsonic.player.resume();
-        } else {
-          subsonic.player.pause();
-        }
-        return;
+    // Local-file playback owns the session: toggle the local sink directly. The
+    // playbar reads pause state live from the player, so nothing else to update.
+    #[cfg(feature = "local-files")]
+    if let Some(local) = &self.local_playback {
+      if local.player.is_paused() {
+        local.player.resume();
+      } else {
+        local.player.pause();
       }
+      return;
+    }
 
-      // YouTube playback owns the session the same way: toggle its sink directly.
-      #[cfg(feature = "youtube")]
-      if let Some(youtube) = &self.youtube_playback {
-        if youtube.player.is_paused() {
-          youtube.player.resume();
-        } else {
-          youtube.player.pause();
-        }
-        return;
+    // Subsonic playback owns the session the same way: toggle its sink directly.
+    #[cfg(feature = "subsonic")]
+    if let Some(subsonic) = &self.subsonic_playback {
+      if subsonic.player.is_paused() {
+        subsonic.player.resume();
+      } else {
+        subsonic.player.pause();
       }
+      return;
+    }
 
-      // Internet-radio playback owns the session the same way: toggle its sink
-      // directly. Without this branch radio falls through to the streaming path,
-      // which only ever emits a bare resume — so Play/Pause could resume radio but
-      // never pause it.
-      #[cfg(feature = "internet-radio")]
-      if let Some(radio) = &self.radio_playback {
-        if radio.player.is_paused() {
-          radio.player.resume();
-        } else {
-          radio.player.pause();
-        }
-        return;
+    // YouTube playback owns the session the same way: toggle its sink directly.
+    #[cfg(feature = "youtube")]
+    if let Some(youtube) = &self.youtube_playback {
+      if youtube.player.is_paused() {
+        youtube.player.resume();
+      } else {
+        youtube.player.pause();
       }
+      return;
+    }
+
+    // Internet-radio playback owns the session the same way: toggle its sink
+    // directly. Without this branch radio falls through to the streaming path,
+    // which only ever emits a bare resume — so Play/Pause could resume radio but
+    // never pause it.
+    #[cfg(feature = "internet-radio")]
+    if let Some(radio) = &self.radio_playback {
+      if radio.player.is_paused() {
+        radio.player.resume();
+      } else {
+        radio.player.pause();
+      }
+      return;
     }
 
     // Use native streaming player for instant control (bypasses event channel latency)
@@ -7968,15 +7977,28 @@ mod tests {
   #[test]
   fn toggle_playback_with_spotify_queue_slot_does_not_panic() {
     use crate::infra::queue::QueueNowPlaying;
-    let (tx, _rx) = channel();
+    let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.queue_now = Some(QueueNowPlaying::Spotify {
       track: queue_track(Some("spotify:track:queued"), "Queued"),
     });
+    app.native_is_playing = Some(true);
 
     app.toggle_playback();
 
     assert!(app.queue_now_is_spotify());
+    assert!(matches!(rx.recv().unwrap(), IoEvent::PausePlayback));
+    assert_eq!(app.native_is_playing, Some(false));
+
+    // A second toggle before the router echoes back the new state must read
+    // the optimistically flipped value and dispatch the opposite action.
+    app.toggle_playback();
+
+    assert!(matches!(
+      rx.recv().unwrap(),
+      IoEvent::StartPlayback(None, None, None)
+    ));
+    assert_eq!(app.native_is_playing, Some(true));
   }
 
   #[cfg(feature = "streaming")]
