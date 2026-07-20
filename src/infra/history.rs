@@ -373,12 +373,23 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
       app.lock().await.listening_streaks = Some(streaks_from_day_totals(totals));
     }
 
-    // Sync history to cloud on startup
-    let sync_token_opt: Option<String> = if let Ok(app_guard) = app.try_lock() {
-      app_guard.user_config.behavior.sync_token.clone()
-    } else {
-      None
-    };
+    // Sync history to cloud on startup. This takes the lock properly rather
+    // than `try_lock`: the startup work above ends by acquiring (and releasing)
+    // the app mutex, and tokio's fair mutex hands the freed permit straight to
+    // any queued waiter, so a `try_lock` here intermittently loses to the
+    // render loop. Losing it silently pinned the token to `None` for the whole
+    // process, disabling per-song and now-playing sync and dumping the entire
+    // session onto the exit sync.
+    let mut sync_token_opt: Option<String> =
+      app.lock().await.user_config.behavior.sync_token.clone();
+    log::info!(
+      "cloud sync {} at history collector startup",
+      if sync_token_opt.is_some() {
+        "enabled"
+      } else {
+        "disabled (no sync token configured)"
+      }
+    );
 
     let history_sync_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(ref token) = sync_token_opt {
@@ -396,11 +407,28 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
         perform_auto_recap_check(&app).await;
       }
 
-      let snapshot = if let Ok(app) = app.try_lock() {
-        current_playback_snapshot(&app)
+      // Re-read the token from the guard we already hold: it can be pasted or
+      // cleared in Settings mid-session, and the collector is only spawned once.
+      let (snapshot, latest_token) = if let Ok(app_guard) = app.try_lock() {
+        (
+          current_playback_snapshot(&app_guard),
+          app_guard.user_config.behavior.sync_token.clone(),
+        )
       } else {
         continue;
       };
+
+      if latest_token != sync_token_opt {
+        log::info!(
+          "cloud sync token {}",
+          if latest_token.is_some() {
+            "configured"
+          } else {
+            "cleared"
+          }
+        );
+        sync_token_opt = latest_token;
+      }
 
       // Now-playing sync: push on track change, play/pause flip, seek, or
       // heartbeat; clear once when track playback stops.
@@ -2226,15 +2254,22 @@ async fn sync_history_to_cloud_with_client(
 ) -> Result<()> {
   let path = last_synced_file_path()?;
 
-  use chrono::TimeZone;
-  let last_synced_at = match fs::read_to_string(&path) {
-    Ok(content) => DateTime::parse_from_rfc3339(content.trim())
-      .map(|dt| dt.with_timezone(&Utc))
-      .unwrap_or_else(|_| Utc.timestamp_opt(0, 0).unwrap()),
-    Err(_) => Utc.timestamp_opt(0, 0).unwrap(),
-  };
+  // Reading the cursor and parsing the whole listens file is blocking IO on an
+  // ever-growing file; keep it off the runtime worker (matches the streak-cache
+  // load in `spawn_history_collector`).
+  let cursor_path = path.clone();
+  let (last_synced_at, listens) = tokio::task::spawn_blocking(move || {
+    use chrono::TimeZone;
+    let last_synced_at = match fs::read_to_string(&cursor_path) {
+      Ok(content) => DateTime::parse_from_rfc3339(content.trim())
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc.timestamp_opt(0, 0).unwrap()),
+      Err(_) => Utc.timestamp_opt(0, 0).unwrap(),
+    };
+    load_listens().map(|listens| (last_synced_at, listens))
+  })
+  .await??;
 
-  let listens = load_listens()?;
   let new_listens: Vec<&ListenRecord> = listens
     .iter()
     .filter(|record| record.ended_at > last_synced_at)
@@ -2253,8 +2288,11 @@ async fn sync_history_to_cloud_with_client(
     .await?;
 
   if response.status().is_success() {
-    if let Some(last_record) = new_listens.last() {
-      fs::write(&path, last_record.ended_at.to_rfc3339())?;
+    // Take the max rather than the last record: if listens.jsonl ever goes out
+    // of order (clock step, two instances), a regressing cursor would re-POST
+    // records that were already synced.
+    if let Some(last_ended_at) = new_listens.iter().map(|record| record.ended_at).max() {
+      tokio::task::spawn_blocking(move || fs::write(&path, last_ended_at.to_rfc3339())).await??;
     }
     log::info!(
       "successfully synchronized listening history to cloud ({} tracks)",
