@@ -17,6 +17,20 @@ The native streaming feature uses a separate authentication flow. On first run:
 - You can control playback from the TUI, your phone, or any other Spotify client
 - Audio plays directly on the computer running spotatui
 
+## Audio Quality
+
+Native streaming uses 320 kbps by default. To select a different quality, set
+`streaming_bitrate` in `client.yml` and restart spotatui:
+
+```yaml
+streaming_bitrate: 320 # 96, 160, or 320 kbps
+```
+
+`client.yml` is in the same app config directory as `config.yml` (for example,
+`~/.config/spotatui/client.yml` on Linux and macOS). This setting controls the
+librespot native player directly; the Spotify app may still describe a Connect
+device's quality as "Automatic".
+
 ## Notes
 
 - Native streaming is **enabled by default** when built with the `streaming` feature
