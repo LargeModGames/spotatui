@@ -1073,10 +1073,27 @@ impl PlaybackNetwork for Network {
         app.is_fetching_current_playback = false;
 
         let err = anyhow!(e);
+        let err_text = err.to_string();
 
-        if err.to_string().contains("429")
-          || err.to_string().contains("Too Many Requests")
-          || err.to_string().contains("Too many requests")
+        // Playback polling is observational: a stale/missing Web API token must
+        // not replace the still-playing UI with a blocking error screen. Queue a
+        // forced refresh and let the next poll reconcile the player state.
+        if err_text.contains("401")
+          || err_text.contains("Unauthorized")
+          || err_text.to_lowercase().contains("access token missing")
+        {
+          app.dispatch(IoEvent::RefreshAuthentication);
+          app.set_status_message(
+            "Spotify session expired. Refreshing authentication automatically.",
+            5,
+          );
+          app.instant_since_last_current_playback_poll = Instant::now();
+          return;
+        }
+
+        if err_text.contains("429")
+          || err_text.contains("Too Many Requests")
+          || err_text.contains("Too many requests")
         {
           app.status_message = Some(
             "Spotify rate limit hit. Retrying automatically; please wait a few seconds."
