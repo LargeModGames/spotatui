@@ -308,6 +308,12 @@ pub struct Network {
   pub token_cache_path: PathBuf,
   /// In-flight in-TUI Spotify login, if any (see `begin_spotify_login`).
   pending_login: Option<PendingLogin>,
+  /// How many playback polls in a row came back 401. Spotify's player service
+  /// intermittently rejects a valid token (issue #395) and the poll runs once a
+  /// second against an external device, so a lone 401 is noise; only a sustained
+  /// run means the session is actually broken and deserves the error route.
+  /// Reset by every poll the API answers.
+  consecutive_playback_auth_failures: u8,
   /// TTL caches so re-visiting the same artist/album skips the round trip +
   /// pacing tax (see `metadata::MetadataTtlCache`).
   artist_cache: metadata::MetadataTtlCache<metadata::CachedArtistData>,
@@ -334,6 +340,7 @@ impl Network {
       party_incoming_rx: None,
       token_cache_path,
       pending_login: None,
+      consecutive_playback_auth_failures: 0,
       artist_cache: Default::default(),
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
@@ -357,6 +364,7 @@ impl Network {
       party_incoming_rx: None,
       token_cache_path,
       pending_login: None,
+      consecutive_playback_auth_failures: 0,
       artist_cache: Default::default(),
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
@@ -1130,6 +1138,10 @@ impl Network {
       log::warn!("[login] failed to cache token after login: {e}");
     }
     let expiry = auth::token_expiry(&spotify).await.ok();
+
+    // A brand-new token family is in play, so the previous session's
+    // forced-refresh cooldown carries no information about it.
+    requests::reset_forced_refresh_cooldown().await;
 
     self.spotify = Some(spotify);
     self.token_cache_path = token_cache_path;

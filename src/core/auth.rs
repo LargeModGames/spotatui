@@ -47,6 +47,30 @@ pub struct AuthenticatedClient {
   /// interactive login).
   #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
   pub me: Option<rspotify::model::PrivateUser>,
+  /// What to tell the user about which Spotify app this session authenticated
+  /// as, when that is not what they would assume. `None` when there is nothing
+  /// surprising to report.
+  pub client_id_notice: Option<ClientIdNotice>,
+}
+
+/// Which Spotify app a session ended up on, when the user would likely assume
+/// otherwise. An issue #395 reporter believed they were running their own app
+/// ("Option 2") while actually on the shared ncspot one, which cost real
+/// diagnostic time — and nothing in the app ever said so.
+#[derive(Debug, Clone)]
+pub enum ClientIdNotice {
+  /// Authenticated as the shared ncspot app while the user also has their own
+  /// app configured. This is the *normal* outcome of the wizard's Option 2:
+  /// `run_auth_setup_wizard` writes ncspot as the primary `client_id` and the
+  /// user's own app as `fallback_client_id`, so "I set up my own app" does not
+  /// mean "I am using my own app".
+  SharedWhilePersonalConfigured { personal_client_id: String },
+  /// An earlier candidate had no usable session, so authentication moved on to
+  /// the next one.
+  FellBack {
+    from_client_id: String,
+    to_client_id: String,
+  },
 }
 
 // Manual token cache helpers since rspotify's built-in caching isn't working.
@@ -405,6 +429,46 @@ pub async fn try_load_spotify_silently(
     .ok()
 }
 
+/// Decide what (if anything) to tell the user about the app they just
+/// authenticated as.
+///
+/// The subtlety this exists to get right: the setup wizard writes
+/// `NCSPOT_CLIENT_ID` as the **primary** `client_id` for *both* of its options
+/// and puts the user's own app in `fallback_client_id` (see
+/// `ClientConfig::run_auth_setup_wizard`). So "landed on the shared app" is
+/// `index == 0`, not a fallback — reading it the other way round reports the
+/// healthy resilience path as a failure and stays silent in the case that
+/// actually confused an issue #395 reporter.
+fn client_id_notice_for(
+  index: usize,
+  requested_client_id: &str,
+  winning_client_id: &str,
+  candidates: &[String],
+) -> Option<ClientIdNotice> {
+  if index > 0 {
+    return Some(ClientIdNotice::FellBack {
+      from_client_id: requested_client_id.to_string(),
+      to_client_id: winning_client_id.to_string(),
+    });
+  }
+
+  if winning_client_id != NCSPOT_CLIENT_ID {
+    // On a personal app, which is what the user would expect. Nothing to say.
+    return None;
+  }
+
+  // On the shared app. Worth mentioning only when the user has an app of their
+  // own configured and might believe they are using it.
+  candidates
+    .iter()
+    .find(|candidate| *candidate != NCSPOT_CLIENT_ID)
+    .map(
+      |personal_client_id| ClientIdNotice::SharedWhilePersonalConfigured {
+        personal_client_id: personal_client_id.clone(),
+      },
+    )
+}
+
 async fn authenticate_candidates(
   client_config: &mut ClientConfig,
   config_paths: &ConfigPaths,
@@ -417,11 +481,16 @@ async fn authenticate_candidates(
     }
   }
 
+  // Captured up front: the loop below overwrites `client_config.client_id` with
+  // whichever candidate won, so this is the only record of what was requested.
+  let requested_client_id = client_config.client_id.clone();
+
   let mut spotify = None;
   #[cfg(feature = "streaming")]
   let mut selected_redirect_uri = client_config.get_redirect_uri();
   let mut last_auth_error = None;
   let mut validated_me = None;
+  let mut client_id_notice = None;
 
   for (index, client_id) in client_candidates.iter().enumerate() {
     let token_cache_path = token_cache_path_for_client(&config_paths.token_cache_path, client_id);
@@ -436,6 +505,8 @@ async fn authenticate_candidates(
     match auth_result {
       Ok(me) => {
         validated_me = me;
+        client_id_notice =
+          client_id_notice_for(index, &requested_client_id, client_id, &client_candidates);
         if *client_id == NCSPOT_CLIENT_ID {
           info!(
             "Using ncspot shared client ID. If it breaks in the future, configure fallback_client_id in client.yml."
@@ -475,6 +546,7 @@ async fn authenticate_candidates(
     #[cfg(feature = "streaming")]
     redirect_uri: selected_redirect_uri,
     me: validated_me,
+    client_id_notice,
   })
 }
 
@@ -512,6 +584,50 @@ pub async fn token_expiry(spotify: &AuthCodePkceSpotify) -> Result<SystemTime> {
 mod tests {
   use super::*;
   use chrono::{TimeDelta, Utc};
+
+  const PERSONAL_CLIENT_ID: &str = "0123456789abcdef0123456789abcdef";
+
+  /// The wizard's Option 2 writes ncspot as the PRIMARY id and the user's own
+  /// app as the fallback, so being on ncspot is `index == 0`. This is the case
+  /// an issue #395 reporter misread as "I'm running my own app".
+  #[test]
+  fn shared_client_id_with_a_personal_one_configured_is_reported() {
+    let candidates = vec![NCSPOT_CLIENT_ID.to_string(), PERSONAL_CLIENT_ID.to_string()];
+    let notice = client_id_notice_for(0, NCSPOT_CLIENT_ID, NCSPOT_CLIENT_ID, &candidates);
+    assert!(matches!(
+      notice,
+      Some(ClientIdNotice::SharedWhilePersonalConfigured { personal_client_id })
+        if personal_client_id == PERSONAL_CLIENT_ID
+    ));
+  }
+
+  /// Option 1: the user only ever asked for the shared app. Nothing surprising.
+  #[test]
+  fn shared_client_id_alone_is_not_reported() {
+    let candidates = vec![NCSPOT_CLIENT_ID.to_string()];
+    assert!(client_id_notice_for(0, NCSPOT_CLIENT_ID, NCSPOT_CLIENT_ID, &candidates).is_none());
+  }
+
+  /// A hand-edited `client.yml` with a personal id as primary: the user is on
+  /// exactly the app they configured.
+  #[test]
+  fn personal_client_id_as_primary_is_not_reported() {
+    let candidates = vec![PERSONAL_CLIENT_ID.to_string()];
+    assert!(client_id_notice_for(0, PERSONAL_CLIENT_ID, PERSONAL_CLIENT_ID, &candidates).is_none());
+  }
+
+  /// The resilience path: the shared app had no usable session, so the user's
+  /// own app took over. Reported as a fallback, naming both apps.
+  #[test]
+  fn falling_through_to_the_next_candidate_is_reported_as_a_fallback() {
+    let candidates = vec![NCSPOT_CLIENT_ID.to_string(), PERSONAL_CLIENT_ID.to_string()];
+    let notice = client_id_notice_for(1, NCSPOT_CLIENT_ID, PERSONAL_CLIENT_ID, &candidates);
+    assert!(matches!(
+      notice,
+      Some(ClientIdNotice::FellBack { from_client_id, to_client_id })
+        if from_client_id == NCSPOT_CLIENT_ID && to_client_id == PERSONAL_CLIENT_ID
+    ));
+  }
 
   fn create_test_token(refresh_token: Option<String>) -> Token {
     Token {
