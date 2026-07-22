@@ -1,7 +1,8 @@
 use super::{IoEvent, Network};
+use crate::core::app::App;
 #[cfg(feature = "streaming")]
 use crate::core::{
-  app::{App, NativePlaybackOrigin, NativePlaybackRecoverySnapshot},
+  app::{NativePlaybackOrigin, NativePlaybackRecoverySnapshot},
   config::ClientConfig,
 };
 #[cfg(feature = "streaming")]
@@ -387,6 +388,73 @@ fn spotify_payload_confirms_native_device(payload: &DevicePayload, native_device
 fn is_no_active_device_error(e: &anyhow::Error) -> bool {
   let text = e.to_string().to_ascii_lowercase();
   text.contains("no_active_device") || text.contains("no active device")
+}
+
+/// Handle transient failures from the playback poll (`me/player`) that must not
+/// replace the still-playing UI with the full-screen Error route. Returns `true`
+/// when the error was consumed: a status message was shown, the next poll was
+/// scheduled, and the caller must skip generic error handling.
+fn handle_transient_playback_poll_error(app: &mut App, err_text: &str) -> bool {
+  let lowered = err_text.to_lowercase();
+
+  // Playback polling is observational: a stale/missing Web API token must
+  // not replace the still-playing UI with a blocking error screen. Queue a
+  // forced refresh and let the next poll reconcile the player state.
+  if err_text.contains("401")
+    || err_text.contains("Unauthorized")
+    || lowered.contains("access token missing")
+  {
+    app.dispatch(IoEvent::RefreshAuthentication);
+    app.set_status_message(
+      "Spotify session expired. Refreshing authentication automatically.",
+      5,
+    );
+    app.instant_since_last_current_playback_poll = Instant::now();
+    return true;
+  }
+
+  if err_text.contains("429")
+    || err_text.contains("Too Many Requests")
+    || err_text.contains("Too many requests")
+  {
+    app.status_message = Some(
+      "Spotify rate limit hit. Retrying automatically; please wait a few seconds.".to_string(),
+    );
+    app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(6));
+    app.instant_since_last_current_playback_poll = Instant::now();
+    return true;
+  }
+
+  if lowered.contains("error sending request for url")
+    || err_text.contains("connection reset")
+    || err_text.contains("connection refused")
+    || err_text.contains("timed out")
+    || err_text.contains("temporary failure")
+    || err_text.contains("dns")
+  {
+    app.status_message = Some(
+      "Temporary Spotify network error while polling playback; retrying automatically.".to_string(),
+    );
+    app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(5));
+    app.instant_since_last_current_playback_poll = Instant::now();
+    return true;
+  }
+
+  if err_text.contains("504")
+    || err_text.contains("503")
+    || err_text.contains("502")
+    || err_text.contains("Gateway Timeout")
+    || err_text.contains("Service Unavailable")
+    || err_text.contains("Bad Gateway")
+  {
+    app.status_message =
+      Some("Spotify server temporarily unavailable (5xx); retrying automatically.".to_string());
+    app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(10));
+    app.instant_since_last_current_playback_poll = Instant::now();
+    return true;
+  }
+
+  false
 }
 
 /// While a native backend is expected to materialize (recovery in flight, or
@@ -1073,68 +1141,8 @@ impl PlaybackNetwork for Network {
         app.is_fetching_current_playback = false;
 
         let err = anyhow!(e);
-        let err_text = err.to_string();
 
-        // Playback polling is observational: a stale/missing Web API token must
-        // not replace the still-playing UI with a blocking error screen. Queue a
-        // forced refresh and let the next poll reconcile the player state.
-        if err_text.contains("401")
-          || err_text.contains("Unauthorized")
-          || err_text.to_lowercase().contains("access token missing")
-        {
-          app.dispatch(IoEvent::RefreshAuthentication);
-          app.set_status_message(
-            "Spotify session expired. Refreshing authentication automatically.",
-            5,
-          );
-          app.instant_since_last_current_playback_poll = Instant::now();
-          return;
-        }
-
-        if err_text.contains("429")
-          || err_text.contains("Too Many Requests")
-          || err_text.contains("Too many requests")
-        {
-          app.status_message = Some(
-            "Spotify rate limit hit. Retrying automatically; please wait a few seconds."
-              .to_string(),
-          );
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(6));
-          app.instant_since_last_current_playback_poll = Instant::now();
-          return;
-        }
-
-        if err
-          .to_string()
-          .to_lowercase()
-          .contains("error sending request for url")
-          || err.to_string().contains("connection reset")
-          || err.to_string().contains("connection refused")
-          || err.to_string().contains("timed out")
-          || err.to_string().contains("temporary failure")
-          || err.to_string().contains("dns")
-        {
-          app.status_message = Some(
-            "Temporary Spotify network error while polling playback; retrying automatically."
-              .to_string(),
-          );
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(5));
-          app.instant_since_last_current_playback_poll = Instant::now();
-          return;
-        }
-
-        if err.to_string().contains("504")
-          || err.to_string().contains("503")
-          || err.to_string().contains("502")
-          || err.to_string().contains("Gateway Timeout")
-          || err.to_string().contains("Service Unavailable")
-          || err.to_string().contains("Bad Gateway")
-        {
-          app.status_message = Some(
-            "Spotify server temporarily unavailable (5xx); retrying automatically.".to_string(),
-          );
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(10));
-          app.instant_since_last_current_playback_poll = Instant::now();
+        if handle_transient_playback_poll_error(&mut app, &err.to_string()) {
           return;
         }
 
@@ -3018,5 +3026,96 @@ mod tests {
 
     let guard = app.lock().await;
     assert_eq!(guard.status_message.as_deref(), Some("Queue finished"));
+  }
+
+  /// Regression test for #395: authorization failures while polling playback
+  /// must queue a token refresh and keep the player UI up (status message +
+  /// rescheduled poll) instead of falling through to generic error handling.
+  #[test]
+  fn playback_poll_auth_errors_refresh_authentication_instead_of_erroring() {
+    use crate::core::app::App;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    for err_text in [
+      "http status 401 from me/player",
+      "Unauthorized",
+      "Access token missing",
+    ] {
+      let (io_tx, io_rx) = channel();
+      let mut app = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+      let stale_poll = Instant::now() - Duration::from_secs(60);
+      app.instant_since_last_current_playback_poll = stale_poll;
+
+      assert!(
+        handle_transient_playback_poll_error(&mut app, err_text),
+        "auth error {err_text:?} must be consumed before generic error handling"
+      );
+
+      assert!(
+        matches!(io_rx.try_recv(), Ok(IoEvent::RefreshAuthentication)),
+        "auth error {err_text:?} must dispatch RefreshAuthentication"
+      );
+      assert_eq!(
+        app.status_message.as_deref(),
+        Some("Spotify session expired. Refreshing authentication automatically.")
+      );
+      assert!(app.instant_since_last_current_playback_poll > stale_poll);
+      assert!(app.api_error.is_empty());
+    }
+  }
+
+  /// Both rate-limit message variants keep polling with a status message and
+  /// never queue a token refresh.
+  #[test]
+  fn playback_poll_rate_limit_errors_show_status_and_keep_polling() {
+    use crate::core::app::App;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    for err_text in ["http status 429", "Too Many Requests", "Too many requests"] {
+      let (io_tx, io_rx) = channel();
+      let mut app = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+      let stale_poll = Instant::now() - Duration::from_secs(60);
+      app.instant_since_last_current_playback_poll = stale_poll;
+
+      assert!(
+        handle_transient_playback_poll_error(&mut app, err_text),
+        "rate-limit error {err_text:?} must be consumed before generic error handling"
+      );
+
+      assert!(
+        io_rx.try_recv().is_err(),
+        "rate-limit error {err_text:?} must not dispatch any IoEvent"
+      );
+      assert_eq!(
+        app.status_message.as_deref(),
+        Some("Spotify rate limit hit. Retrying automatically; please wait a few seconds.")
+      );
+      assert!(app.status_message_expires_at.is_some());
+      assert!(app.instant_since_last_current_playback_poll > stale_poll);
+      assert!(app.api_error.is_empty());
+    }
+  }
+
+  /// Errors that match no transient pattern fall through to generic handling.
+  #[test]
+  fn playback_poll_unrecognized_errors_fall_through_to_generic_handling() {
+    use crate::core::app::App;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, io_rx) = channel();
+    let mut app = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+
+    assert!(!handle_transient_playback_poll_error(
+      &mut app,
+      "some unexpected failure"
+    ));
+    assert!(io_rx.try_recv().is_err());
+    assert!(app.status_message.is_none());
   }
 }
