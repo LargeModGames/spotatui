@@ -32,6 +32,12 @@ use std::sync::Arc;
 
 const MAX_API_PLAYBACK_URIS: usize = 100;
 
+/// Playback polls that must fail 401 back-to-back before the full-screen error
+/// route is shown. Below the threshold the poll simply tries again on its next
+/// tick, which is what actually recovers the intermittent player-service 401s
+/// of issue #395 (users were pressing Esc and finding playback untouched).
+const MAX_CONSECUTIVE_PLAYBACK_AUTH_FAILURES: u8 = 4;
+
 #[cfg(feature = "streaming")]
 const MAX_NATIVE_IDLE_RECOVERY_ATTEMPTS: u8 = 2;
 
@@ -887,6 +893,7 @@ impl PlaybackNetwork for Network {
       #[allow(unused_mut)]
       Ok(Some(mut c)) => {
         app.instant_since_last_current_playback_poll = Instant::now();
+        self.consecutive_playback_auth_failures = 0;
 
         // Detect whether the native spotatui streaming device is the active Spotify device.
         #[cfg(feature = "streaming")]
@@ -1068,6 +1075,8 @@ impl PlaybackNetwork for Network {
           );
         }
         app.instant_since_last_current_playback_poll = Instant::now();
+        // Idle is still a poll the API answered: the session is fine.
+        self.consecutive_playback_auth_failures = 0;
       }
       Err(e) => {
         app.is_fetching_current_playback = false;
@@ -1121,9 +1130,48 @@ impl PlaybackNetwork for Network {
           return;
         }
 
+        // A 401 here is usually not a broken session: Spotify's player service
+        // intermittently rejects a valid token (issue #395, typically right at a
+        // track transition) and the very next poll succeeds with the same token.
+        // Escalating the first one to the full-screen error route interrupted
+        // playback the user could see was fine. Tolerate a short run, then
+        // surface it — a genuinely dead session fails every poll.
+        if err.to_string().contains("401")
+          || err.to_string().to_lowercase().contains("unauthorized")
+        {
+          self.consecutive_playback_auth_failures =
+            self.consecutive_playback_auth_failures.saturating_add(1);
+
+          log::warn!(
+            "playback poll rejected with 401 ({}/{}): {}",
+            self.consecutive_playback_auth_failures,
+            MAX_CONSECUTIVE_PLAYBACK_AUTH_FAILURES,
+            err
+          );
+
+          if self.consecutive_playback_auth_failures < MAX_CONSECUTIVE_PLAYBACK_AUTH_FAILURES {
+            // Stay quiet on the first one (the self-healing case); only say
+            // something once it starts looking persistent.
+            if self.consecutive_playback_auth_failures > 1 {
+              app.set_status_message(
+                "Spotify keeps rejecting the playback poll; retrying automatically.".to_string(),
+                5,
+              );
+            }
+            app.instant_since_last_current_playback_poll = Instant::now();
+            return;
+          }
+
+          // Sustained failure: surface it, and start counting again so a still
+          // broken session re-reports periodically instead of every poll.
+          self.consecutive_playback_auth_failures = 0;
+        }
+
         // 404 = no active device/player; treat as idle, not an error
         if err.to_string().contains("404") || err.to_string().contains("Not Found") {
           app.current_playback_context = None;
+          // The API answered, so the token is good.
+          self.consecutive_playback_auth_failures = 0;
           #[cfg(feature = "streaming")]
           if let Some(player) = streaming_player.as_ref() {
             reconcile_native_idle_device_if_preferred(

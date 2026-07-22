@@ -841,6 +841,46 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   }
 }
 
+/// Abbreviate a Spotify client ID for user-facing messages: enough to tell two
+/// apart, short enough to fit a status line. The 8-char prefix is also what
+/// names the token cache file, so it is recognisable.
+fn short_client_id(client_id: &str) -> String {
+  let head: String = client_id.chars().take(8).collect();
+  if client_id.chars().count() > 8 {
+    format!("{head}…")
+  } else {
+    head
+  }
+}
+
+fn name_client_id(client_id: &str) -> String {
+  if client_id == crate::core::config::NCSPOT_CLIENT_ID {
+    "the shared ncspot client ID".to_string()
+  } else {
+    format!("your own app ({})", short_client_id(client_id))
+  }
+}
+
+/// Phrase an [`auth::ClientIdNotice`] for the user. Both variants are
+/// informational: neither means anything is broken, and neither should read as
+/// if the user misconfigured something.
+fn describe_client_id_notice(notice: auth::ClientIdNotice) -> String {
+  match notice {
+    auth::ClientIdNotice::SharedWhilePersonalConfigured { personal_client_id } => format!(
+      "Spotify signed in with the shared ncspot client ID. Your own app ({}) is set as the fallback, so it is only used if the shared one stops working.",
+      short_client_id(&personal_client_id)
+    ),
+    auth::ClientIdNotice::FellBack {
+      from_client_id,
+      to_client_id,
+    } => format!(
+      "No usable Spotify session for {}; signed in with {} instead.",
+      name_client_id(&from_client_id),
+      name_client_id(&to_client_id)
+    ),
+  }
+}
+
 /// Prompt once for the anonymous global song counter opt-in and persist the
 /// choice into `config.yml`. Asked before the first-run source picker so the
 /// answer applies to whichever source(s) the user sets up. Non-interactive runs
@@ -1163,6 +1203,17 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   );
   let authenticated: Option<auth::AuthenticatedClient> = authenticated?;
 
+  // Which Spotify app the session actually authenticated as, when the user would
+  // likely assume otherwise. Logged now (so it is in every log file) and shown as
+  // a status message once the UI is about to come up (issue #395).
+  let client_id_notice_message = authenticated
+    .as_ref()
+    .and_then(|a| a.client_id_notice.clone())
+    .map(describe_client_id_notice);
+  if let Some(message) = client_id_notice_message.as_deref() {
+    log::warn!("{}", message);
+  }
+
   // Redirect URI for native streaming: from the authenticated client when a
   // Spotify session exists, else the configured default (streaming stays off
   // without Spotify anyway, see the `spotify.is_some()` gate below).
@@ -1275,6 +1326,17 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         }
       }
     }
+    // Shown here rather than at authentication time: the streaming credential
+    // flow above can block on a browser round trip, which would burn the
+    // message's TTL before the first frame ever renders. Never displaces a
+    // message something else just set (they are more urgent than this notice).
+    if let Some(message) = client_id_notice_message {
+      let mut app_mut = app.lock().await;
+      if app_mut.status_message.is_none() {
+        app_mut.set_status_message(message, 15);
+      }
+    }
+
     crate::infra::history::spawn_history_collector(Arc::clone(&app));
     // Native streaming needs a Spotify session; when it will be attempted, the
     // account probe and librespot handshake run in a background task after the
