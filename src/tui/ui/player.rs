@@ -675,8 +675,43 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
   })
 }
 
+/// Style for a playbar control label, lighting active toggles in the accent so
+/// playback-mode state is visible at a glance: Shuffle and Repeat-all glow in
+/// the selected accent, Repeat-one in the hint accent (so the two repeat modes
+/// stay distinguishable), and every other control keeps the neutral playbar
+/// colour.
+fn playbar_control_style(
+  control: PlaybarControl,
+  shuffle: bool,
+  repeat: Option<RepeatState>,
+  theme: crate::core::user_config::Theme,
+  bold: Modifier,
+) -> Style {
+  let neutral = Style::default().fg(theme.playbar_text);
+  let on = Style::default().fg(theme.selected).add_modifier(bold);
+  match control {
+    PlaybarControl::Shuffle if shuffle => on,
+    PlaybarControl::Repeat => match repeat {
+      Some(RepeatState::Context) => on,
+      Some(RepeatState::Track) => Style::default().fg(theme.hint).add_modifier(bold),
+      _ => neutral,
+    },
+    _ => neutral,
+  }
+}
+
 fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
-  let controls_style = Style::default().fg(app.user_config.theme.playbar_text);
+  let theme = app.user_config.theme;
+  let bold = app.user_config.behavior.emphasis(Modifier::BOLD);
+  let shuffle = app
+    .current_playback_context
+    .as_ref()
+    .map(|c| c.shuffle_state)
+    .unwrap_or(false);
+  let repeat = app
+    .current_playback_context
+    .as_ref()
+    .map(|c| c.repeat_state);
   for hitbox in playbar_control_hitboxes_in_area(
     controls_area,
     &app.user_config.behavior,
@@ -684,7 +719,7 @@ fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
   ) {
     let control = Paragraph::new(Span::styled(
       hitbox.control.label(&app.user_config.behavior).into_owned(),
-      controls_style,
+      playbar_control_style(hitbox.control, shuffle, repeat, theme, bold),
     ));
     f.render_widget(control, hitbox.rect);
   }
@@ -1855,6 +1890,47 @@ mod tests {
     assert_eq!(
       hitboxes[PLAYBAR_CONTROLS.len() - 1].control,
       PlaybarControl::VolumeUp
+    );
+  }
+
+  #[test]
+  fn playbar_control_style_lights_active_toggles() {
+    let theme = crate::core::user_config::Theme::default();
+    let bold = Modifier::BOLD;
+    let fg = |c, shuffle, repeat| playbar_control_style(c, shuffle, repeat, theme, bold).fg;
+
+    // Shuffle: accent when on, neutral when off.
+    assert_eq!(
+      fg(PlaybarControl::Shuffle, true, None),
+      Some(theme.selected)
+    );
+    assert_eq!(
+      fg(PlaybarControl::Shuffle, false, None),
+      Some(theme.playbar_text)
+    );
+
+    // Repeat: accent for all-repeat, hint for one-repeat, neutral for off.
+    assert_eq!(
+      fg(PlaybarControl::Repeat, false, Some(RepeatState::Context)),
+      Some(theme.selected)
+    );
+    assert_eq!(
+      fg(PlaybarControl::Repeat, false, Some(RepeatState::Track)),
+      Some(theme.hint)
+    );
+    assert_eq!(
+      fg(PlaybarControl::Repeat, false, Some(RepeatState::Off)),
+      Some(theme.playbar_text)
+    );
+    assert_eq!(
+      fg(PlaybarControl::Repeat, false, None),
+      Some(theme.playbar_text)
+    );
+
+    // Non-toggle controls stay neutral regardless of state.
+    assert_eq!(
+      fg(PlaybarControl::Next, true, Some(RepeatState::Context)),
+      Some(theme.playbar_text)
     );
   }
 
