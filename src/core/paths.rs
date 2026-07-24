@@ -1,7 +1,4 @@
-use std::{
-  ffi::OsString,
-  path::PathBuf,
-};
+use std::{ffi::OsString, path::PathBuf};
 
 const APP_CONFIG_DIR: &str = "spotatui";
 const FALLBACK_CONFIG_DIR: &str = ".config";
@@ -15,7 +12,10 @@ pub(crate) fn app_config_dir() -> Option<PathBuf> {
   app_config_dir_from(std::env::var_os(XDG_CONFIG_HOME_ENV), dirs::home_dir())
 }
 
-fn app_config_dir_from(xdg_config_home: Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+fn app_config_dir_from(
+  xdg_config_home: Option<OsString>,
+  home: Option<PathBuf>,
+) -> Option<PathBuf> {
   xdg_config_home
     .and_then(valid_xdg_config_home)
     .or_else(|| home.map(|home| home.join(FALLBACK_CONFIG_DIR)))
@@ -47,14 +47,20 @@ mod tests {
       Some(Path::new("/home/alice").to_path_buf()),
     );
 
-    assert_eq!(path, Some(Path::new("/tmp/xdg-config/spotatui").to_path_buf()));
+    assert_eq!(
+      path,
+      Some(Path::new("/tmp/xdg-config/spotatui").to_path_buf())
+    );
   }
 
   #[test]
   fn app_config_dir_falls_back_to_home_when_xdg_is_unset() {
     let path = app_config_dir_from(None, Some(Path::new("/home/alice").to_path_buf()));
 
-    assert_eq!(path, Some(Path::new("/home/alice/.config/spotatui").to_path_buf()));
+    assert_eq!(
+      path,
+      Some(Path::new("/home/alice/.config/spotatui").to_path_buf())
+    );
   }
 
   #[test]
