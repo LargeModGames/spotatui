@@ -5,6 +5,7 @@ pub mod first_run;
 pub mod format;
 pub mod layout;
 pub mod pagination;
+pub mod paths;
 pub mod persisted_playback;
 pub mod plugin_api;
 pub mod queue;
