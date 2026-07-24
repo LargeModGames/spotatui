@@ -51,6 +51,15 @@
 
             cargoLock = {
               lockFile = ./Cargo.lock;
+              outputHashes = {
+                "librespot-audio-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+                "librespot-connect-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+                "librespot-core-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+                "librespot-metadata-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+                "librespot-oauth-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+                "librespot-playback-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+                "librespot-protocol-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+              };
             };
             inherit nativeBuildInputs buildInputs;
             meta = with pkgs.lib; {
