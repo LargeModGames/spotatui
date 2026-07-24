@@ -40,6 +40,7 @@
             pkgs.apple-sdk
             pkgs.portaudio
           ];
+        librespotOutputHash = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
       in
       {
         # Build dependencies for rust
@@ -52,13 +53,13 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "librespot-audio-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
-                "librespot-connect-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
-                "librespot-core-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
-                "librespot-metadata-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
-                "librespot-oauth-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
-                "librespot-playback-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
-                "librespot-protocol-0.8.0" = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+                "librespot-audio-0.8.0" = librespotOutputHash;
+                "librespot-connect-0.8.0" = librespotOutputHash;
+                "librespot-core-0.8.0" = librespotOutputHash;
+                "librespot-metadata-0.8.0" = librespotOutputHash;
+                "librespot-oauth-0.8.0" = librespotOutputHash;
+                "librespot-playback-0.8.0" = librespotOutputHash;
+                "librespot-protocol-0.8.0" = librespotOutputHash;
               };
             };
             inherit nativeBuildInputs buildInputs;
