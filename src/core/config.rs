@@ -4,13 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::{
   fs,
   io::{stdin, Write},
-  path::{Path, PathBuf},
+  path::PathBuf,
 };
 
 const DEFAULT_PORT: u16 = 8888;
 const FILE_NAME: &str = "client.yml";
-const CONFIG_DIR: &str = ".config";
-const APP_CONFIG_DIR: &str = "spotatui";
 const TOKEN_CACHE_FILE: &str = ".spotify_token_cache.json";
 const GITIGNORE_FILE: &str = ".gitignore";
 pub const NCSPOT_CLIENT_ID: &str = "d420a117a32841c2b3474932e49fb54b";
@@ -81,19 +79,9 @@ impl ClientConfig {
   }
 
   pub fn get_or_build_paths(&self) -> Result<ConfigPaths> {
-    match dirs::home_dir() {
-      Some(home) => {
-        let path = Path::new(&home);
-        let home_config_dir = path.join(CONFIG_DIR);
-        let app_config_dir = home_config_dir.join(APP_CONFIG_DIR);
-
-        if !home_config_dir.exists() {
-          fs::create_dir(&home_config_dir)?;
-        }
-
-        if !app_config_dir.exists() {
-          fs::create_dir(&app_config_dir)?;
-        }
+    match crate::core::paths::app_config_dir() {
+      Some(app_config_dir) => {
+        fs::create_dir_all(&app_config_dir)?;
 
         // Create .gitignore to protect sensitive files from being committed
         let gitignore_path = app_config_dir.join(GITIGNORE_FILE);
