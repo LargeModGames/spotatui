@@ -4,7 +4,7 @@
 //! There is no clean login API for YouTube Music (Google shut down the OAuth
 //! path; cookies are fragile and risky), so instead of syncing a remote
 //! library the YouTube source keeps playlists **locally**:
-//! `~/.config/spotatui/youtube_playlists.yml`. Together with anonymous
+//! `youtube_playlists.yml` in the spotatui config directory. Together with anonymous
 //! search + playback this makes spotatui fully usable without any account.
 //!
 //! The file is human-editable and shareable:

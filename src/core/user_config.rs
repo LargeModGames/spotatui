@@ -8,8 +8,6 @@ use std::collections::HashMap;
 use std::{fs, path::PathBuf};
 
 const FILE_NAME: &str = "config.yml";
-const CONFIG_DIR: &str = ".config";
-const APP_CONFIG_DIR: &str = "spotatui";
 pub const DEFAULT_TICK_RATE_MILLISECONDS: u64 = 250;
 pub const DEFAULT_ANIMATION_TICK_RATE_MILLISECONDS: u64 = 16;
 pub const MAX_TICK_RATE_MILLISECONDS: u64 = 999;
@@ -88,7 +86,7 @@ pub fn format_update_delay_secs(secs: u64) -> String {
 }
 
 pub(crate) fn default_app_config_dir() -> Option<PathBuf> {
-  dirs::home_dir().map(|home| home.join(CONFIG_DIR).join(APP_CONFIG_DIR))
+  crate::core::paths::app_config_dir()
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1105,8 +1103,8 @@ pub struct UserConfig {
 }
 
 impl UserConfig {
-  /// Get the spotatui app config directory (~/.config/spotatui).
-  /// Returns None if $HOME is not set.
+  /// Get the spotatui app config directory.
+  /// Returns None if neither an absolute XDG config directory nor $HOME is set.
   #[cfg(feature = "self-update")]
   pub fn get_app_config_dir() -> Option<PathBuf> {
     default_app_config_dir()

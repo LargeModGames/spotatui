@@ -457,24 +457,15 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
 /// Default output path for the shareable recap page, used by the automatic
 /// monthly check and the in-app `generate_recap` key.
 pub fn recap_output_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join("spotatui-recap.html"),
-  )
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join("spotatui-recap.html"))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 fn last_recap_file_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join(HISTORY_SUBDIR)
-      .join("last_recap_at.txt"),
-  )
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join(HISTORY_SUBDIR).join("last_recap_at.txt"))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 fn auto_recap_is_due(last_recap_contents: Option<&str>, now_ts: i64) -> bool {
@@ -759,14 +750,9 @@ impl ListenRecord {
 }
 
 fn listens_file_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join(HISTORY_SUBDIR)
-      .join(LISTENS_FILE_NAME),
-  )
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join(HISTORY_SUBDIR).join(LISTENS_FILE_NAME))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 fn append_listen_record(record: &ListenRecord) -> Result<()> {
@@ -2152,14 +2138,9 @@ fn js_string(input: &str) -> String {
 }
 
 fn last_synced_file_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join(HISTORY_SUBDIR)
-      .join("last_synced_at.txt"),
-  )
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join(HISTORY_SUBDIR).join("last_synced_at.txt"))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 /// Resolve a sync endpoint, honoring the `SPOTATUI_SYNC_BASE_URL` override

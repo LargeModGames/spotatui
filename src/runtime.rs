@@ -478,12 +478,8 @@ fn install_panic_hook() {
     }
 
     ratatui::restore();
-    let panic_log_path = dirs::home_dir().map(|home| {
-      home
-        .join(".config")
-        .join("spotatui")
-        .join("spotatui_panic.log")
-    });
+    let panic_log_path =
+      crate::core::paths::app_state_dir().map(|dir| dir.join("spotatui_panic.log"));
 
     if let Some(path) = panic_log_path.as_ref() {
       if let Some(parent) = path.parent() {
@@ -997,7 +993,7 @@ pub async fn run() -> Result<()> {
     .override_usage("Press `?` while running the app to see keybindings")
     .before_help(BANNER)
     .after_help(
-      "Client authentication settings are stored in $HOME/.config/spotatui/client.yml (use --reconfigure-auth to update them)",
+      "Client authentication settings are stored in the spotatui config directory (use --reconfigure-auth to update them)",
     )
     .arg(
       Arg::new("tick-rate")

@@ -25,6 +25,17 @@ use crossterm::{
 };
 use std::io::{stdin, stdout, Write};
 
+#[cfg(any(feature = "subsonic", feature = "youtube", feature = "local-files"))]
+fn config_file_path_display(user_config: &UserConfig) -> String {
+  user_config
+    .path_to_config
+    .as_ref()
+    .map(|paths| paths.config_file_path.clone())
+    .or_else(|| crate::core::paths::app_config_dir().map(|dir| dir.join("config.yml")))
+    .map(|path| path.display().to_string())
+    .unwrap_or_else(|| "config.yml".to_string())
+}
+
 /// Run the interactive first-run source picker. A no-op after the first launch
 /// (detected by the presence of `client.yml`) and when only Spotify is compiled
 /// in. Must be called before [`ClientConfig::load_config`], which would otherwise
@@ -305,7 +316,8 @@ async fn configure_subsonic(user_config: &mut UserConfig) -> Result<()> {
     Err(e) => {
       println!("failed: {e}");
       println!(
-        "Saved anyway. Fix the details in ~/.config/spotatui/config.yml and relaunch if needed."
+        "Saved anyway. Fix the details in {} and relaunch if needed.",
+        config_file_path_display(user_config)
       );
     }
   }
@@ -333,7 +345,8 @@ fn configure_youtube(user_config: &UserConfig) {
       println!("YouTube playback needs the `yt-dlp` binary on your PATH.");
       println!("Install it (e.g. `pipx install yt-dlp` or your distro package) and relaunch.");
       println!(
-        "If it lives at a custom path, set behavior.ytdlp_path in ~/.config/spotatui/config.yml."
+        "If it lives at a custom path, set behavior.ytdlp_path in {}.",
+        config_file_path_display(user_config)
       );
     }
   }
@@ -344,11 +357,17 @@ fn configure_local(user_config: &UserConfig) {
   match &user_config.behavior.local_music_path {
     Some(path) => {
       println!("\nLocal files will be read from: {path}");
-      println!("(Change behavior.local_music_path in config.yml to use another folder.)");
+      println!(
+        "(Change behavior.local_music_path in {} to use another folder.)",
+        config_file_path_display(user_config)
+      );
     }
     None => {
       println!("\nNo music folder was detected automatically.");
-      println!("Set behavior.local_music_path in ~/.config/spotatui/config.yml.");
+      println!(
+        "Set behavior.local_music_path in {}.",
+        config_file_path_display(user_config)
+      );
     }
   }
 }

@@ -113,14 +113,14 @@ pub enum PersistedPlayback {
 }
 
 /// Location of the session file: `$SPOTATUI_LAST_SESSION_PATH` when set, else
-/// `<config dir>/last_session.yml` next to the app config.
+/// `<state dir>/last_session.yml`.
 pub fn default_session_path() -> Result<PathBuf> {
   if let Ok(path) = std::env::var(PATH_ENV) {
     return Ok(PathBuf::from(path));
   }
-  crate::core::user_config::default_app_config_dir()
+  crate::core::paths::app_state_dir()
     .map(|dir| dir.join(FILE_NAME))
-    .ok_or_else(|| anyhow!("cannot resolve the spotatui config directory"))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 /// Load the persisted session. A missing file means "no session to resume"

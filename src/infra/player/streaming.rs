@@ -1490,10 +1490,5 @@ mod tests {
 
 /// Helper to get the default cache path for streaming
 pub fn get_default_cache_path() -> Option<PathBuf> {
-  dirs::home_dir().map(|home| {
-    home
-      .join(".config")
-      .join("spotatui")
-      .join("streaming_cache")
-  })
+  crate::core::paths::app_cache_dir().map(|dir| dir.join("streaming_cache"))
 }
