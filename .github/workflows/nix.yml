@@ -1,0 +1,61 @@
+# Nix packaging is only exercised when the inputs that can break it change,
+# because `nix build` compiles the whole crate and is far too slow to run on
+# every PR. Keep this list in sync with anything the flake reads.
+on:
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/nix.yml"
+  push:
+    branches: [main]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/nix.yml"
+
+name: Nix
+
+permissions:
+  contents: read
+
+jobs:
+  flake:
+    name: Flake
+    runs-on: ubuntu-latest
+    # A cold `nix build` of the full default feature set (librespot included)
+    # is the long pole here.
+    timeout-minutes: 60
+    if: |
+      !contains(format('{0} {1} {2}', github.event.head_commit.message, github.event.pull_request.title, github.event.pull_request.body), '[skip ci]')
+    steps:
+      - uses: actions/checkout@master
+      - uses: cachix/install-nix-action@v31.11.0
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Catches outputs declared under the wrong attribute path. `devShells` and
+      # `apps` nested inside `packages` evaluated fine but were invisible to Nix,
+      # so `nix run` had no target and `nix develop` silently fell back to the
+      # package derivation (#401). Evaluation only, no builds.
+      - name: Check flake outputs
+        run: nix flake check --all-systems --no-build
+
+      # Direct regression guard for the above: the dev shell has to be reachable
+      # *and* actually carry the Rust toolchain.
+      - name: Dev shell provides the Rust toolchain
+        run: nix develop --command cargo --version
+
+      # The `librespot-*` entries in `cargoLock.outputHashes` pin the content of
+      # the spotatui-librespot checkout, while the rev they correspond to lives
+      # in Cargo.toml's [patch] block. Nothing links the two, so bumping the fork
+      # without regenerating the hash breaks `nix build` for every Nix user, with
+      # a fixed-output hash mismatch that never mentions the rev. Building here is
+      # what catches that drift before it reaches main.
+      - name: Build the package
+        run: nix build --no-link --print-build-logs .#default
