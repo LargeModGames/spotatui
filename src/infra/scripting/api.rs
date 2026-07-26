@@ -1086,62 +1086,181 @@ fn verify_screen_owner(
     .map(Option::unwrap_or_default)
 }
 
-/// Parse the widget array for `spotatui.set_screen`. Each item is a table with
-/// a `type` of "paragraph", "list" or "gauge".
+/// Name used in every `set_screen` parse error.
+const SET_SCREEN_FN: &str = "spotatui.set_screen";
+
+/// Maximum `row`/`column` nesting depth accepted by `spotatui.set_screen`.
+const MAX_WIDGET_DEPTH: usize = 8;
+
+/// Maximum number of widget nodes in one screen's tree. The depth cap alone does
+/// not bound the parse (a shallow tree can still be enormous), so nodes are
+/// budgeted too.
+const MAX_WIDGET_NODES: usize = 256;
+
+/// Parse the widget array for `spotatui.set_screen`.
+///
+/// Each item is a table with a `type` of "paragraph", "list", "gauge",
+/// "cover_art", "row" or "column"; `row`/`column` nest via `children`.
 fn parse_screen_widgets(widgets: mlua::Table) -> mlua::Result<Vec<plugin_api::PluginWidget>> {
-  const FN: &str = "spotatui.set_screen";
+  let mut budget = MAX_WIDGET_NODES;
+  let mut cover_art_seen = false;
+  parse_widget_list(widgets, 0, &mut budget, &mut cover_art_seen)
+}
+
+fn parse_widget_list(
+  widgets: mlua::Table,
+  depth: usize,
+  budget: &mut usize,
+  cover_art_seen: &mut bool,
+) -> mlua::Result<Vec<plugin_api::PluginWidget>> {
+  if depth > MAX_WIDGET_DEPTH {
+    return Err(mlua::Error::RuntimeError(format!(
+      "{SET_SCREEN_FN}: widgets nested more than {MAX_WIDGET_DEPTH} levels deep"
+    )));
+  }
+
   let mut out = Vec::new();
   for item in widgets.sequence_values::<mlua::Table>() {
     let item = item?;
+    if *budget == 0 {
+      return Err(mlua::Error::RuntimeError(format!(
+        "{SET_SCREEN_FN}: a screen may contain at most {MAX_WIDGET_NODES} widgets"
+      )));
+    }
+    *budget -= 1;
+
     let kind: String = item.get::<Option<String>>("type")?.ok_or_else(|| {
-      mlua::Error::RuntimeError(format!("{FN}: each widget must have a 'type' field"))
+      mlua::Error::RuntimeError(format!(
+        "{SET_SCREEN_FN}: each widget must have a 'type' field"
+      ))
     })?;
-    match kind.as_str() {
+    let kind = match kind.as_str() {
       "paragraph" => {
         let lines: mlua::Value = item.get("lines")?;
-        let lines = parse_styled_lines(FN, lines)?;
-        let height: Option<u16> = item.get("height")?;
-        out.push(plugin_api::PluginWidget::Paragraph { lines, height });
+        let lines = parse_styled_lines(SET_SCREEN_FN, lines)?;
+        // Defaults to true: under api_version 5 every paragraph on a screen
+        // scrolled in lockstep, and that stays the behavior unless opted out.
+        let scroll: bool = item.get::<Option<bool>>("scroll")?.unwrap_or(true);
+        plugin_api::PluginWidgetKind::Paragraph { lines, scroll }
       }
       "list" => {
         let items_val: mlua::Value = item.get("items")?;
-        let items = parse_styled_lines(FN, items_val)?;
+        let items = parse_styled_lines(SET_SCREEN_FN, items_val)?;
         let title: Option<String> = item.get("title")?;
-        let height: Option<u16> = item.get("height")?;
         // Lua-side `selected` is 1-based (like Lua arrays); stored 0-based.
         let selected: Option<i64> = item.get("selected")?;
         let selected = match selected {
           Some(s) if s >= 1 => Some((s - 1) as usize),
           Some(s) => {
             return Err(mlua::Error::RuntimeError(format!(
-              "{FN}: list 'selected' is 1-based and must be >= 1, got {s}"
+              "{SET_SCREEN_FN}: list 'selected' is 1-based and must be >= 1, got {s}"
             )));
           }
           None => None,
         };
-        out.push(plugin_api::PluginWidget::List {
+        plugin_api::PluginWidgetKind::List {
           title,
           items,
           selected,
-          height,
-        });
+        }
       }
       "gauge" => {
         let ratio: f64 = item.get::<Option<f64>>("ratio")?.unwrap_or(0.0);
         let label: Option<String> = item.get("label")?;
-        out.push(plugin_api::PluginWidget::Gauge {
+        plugin_api::PluginWidgetKind::Gauge {
           ratio: ratio.clamp(0.0, 1.0),
           label,
-        });
+        }
+      }
+      "cover_art" => {
+        // One shared protocol slot backs the widget, so a second one would have
+        // nothing to render. Fail loudly instead of leaving a blank pane.
+        if *cover_art_seen {
+          return Err(mlua::Error::RuntimeError(format!(
+            "{SET_SCREEN_FN}: at most one cover_art widget is supported per screen"
+          )));
+        }
+        *cover_art_seen = true;
+        parse_cover_art_widget(&item)?
+      }
+      "row" | "column" => {
+        let children: Option<mlua::Table> = item.get("children")?;
+        let children = children.ok_or_else(|| {
+          mlua::Error::RuntimeError(format!(
+            "{SET_SCREEN_FN}: '{kind}' must have a 'children' array"
+          ))
+        })?;
+        let children = parse_widget_list(children, depth + 1, budget, cover_art_seen)?;
+        if kind == "row" {
+          plugin_api::PluginWidgetKind::Row { children }
+        } else {
+          plugin_api::PluginWidgetKind::Column { children }
+        }
       }
       other => {
         return Err(mlua::Error::RuntimeError(format!(
-          "{FN}: unknown widget type '{other}' (expected paragraph, list or gauge)"
+          "{SET_SCREEN_FN}: unknown widget type '{other}' (expected paragraph, list, gauge, \
+           cover_art, row or column)"
         )));
       }
-    }
+    };
+
+    out.push(plugin_api::PluginWidget {
+      kind,
+      width: parse_widget_length(&item, "width", "width_percent")?,
+      height: parse_widget_length(&item, "height", "height_percent")?,
+    });
   }
   Ok(out)
+}
+
+fn parse_cover_art_widget(item: &mlua::Table) -> mlua::Result<plugin_api::PluginWidgetKind> {
+  // `source` is validated but not stored: "current" is the only image the app
+  // holds. Rejecting anything else means a future source fails loudly on an old
+  // build instead of silently rendering the wrong art.
+  if let Some(source) = item.get::<Option<String>>("source")? {
+    if source != "current" {
+      return Err(mlua::Error::RuntimeError(format!(
+        "{SET_SCREEN_FN}: unknown cover_art source '{source}' (expected \"current\")"
+      )));
+    }
+  }
+  let fit = match item.get::<Option<String>>("fit")?.as_deref() {
+    None | Some("contain") => plugin_api::PluginCoverArtFit::Contain,
+    Some("scale") => plugin_api::PluginCoverArtFit::Scale,
+    Some(other) => {
+      return Err(mlua::Error::RuntimeError(format!(
+        "{SET_SCREEN_FN}: unknown cover_art fit '{other}' (expected \"contain\" or \"scale\")"
+      )));
+    }
+  };
+  Ok(plugin_api::PluginWidgetKind::CoverArt { fit })
+}
+
+/// Read one axis' size hint: an absolute cell count (`cells_key`) or a
+/// percentage of the parent (`percent_key`). At most one may be given.
+fn parse_widget_length(
+  item: &mlua::Table,
+  cells_key: &str,
+  percent_key: &str,
+) -> mlua::Result<Option<plugin_api::PluginLength>> {
+  let cells: Option<u16> = item.get(cells_key)?;
+  let percent: Option<u16> = item.get(percent_key)?;
+  match (cells, percent) {
+    (Some(_), Some(_)) => Err(mlua::Error::RuntimeError(format!(
+      "{SET_SCREEN_FN}: set at most one of '{cells_key}' and '{percent_key}'"
+    ))),
+    (Some(cells), None) => Ok(Some(plugin_api::PluginLength::Cells(cells))),
+    (None, Some(percent)) => {
+      if !(1..=100).contains(&percent) {
+        return Err(mlua::Error::RuntimeError(format!(
+          "{SET_SCREEN_FN}: '{percent_key}' must be between 1 and 100, got {percent}"
+        )));
+      }
+      Ok(Some(plugin_api::PluginLength::Percent(percent)))
+    }
+    (None, None) => Ok(None),
+  }
 }
 
 /// Parse the `lines` argument for `spotatui.popup`.

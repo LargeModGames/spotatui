@@ -13,6 +13,7 @@ privileges, so read anything you install from elsewhere (see
 | [`accent-cycler.lua`](accent-cycler.lua) | `register_command`, `set_theme` |
 | [`now-playing-webhook.lua`](now-playing-webhook.lua) | `http_post`, `json_encode` |
 | [`queue-browser.lua`](queue-browser.lua) | Custom screens, async data reads, timers, storage |
+| [`now-playing.lua`](now-playing.lua) | `cover_art` widget, `row`/`column` layout, synced lyrics |
 | [`session-stats/`](session-stats) | A directory plugin with a `require`-d helper module |
 
 ## Installing

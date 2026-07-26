@@ -241,6 +241,21 @@ pub fn fullscreen_view_layout(behavior: &BehaviorConfig, area: Rect) -> (Rect, O
   (content_area, Some(playbar_area))
 }
 
+/// Centers a `size` rect inside `bounds`, clamping it to fit.
+///
+/// Shared by every cover-art placement (playbar slot, fullscreen view, plugin
+/// screen widget): `ratatui-image` renders top-left within the area it is
+/// given, so the caller measures the fitted size first and then centers it.
+#[cfg(feature = "cover-art")]
+pub fn center_rect_within(bounds: Rect, size: Rect) -> Rect {
+  Rect {
+    x: bounds.x + bounds.width.saturating_sub(size.width.min(bounds.width)) / 2,
+    y: bounds.y + bounds.height.saturating_sub(size.height.min(bounds.height)) / 2,
+    width: size.width.min(bounds.width),
+    height: size.height.min(bounds.height),
+  }
+}
+
 /// Returns the compact playbar area used by the full-screen miniplayer.
 ///
 /// The normal playbar layout is optimized for a short strip. Miniplayer keeps
