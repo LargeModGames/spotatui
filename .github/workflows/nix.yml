@@ -33,8 +33,17 @@ jobs:
     if: |
       !contains(format('{0} {1} {2}', github.event.head_commit.message, github.event.pull_request.title, github.event.pull_request.body), '[skip ci]')
     steps:
-      - uses: actions/checkout@master
-      - uses: cachix/install-nix-action@v31.11.0
+      # Pinned to commit SHAs rather than tags or branches: a tag can be
+      # retargeted, and this job runs `nix build`, so a compromised action would
+      # be executing arbitrary code against the build. Dependabot already tracks
+      # the `github-actions` ecosystem and reads the trailing version comment, so
+      # these still get update PRs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The job only reads the repo, so leaving GITHUB_TOKEN behind in the
+          # local git config buys nothing.
+          persist-credentials: false
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
