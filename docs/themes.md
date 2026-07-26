@@ -21,7 +21,9 @@ spotatui comes with several built-in theme presets. Access them via `Alt-,` > Th
 
 ## Custom Themes
 
-You can create custom themes in `~/.config/spotatui/config.yml`:
+You can create custom themes in `config.yml` in the spotatui app config directory
+(`$XDG_CONFIG_HOME/spotatui`, or `~/.config/spotatui` when `XDG_CONFIG_HOME` is
+not set):
 
 ```yaml
 theme:

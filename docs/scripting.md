@@ -6,7 +6,8 @@ feature, which is enabled in the default build.
 
 ## File locations
 
-Plugins are loaded from your config directory (`~/.config/spotatui/`) at startup, in this order:
+Plugins are loaded from your app config directory (`$XDG_CONFIG_HOME/spotatui`, or
+`~/.config/spotatui` when `XDG_CONFIG_HOME` is not set) at startup, in this order:
 
 1. `init.lua`, if present.
 2. Single-file plugins: every `plugins/*.lua` file, sorted by filename.
@@ -54,10 +55,11 @@ spotatui plugin remove <name>       # uninstall
 spotatui plugin new <name>          # scaffold a new plugin to start from
 ```
 
-`add` clones the repository into `~/.config/spotatui/plugins/<name>/` (a shallow clone) and
-records it in `~/.config/spotatui/plugins.lock`. `update` fast-forwards each clone to the remote's
-latest commit. Restart spotatui after installing or updating for changes to take effect, and bind
-any commands the plugin registers under `plugin_commands` in `config.yml`.
+`add` clones the repository into `plugins/<name>/` under the spotatui app config
+directory (a shallow clone) and records it in `plugins.lock` in that same
+directory. `update` fast-forwards each clone to the remote's latest commit.
+Restart spotatui after installing or updating for changes to take effect, and
+bind any commands the plugin registers under `plugin_commands` in `config.yml`.
 
 Single-file plugins you drop into `plugins/` by hand are not tracked in the lockfile; `plugin list`
 shows them under "untracked".
@@ -71,9 +73,9 @@ your config directory:
 spotatui plugin new my-plugin
 ```
 
-This writes `~/.config/spotatui/plugins/my-plugin/main.lua` (with a `require_api` guard, a sample
-command, and a suggested key binding) plus a `README.md`. Edit it, then `git init` and push to
-share it.
+This writes `plugins/my-plugin/main.lua` under the spotatui app config directory
+(with a `require_api` guard, a sample command, and a suggested key binding) plus
+a `README.md`. Edit it, then `git init` and push to share it.
 
 A shareable plugin is a git repository with a `main.lua` (or `init.lua`) entry point at its root:
 
@@ -288,8 +290,9 @@ tick. If the app stalls past several interval periods, the interval fires once a
 ### Persistent storage
 
 Each plugin gets a private key-value store persisted as plain JSON at
-`~/.config/spotatui/plugin-data/<plugin>.json`. Values must be JSON-serializable (tables,
-strings, numbers, booleans); functions and userdata raise.
+`plugin-data/<plugin>.json` under the spotatui app config directory. Values must
+be JSON-serializable (tables, strings, numbers, booleans); functions and userdata
+raise.
 
 - `spotatui.storage_get(key)` - the stored value, or `nil`.
 - `spotatui.storage_set(key, value)` - store a value. `nil` removes the key.

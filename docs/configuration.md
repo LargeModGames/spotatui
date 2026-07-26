@@ -2,8 +2,10 @@
 
 spotatui reads `config.yml` from the app config directory:
 
-- Linux / macOS: `~/.config/spotatui/config.yml`
-- Windows: `C:\Users\<you>\.config\spotatui\config.yml`
+- `$XDG_CONFIG_HOME/spotatui/config.yml` when `XDG_CONFIG_HOME` is set to an absolute path.
+- `${HOME}/.config/spotatui/config.yml` otherwise.
+
+You can also point spotatui at a specific config file with `--config <path>`.
 
 All fields are optional; omitted values use the built-in defaults. A complete, commented example lives in [`examples/config.example.yml`](../examples/config.example.yml).
 

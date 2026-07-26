@@ -37,7 +37,8 @@ Press `?` in spotatui to see the help menu with all keybindings.
 
 ## Customizing Keybindings
 
-Edit `~/.config/spotatui/config.yml`:
+Edit `config.yml` in the spotatui app config directory (`$XDG_CONFIG_HOME/spotatui`,
+or `~/.config/spotatui` when `XDG_CONFIG_HOME` is not set):
 
 ```yaml
 keybindings:
