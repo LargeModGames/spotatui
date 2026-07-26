@@ -20,18 +20,22 @@ privileges, so read anything you install from elsewhere (see
 Single-file plugins go straight into `plugins/`:
 
 ```bash
-cp track-notifier.lua ~/.config/spotatui/plugins/
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+mkdir -p "$config_home/spotatui/plugins"
+cp track-notifier.lua "$config_home/spotatui/plugins/"
 ```
 
 Directory plugins (a folder with a `main.lua` entry point) are copied as a whole:
 
 ```bash
-cp -r session-stats ~/.config/spotatui/plugins/
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+mkdir -p "$config_home/spotatui/plugins"
+cp -r session-stats "$config_home/spotatui/plugins/"
 ```
 
 Restart spotatui after installing. Plugins that register commands need a key binding; add one to
-`~/.config/spotatui/config.yml` under `plugin_commands` (each plugin documents a suggested key in
-its header comment).
+`config.yml` in the spotatui app config directory under `plugin_commands` (each
+plugin documents a suggested key in its header comment).
 
 To install a plugin published as a git repository, use the built-in installer instead:
 

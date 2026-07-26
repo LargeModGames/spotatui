@@ -4,7 +4,9 @@
 -- webhooks, home-automation triggers, or a "what am I listening to" endpoint.
 --
 -- Install (single file):
---   cp now-playing-webhook.lua ~/.config/spotatui/plugins/
+--   config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+--   mkdir -p "$config_home/spotatui/plugins"
+--   cp now-playing-webhook.lua "$config_home/spotatui/plugins/"
 -- Edit WEBHOOK_URL below first.
 
 local WEBHOOK_URL = "https://example.com/webhook"
