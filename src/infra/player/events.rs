@@ -685,6 +685,22 @@ async fn handle_player_events(
           album: album.clone(),
           duration_ms: audio_item.duration_ms,
           kind,
+          // `covers` arrives widest-first: the pinned librespot fork sorts it
+          // descending by width in `get_covers` (metadata/src/audio/item.rs)
+          // before building the list, and the filter that follows preserves that
+          // order, so `.first()` is the largest. Each url is already a fully
+          // resolved `https://i.scdn.co/image/<file_id>` — the same CDN form the
+          // Web API returns, so the cover-art key stays stable when the polled
+          // context later catches up and takes over. The empty-string filter
+          // matters: librespot substitutes into a session-supplied url template,
+          // so a blank template yields `Some("")`, which would defeat the
+          // fallback below instead of deferring to it. Local files legitimately
+          // carry no covers at all (their art is embedded in the file).
+          image_url: audio_item
+            .covers
+            .first()
+            .map(|cover| cover.url.clone())
+            .filter(|url| !url.is_empty()),
         });
 
         app.song_progress_ms = 0;

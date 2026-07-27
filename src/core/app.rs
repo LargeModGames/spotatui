@@ -983,6 +983,12 @@ pub struct NativeTrackInfo {
   pub album: String, // Reserved for future use (e.g., displaying album in playbar)
   pub duration_ms: u32,
   pub kind: NativeTrackKind,
+  /// Album art URL carried by librespot's own `TrackChanged` payload, so cover
+  /// art follows the track librespot is actually decoding. The polled Spotify
+  /// context is not a usable source here: it lags by seconds after a skip, and
+  /// for a natively queued track (played via a direct `player.load`, which Spirc
+  /// never reports) it stays on the *previous* track for the whole song. (#402)
+  pub image_url: Option<String>,
 }
 
 /// A node in the playlist folder hierarchy from Spotify's rootlist
