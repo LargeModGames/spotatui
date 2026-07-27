@@ -3019,6 +3019,19 @@ mod screen_tests {
     }
   }
 
+  /// `height = 0` was legal in v5 (it produced a `Length(0)` constraint and so
+  /// an invisible widget). v6 must keep accepting it, or plugins that compute a
+  /// height and land on zero start failing their whole `set_screen` call.
+  #[test]
+  fn set_screen_accepts_a_zero_cell_count_as_a_hidden_widget() {
+    let content =
+      publish_widgets(r#"{ { type = "paragraph", lines = {"x"}, height = 0, width = 0 } }"#);
+
+    assert_eq!(content.widgets.len(), 1);
+    assert_eq!(content.widgets[0].height, Some(PluginLength::Cells(0)));
+    assert_eq!(content.widgets[0].width, Some(PluginLength::Cells(0)));
+  }
+
   #[test]
   fn set_screen_rejects_a_container_without_children() {
     let err = publish_widgets_err(r#"{ { type = "row" } }"#);

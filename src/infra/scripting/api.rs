@@ -1239,6 +1239,11 @@ fn parse_cover_art_widget(item: &mlua::Table) -> mlua::Result<plugin_api::Plugin
 
 /// Read one axis' size hint: an absolute cell count (`cells_key`) or a
 /// percentage of the parent (`percent_key`). At most one may be given.
+///
+/// A zero cell count is accepted and hides the widget: `height = 0` was already
+/// legal in v5, where it produced a `Length(0)` constraint, so rejecting it now
+/// would break existing plugins. The percentage form has no such history and
+/// keeps its stricter `1..=100` range.
 fn parse_widget_length(
   item: &mlua::Table,
   cells_key: &str,

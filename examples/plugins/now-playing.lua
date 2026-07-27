@@ -1,5 +1,5 @@
 -- now-playing: a custom now-playing screen showing the v6 API - the cover_art
--- widget beside synchronized lyrics, laid out with row/column containers and
+-- widget beside synchronized lyrics, laid out in a row container with
 -- per-axis size hints.
 --
 -- Install (single file):

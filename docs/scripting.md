@@ -562,14 +562,15 @@ Any widget may carry a size hint on either axis:
 
 | Field | Meaning |
 |---|---|
-| `height` / `width` | an absolute number of cells |
+| `height` / `width` | an absolute number of cells; `0` hides the widget |
 | `height_percent` / `width_percent` | `1`..`100` percent of the parent |
 
 The top level is an implicit vertical stack, a `column` stacks vertically and a `row` stacks
 horizontally. Only the hint matching the parent's axis is used - `width` is ignored at the top
 level, `height` is ignored inside a `row`. A widget with no matching hint shares the remaining
 space evenly with the other unsized widgets. Setting both `height` and `height_percent` (or
-both width forms) is an error, as is a percentage outside `1`..`100`.
+both width forms) is an error, as is a percentage outside `1`..`100`. A cell count of `0` is
+not an error - it collapses the widget to nothing, which is a way to hide one conditionally.
 
 A `gauge` with no `height` takes 3 rows, as before. Since API v6 an explicit `height` on a
 gauge is honored instead of ignored.
@@ -614,7 +615,7 @@ When no image can be shown the widget draws a centered status line instead ("Loa
 art...", "No cover art for this source", ...). That is what you get when the track has no
 artwork, when the build was compiled without the `cover-art` feature, when
 `behavior.draw_cover_art` is off, or when the terminal has no graphics protocol and
-`behavior.draw_cover_art_forced` is off. Cover art needs a Kitty, iTerm2 or Sixel capable
+`behavior.draw_cover_art_forced` is off. Cover art needs a Kitty-, iTerm2- or Sixel-capable
 terminal.
 
 #### Keys
