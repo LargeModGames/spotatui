@@ -685,7 +685,10 @@ async fn handle_player_events(
           album: album.clone(),
           duration_ms: audio_item.duration_ms,
           kind,
-          // `covers` arrives widest-first and each url is already a fully
+          // `covers` arrives widest-first: the pinned librespot fork sorts it
+          // descending by width in `get_covers` (metadata/src/audio/item.rs)
+          // before building the list, and the filter that follows preserves that
+          // order, so `.first()` is the largest. Each url is already a fully
           // resolved `https://i.scdn.co/image/<file_id>` — the same CDN form the
           // Web API returns, so the cover-art key stays stable when the polled
           // context later catches up and takes over. The empty-string filter
