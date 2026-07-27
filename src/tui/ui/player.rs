@@ -1,4 +1,6 @@
 #[cfg(feature = "cover-art")]
+use crate::core::layout::center_rect_within;
+#[cfg(feature = "cover-art")]
 use crate::core::layout::fullscreen_view_layout;
 #[cfg(feature = "cover-art")]
 use ratatui::layout::Alignment;
@@ -691,16 +693,6 @@ fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
 }
 
 #[cfg(feature = "cover-art")]
-fn center_rect_within(bounds: Rect, size: Rect) -> Rect {
-  Rect {
-    x: bounds.x + bounds.width.saturating_sub(size.width.min(bounds.width)) / 2,
-    y: bounds.y + bounds.height.saturating_sub(size.height.min(bounds.height)) / 2,
-    width: size.width.min(bounds.width),
-    height: size.height.min(bounds.height),
-  }
-}
-
-#[cfg(feature = "cover-art")]
 pub fn draw_cover_art_view(f: &mut Frame<'_>, app: &App) {
   let (content_area, playbar_area) = fullscreen_view_layout(&app.user_config.behavior, f.area());
 
@@ -726,15 +718,9 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
   let (track_name, artist_str) = extract_track_info(app);
 
   if !app.cover_art.available() {
-    use crate::core::app::CoverArtStatus;
     // No image is loaded: show an explicit message for the current state rather
     // than a blank pane, so "no art" always reads as a deliberate outcome.
-    let message = match app.cover_art_status {
-      CoverArtStatus::Loading => "Loading cover art...",
-      CoverArtStatus::Unavailable => "No cover art for this source",
-      CoverArtStatus::Failed => "Cover art unavailable",
-      CoverArtStatus::Loaded | CoverArtStatus::NotStarted => "No cover art available",
-    };
+    let message = crate::tui::cover_art::status_message(app.cover_art_status);
     let p = Paragraph::new(message)
       .style(Style::default().fg(app.user_config.theme.inactive))
       .alignment(Alignment::Center);
