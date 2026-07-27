@@ -571,6 +571,7 @@ pub async fn start_ui(
   shared_position: Option<Arc<AtomicU64>>,
   mpris_manager: MprisHandle,
   discord_rpc_manager: DiscordRpcHandle,
+  history_collector: crate::infra::history::HistoryCollectorHandle,
 ) -> Result<()> {
   info!("ui thread initialized");
   #[cfg(not(feature = "discord-rpc"))]
@@ -1358,6 +1359,11 @@ pub async fn start_ui(
   #[cfg(feature = "streaming")]
   pause_native_playback_before_exit(app).await;
 
+  // Stop the collector and all network work it owns before the final sync and
+  // clear. In particular, a pause-triggered now-playing push must not race the
+  // exit clear and recreate a stale public widget.
+  history_collector.shutdown().await;
+
   // Restore the terminal before the exit network calls: there is no reason to
   // hold the alternate screen and raw mode while waiting on HTTP.
   let _ = reset_window_title(&mut window_title_state);
@@ -1375,10 +1381,9 @@ pub async fn start_ui(
 
   if let Some(token) = sync_token_opt {
     info!("Synchronizing listening history to cloud before exit...");
-    // Keep the clear strictly last: the history collector is still ticking and
-    // re-pushes now-playing once it sees the pause above, and that push is an
-    // upsert on the server, so a clear that landed first would be undone and
-    // leave a stale "paused" card on the public widget.
+    // Keep the clear strictly last after the collector has stopped: now-playing
+    // updates are upserts, so a late push would otherwise recreate a stale
+    // "paused" card on the public widget.
     //
     // Each call is bounded separately rather than sharing one budget, so a slow
     // history upload cannot starve the clear. Without these the shared client
