@@ -312,6 +312,7 @@ mod tests {
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: crate::core::app::NativeTrackKind::Track,
+      image_url: None,
     });
 
     assert_eq!(playback_window_title(&app), "The Track — The Artist");
@@ -327,6 +328,7 @@ mod tests {
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: crate::core::app::NativeTrackKind::Track,
+      image_url: None,
     });
 
     assert_eq!(playback_window_title(&app), "The]2;Bad Track — TheArtist");

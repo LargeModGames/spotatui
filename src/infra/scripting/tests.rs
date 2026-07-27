@@ -1890,6 +1890,7 @@ mod data_read_tests {
         album: "The Album".to_string(),
         duration_ms: 180_000,
         kind: NativeTrackKind::Track,
+        image_url: None,
       });
     }
 
@@ -1950,6 +1951,7 @@ mod data_read_tests {
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: NativeTrackKind::Track,
+      image_url: None,
     });
     app.desired_lyrics_identity = Some(("Track A".to_string(), "The Artist".to_string()));
     app.lyrics_status = LyricsStatus::Found;
