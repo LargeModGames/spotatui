@@ -11,6 +11,7 @@ pub mod plugin_api;
 pub mod queue;
 pub mod sort;
 pub mod source;
+pub mod state;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod user_config;
