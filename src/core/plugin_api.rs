@@ -5,7 +5,6 @@
 //! and multi-source refactor. All conversions from rspotify types happen in the mapping
 //! functions below; callers receive only the plain structs defined here.
 
-// Nothing in the main binary calls this API yet; Phase 1 will wire it up.
 #![allow(dead_code)]
 
 use crate::core::app::App;
@@ -13,7 +12,7 @@ use crate::infra::media_metadata::current_playback_snapshot;
 use rspotify::model::RepeatState;
 use serde::{Deserialize, Serialize};
 
-pub const API_VERSION: u32 = 5;
+pub const API_VERSION: u32 = 6;
 
 /// A popup dialog produced by a plugin.
 #[derive(Debug, Clone, PartialEq)]
@@ -250,26 +249,83 @@ pub struct PluginScreenContent {
   pub widgets: Vec<PluginWidget>,
 }
 
-/// A widget in a [`PluginScreenContent`]. Fixed-height widgets take their
-/// requested rows; the remaining vertical space is split evenly between the
-/// rest.
+/// A size along one axis: an absolute cell count, or a percentage of the parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginLength {
+  Cells(u16),
+  /// 1..=100 (validated at the API layer).
+  Percent(u16),
+}
+
+/// How a [`PluginWidgetKind::CoverArt`] image is scaled into its area.
+///
+/// `Crop` (CSS `cover`) is deliberately not offered: `ratatui-image` documents
+/// that cropping overdraws characters over graphics and that some terminals
+/// misbehave when it does (Alacritty's sixel branch is named explicitly).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PluginCoverArtFit {
+  /// Fit inside the area, keeping the aspect ratio, never upscaling.
+  #[default]
+  Contain,
+  /// Like `Contain` but upscales an image smaller than the area.
+  Scale,
+}
+
+/// A widget in a [`PluginScreenContent`].
+///
+/// `width`/`height` are per-axis size hints; only the one matching the parent
+/// container's axis is used (the top level is an implicit vertical stack).
+/// `None` means "share the remaining space evenly".
 #[derive(Debug, Clone, PartialEq)]
-pub enum PluginWidget {
+pub struct PluginWidget {
+  pub kind: PluginWidgetKind,
+  pub width: Option<PluginLength>,
+  pub height: Option<PluginLength>,
+}
+
+impl PluginWidget {
+  /// A widget with no size hints on either axis.
+  pub fn new(kind: PluginWidgetKind) -> Self {
+    Self {
+      kind,
+      width: None,
+      height: None,
+    }
+  }
+}
+
+/// The content of a [`PluginWidget`]. `Row`/`Column` are pure layout containers:
+/// they draw no border and no title, they only split their area.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginWidgetKind {
   Paragraph {
     lines: Vec<PopupLine>,
-    height: Option<u16>,
+    /// Whether `PageUp`/`PageDown` scrolling applies to this paragraph.
+    /// Defaults to `true`, matching the `api_version = 5` behavior where every
+    /// paragraph on a screen scrolled in lockstep.
+    scroll: bool,
   },
   List {
     title: Option<String>,
     items: Vec<PopupLine>,
     /// 0-based index of the highlighted item.
     selected: Option<usize>,
-    height: Option<u16>,
   },
   Gauge {
     /// 0.0..=1.0 (clamped at the API layer).
     ratio: f64,
     label: Option<String>,
+  },
+  /// The current track's cover art, rendered from the app's already-decoded
+  /// in-memory image. At most one may appear per screen.
+  CoverArt {
+    fit: PluginCoverArtFit,
+  },
+  Row {
+    children: Vec<PluginWidget>,
+  },
+  Column {
+    children: Vec<PluginWidget>,
   },
 }
 
@@ -696,6 +752,35 @@ pub fn search_results_snapshot(app: &App) -> SearchResults {
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
+  }
+}
+
+/// Whether `app.lyrics`/`app.lyrics_status` describe the item playing *right now*.
+///
+/// The runner's shared track-change detector runs **after** the script engine's
+/// tick, so on the tick a track changes the lyrics state still belongs to the
+/// previous track. Without this check, `spotatui.get_lyrics` called from a
+/// `track_change` handler - the obvious place to call it - sees a terminal
+/// status, resolves synchronously, and hands the plugin the *previous* track's
+/// lyrics; the one-shot callback is then spent by the time the real ones land.
+///
+/// `desired_lyrics_identity` is the detector's record of which item it last
+/// published lyrics state for, so comparing it against the live snapshot
+/// detects exactly that window.
+pub fn lyrics_state_is_current(app: &App) -> bool {
+  use crate::infra::media_metadata::PlaybackItemKind;
+  match current_playback_snapshot(app) {
+    // Nothing playing: the detector clears the identity.
+    None => app.desired_lyrics_identity.is_none(),
+    Some(snapshot) => match snapshot.item_kind {
+      PlaybackItemKind::Track => {
+        app.desired_lyrics_identity
+          == Some((snapshot.metadata.title.clone(), snapshot.primary_artist()))
+      }
+      // Episodes get no lookup at all; the detector clears the identity and
+      // publishes `NotFound` for them.
+      PlaybackItemKind::Episode => app.desired_lyrics_identity.is_none(),
+    },
   }
 }
 

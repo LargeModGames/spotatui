@@ -1,3 +1,5 @@
+use crate::core::app::CoverArtStatus;
+use crate::core::plugin_api::PluginCoverArtFit;
 use anyhow::anyhow;
 use log::{debug, info, warn};
 use ratatui::{
@@ -40,11 +42,38 @@ impl CoverArtRequest {
   }
 }
 
+/// The message shown in place of the image when none is loaded, so "no art"
+/// always reads as a deliberate outcome rather than a blank pane. Shared by the
+/// fullscreen view and the plugin-screen `cover_art` widget.
+pub fn status_message(status: CoverArtStatus) -> &'static str {
+  match status {
+    CoverArtStatus::Loading => "Loading cover art...",
+    CoverArtStatus::Unavailable => "No cover art for this source",
+    CoverArtStatus::Failed => "Cover art unavailable",
+    CoverArtStatus::Loaded | CoverArtStatus::NotStarted => "No cover art available",
+  }
+}
+
+impl PluginCoverArtFit {
+  /// The `ratatui-image` resize strategy for this fit mode. Kept private so
+  /// `Resize` does not leak into the UI layer.
+  fn resize(self) -> Resize {
+    match self {
+      PluginCoverArtFit::Contain => Resize::Fit(None),
+      PluginCoverArtFit::Scale => Resize::Scale(None),
+    }
+  }
+}
+
 pub struct CoverArt {
   pub state: Mutex<Option<CoverArtState>>,
   /// Separate protocol state for fullscreen cover art view, avoiding conflicts
   /// when the same image is rendered in both the playbar and fullscreen in one frame.
   pub fullscreen_state: Mutex<Option<CoverArtState>>,
+  /// Separate protocol state for a plugin screen's `cover_art` widget, for the
+  /// same reason: a plugin can size its image differently from the playbar, and
+  /// a shared protocol would re-encode on every switch between them.
+  pub plugin_state: Mutex<Option<CoverArtState>>,
   picker: Picker,
 }
 
@@ -74,6 +103,7 @@ impl CoverArt {
       picker,
       state: Mutex::new(None),
       fullscreen_state: Mutex::new(None),
+      plugin_state: Mutex::new(None),
     }
   }
 
@@ -146,15 +176,22 @@ impl CoverArt {
   /// render time. Call this under the (briefly re-acquired) `App` guard after
   /// [`fetch_and_decode`] has done the slow work off-lock.
   pub fn store_decoded(&self, url: String, img: image::DynamicImage) {
-    // Create two separate protocol instances so the playbar and fullscreen
-    // views can render independently without conflicting.
+    // Create separate protocol instances so the playbar, fullscreen view and a
+    // plugin screen's cover_art widget can render independently without
+    // conflicting. All three are set here and dropped together in `clear`;
+    // callers rely on that lockstep (`available`/`get_url` only read `state`).
     let image_protocol = self.picker.new_resize_protocol(img.clone());
-    let fullscreen_protocol = self.picker.new_resize_protocol(img);
+    let fullscreen_protocol = self.picker.new_resize_protocol(img.clone());
+    let plugin_protocol = self.picker.new_resize_protocol(img);
 
     self.set_state(CoverArtState::new(url.clone(), image_protocol));
     {
       let mut lock = self.fullscreen_state.lock().unwrap();
       *lock = Some(CoverArtState::new(url.clone(), fullscreen_protocol));
+    }
+    {
+      let mut lock = self.plugin_state.lock().unwrap();
+      *lock = Some(CoverArtState::new(url.clone(), plugin_protocol));
     }
     info!("got new cover art: {url}");
   }
@@ -163,47 +200,58 @@ impl CoverArt {
     self.state.lock().unwrap().is_some()
   }
 
-  /// Drop any stored cover art (both the playbar and fullscreen protocol state)
+  /// Drop any stored cover art (playbar, fullscreen and plugin protocol state)
   /// so the pane renders nothing. Used when switching to a track/source with no
   /// art, or after a failed fetch, so stale art from the previous track can
   /// never linger on screen.
   pub fn clear(&self) {
     *self.state.lock().unwrap() = None;
     *self.fullscreen_state.lock().unwrap() = None;
+    *self.plugin_state.lock().unwrap() = None;
   }
 
   pub fn render(&self, f: &mut Frame, area: Rect) {
-    Self::render_state(&self.state, f, area);
+    Self::render_state(&self.state, f, area, Resize::Fit(None));
   }
 
   pub fn size_for(&self, area: Rect) -> Option<Rect> {
-    Self::size_for_state(&self.state, area)
+    Self::size_for_state(&self.state, area, Resize::Fit(None))
   }
 
   pub fn render_fullscreen(&self, f: &mut Frame, area: Rect) {
-    Self::render_state(&self.fullscreen_state, f, area);
+    Self::render_state(&self.fullscreen_state, f, area, Resize::Fit(None));
   }
 
   pub fn fullscreen_size_for(&self, area: Rect) -> Option<Rect> {
-    Self::size_for_state(&self.fullscreen_state, area)
+    Self::size_for_state(&self.fullscreen_state, area, Resize::Fit(None))
   }
 
-  fn render_state(state: &Mutex<Option<CoverArtState>>, f: &mut Frame, area: Rect) {
+  /// Render into a plugin screen's `cover_art` widget slot.
+  pub fn render_plugin(&self, f: &mut Frame, area: Rect, fit: PluginCoverArtFit) {
+    Self::render_state(&self.plugin_state, f, area, fit.resize());
+  }
+
+  /// Measure the plugin slot's fitted size, so the caller can center it.
+  pub fn plugin_size_for(&self, area: Rect, fit: PluginCoverArtFit) -> Option<Rect> {
+    Self::size_for_state(&self.plugin_state, area, fit.resize())
+  }
+
+  fn render_state(state: &Mutex<Option<CoverArtState>>, f: &mut Frame, area: Rect, resize: Resize) {
     let mut lock = state.lock().unwrap();
     if let Some(sp) = lock.as_mut() {
-      f.render_stateful_widget(
-        StatefulImage::new().resize(Resize::Fit(None)),
-        area,
-        &mut sp.image,
-      );
+      f.render_stateful_widget(StatefulImage::new().resize(resize), area, &mut sp.image);
     }
   }
 
-  fn size_for_state(state: &Mutex<Option<CoverArtState>>, area: Rect) -> Option<Rect> {
+  fn size_for_state(
+    state: &Mutex<Option<CoverArtState>>,
+    area: Rect,
+    resize: Resize,
+  ) -> Option<Rect> {
     let lock = state.lock().unwrap();
     lock.as_ref().map(|sp| {
       let size = sp.image.size_for(
-        Resize::Fit(None),
+        resize,
         Size {
           width: area.width,
           height: area.height,

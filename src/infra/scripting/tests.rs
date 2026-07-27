@@ -1874,6 +1874,101 @@ mod data_read_tests {
     }
   }
 
+  /// The runner ticks the script engine *before* its track-change detector, so
+  /// on the tick a track changes `lyrics_status` is still `Found` for the
+  /// previous track. `get_lyrics` from a `track_change` handler must wait for
+  /// the new lyrics rather than resolving with the old ones.
+  #[test]
+  fn get_lyrics_waits_when_the_stored_lyrics_are_for_the_previous_track() {
+    use crate::core::app::{NativeTrackInfo, NativeTrackKind};
+
+    fn playing(app: &mut App, name: &str) {
+      app.is_streaming_active = true;
+      app.native_track_info = Some(NativeTrackInfo {
+        name: name.to_string(),
+        artists_display: "The Artist".to_string(),
+        album: "The Album".to_string(),
+        duration_ms: 180_000,
+        kind: NativeTrackKind::Track,
+      });
+    }
+
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, rx) = make_app();
+
+    // Track A is playing and its lyrics have landed.
+    playing(&mut app, "Track A");
+    app.desired_lyrics_identity = Some(("Track A".to_string(), "The Artist".to_string()));
+    app.lyrics_status = LyricsStatus::Found;
+    app.lyrics = Some(vec![(0, "lyrics for A".to_string())]);
+
+    // Playback moves to track B. The detector has NOT run yet, so the lyrics
+    // state still describes A - this is the exact window the bug lived in.
+    playing(&mut app, "Track B");
+
+    engine
+      .load_source(
+        "lyricist",
+        r#"spotatui.get_lyrics(function(data, err) spotatui.notify(data.lines[1].text, 1) end)"#,
+      )
+      .unwrap();
+
+    let now = Instant::now();
+    engine.process_data_requests_for_test(&mut app, now);
+    assert!(
+      rx.try_recv().is_err(),
+      "lyrics must not dispatch an IoEvent"
+    );
+    assert!(
+      drain(&engine).is_empty(),
+      "must not resolve with the previous track's lyrics"
+    );
+
+    // The detector then runs and B's lyrics land, bumping the generation.
+    app.desired_lyrics_identity = Some(("Track B".to_string(), "The Artist".to_string()));
+    app.lyrics = Some(vec![(0, "lyrics for B".to_string())]);
+    app.plugin_data_generations.bump(PluginDataKind::Lyrics);
+    engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "lyrics for B"),
+      _ => panic!("expected B's lyrics"),
+    }
+  }
+
+  /// The currency check must not stall the normal case: lyrics that belong to
+  /// the track actually playing still resolve in the same pass.
+  #[test]
+  fn get_lyrics_for_the_current_track_still_delivers_immediately() {
+    use crate::core::app::{NativeTrackInfo, NativeTrackKind};
+
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    app.is_streaming_active = true;
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "Track A".to_string(),
+      artists_display: "The Artist".to_string(),
+      album: "The Album".to_string(),
+      duration_ms: 180_000,
+      kind: NativeTrackKind::Track,
+    });
+    app.desired_lyrics_identity = Some(("Track A".to_string(), "The Artist".to_string()));
+    app.lyrics_status = LyricsStatus::Found;
+    app.lyrics = Some(vec![(0, "lyrics for A".to_string())]);
+
+    engine
+      .load_source(
+        "lyricist",
+        r#"spotatui.get_lyrics(function(data, err) spotatui.notify(data.lines[1].text, 1) end)"#,
+      )
+      .unwrap();
+
+    engine.process_data_requests_for_test(&mut app, Instant::now());
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "lyrics for A"),
+      _ => panic!("expected immediate delivery"),
+    }
+  }
+
   #[test]
   fn get_queue_resolves_with_flattened_items() {
     let mut engine = ScriptEngine::new().unwrap();
@@ -2669,7 +2764,7 @@ mod state_event_tests {
 mod screen_tests {
   use super::*;
   use crate::core::app::{ActiveBlock, App, RouteId};
-  use crate::core::plugin_api::PluginWidget;
+  use crate::core::plugin_api::{PluginCoverArtFit, PluginLength, PluginWidgetKind};
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
@@ -2743,20 +2838,22 @@ mod screen_tests {
     let content = app.plugin_screens.get("stats").expect("content published");
     assert_eq!(content.title, "Stats");
     assert_eq!(content.widgets.len(), 3);
-    match &content.widgets[0] {
-      PluginWidget::Paragraph { lines, height } => {
+    match &content.widgets[0].kind {
+      PluginWidgetKind::Paragraph { lines, scroll } => {
         assert_eq!(lines.len(), 2);
         assert!(lines[1].bold);
-        assert_eq!(*height, Some(4));
+        // Paragraphs scroll by default, matching the api_version = 5 behavior.
+        assert!(*scroll);
       }
       _ => panic!("expected paragraph widget"),
     }
-    match &content.widgets[1] {
-      PluginWidget::List {
+    assert_eq!(content.widgets[0].height, Some(PluginLength::Cells(4)));
+    assert_eq!(content.widgets[0].width, None);
+    match &content.widgets[1].kind {
+      PluginWidgetKind::List {
         title,
         items,
         selected,
-        ..
       } => {
         assert_eq!(title.as_deref(), Some("Songs"));
         assert_eq!(items.len(), 2);
@@ -2765,8 +2862,8 @@ mod screen_tests {
       }
       _ => panic!("expected list widget"),
     }
-    match &content.widgets[2] {
-      PluginWidget::Gauge { ratio, label } => {
+    match &content.widgets[2].kind {
+      PluginWidgetKind::Gauge { ratio, label } => {
         assert_eq!(*ratio, 1.0, "ratio must be clamped");
         assert_eq!(label.as_deref(), Some("70%"));
       }
@@ -2790,6 +2887,184 @@ mod screen_tests {
         r#"spotatui.set_screen("stats", {{ type = "list", items = {"x"}, selected = 0 }})"#
       )
       .is_err());
+  }
+
+  /// Publishes `widgets` on the "stats" screen and returns the stored content.
+  fn publish_widgets(widgets: &str) -> crate::core::plugin_api::PluginScreenContent {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+    engine
+      .load_source(
+        "stats.lua",
+        &format!(r#"spotatui.set_screen("stats", {widgets})"#),
+      )
+      .unwrap();
+    engine.drain_effects(&mut app);
+    app
+      .plugin_screens
+      .remove("stats")
+      .expect("content published")
+  }
+
+  /// Asserts publishing `widgets` fails, and returns the error text.
+  fn publish_widgets_err(widgets: &str) -> String {
+    let mut engine = ScriptEngine::new().unwrap();
+    engine.load_source("stats.lua", STATS_SCREEN).unwrap();
+    engine
+      .load_source(
+        "stats.lua",
+        &format!(r#"spotatui.set_screen("stats", {widgets})"#),
+      )
+      .expect_err("expected set_screen to fail")
+      .to_string()
+  }
+
+  #[test]
+  fn set_screen_parses_nested_row_and_column_containers() {
+    let content = publish_widgets(
+      r#"{
+        {
+          type = "row",
+          height_percent = 60,
+          children = {
+            { type = "cover_art", source = "current", fit = "scale", width_percent = 40 },
+            {
+              type = "column",
+              width = 30,
+              children = {
+                { type = "paragraph", lines = {"a"}, scroll = false },
+                { type = "paragraph", lines = {"b"} },
+              },
+            },
+          },
+        },
+      }"#,
+    );
+
+    assert_eq!(content.widgets.len(), 1);
+    let row = &content.widgets[0];
+    assert_eq!(row.height, Some(PluginLength::Percent(60)));
+    let PluginWidgetKind::Row { children } = &row.kind else {
+      panic!("expected row container");
+    };
+    assert_eq!(children.len(), 2);
+
+    assert_eq!(children[0].width, Some(PluginLength::Percent(40)));
+    assert!(matches!(
+      children[0].kind,
+      PluginWidgetKind::CoverArt {
+        fit: PluginCoverArtFit::Scale
+      }
+    ));
+
+    assert_eq!(children[1].width, Some(PluginLength::Cells(30)));
+    let PluginWidgetKind::Column { children: inner } = &children[1].kind else {
+      panic!("expected column container");
+    };
+    assert_eq!(inner.len(), 2);
+    assert!(matches!(
+      inner[0].kind,
+      PluginWidgetKind::Paragraph { scroll: false, .. }
+    ));
+    assert!(matches!(
+      inner[1].kind,
+      PluginWidgetKind::Paragraph { scroll: true, .. }
+    ));
+  }
+
+  #[test]
+  fn cover_art_defaults_to_contain_and_the_current_source() {
+    let content = publish_widgets(r#"{ { type = "cover_art" } }"#);
+    assert!(matches!(
+      content.widgets[0].kind,
+      PluginWidgetKind::CoverArt {
+        fit: PluginCoverArtFit::Contain
+      }
+    ));
+  }
+
+  #[test]
+  fn set_screen_rejects_a_second_cover_art_widget_anywhere_in_the_tree() {
+    let err = publish_widgets_err(
+      r#"{
+        { type = "cover_art" },
+        { type = "row", children = { { type = "cover_art" } } },
+      }"#,
+    );
+    assert!(err.contains("at most one cover_art widget"), "got: {err}");
+  }
+
+  #[test]
+  fn set_screen_rejects_unknown_cover_art_source_and_fit() {
+    let err = publish_widgets_err(r#"{ { type = "cover_art", source = "album" } }"#);
+    assert!(err.contains("unknown cover_art source"), "got: {err}");
+
+    let err = publish_widgets_err(r#"{ { type = "cover_art", fit = "cover" } }"#);
+    assert!(err.contains("unknown cover_art fit"), "got: {err}");
+  }
+
+  #[test]
+  fn set_screen_rejects_conflicting_or_out_of_range_size_hints() {
+    let err = publish_widgets_err(
+      r#"{ { type = "paragraph", lines = {"x"}, height = 4, height_percent = 50 } }"#,
+    );
+    assert!(err.contains("at most one of"), "got: {err}");
+
+    for percent in ["0", "101"] {
+      let err = publish_widgets_err(&format!(
+        r#"{{ {{ type = "paragraph", lines = {{"x"}}, width_percent = {percent} }} }}"#
+      ));
+      assert!(err.contains("must be between 1 and 100"), "got: {err}");
+    }
+  }
+
+  /// `height = 0` was legal in v5 (it produced a `Length(0)` constraint and so
+  /// an invisible widget). v6 must keep accepting it, or plugins that compute a
+  /// height and land on zero start failing their whole `set_screen` call.
+  #[test]
+  fn set_screen_accepts_a_zero_cell_count_as_a_hidden_widget() {
+    let content =
+      publish_widgets(r#"{ { type = "paragraph", lines = {"x"}, height = 0, width = 0 } }"#);
+
+    assert_eq!(content.widgets.len(), 1);
+    assert_eq!(content.widgets[0].height, Some(PluginLength::Cells(0)));
+    assert_eq!(content.widgets[0].width, Some(PluginLength::Cells(0)));
+  }
+
+  #[test]
+  fn set_screen_rejects_a_container_without_children() {
+    let err = publish_widgets_err(r#"{ { type = "row" } }"#);
+    assert!(err.contains("must have a 'children' array"), "got: {err}");
+  }
+
+  #[test]
+  fn set_screen_rejects_over_deep_nesting() {
+    // 9 nested rows: one past MAX_WIDGET_DEPTH.
+    let mut lua = String::from(r#"{ type = "paragraph", lines = {"x"} }"#);
+    for _ in 0..9 {
+      lua = format!(r#"{{ type = "row", children = {{ {lua} }} }}"#);
+    }
+    let err = publish_widgets_err(&format!("{{ {lua} }}"));
+    assert!(err.contains("nested more than"), "got: {err}");
+
+    // 8 levels is still accepted.
+    let mut lua = String::from(r#"{ type = "paragraph", lines = {"x"} }"#);
+    for _ in 0..8 {
+      lua = format!(r#"{{ type = "row", children = {{ {lua} }} }}"#);
+    }
+    let content = publish_widgets(&format!("{{ {lua} }}"));
+    assert_eq!(content.widgets.len(), 1);
+  }
+
+  #[test]
+  fn set_screen_rejects_too_many_widget_nodes() {
+    let one = r#"{ type = "paragraph", lines = {"x"} },"#;
+    let err = publish_widgets_err(&format!("{{ {} }}", one.repeat(257)));
+    assert!(err.contains("at most 256 widgets"), "got: {err}");
+
+    let content = publish_widgets(&format!("{{ {} }}", one.repeat(256)));
+    assert_eq!(content.widgets.len(), 256);
   }
 
   #[test]
@@ -2898,6 +3173,62 @@ mod screen_tests {
     app.pop_navigation_stack();
     engine.run_pending_commands(&mut app);
     assert_eq!(app.status_message.as_deref(), Some("closed"));
+  }
+
+  /// The shipped example is the reference for the v6 widget API, so it is
+  /// loaded and driven through the real engine rather than only eyeballed.
+  #[test]
+  fn now_playing_example_publishes_a_cover_art_row() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "now-playing.lua",
+        include_str!("../../../examples/plugins/now-playing.lua"),
+      )
+      .unwrap();
+
+    // Baseline route tracking, then open the screen via its command.
+    engine.run_pending_commands(&mut app);
+    app.queue_plugin_command("now_playing".to_string());
+    engine.run_pending_commands(&mut app);
+    engine.drain_effects(&mut app);
+    assert_eq!(
+      app.get_current_route().id,
+      RouteId::PluginScreen("now_playing".to_string())
+    );
+
+    // The route change fires on_open, which renders the screen.
+    engine.run_pending_commands(&mut app);
+    engine.drain_effects(&mut app);
+
+    let content = app
+      .plugin_screens
+      .get("now_playing")
+      .expect("content published");
+    assert_eq!(content.title, "Now Playing");
+    assert_eq!(content.widgets.len(), 2);
+    assert!(matches!(
+      content.widgets[0].kind,
+      PluginWidgetKind::Paragraph { scroll: false, .. }
+    ));
+
+    let PluginWidgetKind::Row { children } = &content.widgets[1].kind else {
+      panic!("expected the lyrics row");
+    };
+    assert_eq!(children.len(), 2);
+    assert!(matches!(
+      children[0].kind,
+      PluginWidgetKind::CoverArt {
+        fit: PluginCoverArtFit::Contain
+      }
+    ));
+    assert_eq!(children[0].width, Some(PluginLength::Percent(45)));
+    assert!(matches!(
+      children[1].kind,
+      PluginWidgetKind::Paragraph { .. }
+    ));
+    assert_eq!(children[1].width, Some(PluginLength::Percent(55)));
   }
 
   #[test]

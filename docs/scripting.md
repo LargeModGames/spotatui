@@ -97,7 +97,7 @@ A global table named `spotatui` is available in every plugin.
 
 ### Constants
 
-- `spotatui.api_version` - integer API version (currently `5`).
+- `spotatui.api_version` - integer API version (currently `6`).
 
 ### Declaring API compatibility
 
@@ -106,7 +106,7 @@ particular version, declare it on the first line so users on an older spotatui g
 message instead of a cryptic `attempt to call nil` error:
 
 ```lua
-spotatui.require_api(5)
+spotatui.require_api(6)
 ```
 
 `spotatui.require_api(n)` raises a load error (`requires spotatui scripting API v{n} ...`) when
@@ -203,8 +203,9 @@ receives `(nil, "request timed out")`. Callbacks are one-shot.
 - `spotatui.get_devices(cb)` - refreshes the device list without opening the device picker.
 - `spotatui.get_lyrics(cb)` - `cb({ status, lines }, err)` for the current track, where
   `status` is `"not_started" | "loading" | "found" | "not_found"` and each line is
-  `{ time_ms, text }`. Delivered immediately when lyrics are already resolved; otherwise waits
-  for the in-flight fetch.
+  `{ time_ms, text }`. Delivered immediately when the current track's lyrics are already
+  resolved; otherwise waits for the in-flight fetch. Calling it from a `track_change` handler
+  is safe: it waits for the new track's lyrics rather than returning the previous track's.
 
 ```lua
 spotatui.get_playlists(function(playlists, err)
@@ -545,19 +546,87 @@ calling plugin.
 
 `widgets` is an array; each entry is a table with a `type`:
 
-- `{ type = "paragraph", lines = <lines>, height? }` - styled text. `lines` uses the same
-  format as `spotatui.popup`.
-- `{ type = "list", items = <lines>, title?, selected?, height? }` - a bordered list.
+- `{ type = "paragraph", lines = <lines>, scroll? }` - styled text. `lines` uses the same
+  format as `spotatui.popup`. `scroll` defaults to `true`; set it to `false` on a fixed
+  header so `PageUp`/`PageDown` leave it alone.
+- `{ type = "list", items = <lines>, title?, selected? }` - a bordered list.
   `selected` is 1-based (like Lua arrays) and highlights that item.
 - `{ type = "gauge", ratio, label? }` - a progress bar; `ratio` is clamped to 0..1.
+- `{ type = "cover_art", source?, fit? }` - the current track's cover art (API v6).
+- `{ type = "row", children = { ... } }` / `{ type = "column", children = { ... } }` -
+  layout containers (API v6).
 
-Widgets with a `height` take exactly that many rows; the rest split the remaining space
-evenly.
+#### Sizing
+
+Any widget may carry a size hint on either axis:
+
+| Field | Meaning |
+|---|---|
+| `height` / `width` | an absolute number of cells; `0` hides the widget |
+| `height_percent` / `width_percent` | `1`..`100` percent of the parent |
+
+The top level is an implicit vertical stack, a `column` stacks vertically and a `row` stacks
+horizontally. Only the hint matching the parent's axis is used - `width` is ignored at the top
+level, `height` is ignored inside a `row`. A widget with no matching hint shares the remaining
+space evenly with the other unsized widgets. Setting both `height` and `height_percent` (or
+both width forms) is an error, as is a percentage outside `1`..`100`. A cell count of `0` is
+not an error - it collapses the widget to nothing, which is a way to hide one conditionally.
+
+A `gauge` with no `height` takes 3 rows, as before. Since API v6 an explicit `height` on a
+gauge is honored instead of ignored.
+
+#### Containers
+
+`row` and `column` are pure layout: they draw no border and no title, they only split their
+area among `children`. Nest them to build a grid:
+
+```lua
+spotatui.set_screen("now_playing", {
+  { type = "paragraph", lines = { "q to close" }, height = 1, scroll = false },
+  {
+    type = "row",
+    children = {
+      { type = "cover_art", width_percent = 40 },
+      { type = "paragraph", lines = lyrics, width_percent = 60 },
+    },
+  },
+})
+```
+
+Trees are capped at 8 levels of nesting and 256 widgets per screen.
+
+#### Cover art
+
+`{ type = "cover_art" }` renders the artwork spotatui has *already* downloaded and decoded for
+the current track - there is no second download, and the app keeps ownership of the terminal
+graphics protocol, resizing, placement and cleanup. It works for every source that supplies
+art (Spotify, Subsonic, YouTube, local files with an embedded picture).
+
+- `source` - optional; only `"current"` is accepted today. Any other value is an error, so a
+  future source fails loudly on an old build rather than showing the wrong image.
+- `fit` - `"contain"` (default) fits the image inside its area keeping the aspect ratio and
+  never upscaling; `"scale"` also upscales an image smaller than its area. The image is
+  centered in whatever space the layout gives it.
+
+At most **one** `cover_art` widget may appear anywhere in a screen's tree; a second one is a
+`set_screen` error.
+
+When no image can be shown the widget draws a centered status line instead ("Loading cover
+art...", "No cover art for this source", ...). That is what you get when the track has no
+artwork, when the build was compiled without the `cover-art` feature, when
+`behavior.draw_cover_art` is off, or when the terminal has no graphics protocol and
+`behavior.draw_cover_art_forced` is off. Cover art needs a Kitty-, iTerm2- or Sixel-capable
+terminal.
+
+#### Keys
 
 Keys reach `on_key` only after the global keybindings have run, so keys like the back key or
 volume keys keep their normal meaning. `Esc` (and the back key) leave the screen, and
 `PageUp`/`PageDown` scroll paragraph text; everything else is forwarded. An `on_key` that
 errors is disabled after the first failure (one strike).
+
+`PageUp`/`PageDown` apply one shared scroll offset to every paragraph with `scroll = true`, so
+a header with `scroll = false` stays pinned while the rest of the screen moves.
 
 A minimal interactive screen:
 
