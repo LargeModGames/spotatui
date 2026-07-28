@@ -1333,10 +1333,9 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     let network = Network::new(spotify, client_config, &app, final_token_cache_path); // CLI doesn't use streaming
     #[cfg(not(feature = "streaming"))]
     let network = Network::new(spotify, client_config, &app, final_token_cache_path);
-    println!(
-      "{}",
-      cli::handle_matches(m, cmd.to_string(), network, user_config).await?
-    );
+    let cli_result = cli::handle_matches(m, cmd.to_string(), network, user_config).await;
+    app.lock().await.flush_state_save(true);
+    println!("{}", cli_result?);
   // Launch the UI (async)
   } else {
     info!("launching interactive terminal ui");

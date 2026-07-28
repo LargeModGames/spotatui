@@ -79,11 +79,15 @@ impl ClientConfig {
   }
 
   pub fn get_or_build_paths(&self) -> Result<ConfigPaths> {
-    match crate::core::paths::app_config_dir() {
-      Some(app_config_dir) => {
+    match (
+      crate::core::paths::app_config_dir(),
+      crate::core::paths::app_state_dir(),
+    ) {
+      (Some(app_config_dir), Some(app_state_dir)) => {
         fs::create_dir_all(&app_config_dir)?;
+        fs::create_dir_all(&app_state_dir)?;
 
-        // Create .gitignore to protect sensitive files from being committed
+        // Create .gitignore to protect sensitive config from being committed.
         let gitignore_path = app_config_dir.join(GITIGNORE_FILE);
         if !gitignore_path.exists() {
           let gitignore_content = "\
@@ -92,18 +96,12 @@ impl ClientConfig {
 
             # Client credentials (client_id, client_secret)
             client.yml
-
-            # Panic logs
-            spotatui_panic.log
-
-            # Streaming credentials
-            streaming_cache/credentials.json
             ";
           fs::write(&gitignore_path, gitignore_content)?;
         }
 
         let config_file_path = &app_config_dir.join(FILE_NAME);
-        let token_cache_path = &app_config_dir.join(TOKEN_CACHE_FILE);
+        let token_cache_path = &app_state_dir.join(TOKEN_CACHE_FILE);
 
         let paths = ConfigPaths {
           config_file_path: config_file_path.to_path_buf(),
@@ -112,7 +110,7 @@ impl ClientConfig {
 
         Ok(paths)
       }
-      None => Err(anyhow!("No $HOME directory found for client config")),
+      _ => Err(anyhow!("No $HOME directory found for client config/state")),
     }
   }
 

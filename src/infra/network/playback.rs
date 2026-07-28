@@ -2049,6 +2049,8 @@ impl PlaybackNetwork for Network {
       if let Some(ctx) = &mut app.current_playback_context {
         ctx.device.volume_percent = Some(volume.into());
       }
+      app.runtime_state.volume_percent = volume.min(100);
+      app.schedule_state_save();
       app.is_volume_change_in_flight = false;
       app.last_dispatched_volume = Some(volume);
       // Keep pending_volume set — cleared when API confirms the value matches
@@ -2069,6 +2071,8 @@ impl PlaybackNetwork for Network {
         if let Some(ctx) = &mut app.current_playback_context {
           ctx.device.volume_percent = Some(volume.into());
         }
+        app.runtime_state.volume_percent = volume.min(100);
+        app.schedule_state_save();
         app.is_volume_change_in_flight = false;
         app.last_dispatched_volume = Some(volume);
         // Keep pending_volume set — cleared when get_current_playback confirms

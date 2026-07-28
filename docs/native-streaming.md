@@ -32,6 +32,10 @@ streaming_bitrate: 320 # 96, 160, or 320 kbps
 directly; the Spotify app may still describe a Connect device's quality as
 "Automatic".
 
+Native-streaming credentials and audio cache are stored in the app cache
+directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache`, or
+`~/.cache/spotatui/streaming_cache` when `XDG_CACHE_HOME` is not set.
+
 ## Notes
 
 - Native streaming is **enabled by default** when built with the `streaming` feature
