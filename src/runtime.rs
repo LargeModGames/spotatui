@@ -1383,7 +1383,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       }
     }
 
-    crate::infra::history::spawn_history_collector(Arc::clone(&app));
+    let history_collector = crate::infra::history::spawn_history_collector(Arc::clone(&app));
     // Native streaming needs a Spotify session; when it will be attempted, the
     // account probe and librespot handshake run in a background task after the
     // UI is up (see `deferred_streaming_startup`) instead of gating the first
@@ -1766,6 +1766,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       #[cfg(not(all(feature = "mpris", target_os = "linux")))]
       None,
       discord_rpc_manager,
+      history_collector,
     )
     .await;
     if ui_result.is_err() {

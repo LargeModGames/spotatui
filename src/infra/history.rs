@@ -3,15 +3,16 @@ use crate::infra::media_metadata::{
   current_playback_snapshot, PlaybackItemKind, PlaybackSnapshot, PlaybackSource,
 };
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
+use tokio::task::{JoinHandle, JoinSet};
 
 const HISTORY_SUBDIR: &str = "history";
 const LISTENS_FILE_NAME: &str = "listens.jsonl";
@@ -320,13 +321,14 @@ fn streaks_from_days(days: &BTreeSet<NaiveDate>, today: NaiveDate, today_ms: u64
 }
 
 /// Spawn a cloud history sync unless one is already in flight. Overlapping
-/// syncs would race on the last-synced timestamp and double-send records;
-/// a skipped sync is harmless because every sync sends everything newer than
-/// that timestamp, so the next trigger (next song or exit) catches up.
+/// syncs would race on the append cursor and double-send records; a skipped
+/// sync is harmless because the next trigger (next song or exit) resumes from
+/// the same cursor.
 fn spawn_cloud_history_sync(
   client: &reqwest::Client,
   sync_token: &str,
   in_flight: &Arc<std::sync::atomic::AtomicBool>,
+  network_tasks: &mut JoinSet<()>,
 ) {
   use std::sync::atomic::Ordering;
 
@@ -336,7 +338,7 @@ fn spawn_cloud_history_sync(
   let client = client.clone();
   let token = sync_token.to_string();
   let in_flight = Arc::clone(in_flight);
-  tokio::spawn(async move {
+  network_tasks.spawn(async move {
     if let Err(e) = sync_history_to_cloud_with_client(&client, &token).await {
       log::warn!("failed to sync listening history to cloud: {}", e);
     }
@@ -344,12 +346,39 @@ fn spawn_cloud_history_sync(
   });
 }
 
-pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
-  tokio::spawn(async move {
+pub struct HistoryCollectorHandle {
+  shutdown_tx: Option<oneshot::Sender<()>>,
+  task: JoinHandle<()>,
+}
+
+impl HistoryCollectorHandle {
+  /// Stop the collector and wait briefly for its network work to finish. If a
+  /// request is stuck, aborting the collector also aborts its owned `JoinSet`,
+  /// ensuring no now-playing upload can race the final exit clear.
+  pub async fn shutdown(mut self) {
+    if let Some(shutdown_tx) = self.shutdown_tx.take() {
+      let _ = shutdown_tx.send(());
+    }
+
+    if tokio::time::timeout(std::time::Duration::from_secs(1), &mut self.task)
+      .await
+      .is_err()
+    {
+      log::warn!("history collector shutdown timed out; aborting outstanding sync work");
+      self.task.abort();
+      let _ = self.task.await;
+    }
+  }
+}
+
+pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
+  let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+  let task = tokio::spawn(async move {
     let mut collector = HistoryCollector::default();
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
     let mut last_auto_check = Instant::now();
     let http_client = crate::infra::network::requests::shared_http_client().clone();
+    let mut network_tasks = JoinSet::new();
 
     // Check on startup
     perform_auto_recap_check(&app).await;
@@ -373,34 +402,75 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
       app.lock().await.listening_streaks = Some(streaks_from_day_totals(totals));
     }
 
-    // Sync history to cloud on startup
-    let sync_token_opt: Option<String> = if let Ok(app_guard) = app.try_lock() {
-      app_guard.user_config.behavior.sync_token.clone()
-    } else {
-      None
-    };
+    // Sync history to cloud on startup. This takes the lock properly rather
+    // than `try_lock`: the startup work above ends by acquiring (and releasing)
+    // the app mutex, and tokio's fair mutex hands the freed permit straight to
+    // any queued waiter, so a `try_lock` here intermittently loses to the
+    // render loop. Losing it silently pinned the token to `None` for the whole
+    // process, disabling per-song and now-playing sync and dumping the entire
+    // session onto the exit sync.
+    let mut sync_token_opt: Option<String> =
+      app.lock().await.user_config.behavior.sync_token.clone();
+    log::info!(
+      "cloud sync {} at history collector startup",
+      if sync_token_opt.is_some() {
+        "enabled"
+      } else {
+        "disabled (no sync token configured)"
+      }
+    );
 
     let history_sync_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(ref token) = sync_token_opt {
-      spawn_cloud_history_sync(&http_client, token, &history_sync_in_flight);
+      spawn_cloud_history_sync(
+        &http_client,
+        token,
+        &history_sync_in_flight,
+        &mut network_tasks,
+      );
     }
 
     // Now-playing tracking state
     let mut now_playing_tracker = NowPlayingTracker::default();
 
     loop {
-      interval.tick().await;
+      tokio::select! {
+        _ = interval.tick() => {}
+        _ = &mut shutdown_rx => break,
+      }
+      while let Some(result) = network_tasks.try_join_next() {
+        if let Err(error) = result {
+          log::warn!("history collector network task failed: {}", error);
+        }
+      }
 
       if last_auto_check.elapsed().as_secs() >= 3600 {
         last_auto_check = Instant::now();
         perform_auto_recap_check(&app).await;
       }
 
-      let snapshot = if let Ok(app) = app.try_lock() {
-        current_playback_snapshot(&app)
+      // Re-read the token from the guard we already hold: it can be pasted or
+      // cleared in Settings mid-session, and the collector is only spawned once.
+      let (snapshot, latest_token) = if let Ok(app_guard) = app.try_lock() {
+        (
+          current_playback_snapshot(&app_guard),
+          app_guard.user_config.behavior.sync_token.clone(),
+        )
       } else {
         continue;
       };
+
+      if latest_token != sync_token_opt {
+        log::info!(
+          "cloud sync token {}",
+          if latest_token.is_some() {
+            "configured"
+          } else {
+            "cleared"
+          }
+        );
+        sync_token_opt = latest_token;
+      }
 
       // Now-playing sync: push on track change, play/pause flip, seek, or
       // heartbeat; clear once when track playback stops.
@@ -410,7 +480,7 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
           Some(NowPlayingAction::Push(payload)) => {
             let token_clone = token.clone();
             let client = http_client.clone();
-            tokio::spawn(async move {
+            network_tasks.spawn(async move {
               if let Err(e) = sync_now_playing_to_cloud(&client, &token_clone, &payload).await {
                 log::warn!("failed to sync now-playing: {}", e);
               }
@@ -419,7 +489,7 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
           Some(NowPlayingAction::Clear) => {
             let token_clone = token.clone();
             let client = http_client.clone();
-            tokio::spawn(async move {
+            network_tasks.spawn(async move {
               if let Err(e) = clear_now_playing_with_client(&client, &token_clone).await {
                 log::warn!("failed to clear now-playing: {}", e);
               }
@@ -442,7 +512,12 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
           // at startup/exit; long sessions otherwise pile up records that
           // stall the exit sync.
           if let Some(ref token) = sync_token_opt {
-            spawn_cloud_history_sync(&http_client, token, &history_sync_in_flight);
+            spawn_cloud_history_sync(
+              &http_client,
+              token,
+              &history_sync_in_flight,
+              &mut network_tasks,
+            );
           }
         }
         Ok(None) => {}
@@ -451,7 +526,17 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) {
         }
       }
     }
+    while let Some(result) = network_tasks.join_next().await {
+      if let Err(error) = result {
+        log::warn!("history collector network task failed: {}", error);
+      }
+    }
   });
+
+  HistoryCollectorHandle {
+    shutdown_tx: Some(shutdown_tx),
+    task,
+  }
 }
 
 /// Default output path for the shareable recap page, used by the automatic
@@ -2143,6 +2228,91 @@ fn last_synced_file_path() -> Result<PathBuf> {
     .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SyncCursor {
+  LegacyTimestamp(DateTime<Utc>),
+  Offset(u64),
+}
+
+fn read_sync_cursor(path: &Path) -> Result<SyncCursor> {
+  let epoch = Utc
+    .timestamp_opt(0, 0)
+    .single()
+    .ok_or_else(|| anyhow!("failed to construct Unix epoch timestamp"))?;
+
+  let Ok(content) = fs::read_to_string(path) else {
+    return Ok(SyncCursor::LegacyTimestamp(epoch));
+  };
+  let content = content.trim();
+
+  if let Some(offset) = content
+    .strip_prefix("offset:")
+    .and_then(|offset| offset.parse::<u64>().ok())
+  {
+    return Ok(SyncCursor::Offset(offset));
+  }
+
+  Ok(SyncCursor::LegacyTimestamp(
+    DateTime::parse_from_rfc3339(content)
+      .map(|timestamp| timestamp.with_timezone(&Utc))
+      .unwrap_or(epoch),
+  ))
+}
+
+/// Load complete JSONL records after the append offset. A legacy timestamp
+/// cursor reads the whole file once, then migrates to the returned offset.
+///
+/// The returned offset stops at the last newline observed. This matters when a
+/// concurrent append has written part, but not all, of its JSON record.
+fn load_sync_batch(path: &Path, cursor: SyncCursor) -> Result<(Vec<ListenRecord>, u64)> {
+  let mut file = match fs::File::open(path) {
+    Ok(file) => file,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+    Err(error) => return Err(error.into()),
+  };
+  let file_len = file.metadata()?.len();
+  let start_offset = match cursor {
+    SyncCursor::Offset(offset) if offset <= file_len => offset,
+    SyncCursor::Offset(_) | SyncCursor::LegacyTimestamp(_) => 0,
+  };
+  file.seek(SeekFrom::Start(start_offset))?;
+
+  let mut bytes = Vec::new();
+  file.read_to_end(&mut bytes)?;
+  let complete_len = bytes
+    .iter()
+    .rposition(|byte| *byte == b'\n')
+    .map_or(0, |index| index + 1);
+  let next_offset = start_offset + complete_len as u64;
+
+  let mut listens = Vec::new();
+  for line in BufReader::new(&bytes[..complete_len]).lines() {
+    let line = line?;
+    if line.trim().is_empty() {
+      continue;
+    }
+
+    match serde_json::from_str::<ListenRecord>(&line) {
+      Ok(record) => listens.push(record),
+      Err(error) => log::warn!("skipping malformed history line: {}", error),
+    }
+  }
+
+  if let SyncCursor::LegacyTimestamp(last_synced_at) = cursor {
+    listens.retain(|record| record.ended_at > last_synced_at);
+  }
+
+  Ok((listens, next_offset))
+}
+
+fn write_sync_offset(path: &Path, offset: u64) -> Result<()> {
+  if let Some(parent) = path.parent() {
+    fs::create_dir_all(parent)?;
+  }
+  fs::write(path, format!("offset:{offset}"))?;
+  Ok(())
+}
+
 /// Resolve a sync endpoint, honoring the `SPOTATUI_SYNC_BASE_URL` override
 /// (useful for pointing the client at a local backend during development).
 fn resolve_sync_url(path: &str) -> String {
@@ -2207,21 +2377,19 @@ async fn sync_history_to_cloud_with_client(
 ) -> Result<()> {
   let path = last_synced_file_path()?;
 
-  use chrono::TimeZone;
-  let last_synced_at = match fs::read_to_string(&path) {
-    Ok(content) => DateTime::parse_from_rfc3339(content.trim())
-      .map(|dt| dt.with_timezone(&Utc))
-      .unwrap_or_else(|_| Utc.timestamp_opt(0, 0).unwrap()),
-    Err(_) => Utc.timestamp_opt(0, 0).unwrap(),
-  };
-
-  let listens = load_listens()?;
-  let new_listens: Vec<&ListenRecord> = listens
-    .iter()
-    .filter(|record| record.ended_at > last_synced_at)
-    .collect();
+  // Reading the cursor and parsing the whole listens file is blocking IO on an
+  // ever-growing file; keep it off the runtime worker (matches the streak-cache
+  // load in `spawn_history_collector`).
+  let cursor_path = path.clone();
+  let listens_path = listens_file_path()?;
+  let (new_listens, next_offset) = tokio::task::spawn_blocking(move || {
+    let cursor = read_sync_cursor(&cursor_path)?;
+    load_sync_batch(&listens_path, cursor)
+  })
+  .await??;
 
   if new_listens.is_empty() {
+    tokio::task::spawn_blocking(move || write_sync_offset(&path, next_offset)).await??;
     log::info!("no new listening history records to sync");
     return Ok(());
   }
@@ -2234,9 +2402,10 @@ async fn sync_history_to_cloud_with_client(
     .await?;
 
   if response.status().is_success() {
-    if let Some(last_record) = new_listens.last() {
-      fs::write(&path, last_record.ended_at.to_rfc3339())?;
-    }
+    // Advance by append position rather than timestamp. Any record appended
+    // during this request remains beyond `next_offset` and is picked up by the
+    // next sync even if its clock timestamp is older than this batch.
+    tokio::task::spawn_blocking(move || write_sync_offset(&path, next_offset)).await??;
     log::info!(
       "successfully synchronized listening history to cloud ({} tracks)",
       new_listens.len()
@@ -2385,6 +2554,40 @@ mod tests {
     assert!(payload.is_live);
     assert_eq!(payload.duration_ms, 0);
     assert!(payload.image_url.is_none());
+  }
+
+  #[test]
+  fn append_cursor_keeps_out_of_order_record_added_during_sync() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(LISTENS_FILE_NAME);
+    let first = record_at(21, 120_000, true);
+    append_records_for_test(&path, std::slice::from_ref(&first));
+
+    // This snapshot represents the request body already in flight.
+    let epoch = Utc.timestamp_opt(0, 0).single().unwrap();
+    let (in_flight_batch, synced_offset) =
+      load_sync_batch(&path, SyncCursor::LegacyTimestamp(epoch)).unwrap();
+    assert_eq!(in_flight_batch, vec![first]);
+
+    // A second instance appends an older timestamp before that request
+    // succeeds and persists `synced_offset`.
+    let out_of_order = record_at(20, 90_000, true);
+    append_records_for_test(&path, std::slice::from_ref(&out_of_order));
+
+    let (next_batch, _) = load_sync_batch(&path, SyncCursor::Offset(synced_offset)).unwrap();
+    assert_eq!(next_batch, vec![out_of_order]);
+  }
+
+  fn append_records_for_test(path: &Path, records: &[ListenRecord]) {
+    let mut file = OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(path)
+      .unwrap();
+    for record in records {
+      serde_json::to_writer(&mut file, record).unwrap();
+      writeln!(file).unwrap();
+    }
   }
 
   #[test]

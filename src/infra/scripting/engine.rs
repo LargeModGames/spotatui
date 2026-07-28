@@ -590,13 +590,17 @@ impl ScriptEngine {
     let requests: Vec<DataRequest> = self.shared.data_requests.borrow_mut().drain(..).collect();
     for req in requests {
       // Lyrics fetches are driven by the runner's track-change detector, not by
-      // dispatch: deliver immediately when the current status is terminal,
-      // otherwise wait for the in-flight fetch to bump the generation.
+      // dispatch: deliver immediately when the current status is terminal AND
+      // describes the item playing now, otherwise wait for the in-flight fetch
+      // to bump the generation. The currency check matters because the detector
+      // runs after this tick, so on a track change the terminal status still
+      // belongs to the previous track - see `lyrics_state_is_current`.
       if req.kind == PluginDataKind::Lyrics
         && matches!(
           app.lyrics_status,
           LyricsStatus::Found | LyricsStatus::NotFound
         )
+        && crate::core::plugin_api::lyrics_state_is_current(app)
       {
         let value = self.data_value(req.kind, app);
         self.deliver_data_result(req.token, value.map_err(|e| e.to_string()));

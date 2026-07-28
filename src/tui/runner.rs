@@ -312,6 +312,7 @@ mod tests {
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: crate::core::app::NativeTrackKind::Track,
+      image_url: None,
     });
 
     assert_eq!(playback_window_title(&app), "The Track — The Artist");
@@ -327,6 +328,7 @@ mod tests {
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: crate::core::app::NativeTrackKind::Track,
+      image_url: None,
     });
 
     assert_eq!(playback_window_title(&app), "The]2;Bad Track — TheArtist");
@@ -571,6 +573,7 @@ pub async fn start_ui(
   shared_position: Option<Arc<AtomicU64>>,
   mpris_manager: MprisHandle,
   discord_rpc_manager: DiscordRpcHandle,
+  history_collector: crate::infra::history::HistoryCollectorHandle,
 ) -> Result<()> {
   info!("ui thread initialized");
   #[cfg(not(feature = "discord-rpc"))]
@@ -1358,6 +1361,20 @@ pub async fn start_ui(
   #[cfg(feature = "streaming")]
   pause_native_playback_before_exit(app).await;
 
+  // Stop the collector and all network work it owns before the final sync and
+  // clear. In particular, a pause-triggered now-playing push must not race the
+  // exit clear and recreate a stale public widget.
+  history_collector.shutdown().await;
+
+  // Restore the terminal before the exit network calls: there is no reason to
+  // hold the alternate screen and raw mode while waiting on HTTP.
+  let _ = reset_window_title(&mut window_title_state);
+  let _ = execute!(stdout(), DisableMouseCapture);
+  if keyboard_enhancement_enabled {
+    let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+  }
+  ratatui::restore();
+
   // Sync history to cloud on exit
   let sync_token_opt = {
     let app_guard = app.lock().await;
@@ -1366,20 +1383,28 @@ pub async fn start_ui(
 
   if let Some(token) = sync_token_opt {
     info!("Synchronizing listening history to cloud before exit...");
-    if let Err(e) = crate::infra::history::sync_history_to_cloud(&token).await {
-      log::warn!("failed to run exit history cloud sync: {}", e);
+    // Keep the clear strictly last after the collector has stopped: now-playing
+    // updates are upserts, so a late push would otherwise recreate a stale
+    // "paused" card on the public widget.
+    //
+    // Each call is bounded separately rather than sharing one budget, so a slow
+    // history upload cannot starve the clear. Without these the shared client
+    // allows a 10s connect plus a 30s request, stalling quit for up to a minute
+    // on a half-open connection.
+    let history_sync = crate::infra::history::sync_history_to_cloud(&token);
+    match tokio::time::timeout(std::time::Duration::from_secs(2), history_sync).await {
+      Ok(Err(e)) => log::warn!("failed to run exit history cloud sync: {}", e),
+      Err(_) => log::warn!("exit history cloud sync timed out; records will sync next run"),
+      Ok(Ok(())) => {}
     }
-    if let Err(e) = crate::infra::history::clear_now_playing_from_cloud(&token).await {
-      log::warn!("failed to clear now-playing on exit: {}", e);
-    }
-  }
 
-  reset_window_title(&mut window_title_state)?;
-  execute!(stdout(), DisableMouseCapture)?;
-  if keyboard_enhancement_enabled {
-    let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    let clear_now_playing = crate::infra::history::clear_now_playing_from_cloud(&token);
+    match tokio::time::timeout(std::time::Duration::from_secs(1), clear_now_playing).await {
+      Ok(Err(e)) => log::warn!("failed to clear now-playing on exit: {}", e),
+      Err(_) => log::warn!("clearing now-playing on exit timed out"),
+      Ok(Ok(())) => {}
+    }
   }
-  ratatui::restore();
 
   #[cfg(feature = "discord-rpc")]
   if let Some(ref manager) = discord_rpc_manager {

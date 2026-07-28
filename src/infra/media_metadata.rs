@@ -93,7 +93,16 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
         title: native_info.name.clone(),
         artists: vec![native_info.artists_display.clone()],
         album: native_info.album.clone(),
-        image_url: image_url_from_context_item(context.and_then(|ctx| ctx.item.as_ref())),
+        // Prefer the art librespot handed us with this very track. The polled
+        // context is a per-track race: after a skip it still holds the previous
+        // item for seconds, and for a natively queued track it never reports the
+        // right one at all, so reading art from it pinned the *previous* album's
+        // cover (#402). Fall back to the context item only when librespot gave
+        // us no covers, which keeps the old behavior for that corner.
+        image_url: native_info
+          .image_url
+          .clone()
+          .or_else(|| image_url_from_context_item(context.and_then(|ctx| ctx.item.as_ref()))),
         duration_ms: native_info.duration_ms,
       },
       item_kind,
@@ -602,6 +611,7 @@ mod tests {
       album: "Native Album".to_string(),
       duration_ms: 123_000,
       kind: NativeTrackKind::Track,
+      image_url: None,
     });
     app.native_playback_origin = Some(NativePlaybackOrigin::RawList);
 
@@ -615,6 +625,82 @@ mod tests {
     assert_eq!(snapshot.source, PlaybackSource::NativeRawList);
     assert_eq!(snapshot.progress_ms, 12_000);
     assert!(snapshot.is_playing);
+  }
+
+  /// #402: after a skip (and for the whole of a natively queued track) the
+  /// polled context still holds the *previous* item, so its cover art belongs to
+  /// the previous album. librespot's own `TrackChanged` art must win.
+  #[test]
+  fn native_track_art_wins_over_a_stale_context_item() {
+    let mut app = app();
+    app.is_streaming_active = true;
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "Native Track".to_string(),
+      artists_display: "Native Artist".to_string(),
+      album: "Native Album".to_string(),
+      duration_ms: 123_000,
+      kind: NativeTrackKind::Track,
+      image_url: Some("https://i.scdn.co/image/current".to_string()),
+    });
+    // The context lags on the previous track, whose art is a different album's.
+    app.current_playback_context = Some(playback_context(PlayableItem::Track(track()), true));
+
+    let snapshot = current_playback_snapshot(&app).unwrap();
+
+    assert_eq!(
+      snapshot.metadata.image_url.as_deref(),
+      Some("https://i.scdn.co/image/current"),
+      "the stale context item's art must not override librespot's"
+    );
+  }
+
+  /// Some payloads carry no covers at all (notably local files, whose art is
+  /// embedded in the file rather than on the CDN). The context item then stays
+  /// the only art source, so the pre-#402 fallback must survive. The context
+  /// here describes the *same* track that is playing, which is the only case
+  /// where trusting it is right.
+  #[test]
+  fn native_track_falls_back_to_context_art_without_librespot_covers() {
+    let mut app = app();
+    app.is_streaming_active = true;
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "Track".to_string(),
+      artists_display: "Artist".to_string(),
+      album: "Album".to_string(),
+      duration_ms: 123_000,
+      kind: NativeTrackKind::Track,
+      image_url: None,
+    });
+    app.current_playback_context = Some(playback_context(PlayableItem::Track(track()), true));
+
+    let snapshot = current_playback_snapshot(&app).unwrap();
+
+    assert_eq!(
+      snapshot.metadata.image_url.as_deref(),
+      Some("https://example.com/cover.jpg")
+    );
+  }
+
+  /// Boundary of the #402 fix: the librespot art is only consulted while native
+  /// metadata is authoritative. Once `get_current_playback` decides the API has
+  /// caught up it clears `native_track_info`, and the snapshot goes back to the
+  /// context item wholesale. That handoff is correct when the API really did
+  /// catch up, but note that `api_confirms_native_info_is_current` accepts a
+  /// bare *title* match (see `playback.rs`), so two consecutive same-titled
+  /// tracks still hand over early and show the previous album's art.
+  #[test]
+  fn context_art_is_used_once_native_info_is_cleared() {
+    let mut app = app();
+    app.is_streaming_active = true;
+    app.native_track_info = None;
+    app.current_playback_context = Some(playback_context(PlayableItem::Track(track()), true));
+
+    let snapshot = current_playback_snapshot(&app).unwrap();
+
+    assert_eq!(
+      snapshot.metadata.image_url.as_deref(),
+      Some("https://example.com/cover.jpg")
+    );
   }
 
   #[test]
@@ -639,6 +725,7 @@ mod tests {
       album: "Native Album".to_string(),
       duration_ms: 123_000,
       kind: NativeTrackKind::Track,
+      image_url: None,
     });
     app.current_playback_context = Some(playback_context(PlayableItem::Track(track()), true));
 
