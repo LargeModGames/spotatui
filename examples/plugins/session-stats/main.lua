@@ -4,7 +4,10 @@
 -- helper module (stats.lua). This is the layout `spotatui plugin add owner/repo` produces.
 --
 -- Install (directory):
---   config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+--   case "${XDG_CONFIG_HOME:-}" in
+--     /*) config_home="$XDG_CONFIG_HOME" ;;
+--     *) config_home="$HOME/.config" ;;
+--   esac
 --   mkdir -p "$config_home/spotatui/plugins"
 --   cp -r session-stats "$config_home/spotatui/plugins/"
 --

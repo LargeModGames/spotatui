@@ -219,7 +219,7 @@ See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/N
 
 ## Configuration
 
-The config file is at `$XDG_CONFIG_HOME/spotatui/config.yml`, falling back to `${HOME}/.config/spotatui/config.yml` when `XDG_CONFIG_HOME` is not set. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
+The config file is at `$XDG_CONFIG_HOME/spotatui/config.yml` when `XDG_CONFIG_HOME` is set to an absolute path, falling back to `${HOME}/.config/spotatui/config.yml` when it is unset or not absolute. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
 
 Nearly everything is customizable: keybindings, themes, icons, playbar button labels, status-line and window-title format templates, table columns (reorder/rename/resize), default sorting per screen, startup screen, and layout (sidebar/playbar position). Invalid values fall back to defaults with a logged warning — a config typo never blocks startup.
 
@@ -227,7 +227,7 @@ Nearly everything is customizable: keybindings, themes, icons, playbar button la
 - Full config reference: [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration)
 - Built-in themes (Spotify, Dracula, Nord, …): [Themes Wiki](https://github.com/LargeModGames/spotatui/wiki/Themes)
 
-spotatui also stores local listening history at `$XDG_STATE_HOME/spotatui/history/listens.jsonl`, falling back to `${HOME}/.local/state/spotatui/history/listens.jsonl` when `XDG_STATE_HOME` is not set. This powers `spotatui history recap`. Short or skipped plays are stored but excluded from recap totals.
+spotatui also stores local listening history at `$XDG_STATE_HOME/spotatui/history/listens.jsonl` when `XDG_STATE_HOME` is set to an absolute path, falling back to `${HOME}/.local/state/spotatui/history/listens.jsonl` when it is unset or not absolute. This powers `spotatui history recap`. Short or skipped plays are stored but excluded from recap totals.
 
 ### Discord Rich Presence
 
@@ -326,12 +326,15 @@ Follow the spotifyd documentation to get set up. After that:
 If you used the original `spotify-tui` before:
 
 - The binary name changed from `spt` to `spotatui`.
-- Config paths changed: `~/.config/spotify-tui/` → `$XDG_CONFIG_HOME/spotatui/` or `~/.config/spotatui/` when `XDG_CONFIG_HOME` is not set.
+- Config paths changed: `~/.config/spotify-tui/` -> `$XDG_CONFIG_HOME/spotatui/` when `XDG_CONFIG_HOME` is set to an absolute path, or `~/.config/spotatui/` when it is unset or not absolute.
 
 You can copy your existing config:
 
 ```bash
-config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+case "${XDG_CONFIG_HOME:-}" in
+  /*) config_home="$XDG_CONFIG_HOME" ;;
+  *) config_home="$HOME/.config" ;;
+esac
 mkdir -p "$config_home/spotatui"
 cp -r ~/.config/spotify-tui/* "$config_home/spotatui/"
 ```

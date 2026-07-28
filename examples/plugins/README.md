@@ -21,7 +21,10 @@ privileges, so read anything you install from elsewhere (see
 Single-file plugins go straight into `plugins/`:
 
 ```bash
-config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+case "${XDG_CONFIG_HOME:-}" in
+  /*) config_home="$XDG_CONFIG_HOME" ;;
+  *) config_home="$HOME/.config" ;;
+esac
 mkdir -p "$config_home/spotatui/plugins"
 cp track-notifier.lua "$config_home/spotatui/plugins/"
 ```
@@ -29,7 +32,10 @@ cp track-notifier.lua "$config_home/spotatui/plugins/"
 Directory plugins (a folder with a `main.lua` entry point) are copied as a whole:
 
 ```bash
-config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+case "${XDG_CONFIG_HOME:-}" in
+  /*) config_home="$XDG_CONFIG_HOME" ;;
+  *) config_home="$HOME/.config" ;;
+esac
 mkdir -p "$config_home/spotatui/plugins"
 cp -r session-stats "$config_home/spotatui/plugins/"
 ```

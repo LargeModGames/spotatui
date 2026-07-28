@@ -6,8 +6,9 @@ feature, which is enabled in the default build.
 
 ## File locations
 
-Plugins are loaded from your app config directory (`$XDG_CONFIG_HOME/spotatui`, or
-`~/.config/spotatui` when `XDG_CONFIG_HOME` is not set) at startup, in this order:
+Plugins are loaded from your app config directory (`$XDG_CONFIG_HOME/spotatui`
+when `XDG_CONFIG_HOME` is set to an absolute path, or `~/.config/spotatui`
+when it is unset or not absolute) at startup, in this order:
 
 1. `init.lua`, if present.
 2. Single-file plugins: every `plugins/*.lua` file, sorted by filename.

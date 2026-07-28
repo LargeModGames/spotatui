@@ -27,14 +27,15 @@ streaming_bitrate: 320 # 96, 160, or 320 kbps
 ```
 
 `client.yml` is in the spotatui app config directory (for example,
-`$XDG_CONFIG_HOME/spotatui/client.yml`, or `~/.config/spotatui/client.yml` when
-`XDG_CONFIG_HOME` is not set). This setting controls the librespot native player
-directly; the Spotify app may still describe a Connect device's quality as
-"Automatic".
+`$XDG_CONFIG_HOME/spotatui/client.yml` when `XDG_CONFIG_HOME` is set to an
+absolute path, or `~/.config/spotatui/client.yml` when it is unset or not
+absolute). This setting controls the librespot native player directly; the
+Spotify app may still describe a Connect device's quality as "Automatic".
 
 Native-streaming credentials and audio cache are stored in the app cache
-directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache`, or
-`~/.cache/spotatui/streaming_cache` when `XDG_CACHE_HOME` is not set.
+directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
+`XDG_CACHE_HOME` is set to an absolute path, or
+`~/.cache/spotatui/streaming_cache` when it is unset or not absolute.
 
 ## Notes
 
