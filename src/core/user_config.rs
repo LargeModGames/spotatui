@@ -1,5 +1,5 @@
 use crate::core::format::Template;
-use crate::core::state::RadioStationConfig;
+use crate::core::state::{sanitized_radio_stations, RadioStationConfig};
 use crate::tui::event::Key;
 use anyhow::{anyhow, Result};
 use ratatui::style::{Color, Style};
@@ -42,25 +42,6 @@ pub fn validate_tick_rate_milliseconds(value: u64, label: &str) -> Result<u64> {
 
 pub fn normalize_tick_rate_milliseconds(value: i64) -> u64 {
   value.clamp(1, MAX_TICK_RATE_MILLISECONDS as i64) as u64
-}
-
-fn sanitized_radio_stations(stations: Vec<RadioStationConfig>) -> Vec<RadioStationConfig> {
-  let mut sanitized = Vec::new();
-  for station in stations {
-    let name = station.name.trim();
-    let url = station.url.trim();
-    if name.is_empty()
-      || url.is_empty()
-      || sanitized.iter().any(|s: &RadioStationConfig| s.url == url)
-    {
-      continue;
-    }
-    sanitized.push(RadioStationConfig {
-      name: name.to_string(),
-      url: url.to_string(),
-    });
-  }
-  sanitized
 }
 
 /// Parse a human-readable update delay into seconds.
@@ -1568,7 +1549,7 @@ impl UserConfig {
     }
 
     if let Some(radio_stations) = behavior_config.radio_stations {
-      self.behavior.radio_stations = sanitized_radio_stations(radio_stations);
+      self.behavior.radio_stations = sanitized_radio_stations(&radio_stations);
     }
 
     if let Some(sidebar_width_percent) = behavior_config.sidebar_width_percent {

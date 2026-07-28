@@ -252,7 +252,7 @@ fn sanitized_ids(ids: &[String]) -> Vec<String> {
     .collect()
 }
 
-fn sanitized_radio_stations(stations: &[RadioStationConfig]) -> Vec<RadioStationConfig> {
+pub(crate) fn sanitized_radio_stations(stations: &[RadioStationConfig]) -> Vec<RadioStationConfig> {
   stations
     .iter()
     .filter_map(|station| {
@@ -359,6 +359,10 @@ mod tests {
         RadioStationConfig {
           name: " Good ".to_string(),
           url: " https://example.test ".to_string(),
+        },
+        RadioStationConfig {
+          name: "Duplicate".to_string(),
+          url: "https://example.test".to_string(),
         },
         RadioStationConfig {
           name: "Broken".to_string(),
