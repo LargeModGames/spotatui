@@ -862,8 +862,9 @@ pub struct BehaviorConfigString {
 pub struct BehaviorConfig {
   pub seek_milliseconds: u32,
   pub volume_increment: u8,
-  /// Optional startup volume override. Runtime volume changes are persisted in
-  /// `state.yml`; this config value wins only when explicitly present.
+  /// User-configured initial volume default. It seeds `state.yml` only when
+  /// runtime state has no saved volume yet; later runtime volume changes stay
+  /// authoritative.
   pub volume_percent: Option<u8>,
   pub tick_rate_milliseconds: u64,
   pub animation_tick_rate_milliseconds: u64,
@@ -948,8 +949,9 @@ pub struct BehaviorConfig {
   // --- Phase 6: layout arrangement ---
   pub sidebar_position: String,
   pub playbar_position: String,
-  /// Optional startup pane-size overrides. Runtime resize changes are persisted
-  /// in `state.yml`; these config values win only when explicitly present.
+  /// User-configured initial pane-size defaults. They seed `state.yml` only
+  /// when runtime state has no saved sizes yet; later runtime resize changes
+  /// stay authoritative.
   pub sidebar_width_percent: Option<u8>,
   pub playbar_height_rows: Option<u16>,
   pub library_height_percent: Option<u8>,
@@ -2774,7 +2776,7 @@ mod tests {
   }
 
   #[test]
-  fn volume_percent_loads_as_optional_startup_override() {
+  fn volume_percent_loads_as_configured_runtime_default() {
     use super::{BehaviorConfigString, UserConfig};
 
     let behavior: BehaviorConfigString = serde_yaml::from_str("volume_percent: 150\n").unwrap();
@@ -2789,7 +2791,7 @@ mod tests {
   }
 
   #[test]
-  fn pane_sizes_load_as_optional_startup_overrides() {
+  fn pane_sizes_load_as_configured_runtime_defaults() {
     use super::{BehaviorConfigString, UserConfig};
 
     let behavior: BehaviorConfigString = serde_yaml::from_str(

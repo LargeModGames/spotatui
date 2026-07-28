@@ -29,8 +29,9 @@ use crate::cli;
 use crate::core::app::App;
 use crate::core::auth;
 use crate::core::config::ClientConfig;
+use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::{
-  validate_tick_rate_milliseconds, StartupBehavior, UserConfig, UserConfigPaths,
+  validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
 };
 #[cfg(feature = "discord-rpc")]
 use crate::infra::discord_rpc;
@@ -44,6 +45,7 @@ use crate::infra::network::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::infra::player;
 use crate::tui::banner::BANNER;
+use crate::tui::handlers::resize::MAX_PLAYBAR_ROWS;
 
 use anyhow::{anyhow, Result};
 use backtrace::Backtrace;
@@ -976,6 +978,41 @@ fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
   Ok(())
 }
 
+fn apply_configured_runtime_defaults(
+  runtime_state: &mut RuntimeState,
+  persisted_state: &PersistedRuntimeState,
+  behavior: &BehaviorConfig,
+) -> bool {
+  let mut applied_default = false;
+
+  if persisted_state.volume_percent.is_none() {
+    if let Some(volume_percent) = behavior.volume_percent {
+      runtime_state.volume_percent = volume_percent.min(100);
+      applied_default = true;
+    }
+  }
+  if persisted_state.sidebar_width_percent.is_none() {
+    if let Some(sidebar_width_percent) = behavior.sidebar_width_percent {
+      runtime_state.sidebar_width_percent = sidebar_width_percent.min(100);
+      applied_default = true;
+    }
+  }
+  if persisted_state.playbar_height_rows.is_none() {
+    if let Some(playbar_height_rows) = behavior.playbar_height_rows {
+      runtime_state.playbar_height_rows = playbar_height_rows.min(MAX_PLAYBAR_ROWS);
+      applied_default = true;
+    }
+  }
+  if persisted_state.library_height_percent.is_none() {
+    if let Some(library_height_percent) = behavior.library_height_percent {
+      runtime_state.library_height_percent = library_height_percent.min(100);
+      applied_default = true;
+    }
+  }
+
+  applied_default
+}
+
 pub async fn run() -> Result<()> {
   setup_logging()?;
   info!("spotatui {} starting up", env!("CARGO_PKG_VERSION"));
@@ -1085,18 +1122,22 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     user_config.path_to_config.replace(path);
   }
   user_config.load_config()?;
-  let mut runtime_state = crate::core::state::RuntimeState::default();
+  let mut runtime_state = RuntimeState::default();
+  let mut persisted_state = PersistedRuntimeState::default();
   let mut state_path = None;
   let mut should_save_initial_state = false;
+  let mut can_save_initial_state = false;
   match crate::core::state::default_state_path() {
     Ok(path) => {
       let state_file_exists = path.exists();
       match crate::core::state::load(&path) {
         Ok(state) => {
-          runtime_state.apply_persisted(&state);
+          persisted_state = state;
+          runtime_state.apply_persisted(&persisted_state);
           if !state_file_exists {
             should_save_initial_state = true;
           }
+          can_save_initial_state = true;
           state_path = Some(path);
         }
         Err(e) => {
@@ -1108,17 +1149,10 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       log::warn!("[state] runtime state path is unavailable: {e}");
     }
   }
-  if let Some(startup_volume_percent) = user_config.behavior.volume_percent {
-    runtime_state.volume_percent = startup_volume_percent.min(100);
-  }
-  if let Some(sidebar_width_percent) = user_config.behavior.sidebar_width_percent {
-    runtime_state.sidebar_width_percent = sidebar_width_percent.min(100);
-  }
-  if let Some(playbar_height_rows) = user_config.behavior.playbar_height_rows {
-    runtime_state.playbar_height_rows = playbar_height_rows;
-  }
-  if let Some(library_height_percent) = user_config.behavior.library_height_percent {
-    runtime_state.library_height_percent = library_height_percent.min(100);
+  if apply_configured_runtime_defaults(&mut runtime_state, &persisted_state, &user_config.behavior)
+    && can_save_initial_state
+  {
+    should_save_initial_state = true;
   }
   if should_save_initial_state {
     if let Some(path) = &state_path {
@@ -2722,13 +2756,69 @@ async fn route_decoded_windows_event(
 
 #[cfg(test)]
 mod tests {
-  use super::{startup_device_decision, StartupDeviceEvent};
-  use crate::core::user_config::StartupBehavior;
+  use super::{apply_configured_runtime_defaults, startup_device_decision, StartupDeviceEvent};
+  use crate::core::state::{PersistedRuntimeState, RuntimeState};
+  use crate::core::user_config::{StartupBehavior, UserConfig};
+  use crate::tui::handlers::resize::MAX_PLAYBAR_ROWS;
   use rspotify::model::{device::Device, DeviceType};
 
   const NATIVE_NAME: &str = "spotatui";
   const NATIVE_ID: &str = "native-device";
   const EXTERNAL_ID: &str = "phone-device";
+
+  fn user_config_with_runtime_defaults() -> UserConfig {
+    let mut config = UserConfig::new();
+    config.behavior.volume_percent = Some(80);
+    config.behavior.sidebar_width_percent = Some(40);
+    config.behavior.playbar_height_rows = Some(MAX_PLAYBAR_ROWS + 1);
+    config.behavior.library_height_percent = Some(60);
+    config
+  }
+
+  #[test]
+  fn configured_runtime_defaults_do_not_override_persisted_state() {
+    let config = user_config_with_runtime_defaults();
+    let persisted = PersistedRuntimeState {
+      volume_percent: Some(42),
+      sidebar_width_percent: Some(25),
+      playbar_height_rows: Some(5),
+      library_height_percent: Some(35),
+      ..Default::default()
+    };
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&persisted);
+
+    assert!(!apply_configured_runtime_defaults(
+      &mut runtime,
+      &persisted,
+      &config.behavior,
+    ));
+    assert_eq!(runtime.volume_percent, 42);
+    assert_eq!(runtime.sidebar_width_percent, 25);
+    assert_eq!(runtime.playbar_height_rows, 5);
+    assert_eq!(runtime.library_height_percent, 35);
+  }
+
+  #[test]
+  fn configured_runtime_defaults_seed_only_missing_persisted_fields() {
+    let config = user_config_with_runtime_defaults();
+    let persisted = PersistedRuntimeState {
+      volume_percent: Some(42),
+      ..Default::default()
+    };
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&persisted);
+
+    assert!(apply_configured_runtime_defaults(
+      &mut runtime,
+      &persisted,
+      &config.behavior,
+    ));
+    assert_eq!(runtime.volume_percent, 42);
+    assert_eq!(runtime.sidebar_width_percent, 40);
+    assert_eq!(runtime.playbar_height_rows, MAX_PLAYBAR_ROWS);
+    assert_eq!(runtime.library_height_percent, 60);
+  }
 
   #[allow(deprecated)]
   fn device(id: &str, name: &str) -> Device {

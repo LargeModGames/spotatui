@@ -39,7 +39,7 @@ behavior:
 
   # Volume
   volume_increment: 10             # step for + / - (0..=100, fatal if outside)
-  volume_percent: 100              # optional startup volume; omit to restore last runtime volume
+  volume_percent: 100              # initial volume default; saved runtime volume wins once present
 
   # Scrolling
   table_scroll_padding: 5          # rows kept visible below the selection before
@@ -105,15 +105,15 @@ Stations saved from inside the app are stored in `state.yml`. The sidebar merges
 behavior:
   sidebar_position: left    # left | right | hidden
   playbar_position: bottom  # bottom | top
-  sidebar_width_percent: 20 # optional startup sidebar width; omit to restore last runtime size
-  library_height_percent: 30 # optional startup library height; omit to restore last runtime size
-  playbar_height_rows: 6    # optional startup playbar height; 0 hides it; omit to restore last runtime size
+  sidebar_width_percent: 20 # initial sidebar width default; saved runtime size wins once present
+  library_height_percent: 30 # initial library height default; saved runtime size wins once present
+  playbar_height_rows: 6    # initial playbar height default, 0..=50; 0 hides it; saved runtime size wins once present
   small_terminal_width: 150
   small_terminal_height: 45
 ```
 
 - `sidebar_position: hidden` gives the content the full width, but the sidebar auto-reveals while the Library or Playlists panel has keyboard focus or is hovered, so it never becomes unreachable.
-- `sidebar_width_percent`, `library_height_percent`, and `playbar_height_rows` are optional startup overrides. Runtime resize changes use `{` / `}` for sidebar width, `(` / `)` for playbar height, `(` / `)` while hovering Library or Playlists for the library/sidebar split, and `|` to reset sizes; those changes persist in `state.yml`.
+- `sidebar_width_percent`, `library_height_percent`, and `playbar_height_rows` are configured initial defaults. Runtime resize changes use `{` / `}` for sidebar width, `(` / `)` for playbar height, `(` / `)` while hovering Library or Playlists for the library/sidebar split, and `|` to reset sizes; those changes persist in `state.yml` and are not overwritten by configured defaults after state exists. Configured `playbar_height_rows` is capped at 50 rows when applied at startup or when resetting the layout.
 - `small_terminal_width` / `small_terminal_height` are the responsive-layout breakpoints. At or above `small_terminal_width` columns the app uses the wide layout (search box inside the sidebar); below it the search box gets its own full-width top row. `enforce_wide_search_bar: true` forces the full-width search row regardless of width.
 - Unknown position strings fall back to the default with a warning.
 - Mouse hit-testing follows every arrangement automatically.

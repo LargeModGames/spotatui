@@ -2,9 +2,9 @@ use crate::core::app::App;
 use crate::core::state::RuntimeState;
 
 const SIDEBAR_STEP: u8 = 5;
-const MAX_PLAYBAR_ROWS: u16 = 50;
 const PLAYBAR_STEP: u16 = 1;
 const LIBRARY_STEP: u8 = 5;
+pub(crate) const MAX_PLAYBAR_ROWS: u16 = 50;
 
 /// Decrease sidebar width by SIDEBAR_STEP percent (minimum 0%).
 pub fn decrease_sidebar_width(app: &mut App) {
@@ -63,7 +63,7 @@ pub fn increase_library_height(app: &mut App) {
   app.schedule_state_save();
 }
 
-/// Reset all pane sizes to explicit config startup overrides, or runtime defaults.
+/// Reset all pane sizes to configured defaults, or runtime defaults.
 pub fn reset_layout(app: &mut App) {
   let defaults = RuntimeState::default();
   app.runtime_state.sidebar_width_percent = app
@@ -76,7 +76,8 @@ pub fn reset_layout(app: &mut App) {
     .user_config
     .behavior
     .playbar_height_rows
-    .unwrap_or(defaults.playbar_height_rows);
+    .unwrap_or(defaults.playbar_height_rows)
+    .min(MAX_PLAYBAR_ROWS);
   app.runtime_state.library_height_percent = app
     .user_config
     .behavior
@@ -195,7 +196,7 @@ mod tests {
   }
 
   #[test]
-  fn reset_layout_restores_runtime_defaults_without_config_overrides() {
+  fn reset_layout_restores_runtime_defaults_without_configured_defaults() {
     let mut app = App::default();
     app.runtime_state.sidebar_width_percent = 50;
     app.runtime_state.playbar_height_rows = 0;
@@ -217,7 +218,7 @@ mod tests {
   }
 
   #[test]
-  fn reset_layout_prefers_config_startup_overrides() {
+  fn reset_layout_prefers_configured_defaults() {
     let mut app = App::default();
     app.runtime_state.sidebar_width_percent = 50;
     app.runtime_state.playbar_height_rows = 0;
@@ -229,5 +230,14 @@ mod tests {
     assert_eq!(app.runtime_state.sidebar_width_percent, 35);
     assert_eq!(app.runtime_state.playbar_height_rows, 9);
     assert_eq!(app.runtime_state.library_height_percent, 45);
+  }
+
+  #[test]
+  fn reset_layout_clamps_configured_playbar_height_to_max() {
+    let mut app = App::default();
+    app.runtime_state.playbar_height_rows = 0;
+    app.user_config.behavior.playbar_height_rows = Some(MAX_PLAYBAR_ROWS + 1);
+    reset_layout(&mut app);
+    assert_eq!(app.runtime_state.playbar_height_rows, MAX_PLAYBAR_ROWS);
   }
 }

@@ -109,7 +109,9 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       Some(player) => {
         player.set_volume(*volume as f32 / 100.0);
         // Keep the playbar's volume readout in sync.
-        app.lock().await.runtime_state.volume_percent = *volume;
+        let mut app = app.lock().await;
+        app.runtime_state.volume_percent = *volume;
+        app.schedule_state_save();
         true
       }
       None => false,

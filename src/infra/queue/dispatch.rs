@@ -94,7 +94,9 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
     }
     IoEvent::ChangeVolume(volume) => {
       player.set_volume(*volume as f32 / 100.0);
-      app.lock().await.runtime_state.volume_percent = *volume;
+      let mut app = app.lock().await;
+      app.runtime_state.volume_percent = *volume;
+      app.schedule_state_save();
       Some(true)
     }
     // Skip the queued track: advance to the next queued item (or resume).
