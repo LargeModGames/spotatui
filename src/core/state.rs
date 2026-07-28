@@ -253,19 +253,26 @@ fn sanitized_ids(ids: &[String]) -> Vec<String> {
 }
 
 pub(crate) fn sanitized_radio_stations(stations: &[RadioStationConfig]) -> Vec<RadioStationConfig> {
+  let mut seen_urls = std::collections::HashSet::new();
+
   stations
     .iter()
     .filter_map(|station| {
       let name = station.name.trim();
       let url = station.url.trim();
       if name.is_empty() || url.is_empty() {
-        None
-      } else {
-        Some(RadioStationConfig {
-          name: name.to_string(),
-          url: url.to_string(),
-        })
+        return None;
       }
+
+      let url = url.to_string();
+      if !seen_urls.insert(url.clone()) {
+        return None;
+      }
+
+      Some(RadioStationConfig {
+        name: name.to_string(),
+        url,
+      })
     })
     .collect()
 }
