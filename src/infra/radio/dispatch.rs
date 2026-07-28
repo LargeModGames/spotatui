@@ -34,6 +34,7 @@ use crate::core::app::{App, SearchResultBlock};
 use crate::core::pagination::Paged;
 use crate::core::plugin_api::TrackInfo;
 use crate::core::source::Searcher;
+use crate::core::state::RadioStationConfig;
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
 
@@ -88,7 +89,7 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     IoEvent::ChangeVolume(volume) => match player(app).await {
       Some(p) => {
         p.set_volume(*volume as f32 / 100.0);
-        app.lock().await.user_config.behavior.volume_percent = *volume;
+        app.lock().await.runtime_state.volume_percent = *volume;
         true
       }
       None => false,
@@ -110,27 +111,41 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
 // Browse + search
 // ---------------------------------------------------------------------------
 
-/// Load the config-file station list into `app.radio_stations` (the sidebar's
-/// Stations panel). No network — the list is user-configured.
+/// Load configured and saved stations into `app.radio_stations` (the sidebar's
+/// Stations panel). No network.
 async fn load_radio_stations(app: &Arc<Mutex<App>>) {
   let mut guard = app.lock().await;
-  let stations: Vec<TrackInfo> = guard
-    .user_config
-    .behavior
-    .radio_stations
-    .iter()
-    .filter(|s| !s.name.trim().is_empty() && !s.url.trim().is_empty())
-    .map(|s| config_station_to_track_info(&s.name, &s.url))
-    .collect();
+  let stations = merged_radio_stations(
+    &guard.user_config.behavior.radio_stations,
+    &guard.runtime_state.radio_stations,
+  );
   let empty = stations.is_empty();
   guard.radio_stations = stations;
   guard.radio_stations_index = 0;
   if empty {
     guard.set_status_message(
-      "No radio stations configured (behavior.radio_stations); search to find some".to_string(),
+      "No radio stations configured or saved; search to add some".to_string(),
       6,
     );
   }
+}
+
+fn merged_radio_stations(
+  configured: &[RadioStationConfig],
+  saved: &[RadioStationConfig],
+) -> Vec<TrackInfo> {
+  let mut stations = Vec::new();
+  let mut seen_urls: Vec<String> = Vec::new();
+  for station in configured.iter().chain(saved.iter()) {
+    let name = station.name.trim();
+    let url = station.url.trim();
+    if name.is_empty() || url.is_empty() || seen_urls.iter().any(|seen| seen == url) {
+      continue;
+    }
+    seen_urls.push(url.to_string());
+    stations.push(config_station_to_track_info(name, url));
+  }
+  stations
 }
 
 /// Search the radio-browser.info directory and populate `app.search_results`.
@@ -310,7 +325,7 @@ async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
 
   match result {
     Ok(Ok(())) => {
-      let volume = app.lock().await.user_config.behavior.volume_percent;
+      let volume = app.lock().await.runtime_state.volume_percent;
       player.set_volume(volume as f32 / 100.0);
 
       let display = station.name.clone();
@@ -430,35 +445,39 @@ mod tests {
     );
   }
 
-  /// Loading the (empty) config station list is consumed and surfaces a hint.
+  /// Loading the station list is consumed and merges config + saved stations.
   #[tokio::test]
-  async fn get_radio_stations_loads_config_list() {
+  async fn get_radio_stations_merges_configured_and_saved_lists() {
     let app = Arc::new(Mutex::new(test_app()));
     assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
     assert!(app.lock().await.radio_stations.is_empty());
 
-    // Now with two configured stations, one blank (filtered out).
     {
       let mut guard = app.lock().await;
-      guard.user_config.behavior.radio_stations = vec![
-        crate::core::user_config::RadioStationConfig {
+      guard.user_config.behavior.radio_stations = vec![crate::core::state::RadioStationConfig {
+        name: "Configured Groove".to_string(),
+        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+      }];
+      guard.runtime_state.radio_stations = vec![
+        crate::core::state::RadioStationConfig {
           name: "Groove Salad".to_string(),
           url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
         },
-        crate::core::user_config::RadioStationConfig {
-          name: "  ".to_string(),
-          url: "https://x.example/s".to_string(),
+        crate::core::state::RadioStationConfig {
+          name: "Secret Agent".to_string(),
+          url: "https://ice1.somafm.com/secretagent-128-mp3".to_string(),
         },
       ];
     }
     assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
     let guard = app.lock().await;
-    assert_eq!(guard.radio_stations.len(), 1);
-    assert_eq!(guard.radio_stations[0].name, "Groove Salad");
+    assert_eq!(guard.radio_stations.len(), 2);
+    assert_eq!(guard.radio_stations[0].name, "Configured Groove");
     assert_eq!(
       guard.radio_stations[0].uri.as_deref(),
       Some("radio:https://ice1.somafm.com/groovesalad-128-mp3")
     );
+    assert_eq!(guard.radio_stations[1].name, "Secret Agent");
   }
 
   /// End-to-end dispatch test: drive `route_radio_event` exactly as the runtime
@@ -472,11 +491,10 @@ mod tests {
     let app = Arc::new(Mutex::new(test_app()));
     {
       let mut guard = app.lock().await;
-      guard.user_config.behavior.radio_stations =
-        vec![crate::core::user_config::RadioStationConfig {
-          name: "Groove Salad".to_string(),
-          url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-        }];
+      guard.runtime_state.radio_stations = vec![crate::core::state::RadioStationConfig {
+        name: "Groove Salad".to_string(),
+        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+      }];
     }
     assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
     let uri = app.lock().await.radio_stations[0].uri.clone().unwrap();

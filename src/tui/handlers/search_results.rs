@@ -5,7 +5,7 @@ use crate::core::app::{
 };
 use crate::core::plugin_api::TrackInfo;
 use crate::core::source::Source;
-use crate::core::user_config::RadioStationAddOutcome;
+use crate::core::state::RadioStationAddOutcome;
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use rspotify::model::idtypes::PlaylistId;
@@ -468,7 +468,7 @@ fn favorite_radio_station(app: &mut App, station: TrackInfo) {
   let name = if trimmed.is_empty() { url } else { trimmed }.to_string();
   let url = url.to_string();
 
-  let message = match app.user_config.add_radio_station(&name, &url) {
+  let message = match app.add_radio_station(&name, &url) {
     Ok(RadioStationAddOutcome::Added) => format!("Favorited radio station: {name}"),
     Ok(RadioStationAddOutcome::AlreadyExists) => {
       format!("Radio station already favorited: {name}")
@@ -805,6 +805,7 @@ mod tests {
     });
     let (tx, _rx) = channel();
     let mut app = App::new(tx, user_config, Some(SystemTime::now()));
+    app.state_path = Some(dir.path().join("state.yml"));
     app.active_source = Source::Radio;
     app.search_results.tracks = Some(Paged {
       items: vec![station(
@@ -820,9 +821,9 @@ mod tests {
     let favorite_key = app.user_config.keys.like_track;
     handler(favorite_key, &mut app);
 
-    assert_eq!(app.user_config.behavior.radio_stations.len(), 1);
+    assert_eq!(app.runtime_state.radio_stations.len(), 1);
     assert_eq!(
-      app.user_config.behavior.radio_stations[0].url,
+      app.runtime_state.radio_stations[0].url,
       "https://ice1.somafm.com/groovesalad-128-mp3"
     );
     assert_eq!(app.radio_stations.len(), 1);

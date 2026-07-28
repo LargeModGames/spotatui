@@ -844,8 +844,8 @@ pub async fn start_ui(
               handlers::handle_app(key, &mut app);
             } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
               if let Some(dismissed_id) = app.dismiss_active_announcement() {
-                app.user_config.mark_announcement_seen(dismissed_id);
-                if let Err(error) = app.user_config.save_config() {
+                app.runtime_state.mark_announcement_seen(dismissed_id);
+                if let Err(error) = app.save_runtime_state() {
                   app.handle_error(anyhow!(
                     "Failed to persist dismissed announcement: {}",
                     error
@@ -896,7 +896,7 @@ pub async fn start_ui(
         app.flush_pending_api_seek();
         app.flush_pending_source_seek();
         app.flush_pending_volume();
-        app.flush_config_save(false);
+        app.flush_state_save(false);
 
         #[cfg(feature = "scripting")]
         if let Some(engine) = script_engine.as_mut() {
@@ -1352,7 +1352,7 @@ pub async fn start_ui(
   // persist it before the process exits.
   {
     let mut app = app.lock().await;
-    app.flush_config_save(true);
+    app.flush_state_save(true);
   }
 
   #[cfg(feature = "streaming")]

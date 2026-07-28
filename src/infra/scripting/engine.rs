@@ -921,7 +921,8 @@ impl ScriptEngine {
     }
     // Config has no generation counter (theme/settings can change from many
     // places); rebuilding the small snapshot each pass is cheap.
-    *self.shared.config_cache.borrow_mut() = plugin_api::config_snapshot(&app.user_config);
+    *self.shared.config_cache.borrow_mut() =
+      plugin_api::config_snapshot(&app.user_config, &app.runtime_state);
 
     let search_was = self.last_cache_gens[PluginDataKind::Search.index()];
     if refresh(

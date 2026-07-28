@@ -13,6 +13,7 @@
 
 use crate::core::config::ClientConfig;
 use crate::core::source::Source;
+use crate::core::state::RuntimeState;
 use crate::core::user_config::UserConfig;
 use anyhow::{anyhow, Result};
 use crossterm::{
@@ -42,6 +43,7 @@ fn config_file_path_display(user_config: &UserConfig) -> String {
 /// trigger the Spotify-only auth wizard on a fresh install.
 pub async fn run_first_run_picker(
   user_config: &mut UserConfig,
+  runtime_state: &mut RuntimeState,
   client_config: &mut ClientConfig,
 ) -> Result<()> {
   // First run is detected by the absence of the Spotify client config file.
@@ -72,7 +74,7 @@ pub async fn run_first_run_picker(
     numbered_fallback(&options)?
   };
 
-  apply_selections(selections, user_config, client_config).await
+  apply_selections(selections, user_config, runtime_state, client_config).await
 }
 
 /// Act on the sources the user chose. `active_source` is set to the first checked
@@ -80,6 +82,7 @@ pub async fn run_first_run_picker(
 async fn apply_selections(
   selections: Vec<Source>,
   user_config: &mut UserConfig,
+  runtime_state: &mut RuntimeState,
   client_config: &mut ClientConfig,
 ) -> Result<()> {
   // Spotify only: keep today's behavior and let `load_config` run the wizard.
@@ -96,10 +99,13 @@ async fn apply_selections(
   if !spotify_selected {
     client_config.init_default_spotify_config()?;
   }
-  user_config.behavior.active_source = active;
+  runtime_state.active_source = active;
   // The global song counter opt-in is asked before this picker runs, so the
   // user's choice already sits on `user_config`; save_config persists it here.
+  // The active source is runtime state, so save it separately.
   user_config.save_config()?;
+  let state_path = crate::core::state::default_state_path()?;
+  crate::core::state::save(&state_path, &runtime_state.to_persisted())?;
 
   // Collect credentials / check prerequisites for each chosen free source.
   for source in &selections {

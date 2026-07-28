@@ -364,9 +364,13 @@ pub struct ConfigSnapshot {
   pub behavior: BehaviorSnapshot,
 }
 
-/// Build a [`ConfigSnapshot`] from the live user config. Theme colors use the
-/// same string forms `parse_theme_item` accepts (named or `"r, g, b"`).
-pub fn config_snapshot(config: &crate::core::user_config::UserConfig) -> ConfigSnapshot {
+/// Build a [`ConfigSnapshot`] from the live user config and runtime state.
+/// Theme colors use the same string forms `parse_theme_item` accepts (named or
+/// `"r, g, b"`).
+pub fn config_snapshot(
+  config: &crate::core::user_config::UserConfig,
+  runtime_state: &crate::core::state::RuntimeState,
+) -> ConfigSnapshot {
   use crate::core::user_config::color_to_string;
   let t = &config.theme;
   let theme: std::collections::BTreeMap<String, String> = [
@@ -411,12 +415,12 @@ pub fn config_snapshot(config: &crate::core::user_config::UserConfig) -> ConfigS
       playing_icon: b.playing_icon.clone(),
       paused_icon: b.paused_icon.clone(),
       set_window_title: b.set_window_title,
-      shuffle_enabled: b.shuffle_enabled,
+      shuffle_enabled: runtime_state.shuffle_enabled,
       stop_after_current_track: b.stop_after_current_track,
-      sidebar_width_percent: b.sidebar_width_percent,
-      playbar_height_rows: b.playbar_height_rows,
-      library_height_percent: b.library_height_percent,
-      active_source: format!("{:?}", b.active_source).to_lowercase(),
+      sidebar_width_percent: runtime_state.sidebar_width_percent,
+      playbar_height_rows: runtime_state.playbar_height_rows,
+      library_height_percent: runtime_state.library_height_percent,
+      active_source: format!("{:?}", runtime_state.active_source).to_lowercase(),
     },
   }
 }

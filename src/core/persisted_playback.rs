@@ -1,7 +1,8 @@
 //! Persist the last non-Spotify playback session so it survives restarts.
 //!
 //! The browse-scope [`Source`](crate::core::source::Source) is already persisted
-//! in `config.yml` (see `BehaviorConfig::active_source`). What this module adds
+//! in `state.yml` (see [`RuntimeState::active_source`](crate::core::state::RuntimeState::active_source)).
+//! What this module adds
 //! is the *playback* side: which track/queue was playing, where in it, and
 //! whether it was paused — so that after a restart the app can resume the exact
 //! song on the same source.

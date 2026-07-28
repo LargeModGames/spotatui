@@ -4,6 +4,9 @@ use crate::core::plugin_api::{
 };
 use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
 use crate::core::source::Source;
+use crate::core::state::{
+  PersistedRuntimeState, RadioStationAddOutcome, RadioStationConfig, RuntimeState,
+};
 use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
 use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
 use crate::infra::network::sync::{PartySession, PartyStatus};
@@ -1372,6 +1375,8 @@ pub struct App {
   pub audio_capture_active: bool,
   pub home_scroll: u16,
   pub user_config: UserConfig,
+  pub runtime_state: RuntimeState,
+  pub state_path: Option<PathBuf>,
   pub artists: Vec<crate::core::plugin_api::ArtistInfo>,
   pub artist: Option<Artist>,
   pub album_table_context: AlbumTableContext,
@@ -1712,13 +1717,9 @@ pub struct App {
   /// When true, we hold off on sending another one — rapid key presses
   /// just update `pending_volume` and the latest value wins.
   pub is_volume_change_in_flight: bool,
-  /// Deadline for a debounced config save scheduled by an auto-repeating key
-  /// (volume, panel resize, shuffle). Those keys used to call `save_config()`
-  /// synchronously per repeat, paying a full read, YAML parse, rebuild,
-  /// serialize, and write on the UI thread, dozens of times per second while
-  /// held. The tick handler flushes this once the debounce window passes;
-  /// shutdown flushes it unconditionally.
-  pub config_save_due: Option<Instant>,
+  /// Deadline for a debounced state save scheduled by auto-repeating runtime
+  /// state changes such as volume and shuffle.
+  pub state_save_due: Option<Instant>,
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
@@ -1895,6 +1896,8 @@ impl Default for App {
       artists: vec![],
       artist: None,
       user_config: UserConfig::new(),
+      runtime_state: RuntimeState::default(),
+      state_path: None,
       saved_album_tracks_index: 0,
       recently_played: Default::default(),
       size: Size::default(),
@@ -2072,7 +2075,7 @@ impl Default for App {
       playlist_tracks_prefetch_in_flight: HashSet::new(),
       playlist_sort_fetch_in_flight: HashSet::new(),
       is_volume_change_in_flight: false,
-      config_save_due: None,
+      state_save_due: None,
       pending_volume: None,
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
@@ -2146,14 +2149,31 @@ impl Default for App {
 }
 
 impl App {
+  #[cfg(test)]
   pub fn new(
     io_tx: Sender<IoEvent>,
     user_config: UserConfig,
     spotify_token_expiry: Option<SystemTime>,
   ) -> App {
-    // Read the persisted active source before moving user_config into the struct,
+    Self::new_with_state(
+      io_tx,
+      user_config,
+      RuntimeState::default(),
+      None,
+      spotify_token_expiry,
+    )
+  }
+
+  pub fn new_with_state(
+    io_tx: Sender<IoEvent>,
+    user_config: UserConfig,
+    runtime_state: RuntimeState,
+    state_path: Option<PathBuf>,
+    spotify_token_expiry: Option<SystemTime>,
+  ) -> App {
+    // Read the persisted active source before moving runtime_state into the struct,
     // so the restored value overrides the Source::default() set by App::default().
-    let active_source = user_config.behavior.active_source;
+    let active_source = runtime_state.active_source;
     // Resolve configurable per-context default sort states. Config validation
     // already rejected invalid specs at load time, so parse failure here is a
     // defensive fallback to the built-in default sort.
@@ -2201,6 +2221,8 @@ impl App {
     App {
       io_tx: Some(io_tx),
       user_config,
+      runtime_state,
+      state_path,
       // A token expiry means a Spotify session loaded at startup; a free-source
       // launch with no cached token passes `None`. In-TUI login flips both fields.
       spotify_connected: spotify_token_expiry.is_some(),
@@ -2818,7 +2840,7 @@ impl App {
           track_duration_ms: self.native_track_info.as_ref().map(|info| info.duration_ms),
           position_ms,
           desired_playing: is_playing,
-          shuffle: self.user_config.behavior.shuffle_enabled,
+          shuffle: self.runtime_state.shuffle_enabled,
           repeat: self
             .current_playback_context
             .as_ref()
@@ -3918,32 +3940,89 @@ impl App {
     }
   }
 
-  /// Picks up pending volume changes from the tick loop and sends them to Spotify.
-  ///
-  /// Skips dispatching if the previous request is still in flight, or if we
-  /// already sent this exact value and are just waiting for the API to confirm.
-  ///
-  /// We intentionally don't clear `pending_volume` here — it sticks around until
-  /// `get_current_playback` sees the matching value come back from the API.
-  /// Schedule a debounced config save. Hot paths (volume, panel resize,
-  /// shuffle) call this instead of `save_config()` so a held key doesn't pay
+  /// Schedule a debounced state save. Hot paths (volume, shuffle) call this
+  /// instead of `save_runtime_state()` so a held key doesn't pay
   /// disk + YAML work on every auto-repeat; the save lands once, shortly
   /// after the last change.
-  pub fn schedule_config_save(&mut self) {
-    const CONFIG_SAVE_DEBOUNCE_MS: u64 = 500;
-    self.config_save_due = Some(Instant::now() + Duration::from_millis(CONFIG_SAVE_DEBOUNCE_MS));
+  pub fn schedule_state_save(&mut self) {
+    const STATE_SAVE_DEBOUNCE_MS: u64 = 500;
+    self.state_save_due = Some(Instant::now() + Duration::from_millis(STATE_SAVE_DEBOUNCE_MS));
   }
 
-  /// Flush a scheduled config save once its debounce window has passed, or
+  pub fn current_runtime_state(&self) -> PersistedRuntimeState {
+    self.runtime_state.to_persisted()
+  }
+
+  pub fn save_runtime_state(&self) -> anyhow::Result<()> {
+    let path = match &self.state_path {
+      Some(path) => path.clone(),
+      None => crate::core::state::default_state_path()?,
+    };
+    crate::core::state::save(&path, &self.current_runtime_state())
+  }
+
+  pub fn add_radio_station(
+    &mut self,
+    name: impl AsRef<str>,
+    url: impl AsRef<str>,
+  ) -> anyhow::Result<RadioStationAddOutcome> {
+    if self.is_configured_radio_station_url(url.as_ref()) {
+      return Ok(RadioStationAddOutcome::AlreadyExists);
+    }
+    let before_len = self.runtime_state.radio_stations.len();
+    let outcome = self.runtime_state.add_radio_station(name, url)?;
+    if outcome == RadioStationAddOutcome::Added {
+      if let Err(error) = self.save_runtime_state() {
+        self.runtime_state.radio_stations.truncate(before_len);
+        return Err(error);
+      }
+    }
+    Ok(outcome)
+  }
+
+  pub fn is_configured_radio_station_url(&self, url: &str) -> bool {
+    let url = url.trim();
+    !url.is_empty()
+      && self
+        .user_config
+        .behavior
+        .radio_stations
+        .iter()
+        .any(|station| station.url.trim() == url)
+  }
+
+  pub fn remove_radio_station_by_url(
+    &mut self,
+    url: impl AsRef<str>,
+  ) -> anyhow::Result<Option<RadioStationConfig>> {
+    let Some(index) = self
+      .runtime_state
+      .radio_stations
+      .iter()
+      .position(|station| station.url.trim() == url.as_ref().trim())
+    else {
+      return Ok(None);
+    };
+    let removed = self.runtime_state.remove_radio_station_by_url(url)?;
+    if let Err(error) = self.save_runtime_state() {
+      if let Some(removed) = removed {
+        self.runtime_state.radio_stations.insert(index, removed);
+      }
+      return Err(error);
+    }
+    Ok(removed)
+  }
+
+  /// Flush a scheduled state save once its debounce window has passed, or
   /// immediately when `force` is set (shutdown).
-  pub fn flush_config_save(&mut self, force: bool) {
-    let Some(due) = self.config_save_due else {
+  pub fn flush_state_save(&mut self, force: bool) {
+    let Some(due) = self.state_save_due else {
       return;
     };
     if force || Instant::now() >= due {
-      self.config_save_due = None;
-      if let Err(e) = self.user_config.save_config() {
-        self.handle_error(anyhow!("Failed to save config: {}", e));
+      self.state_save_due = None;
+      if let Err(e) = self.save_runtime_state() {
+        self.handle_error(anyhow!("Failed to save state: {}", e));
       }
     }
   }
@@ -3999,7 +4078,7 @@ impl App {
       // No Spotify device volume (e.g. a decoded source is playing, or the slim
       // build has no context): fall back to the configured volume, not 0, so the
       // playbar and volume-up/down base math stay correct for every source.
-      .unwrap_or(self.user_config.behavior.volume_percent as u32)
+      .unwrap_or(self.runtime_state.volume_percent as u32)
   }
 
   /// Set volume to an absolute percentage (0-100). Routes through the same
@@ -4017,8 +4096,8 @@ impl App {
       // librespot. The dispatcher converts the u8 percentage to a float.
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume));
-        self.user_config.behavior.volume_percent = next_volume;
-        self.schedule_config_save();
+        self.runtime_state.volume_percent = next_volume;
+        self.schedule_state_save();
         self.pending_volume = Some(next_volume);
         return;
       }
@@ -4032,8 +4111,8 @@ impl App {
           if let Some(ctx) = &mut self.current_playback_context {
             ctx.device.volume_percent = Some(next_volume.into());
           }
-          self.user_config.behavior.volume_percent = next_volume;
-          self.schedule_config_save();
+          self.runtime_state.volume_percent = next_volume;
+          self.schedule_state_save();
           self.pending_volume = Some(next_volume);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -4073,8 +4152,8 @@ impl App {
       // librespot. The dispatcher converts the u8 percentage to a float.
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume));
-        self.user_config.behavior.volume_percent = next_volume;
-        self.schedule_config_save();
+        self.runtime_state.volume_percent = next_volume;
+        self.schedule_state_save();
         self.pending_volume = Some(next_volume);
         return;
       }
@@ -4088,8 +4167,8 @@ impl App {
           if let Some(ctx) = &mut self.current_playback_context {
             ctx.device.volume_percent = Some(next_volume.into());
           }
-          self.user_config.behavior.volume_percent = next_volume;
-          self.schedule_config_save();
+          self.runtime_state.volume_percent = next_volume;
+          self.schedule_state_save();
           self.pending_volume = Some(next_volume);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -4134,8 +4213,8 @@ impl App {
       // librespot. The dispatcher converts the u8 percentage to a float.
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume_u8));
-        self.user_config.behavior.volume_percent = next_volume_u8;
-        self.schedule_config_save();
+        self.runtime_state.volume_percent = next_volume_u8;
+        self.schedule_state_save();
         self.pending_volume = Some(next_volume_u8);
         return;
       }
@@ -4149,8 +4228,8 @@ impl App {
           if let Some(ctx) = &mut self.current_playback_context {
             ctx.device.volume_percent = Some(next_volume_u8.into());
           }
-          self.user_config.behavior.volume_percent = next_volume_u8;
-          self.schedule_config_save();
+          self.runtime_state.volume_percent = next_volume_u8;
+          self.schedule_state_save();
           self.pending_volume = Some(next_volume_u8);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -4212,7 +4291,7 @@ impl App {
         volume_percent: Some(u32::from(volume_percent)),
       },
       repeat_state: RepeatState::Off,
-      shuffle_state: self.user_config.behavior.shuffle_enabled,
+      shuffle_state: self.runtime_state.shuffle_enabled,
       context: None,
       timestamp: Utc::now(),
       progress: None,
@@ -6229,8 +6308,8 @@ impl App {
         if let Some(ctx) = &mut self.current_playback_context {
           ctx.shuffle_state = new_shuffle_state;
         }
-        self.user_config.behavior.shuffle_enabled = new_shuffle_state;
-        self.schedule_config_save();
+        self.runtime_state.shuffle_enabled = new_shuffle_state;
+        self.schedule_state_save();
 
         // Notify MPRIS clients of the change
         #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -9897,7 +9976,7 @@ mod tests {
     let mut app = make_app_simple();
     app.current_playback_context = None;
     app.pending_volume = None;
-    app.user_config.behavior.volume_percent = 42;
+    app.runtime_state.volume_percent = 42;
 
     assert_eq!(
       app.desired_volume(),

@@ -199,7 +199,7 @@ Prefer setting the password via the `SPOTATUI_SUBSONIC_PASSWORD` environment var
 
 ### Internet Radio
 
-Search the radio-browser.info directory in-app (Enter plays a station directly), and press the save key (`F` by default) to keep a station in your sidebar. Saved stations live under `behavior.radio_stations`; the playbar shows a `LIVE` badge with the stream's now-playing title.
+Search the radio-browser.info directory in-app (Enter plays a station directly), and press the save key (`F` by default) to keep a station in your sidebar. Stations can also be preconfigured in `config.yml`; stations saved in-app live in `state.yml`. The playbar shows a `LIVE` badge with the stream's now-playing title.
 
 ### YouTube
 

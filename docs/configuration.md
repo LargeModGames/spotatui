@@ -11,6 +11,8 @@ All fields are optional; omitted values use the built-in defaults. A complete, c
 
 Simple values (numbers, toggles, icons, positions) can also be changed live in the in-app **Settings** screen (see the hint in the top-right of the UI). Structured config — `format:` templates, `tables:` columns, and `playbar_control_labels` — is file-only. Edit the file while the app is closed: saving from the Settings screen rewrites the `behavior`, `theme`, and `keybindings` sections, but your `format:`, `tables:`, and `plugin_commands:` sections survive in-app saves untouched.
 
+Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/state.yml` (or `${HOME}/.local/state/spotatui/state.yml`). This includes volume, shuffle, active source, seen announcements, resized pane dimensions, and saved radio stations. `sync_token` remains user config and is stored in `config.yml`.
+
 ## Safe by default
 
 A typo in `config.yml` never prevents the app from starting. Structural mistakes — an unknown sort field, a bad template placeholder, an invalid column id, an icon that is too wide — are logged as warnings and the affected value falls back to its built-in default. Warnings go to the log file whose path is printed at startup (`/tmp/spotatui_logs/spotatuilog<pid>`).
@@ -37,7 +39,7 @@ behavior:
 
   # Volume
   volume_increment: 10             # step for + / - (0..=100, fatal if outside)
-  volume_percent: 100              # startup volume
+  volume_percent: 100              # optional startup volume; omit to restore last runtime volume
 
   # Scrolling
   table_scroll_padding: 5          # rows kept visible below the selection before
@@ -84,20 +86,34 @@ Valid fields per screen:
 
 `default` keeps the order the API returns (playlist order, date saved, play order). A field that is not valid for that screen falls back to `default` with a warning.
 
+## Internet Radio
+
+Preconfigured stations can be declared in `config.yml`:
+
+```yaml
+behavior:
+  radio_stations:
+    - name: SomaFM Groove Salad
+      url: https://ice1.somafm.com/groovesalad-128-mp3
+```
+
+Stations saved from inside the app are stored in `state.yml`. The sidebar merges configured stations first and app-saved stations second, deduped by stream URL. To remove a configured station, edit `config.yml`; the in-app remove action only removes app-saved stations from `state.yml`.
+
 ## Layout
 
 ```yaml
 behavior:
   sidebar_position: left    # left | right | hidden
   playbar_position: bottom  # bottom | top
-  sidebar_width_percent: 20 # 0 hides the sidebar entirely
-  library_height_percent: 30
-  playbar_height_rows: 6    # 0 hides the playbar
+  sidebar_width_percent: 20 # optional startup sidebar width; omit to restore last runtime size
+  library_height_percent: 30 # optional startup library height; omit to restore last runtime size
+  playbar_height_rows: 6    # optional startup playbar height; 0 hides it; omit to restore last runtime size
   small_terminal_width: 150
   small_terminal_height: 45
 ```
 
 - `sidebar_position: hidden` gives the content the full width, but the sidebar auto-reveals while the Library or Playlists panel has keyboard focus or is hovered, so it never becomes unreachable.
+- `sidebar_width_percent`, `library_height_percent`, and `playbar_height_rows` are optional startup overrides. Runtime resize changes use `{` / `}` for sidebar width, `(` / `)` for playbar height, `(` / `)` while hovering Library or Playlists for the library/sidebar split, and `|` to reset sizes; those changes persist in `state.yml`.
 - `small_terminal_width` / `small_terminal_height` are the responsive-layout breakpoints. At or above `small_terminal_width` columns the app uses the wide layout (search box inside the sidebar); below it the search box gets its own full-width top row. `enforce_wide_search_bar: true` forces the full-width search row regardless of width.
 - Unknown position strings fall back to the default with a warning.
 - Mouse hit-testing follows every arrangement automatically.

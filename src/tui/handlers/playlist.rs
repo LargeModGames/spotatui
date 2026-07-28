@@ -99,8 +99,18 @@ fn remove_radio_station(app: &mut App) {
     app.set_status_message("Radio station has no stream URL".to_string(), 4);
     return;
   };
+  if app.is_configured_radio_station_url(url) {
+    app.set_status_message(
+      format!(
+        "Radio station is configured in config.yml: {}",
+        station.name
+      ),
+      4,
+    );
+    return;
+  }
 
-  match app.user_config.remove_radio_station_by_url(url) {
+  match app.remove_radio_station_by_url(url) {
     Ok(Some(removed)) => {
       app.radio_stations.remove(idx);
       app.selected_playlist_index = if app.radio_stations.is_empty() {
@@ -248,10 +258,29 @@ pub fn handler(key: Key, app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::plugin_api::TrackInfo;
+  use crate::core::state::RadioStationConfig;
   use crate::core::test_helpers::playlist_info;
-  use crate::core::user_config::{RadioStationConfig, UserConfig, UserConfigPaths};
+  use crate::core::user_config::{UserConfig, UserConfigPaths};
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
+
+  fn radio_station_row(name: &str, url: &str) -> TrackInfo {
+    TrackInfo {
+      uri: Some(format!("radio:{url}")),
+      name: name.to_string(),
+      artists: vec![],
+      album: String::new(),
+      duration_ms: 0,
+      id: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }
+  }
 
   #[test]
   fn enter_playlist_dispatches_only_visible_page_load() {
@@ -348,7 +377,9 @@ mod tests {
     config.path_to_config = Some(UserConfigPaths {
       config_file_path: dir.path().join("config.yml"),
     });
-    config.behavior.radio_stations = vec![
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.runtime_state.radio_stations = vec![
       RadioStationConfig {
         name: "Groove Salad".to_string(),
         url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
@@ -359,7 +390,6 @@ mod tests {
       },
     ];
 
-    let mut app = App::new(tx, config, Some(SystemTime::now()));
     app.active_source = Source::Radio;
     app.radio_stations = vec![
       TrackInfo {
@@ -397,9 +427,9 @@ mod tests {
 
     handler(Key::Char('D'), &mut app);
 
-    assert_eq!(app.user_config.behavior.radio_stations.len(), 1);
+    assert_eq!(app.runtime_state.radio_stations.len(), 1);
     assert_eq!(
-      app.user_config.behavior.radio_stations[0].url,
+      app.runtime_state.radio_stations[0].url,
       "https://ice1.somafm.com/secretagent-128-mp3"
     );
     assert_eq!(app.radio_stations.len(), 1);
@@ -408,6 +438,42 @@ mod tests {
     assert_eq!(
       app.status_message.as_deref(),
       Some("Removed radio station: Groove Salad")
+    );
+  }
+
+  #[test]
+  fn shift_d_on_configured_radio_station_reports_config_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: dir.path().join("config.yml"),
+    });
+    config.behavior.radio_stations = vec![RadioStationConfig {
+      name: "Configured Groove".to_string(),
+      url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+    }];
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.runtime_state.radio_stations = vec![RadioStationConfig {
+      name: "Runtime Duplicate".to_string(),
+      url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+    }];
+    app.active_source = Source::Radio;
+    app.radio_stations = vec![radio_station_row(
+      "Configured Groove",
+      "https://ice1.somafm.com/groovesalad-128-mp3",
+    )];
+    app.selected_playlist_index = Some(0);
+
+    handler(Key::Char('D'), &mut app);
+
+    assert_eq!(app.runtime_state.radio_stations.len(), 1);
+    assert_eq!(app.radio_stations.len(), 1);
+    assert_eq!(app.selected_playlist_index, Some(0));
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Radio station is configured in config.yml: Configured Groove")
     );
   }
 }

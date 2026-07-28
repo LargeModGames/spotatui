@@ -749,7 +749,8 @@ async fn start_native_context_via_api(
         ctx.is_playing = true;
         ctx.shuffle_state = desired_shuffle_state;
       }
-      app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
+      app.runtime_state.shuffle_enabled = desired_shuffle_state;
+      app.schedule_state_save();
       // Keep the recovery chain alive: if the API accepted the start but the
       // native device never emits a player event, the watchdog fires again and
       // the bounded attempt counter eventually drops the request with a
@@ -1025,10 +1026,10 @@ impl PlaybackNetwork for Network {
         // override API shuffle with saved preference.
         #[cfg(feature = "streaming")]
         if local_state.is_none() && is_native_device {
-          c.shuffle_state = app.user_config.behavior.shuffle_enabled;
+          c.shuffle_state = app.runtime_state.shuffle_enabled;
           // Proactively set native shuffle on first load to keep backend in sync
           if let Some(ref player) = streaming_player {
-            let _ = player.set_shuffle(app.user_config.behavior.shuffle_enabled);
+            let _ = player.set_shuffle(app.runtime_state.shuffle_enabled);
           }
         }
 
@@ -1280,7 +1281,7 @@ impl PlaybackNetwork for Network {
         .current_playback_context
         .as_ref()
         .map(|ctx| ctx.shuffle_state)
-        .unwrap_or(app.user_config.behavior.shuffle_enabled)
+        .unwrap_or(app.runtime_state.shuffle_enabled)
     };
 
     // Any explicit new playback target invalidates the app-owned shuffle
@@ -1519,7 +1520,8 @@ impl PlaybackNetwork for Network {
             ctx.is_playing = true;
             ctx.shuffle_state = desired_shuffle_state;
           }
-          app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
+          app.runtime_state.shuffle_enabled = desired_shuffle_state;
+          app.schedule_state_save();
         }
         Err(load_err) => {
           let Some((device_id, context)) = api_fallback else {
@@ -1569,7 +1571,8 @@ impl PlaybackNetwork for Network {
           ctx.is_playing = true;
           ctx.shuffle_state = desired_shuffle_state;
         }
-        app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
+        app.runtime_state.shuffle_enabled = desired_shuffle_state;
+        app.schedule_state_save();
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
@@ -1643,7 +1646,8 @@ impl PlaybackNetwork for Network {
                     ctx.is_playing = true;
                     ctx.shuffle_state = desired_shuffle_state;
                   }
-                  app.user_config.behavior.shuffle_enabled = desired_shuffle_state;
+                  app.runtime_state.shuffle_enabled = desired_shuffle_state;
+                  app.schedule_state_save();
                 }
                 return;
               }
@@ -1956,6 +1960,8 @@ impl PlaybackNetwork for Network {
       if let Some(ctx) = &mut app.current_playback_context {
         ctx.shuffle_state = shuffle_state;
       }
+      app.runtime_state.shuffle_enabled = shuffle_state;
+      app.schedule_state_save();
       return;
     }
 
@@ -1973,6 +1979,8 @@ impl PlaybackNetwork for Network {
         if let Some(ctx) = &mut app.current_playback_context {
           ctx.shuffle_state = shuffle_state;
         }
+        app.runtime_state.shuffle_enabled = shuffle_state;
+        app.schedule_state_save();
       }
       Err(e) => {
         #[cfg(feature = "streaming")]

@@ -1,5 +1,5 @@
 use crate::core::format::Template;
-use crate::core::source::Source;
+use crate::core::state::RadioStationConfig;
 use crate::tui::event::Key;
 use anyhow::{anyhow, Result};
 use ratatui::style::{Color, Style};
@@ -42,6 +42,25 @@ pub fn validate_tick_rate_milliseconds(value: u64, label: &str) -> Result<u64> {
 
 pub fn normalize_tick_rate_milliseconds(value: i64) -> u64 {
   value.clamp(1, MAX_TICK_RATE_MILLISECONDS as i64) as u64
+}
+
+fn sanitized_radio_stations(stations: Vec<RadioStationConfig>) -> Vec<RadioStationConfig> {
+  let mut sanitized = Vec::new();
+  for station in stations {
+    let name = station.name.trim();
+    let url = station.url.trim();
+    if name.is_empty()
+      || url.is_empty()
+      || sanitized.iter().any(|s: &RadioStationConfig| s.url == url)
+    {
+      continue;
+    }
+    sanitized.push(RadioStationConfig {
+      name: name.to_string(),
+      url: url.to_string(),
+    });
+  }
+  sanitized
 }
 
 /// Parse a human-readable update delay into seconds.
@@ -758,25 +777,11 @@ pub struct KeyBindings {
   pub generate_recap: Key,
 }
 
-/// One internet-radio station in the config file: a display name plus the
-/// direct stream URL. The same shape is used in `BehaviorConfigString` (file)
-/// and `BehaviorConfig` (in-memory) — there is nothing to convert.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RadioStationConfig {
-  pub name: String,
-  pub url: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RadioStationAddOutcome {
-  Added,
-  AlreadyExists,
-}
-
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BehaviorConfigString {
   pub seek_milliseconds: Option<u32>,
   pub volume_increment: Option<u8>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub volume_percent: Option<u8>,
   pub tick_rate_milliseconds: Option<u64>,
   pub animation_tick_rate_milliseconds: Option<u64>,
@@ -791,10 +796,7 @@ pub struct BehaviorConfigString {
   pub discord_rpc_client_id: Option<String>,
   pub enable_announcements: Option<bool>,
   pub announcement_feed_url: Option<String>,
-  pub seen_announcement_ids: Option<Vec<String>>,
   pub enable_monthly_recap_prompt: Option<bool>,
-  pub shuffle_enabled: Option<bool>,
-  pub active_source: Option<String>,
   pub liked_icon: Option<String>,
   pub shuffle_icon: Option<String>,
   pub repeat_track_icon: Option<String>,
@@ -803,12 +805,8 @@ pub struct BehaviorConfigString {
   pub paused_icon: Option<String>,
   pub set_window_title: Option<bool>,
   pub visualizer_style: Option<VisualizerStyle>,
-  pub dismissed_announcements: Option<Vec<String>>,
   pub relay_server_url: Option<String>,
   pub stop_after_current_track: Option<bool>,
-  pub sidebar_width_percent: Option<u8>,
-  pub playbar_height_rows: Option<u16>,
-  pub library_height_percent: Option<u8>,
   pub startup_behavior: Option<StartupBehavior>,
   pub disable_auto_update: Option<bool>,
   pub auto_update_delay: Option<String>,
@@ -825,8 +823,9 @@ pub struct BehaviorConfigString {
   pub subsonic_url: Option<String>,
   pub subsonic_username: Option<String>,
   pub subsonic_password: Option<String>,
-  pub radio_stations: Option<Vec<RadioStationConfig>>,
   pub ytdlp_path: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub radio_stations: Option<Vec<RadioStationConfig>>,
   // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
   pub gauge_filled_icon: Option<String>,
   pub gauge_unfilled_icon: Option<String>,
@@ -849,6 +848,12 @@ pub struct BehaviorConfigString {
   // --- Phase 6: layout arrangement ---
   pub sidebar_position: Option<String>,
   pub playbar_position: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub sidebar_width_percent: Option<u8>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub playbar_height_rows: Option<u16>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub library_height_percent: Option<u8>,
   pub small_terminal_width: Option<u16>,
   pub small_terminal_height: Option<u16>,
 }
@@ -857,7 +862,9 @@ pub struct BehaviorConfigString {
 pub struct BehaviorConfig {
   pub seek_milliseconds: u32,
   pub volume_increment: u8,
-  pub volume_percent: u8,
+  /// Optional startup volume override. Runtime volume changes are persisted in
+  /// `state.yml`; this config value wins only when explicitly present.
+  pub volume_percent: Option<u8>,
   pub tick_rate_milliseconds: u64,
   pub animation_tick_rate_milliseconds: u64,
   pub enable_text_emphasis: bool,
@@ -873,11 +880,7 @@ pub struct BehaviorConfig {
   pub discord_rpc_client_id: Option<String>,
   pub enable_announcements: bool,
   pub announcement_feed_url: Option<String>,
-  pub seen_announcement_ids: Vec<String>,
   pub enable_monthly_recap_prompt: bool,
-  pub shuffle_enabled: bool,
-  /// The last active source — persisted so it survives restarts.
-  pub active_source: Source,
   pub liked_icon: String,
   pub shuffle_icon: String,
   pub repeat_track_icon: String,
@@ -886,12 +889,8 @@ pub struct BehaviorConfig {
   pub paused_icon: String,
   pub set_window_title: bool,
   pub visualizer_style: VisualizerStyle,
-  pub dismissed_announcements: Vec<String>,
   pub relay_server_url: String,
   pub stop_after_current_track: bool,
-  pub sidebar_width_percent: u8,
-  pub playbar_height_rows: u16,
-  pub library_height_percent: u8,
   pub startup_behavior: StartupBehavior,
   pub disable_auto_update: bool,
   pub auto_update_delay: String,
@@ -919,13 +918,12 @@ pub struct BehaviorConfig {
   /// prefer the `SPOTATUI_SUBSONIC_PASSWORD` environment variable, which
   /// overrides this field at connection time and is never written to disk.
   pub subsonic_password: Option<String>,
-  /// The user's internet-radio station list, shown in the sidebar when the
-  /// Radio source is active. Stations found via the in-app directory search
-  /// are not persisted here (yet) — this list is hand-maintained in the config.
-  pub radio_stations: Vec<RadioStationConfig>,
   /// Path to the `yt-dlp` binary used by the YouTube source. `None` resolves
   /// plain `yt-dlp` through `$PATH`.
   pub ytdlp_path: Option<String>,
+  /// User-authored stations shown alongside stations saved at runtime.
+  /// In-app favorite/remove actions mutate `state.yml`, not this list.
+  pub radio_stations: Vec<RadioStationConfig>,
   // --- Phase 2: icons / glyphs / labels ---
   pub gauge_filled_icon: String,
   pub gauge_unfilled_icon: String,
@@ -950,6 +948,11 @@ pub struct BehaviorConfig {
   // --- Phase 6: layout arrangement ---
   pub sidebar_position: String,
   pub playbar_position: String,
+  /// Optional startup pane-size overrides. Runtime resize changes are persisted
+  /// in `state.yml`; these config values win only when explicitly present.
+  pub sidebar_width_percent: Option<u8>,
+  pub playbar_height_rows: Option<u16>,
+  pub library_height_percent: Option<u8>,
   pub small_terminal_width: u16,
   pub small_terminal_height: u16,
 }
@@ -1173,7 +1176,7 @@ impl UserConfig {
       behavior: BehaviorConfig {
         seek_milliseconds: 5 * 1000,
         volume_increment: 10,
-        volume_percent: 100,
+        volume_percent: None,
         tick_rate_milliseconds: DEFAULT_TICK_RATE_MILLISECONDS,
         animation_tick_rate_milliseconds: DEFAULT_ANIMATION_TICK_RATE_MILLISECONDS,
         enable_text_emphasis: true,
@@ -1187,10 +1190,7 @@ impl UserConfig {
         discord_rpc_client_id: None,
         enable_announcements: true,
         announcement_feed_url: None,
-        seen_announcement_ids: Vec::new(),
         enable_monthly_recap_prompt: true,
-        shuffle_enabled: false,
-        active_source: Source::default(),
         liked_icon: "♥".to_string(),
         shuffle_icon: "🔀".to_string(),
         repeat_track_icon: "🔂".to_string(),
@@ -1199,12 +1199,8 @@ impl UserConfig {
         paused_icon: "⏸".to_string(),
         set_window_title: true,
         visualizer_style: VisualizerStyle::default(),
-        dismissed_announcements: Vec::new(),
         relay_server_url: "wss://spotatui-party.spotatui.workers.dev/ws".to_string(),
         stop_after_current_track: false,
-        sidebar_width_percent: 20,
-        playbar_height_rows: 6,
-        library_height_percent: 30,
         startup_behavior: StartupBehavior::Continue,
         disable_auto_update: false,
         auto_update_delay: "0".to_string(),
@@ -1221,8 +1217,8 @@ impl UserConfig {
         subsonic_url: None,
         subsonic_username: None,
         subsonic_password: None,
-        radio_stations: Vec::new(),
         ytdlp_path: None,
+        radio_stations: Vec::new(),
         // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
         gauge_filled_icon: "⣿".to_string(),
         gauge_unfilled_icon: "⣉".to_string(),
@@ -1245,6 +1241,9 @@ impl UserConfig {
         // --- Phase 6: layout arrangement ---
         sidebar_position: "left".to_string(),
         playbar_position: "bottom".to_string(),
+        sidebar_width_percent: None,
+        playbar_height_rows: None,
+        library_height_percent: None,
         small_terminal_width: 150,
         small_terminal_height: 45,
       },
@@ -1436,7 +1435,7 @@ impl UserConfig {
     }
 
     if let Some(volume) = behavior_config.volume_percent {
-      self.behavior.volume_percent = volume.min(100);
+      self.behavior.volume_percent = Some(volume.min(100));
     }
 
     let loaded_tick_rate = behavior_config.tick_rate_milliseconds;
@@ -1540,36 +1539,12 @@ impl UserConfig {
       };
     }
 
-    if let Some(seen_announcement_ids) = behavior_config.seen_announcement_ids {
-      self.behavior.seen_announcement_ids = seen_announcement_ids
-        .into_iter()
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
-        .collect();
-    }
-
     if let Some(discord_rpc_client_id) = behavior_config.discord_rpc_client_id {
       self.behavior.discord_rpc_client_id = Some(discord_rpc_client_id);
     }
 
-    if let Some(shuffle_enabled) = behavior_config.shuffle_enabled {
-      self.behavior.shuffle_enabled = shuffle_enabled;
-    }
-
-    if let Some(active_source_str) = behavior_config.active_source {
-      self.behavior.active_source = Source::from_config_str(&active_source_str);
-    }
-
     if let Some(visualizer_style) = behavior_config.visualizer_style {
       self.behavior.visualizer_style = visualizer_style;
-    }
-
-    if let Some(dismissed_announcements) = behavior_config.dismissed_announcements {
-      self.behavior.dismissed_announcements = dismissed_announcements
-        .into_iter()
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
-        .collect();
     }
 
     if let Some(relay_server_url) = behavior_config.relay_server_url {
@@ -1578,7 +1553,6 @@ impl UserConfig {
         self.behavior.relay_server_url = trimmed.to_string();
       }
     }
-
     if let Some(sync_token) = behavior_config.sync_token {
       let trimmed = sync_token.trim();
       if trimmed.is_empty() {
@@ -1587,21 +1561,24 @@ impl UserConfig {
         self.behavior.sync_token = Some(trimmed.to_string());
       }
     }
-
     if let Some(stop_after_current_track) = behavior_config.stop_after_current_track {
       self.behavior.stop_after_current_track = stop_after_current_track;
     }
 
+    if let Some(radio_stations) = behavior_config.radio_stations {
+      self.behavior.radio_stations = sanitized_radio_stations(radio_stations);
+    }
+
     if let Some(sidebar_width_percent) = behavior_config.sidebar_width_percent {
-      self.behavior.sidebar_width_percent = sidebar_width_percent.min(100);
+      self.behavior.sidebar_width_percent = Some(sidebar_width_percent.min(100));
     }
 
     if let Some(playbar_height_rows) = behavior_config.playbar_height_rows {
-      self.behavior.playbar_height_rows = playbar_height_rows;
+      self.behavior.playbar_height_rows = Some(playbar_height_rows);
     }
 
     if let Some(library_height_percent) = behavior_config.library_height_percent {
-      self.behavior.library_height_percent = library_height_percent.min(100);
+      self.behavior.library_height_percent = Some(library_height_percent.min(100));
     }
 
     if let Some(startup_behavior) = behavior_config.startup_behavior {
@@ -1665,14 +1642,6 @@ impl UserConfig {
     }
     if let Some(subsonic_password) = trim_to_none(behavior_config.subsonic_password) {
       self.behavior.subsonic_password = Some(subsonic_password);
-    }
-    if let Some(radio_stations) = behavior_config.radio_stations {
-      // Drop entries missing a name or URL rather than failing the whole
-      // config; the dispatch filters again defensively at load time.
-      self.behavior.radio_stations = radio_stations
-        .into_iter()
-        .filter(|s| !s.name.trim().is_empty() && !s.url.trim().is_empty())
-        .collect();
     }
     if let Some(ytdlp_path) = trim_to_none(behavior_config.ytdlp_path) {
       self.behavior.ytdlp_path = Some(ytdlp_path);
@@ -2068,7 +2037,7 @@ impl UserConfig {
     let build_behavior = || BehaviorConfigString {
       seek_milliseconds: Some(self.behavior.seek_milliseconds),
       volume_increment: Some(self.behavior.volume_increment),
-      volume_percent: Some(self.behavior.volume_percent),
+      volume_percent: self.behavior.volume_percent,
       tick_rate_milliseconds: Some(self.behavior.tick_rate_milliseconds),
       animation_tick_rate_milliseconds: Some(self.behavior.animation_tick_rate_milliseconds),
       enable_text_emphasis: Some(self.behavior.enable_text_emphasis),
@@ -2082,10 +2051,7 @@ impl UserConfig {
       discord_rpc_client_id: self.behavior.discord_rpc_client_id.clone(),
       enable_announcements: Some(self.behavior.enable_announcements),
       announcement_feed_url: self.behavior.announcement_feed_url.clone(),
-      seen_announcement_ids: Some(self.behavior.seen_announcement_ids.clone()),
       enable_monthly_recap_prompt: Some(self.behavior.enable_monthly_recap_prompt),
-      shuffle_enabled: Some(self.behavior.shuffle_enabled),
-      active_source: Some(self.behavior.active_source.to_config_str().to_string()),
       liked_icon: Some(self.behavior.liked_icon.clone()),
       shuffle_icon: Some(self.behavior.shuffle_icon.clone()),
       repeat_track_icon: Some(self.behavior.repeat_track_icon.clone()),
@@ -2094,23 +2060,19 @@ impl UserConfig {
       paused_icon: Some(self.behavior.paused_icon.clone()),
       set_window_title: Some(self.behavior.set_window_title),
       visualizer_style: Some(self.behavior.visualizer_style),
-      dismissed_announcements: Some(self.behavior.dismissed_announcements.clone()),
       relay_server_url: Some(self.behavior.relay_server_url.clone()),
       sync_token: self.behavior.sync_token.clone(),
       local_music_path: self.behavior.local_music_path.clone(),
       subsonic_url: self.behavior.subsonic_url.clone(),
       subsonic_username: self.behavior.subsonic_username.clone(),
       subsonic_password: self.behavior.subsonic_password.clone(),
+      ytdlp_path: self.behavior.ytdlp_path.clone(),
       radio_stations: if self.behavior.radio_stations.is_empty() {
         None
       } else {
         Some(self.behavior.radio_stations.clone())
       },
-      ytdlp_path: self.behavior.ytdlp_path.clone(),
       stop_after_current_track: Some(self.behavior.stop_after_current_track),
-      sidebar_width_percent: Some(self.behavior.sidebar_width_percent),
-      playbar_height_rows: Some(self.behavior.playbar_height_rows),
-      library_height_percent: Some(self.behavior.library_height_percent),
       startup_behavior: Some(self.behavior.startup_behavior),
       disable_auto_update: Some(self.behavior.disable_auto_update),
       auto_update_delay: Some(self.behavior.auto_update_delay.clone()),
@@ -2146,6 +2108,9 @@ impl UserConfig {
       default_sort_recently_played: Some(self.behavior.default_sort_recently_played.clone()),
       sidebar_position: Some(self.behavior.sidebar_position.clone()),
       playbar_position: Some(self.behavior.playbar_position.clone()),
+      sidebar_width_percent: self.behavior.sidebar_width_percent,
+      playbar_height_rows: self.behavior.playbar_height_rows,
+      library_height_percent: self.behavior.library_height_percent,
       small_terminal_width: Some(self.behavior.small_terminal_width),
       small_terminal_height: Some(self.behavior.small_terminal_height),
     };
@@ -2285,11 +2250,11 @@ impl UserConfig {
     };
 
     // Serialize to a String/bytes first, then write via a private-file helper
-    // (0o600 on Unix — this file carries the Subsonic password and party
-    // sync_token in cleartext, so it deserves the same protection as the
-    // Spotify token cache) using a temp-file + atomic rename, so a crash
-    // mid-write can't corrupt the config. Do not log `content_yml`: it may
-    // contain the plaintext password/sync_token.
+    // (0o600 on Unix — this file can carry the Subsonic password in
+    // cleartext, so it deserves the same protection as the Spotify token
+    // cache) using a temp-file + atomic rename, so a crash mid-write can't
+    // corrupt the config. Do not log `content_yml`: it may contain plaintext
+    // credentials.
     let content_yml = serde_yaml::to_string(&final_config)?;
     let tmp_path = paths.config_file_path.with_extension("yml.tmp");
     crate::core::auth::write_private_file(&tmp_path, content_yml.as_bytes())?;
@@ -2297,7 +2262,6 @@ impl UserConfig {
 
     Ok(())
   }
-
   pub fn padded_liked_icon(&self) -> String {
     format!("{} ", self.behavior.liked_icon)
   }
@@ -2308,88 +2272,6 @@ impl UserConfig {
   pub fn padded_playing_icon(&self) -> String {
     format!("{} ", self.behavior.playing_icon)
   }
-
-  pub fn add_radio_station(
-    &mut self,
-    name: impl AsRef<str>,
-    url: impl AsRef<str>,
-  ) -> Result<RadioStationAddOutcome> {
-    let name = name.as_ref().trim();
-    let url = url.as_ref().trim();
-
-    if name.is_empty() {
-      return Err(anyhow!("Radio station name is empty"));
-    }
-    if url.is_empty() {
-      return Err(anyhow!("Radio station URL is empty"));
-    }
-
-    if self
-      .behavior
-      .radio_stations
-      .iter()
-      .any(|station| station.url.trim() == url)
-    {
-      return Ok(RadioStationAddOutcome::AlreadyExists);
-    }
-
-    self.behavior.radio_stations.push(RadioStationConfig {
-      name: name.to_string(),
-      url: url.to_string(),
-    });
-
-    if let Err(error) = self.save_config() {
-      self.behavior.radio_stations.pop();
-      return Err(error);
-    }
-
-    Ok(RadioStationAddOutcome::Added)
-  }
-
-  pub fn remove_radio_station_by_url(
-    &mut self,
-    url: impl AsRef<str>,
-  ) -> Result<Option<RadioStationConfig>> {
-    let url = url.as_ref().trim();
-    if url.is_empty() {
-      return Err(anyhow!("Radio station URL is empty"));
-    }
-
-    let Some(index) = self
-      .behavior
-      .radio_stations
-      .iter()
-      .position(|station| station.url.trim() == url)
-    else {
-      return Ok(None);
-    };
-
-    let removed = self.behavior.radio_stations.remove(index);
-
-    if let Err(error) = self.save_config() {
-      self.behavior.radio_stations.insert(index, removed);
-      return Err(error);
-    }
-
-    Ok(Some(removed))
-  }
-
-  pub fn mark_announcement_seen(&mut self, announcement_id: impl Into<String>) {
-    let id = announcement_id.into();
-    if id.is_empty() {
-      return;
-    }
-
-    if !self
-      .behavior
-      .seen_announcement_ids
-      .iter()
-      .any(|seen| seen == &id)
-    {
-      self.behavior.seen_announcement_ids.push(id);
-    }
-  }
-
   #[cfg(feature = "cover-art")]
   pub fn do_draw_cover_art(&self, full_image_support: bool) -> bool {
     self.behavior.draw_cover_art && (self.behavior.draw_cover_art_forced || full_image_support)
@@ -2878,187 +2760,86 @@ mod tests {
   }
 
   #[test]
-  fn active_source_local_round_trips_through_config() {
+  fn sync_token_loads_as_user_config_and_trims_blank_to_none() {
     use super::{BehaviorConfigString, UserConfig};
-    use crate::core::source::Source;
 
-    // "Local" in YAML deserialized and resolved → Source::Local
-    let behavior: BehaviorConfigString = serde_yaml::from_str("active_source: Local").unwrap();
-    assert_eq!(behavior.active_source, Some("Local".to_string()));
-
+    let behavior: BehaviorConfigString = serde_yaml::from_str("sync_token: ' token '\n").unwrap();
     let mut config = UserConfig::new();
     config.load_behaviorconfig(behavior).unwrap();
-    assert_eq!(config.behavior.active_source, Source::Local);
+    assert_eq!(config.behavior.sync_token, Some("token".to_string()));
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str("sync_token: '   '\n").unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.sync_token, None);
   }
 
   #[test]
-  fn radio_stations_round_trip_through_config() {
-    use super::{BehaviorConfigString, RadioStationConfig, UserConfig};
+  fn volume_percent_loads_as_optional_startup_override() {
+    use super::{BehaviorConfigString, UserConfig};
 
-    let yaml = r#"
+    let behavior: BehaviorConfigString = serde_yaml::from_str("volume_percent: 150\n").unwrap();
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.volume_percent, Some(100));
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.volume_percent, None);
+  }
+
+  #[test]
+  fn pane_sizes_load_as_optional_startup_overrides() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str(
+      r#"
+sidebar_width_percent: 120
+playbar_height_rows: 9
+library_height_percent: 101
+"#,
+    )
+    .unwrap();
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.sidebar_width_percent, Some(100));
+    assert_eq!(config.behavior.playbar_height_rows, Some(9));
+    assert_eq!(config.behavior.library_height_percent, Some(100));
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.sidebar_width_percent, None);
+    assert_eq!(config.behavior.playbar_height_rows, None);
+    assert_eq!(config.behavior.library_height_percent, None);
+  }
+
+  #[test]
+  fn radio_stations_load_as_user_config() {
+    use super::{BehaviorConfigString, UserConfig};
+    use crate::core::state::RadioStationConfig;
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str(
+      r#"
 radio_stations:
-  - name: SomaFM Groove Salad
+  - name: " Groove Salad "
+    url: " https://ice1.somafm.com/groovesalad-128-mp3 "
+  - name: Duplicate
     url: https://ice1.somafm.com/groovesalad-128-mp3
   - name: ""
     url: https://blank-name.example/dropped
-"#;
-    let behavior: BehaviorConfigString = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(behavior.radio_stations.as_ref().map(Vec::len), Some(2));
-
+"#,
+    )
+    .unwrap();
     let mut config = UserConfig::new();
     config.load_behaviorconfig(behavior).unwrap();
-    // The blank-name entry is dropped at load; the valid one survives intact.
     assert_eq!(
       config.behavior.radio_stations,
       vec![RadioStationConfig {
-        name: "SomaFM Groove Salad".to_string(),
-        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-      }]
-    );
-  }
-
-  #[test]
-  fn radio_stations_missing_field_defaults_to_empty() {
-    use super::{BehaviorConfigString, UserConfig};
-
-    let behavior: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
-    assert_eq!(behavior.radio_stations, None);
-
-    let mut config = UserConfig::new();
-    config.load_behaviorconfig(behavior).unwrap();
-    assert!(config.behavior.radio_stations.is_empty());
-  }
-
-  #[test]
-  fn adding_radio_station_persists_trimmed_unique_entry() {
-    use super::{
-      RadioStationAddOutcome, RadioStationConfig, UserConfig, UserConfigPaths, UserConfigString,
-    };
-
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.yml");
-    let mut config = UserConfig::new();
-    config.path_to_config = Some(UserConfigPaths {
-      config_file_path: config_path.clone(),
-    });
-
-    let outcome = config
-      .add_radio_station(
-        " SomaFM Groove Salad ",
-        " https://ice1.somafm.com/groovesalad-128-mp3 ",
-      )
-      .unwrap();
-    assert_eq!(outcome, RadioStationAddOutcome::Added);
-    assert_eq!(
-      config.behavior.radio_stations,
-      vec![RadioStationConfig {
-        name: "SomaFM Groove Salad".to_string(),
-        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-      }]
-    );
-
-    let saved = std::fs::read_to_string(config_path).unwrap();
-    let saved: UserConfigString = serde_yaml::from_str(&saved).unwrap();
-    assert_eq!(
-      saved
-        .behavior
-        .unwrap()
-        .radio_stations
-        .unwrap()
-        .first()
-        .cloned(),
-      Some(RadioStationConfig {
-        name: "SomaFM Groove Salad".to_string(),
-        url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-      })
-    );
-  }
-
-  #[test]
-  fn adding_radio_station_dedupes_by_stream_url() {
-    use super::{RadioStationAddOutcome, RadioStationConfig, UserConfig, UserConfigPaths};
-
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = UserConfig::new();
-    config.path_to_config = Some(UserConfigPaths {
-      config_file_path: dir.path().join("config.yml"),
-    });
-    config.behavior.radio_stations = vec![RadioStationConfig {
-      name: "Existing".to_string(),
-      url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-    }];
-
-    let outcome = config
-      .add_radio_station(
-        "Duplicate Name",
-        " https://ice1.somafm.com/groovesalad-128-mp3 ",
-      )
-      .unwrap();
-
-    assert_eq!(outcome, RadioStationAddOutcome::AlreadyExists);
-    assert_eq!(config.behavior.radio_stations.len(), 1);
-    assert_eq!(config.behavior.radio_stations[0].name, "Existing");
-  }
-
-  #[test]
-  fn removing_radio_station_persists_by_stream_url() {
-    use super::{RadioStationConfig, UserConfig, UserConfigPaths, UserConfigString};
-
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.yml");
-    let mut config = UserConfig::new();
-    config.path_to_config = Some(UserConfigPaths {
-      config_file_path: config_path.clone(),
-    });
-    config.behavior.radio_stations = vec![
-      RadioStationConfig {
         name: "Groove Salad".to_string(),
         url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-      },
-      RadioStationConfig {
-        name: "Secret Agent".to_string(),
-        url: "https://ice1.somafm.com/secretagent-128-mp3".to_string(),
-      },
-    ];
-
-    let removed = config
-      .remove_radio_station_by_url(" https://ice1.somafm.com/groovesalad-128-mp3 ")
-      .unwrap();
-
-    assert_eq!(
-      removed.map(|station| station.name),
-      Some("Groove Salad".to_string())
+      }]
     );
-    assert_eq!(config.behavior.radio_stations.len(), 1);
-    assert_eq!(config.behavior.radio_stations[0].name, "Secret Agent");
-
-    let saved = std::fs::read_to_string(config_path).unwrap();
-    let saved: UserConfigString = serde_yaml::from_str(&saved).unwrap();
-    assert_eq!(
-      saved
-        .behavior
-        .unwrap()
-        .radio_stations
-        .unwrap()
-        .iter()
-        .map(|station| station.name.as_str())
-        .collect::<Vec<_>>(),
-      vec!["Secret Agent"]
-    );
-  }
-
-  #[test]
-  fn active_source_missing_field_defaults_to_spotify() {
-    use super::{BehaviorConfigString, UserConfig};
-    use crate::core::source::Source;
-
-    // No active_source key in config → field is None → default Spotify preserved
-    let behavior: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
-    assert_eq!(behavior.active_source, None);
-
-    let mut config = UserConfig::new();
-    config.load_behaviorconfig(behavior).unwrap();
-    assert_eq!(config.behavior.active_source, Source::Spotify);
   }
 
   #[test]

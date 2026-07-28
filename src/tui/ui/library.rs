@@ -86,7 +86,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // A station is a leaf — Enter plays it directly instead of drilling in.
   if app.active_source == Source::Radio {
     let items: Vec<String> = if app.radio_stations.is_empty() {
-      vec!["(no stations \u{2014} add behavior.radio_stations or search)".to_string()]
+      vec!["(no saved stations \u{2014} search to add)".to_string()]
     } else {
       app
         .radio_stations
@@ -203,7 +203,7 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
   // Check for width to make a responsive layout
   if is_wide_layout(app) {
-    let lib_constraints = library_constraints(&app.user_config.behavior);
+    let lib_constraints = library_constraints(&app.runtime_state);
     let [input_area, library_area, playlist_area] = layout_chunk.layout(&Layout::vertical([
       Constraint::Length(3),
       lib_constraints[0],
@@ -217,9 +217,8 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     draw_library_block(f, app, library_area);
     draw_playlist_block(f, app, playlist_area);
   } else {
-    let [library_area, playlist_area] = layout_chunk.layout(&Layout::vertical(
-      library_constraints(&app.user_config.behavior),
-    ));
+    let [library_area, playlist_area] =
+      layout_chunk.layout(&Layout::vertical(library_constraints(&app.runtime_state)));
 
     // Search input and help
     draw_library_block(f, app, library_area);

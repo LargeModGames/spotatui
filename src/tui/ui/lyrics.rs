@@ -10,7 +10,7 @@ use ratatui::{
 use super::player::draw_playbar;
 
 pub fn draw_lyrics_view(f: &mut Frame<'_>, app: &App) {
-  let (content_area, playbar_area) = fullscreen_view_layout(&app.user_config.behavior, f.area());
+  let (content_area, playbar_area) = fullscreen_view_layout(&app.runtime_state, f.area());
 
   draw_lyrics(f, app, content_area);
   if let Some(playbar_area) = playbar_area {
@@ -219,7 +219,7 @@ mod tests {
     // scroll_pos = 1.0 puts the active line at the vertical center of the
     // lyric area.
     let active_row = row_of(&buffer, "second line").expect("active line row");
-    let expected = 1 + (24 - app.user_config.behavior.playbar_height_rows - 2) / 2;
+    let expected = 1 + (24 - app.runtime_state.playbar_height_rows - 2) / 2;
     assert_eq!(active_row, expected);
   }
 

@@ -5,8 +5,8 @@ pub fn handler(key: Key, app: &mut App) {
   match key {
     Key::Enter | Key::Esc | Key::Char('q') | Key::Char(' ') => {
       if let Some(dismissed_id) = app.dismiss_active_announcement() {
-        app.user_config.mark_announcement_seen(dismissed_id);
-        if let Err(error) = app.user_config.save_config() {
+        app.runtime_state.mark_announcement_seen(dismissed_id);
+        if let Err(error) = app.save_runtime_state() {
           app.handle_error(anyhow::anyhow!(
             "Failed to persist dismissed announcement: {}",
             error

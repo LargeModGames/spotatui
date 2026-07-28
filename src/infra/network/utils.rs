@@ -213,7 +213,7 @@ impl UtilsNetwork for Network {
       (
         app.user_config.behavior.enable_announcements,
         app.user_config.behavior.announcement_feed_url.clone(),
-        app.user_config.behavior.seen_announcement_ids.clone(),
+        app.runtime_state.seen_announcement_ids.clone(),
       )
     };
 

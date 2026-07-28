@@ -1085,9 +1085,52 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     user_config.path_to_config.replace(path);
   }
   user_config.load_config()?;
+  let mut runtime_state = crate::core::state::RuntimeState::default();
+  let mut state_path = None;
+  let mut should_save_initial_state = false;
+  match crate::core::state::default_state_path() {
+    Ok(path) => {
+      let state_file_exists = path.exists();
+      match crate::core::state::load(&path) {
+        Ok(state) => {
+          runtime_state.apply_persisted(&state);
+          if !state_file_exists {
+            should_save_initial_state = true;
+          }
+          state_path = Some(path);
+        }
+        Err(e) => {
+          log::warn!("[state] ignoring unreadable runtime state: {e}");
+        }
+      }
+    }
+    Err(e) => {
+      log::warn!("[state] runtime state path is unavailable: {e}");
+    }
+  }
+  if let Some(startup_volume_percent) = user_config.behavior.volume_percent {
+    runtime_state.volume_percent = startup_volume_percent.min(100);
+  }
+  if let Some(sidebar_width_percent) = user_config.behavior.sidebar_width_percent {
+    runtime_state.sidebar_width_percent = sidebar_width_percent.min(100);
+  }
+  if let Some(playbar_height_rows) = user_config.behavior.playbar_height_rows {
+    runtime_state.playbar_height_rows = playbar_height_rows;
+  }
+  if let Some(library_height_percent) = user_config.behavior.library_height_percent {
+    runtime_state.library_height_percent = library_height_percent.min(100);
+  }
+  if should_save_initial_state {
+    if let Some(path) = &state_path {
+      let state = runtime_state.to_persisted();
+      if let Err(e) = crate::core::state::save(path, &state) {
+        log::warn!("[state] failed to save initial runtime state: {e}");
+      }
+    }
+  }
   info!("user config loaded successfully");
 
-  let initial_shuffle_enabled = user_config.behavior.shuffle_enabled;
+  let initial_shuffle_enabled = runtime_state.shuffle_enabled;
   let initial_startup_behavior = user_config.behavior.startup_behavior;
 
   // Load the persisted non-Spotify playback session so the last song can resume
@@ -1138,7 +1181,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // otherwise launch the Spotify-only auth wizard on a fresh install. Skipped for
   // CLI subcommands (Spotify-only) and when `--reconfigure-auth` is requested.
   if matches.subcommand_name().is_none() && !matches.get_flag("reconfigure-auth") {
-    crate::core::first_run::run_first_run_picker(&mut user_config, &mut client_config).await?;
+    crate::core::first_run::run_first_run_picker(
+      &mut user_config,
+      &mut runtime_state,
+      &mut client_config,
+    )
+    .await?;
   }
   client_config.load_config()?;
   info!("client authentication config loaded");
@@ -1179,7 +1227,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // when unauthenticated). A free-source TUI launch tries a silent token load and
   // tolerates its absence; the user can add Spotify later via in-TUI login.
   let spotify_required = matches.subcommand_name().is_some()
-    || user_config.behavior.active_source == crate::core::source::Source::Spotify;
+    || runtime_state.active_source == crate::core::source::Source::Spotify;
 
   // The GitHub update check runs concurrently with authentication: both are
   // network round trips and neither depends on the other, so the check no
@@ -1249,9 +1297,11 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   info!("app state initialized");
 
   // Initialise app state
-  let app = Arc::new(Mutex::new(App::new(
+  let app = Arc::new(Mutex::new(App::new_with_state(
     sync_io_tx,
     user_config.clone(),
+    runtime_state.clone(),
+    state_path.clone(),
     token_expiry,
   )));
 
@@ -1599,7 +1649,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         token_cache_path: final_token_cache_path.clone(),
         client_config: client_config.clone(),
         redirect_uri: selected_redirect_uri.clone(),
-        volume_percent: user_config.behavior.volume_percent,
+        volume_percent: runtime_state.volume_percent,
         device_startup_behavior,
         // A restored non-Spotify session owns the startup play/pause decision;
         // otherwise the deferred task fires it once the device is selected.
@@ -1719,7 +1769,8 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     )
     .await;
     if ui_result.is_err() {
-      cloned_app.lock().await.flush_config_save(true);
+      let mut app = cloned_app.lock().await;
+      app.flush_state_save(true);
     }
     ui_result?;
   }
@@ -2197,7 +2248,8 @@ async fn handle_mpris_events(
             if let Some(ref mut ctx) = app_lock.current_playback_context {
               ctx.shuffle_state = shuffle;
             }
-            app_lock.user_config.behavior.shuffle_enabled = shuffle;
+            app_lock.runtime_state.shuffle_enabled = shuffle;
+            app_lock.schedule_state_save();
           }
           continue;
         }
@@ -2207,7 +2259,8 @@ async fn handle_mpris_events(
         if let Some(ref mut ctx) = app_lock.current_playback_context {
           ctx.shuffle_state = shuffle;
         }
-        app_lock.user_config.behavior.shuffle_enabled = shuffle;
+        app_lock.runtime_state.shuffle_enabled = shuffle;
+        app_lock.schedule_state_save();
         app_lock.dispatch(IoEvent::Shuffle(shuffle));
       }
       MprisEvent::SetLoopStatus(loop_status) => {

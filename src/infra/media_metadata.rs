@@ -122,7 +122,7 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   let shuffle = !queue_owns_playback
     && context
       .map(|context| context.shuffle_state)
-      .unwrap_or(app.user_config.behavior.shuffle_enabled);
+      .unwrap_or(app.runtime_state.shuffle_enabled);
   let repeat = if queue_owns_playback {
     None
   } else {
