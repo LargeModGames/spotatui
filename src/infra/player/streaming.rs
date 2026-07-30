@@ -577,7 +577,7 @@ fn request_streaming_oauth_credentials() -> Result<Credentials> {
 pub fn ensure_streaming_credentials_cached() -> Result<()> {
   let cache_path = get_default_cache_path();
   if let Some(path) = cache_path.as_ref() {
-    std::fs::create_dir_all(path)?;
+    crate::core::paths::ensure_private_dir(path)?;
   }
   let cache = Cache::new(cache_path, None, None, None)?;
   if cache.credentials().is_none() {
@@ -591,7 +591,7 @@ pub fn ensure_streaming_credentials_cached() -> Result<()> {
 pub fn streaming_credentials_are_cached() -> Result<bool> {
   let cache_path = get_default_cache_path();
   if let Some(path) = cache_path.as_ref() {
-    std::fs::create_dir_all(path)?;
+    crate::core::paths::ensure_private_dir(path)?;
   }
   Ok(
     Cache::new(cache_path, None, None, None)?
@@ -756,7 +756,7 @@ impl StreamingPlayer {
 
     // Ensure cache directories exist
     if let Some(ref path) = cache_path {
-      std::fs::create_dir_all(path).ok();
+      crate::core::paths::ensure_private_dir(path).ok();
     }
     if let Some(ref path) = audio_cache_path {
       std::fs::create_dir_all(path).ok();
@@ -1288,7 +1288,7 @@ fn get_or_create_device_id(cache_path: Option<&std::path::Path>) -> Option<Strin
     }
   }
   let id = new_device_id_string();
-  let _ = std::fs::create_dir_all(cache_path);
+  let _ = crate::core::paths::ensure_private_dir(cache_path);
   let _ = std::fs::write(&id_file, &id);
   Some(id)
 }

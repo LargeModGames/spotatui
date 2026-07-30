@@ -222,26 +222,12 @@ pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
 pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
   let yaml = serde_yaml::to_string(state).context("serializing runtime state")?;
   if let Some(dir) = path.parent() {
-    ensure_private_state_dir(dir)?;
+    crate::core::paths::ensure_private_dir(dir)?;
   }
   let tmp = path.with_extension("yml.tmp");
   crate::core::auth::write_private_file(&tmp, yaml.as_bytes())
     .with_context(|| format!("writing {}", tmp.display()))?;
   std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
-  Ok(())
-}
-
-/// Ensure a state directory exists and is owner-only where supported.
-pub(crate) fn ensure_private_state_dir(dir: &Path) -> Result<()> {
-  std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-
-  #[cfg(unix)]
-  {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-      .with_context(|| format!("setting private permissions on {}", dir.display()))?;
-  }
-
   Ok(())
 }
 

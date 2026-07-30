@@ -1,4 +1,8 @@
-use std::{ffi::OsString, path::PathBuf};
+use anyhow::{Context, Result};
+use std::{
+  ffi::OsString,
+  path::{Path, PathBuf},
+};
 
 const APP_DIR: &str = "spotatui";
 const FALLBACK_CONFIG_DIR: [&str; 1] = [".config"];
@@ -45,6 +49,21 @@ pub(crate) fn app_state_dir() -> Option<PathBuf> {
     dirs::home_dir(),
     &FALLBACK_STATE_DIR,
   )
+}
+
+/// Ensure a directory that stores credentials or other private app data exists
+/// and is owner-only where supported.
+pub(crate) fn ensure_private_dir(dir: &Path) -> Result<()> {
+  std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+      .with_context(|| format!("setting private permissions on {}", dir.display()))?;
+  }
+
+  Ok(())
 }
 
 fn app_dir_from(
