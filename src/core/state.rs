@@ -231,7 +231,8 @@ pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
   Ok(())
 }
 
-fn ensure_private_state_dir(dir: &Path) -> Result<()> {
+/// Ensure a state directory exists and is owner-only where supported.
+pub(crate) fn ensure_private_state_dir(dir: &Path) -> Result<()> {
   std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
   #[cfg(unix)]

@@ -85,7 +85,7 @@ impl ClientConfig {
     ) {
       (Some(app_config_dir), Some(app_state_dir)) => {
         fs::create_dir_all(&app_config_dir)?;
-        fs::create_dir_all(&app_state_dir)?;
+        crate::core::state::ensure_private_state_dir(&app_state_dir)?;
 
         // Create .gitignore to protect sensitive config from being committed.
         let gitignore_path = app_config_dir.join(GITIGNORE_FILE);
