@@ -31,6 +31,20 @@ fn help_field_contains(field: &str, term: &str) -> bool {
   }
 }
 
+/// All byte offsets where `needle` starts in `haystack`, including overlapping
+/// occurrences, which `str::match_indices` skips (it resumes after each match).
+/// After each hit the search resumes one char later, not one match later.
+fn overlapping_match_starts(haystack: &str, needle: &str) -> Vec<usize> {
+  let mut starts = Vec::new();
+  let mut from = 0;
+  while let Some(pos) = haystack[from..].find(needle) {
+    let start = from + pos;
+    starts.push(start);
+    from = start + haystack[start..].chars().next().map_or(1, char::len_utf8);
+  }
+  starts
+}
+
 /// Byte ranges within a rendered help line where filter terms match, sorted and
 /// merged, so the Help table can highlight why each row survived the filter.
 /// Case sensitivity follows the same smart-case rule as [`help_field_contains`].
@@ -45,7 +59,7 @@ pub fn help_match_ranges(line: &str, filter: &str) -> Vec<(usize, usize)> {
   let mut byte_map: Vec<(usize, usize)> = Vec::new();
   for term in filter.split_whitespace() {
     if term.chars().any(|c| c.is_ascii_uppercase()) {
-      for (start, _) in line.match_indices(term) {
+      for start in overlapping_match_starts(line, term) {
         ranges.push((start, start + term.len()));
       }
     } else {
@@ -61,7 +75,7 @@ pub fn help_match_ranges(line: &str, filter: &str) -> Vec<(usize, usize)> {
         }
       }
       let needle = term.to_lowercase();
-      for (start, _) in haystack.match_indices(&needle) {
+      for start in overlapping_match_starts(&haystack, &needle) {
         // A match may start or end inside the multi-char lowering of a single
         // original char; widen it to whole original chars.
         ranges.push((byte_map[start].0, byte_map[start + needle.len() - 1].1));
@@ -584,6 +598,14 @@ mod tests {
   #[test]
   fn help_match_ranges_merges_overlapping_matches() {
     assert_eq!(help_match_ranges("aaaa", "aa aaa"), vec![(0, 4)]);
+  }
+
+  #[test]
+  fn help_match_ranges_finds_overlapping_occurrences_of_one_term() {
+    // `str::match_indices` alone would stop at (0, 2), leaving the last 'a'
+    // unhighlighted.
+    assert_eq!(help_match_ranges("aaa", "aa"), vec![(0, 3)]);
+    assert_eq!(help_match_ranges("AAA", "AA"), vec![(0, 3)]);
   }
 
   #[test]
