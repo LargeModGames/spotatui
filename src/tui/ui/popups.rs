@@ -10,7 +10,7 @@ use ratatui::{
   Frame,
 };
 
-use super::help::get_filtered_help_docs;
+use super::help::{get_filtered_help_docs, help_match_ranges};
 
 /// Formatted help rows are static between terminal-width, keybinding, or filter
 /// changes, so cache them instead of rebuilding ~80 owned Strings (plus
@@ -21,10 +21,40 @@ struct HelpMenuCache {
   filter: String,
   header: String,
   rows: Vec<String>,
+  /// Per-row filter-match byte ranges, parallel to `rows`. Precomputed here so
+  /// the render loop does not lowercase every visible row on every frame.
+  match_ranges: Vec<Vec<(usize, usize)>>,
 }
 
 static HELP_MENU_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<HelpMenuCache>>> =
   std::sync::OnceLock::new();
+
+/// Split a formatted help row into spans so every filter-term match renders in
+/// the highlight style, making it obvious why the row survived the filter.
+/// `ranges` are the row's precomputed [`help_match_ranges`] from the cache.
+fn highlighted_help_line<'a>(
+  row: &'a str,
+  ranges: &[(usize, usize)],
+  base: Style,
+  highlight: Style,
+) -> Line<'a> {
+  if ranges.is_empty() {
+    return Line::from(Span::styled(row, base));
+  }
+  let mut spans = Vec::with_capacity(ranges.len() * 2 + 1);
+  let mut cursor = 0;
+  for &(start, end) in ranges {
+    if cursor < start {
+      spans.push(Span::styled(&row[cursor..start], base));
+    }
+    spans.push(Span::styled(&row[start..end], highlight));
+    cursor = end;
+  }
+  if cursor < row.len() {
+    spans.push(Span::styled(&row[cursor..], base));
+  }
+  Line::from(spans)
+}
 
 fn build_help_rows(app: &App, total_width: usize) -> (String, Vec<String>) {
   // Create a one-column table to avoid flickering due to non-determinism when
@@ -89,12 +119,17 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   });
   if stale {
     let (header, rows) = build_help_rows(app, total_width);
+    let match_ranges = rows
+      .iter()
+      .map(|row| help_match_ranges(row, &app.help_filter))
+      .collect();
     *cache = Some(HelpMenuCache {
       width: total_width,
       keys: app.user_config.keys.clone(),
       filter: app.help_filter.clone(),
       header,
       rows,
+      match_ranges,
     });
   }
   let cache = cache.as_ref().expect("help cache populated above");
@@ -114,9 +149,21 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
         .style(Style::default().fg(app.user_config.theme.inactive)),
     ]
   } else {
+    let highlight_style = Style::default()
+      .fg(app.user_config.theme.active)
+      .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
     help_docs
       .iter()
-      .map(|item| Row::new([item.as_str()]).style(help_menu_style))
+      .zip(&cache.match_ranges[start..end])
+      .map(|(item, ranges)| {
+        Row::new([highlighted_help_line(
+          item,
+          ranges,
+          help_menu_style,
+          highlight_style,
+        )])
+        .style(help_menu_style)
+      })
       .collect()
   };
 
@@ -213,6 +260,36 @@ mod help_menu_tests {
 
     assert!(rendered.contains("<Esc>: go back"));
     assert!(!rendered.contains("press <Esc> to go back"));
+  }
+
+  #[test]
+  fn help_menu_highlights_matched_text_in_filtered_rows() {
+    let mut app = App::default();
+    app.help_filter = "volume".to_string();
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| draw_help_menu(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+
+    // Locate the row and column of the first "volume" match in the buffer.
+    // `find` returns a byte offset, but border symbols are multi-byte, so
+    // convert to a cell column by counting the chars before the match.
+    let (match_x, match_y) = (0..30)
+      .find_map(|y| {
+        let line: String = (0..100)
+          .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol().to_string()))
+          .collect();
+        line.find("Increase volume").map(|byte_idx| {
+          let cell_x = line[..byte_idx].chars().count() as u16;
+          (cell_x + "Increase ".len() as u16, y)
+        })
+      })
+      .expect("filtered help row should be rendered");
+
+    let matched = buffer.cell((match_x, match_y)).unwrap();
+    let unmatched = buffer.cell((match_x - "Increase ".len() as u16, match_y)).unwrap();
+    assert_eq!(matched.style().fg, Some(app.user_config.theme.active));
+    assert_ne!(unmatched.style().fg, Some(app.user_config.theme.active));
   }
 
   #[test]
