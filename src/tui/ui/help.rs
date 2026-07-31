@@ -592,7 +592,10 @@ mod tests {
   #[test]
   fn help_match_ranges_uses_smart_case() {
     assert!(help_match_ranges("Increase volume", "VOLUME").is_empty());
-    assert_eq!(help_match_ranges("Increase volume", "Increase"), vec![(0, 8)]);
+    assert_eq!(
+      help_match_ranges("Increase volume", "Increase"),
+      vec![(0, 8)]
+    );
   }
 
   #[test]

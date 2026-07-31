@@ -291,7 +291,9 @@ mod help_menu_tests {
       .expect("filtered help row should be rendered");
 
     let matched = buffer.cell((match_x, match_y)).unwrap();
-    let unmatched = buffer.cell((match_x - "Increase ".len() as u16, match_y)).unwrap();
+    let unmatched = buffer
+      .cell((match_x - "Increase ".len() as u16, match_y))
+      .unwrap();
     assert_eq!(matched.style().fg, Some(app.user_config.theme.active));
     assert_ne!(unmatched.style().fg, Some(app.user_config.theme.active));
   }
