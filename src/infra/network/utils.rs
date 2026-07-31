@@ -17,11 +17,8 @@ struct LrcResponse {
 
 impl LrcResponse {
   fn has_lyrics(&self) -> bool {
-    let has_text = |value: &Option<String>| {
-      value
-        .as_deref()
-        .is_some_and(|text| !text.trim().is_empty())
-    };
+    let has_text =
+      |value: &Option<String>| value.as_deref().is_some_and(|text| !text.trim().is_empty());
     has_text(&self.syncedLyrics) || has_text(&self.plainLyrics)
   }
 }
