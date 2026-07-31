@@ -571,6 +571,34 @@ behavior:
   }
 
   #[test]
+  fn legacy_runtime_state_migration_preserves_free_source_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yml");
+    std::fs::write(
+      &path,
+      r#"
+behavior:
+  active_source: Local
+"#,
+    )
+    .unwrap();
+    let persisted = PersistedRuntimeState::default();
+    let mut runtime = RuntimeState::default();
+
+    let patch =
+      apply_legacy_config_runtime_state_migration(&path, &mut runtime, &persisted).unwrap();
+
+    assert_eq!(runtime.active_source, Source::Local);
+    assert_eq!(
+      patch,
+      PersistedRuntimeState {
+        active_source: Some(Source::Local),
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
   fn legacy_runtime_state_fields_do_not_override_existing_persisted_fields() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.yml");
