@@ -55,17 +55,18 @@ pub(crate) fn state_file_path_with_legacy_config_rename(
 
   let state_dir = crate::core::paths::app_state_dir()
     .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))?;
+  crate::core::paths::ensure_private_dir(&state_dir)?;
   let state_path = state_dir.join(relative_path);
 
   if let Some(config_dir) = crate::core::paths::app_config_dir() {
     let legacy_path = config_dir.join(relative_path);
-    rename_legacy_file_if_unclaimed(&legacy_path, &state_path)?;
+    migrate_legacy_path_if_unclaimed(&legacy_path, &state_path)?;
   }
 
   Ok(state_path)
 }
 
-pub(crate) fn rename_legacy_file_if_unclaimed(
+pub(crate) fn migrate_legacy_path_if_unclaimed(
   legacy_path: &Path,
   state_path: &Path,
 ) -> Result<bool> {
@@ -77,9 +78,8 @@ pub(crate) fn rename_legacy_file_if_unclaimed(
     fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
   }
 
-  match fs::hard_link(legacy_path, state_path) {
+  match fs::rename(legacy_path, state_path) {
     Ok(()) => {
-      remove_legacy_file_after_migration(legacy_path, state_path);
       log::info!(
         "migrated legacy app data from {} to {}",
         legacy_path.display(),
@@ -89,11 +89,11 @@ pub(crate) fn rename_legacy_file_if_unclaimed(
     }
     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-    Err(link_error) => {
-      if !copy_legacy_file_if_unclaimed(legacy_path, state_path, &link_error)? {
+    Err(rename_error) => {
+      if !copy_legacy_path_if_unclaimed(legacy_path, state_path, &rename_error)? {
         return Ok(false);
       }
-      remove_legacy_file_after_migration(legacy_path, state_path);
+      remove_legacy_path_after_migration(legacy_path, state_path);
       log::info!(
         "migrated legacy app data from {} to {}",
         legacy_path.display(),
@@ -104,11 +104,23 @@ pub(crate) fn rename_legacy_file_if_unclaimed(
   }
 }
 
-fn copy_legacy_file_if_unclaimed(
+fn copy_legacy_path_if_unclaimed(
   legacy_path: &Path,
   state_path: &Path,
-  link_error: &std::io::Error,
+  rename_error: &std::io::Error,
 ) -> Result<bool> {
+  let metadata = match fs::symlink_metadata(legacy_path) {
+    Ok(metadata) => metadata,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+    Err(error) => {
+      return Err(error).with_context(|| format!("checking {}", legacy_path.display()));
+    }
+  };
+
+  if metadata.is_dir() {
+    return copy_legacy_dir_if_unclaimed(legacy_path, state_path, rename_error);
+  }
+
   let mut source = match fs::File::open(legacy_path) {
     Ok(file) => file,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -116,17 +128,20 @@ fn copy_legacy_file_if_unclaimed(
       return Err(error).with_context(|| format!("opening {}", legacy_path.display()));
     }
   };
-  let mut target = match fs::OpenOptions::new()
-    .write(true)
-    .create_new(true)
-    .open(state_path)
+  let mut target_options = fs::OpenOptions::new();
+  target_options.write(true).create_new(true);
+  #[cfg(unix)]
   {
+    use std::os::unix::fs::OpenOptionsExt;
+    target_options.mode(0o600);
+  }
+  let mut target = match target_options.open(state_path) {
     Ok(file) => file,
     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
     Err(error) => {
       return Err(error).with_context(|| {
         format!(
-          "linking {} to {} failed ({link_error}); creating copy target also failed",
+          "renaming {} to {} failed ({rename_error}); creating copy target also failed",
           legacy_path.display(),
           state_path.display()
         )
@@ -138,7 +153,7 @@ fn copy_legacy_file_if_unclaimed(
     let _ = fs::remove_file(state_path);
     return Err(error).with_context(|| {
       format!(
-        "linking {} to {} failed ({link_error}); copying fallback also failed",
+        "renaming {} to {} failed ({rename_error}); copying fallback also failed",
         legacy_path.display(),
         state_path.display()
       )
@@ -148,8 +163,69 @@ fn copy_legacy_file_if_unclaimed(
   Ok(true)
 }
 
-fn remove_legacy_file_after_migration(legacy_path: &Path, state_path: &Path) {
-  match fs::remove_file(legacy_path) {
+fn copy_legacy_dir_if_unclaimed(
+  legacy_path: &Path,
+  state_path: &Path,
+  rename_error: &std::io::Error,
+) -> Result<bool> {
+  match fs::create_dir(state_path) {
+    Ok(()) => {}
+    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+    Err(error) => {
+      return Err(error).with_context(|| {
+        format!(
+          "renaming {} to {} failed ({rename_error}); creating copy target also failed",
+          legacy_path.display(),
+          state_path.display()
+        )
+      });
+    }
+  }
+
+  if let Err(error) = copy_dir_contents(legacy_path, state_path) {
+    let _ = fs::remove_dir_all(state_path);
+    return Err(error);
+  }
+
+  Ok(true)
+}
+
+fn copy_dir_contents(legacy_path: &Path, state_path: &Path) -> Result<()> {
+  for entry in
+    fs::read_dir(legacy_path).with_context(|| format!("reading {}", legacy_path.display()))?
+  {
+    let entry = entry?;
+    let source = entry.path();
+    let target = state_path.join(entry.file_name());
+    let metadata = entry
+      .metadata()
+      .with_context(|| format!("checking {}", source.display()))?;
+
+    if metadata.is_dir() {
+      fs::create_dir(&target).with_context(|| format!("creating {}", target.display()))?;
+      copy_dir_contents(&source, &target)?;
+    } else {
+      fs::copy(&source, &target).with_context(|| {
+        format!(
+          "copying legacy app data from {} to {}",
+          source.display(),
+          target.display()
+        )
+      })?;
+    }
+  }
+
+  Ok(())
+}
+
+fn remove_legacy_path_after_migration(legacy_path: &Path, state_path: &Path) {
+  let remove_result = match fs::symlink_metadata(legacy_path) {
+    Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(legacy_path),
+    Ok(_) => fs::remove_file(legacy_path),
+    Err(error) => Err(error),
+  };
+
+  match remove_result {
     Ok(()) => {}
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
     Err(error) => log::warn!(
@@ -425,7 +501,7 @@ mod tests {
     std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
     std::fs::write(&legacy_path, "legacy listens").unwrap();
 
-    assert!(rename_legacy_file_if_unclaimed(&legacy_path, &state_path).unwrap());
+    assert!(migrate_legacy_path_if_unclaimed(&legacy_path, &state_path).unwrap());
     assert!(!legacy_path.exists());
     assert_eq!(
       std::fs::read_to_string(&state_path).unwrap(),
@@ -439,7 +515,7 @@ mod tests {
     let legacy_path = dir.path().join("config").join("last_session.yml");
     let state_path = dir.path().join("state").join("last_session.yml");
 
-    assert!(!rename_legacy_file_if_unclaimed(&legacy_path, &state_path).unwrap());
+    assert!(!migrate_legacy_path_if_unclaimed(&legacy_path, &state_path).unwrap());
     assert!(!state_path.exists());
   }
 
@@ -461,12 +537,35 @@ mod tests {
     std::fs::write(&legacy_path, "legacy cursor").unwrap();
     std::fs::write(&state_path, "offset:42").unwrap();
 
-    assert!(!rename_legacy_file_if_unclaimed(&legacy_path, &state_path).unwrap());
+    assert!(!migrate_legacy_path_if_unclaimed(&legacy_path, &state_path).unwrap());
     assert_eq!(
       std::fs::read_to_string(&legacy_path).unwrap(),
       "legacy cursor"
     );
     assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "offset:42");
+  }
+
+  #[test]
+  fn legacy_path_migration_moves_directory_when_target_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy_path = dir.path().join("config").join("streaming_cache");
+    let state_path = dir.path().join("cache").join("streaming_cache");
+    std::fs::create_dir_all(&legacy_path).unwrap();
+    std::fs::write(legacy_path.join("credentials.json"), "legacy credentials").unwrap();
+    std::fs::create_dir_all(legacy_path.join("audio")).unwrap();
+    std::fs::write(legacy_path.join("audio").join("chunk"), "audio cache").unwrap();
+
+    assert!(migrate_legacy_path_if_unclaimed(&legacy_path, &state_path).unwrap());
+
+    assert!(!legacy_path.exists());
+    assert_eq!(
+      std::fs::read_to_string(state_path.join("credentials.json")).unwrap(),
+      "legacy credentials"
+    );
+    assert_eq!(
+      std::fs::read_to_string(state_path.join("audio").join("chunk")).unwrap(),
+      "audio cache"
+    );
   }
 
   #[test]
