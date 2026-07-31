@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Help search highlights its matches**: While filtering the Help menu (search key, `/` by default), every occurrence of your search terms is now highlighted in the visible rows, so you can see at a glance which part of a row matched. Highlighting follows the same smart-case rule as the filter itself ([#408](https://github.com/LargeModGames/spotatui/issues/408)).
+
 ## [v0.40.3] 2026-07-27
 
 ### Added
