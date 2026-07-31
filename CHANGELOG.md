@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Generated app state now uses XDG state/cache directories**: `config.yml` stays in the app config directory for user-authored settings, while runtime-managed state (`state.yml`), listening history, last playback session, and Spotify token caches move to the app state directory. Native streaming credentials and audio cache move to the app cache directory. Existing config-dir runtime fields, radio favorites, listening history, and playback-session files are migrated on first use when the new path is still empty, preserving free-source startup and existing in-app radio favorites during upgrade. Existing Spotify token caches and native streaming caches are not migrated automatically.
+
 ## [v0.40.3] 2026-07-27
 
 ### Added
