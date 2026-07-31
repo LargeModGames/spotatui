@@ -336,7 +336,9 @@ impl Network {
         ctx.shuffle_state = true;
       }
       app.runtime_state.shuffle_enabled = true;
-      app.schedule_state_save();
+      app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+        true,
+      ));
       generation
     };
 

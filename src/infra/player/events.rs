@@ -877,7 +877,9 @@ async fn handle_player_events(
               ctx.device.volume_percent = Some(volume_percent as u32);
             }
             app.runtime_state.volume_percent = volume_percent.min(100);
-            let _ = app.save_runtime_state();
+            let _ = app.save_runtime_state(
+              &crate::core::state::PersistedRuntimeState::volume_percent(volume_percent.min(100)),
+            );
           }
         }
       }

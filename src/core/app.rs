@@ -1726,6 +1726,8 @@ pub struct App {
   /// Deadline for a debounced state save scheduled by auto-repeating runtime
   /// state changes such as volume and shuffle.
   pub state_save_due: Option<Instant>,
+  /// Runtime-state patch waiting for the next debounced save.
+  pub pending_state_save_patch: PersistedRuntimeState,
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
@@ -2082,6 +2084,7 @@ impl Default for App {
       playlist_sort_fetch_in_flight: HashSet::new(),
       is_volume_change_in_flight: false,
       state_save_due: None,
+      pending_state_save_patch: PersistedRuntimeState::default(),
       pending_volume: None,
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
@@ -3950,21 +3953,32 @@ impl App {
   /// instead of `save_runtime_state()` so a held key doesn't pay
   /// disk + YAML work on every auto-repeat; the save lands once, shortly
   /// after the last change.
-  pub fn schedule_state_save(&mut self) {
+  pub fn schedule_state_save(&mut self, patch: PersistedRuntimeState) {
+    if patch.is_empty() {
+      return;
+    }
     const STATE_SAVE_DEBOUNCE_MS: u64 = 500;
+    self.pending_state_save_patch.merge_patch(&patch);
     self.state_save_due = Some(Instant::now() + Duration::from_millis(STATE_SAVE_DEBOUNCE_MS));
   }
 
-  pub fn current_runtime_state(&self) -> PersistedRuntimeState {
-    self.runtime_state.to_persisted()
-  }
-
-  pub fn save_runtime_state(&self) -> anyhow::Result<()> {
+  pub fn save_runtime_state(&self, patch: &PersistedRuntimeState) -> anyhow::Result<()> {
+    if patch.is_empty() {
+      return Ok(());
+    }
     let path = match &self.state_path {
       Some(path) => path.clone(),
       None => crate::core::state::default_state_path()?,
     };
-    crate::core::state::save(&path, &self.current_runtime_state())
+    crate::core::state::save(&path, patch)
+  }
+
+  fn save_removed_radio_station(&self, url: &str) -> anyhow::Result<()> {
+    let path = match &self.state_path {
+      Some(path) => path.clone(),
+      None => crate::core::state::default_state_path()?,
+    };
+    crate::core::state::save_removing_radio_station(&path, url)
   }
 
   pub fn add_radio_station(
@@ -3978,7 +3992,10 @@ impl App {
     let before_len = self.runtime_state.radio_stations.len();
     let outcome = self.runtime_state.add_radio_station(name, url)?;
     if outcome == RadioStationAddOutcome::Added {
-      if let Err(error) = self.save_runtime_state() {
+      let Some(station) = self.runtime_state.radio_stations.get(before_len).cloned() else {
+        return Ok(outcome);
+      };
+      if let Err(error) = self.save_runtime_state(&PersistedRuntimeState::radio_station(station)) {
         self.runtime_state.radio_stations.truncate(before_len);
         return Err(error);
       }
@@ -4001,16 +4018,17 @@ impl App {
     &mut self,
     url: impl AsRef<str>,
   ) -> anyhow::Result<Option<RadioStationConfig>> {
+    let url = url.as_ref().trim().to_string();
     let Some(index) = self
       .runtime_state
       .radio_stations
       .iter()
-      .position(|station| station.url.trim() == url.as_ref().trim())
+      .position(|station| station.url.trim() == url)
     else {
       return Ok(None);
     };
-    let removed = self.runtime_state.remove_radio_station_by_url(url)?;
-    if let Err(error) = self.save_runtime_state() {
+    let removed = self.runtime_state.remove_radio_station_by_url(&url)?;
+    if let Err(error) = self.save_removed_radio_station(&url) {
       if let Some(removed) = removed {
         self.runtime_state.radio_stations.insert(index, removed);
       }
@@ -4026,8 +4044,10 @@ impl App {
       return;
     };
     if force || Instant::now() >= due {
+      let patch = std::mem::take(&mut self.pending_state_save_patch);
       self.state_save_due = None;
-      if let Err(e) = self.save_runtime_state() {
+      if let Err(e) = self.save_runtime_state(&patch) {
+        self.pending_state_save_patch.merge_patch(&patch);
         self.handle_error(anyhow!("Failed to save state: {}", e));
       }
     }
@@ -4103,7 +4123,7 @@ impl App {
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume));
         self.runtime_state.volume_percent = next_volume;
-        self.schedule_state_save();
+        self.schedule_state_save(PersistedRuntimeState::volume_percent(next_volume));
         self.pending_volume = Some(next_volume);
         return;
       }
@@ -4118,7 +4138,7 @@ impl App {
             ctx.device.volume_percent = Some(next_volume.into());
           }
           self.runtime_state.volume_percent = next_volume;
-          self.schedule_state_save();
+          self.schedule_state_save(PersistedRuntimeState::volume_percent(next_volume));
           self.pending_volume = Some(next_volume);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -4159,7 +4179,7 @@ impl App {
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume));
         self.runtime_state.volume_percent = next_volume;
-        self.schedule_state_save();
+        self.schedule_state_save(PersistedRuntimeState::volume_percent(next_volume));
         self.pending_volume = Some(next_volume);
         return;
       }
@@ -4174,7 +4194,7 @@ impl App {
             ctx.device.volume_percent = Some(next_volume.into());
           }
           self.runtime_state.volume_percent = next_volume;
-          self.schedule_state_save();
+          self.schedule_state_save(PersistedRuntimeState::volume_percent(next_volume));
           self.pending_volume = Some(next_volume);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -4220,7 +4240,7 @@ impl App {
       if self.active_decoded_source() {
         self.dispatch(IoEvent::ChangeVolume(next_volume_u8));
         self.runtime_state.volume_percent = next_volume_u8;
-        self.schedule_state_save();
+        self.schedule_state_save(PersistedRuntimeState::volume_percent(next_volume_u8));
         self.pending_volume = Some(next_volume_u8);
         return;
       }
@@ -4235,7 +4255,7 @@ impl App {
             ctx.device.volume_percent = Some(next_volume_u8.into());
           }
           self.runtime_state.volume_percent = next_volume_u8;
-          self.schedule_state_save();
+          self.schedule_state_save(PersistedRuntimeState::volume_percent(next_volume_u8));
           self.pending_volume = Some(next_volume_u8);
 
           // Notify MPRIS clients of the change (VolumeChanged is never emitted by
@@ -6315,7 +6335,7 @@ impl App {
           ctx.shuffle_state = new_shuffle_state;
         }
         self.runtime_state.shuffle_enabled = new_shuffle_state;
-        self.schedule_state_save();
+        self.schedule_state_save(PersistedRuntimeState::shuffle_enabled(new_shuffle_state));
 
         // Notify MPRIS clients of the change
         #[cfg(all(feature = "mpris", target_os = "linux"))]

@@ -750,7 +750,9 @@ async fn start_native_context_via_api(
         ctx.shuffle_state = desired_shuffle_state;
       }
       app.runtime_state.shuffle_enabled = desired_shuffle_state;
-      app.schedule_state_save();
+      app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+        desired_shuffle_state,
+      ));
       // Keep the recovery chain alive: if the API accepted the start but the
       // native device never emits a player event, the watchdog fires again and
       // the bounded attempt counter eventually drops the request with a
@@ -1521,7 +1523,9 @@ impl PlaybackNetwork for Network {
             ctx.shuffle_state = desired_shuffle_state;
           }
           app.runtime_state.shuffle_enabled = desired_shuffle_state;
-          app.schedule_state_save();
+          app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+            desired_shuffle_state,
+          ));
         }
         Err(load_err) => {
           let Some((device_id, context)) = api_fallback else {
@@ -1572,7 +1576,9 @@ impl PlaybackNetwork for Network {
           ctx.shuffle_state = desired_shuffle_state;
         }
         app.runtime_state.shuffle_enabled = desired_shuffle_state;
-        app.schedule_state_save();
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+          desired_shuffle_state,
+        ));
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
@@ -1647,7 +1653,11 @@ impl PlaybackNetwork for Network {
                     ctx.shuffle_state = desired_shuffle_state;
                   }
                   app.runtime_state.shuffle_enabled = desired_shuffle_state;
-                  app.schedule_state_save();
+                  app.schedule_state_save(
+                    crate::core::state::PersistedRuntimeState::shuffle_enabled(
+                      desired_shuffle_state,
+                    ),
+                  );
                 }
                 return;
               }
@@ -1961,7 +1971,9 @@ impl PlaybackNetwork for Network {
         ctx.shuffle_state = shuffle_state;
       }
       app.runtime_state.shuffle_enabled = shuffle_state;
-      app.schedule_state_save();
+      app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+        shuffle_state,
+      ));
       return;
     }
 
@@ -1980,7 +1992,9 @@ impl PlaybackNetwork for Network {
           ctx.shuffle_state = shuffle_state;
         }
         app.runtime_state.shuffle_enabled = shuffle_state;
-        app.schedule_state_save();
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+          shuffle_state,
+        ));
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
@@ -2050,7 +2064,9 @@ impl PlaybackNetwork for Network {
         ctx.device.volume_percent = Some(volume.into());
       }
       app.runtime_state.volume_percent = volume.min(100);
-      app.schedule_state_save();
+      app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
+        volume.min(100),
+      ));
       app.is_volume_change_in_flight = false;
       app.last_dispatched_volume = Some(volume);
       // Keep pending_volume set — cleared when API confirms the value matches
@@ -2072,7 +2088,9 @@ impl PlaybackNetwork for Network {
           ctx.device.volume_percent = Some(volume.into());
         }
         app.runtime_state.volume_percent = volume.min(100);
-        app.schedule_state_save();
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
+          volume.min(100),
+        ));
         app.is_volume_change_in_flight = false;
         app.last_dispatched_volume = Some(volume);
         // Keep pending_volume set — cleared when get_current_playback confirms

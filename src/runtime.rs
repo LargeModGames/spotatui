@@ -29,6 +29,7 @@ use crate::cli;
 use crate::core::app::App;
 use crate::core::auth;
 use crate::core::config::ClientConfig;
+use crate::core::layout::MAX_PLAYBAR_ROWS;
 use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::{
   validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
@@ -45,7 +46,6 @@ use crate::infra::network::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::infra::player;
 use crate::tui::banner::BANNER;
-use crate::tui::handlers::resize::MAX_PLAYBAR_ROWS;
 
 use anyhow::{anyhow, Result};
 use backtrace::Backtrace;
@@ -982,35 +982,35 @@ fn apply_configured_runtime_defaults(
   runtime_state: &mut RuntimeState,
   persisted_state: &PersistedRuntimeState,
   behavior: &BehaviorConfig,
-) -> bool {
-  let mut applied_default = false;
+) -> PersistedRuntimeState {
+  let mut applied_defaults = PersistedRuntimeState::default();
 
   if persisted_state.volume_percent.is_none() {
     if let Some(volume_percent) = behavior.volume_percent {
       runtime_state.volume_percent = volume_percent.min(100);
-      applied_default = true;
+      applied_defaults.volume_percent = Some(runtime_state.volume_percent);
     }
   }
   if persisted_state.sidebar_width_percent.is_none() {
     if let Some(sidebar_width_percent) = behavior.sidebar_width_percent {
       runtime_state.sidebar_width_percent = sidebar_width_percent.min(100);
-      applied_default = true;
+      applied_defaults.sidebar_width_percent = Some(runtime_state.sidebar_width_percent);
     }
   }
   if persisted_state.playbar_height_rows.is_none() {
     if let Some(playbar_height_rows) = behavior.playbar_height_rows {
       runtime_state.playbar_height_rows = playbar_height_rows.min(MAX_PLAYBAR_ROWS);
-      applied_default = true;
+      applied_defaults.playbar_height_rows = Some(runtime_state.playbar_height_rows);
     }
   }
   if persisted_state.library_height_percent.is_none() {
     if let Some(library_height_percent) = behavior.library_height_percent {
       runtime_state.library_height_percent = library_height_percent.min(100);
-      applied_default = true;
+      applied_defaults.library_height_percent = Some(runtime_state.library_height_percent);
     }
   }
 
-  applied_default
+  applied_defaults
 }
 
 pub async fn run() -> Result<()> {
@@ -1149,14 +1149,15 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       log::warn!("[state] runtime state path is unavailable: {e}");
     }
   }
-  if apply_configured_runtime_defaults(&mut runtime_state, &persisted_state, &user_config.behavior)
-    && can_save_initial_state
-  {
-    should_save_initial_state = true;
-  }
-  if should_save_initial_state {
+  let default_fields =
+    apply_configured_runtime_defaults(&mut runtime_state, &persisted_state, &user_config.behavior);
+  let state = if should_save_initial_state {
+    runtime_state.to_persisted()
+  } else {
+    default_fields
+  };
+  if can_save_initial_state && !state.is_empty() {
     if let Some(path) = &state_path {
-      let state = runtime_state.to_persisted();
       if let Err(e) = crate::core::state::save(path, &state) {
         log::warn!("[state] failed to save initial runtime state: {e}");
       }
@@ -2283,7 +2284,9 @@ async fn handle_mpris_events(
               ctx.shuffle_state = shuffle;
             }
             app_lock.runtime_state.shuffle_enabled = shuffle;
-            app_lock.schedule_state_save();
+            app_lock.schedule_state_save(
+              crate::core::state::PersistedRuntimeState::shuffle_enabled(shuffle),
+            );
           }
           continue;
         }
@@ -2294,7 +2297,9 @@ async fn handle_mpris_events(
           ctx.shuffle_state = shuffle;
         }
         app_lock.runtime_state.shuffle_enabled = shuffle;
-        app_lock.schedule_state_save();
+        app_lock.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+          shuffle,
+        ));
         app_lock.dispatch(IoEvent::Shuffle(shuffle));
       }
       MprisEvent::SetLoopStatus(loop_status) => {
@@ -2757,9 +2762,9 @@ async fn route_decoded_windows_event(
 #[cfg(test)]
 mod tests {
   use super::{apply_configured_runtime_defaults, startup_device_decision, StartupDeviceEvent};
+  use crate::core::layout::MAX_PLAYBAR_ROWS;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
   use crate::core::user_config::{StartupBehavior, UserConfig};
-  use crate::tui::handlers::resize::MAX_PLAYBAR_ROWS;
   use rspotify::model::{device::Device, DeviceType};
 
   const NATIVE_NAME: &str = "spotatui";
@@ -2788,11 +2793,10 @@ mod tests {
     let mut runtime = RuntimeState::default();
     runtime.apply_persisted(&persisted);
 
-    assert!(!apply_configured_runtime_defaults(
-      &mut runtime,
-      &persisted,
-      &config.behavior,
-    ));
+    assert_eq!(
+      apply_configured_runtime_defaults(&mut runtime, &persisted, &config.behavior),
+      PersistedRuntimeState::default()
+    );
     assert_eq!(runtime.volume_percent, 42);
     assert_eq!(runtime.sidebar_width_percent, 25);
     assert_eq!(runtime.playbar_height_rows, 5);
@@ -2809,11 +2813,15 @@ mod tests {
     let mut runtime = RuntimeState::default();
     runtime.apply_persisted(&persisted);
 
-    assert!(apply_configured_runtime_defaults(
-      &mut runtime,
-      &persisted,
-      &config.behavior,
-    ));
+    assert_eq!(
+      apply_configured_runtime_defaults(&mut runtime, &persisted, &config.behavior),
+      PersistedRuntimeState {
+        sidebar_width_percent: Some(40),
+        playbar_height_rows: Some(MAX_PLAYBAR_ROWS),
+        library_height_percent: Some(60),
+        ..Default::default()
+      }
+    );
     assert_eq!(runtime.volume_percent, 42);
     assert_eq!(runtime.sidebar_width_percent, 40);
     assert_eq!(runtime.playbar_height_rows, MAX_PLAYBAR_ROWS);

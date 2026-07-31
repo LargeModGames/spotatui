@@ -4,6 +4,7 @@ use crate::core::user_config::BehaviorConfig;
 use ratatui::layout::{Constraint, Layout, Rect};
 
 pub const COMPACT_TOP_ROW_THRESHOLD: u16 = 60;
+pub const MAX_PLAYBAR_ROWS: u16 = 50;
 const COMPACT_HELP_WIDTH: u16 = 6;
 const COMPACT_SETTINGS_WIDTH: u16 = 10;
 

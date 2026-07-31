@@ -111,7 +111,9 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
         // Keep the playbar's volume readout in sync.
         let mut app = app.lock().await;
         app.runtime_state.volume_percent = *volume;
-        app.schedule_state_save();
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
+          *volume,
+        ));
         true
       }
       None => false,

@@ -848,7 +848,11 @@ pub async fn start_ui(
             } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
               if let Some(dismissed_id) = app.dismiss_active_announcement() {
                 app.runtime_state.mark_announcement_seen(dismissed_id);
-                if let Err(error) = app.save_runtime_state() {
+                let patch = crate::core::state::PersistedRuntimeState::announcements(
+                  &app.runtime_state.seen_announcement_ids,
+                  &app.runtime_state.dismissed_announcements,
+                );
+                if let Err(error) = app.save_runtime_state(&patch) {
                   app.handle_error(anyhow!(
                     "Failed to persist dismissed announcement: {}",
                     error

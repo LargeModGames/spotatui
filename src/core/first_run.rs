@@ -105,7 +105,10 @@ async fn apply_selections(
   // The active source is runtime state, so save it separately.
   user_config.save_config()?;
   let state_path = crate::core::state::default_state_path()?;
-  crate::core::state::save(&state_path, &runtime_state.to_persisted())?;
+  crate::core::state::save(
+    &state_path,
+    &crate::core::state::PersistedRuntimeState::active_source(runtime_state.active_source),
+  )?;
 
   // Collect credentials / check prerequisites for each chosen free source.
   for source in &selections {

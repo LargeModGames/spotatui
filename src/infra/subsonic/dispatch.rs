@@ -122,7 +122,9 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
         p.set_volume(*volume as f32 / 100.0);
         let mut app = app.lock().await;
         app.runtime_state.volume_percent = *volume;
-        app.schedule_state_save();
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
+          *volume,
+        ));
         true
       }
       None => false,

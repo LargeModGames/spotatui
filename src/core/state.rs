@@ -5,7 +5,7 @@
 //! edits do not churn every time volume, source, pane sizes, announcements, or
 //! radio stations change.
 
-use crate::core::source::Source;
+use crate::core::{layout::MAX_PLAYBAR_ROWS, source::Source};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -76,7 +76,7 @@ impl RuntimeState {
       self.sidebar_width_percent = sidebar_width_percent.min(100);
     }
     if let Some(playbar_height_rows) = state.playbar_height_rows {
-      self.playbar_height_rows = playbar_height_rows;
+      self.playbar_height_rows = playbar_height_rows.min(MAX_PLAYBAR_ROWS);
     }
     if let Some(library_height_percent) = state.library_height_percent {
       self.library_height_percent = library_height_percent.min(100);
@@ -94,7 +94,7 @@ impl RuntimeState {
       seen_announcement_ids: Some(sanitized_ids(&self.seen_announcement_ids)),
       dismissed_announcements: Some(sanitized_ids(&self.dismissed_announcements)),
       sidebar_width_percent: Some(self.sidebar_width_percent.min(100)),
-      playbar_height_rows: Some(self.playbar_height_rows),
+      playbar_height_rows: Some(self.playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
       library_height_percent: Some(self.library_height_percent.min(100)),
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
     }
@@ -194,6 +194,97 @@ pub struct PersistedRuntimeState {
   pub radio_stations: Option<Vec<RadioStationConfig>>,
 }
 
+impl PersistedRuntimeState {
+  pub fn volume_percent(volume_percent: u8) -> Self {
+    Self {
+      volume_percent: Some(volume_percent.min(100)),
+      ..Default::default()
+    }
+  }
+
+  pub fn shuffle_enabled(shuffle_enabled: bool) -> Self {
+    Self {
+      shuffle_enabled: Some(shuffle_enabled),
+      ..Default::default()
+    }
+  }
+
+  pub fn active_source(active_source: Source) -> Self {
+    Self {
+      active_source: Some(active_source),
+      ..Default::default()
+    }
+  }
+
+  pub fn announcements(
+    seen_announcement_ids: &[String],
+    dismissed_announcements: &[String],
+  ) -> Self {
+    Self {
+      seen_announcement_ids: Some(sanitized_ids(seen_announcement_ids)),
+      dismissed_announcements: Some(sanitized_ids(dismissed_announcements)),
+      ..Default::default()
+    }
+  }
+
+  pub fn sidebar_width_percent(sidebar_width_percent: u8) -> Self {
+    Self {
+      sidebar_width_percent: Some(sidebar_width_percent.min(100)),
+      ..Default::default()
+    }
+  }
+
+  pub fn playbar_height_rows(playbar_height_rows: u16) -> Self {
+    Self {
+      playbar_height_rows: Some(playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
+      ..Default::default()
+    }
+  }
+
+  pub fn library_height_percent(library_height_percent: u8) -> Self {
+    Self {
+      library_height_percent: Some(library_height_percent.min(100)),
+      ..Default::default()
+    }
+  }
+
+  pub fn layout(
+    sidebar_width_percent: u8,
+    playbar_height_rows: u16,
+    library_height_percent: u8,
+  ) -> Self {
+    Self {
+      sidebar_width_percent: Some(sidebar_width_percent.min(100)),
+      playbar_height_rows: Some(playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
+      library_height_percent: Some(library_height_percent.min(100)),
+      ..Default::default()
+    }
+  }
+
+  pub fn radio_station(radio_station: RadioStationConfig) -> Self {
+    Self {
+      radio_stations: Some(vec![radio_station]),
+      ..Default::default()
+    }
+  }
+
+  pub fn merge_patch(&mut self, patch: &Self) {
+    merge_state_patch(self, patch);
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.volume_percent.is_none()
+      && self.shuffle_enabled.is_none()
+      && self.active_source.is_none()
+      && self.seen_announcement_ids.is_none()
+      && self.dismissed_announcements.is_none()
+      && self.sidebar_width_percent.is_none()
+      && self.playbar_height_rows.is_none()
+      && self.library_height_percent.is_none()
+      && self.radio_stations.is_none()
+  }
+}
+
 /// Location of the app runtime-state file: `<state dir>/state.yml`.
 pub fn default_state_path() -> Result<PathBuf> {
   crate::core::paths::app_state_dir()
@@ -209,8 +300,9 @@ pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
       if contents.trim().is_empty() {
         Ok(PersistedRuntimeState::default())
       } else {
-        serde_yaml::from_str(&contents)
-          .with_context(|| format!("malformed runtime state file: {}", path.display()))
+        let state = serde_yaml::from_str(&contents)
+          .with_context(|| format!("malformed runtime state file: {}", path.display()))?;
+        Ok(sanitized_persisted_state(&state))
       }
     }
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PersistedRuntimeState::default()),
@@ -218,9 +310,33 @@ pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
   }
 }
 
-/// Save state atomically and privately.
+/// Save a state patch atomically and privately.
+///
+/// Runtime saves are intentionally read-modify-write: most save call sites only
+/// own one field, so blindly writing a whole in-memory snapshot would clobber
+/// updates made by another running instance.
 pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
-  let yaml = serde_yaml::to_string(state).context("serializing runtime state")?;
+  let mut merged = load(path)?;
+  merge_state_patch(&mut merged, state);
+  write_state(path, &merged)
+}
+
+/// Remove a radio station without sending a stale full station list.
+pub fn save_removing_radio_station(path: &Path, url: &str) -> Result<()> {
+  let mut merged = load(path)?;
+  if let Some(stations) = &mut merged.radio_stations {
+    let url = url.trim();
+    stations.retain(|station| station.url.trim() != url);
+    *stations = sanitized_radio_stations(stations);
+  } else {
+    merged.radio_stations = Some(Vec::new());
+  }
+  write_state(path, &merged)
+}
+
+fn write_state(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
+  let state = sanitized_persisted_state(state);
+  let yaml = serde_yaml::to_string(&state).context("serializing runtime state")?;
   if let Some(dir) = path.parent() {
     crate::core::paths::ensure_private_dir(dir)?;
   }
@@ -231,11 +347,84 @@ pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
   Ok(())
 }
 
+fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeState {
+  PersistedRuntimeState {
+    volume_percent: state.volume_percent.map(|volume| volume.min(100)),
+    shuffle_enabled: state.shuffle_enabled,
+    active_source: state.active_source,
+    seen_announcement_ids: state.seen_announcement_ids.as_deref().map(sanitized_ids),
+    dismissed_announcements: state.dismissed_announcements.as_deref().map(sanitized_ids),
+    sidebar_width_percent: state.sidebar_width_percent.map(|width| width.min(100)),
+    playbar_height_rows: state
+      .playbar_height_rows
+      .map(|rows| rows.min(MAX_PLAYBAR_ROWS)),
+    library_height_percent: state.library_height_percent.map(|height| height.min(100)),
+    radio_stations: state
+      .radio_stations
+      .as_deref()
+      .map(sanitized_radio_stations),
+  }
+}
+
+fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntimeState) {
+  if let Some(volume_percent) = patch.volume_percent {
+    merged.volume_percent = Some(volume_percent.min(100));
+  }
+  if let Some(shuffle_enabled) = patch.shuffle_enabled {
+    merged.shuffle_enabled = Some(shuffle_enabled);
+  }
+  if let Some(active_source) = patch.active_source {
+    merged.active_source = Some(active_source);
+  }
+  if let Some(seen_announcement_ids) = &patch.seen_announcement_ids {
+    merged.seen_announcement_ids = Some(merged_ids(
+      merged.seen_announcement_ids.as_deref().unwrap_or(&[]),
+      seen_announcement_ids,
+    ));
+  }
+  if let Some(dismissed_announcements) = &patch.dismissed_announcements {
+    merged.dismissed_announcements = Some(merged_ids(
+      merged.dismissed_announcements.as_deref().unwrap_or(&[]),
+      dismissed_announcements,
+    ));
+  }
+  if let Some(sidebar_width_percent) = patch.sidebar_width_percent {
+    merged.sidebar_width_percent = Some(sidebar_width_percent.min(100));
+  }
+  if let Some(playbar_height_rows) = patch.playbar_height_rows {
+    merged.playbar_height_rows = Some(playbar_height_rows.min(MAX_PLAYBAR_ROWS));
+  }
+  if let Some(library_height_percent) = patch.library_height_percent {
+    merged.library_height_percent = Some(library_height_percent.min(100));
+  }
+  if let Some(radio_stations) = &patch.radio_stations {
+    merged.radio_stations = Some(merged_radio_stations(
+      merged.radio_stations.as_deref().unwrap_or(&[]),
+      radio_stations,
+    ));
+  }
+}
+
 fn sanitized_ids(ids: &[String]) -> Vec<String> {
   ids
     .iter()
     .map(|id| id.trim().to_string())
     .filter(|id| !id.is_empty())
+    .collect()
+}
+
+fn merged_ids(existing: &[String], incoming: &[String]) -> Vec<String> {
+  let mut seen = std::collections::HashSet::new();
+  existing
+    .iter()
+    .chain(incoming.iter())
+    .filter_map(|id| {
+      let id = id.trim();
+      if id.is_empty() || !seen.insert(id.to_string()) {
+        return None;
+      }
+      Some(id.to_string())
+    })
     .collect()
 }
 
@@ -262,6 +451,25 @@ pub(crate) fn sanitized_radio_stations(stations: &[RadioStationConfig]) -> Vec<R
       })
     })
     .collect()
+}
+
+pub(crate) fn merged_radio_stations(
+  existing: &[RadioStationConfig],
+  incoming: &[RadioStationConfig],
+) -> Vec<RadioStationConfig> {
+  let mut stations = sanitized_radio_stations(existing);
+  let mut seen_urls = stations
+    .iter()
+    .map(|station| station.url.clone())
+    .collect::<std::collections::HashSet<_>>();
+
+  for station in sanitized_radio_stations(incoming) {
+    if seen_urls.insert(station.url.clone()) {
+      stations.push(station);
+    }
+  }
+
+  stations
 }
 
 mod source_config {
@@ -342,12 +550,151 @@ mod tests {
   }
 
   #[test]
+  fn state_load_and_save_caps_playbar_height_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    std::fs::write(
+      &path,
+      format!("playbar_height_rows: {}\n", MAX_PLAYBAR_ROWS + 10),
+    )
+    .unwrap();
+
+    assert_eq!(
+      load(&path).unwrap().playbar_height_rows,
+      Some(MAX_PLAYBAR_ROWS)
+    );
+
+    save(
+      &path,
+      &PersistedRuntimeState {
+        volume_percent: Some(40),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+
+    assert_eq!(
+      load(&path).unwrap().playbar_height_rows,
+      Some(MAX_PLAYBAR_ROWS)
+    );
+  }
+
+  #[test]
+  fn state_save_merges_sparse_patches_without_clobbering_unmentioned_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    let existing = PersistedRuntimeState {
+      volume_percent: Some(20),
+      active_source: Some(Source::Radio),
+      seen_announcement_ids: Some(vec!["first".to_string()]),
+      radio_stations: Some(vec![RadioStationConfig {
+        name: "Alpha".to_string(),
+        url: "https://example.test/alpha".to_string(),
+      }]),
+      ..Default::default()
+    };
+    save(&path, &existing).unwrap();
+
+    let patch = PersistedRuntimeState {
+      shuffle_enabled: Some(true),
+      seen_announcement_ids: Some(vec!["second".to_string()]),
+      radio_stations: Some(vec![RadioStationConfig {
+        name: "Beta".to_string(),
+        url: "https://example.test/beta".to_string(),
+      }]),
+      ..Default::default()
+    };
+    save(&path, &patch).unwrap();
+
+    assert_eq!(
+      load(&path).unwrap(),
+      PersistedRuntimeState {
+        volume_percent: Some(20),
+        shuffle_enabled: Some(true),
+        active_source: Some(Source::Radio),
+        seen_announcement_ids: Some(vec!["first".to_string(), "second".to_string()]),
+        radio_stations: Some(vec![
+          RadioStationConfig {
+            name: "Alpha".to_string(),
+            url: "https://example.test/alpha".to_string(),
+          },
+          RadioStationConfig {
+            name: "Beta".to_string(),
+            url: "https://example.test/beta".to_string(),
+          },
+        ]),
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
+  fn radio_station_removal_preserves_other_runtime_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    save(
+      &path,
+      &PersistedRuntimeState {
+        volume_percent: Some(55),
+        radio_stations: Some(vec![
+          RadioStationConfig {
+            name: "Alpha".to_string(),
+            url: "https://example.test/alpha".to_string(),
+          },
+          RadioStationConfig {
+            name: "Beta".to_string(),
+            url: "https://example.test/beta".to_string(),
+          },
+        ]),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+
+    save_removing_radio_station(&path, " https://example.test/alpha ").unwrap();
+
+    assert_eq!(
+      load(&path).unwrap(),
+      PersistedRuntimeState {
+        volume_percent: Some(55),
+        radio_stations: Some(vec![RadioStationConfig {
+          name: "Beta".to_string(),
+          url: "https://example.test/beta".to_string(),
+        }]),
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
+  fn persisted_runtime_state_builds_sparse_patches() {
+    let mut patch = PersistedRuntimeState::volume_percent(120);
+    patch.merge_patch(&PersistedRuntimeState::active_source(Source::Subsonic));
+    patch.merge_patch(&PersistedRuntimeState::playbar_height_rows(
+      MAX_PLAYBAR_ROWS + 10,
+    ));
+
+    assert_eq!(
+      patch,
+      PersistedRuntimeState {
+        volume_percent: Some(100),
+        active_source: Some(Source::Subsonic),
+        playbar_height_rows: Some(MAX_PLAYBAR_ROWS),
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
   fn runtime_state_applies_and_sanitizes_persisted_values() {
     let state = PersistedRuntimeState {
       volume_percent: Some(150),
       active_source: Some(Source::Subsonic),
       seen_announcement_ids: Some(vec![" seen ".to_string(), " ".to_string()]),
       sidebar_width_percent: Some(120),
+      playbar_height_rows: Some(MAX_PLAYBAR_ROWS + 10),
       library_height_percent: Some(101),
       radio_stations: Some(vec![
         RadioStationConfig {
@@ -373,6 +720,7 @@ mod tests {
     assert_eq!(runtime.active_source, Source::Subsonic);
     assert_eq!(runtime.seen_announcement_ids, vec!["seen"]);
     assert_eq!(runtime.sidebar_width_percent, 100);
+    assert_eq!(runtime.playbar_height_rows, MAX_PLAYBAR_ROWS);
     assert_eq!(runtime.library_height_percent, 100);
     assert_eq!(
       runtime.radio_stations,

@@ -34,7 +34,7 @@ use crate::core::app::{App, SearchResultBlock};
 use crate::core::pagination::Paged;
 use crate::core::plugin_api::TrackInfo;
 use crate::core::source::Searcher;
-use crate::core::state::{sanitized_radio_stations, RadioStationConfig};
+use crate::core::state::merged_radio_stations;
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
 
@@ -91,7 +91,9 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
         p.set_volume(*volume as f32 / 100.0);
         let mut app = app.lock().await;
         app.runtime_state.volume_percent = *volume;
-        app.schedule_state_save();
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
+          *volume,
+        ));
         true
       }
       None => false,
@@ -117,18 +119,13 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
 /// Stations panel). No network.
 async fn load_radio_stations(app: &Arc<Mutex<App>>) {
   let mut guard = app.lock().await;
-  let merged_stations: Vec<RadioStationConfig> = guard
-    .user_config
-    .behavior
-    .radio_stations
-    .iter()
-    .chain(guard.runtime_state.radio_stations.iter())
-    .cloned()
-    .collect();
-  let stations: Vec<TrackInfo> = sanitized_radio_stations(&merged_stations)
-    .into_iter()
-    .map(|station| config_station_to_track_info(&station.name, &station.url))
-    .collect();
+  let stations: Vec<TrackInfo> = merged_radio_stations(
+    &guard.user_config.behavior.radio_stations,
+    &guard.runtime_state.radio_stations,
+  )
+  .into_iter()
+  .map(|station| config_station_to_track_info(&station.name, &station.url))
+  .collect();
   let empty = stations.is_empty();
   guard.radio_stations = stations;
   guard.radio_stations_index = 0;
