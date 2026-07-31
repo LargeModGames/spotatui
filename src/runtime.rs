@@ -30,6 +30,10 @@ use crate::core::app::App;
 use crate::core::auth;
 use crate::core::config::ClientConfig;
 use crate::core::layout::MAX_PLAYBAR_ROWS;
+use crate::core::migrations::{
+  apply_legacy_config_radio_station_migration, apply_legacy_config_runtime_state_migration,
+  legacy_config_cleanup_targets, remove_legacy_config_fields,
+};
 use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::{
   validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
@@ -1151,15 +1155,78 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   }
   let default_fields =
     apply_configured_runtime_defaults(&mut runtime_state, &persisted_state, &user_config.behavior);
+  let legacy_radio_fields = apply_legacy_config_radio_station_migration(
+    &mut runtime_state,
+    &persisted_state,
+    &user_config.behavior,
+  );
+  let legacy_runtime_fields = match user_config
+    .path_to_config
+    .as_ref()
+    .map(|paths| paths.config_file_path.clone())
+  {
+    Some(config_path) => match apply_legacy_config_runtime_state_migration(
+      &config_path,
+      &mut runtime_state,
+      &persisted_state,
+    ) {
+      Ok(fields) => fields,
+      Err(e) => {
+        log::warn!("[state] failed to read legacy runtime fields from config.yml: {e}");
+        PersistedRuntimeState::default()
+      }
+    },
+    None => PersistedRuntimeState::default(),
+  };
   let state = if should_save_initial_state {
     runtime_state.to_persisted()
   } else {
-    default_fields
+    let mut state = default_fields;
+    state.merge_patch(&legacy_radio_fields);
+    state.merge_patch(&legacy_runtime_fields);
+    state
   };
-  if can_save_initial_state && !state.is_empty() {
+  let mut state_available_for_cleanup = persisted_state.clone();
+  let mut state_save_succeeded = state.is_empty();
+  if can_save_initial_state && state_save_succeeded {
+    state_available_for_cleanup.merge_patch(&state);
+  } else if can_save_initial_state && !state.is_empty() {
     if let Some(path) = &state_path {
       if let Err(e) = crate::core::state::save(path, &state) {
         log::warn!("[state] failed to save initial runtime state: {e}");
+      } else {
+        state_save_succeeded = true;
+        state_available_for_cleanup.merge_patch(&state);
+      }
+    }
+  }
+
+  let config_path = user_config
+    .path_to_config
+    .as_ref()
+    .map(|paths| paths.config_file_path.clone());
+  if state_save_succeeded {
+    if let Some(config_path) = config_path {
+      match legacy_config_cleanup_targets(&config_path, &state_available_for_cleanup) {
+        Ok(targets) => {
+          if targets.removes_radio_stations() {
+            user_config.behavior.radio_stations.clear();
+          }
+          if !targets.is_empty() {
+            match remove_legacy_config_fields(&config_path, &targets) {
+              Ok(true) => {
+                info!("[state] migrated legacy config fields to state.yml");
+              }
+              Ok(false) => {}
+              Err(e) => {
+                log::warn!("[state] failed to remove migrated fields from config.yml: {e}");
+              }
+            }
+          }
+        }
+        Err(e) => {
+          log::warn!("[state] failed to inspect legacy config fields: {e}");
+        }
       }
     }
   }

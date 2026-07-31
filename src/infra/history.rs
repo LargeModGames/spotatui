@@ -16,6 +16,8 @@ use tokio::task::{JoinHandle, JoinSet};
 
 const HISTORY_SUBDIR: &str = "history";
 const LISTENS_FILE_NAME: &str = "listens.jsonl";
+const LAST_RECAP_FILE_NAME: &str = "last_recap_at.txt";
+const LAST_SYNCED_FILE_NAME: &str = "last_synced_at.txt";
 const SYNC_BASE_URL: &str = "https://spotatui.com";
 const CLOUD_SYNC_PATH: &str = "/api/sync";
 const NOW_PLAYING_SYNC_PATH: &str = "/api/sync/now-playing";
@@ -548,9 +550,7 @@ pub fn recap_output_path() -> Result<PathBuf> {
 }
 
 fn last_recap_file_path() -> Result<PathBuf> {
-  crate::core::paths::app_state_dir()
-    .map(|dir| dir.join(HISTORY_SUBDIR).join("last_recap_at.txt"))
-    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
+  history_state_file_path(LAST_RECAP_FILE_NAME)
 }
 
 fn auto_recap_is_due(last_recap_contents: Option<&str>, now_ts: i64) -> bool {
@@ -835,9 +835,13 @@ impl ListenRecord {
 }
 
 fn listens_file_path() -> Result<PathBuf> {
-  crate::core::paths::app_state_dir()
-    .map(|dir| dir.join(HISTORY_SUBDIR).join(LISTENS_FILE_NAME))
-    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
+  history_state_file_path(LISTENS_FILE_NAME)
+}
+
+fn history_state_file_path(file_name: &str) -> Result<PathBuf> {
+  crate::core::migrations::state_file_path_with_legacy_config_rename(
+    Path::new(HISTORY_SUBDIR).join(file_name),
+  )
 }
 
 fn append_listen_record(record: &ListenRecord) -> Result<()> {
@@ -2223,9 +2227,7 @@ fn js_string(input: &str) -> String {
 }
 
 fn last_synced_file_path() -> Result<PathBuf> {
-  crate::core::paths::app_state_dir()
-    .map(|dir| dir.join(HISTORY_SUBDIR).join("last_synced_at.txt"))
-    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
+  history_state_file_path(LAST_SYNCED_FILE_NAME)
 }
 
 #[derive(Clone, Copy, Debug)]

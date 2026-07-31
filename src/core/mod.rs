@@ -4,6 +4,7 @@ pub mod config;
 pub mod first_run;
 pub mod format;
 pub mod layout;
+pub mod migrations;
 pub mod pagination;
 pub mod paths;
 pub mod persisted_playback;

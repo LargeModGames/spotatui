@@ -12,7 +12,7 @@
 //! A playback session is a machine-written, frequently-updated blob (a queue of
 //! [`TrackInfo`], an index, a live position). Serializing that into the
 //! hand-editable `config.yml` would bury the user's real settings under churning
-//! metadata. So it lives in its own `last_session.yml` next to the app config,
+//! metadata. So it lives in its own `last_session.yml` under the app state dir,
 //! mirroring the `youtube_playlists.yml` precedent.
 //!
 //! ## Per-source shape
@@ -27,7 +27,7 @@
 //!   reconnect to.
 
 use crate::core::plugin_api::TrackInfo;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -119,9 +119,7 @@ pub fn default_session_path() -> Result<PathBuf> {
   if let Ok(path) = std::env::var(PATH_ENV) {
     return Ok(PathBuf::from(path));
   }
-  crate::core::paths::app_state_dir()
-    .map(|dir| dir.join(FILE_NAME))
-    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
+  crate::core::migrations::state_file_path_with_legacy_config_rename(Path::new(FILE_NAME))
 }
 
 /// Load the persisted session. A missing file means "no session to resume"
