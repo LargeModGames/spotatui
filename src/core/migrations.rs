@@ -8,16 +8,19 @@ use crate::core::state::{sanitized_radio_stations, PersistedRuntimeState, Runtim
 use crate::core::user_config::BehaviorConfig;
 use anyhow::{anyhow, Context, Result};
 use serde_yaml::{Mapping, Value};
-use std::{
-  fs,
-  path::{Path, PathBuf},
-};
+use std::{fs, path::Path};
 
 const LEGACY_RUNTIME_STATE_BEHAVIOR_KEYS: [&str; 4] = [
   "active_source",
   "shuffle_enabled",
   "seen_announcement_ids",
   "dismissed_announcements",
+];
+const LEGACY_STATE_FILE_RELATIVE_PATHS: [&str; 4] = [
+  "last_session.yml",
+  "history/listens.jsonl",
+  "history/last_recap_at.txt",
+  "history/last_synced_at.txt",
 ];
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -36,34 +39,29 @@ impl LegacyConfigCleanupTargets {
   }
 }
 
-/// Resolve a file that now belongs under the XDG state directory, migrating the
-/// legacy file from the config directory when the new location is still empty.
+/// Move app-managed files that used to live under the XDG config directory into
+/// the XDG state directory.
 ///
 /// This intentionally never overwrites an existing state file: once the new
 /// path has data, merging the old file is file-format-specific and unsafe for a
-/// generic shim. Remove this after the config-to-state upgrade window closes.
-pub(crate) fn state_file_path_with_legacy_config_rename(
-  relative_path: impl AsRef<Path>,
-) -> Result<PathBuf> {
-  let relative_path = relative_path.as_ref();
-  if relative_path.is_absolute() {
-    return Err(anyhow!(
-      "state migration path must be relative: {}",
-      relative_path.display()
-    ));
-  }
-
+/// generic shim. Run once at startup and remove after the config-to-state
+/// upgrade window closes.
+pub(crate) fn apply_legacy_state_file_migrations() -> Result<()> {
+  let Some(config_dir) = crate::core::paths::app_config_dir() else {
+    return Ok(());
+  };
   let state_dir = crate::core::paths::app_state_dir()
     .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))?;
   crate::core::paths::ensure_private_dir(&state_dir)?;
-  let state_path = state_dir.join(relative_path);
 
-  if let Some(config_dir) = crate::core::paths::app_config_dir() {
-    let legacy_path = config_dir.join(relative_path);
-    migrate_legacy_path_if_unclaimed(&legacy_path, &state_path)?;
+  for relative_path in LEGACY_STATE_FILE_RELATIVE_PATHS {
+    migrate_legacy_path_if_unclaimed(
+      &config_dir.join(relative_path),
+      &state_dir.join(relative_path),
+    )?;
   }
 
-  Ok(state_path)
+  Ok(())
 }
 
 pub(crate) fn migrate_legacy_path_if_unclaimed(

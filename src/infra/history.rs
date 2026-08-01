@@ -839,9 +839,9 @@ fn listens_file_path() -> Result<PathBuf> {
 }
 
 fn history_state_file_path(file_name: &str) -> Result<PathBuf> {
-  crate::core::migrations::state_file_path_with_legacy_config_rename(
-    Path::new(HISTORY_SUBDIR).join(file_name),
-  )
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join(HISTORY_SUBDIR).join(file_name))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 fn append_listen_record(record: &ListenRecord) -> Result<()> {

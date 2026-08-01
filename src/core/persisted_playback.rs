@@ -27,7 +27,7 @@
 //!   reconnect to.
 
 use crate::core::plugin_api::TrackInfo;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -119,7 +119,9 @@ pub fn default_session_path() -> Result<PathBuf> {
   if let Ok(path) = std::env::var(PATH_ENV) {
     return Ok(PathBuf::from(path));
   }
-  crate::core::migrations::state_file_path_with_legacy_config_rename(Path::new(FILE_NAME))
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join(FILE_NAME))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 /// Load the persisted session. A missing file means "no session to resume"

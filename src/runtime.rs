@@ -32,7 +32,7 @@ use crate::core::config::ClientConfig;
 use crate::core::layout::MAX_PLAYBAR_ROWS;
 use crate::core::migrations::{
   apply_legacy_config_radio_station_migration, apply_legacy_config_runtime_state_migration,
-  legacy_config_cleanup_targets, remove_legacy_config_fields,
+  apply_legacy_state_file_migrations, legacy_config_cleanup_targets, remove_legacy_config_fields,
 };
 use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::{
@@ -1103,6 +1103,10 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // Handle self-update command (doesn't need Spotify auth)
   if handle_self_update_command(&matches).await? {
     return Ok(());
+  }
+
+  if let Err(e) = apply_legacy_state_file_migrations() {
+    log::warn!("[state] failed to migrate legacy app data files: {e}");
   }
 
   if let Some(history_matches) = matches.subcommand_matches("history") {
