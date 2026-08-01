@@ -4005,10 +4005,25 @@ impl App {
 
   pub fn is_configured_radio_station_url(&self, url: &str) -> bool {
     let url = url.trim();
+    self.is_config_owned_radio_station_url(url) && !self.is_state_owned_radio_station_url(url)
+  }
+
+  pub fn is_config_owned_radio_station_url(&self, url: &str) -> bool {
+    let url = url.trim();
     !url.is_empty()
       && self
         .user_config
         .behavior
+        .radio_stations
+        .iter()
+        .any(|station| station.url.trim() == url)
+  }
+
+  pub fn is_state_owned_radio_station_url(&self, url: &str) -> bool {
+    let url = url.trim();
+    !url.is_empty()
+      && self
+        .runtime_state
         .radio_stations
         .iter()
         .any(|station| station.url.trim() == url)

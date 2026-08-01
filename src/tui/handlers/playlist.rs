@@ -99,6 +99,7 @@ fn remove_radio_station(app: &mut App) {
     app.set_status_message("Radio station has no stream URL".to_string(), 4);
     return;
   };
+  let config_owned = app.is_config_owned_radio_station_url(url);
   if app.is_configured_radio_station_url(url) {
     app.set_status_message(
       format!(
@@ -112,13 +113,15 @@ fn remove_radio_station(app: &mut App) {
 
   match app.remove_radio_station_by_url(url) {
     Ok(Some(removed)) => {
-      app.radio_stations.remove(idx);
-      app.selected_playlist_index = if app.radio_stations.is_empty() {
-        None
-      } else {
-        Some(idx.min(app.radio_stations.len() - 1))
-      };
-      app.set_status_message(format!("Removed radio station: {}", removed.name), 4);
+      if !config_owned {
+        app.radio_stations.remove(idx);
+        app.selected_playlist_index = if app.radio_stations.is_empty() {
+          None
+        } else {
+          Some(idx.min(app.radio_stations.len() - 1))
+        };
+      }
+      app.set_status_message(format!("Removed saved radio station: {}", removed.name), 4);
     }
     Ok(None) => {
       app.set_status_message(
@@ -437,12 +440,44 @@ mod tests {
     assert_eq!(app.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message.as_deref(),
-      Some("Removed radio station: Groove Salad")
+      Some("Removed saved radio station: Groove Salad")
     );
   }
 
   #[test]
-  fn shift_d_on_configured_radio_station_reports_config_ownership() {
+  fn shift_d_on_config_only_radio_station_reports_config_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: dir.path().join("config.yml"),
+    });
+    config.behavior.radio_stations = vec![RadioStationConfig {
+      name: "Configured Groove".to_string(),
+      url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+    }];
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.active_source = Source::Radio;
+    app.radio_stations = vec![radio_station_row(
+      "Configured Groove",
+      "https://ice1.somafm.com/groovesalad-128-mp3",
+    )];
+    app.selected_playlist_index = Some(0);
+
+    handler(Key::Char('D'), &mut app);
+
+    assert!(app.runtime_state.radio_stations.is_empty());
+    assert_eq!(app.radio_stations.len(), 1);
+    assert_eq!(app.selected_playlist_index, Some(0));
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Radio station is configured in config.yml: Configured Groove")
+    );
+  }
+
+  #[test]
+  fn shift_d_on_config_and_state_radio_station_removes_saved_copy_only() {
     let dir = tempfile::tempdir().unwrap();
     let (tx, _rx) = channel();
     let mut config = UserConfig::new();
@@ -468,12 +503,13 @@ mod tests {
 
     handler(Key::Char('D'), &mut app);
 
-    assert_eq!(app.runtime_state.radio_stations.len(), 1);
+    assert!(app.runtime_state.radio_stations.is_empty());
     assert_eq!(app.radio_stations.len(), 1);
+    assert_eq!(app.radio_stations[0].name, "Configured Groove");
     assert_eq!(app.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message.as_deref(),
-      Some("Radio station is configured in config.yml: Configured Groove")
+      Some("Removed saved radio station: Runtime Duplicate")
     );
   }
 }

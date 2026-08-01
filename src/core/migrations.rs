@@ -4,40 +4,18 @@
 //! minimum supported upgrade path no longer includes the legacy release.
 
 use crate::core::source::Source;
-use crate::core::state::{sanitized_radio_stations, PersistedRuntimeState, RuntimeState};
+use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::BehaviorConfig;
 use anyhow::{anyhow, Context, Result};
 use serde_yaml::{Mapping, Value};
 use std::{fs, path::Path};
 
-const LEGACY_RUNTIME_STATE_BEHAVIOR_KEYS: [&str; 4] = [
-  "active_source",
-  "shuffle_enabled",
-  "seen_announcement_ids",
-  "dismissed_announcements",
-];
 const LEGACY_STATE_FILE_RELATIVE_PATHS: [&str; 4] = [
   "last_session.yml",
   "history/listens.jsonl",
   "history/last_recap_at.txt",
   "history/last_synced_at.txt",
 ];
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct LegacyConfigCleanupTargets {
-  runtime_state_keys: Vec<&'static str>,
-  radio_stations: bool,
-}
-
-impl LegacyConfigCleanupTargets {
-  pub(crate) fn is_empty(&self) -> bool {
-    self.runtime_state_keys.is_empty() && !self.radio_stations
-  }
-
-  pub(crate) fn removes_radio_stations(&self) -> bool {
-    self.radio_stations
-  }
-}
 
 /// Move app-managed files that used to live under the XDG config directory into
 /// the XDG state directory.
@@ -235,8 +213,8 @@ fn remove_legacy_path_after_migration(legacy_path: &Path, state_path: &Path) {
   }
 }
 
-/// Move legacy in-app radio favorites from `config.yml` ownership into
-/// `state.yml` ownership.
+/// Seed legacy in-app radio favorites from `config.yml` into `state.yml` when
+/// the state field does not exist yet.
 ///
 /// Remove this migration after one release cycle where users could have started
 /// the app and converted pre-existing `behavior.radio_stations`.
@@ -314,78 +292,6 @@ pub(crate) fn apply_legacy_config_runtime_state_migration(
   Ok(patch)
 }
 
-pub(crate) fn legacy_config_cleanup_targets(
-  path: &Path,
-  state: &PersistedRuntimeState,
-) -> Result<LegacyConfigCleanupTargets> {
-  let Some(config) = read_config_value(path)? else {
-    return Ok(LegacyConfigCleanupTargets::default());
-  };
-  let Some(behavior) = behavior_mapping(&config) else {
-    return Ok(LegacyConfigCleanupTargets::default());
-  };
-
-  let mut targets = LegacyConfigCleanupTargets::default();
-  for key in LEGACY_RUNTIME_STATE_BEHAVIOR_KEYS {
-    if behavior.get(yaml_key(key)).is_some() && state_owns_legacy_runtime_key(key, state) {
-      targets.runtime_state_keys.push(key);
-    }
-  }
-
-  if let Some(config_stations) = behavior
-    .get(yaml_key("radio_stations"))
-    .and_then(radio_stations_from_value)
-  {
-    if state_owns_radio_stations(
-      &config_stations,
-      state.radio_stations.as_deref().unwrap_or(&[]),
-    ) {
-      targets.radio_stations = true;
-    }
-  }
-
-  Ok(targets)
-}
-
-pub(crate) fn remove_legacy_config_fields(
-  path: &Path,
-  targets: &LegacyConfigCleanupTargets,
-) -> Result<bool> {
-  let mut keys = targets.runtime_state_keys.clone();
-  if targets.radio_stations {
-    keys.push("radio_stations");
-  }
-  remove_behavior_keys_from_config(path, &keys)
-}
-
-fn remove_behavior_keys_from_config(path: &Path, keys: &[&str]) -> Result<bool> {
-  if keys.is_empty() {
-    return Ok(false);
-  }
-
-  let Some(mut config) = read_config_value(path)? else {
-    return Ok(false);
-  };
-  let Some(behavior_map) = behavior_mapping_mut(&mut config) else {
-    return Ok(false);
-  };
-
-  let mut removed = false;
-  for key in keys {
-    removed |= behavior_map.remove(yaml_key(key)).is_some();
-  }
-  if !removed {
-    return Ok(false);
-  }
-
-  let updated_config = serde_yaml::to_string(&config)?;
-  let tmp_path = path.with_extension("yml.tmp");
-  crate::core::auth::write_private_file(&tmp_path, updated_config.as_bytes())?;
-  fs::rename(&tmp_path, path)?;
-
-  Ok(true)
-}
-
 fn path_exists(path: &Path) -> Result<bool> {
   match fs::symlink_metadata(path) {
     Ok(_) => Ok(true),
@@ -414,13 +320,6 @@ fn behavior_mapping(config: &Value) -> Option<&Mapping> {
     .and_then(Value::as_mapping)
 }
 
-fn behavior_mapping_mut(config: &mut Value) -> Option<&mut Mapping> {
-  config
-    .as_mapping_mut()
-    .and_then(|map| map.get_mut(yaml_key("behavior")))
-    .and_then(Value::as_mapping_mut)
-}
-
 fn yaml_key(key: &str) -> Value {
   Value::String(key.to_string())
 }
@@ -432,37 +331,6 @@ fn source_from_value(value: &Value) -> Option<Source> {
   }
 
   Some(Source::from_config_str(source))
-}
-
-fn radio_stations_from_value(value: &Value) -> Option<Vec<crate::core::state::RadioStationConfig>> {
-  serde_yaml::from_value(value.clone()).ok()
-}
-
-fn state_owns_legacy_runtime_key(key: &str, state: &PersistedRuntimeState) -> bool {
-  match key {
-    "active_source" => state.active_source.is_some(),
-    "shuffle_enabled" => state.shuffle_enabled.is_some(),
-    "seen_announcement_ids" => state.seen_announcement_ids.is_some(),
-    "dismissed_announcements" => state.dismissed_announcements.is_some(),
-    _ => false,
-  }
-}
-
-fn state_owns_radio_stations(
-  config_stations: &[crate::core::state::RadioStationConfig],
-  state_stations: &[crate::core::state::RadioStationConfig],
-) -> bool {
-  let config_stations = sanitized_radio_stations(config_stations);
-  if config_stations.is_empty() {
-    return false;
-  }
-
-  let state_stations = sanitized_radio_stations(state_stations);
-  config_stations.iter().all(|config_station| {
-    state_stations.iter().any(|state_station| {
-      state_station.name == config_station.name && state_station.url == config_station.url
-    })
-  })
 }
 
 fn string_sequence(value: &Value) -> Option<Vec<String>> {
@@ -730,189 +598,5 @@ behavior:
     assert_eq!(runtime.seen_announcement_ids, vec!["existing"]);
     assert_eq!(runtime.dismissed_announcements, vec!["existing-dismissed"]);
     assert_eq!(patch, PersistedRuntimeState::default());
-  }
-
-  #[test]
-  fn legacy_runtime_cleanup_removes_only_migrated_runtime_behavior_fields() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.yml");
-    std::fs::write(
-      &path,
-      r#"
-behavior:
-  active_source: Radio
-  shuffle_enabled: true
-  seen_announcement_ids:
-    - seen
-  dismissed_announcements:
-    - dismissed
-  seek_milliseconds: 7000
-  radio_stations:
-    - name: Groove Salad
-      url: https://ice1.somafm.com/groovesalad-128-mp3
-"#,
-    )
-    .unwrap();
-
-    let targets = legacy_config_cleanup_targets(
-      &path,
-      &PersistedRuntimeState {
-        active_source: Some(Source::Radio),
-        shuffle_enabled: Some(true),
-        seen_announcement_ids: Some(vec!["seen".to_string()]),
-        dismissed_announcements: Some(vec!["dismissed".to_string()]),
-        ..Default::default()
-      },
-    )
-    .unwrap();
-    assert_eq!(
-      targets.runtime_state_keys.as_slice(),
-      LEGACY_RUNTIME_STATE_BEHAVIOR_KEYS
-    );
-    assert!(!targets.removes_radio_stations());
-
-    assert!(remove_legacy_config_fields(&path, &targets).unwrap());
-
-    let raw = std::fs::read_to_string(&path).unwrap();
-    let config: Value = serde_yaml::from_str(&raw).unwrap();
-    let behavior = behavior_mapping(&config).unwrap();
-    for key in LEGACY_RUNTIME_STATE_BEHAVIOR_KEYS {
-      assert!(behavior.get(yaml_key(key)).is_none());
-    }
-    assert_eq!(
-      behavior
-        .get(yaml_key("seek_milliseconds"))
-        .and_then(Value::as_i64),
-      Some(7000)
-    );
-    assert!(behavior.get(yaml_key("radio_stations")).is_some());
-  }
-
-  #[test]
-  fn radio_station_config_migration_removes_only_behavior_radio_stations() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.yml");
-    std::fs::write(
-      &path,
-      r#"
-behavior:
-  seek_milliseconds: 7000
-  radio_stations:
-    - name: Groove Salad
-      url: https://ice1.somafm.com/groovesalad-128-mp3
-keybindings:
-  back: q
-"#,
-    )
-    .unwrap();
-
-    let targets = legacy_config_cleanup_targets(
-      &path,
-      &PersistedRuntimeState {
-        radio_stations: Some(vec![RadioStationConfig {
-          name: "Groove Salad".to_string(),
-          url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-        }]),
-        ..Default::default()
-      },
-    )
-    .unwrap();
-    assert!(targets.runtime_state_keys.is_empty());
-    assert!(targets.removes_radio_stations());
-
-    assert!(remove_legacy_config_fields(&path, &targets).unwrap());
-
-    let raw = std::fs::read_to_string(&path).unwrap();
-    let config: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
-    let behavior = config
-      .as_mapping()
-      .and_then(|map| map.get(serde_yaml::Value::String("behavior".to_string())))
-      .and_then(|behavior| behavior.as_mapping())
-      .unwrap();
-    assert!(behavior
-      .get(serde_yaml::Value::String("radio_stations".to_string()))
-      .is_none());
-    assert_eq!(
-      behavior
-        .get(serde_yaml::Value::String("seek_milliseconds".to_string()))
-        .and_then(|value| value.as_i64()),
-      Some(7000)
-    );
-    assert_eq!(
-      config
-        .as_mapping()
-        .and_then(|map| map.get(serde_yaml::Value::String("keybindings".to_string())))
-        .and_then(|keybindings| keybindings.as_mapping())
-        .and_then(|keybindings| { keybindings.get(serde_yaml::Value::String("back".to_string())) })
-        .and_then(|value| value.as_str()),
-      Some("q")
-    );
-  }
-
-  #[test]
-  fn radio_station_cleanup_retries_after_state_already_owns_migrated_stations() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.yml");
-    std::fs::write(
-      &path,
-      r#"
-behavior:
-  radio_stations:
-    - name: Groove Salad
-      url: https://ice1.somafm.com/groovesalad-128-mp3
-"#,
-    )
-    .unwrap();
-
-    let targets = legacy_config_cleanup_targets(
-      &path,
-      &PersistedRuntimeState {
-        radio_stations: Some(vec![
-          RadioStationConfig {
-            name: "Groove Salad".to_string(),
-            url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
-          },
-          RadioStationConfig {
-            name: "Secret Agent".to_string(),
-            url: "https://ice1.somafm.com/secretagent-128-mp3".to_string(),
-          },
-        ]),
-        ..Default::default()
-      },
-    )
-    .unwrap();
-
-    assert!(targets.removes_radio_stations());
-  }
-
-  #[test]
-  fn radio_station_cleanup_keeps_config_owned_stations_not_present_in_state() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.yml");
-    std::fs::write(
-      &path,
-      r#"
-behavior:
-  radio_stations:
-    - name: Configured Groove
-      url: https://ice1.somafm.com/groovesalad-128-mp3
-"#,
-    )
-    .unwrap();
-
-    let targets = legacy_config_cleanup_targets(
-      &path,
-      &PersistedRuntimeState {
-        radio_stations: Some(vec![RadioStationConfig {
-          name: "Secret Agent".to_string(),
-          url: "https://ice1.somafm.com/secretagent-128-mp3".to_string(),
-        }]),
-        ..Default::default()
-      },
-    )
-    .unwrap();
-
-    assert!(!targets.removes_radio_stations());
-    assert!(targets.is_empty());
   }
 }
