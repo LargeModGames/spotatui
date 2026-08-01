@@ -25,7 +25,7 @@ use librespot_playback::{
 use log::{error, info, warn};
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -1324,8 +1324,9 @@ fn new_device_id_string() -> String {
 #[cfg(test)]
 mod tests {
   use super::{
-    get_or_create_device_id, new_device_id_string, should_retry_with_fresh_credentials,
-    wait_for_oauth_callback_port, RecoveringSink, StreamingConnectionState,
+    get_or_create_device_id, migrate_legacy_streaming_cache_if_unclaimed, new_device_id_string,
+    should_retry_with_fresh_credentials, wait_for_oauth_callback_port, RecoveringSink,
+    StreamingConnectionState,
   };
   use librespot_playback::{audio_backend, convert::Converter, decoder::AudioPacket};
   use std::sync::Arc;
@@ -1486,9 +1487,56 @@ mod tests {
   fn device_id_none_without_cache_path() {
     assert!(get_or_create_device_id(None).is_none());
   }
+
+  #[test]
+  fn legacy_streaming_cache_migration_preserves_connect_device_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path().join("config");
+    let cache_path = dir.path().join("cache").join("streaming_cache");
+    let legacy_cache_path = config_dir.join("streaming_cache");
+    std::fs::create_dir_all(&legacy_cache_path).unwrap();
+    std::fs::write(legacy_cache_path.join("device_id"), "legacy-device-id\n").unwrap();
+    std::fs::write(
+      legacy_cache_path.join("credentials.json"),
+      "legacy credentials",
+    )
+    .unwrap();
+
+    assert!(migrate_legacy_streaming_cache_if_unclaimed(&config_dir, &cache_path).unwrap());
+
+    assert!(!legacy_cache_path.exists());
+    assert_eq!(
+      get_or_create_device_id(Some(&cache_path)).unwrap(),
+      "legacy-device-id"
+    );
+    assert_eq!(
+      std::fs::read_to_string(cache_path.join("credentials.json")).unwrap(),
+      "legacy credentials"
+    );
+  }
 }
 
 /// Helper to get the default cache path for streaming
 pub fn get_default_cache_path() -> Option<PathBuf> {
-  crate::core::paths::app_cache_dir().map(|dir| dir.join("streaming_cache"))
+  let cache_path = crate::core::paths::app_cache_dir()?.join("streaming_cache");
+  if let Some(config_dir) = crate::core::paths::app_config_dir() {
+    if let Err(error) = migrate_legacy_streaming_cache_if_unclaimed(&config_dir, &cache_path) {
+      log::warn!(
+        "failed to migrate legacy streaming cache from {} to {}: {error}",
+        config_dir.join("streaming_cache").display(),
+        cache_path.display()
+      );
+    }
+  }
+  Some(cache_path)
+}
+
+fn migrate_legacy_streaming_cache_if_unclaimed(
+  app_config_dir: &Path,
+  cache_path: &Path,
+) -> Result<bool> {
+  crate::core::migrations::migrate_legacy_path_if_unclaimed(
+    &app_config_dir.join("streaming_cache"),
+    cache_path,
+  )
 }
