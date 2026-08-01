@@ -145,7 +145,7 @@ fn copy_legacy_dir_if_unclaimed(
   rename_error: &std::io::Error,
 ) -> Result<bool> {
   match fs::create_dir(state_path) {
-    Ok(()) => {}
+    Ok(()) => set_private_dir_permissions(state_path)?,
     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
     Err(error) => {
       return Err(error).with_context(|| {
@@ -166,6 +166,22 @@ fn copy_legacy_dir_if_unclaimed(
   Ok(true)
 }
 
+fn create_private_dir(path: &Path) -> Result<()> {
+  fs::create_dir(path).with_context(|| format!("creating {}", path.display()))?;
+  set_private_dir_permissions(path)
+}
+
+fn set_private_dir_permissions(path: &Path) -> Result<()> {
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+      .with_context(|| format!("setting private permissions on {}", path.display()))?;
+  }
+
+  Ok(())
+}
+
 fn copy_dir_contents(legacy_path: &Path, state_path: &Path) -> Result<()> {
   for entry in
     fs::read_dir(legacy_path).with_context(|| format!("reading {}", legacy_path.display()))?
@@ -173,12 +189,16 @@ fn copy_dir_contents(legacy_path: &Path, state_path: &Path) -> Result<()> {
     let entry = entry?;
     let source = entry.path();
     let target = state_path.join(entry.file_name());
-    let metadata = entry
-      .metadata()
+    let file_type = entry
+      .file_type()
       .with_context(|| format!("checking {}", source.display()))?;
 
-    if metadata.is_dir() {
-      fs::create_dir(&target).with_context(|| format!("creating {}", target.display()))?;
+    if file_type.is_symlink() {
+      continue;
+    }
+
+    if file_type.is_dir() {
+      create_private_dir(&target)?;
       copy_dir_contents(&source, &target)?;
     } else {
       fs::copy(&source, &target).with_context(|| {
@@ -432,6 +452,52 @@ mod tests {
       std::fs::read_to_string(state_path.join("audio").join("chunk")).unwrap(),
       "audio cache"
     );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn legacy_directory_copy_skips_symlink_entries_before_recursing() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy_path = dir.path().join("config").join("streaming_cache");
+    let state_path = dir.path().join("state").join("streaming_cache");
+    std::fs::create_dir_all(legacy_path.join("audio")).unwrap();
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(legacy_path.join("audio").join("chunk"), "audio cache").unwrap();
+    std::os::unix::fs::symlink(&legacy_path, legacy_path.join("loop")).unwrap();
+    let rename_error = std::io::Error::other("forcing copy fallback");
+
+    assert!(copy_legacy_dir_if_unclaimed(&legacy_path, &state_path, &rename_error).unwrap());
+
+    assert_eq!(
+      std::fs::read_to_string(state_path.join("audio").join("chunk")).unwrap(),
+      "audio cache"
+    );
+    assert!(!state_path.join("loop").exists());
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn legacy_directory_copy_sets_private_permissions_on_created_directories() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let legacy_path = dir.path().join("config").join("streaming_cache");
+    let state_path = dir.path().join("state").join("streaming_cache");
+    std::fs::create_dir_all(legacy_path.join("audio")).unwrap();
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(legacy_path.join("audio").join("chunk"), "audio cache").unwrap();
+    let rename_error = std::io::Error::other("forcing copy fallback");
+
+    assert!(copy_legacy_dir_if_unclaimed(&legacy_path, &state_path, &rename_error).unwrap());
+
+    let top_level_mode = std::fs::metadata(&state_path).unwrap().permissions().mode() & 0o777;
+    let subdirectory_mode = std::fs::metadata(state_path.join("audio"))
+      .unwrap()
+      .permissions()
+      .mode()
+      & 0o777;
+    assert_eq!(top_level_mode, 0o700);
+    assert_eq!(subdirectory_mode, 0o700);
   }
 
   #[test]
