@@ -756,7 +756,7 @@ impl StreamingPlayer {
 
     // Ensure cache directories exist
     if let Some(ref path) = cache_path {
-      crate::core::paths::ensure_private_dir(path).ok();
+      crate::core::paths::ensure_private_dir(path)?;
     }
     if let Some(ref path) = audio_cache_path {
       std::fs::create_dir_all(path).ok();
@@ -775,7 +775,7 @@ impl StreamingPlayer {
     };
     // Reuse a persisted device id so every launch and recovery registers as the
     // same Spotify Connect device instead of accumulating ghost entries (#297).
-    if let Some(device_id) = get_or_create_device_id(cache_path.as_deref()) {
+    if let Some(device_id) = get_or_create_device_id(cache_path.as_deref())? {
       session_config.device_id = device_id;
     }
 
@@ -1278,19 +1278,25 @@ fn should_retry_with_fresh_credentials(
 
 /// Stable Connect device id, persisted in the streaming cache dir so every
 /// launch and every in-app recovery registers as the same device (#297).
-fn get_or_create_device_id(cache_path: Option<&std::path::Path>) -> Option<String> {
-  let cache_path = cache_path?;
+fn get_or_create_device_id(cache_path: Option<&Path>) -> Result<Option<String>> {
+  let Some(cache_path) = cache_path else {
+    return Ok(None);
+  };
+  crate::core::paths::ensure_private_dir(cache_path)?;
   let id_file = cache_path.join("device_id");
-  if let Ok(existing) = std::fs::read_to_string(&id_file) {
-    let trimmed = existing.trim();
-    if !trimmed.is_empty() {
-      return Some(trimmed.to_string());
+  match std::fs::read_to_string(&id_file) {
+    Ok(existing) => {
+      let trimmed = existing.trim();
+      if !trimmed.is_empty() {
+        return Ok(Some(trimmed.to_string()));
+      }
     }
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+    Err(e) => return Err(e).with_context(|| format!("reading {}", id_file.display())),
   }
   let id = new_device_id_string();
-  let _ = crate::core::paths::ensure_private_dir(cache_path);
-  let _ = std::fs::write(&id_file, &id);
-  Some(id)
+  std::fs::write(&id_file, &id).with_context(|| format!("writing {}", id_file.display()))?;
+  Ok(Some(id))
 }
 
 /// Hyphenated UUID-v4-shaped string, matching librespot's default device id format.
@@ -1470,8 +1476,8 @@ mod tests {
     let dir = std::env::temp_dir().join(format!("spotatui_device_id_test_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 
-    let first = get_or_create_device_id(Some(&dir)).unwrap();
-    let second = get_or_create_device_id(Some(&dir)).unwrap();
+    let first = get_or_create_device_id(Some(&dir)).unwrap().unwrap();
+    let second = get_or_create_device_id(Some(&dir)).unwrap().unwrap();
     assert_eq!(first, second);
     assert_eq!(
       std::fs::read_to_string(dir.join("device_id"))
@@ -1485,7 +1491,33 @@ mod tests {
 
   #[test]
   fn device_id_none_without_cache_path() {
-    assert!(get_or_create_device_id(None).is_none());
+    assert!(get_or_create_device_id(None).unwrap().is_none());
+  }
+
+  #[test]
+  fn device_id_errors_when_cache_path_setup_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = dir.path().join("not_a_directory");
+    std::fs::write(&cache_path, "not a directory").unwrap();
+
+    let err = get_or_create_device_id(Some(&cache_path)).unwrap_err();
+    assert!(err.to_string().contains("creating"));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn device_id_errors_when_persistence_write_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = dir.path().join("cache");
+    std::fs::create_dir_all(&cache_path).unwrap();
+    std::os::unix::fs::symlink(
+      dir.path().join("missing_parent").join("device_id"),
+      cache_path.join("device_id"),
+    )
+    .unwrap();
+
+    let err = get_or_create_device_id(Some(&cache_path)).unwrap_err();
+    assert!(err.to_string().contains("writing"));
   }
 
   #[test]
@@ -1506,7 +1538,7 @@ mod tests {
 
     assert!(!legacy_cache_path.exists());
     assert_eq!(
-      get_or_create_device_id(Some(&cache_path)).unwrap(),
+      get_or_create_device_id(Some(&cache_path)).unwrap().unwrap(),
       "legacy-device-id"
     );
     assert_eq!(
