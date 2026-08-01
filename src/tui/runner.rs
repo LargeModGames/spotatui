@@ -721,6 +721,12 @@ pub async fn start_ui(
         }
       };
 
+      // Rebuild the formatted Help rows before drawing so the render path
+      // below reads immutable App state only.
+      if app.get_current_route().active_block == ActiveBlock::HelpMenu {
+        ui::ensure_help_menu_model(&mut app);
+      }
+
       let current_route = app.get_current_route();
       // The banner animates whenever the Home screen is displayed, regardless
       // of which block has focus (on Home the focused block is usually Empty

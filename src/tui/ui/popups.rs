@@ -1,4 +1,6 @@
-use crate::core::app::{ActiveBlock, AnnouncementLevel, App, DialogContext, PlaylistPickerRow};
+use crate::core::app::{
+  ActiveBlock, AnnouncementLevel, App, DialogContext, HelpMenuModel, PlaylistPickerRow,
+};
 use crate::core::plugin_api::PlayableInfo;
 use crate::core::plugin_api::PopupLine;
 use crate::infra::network::sync::PartyStatus;
@@ -10,21 +12,63 @@ use ratatui::{
   Frame,
 };
 
-use super::help::get_filtered_help_docs;
+use super::help::{get_filtered_help_docs, help_match_ranges};
 
-/// Formatted help rows are static between terminal-width, keybinding, or filter
-/// changes, so cache them instead of rebuilding ~80 owned Strings (plus
-/// per-cell char-count truncation) on every redraw while Help is open.
-struct HelpMenuCache {
-  width: usize,
-  keys: crate::core::user_config::KeyBindings,
-  filter: String,
-  header: String,
-  rows: Vec<String>,
+/// Rebuild [`App::help_menu_model`] if the terminal width, keybindings, or
+/// filter changed since the last build. Called from the event loop (and tests)
+/// before drawing, so [`draw_help_menu`] renders from immutable `App` state
+/// instead of rebuilding ~80 owned Strings (plus per-cell char-count
+/// truncation) on every redraw while Help is open.
+pub fn ensure_help_menu_model(app: &mut App) {
+  // Mirrors draw_help_menu's layout: a margin of 2 on each side of the frame.
+  let total_width = (app.size.width as usize).saturating_sub(4);
+  let stale = app.help_menu_model.as_ref().is_none_or(|m| {
+    m.width != total_width || m.keys != app.user_config.keys || m.filter != app.help_filter
+  });
+  if !stale {
+    return;
+  }
+  let (header, rows) = build_help_rows(app, total_width);
+  let match_ranges = rows
+    .iter()
+    .map(|row| help_match_ranges(row, &app.help_filter))
+    .collect();
+  app.help_menu_model = Some(HelpMenuModel {
+    width: total_width,
+    keys: app.user_config.keys.clone(),
+    filter: app.help_filter.clone(),
+    header,
+    rows,
+    match_ranges,
+  });
 }
 
-static HELP_MENU_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<HelpMenuCache>>> =
-  std::sync::OnceLock::new();
+/// Split a formatted help row into spans so every filter-term match renders in
+/// the highlight style, making it obvious why the row survived the filter.
+/// `ranges` are the row's precomputed [`help_match_ranges`] from the model.
+fn highlighted_help_line<'a>(
+  row: &'a str,
+  ranges: &[(usize, usize)],
+  base: Style,
+  highlight: Style,
+) -> Line<'a> {
+  if ranges.is_empty() {
+    return Line::from(Span::styled(row, base));
+  }
+  let mut spans = Vec::with_capacity(ranges.len() * 2 + 1);
+  let mut cursor = 0;
+  for &(start, end) in ranges {
+    if cursor < start {
+      spans.push(Span::styled(&row[cursor..start], base));
+    }
+    spans.push(Span::styled(&row[start..end], highlight));
+    cursor = end;
+  }
+  if cursor < row.len() {
+    spans.push(Span::styled(&row[cursor..], base));
+  }
+  Line::from(spans)
+}
 
 fn build_help_rows(app: &App, total_width: usize) -> (String, Vec<String>) {
   // Create a one-column table to avoid flickering due to non-determinism when
@@ -78,45 +122,42 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
     Constraint::Length(1),
   ]));
 
-  let total_width = table_area.width as usize;
-
-  let cache_slot = HELP_MENU_CACHE.get_or_init(|| std::sync::Mutex::new(None));
-  let mut cache = cache_slot
-    .lock()
-    .unwrap_or_else(|poisoned| poisoned.into_inner());
-  let stale = cache.as_ref().is_none_or(|c| {
-    c.width != total_width || c.keys != app.user_config.keys || c.filter != app.help_filter
-  });
-  if stale {
-    let (header, rows) = build_help_rows(app, total_width);
-    *cache = Some(HelpMenuCache {
-      width: total_width,
-      keys: app.user_config.keys.clone(),
-      filter: app.help_filter.clone(),
-      header,
-      rows,
-    });
-  }
-  let cache = cache.as_ref().expect("help cache populated above");
+  // The runner (and tests) call `ensure_help_menu_model` before drawing;
+  // rendering itself never rebuilds the model, only reads it.
+  let Some(model) = app.help_menu_model.as_ref() else {
+    return;
+  };
 
   let help_menu_style = app.user_config.theme.base_style();
-  let header = &cache.header;
-  let start = (app.help_menu_offset as usize).min(cache.rows.len());
+  let header = &model.header;
+  let start = (app.help_menu_offset as usize).min(model.rows.len());
   // Two border rows plus the table header leave this many data rows. This is
   // also the value used by the runner for page-size calculations.
   let visible_count = table_area.height.saturating_sub(3) as usize;
-  let end = start.saturating_add(visible_count).min(cache.rows.len());
-  let help_docs = &cache.rows[start..end];
+  let end = start.saturating_add(visible_count).min(model.rows.len());
+  let help_docs = &model.rows[start..end];
 
-  let rows: Vec<Row<'_>> = if cache.rows.is_empty() && !app.help_filter.is_empty() {
+  let rows: Vec<Row<'_>> = if model.rows.is_empty() && !app.help_filter.is_empty() {
     vec![
       Row::new([format!("No help rows match '{}'", app.help_filter)])
         .style(Style::default().fg(app.user_config.theme.inactive)),
     ]
   } else {
+    let highlight_style = Style::default()
+      .fg(app.user_config.theme.active)
+      .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
     help_docs
       .iter()
-      .map(|item| Row::new([item.as_str()]).style(help_menu_style))
+      .zip(&model.match_ranges[start..end])
+      .map(|(item, ranges)| {
+        Row::new([highlighted_help_line(
+          item,
+          ranges,
+          help_menu_style,
+          highlight_style,
+        )])
+        .style(help_menu_style)
+      })
       .collect()
   };
 
@@ -150,7 +191,7 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
         Style::default().fg(theme.active),
       ),
       Span::styled(
-        format!(" ({})  <Esc>: clear filter", cache.rows.len()),
+        format!(" ({})  <Esc>: clear filter", model.rows.len()),
         Style::default().fg(theme.inactive),
       ),
     ])
@@ -177,7 +218,12 @@ mod help_menu_tests {
   use super::*;
   use ratatui::{backend::TestBackend, Terminal};
 
-  fn rendered_help(app: &App) -> String {
+  fn rendered_help(app: &mut App) -> String {
+    app.size = ratatui::layout::Size {
+      width: 100,
+      height: 30,
+    };
+    ensure_help_menu_model(app);
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     terminal.draw(|f| draw_help_menu(f, app)).unwrap();
     let buffer = terminal.backend().buffer();
@@ -198,7 +244,7 @@ mod help_menu_tests {
     app.help_filter = "volume".to_string();
     app.help_filter_editing = true;
 
-    let rendered = rendered_help(&app);
+    let rendered = rendered_help(&mut app);
 
     assert!(rendered.contains("Increase volume by 10%"));
     assert!(rendered.contains("Decrease volume by 10%"));
@@ -209,10 +255,47 @@ mod help_menu_tests {
 
   #[test]
   fn help_menu_shows_back_hint_when_filter_is_inactive() {
-    let rendered = rendered_help(&App::default());
+    let rendered = rendered_help(&mut App::default());
 
     assert!(rendered.contains("<Esc>: go back"));
     assert!(!rendered.contains("press <Esc> to go back"));
+  }
+
+  #[test]
+  fn help_menu_highlights_matched_text_in_filtered_rows() {
+    let mut app = App::default();
+    app.help_filter = "volume".to_string();
+    app.size = ratatui::layout::Size {
+      width: 100,
+      height: 30,
+    };
+    ensure_help_menu_model(&mut app);
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| draw_help_menu(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+
+    // Locate the row and column of the first "volume" match in the buffer.
+    // `find` returns a byte offset, but border symbols are multi-byte, so
+    // convert to a cell column by counting the chars before the match.
+    let (match_x, match_y) = (0..30)
+      .find_map(|y| {
+        let line: String = (0..100)
+          .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol().to_string()))
+          .collect();
+        line.find("Increase volume").map(|byte_idx| {
+          let cell_x = line[..byte_idx].chars().count() as u16;
+          (cell_x + "Increase ".len() as u16, y)
+        })
+      })
+      .expect("filtered help row should be rendered");
+
+    let matched = buffer.cell((match_x, match_y)).unwrap();
+    let unmatched = buffer
+      .cell((match_x - "Increase ".len() as u16, match_y))
+      .unwrap();
+    assert_eq!(matched.style().fg, Some(app.user_config.theme.active));
+    assert_ne!(unmatched.style().fg, Some(app.user_config.theme.active));
   }
 
   #[test]
@@ -221,7 +304,7 @@ mod help_menu_tests {
     app.help_filter = "not-a-real-help-row".to_string();
     app.help_menu_offset = u32::MAX;
 
-    let rendered = rendered_help(&app);
+    let rendered = rendered_help(&mut app);
 
     assert!(rendered.contains("No help rows match 'not-a-real-help-row'"));
     assert!(rendered.contains("matches for 'not-a-real-help-row' (0)"));

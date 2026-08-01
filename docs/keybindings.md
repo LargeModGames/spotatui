@@ -1,6 +1,9 @@
 # Keybindings
 
-Press `?` in spotatui to see the help menu with all keybindings.
+Press `?` in spotatui to see the help menu with all keybindings. Inside the
+help menu, press the search key (`/` by default) to filter rows by key,
+description, or context; matching text is highlighted in the visible rows.
+Press `Enter` to apply the filter and `Esc` to clear it.
 
 ## Default Keybindings
 

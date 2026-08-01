@@ -1367,6 +1367,21 @@ pub struct NativePlaybackRestoreAttempt {
   pub desired_playing: bool,
 }
 
+/// Formatted Help-menu rows, static between terminal-width, keybinding, or
+/// filter changes. Rebuilt outside the draw path (see
+/// `tui::ui::popups::ensure_help_menu_model`) so Help rendering reads immutable
+/// `App` state instead of rebuilding ~80 owned Strings on every redraw.
+pub struct HelpMenuModel {
+  pub width: usize,
+  pub keys: crate::core::user_config::KeyBindings,
+  pub filter: String,
+  pub header: String,
+  pub rows: Vec<String>,
+  /// Per-row filter-match byte ranges, parallel to `rows`. Precomputed here so
+  /// the render loop does not lowercase every visible row on every frame.
+  pub match_ranges: Vec<Vec<(usize, usize)>>,
+}
+
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
   /// Spotify's API comes back with the same value — otherwise a slow poll
@@ -1554,6 +1569,9 @@ pub struct App {
   pub help_filter: String,
   /// Whether typed keys are currently editing [`Self::help_filter`].
   pub help_filter_editing: bool,
+  /// Formatted Help rows for the current width/keys/filter; `None` until the
+  /// Help menu is first prepared for rendering.
+  pub help_menu_model: Option<HelpMenuModel>,
   pub is_loading: bool,
   io_tx: Option<Sender<IoEvent>>,
   pub is_fetching_current_playback: bool,
@@ -2003,6 +2021,7 @@ impl Default for App {
       help_menu_offset: 0,
       help_filter: String::new(),
       help_filter_editing: false,
+      help_menu_model: None,
       is_loading: false,
       io_tx: None,
       is_fetching_current_playback: false,
