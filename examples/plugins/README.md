@@ -21,23 +21,15 @@ privileges, so read anything you install from elsewhere (see
 Single-file plugins go straight into `plugins/`:
 
 ```bash
-case "${XDG_CONFIG_HOME:-}" in
-  /*) config_home="$XDG_CONFIG_HOME" ;;
-  *) config_home="$HOME/.config" ;;
-esac
-mkdir -p "$config_home/spotatui/plugins"
-cp track-notifier.lua "$config_home/spotatui/plugins/"
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins"
+cp track-notifier.lua "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 ```
 
 Directory plugins (a folder with a `main.lua` entry point) are copied as a whole:
 
 ```bash
-case "${XDG_CONFIG_HOME:-}" in
-  /*) config_home="$XDG_CONFIG_HOME" ;;
-  *) config_home="$HOME/.config" ;;
-esac
-mkdir -p "$config_home/spotatui/plugins"
-cp -r session-stats "$config_home/spotatui/plugins/"
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins"
+cp -r session-stats "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 ```
 
 Restart spotatui after installing. Plugins that register commands need a key binding; add one to

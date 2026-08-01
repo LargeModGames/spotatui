@@ -3,9 +3,9 @@
 -- per-axis size hints.
 --
 -- Install (single file):
---   cp now-playing.lua ~/.config/spotatui/plugins/
+--   cp now-playing.lua "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 --
--- Suggested binding, in ~/.config/spotatui/config.yml:
+-- Suggested binding, in config.yml in the spotatui app config directory:
 --   plugin_commands:
 --     now_playing: "ctrl-n"
 --

@@ -1,12 +1,7 @@
 -- track-info-popup: a `track_info` command that opens a popup with the current track details.
 --
 -- Install (single file):
---   case "${XDG_CONFIG_HOME:-}" in
---     /*) config_home="$XDG_CONFIG_HOME" ;;
---     *) config_home="$HOME/.config" ;;
---   esac
---   mkdir -p "$config_home/spotatui/plugins"
---   cp track-info-popup.lua "$config_home/spotatui/plugins/"
+--   cp track-info-popup.lua "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 --
 -- Suggested binding, in config.yml in the spotatui app config directory:
 --   plugin_commands:
