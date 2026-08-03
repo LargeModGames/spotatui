@@ -1,40 +1,45 @@
 name: Issue Triage
 
-# Drafts a triage (label + summary + possible duplicates) for every opened issue
-# using DeepSeek V4-Flash, then waits for a maintainer to approve it by adding the
-# `triage-ok` label before anything is posted publicly. See .github/scripts/triage.mjs.
+# Auto-triages every opened issue with DeepSeek V4-Flash: applies a category label
+# and posts a summary + possible-duplicate comment, acting as spotatui[bot]. No
+# maintainer approval step — the run generates and applies in one pass. See
+# .github/scripts/triage.mjs.
 
 on:
   issues:
-    types: [opened, reopened, labeled]
+    types: [opened, reopened]
   workflow_dispatch:
     inputs:
       issue_number:
-        description: "Issue number to (re)draft a triage for"
+        description: "Issue number to triage"
         required: true
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: triage-${{ github.event.issue.number || github.event.inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
-  # Draft the triage into the run summary. Runs on untrusted, user-opened issues,
-  # so it holds NO write permission and NO GitHub App key — only the DeepSeek key.
-  suggest:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.action == 'opened' ||
-      github.event.action == 'reopened'
+  triage:
     runs-on: ubuntu-latest
-    permissions:
-      issues: read
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Mint spotatui[bot] token (issues:write only)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SPOTATUI_APP_ID }}
+          private-key: ${{ secrets.SPOTATUI_APP_KEY }}
+          permission-issues: write
+          permission-metadata: read
       - name: Resolve issue number
         id: n
         env:
@@ -42,70 +47,26 @@ jobs:
         run: echo "number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: Gather issue + open issues
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           N: ${{ steps.n.outputs.number }}
         run: |
           gh issue view "$N" --repo "$REPO" --json number,title,body > issue.json
           gh issue list --repo "$REPO" --state open --limit 100 --json number,title > open-issues.json
-      - name: Draft triage with DeepSeek
+      - name: Triage with DeepSeek
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-        run: node .github/scripts/triage.mjs > triage.json
-      - name: Write draft to run summary
-        env:
-          N: ${{ steps.n.outputs.number }}
-        run: |
-          node .github/scripts/triage.mjs --render >> "$GITHUB_STEP_SUMMARY"
-          {
-            echo ""
-            echo "---"
-            echo "**To apply:** add the \`triage-ok\` label to issue #${N}."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # Approved by a maintainer adding `triage-ok` (only write/triage access can add
-  # labels). This is the only job that holds the App key and writes to the repo.
-  apply:
-    if: >-
-      github.event_name == 'issues' &&
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'triage-ok'
-    runs-on: ubuntu-latest
-    permissions:
-      issues: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Mint spotatui[bot] token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.SPOTATUI_APP_ID }}
-          private-key: ${{ secrets.SPOTATUI_APP_KEY }}
-      - name: Gather issue + open issues
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          N: ${{ github.event.issue.number }}
-        run: |
-          gh issue view "$N" --repo "$REPO" --json number,title,body > issue.json
-          gh issue list --repo "$REPO" --state open --limit 100 --json number,title > open-issues.json
-      - name: Re-run triage with DeepSeek
-        env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-        run: node .github/scripts/triage.mjs > triage.json
-      - name: Post comment + apply labels as spotatui[bot]
+        # tee also echoes the triage JSON into the step log for easy inspection.
+        run: node .github/scripts/triage.mjs | tee triage.json
+      - name: Apply label + comment as spotatui[bot]
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-          N: ${{ github.event.issue.number }}
+          N: ${{ steps.n.outputs.number }}
         run: |
-          node .github/scripts/triage.mjs --render > comment.md
+          node .github/scripts/triage.mjs --render | tee comment.md
           gh issue comment "$N" --repo "$REPO" --body-file comment.md
           labels=$(node -e 'process.stdout.write(require("./triage.json").labels.join(","))')
           if [ -n "$labels" ]; then
             gh issue edit "$N" --repo "$REPO" --add-label "$labels"
           fi
-          gh issue edit "$N" --repo "$REPO" --remove-label "triage-ok"

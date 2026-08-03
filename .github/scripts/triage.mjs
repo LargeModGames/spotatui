@@ -4,7 +4,7 @@
 //   node triage.mjs            -> calls the model, prints a validated triage
 //                                 JSON object to stdout (redirect to triage.json)
 //   node triage.mjs --render   -> reads triage.json and prints a Markdown block
-//                                 (used for both the run summary and the bot comment)
+//                                 (posted as the bot comment)
 //
 // No dependencies: Node 20+ built-in fetch and fs only. Untrusted issue text is
 // read from files (issue.json / open-issues.json) written by `gh`, never passed
@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 const MODEL = "deepseek-v4-flash";
 const API_URL = "https://api.deepseek.com/v1/chat/completions";
 
-// Labels the bot may APPLY. Deliberately excludes `duplicate` (on this repo that
+// Labels the bot may apply. Deliberately excludes `duplicate` (on this repo that
 // means "closed as a dup" — a human decision) and judgement labels like
 // `good first issue` / `help wanted`. Dedup results go in the comment, not a label.
 const ALLOWED_LABELS = ["bug", "enhancement", "question", "documentation"];
@@ -27,9 +27,9 @@ if (process.argv.includes("--render")) {
   const lines = [];
   lines.push("### 🎧 spotatui triage");
   lines.push("");
-  lines.push("_Auto-generated with DeepSeek V4-Flash._");
+  lines.push("_Auto-triaged with DeepSeek V4-Flash._");
   lines.push("");
-  lines.push(`**Suggested label:** ${r.labels.length ? r.labels.map((l) => `\`${l}\``).join(", ") : "_none_"}`);
+  lines.push(`**Label:** ${r.labels.length ? r.labels.map((l) => `\`${l}\``).join(", ") : "_none_"}`);
   lines.push(`**Summary:** ${r.summary || "_n/a_"}`);
   lines.push("");
   if (r.dup_candidates.length) {
@@ -82,28 +82,53 @@ ${(issue.body || "").slice(0, 8000)}
 OPEN ISSUES (${compared} most recently updated; compare for duplicates):
 ${openIssues.map((i) => `#${i.number}: ${i.title}`).join("\n") || "(none)"}`;
 
-const resp = await fetch(API_URL, {
-  method: "POST",
-  headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-  body: JSON.stringify({
-    model: MODEL,
-    temperature: 0,
-    // If the API ever rejects this field, drop it — the parser below already
-    // tolerates a model that wraps its JSON in a Markdown fence.
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-  }),
-});
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-if (!resp.ok) {
-  console.error(`DeepSeek API error ${resp.status}: ${await resp.text()}`);
-  process.exit(1);
+async function callModel() {
+  const resp = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: MODEL,
+      temperature: 0,
+      // If the API ever rejects this field, drop it — the parser below already
+      // tolerates a model that wraps its JSON in a Markdown fence.
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+  if (!resp.ok) {
+    const err = new Error(`DeepSeek API error ${resp.status}: ${await resp.text()}`);
+    // 4xx (bad model string, bad request) won't fix itself; only retry 429/5xx.
+    err.retryable = resp.status === 429 || resp.status >= 500;
+    throw err;
+  }
+  return (await resp.json()).choices?.[0]?.message?.content ?? "";
 }
 
-const raw = (await resp.json()).choices?.[0]?.message?.content ?? "";
+// DeepSeek occasionally returns HTTP 200 with empty content; retry a few times
+// for that (and for transient 429/5xx) before giving up.
+const MAX_ATTEMPTS = 3;
+let raw = "";
+for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  try {
+    raw = await callModel();
+    if (raw.trim() !== "") break;
+    if (attempt === MAX_ATTEMPTS) {
+      console.error("DeepSeek returned empty content after retries");
+      process.exit(1);
+    }
+  } catch (e) {
+    if (!e.retryable || attempt === MAX_ATTEMPTS) {
+      console.error(e.message);
+      process.exit(1);
+    }
+  }
+  await sleep(1000 * attempt);
+}
 
 // Flash models occasionally wrap JSON in a ```json fence even with
 // response_format set; strip it before parsing.
@@ -119,13 +144,18 @@ try {
   console.error(`Could not parse model output as JSON: ${e.message}\n---\n${raw}`);
   process.exit(1);
 }
+// A valid JSON scalar/array/null is not a usable triage object; treat as empty
+// rather than crashing on field access below.
+if (!triage || typeof triage !== "object" || Array.isArray(triage)) {
+  triage = {};
+}
 
 // Hard-filter everything the model returned against reality.
 const openNumbers = new Set(openIssues.map((i) => i.number));
 const category = ALLOWED_LABELS.includes(triage.category) ? triage.category : null;
 const dupCandidates = Array.isArray(triage.dup_candidates)
   ? triage.dup_candidates
-      .filter((d) => openNumbers.has(d.number))
+      .filter((d) => d && typeof d === "object" && openNumbers.has(d.number))
       .map((d) => ({
         number: d.number,
         confidence: ["high", "medium", "low"].includes(d.confidence) ? d.confidence : "low",
