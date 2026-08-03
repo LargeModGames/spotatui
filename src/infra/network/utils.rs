@@ -11,6 +11,16 @@ use std::time::{Duration, Instant};
 struct LrcResponse {
   syncedLyrics: Option<String>,
   plainLyrics: Option<String>,
+  #[serde(default)]
+  duration: Option<f64>,
+}
+
+impl LrcResponse {
+  fn has_lyrics(&self) -> bool {
+    let has_text =
+      |value: &Option<String>| value.as_deref().is_some_and(|text| !text.trim().is_empty());
+    has_text(&self.syncedLyrics) || has_text(&self.plainLyrics)
+  }
 }
 
 #[derive(Deserialize, Debug)]
@@ -74,11 +84,6 @@ impl UtilsNetwork for Network {
   async fn get_lyrics(&mut self, track: String, artist: String, duration: f64) {
     let request_identity = (track.clone(), artist.clone());
     let client = super::requests::shared_http_client();
-    let query = vec![
-      ("track_name", track.clone()),
-      ("artist_name", artist.clone()),
-      ("duration", duration.to_string()),
-    ];
 
     // Update state to loading
     {
@@ -91,78 +96,46 @@ impl UtilsNetwork for Network {
       app.lyrics_synced = false;
     }
 
-    match client
-      .get("https://lrclib.net/api/get")
-      .query(&query)
-      .send()
-      .await
-    {
-      Ok(resp) => {
-        if resp.status().is_success() {
-          if let Ok(lrc_resp) = resp.json::<LrcResponse>().await {
-            // Prefer timestamped ("synced") lyrics. If LRCLIB only has plain
-            // (unsynced) lyrics, still show them as static text rather than
-            // reporting "not found" — many tracks only have plain lyrics.
-            let synced = lrc_resp
-              .syncedLyrics
-              .as_deref()
-              .map(parse_synced_lyrics)
-              .unwrap_or_default();
+    let lrc_resp = fetch_lrclib_lyrics(client, &track, &artist, duration).await;
 
-            let mut app = self.app.lock().await;
-            if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
-              return;
-            }
-            if !synced.is_empty() {
-              app.lyrics = Some(synced);
-              app.lyrics_synced = true;
-              app.lyrics_status = LyricsStatus::Found;
-            } else if let Some(plain) = lrc_resp
-              .plainLyrics
-              .as_deref()
-              .filter(|text| !text.trim().is_empty())
-            {
-              app.lyrics = Some(synthesize_plain_lyrics(plain, duration));
-              app.lyrics_synced = false;
-              app.lyrics_status = LyricsStatus::Found;
-            } else {
-              app.lyrics_status = LyricsStatus::NotFound;
-            }
-            app
-              .plugin_data_generations
-              .bump(crate::core::app::PluginDataKind::Lyrics);
-          } else {
-            let mut app = self.app.lock().await;
-            if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
-              return;
-            }
-            app.lyrics_status = LyricsStatus::NotFound;
-            app
-              .plugin_data_generations
-              .bump(crate::core::app::PluginDataKind::Lyrics);
-          }
+    let mut app = self.app.lock().await;
+    if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
+      return;
+    }
+    match lrc_resp {
+      Some(lrc_resp) => {
+        // Prefer timestamped ("synced") lyrics. If LRCLIB only has plain
+        // (unsynced) lyrics, still show them as static text rather than
+        // reporting "not found" — many tracks only have plain lyrics.
+        let synced = lrc_resp
+          .syncedLyrics
+          .as_deref()
+          .map(parse_synced_lyrics)
+          .unwrap_or_default();
+
+        if !synced.is_empty() {
+          app.lyrics = Some(synced);
+          app.lyrics_synced = true;
+          app.lyrics_status = LyricsStatus::Found;
+        } else if let Some(plain) = lrc_resp
+          .plainLyrics
+          .as_deref()
+          .filter(|text| !text.trim().is_empty())
+        {
+          app.lyrics = Some(synthesize_plain_lyrics(plain, duration));
+          app.lyrics_synced = false;
+          app.lyrics_status = LyricsStatus::Found;
         } else {
-          let mut app = self.app.lock().await;
-          if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
-            return;
-          }
           app.lyrics_status = LyricsStatus::NotFound;
-          app
-            .plugin_data_generations
-            .bump(crate::core::app::PluginDataKind::Lyrics);
         }
       }
-      Err(_) => {
-        let mut app = self.app.lock().await;
-        if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
-          return;
-        }
+      None => {
         app.lyrics_status = LyricsStatus::NotFound;
-        app
-          .plugin_data_generations
-          .bump(crate::core::app::PluginDataKind::Lyrics);
       }
     }
+    app
+      .plugin_data_generations
+      .bump(crate::core::app::PluginDataKind::Lyrics);
   }
 
   async fn increment_global_song_count(&mut self) {
@@ -345,6 +318,84 @@ impl UtilsNetwork for Network {
   }
 }
 
+/// Look up lyrics on LRCLIB. `/api/get` is an exact signature match (title +
+/// artist + duration must all agree with LRCLIB's record, duration in whole
+/// seconds), so it 404s on small metadata differences even when LRCLIB has the
+/// song. When it misses, fall back to the fuzzy `/api/search` endpoint and pick
+/// the best-matching result.
+async fn fetch_lrclib_lyrics(
+  client: &reqwest::Client,
+  track: &str,
+  artist: &str,
+  duration: f64,
+) -> Option<LrcResponse> {
+  let get_query = [
+    ("track_name", track.to_string()),
+    ("artist_name", artist.to_string()),
+    ("duration", (duration.round() as u64).to_string()),
+  ];
+  if let Ok(resp) = client
+    .get("https://lrclib.net/api/get")
+    .query(&get_query)
+    .send()
+    .await
+  {
+    if resp.status().is_success() {
+      if let Ok(lrc_resp) = resp.json::<LrcResponse>().await {
+        if lrc_resp.has_lyrics() {
+          return Some(lrc_resp);
+        }
+      }
+    }
+  }
+
+  let search_query = [
+    ("track_name", track.to_string()),
+    ("artist_name", artist.to_string()),
+  ];
+  let resp = client
+    .get("https://lrclib.net/api/search")
+    .query(&search_query)
+    .send()
+    .await
+    .ok()?;
+  if !resp.status().is_success() {
+    return None;
+  }
+  let results = resp.json::<Vec<LrcResponse>>().await.ok()?;
+  pick_search_result(results, duration)
+}
+
+/// Pick the best `/api/search` hit: prefer synced lyrics over plain-only, then
+/// the result whose duration is closest to the playing track's (so synced
+/// timestamps line up). With an unknown duration (e.g. `0.0`), duration is
+/// ignored.
+fn pick_search_result(results: Vec<LrcResponse>, duration: f64) -> Option<LrcResponse> {
+  results
+    .into_iter()
+    .filter(LrcResponse::has_lyrics)
+    .min_by_key(|result| {
+      let synced_rank = if result
+        .syncedLyrics
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty())
+      {
+        0u64
+      } else {
+        1
+      };
+      let duration_diff_ms = if duration > 0.0 {
+        result
+          .duration
+          .map(|d| ((d - duration).abs() * 1000.0) as u64)
+          .unwrap_or(u64::MAX)
+      } else {
+        0
+      };
+      (synced_rank, duration_diff_ms)
+    })
+}
+
 /// Parse LRC-format synced lyrics (`[mm:ss.xx] text` lines) into `(ms, line)`
 /// pairs. Lines without a valid leading timestamp are dropped, so a body of
 /// plain (unsynced) lyrics parses to an empty vec.
@@ -424,7 +475,7 @@ fn parse_announcement_level(level: Option<&str>) -> AnnouncementLevel {
 
 #[cfg(test)]
 mod tests {
-  use super::{parse_synced_lyrics, synthesize_plain_lyrics};
+  use super::{parse_synced_lyrics, pick_search_result, synthesize_plain_lyrics, LrcResponse};
 
   #[test]
   fn parses_timestamped_lyric_lines_and_drops_untimed_ones() {
@@ -464,5 +515,45 @@ mod tests {
   fn synthesizes_zero_timestamps_when_duration_unknown() {
     let parsed = synthesize_plain_lyrics("a\nb", 0.0);
     assert_eq!(parsed, vec![(0u128, "a".to_string()), (0, "b".to_string())]);
+  }
+
+  #[allow(non_snake_case)]
+  fn search_result(
+    syncedLyrics: Option<&str>,
+    plainLyrics: Option<&str>,
+    duration: Option<f64>,
+  ) -> LrcResponse {
+    LrcResponse {
+      syncedLyrics: syncedLyrics.map(str::to_string),
+      plainLyrics: plainLyrics.map(str::to_string),
+      duration,
+    }
+  }
+
+  #[test]
+  fn search_prefers_synced_result_with_closest_duration() {
+    let results = vec![
+      search_result(None, Some("plain only"), Some(200.0)),
+      search_result(Some("[00:01.00] far"), None, Some(300.0)),
+      search_result(Some("[00:01.00] close"), None, Some(201.0)),
+    ];
+    let picked = pick_search_result(results, 200.0).unwrap();
+    assert_eq!(picked.syncedLyrics.as_deref(), Some("[00:01.00] close"));
+  }
+
+  #[test]
+  fn search_falls_back_to_plain_when_no_synced_result() {
+    let results = vec![
+      search_result(None, None, Some(200.0)),
+      search_result(None, Some("plain"), Some(200.0)),
+    ];
+    let picked = pick_search_result(results, 200.0).unwrap();
+    assert_eq!(picked.plainLyrics.as_deref(), Some("plain"));
+  }
+
+  #[test]
+  fn search_returns_none_when_no_result_has_lyrics() {
+    let results = vec![search_result(None, Some("   "), Some(200.0))];
+    assert!(pick_search_result(results, 200.0).is_none());
   }
 }
