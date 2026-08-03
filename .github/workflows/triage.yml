@@ -1,0 +1,111 @@
+name: Issue Triage
+
+# Drafts a triage (label + summary + possible duplicates) for every opened issue
+# using DeepSeek V4-Flash, then waits for a maintainer to approve it by adding the
+# `triage-ok` label before anything is posted publicly. See .github/scripts/triage.mjs.
+
+on:
+  issues:
+    types: [opened, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to (re)draft a triage for"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: triage-${{ github.event.issue.number || github.event.inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  # Draft the triage into the run summary. Runs on untrusted, user-opened issues,
+  # so it holds NO write permission and NO GitHub App key — only the DeepSeek key.
+  suggest:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.action == 'opened' ||
+      github.event.action == 'reopened'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Resolve issue number
+        id: n
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        run: echo "number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Gather issue + open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          N: ${{ steps.n.outputs.number }}
+        run: |
+          gh issue view "$N" --repo "$REPO" --json number,title,body > issue.json
+          gh issue list --repo "$REPO" --state open --limit 100 --json number,title > open-issues.json
+      - name: Draft triage with DeepSeek
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: node .github/scripts/triage.mjs > triage.json
+      - name: Write draft to run summary
+        env:
+          N: ${{ steps.n.outputs.number }}
+        run: |
+          node .github/scripts/triage.mjs --render >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "---"
+            echo "**To apply:** add the \`triage-ok\` label to issue #${N}."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Approved by a maintainer adding `triage-ok` (only write/triage access can add
+  # labels). This is the only job that holds the App key and writes to the repo.
+  apply:
+    if: >-
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'triage-ok'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Mint spotatui[bot] token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SPOTATUI_APP_ID }}
+          private-key: ${{ secrets.SPOTATUI_APP_KEY }}
+      - name: Gather issue + open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          N: ${{ github.event.issue.number }}
+        run: |
+          gh issue view "$N" --repo "$REPO" --json number,title,body > issue.json
+          gh issue list --repo "$REPO" --state open --limit 100 --json number,title > open-issues.json
+      - name: Re-run triage with DeepSeek
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: node .github/scripts/triage.mjs > triage.json
+      - name: Post comment + apply labels as spotatui[bot]
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          N: ${{ github.event.issue.number }}
+        run: |
+          node .github/scripts/triage.mjs --render > comment.md
+          gh issue comment "$N" --repo "$REPO" --body-file comment.md
+          labels=$(node -e 'process.stdout.write(require("./triage.json").labels.join(","))')
+          if [ -n "$labels" ]; then
+            gh issue edit "$N" --repo "$REPO" --add-label "$labels"
+          fi
+          gh issue edit "$N" --repo "$REPO" --remove-label "triage-ok"
