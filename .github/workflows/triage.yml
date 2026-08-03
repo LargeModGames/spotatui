@@ -1,0 +1,72 @@
+name: Issue Triage
+
+# Auto-triages every opened issue with DeepSeek V4-Flash: applies a category label
+# and posts a summary + possible-duplicate comment, acting as spotatui[bot]. No
+# maintainer approval step — the run generates and applies in one pass. See
+# .github/scripts/triage.mjs.
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to triage"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: triage-${{ github.event.issue.number || github.event.inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Mint spotatui[bot] token (issues:write only)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SPOTATUI_APP_ID }}
+          private-key: ${{ secrets.SPOTATUI_APP_KEY }}
+          permission-issues: write
+          permission-metadata: read
+      - name: Resolve issue number
+        id: n
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        run: echo "number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Gather issue + open issues
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          N: ${{ steps.n.outputs.number }}
+        run: |
+          gh issue view "$N" --repo "$REPO" --json number,title,body > issue.json
+          gh issue list --repo "$REPO" --state open --limit 100 --json number,title > open-issues.json
+      - name: Triage with DeepSeek
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        # tee also echoes the triage JSON into the step log for easy inspection.
+        run: node .github/scripts/triage.mjs | tee triage.json
+      - name: Apply label + comment as spotatui[bot]
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          N: ${{ steps.n.outputs.number }}
+        run: |
+          node .github/scripts/triage.mjs --render | tee comment.md
+          gh issue comment "$N" --repo "$REPO" --body-file comment.md
+          labels=$(node -e 'process.stdout.write(require("./triage.json").labels.join(","))')
+          if [ -n "$labels" ]; then
+            gh issue edit "$N" --repo "$REPO" --add-label "$labels"
+          fi
