@@ -30,10 +30,24 @@ if (process.argv.includes("--render")) {
   lines.push("_Auto-triaged with DeepSeek V4-Flash._");
   lines.push("");
   lines.push(`**Label:** ${r.labels.length ? r.labels.map((l) => `\`${l}\``).join(", ") : "_none_"}`);
-  lines.push(`**Summary:** ${r.summary || "_n/a_"}`);
+  if (r.likely_area) lines.push(`**Likely area:** ${r.likely_area}`);
+  lines.push("");
+  lines.push("**Summary**");
+  lines.push("");
+  lines.push(r.summary || "_n/a_");
+  if (r.key_points && r.key_points.length) {
+    lines.push("");
+    lines.push("**Key points**");
+    for (const p of r.key_points) lines.push(`- ${p}`);
+  }
+  if (r.missing_info && r.missing_info.length) {
+    lines.push("");
+    lines.push("**What would help**");
+    for (const m of r.missing_info) lines.push(`- ${m}`);
+  }
   lines.push("");
   if (r.dup_candidates.length) {
-    lines.push("**Possible duplicates:**");
+    lines.push("**Possible duplicates**");
     for (const d of r.dup_candidates) lines.push(`- #${d.number} (${d.confidence}) — ${d.reason}`);
   } else {
     lines.push("**Possible duplicates:** none found");
@@ -62,17 +76,23 @@ try {
 openIssues = openIssues.filter((i) => i.number !== issue.number);
 const compared = openIssues.length;
 
-const system = `You triage GitHub issues for "spotatui", a Rust terminal UI Spotify client.
+const system = `You triage GitHub issues for "spotatui", a Rust terminal UI Spotify client
+(it also has non-Spotify sources: local files, Subsonic, internet radio, YouTube).
 Return ONLY a JSON object — no prose, no Markdown fences — with this exact shape:
 {
   "category": one of ${JSON.stringify(ALLOWED_LABELS)} or null,
-  "summary": "one plain sentence describing what the issue is about",
+  "summary": "2 to 4 sentence plain-language paragraph describing the issue and its impact on the user",
+  "key_points": ["short bullets for concrete specifics THE ISSUE ACTUALLY STATES: OS/platform, terminal, version, reproduction steps, expected vs actual behavior, error messages"],
+  "likely_area": "short phrase naming the most likely affected part of spotatui IF the issue clearly indicates it (e.g. 'Spotify OAuth login', 'internet radio playback', 'native streaming device', 'keybindings'), otherwise null",
+  "missing_info": ["short bullets for details a maintainer would need that are ABSENT from the report, e.g. 'OS and terminal', 'spotatui version', 'steps to reproduce'"],
   "dup_candidates": [ { "number": <int taken from the provided open-issue list>, "confidence": "high"|"medium"|"low", "reason": "short" } ]
 }
 Rules:
+- Ground EVERYTHING in the issue text. Do NOT speculate about code, root causes, or file paths you cannot see. Do not invent facts the reporter did not state.
 - "category" is your single best classification, or null if none fit.
+- "key_points" and "missing_info": at most 5 items each; omit anything not evident; use [] if none.
 - "dup_candidates": only issues from the provided list that plausibly describe the SAME underlying bug/request. Empty array if none. Never invent numbers.
-- Be conservative: prefer a null category and an empty dup list over guessing.`;
+- Be conservative: prefer null / empty over guessing.`;
 
 const user = `NEW ISSUE #${issue.number}
 Title: ${issue.title}
@@ -91,6 +111,8 @@ async function callModel() {
     body: JSON.stringify({
       model: MODEL,
       temperature: 0,
+      // Roomy enough for the richer JSON so the object is never truncated.
+      max_tokens: 900,
       // If the API ever rejects this field, drop it — the parser below already
       // tolerates a model that wraps its JSON in a Markdown fence.
       response_format: { type: "json_object" },
@@ -150,9 +172,19 @@ if (!triage || typeof triage !== "object" || Array.isArray(triage)) {
   triage = {};
 }
 
+// Normalize a model-provided list into <=n clean, length-capped strings.
+const strList = (v, max, n) =>
+  Array.isArray(v)
+    ? v.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().slice(0, max)).slice(0, n)
+    : [];
+
 // Hard-filter everything the model returned against reality.
 const openNumbers = new Set(openIssues.map((i) => i.number));
 const category = ALLOWED_LABELS.includes(triage.category) ? triage.category : null;
+const likelyArea =
+  typeof triage.likely_area === "string" && triage.likely_area.trim()
+    ? triage.likely_area.trim().slice(0, 120)
+    : null;
 const dupCandidates = Array.isArray(triage.dup_candidates)
   ? triage.dup_candidates
       .filter((d) => d && typeof d === "object" && openNumbers.has(d.number))
@@ -168,7 +200,10 @@ console.log(
     issue: issue.number,
     category,
     labels: category ? [category] : [],
-    summary: String(triage.summary || "").slice(0, 300),
+    summary: String(triage.summary || "").slice(0, 800),
+    likely_area: likelyArea,
+    key_points: strList(triage.key_points, 200, 5),
+    missing_info: strList(triage.missing_info, 200, 5),
     dup_candidates: dupCandidates,
     compared,
   }),
