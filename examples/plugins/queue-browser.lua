@@ -2,7 +2,7 @@
 -- queue more music from your library, showing off the v5 API (custom screens,
 -- async data reads, timers, storage, navigation).
 --
--- Install (single file):
+-- Install (single file; see PLUGINS.md for config path rules):
 --   cp queue-browser.lua "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 --
 -- Suggested binding, in config.yml in the spotatui app config directory:

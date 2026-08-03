@@ -28,8 +28,9 @@ ones you trust. See [Trust and safety](docs/scripting.md#trust-and-safety).
 
 You can also drop a single `.lua` file into the app config directory's `plugins/`
 folder by hand. Manual examples use `${XDG_CONFIG_HOME:-$HOME/.config}` for
-brevity; if `XDG_CONFIG_HOME` is relative, use `~/.config/spotatui/plugins`
-because spotatui ignores relative config homes.
+brevity. That matches spotatui when `XDG_CONFIG_HOME` is unset or absolute; if
+it is relative, spotatui ignores it and loads plugins from
+`$HOME/.config/spotatui/plugins`, so copy there instead.
 
 ## First-party examples
 

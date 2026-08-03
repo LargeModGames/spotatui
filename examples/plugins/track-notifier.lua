@@ -1,6 +1,6 @@
 -- track-notifier: show a "Now playing" toast and a playbar segment on every track change.
 --
--- Install (single file):
+-- Install (single file; see PLUGINS.md for config path rules):
 --   cp track-notifier.lua "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 -- Then restart spotatui.
 

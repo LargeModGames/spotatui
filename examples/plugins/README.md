@@ -18,7 +18,8 @@ privileges, so read anything you install from elsewhere (see
 
 ## Installing
 
-Single-file plugins go straight into `plugins/`:
+Single-file plugins go straight into `plugins/` under the spotatui app config
+directory (see [`PLUGINS.md`](../../PLUGINS.md) for config path rules):
 
 ```bash
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins"

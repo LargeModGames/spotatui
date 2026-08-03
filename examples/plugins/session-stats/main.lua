@@ -3,7 +3,7 @@
 -- This is a *directory* plugin: it ships as a folder with an entry point (main.lua) plus a
 -- helper module (stats.lua). This is the layout `spotatui plugin add owner/repo` produces.
 --
--- Install (directory):
+-- Install (directory; see PLUGINS.md for config path rules):
 --   cp -r session-stats "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 --
 -- Suggested binding, in config.yml in the spotatui app config directory:

@@ -2,7 +2,7 @@
 --
 -- Theme overrides from set_theme are runtime-only; they reset when spotatui restarts.
 --
--- Install (single file):
+-- Install (single file; see PLUGINS.md for config path rules):
 --   cp accent-cycler.lua "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 --
 -- Suggested binding, in config.yml in the spotatui app config directory:
