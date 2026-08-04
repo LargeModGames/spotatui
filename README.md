@@ -76,25 +76,35 @@
 > **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
 
 ```bash
+# One-line installer — macOS, Linux, WSL. Grabs the prebuilt binary for your
+# system, verifies its checksum, and puts spotatui on your PATH. No Rust needed.
+curl -fsSL https://spotatui.com/install.sh | bash
+
 # Homebrew (macOS only)
 brew tap LargeModGames/spotatui
 brew install spotatui
 
-# Winget (Windows)
-winget install spotatui
-
-# Cargo
+# Cargo — compile from crates.io …
 cargo install --locked spotatui
+# … or fetch the prebuilt binary without compiling
+cargo binstall spotatui
 
-# Arch Linux (AUR) - pre-built binary (faster)
+# Arch Linux (AUR) — prebuilt binary (faster)
 yay -S spotatui-bin
-
-# Arch Linux (AUR) - build from source
+# …or build from source
 yay -S spotatui
 
-# Void Linux (Unofficial Repo)
+# Void Linux (unofficial repo)
 echo repository=https://raw.githubusercontent.com/Event-Horizon-VL/blackhole-vl/repository-x86_64 | sudo tee /etc/xbps.d/20-repository-extra.conf
 sudo xbps-install -S spotatui
+```
+
+```powershell
+# One-line installer — Windows PowerShell
+irm https://spotatui.com/install.ps1 | iex
+
+# …or via Winget
+winget install spotatui
 ```
 ```nix
 # NixOS (Flake)
@@ -117,6 +127,8 @@ inputs = {
 ```
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
+
+> **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, and YouTube. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube`.
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 

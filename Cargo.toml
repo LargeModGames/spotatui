@@ -195,6 +195,34 @@ suggests = "yt-dlp, ffmpeg"
 section = "utils"
 priority = "optional"
 
+# cargo-binstall: fetch the prebuilt release binaries instead of compiling.
+#   cargo binstall spotatui
+# Our release assets use friendly names (spotatui-<os>-<arch>) rather than the
+# Rust target triple, and the binary sits at the archive root, so every target
+# needs an explicit override with an archive-root bin-dir.
+[package.metadata.binstall]
+bin-dir = "{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/spotatui-linux-x86_64.tar.gz"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/spotatui-linux-aarch64.tar.gz"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/spotatui-macos-x86_64.tar.gz"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/spotatui-macos-aarch64.tar.gz"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/spotatui-windows-x86_64.zip"
+pkg-fmt = "zip"
+
 # Native streaming fixes: librespot 0.8.0 + backport of upstream PR #1722 (fall back to the
 # next CDN URL when one returns a non-206 status, e.g. HTTP 530) + port of upstream PR #1692
 # (dealer reconnects handled in place without restarting spirc; prompt spirc-task exit with
