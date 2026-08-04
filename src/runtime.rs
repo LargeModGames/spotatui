@@ -1281,7 +1281,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // Work with the cli (not really async)
   if let Some(cmd) = matches.subcommand_name() {
     info!("running in cli mode with command: {}", cmd);
-    // Save, because we checked if the subcommand is present at runtime
+    // Safe, because we checked if the subcommand is present at runtime
     let m = matches.subcommand_matches(cmd).unwrap();
     #[cfg(feature = "streaming")]
     let network = Network::new(spotify, client_config, &app, final_token_cache_path); // CLI doesn't use streaming
