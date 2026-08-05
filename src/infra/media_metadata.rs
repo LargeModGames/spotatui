@@ -9,7 +9,6 @@
 )]
 
 use crate::core::app::{App, NativePlaybackOrigin, NativeTrackKind};
-use crate::tui::ui::util::create_artist_string;
 use rspotify::model::{PlayableItem, RepeatState};
 use rspotify::prelude::Id;
 
@@ -91,7 +90,7 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
     (
       PlaybackMetadata {
         title: native_info.name.clone(),
-        artists: vec![native_info.artists_display.clone()],
+        artists: native_info.artists.clone(),
         album: native_info.album.clone(),
         // Prefer the art librespot handed us with this very track. The polled
         // context is a per-track race: after a skip it still holds the previous
@@ -364,7 +363,7 @@ fn metadata_and_identity_from_context_item(
       Some((
         PlaybackMetadata {
           title: track.name.clone(),
-          artists: vec![create_artist_string(&track.artists)],
+          artists: track.artists.iter().map(|a| a.name.clone()).collect(),
           album: track.album.name.clone(),
           image_url: track.album.images.first().map(|image| image.url.clone()),
           duration_ms: track.duration.num_milliseconds() as u32,
@@ -607,7 +606,7 @@ mod tests {
     app.native_is_playing = Some(true);
     app.native_track_info = Some(NativeTrackInfo {
       name: "Native Track".to_string(),
-      artists_display: "Native Artist".to_string(),
+      artists: vec!["Native Artist".to_string()],
       album: "Native Album".to_string(),
       duration_ms: 123_000,
       kind: NativeTrackKind::Track,
@@ -627,6 +626,31 @@ mod tests {
     assert!(snapshot.is_playing);
   }
 
+  /// #410: a native collaboration must reach the snapshot as a *structured*
+  /// artist list, not a single joined string, so the LRCLIB lookup can fall back
+  /// to the primary artist. `primary_artist()` still joins it for display, so the
+  /// playbar/window title are unchanged.
+  #[test]
+  fn native_collaboration_keeps_structured_artist_list() {
+    let mut app = app();
+    app.is_streaming_active = true;
+    app.native_is_playing = Some(true);
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "Take Me Back".to_string(),
+      artists: vec!["Kygo".to_string(), "Max McNown".to_string()],
+      album: "Take Me Back".to_string(),
+      duration_ms: 201_000,
+      kind: NativeTrackKind::Track,
+      image_url: None,
+    });
+    app.native_playback_origin = Some(NativePlaybackOrigin::RawList);
+
+    let snapshot = current_playback_snapshot(&app).unwrap();
+
+    assert_eq!(snapshot.metadata.artists, vec!["Kygo", "Max McNown"]);
+    assert_eq!(snapshot.primary_artist(), "Kygo, Max McNown");
+  }
+
   /// #402: after a skip (and for the whole of a natively queued track) the
   /// polled context still holds the *previous* item, so its cover art belongs to
   /// the previous album. librespot's own `TrackChanged` art must win.
@@ -636,7 +660,7 @@ mod tests {
     app.is_streaming_active = true;
     app.native_track_info = Some(NativeTrackInfo {
       name: "Native Track".to_string(),
-      artists_display: "Native Artist".to_string(),
+      artists: vec!["Native Artist".to_string()],
       album: "Native Album".to_string(),
       duration_ms: 123_000,
       kind: NativeTrackKind::Track,
@@ -665,7 +689,7 @@ mod tests {
     app.is_streaming_active = true;
     app.native_track_info = Some(NativeTrackInfo {
       name: "Track".to_string(),
-      artists_display: "Artist".to_string(),
+      artists: vec!["Artist".to_string()],
       album: "Album".to_string(),
       duration_ms: 123_000,
       kind: NativeTrackKind::Track,
@@ -721,7 +745,7 @@ mod tests {
     app.native_is_playing = Some(false);
     app.native_track_info = Some(NativeTrackInfo {
       name: "Native Track".to_string(),
-      artists_display: "Native Artist".to_string(),
+      artists: vec!["Native Artist".to_string()],
       album: "Native Album".to_string(),
       duration_ms: 123_000,
       kind: NativeTrackKind::Track,

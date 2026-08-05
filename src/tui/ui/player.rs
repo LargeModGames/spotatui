@@ -1331,7 +1331,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         if let Some(ref native_info) = app.native_track_info {
           (
             native_info.name.clone(),
-            native_info.artists_display.clone(),
+            native_info.artists.join(", "),
             native_info.duration_ms as u64,
           )
         } else {
