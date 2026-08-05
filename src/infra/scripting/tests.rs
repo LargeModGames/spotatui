@@ -1886,7 +1886,7 @@ mod data_read_tests {
       app.is_streaming_active = true;
       app.native_track_info = Some(NativeTrackInfo {
         name: name.to_string(),
-        artists_display: "The Artist".to_string(),
+        artists: vec!["The Artist".to_string()],
         album: "The Album".to_string(),
         duration_ms: 180_000,
         kind: NativeTrackKind::Track,
@@ -1947,7 +1947,7 @@ mod data_read_tests {
     app.is_streaming_active = true;
     app.native_track_info = Some(NativeTrackInfo {
       name: "Track A".to_string(),
-      artists_display: "The Artist".to_string(),
+      artists: vec!["The Artist".to_string()],
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: NativeTrackKind::Track,

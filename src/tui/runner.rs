@@ -308,7 +308,7 @@ mod tests {
     app.is_streaming_active = true;
     app.native_track_info = Some(NativeTrackInfo {
       name: "The Track".to_string(),
-      artists_display: "The Artist".to_string(),
+      artists: vec!["The Artist".to_string()],
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: crate::core::app::NativeTrackKind::Track,
@@ -324,7 +324,7 @@ mod tests {
     app.is_streaming_active = true;
     app.native_track_info = Some(NativeTrackInfo {
       name: "The\x1b]2;Bad\x07 Track".to_string(),
-      artists_display: "The\nArtist".to_string(),
+      artists: vec!["The\nArtist".to_string()],
       album: "The Album".to_string(),
       duration_ms: 180_000,
       kind: crate::core::app::NativeTrackKind::Track,
@@ -946,11 +946,14 @@ pub async fn start_ui(
                 // not-found message rather than stale lyrics.
                 if snapshot.item_kind == PlaybackItemKind::Track {
                   let title = snapshot.metadata.title.clone();
-                  let artist = snapshot.primary_artist();
-                  app.desired_lyrics_identity = Some((title.clone(), artist.clone()));
+                  // The identity latch keys on the joined display credit, but the
+                  // LRCLIB lookup needs the structured artist list so it can fall
+                  // back to the primary artist alone for collaborations (#410).
+                  let artists = snapshot.metadata.artists.clone();
+                  app.desired_lyrics_identity = Some((title.clone(), artists.join(", ")));
                   app.dispatch(IoEvent::GetLyrics(
                     title,
-                    artist,
+                    artists,
                     snapshot.metadata.duration_ms as f64 / 1000.0,
                   ));
                 } else {

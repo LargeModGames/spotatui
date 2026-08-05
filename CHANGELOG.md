@@ -6,6 +6,10 @@
 
 - **Help search highlights its matches**: While filtering the Help menu (search key, `/` by default), every occurrence of your search terms is now highlighted in the visible rows, so you can see at a glance which part of a row matched. Highlighting follows the same smart-case rule as the filter itself ([#408](https://github.com/LargeModGames/spotatui/issues/408)).
 
+### Fixed
+
+- **Lyrics now load for collaborations**: A track credited to more than one artist (e.g. "Take Me Back" by Kygo and Max McNown) showed "No lyrics for this track" even when LRCLIB clearly had it. LRCLIB indexes each track under a single artist string, almost always the primary one, but spotatui sent the full joined credit ("Kygo, Max McNown") to both the exact `/api/get` and the fuzzy `/api/search` endpoint, so every collaboration missed. The playback snapshot now carries the artist names as a structured list instead of one pre-joined string (which also makes MPRIS `xesam:artist` a real array), and the LRCLIB lookup falls back to the primary artist alone when the full credit finds nothing ([#410](https://github.com/LargeModGames/spotatui/issues/410)).
+
 ## [v0.40.3] 2026-07-27
 
 ### Added

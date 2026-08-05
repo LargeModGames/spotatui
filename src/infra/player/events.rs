@@ -681,7 +681,7 @@ async fn handle_player_events(
         app.native_backend_pending = false;
         app.native_track_info = Some(app::NativeTrackInfo {
           name: audio_item.name.clone(),
-          artists_display: artists.join(", "),
+          artists: artists.clone(),
           album: album.clone(),
           duration_ms: audio_item.duration_ms,
           kind,
