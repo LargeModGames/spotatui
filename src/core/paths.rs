@@ -51,6 +51,25 @@ pub(crate) fn app_state_dir() -> Option<PathBuf> {
   )
 }
 
+/// Directory holding this run's log file.
+///
+/// The OS temp directory rather than the state dir: a log file is written per
+/// process id, so they accumulate, and temp is the one location the platform
+/// clears on its own. Resolved through `std::env::temp_dir` so Windows lands in
+/// `%TEMP%` instead of the literal `/tmp` this used to hard-code, which is
+/// drive-relative there and left Windows users looking for a path the app
+/// reported but their shell could not find.
+pub(crate) fn app_log_dir() -> PathBuf {
+  std::env::temp_dir().join("spotatui_logs")
+}
+
+/// Path of this process's log file. Callers on both the writing side
+/// (`setup_logging`) and the reporting side (the help screen) use this so the
+/// path shown to a user is always the path actually written.
+pub(crate) fn app_log_path() -> PathBuf {
+  app_log_dir().join(format!("spotatuilog{}", std::process::id()))
+}
+
 /// Ensure a directory that stores credentials or other private app data exists
 /// and is owner-only where supported.
 pub(crate) fn ensure_private_dir(dir: &Path) -> Result<()> {
