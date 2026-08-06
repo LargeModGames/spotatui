@@ -132,6 +132,10 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     counter_message,
     counter_style,
   )]));
+  changelog_lines.push(Line::from(vec![Span::styled(
+    "Join the community on Discord: https://discord.gg/56ZzGmB6h7",
+    Style::default().fg(app.user_config.theme.active),
+  )]));
   changelog_lines.push(Line::from(""));
 
   // The cached changelog lines are pre-wrapped to the area width (one line ==
