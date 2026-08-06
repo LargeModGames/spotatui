@@ -113,16 +113,16 @@ pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Resul
 /// The bytes go to a process-unique temporary sibling first, then a rename swaps
 /// it over `path`. The unique suffix (pid plus a per-process counter) keeps two
 /// concurrent writers from sharing one temp file and renaming each other's
-/// half-written bytes into place. On a failed rename the temp file is removed
-/// best-effort so aborted writes do not accumulate.
-pub(crate) fn write_private_file_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+/// half-written bytes into place. On a failed write or rename the temp file is
+/// removed best-effort so aborted writes do not accumulate.
+pub(crate) fn write_private_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {
   let tmp = unique_temp_path(path);
   // Clean up on either failure (write or rename). Each attempt uses a fresh
   // unique name, so a leaked temp from a partial write would otherwise persist.
   if let Err(error) = write_private_file(&tmp, contents).and_then(|()| std::fs::rename(&tmp, path))
   {
     let _ = std::fs::remove_file(&tmp);
-    return Err(error);
+    return Err(error.into());
   }
   Ok(())
 }
