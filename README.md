@@ -36,8 +36,8 @@ Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), bu
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-- [Installation](#installation)
 - [Features](#features)
+- [Installation](#installation)
 - [Quickstart](#quickstart)
   - [Adding Spotify later](#adding-spotify-later)
 - [Music Sources](#music-sources)
