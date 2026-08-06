@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Discord community
-    url: https://discord.gg/56ZzGmB6h7
+    url: https://spotatui.com/discord
     about: Questions, install help, feature chat, and listening parties. Come say hi.
   - name: Security reports
     url: https://github.com/LargeModGames/spotatui/blob/master/SECURITY.md

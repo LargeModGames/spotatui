@@ -133,7 +133,7 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     counter_style,
   )]));
   changelog_lines.push(Line::from(vec![Span::styled(
-    "Join the community on Discord: https://discord.gg/56ZzGmB6h7",
+    "Join the community on Discord: https://spotatui.com/discord",
     Style::default().fg(app.user_config.theme.active),
   )]));
   changelog_lines.push(Line::from(""));

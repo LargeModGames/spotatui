@@ -5,7 +5,7 @@
 > A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
-[![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/56ZzGmB6h7)
+[![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
 [![Upstream](https://img.shields.io/badge/upstream-Rigellute%2Fspotify--tui-blue)](https://github.com/Rigellute/spotify-tui)
 [![X](https://img.shields.io/badge/@LargeModGames-000000?logo=x&logoColor=white)](https://twitter.com/LargeModGames)
 [![Songs played using Spotatui](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&logo=spotify&logoColor=1ed760&style=flat-square&cacheSeconds=600)](https://github.com/LargeModGames/spotatui)

@@ -15,4 +15,4 @@
 <!-- Screenshots for UI changes, breaking change callouts, or follow-up work. -->
 
 ---
-<sub>💬 Questions or want to chat with other contributors? Join the [spotatui Discord](https://discord.gg/56ZzGmB6h7).</sub>
+<sub>💬 Questions or want to chat with other contributors? Join the [spotatui Discord](https://spotatui.com/discord).</sub>
