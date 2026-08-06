@@ -126,7 +126,8 @@ cargo install --path .
 
 **Nix:**
 ```bash
-nix-build
+nix develop
+cargo install --path .
 ```
 
 ---
