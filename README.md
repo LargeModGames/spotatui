@@ -1,10 +1,12 @@
 <h1>
     <p align="center">
+        <img src="https://cdn.discordapp.com/icons/1534820237122207815/e54d80b8280857dab9b4be463ec884a7.webp?size=80&quality=lossless"><br>
         Spotatui
     </p>
 </h1>
-<p>
-    A terminal music player written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui) — native Spotify streaming, synced lyrics, a real-time audio visualizer, and optional Local, Subsonic/Navidrome, Internet Radio, and YouTube sources. Spotify is optional.
+<p align="center">
+    A terminal music player written in Rust, powered by <a href="https://github.com/ratatui-org/ratatui">Ratatui</a><br>
+Native Spotify streaming, synced lyrics, a real-time audio visualizer, and optional Local, Subsonic/Navidrome, Internet Radio, and YouTube sources. Spotify is optional.
 </p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
