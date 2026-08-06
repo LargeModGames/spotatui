@@ -1,5 +1,5 @@
 use crate::tui::banner::BANNER;
-use anyhow::{anyhow, Error, Result};
+use anyhow::{anyhow, Context, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
   fs,
@@ -9,8 +9,6 @@ use std::{
 
 const DEFAULT_PORT: u16 = 8888;
 const FILE_NAME: &str = "client.yml";
-const CONFIG_DIR: &str = ".config";
-const APP_CONFIG_DIR: &str = "spotatui";
 const TOKEN_CACHE_FILE: &str = ".spotify_token_cache.json";
 const GITIGNORE_FILE: &str = ".gitignore";
 pub const NCSPOT_CLIENT_ID: &str = "d420a117a32841c2b3474932e49fb54b";
@@ -81,21 +79,15 @@ impl ClientConfig {
   }
 
   pub fn get_or_build_paths(&self) -> Result<ConfigPaths> {
-    match dirs::home_dir() {
-      Some(home) => {
-        let path = Path::new(&home);
-        let home_config_dir = path.join(CONFIG_DIR);
-        let app_config_dir = home_config_dir.join(APP_CONFIG_DIR);
+    match (
+      crate::core::paths::app_config_dir(),
+      crate::core::paths::app_state_dir(),
+    ) {
+      (Some(app_config_dir), Some(app_state_dir)) => {
+        fs::create_dir_all(&app_config_dir)?;
+        crate::core::paths::ensure_private_dir(&app_state_dir)?;
 
-        if !home_config_dir.exists() {
-          fs::create_dir(&home_config_dir)?;
-        }
-
-        if !app_config_dir.exists() {
-          fs::create_dir(&app_config_dir)?;
-        }
-
-        // Create .gitignore to protect sensitive files from being committed
+        // Create .gitignore to protect sensitive config from being committed.
         let gitignore_path = app_config_dir.join(GITIGNORE_FILE);
         if !gitignore_path.exists() {
           let gitignore_content = "\
@@ -104,18 +96,21 @@ impl ClientConfig {
 
             # Client credentials (client_id, client_secret)
             client.yml
-
-            # Panic logs
-            spotatui_panic.log
-
-            # Streaming credentials
-            streaming_cache/credentials.json
             ";
           fs::write(&gitignore_path, gitignore_content)?;
         }
 
         let config_file_path = &app_config_dir.join(FILE_NAME);
-        let token_cache_path = &app_config_dir.join(TOKEN_CACHE_FILE);
+        let token_cache_path = &app_state_dir.join(TOKEN_CACHE_FILE);
+        if let Err(error) =
+          migrate_legacy_token_caches_if_unclaimed(&app_config_dir, &app_state_dir)
+        {
+          log::warn!(
+            "failed to migrate legacy Spotify token cache from {} to {}: {error}",
+            app_config_dir.display(),
+            app_state_dir.display()
+          );
+        }
 
         let paths = ConfigPaths {
           config_file_path: config_file_path.to_path_buf(),
@@ -124,7 +119,7 @@ impl ClientConfig {
 
         Ok(paths)
       }
-      None => Err(anyhow!("No $HOME directory found for client config")),
+      _ => Err(anyhow!("No $HOME directory found for client config/state")),
     }
   }
 
@@ -328,5 +323,110 @@ impl ClientConfig {
     } else {
       Ok(())
     }
+  }
+}
+
+fn migrate_legacy_token_caches_if_unclaimed(
+  app_config_dir: &Path,
+  app_state_dir: &Path,
+) -> Result<()> {
+  // OAuth tokens used to live next to client.yml; preserve them when moving
+  // app-managed state out of the config directory.
+  crate::core::migrations::migrate_legacy_path_if_unclaimed(
+    &app_config_dir.join(TOKEN_CACHE_FILE),
+    &app_state_dir.join(TOKEN_CACHE_FILE),
+  )?;
+
+  for entry in
+    fs::read_dir(app_config_dir).with_context(|| format!("reading {}", app_config_dir.display()))?
+  {
+    let entry = entry?;
+    let file_name = entry.file_name();
+    let Some(file_name) = file_name.to_str() else {
+      continue;
+    };
+
+    if file_name == TOKEN_CACHE_FILE || !is_client_token_cache_file(file_name) {
+      continue;
+    }
+
+    crate::core::migrations::migrate_legacy_path_if_unclaimed(
+      &entry.path(),
+      &app_state_dir.join(file_name),
+    )?;
+  }
+
+  Ok(())
+}
+
+fn is_client_token_cache_file(file_name: &str) -> bool {
+  file_name.starts_with(".spotify_token_cache_") && file_name.ends_with(".json")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn legacy_token_cache_migration_moves_base_and_client_token_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path().join("config");
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir_all(&config_dir).unwrap();
+
+    std::fs::write(config_dir.join(TOKEN_CACHE_FILE), "base token").unwrap();
+    std::fs::write(
+      config_dir.join(".spotify_token_cache_d420a117.json"),
+      "client token",
+    )
+    .unwrap();
+    std::fs::write(config_dir.join("client.yml"), "client_id: abc").unwrap();
+
+    migrate_legacy_token_caches_if_unclaimed(&config_dir, &state_dir).unwrap();
+
+    assert!(!config_dir.join(TOKEN_CACHE_FILE).exists());
+    assert!(!config_dir
+      .join(".spotify_token_cache_d420a117.json")
+      .exists());
+    assert_eq!(
+      std::fs::read_to_string(state_dir.join(TOKEN_CACHE_FILE)).unwrap(),
+      "base token"
+    );
+    assert_eq!(
+      std::fs::read_to_string(state_dir.join(".spotify_token_cache_d420a117.json")).unwrap(),
+      "client token"
+    );
+    assert!(config_dir.join("client.yml").exists());
+  }
+
+  #[test]
+  fn legacy_token_cache_migration_does_not_overwrite_existing_state_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path().join("config");
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    std::fs::write(
+      config_dir.join(".spotify_token_cache_d420a117.json"),
+      "legacy token",
+    )
+    .unwrap();
+    std::fs::write(
+      state_dir.join(".spotify_token_cache_d420a117.json"),
+      "state token",
+    )
+    .unwrap();
+
+    migrate_legacy_token_caches_if_unclaimed(&config_dir, &state_dir).unwrap();
+
+    assert_eq!(
+      std::fs::read_to_string(config_dir.join(".spotify_token_cache_d420a117.json")).unwrap(),
+      "legacy token"
+    );
+    assert_eq!(
+      std::fs::read_to_string(state_dir.join(".spotify_token_cache_d420a117.json")).unwrap(),
+      "state token"
+    );
   }
 }

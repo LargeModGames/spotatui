@@ -25,7 +25,7 @@ use librespot_playback::{
 use log::{error, info, warn};
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -577,7 +577,7 @@ fn request_streaming_oauth_credentials() -> Result<Credentials> {
 pub fn ensure_streaming_credentials_cached() -> Result<()> {
   let cache_path = get_default_cache_path();
   if let Some(path) = cache_path.as_ref() {
-    std::fs::create_dir_all(path)?;
+    crate::core::paths::ensure_private_dir(path)?;
   }
   let cache = Cache::new(cache_path, None, None, None)?;
   if cache.credentials().is_none() {
@@ -591,7 +591,7 @@ pub fn ensure_streaming_credentials_cached() -> Result<()> {
 pub fn streaming_credentials_are_cached() -> Result<bool> {
   let cache_path = get_default_cache_path();
   if let Some(path) = cache_path.as_ref() {
-    std::fs::create_dir_all(path)?;
+    crate::core::paths::ensure_private_dir(path)?;
   }
   Ok(
     Cache::new(cache_path, None, None, None)?
@@ -756,7 +756,7 @@ impl StreamingPlayer {
 
     // Ensure cache directories exist
     if let Some(ref path) = cache_path {
-      std::fs::create_dir_all(path).ok();
+      crate::core::paths::ensure_private_dir(path)?;
     }
     if let Some(ref path) = audio_cache_path {
       std::fs::create_dir_all(path).ok();
@@ -775,7 +775,7 @@ impl StreamingPlayer {
     };
     // Reuse a persisted device id so every launch and recovery registers as the
     // same Spotify Connect device instead of accumulating ghost entries (#297).
-    if let Some(device_id) = get_or_create_device_id(cache_path.as_deref()) {
+    if let Some(device_id) = get_or_create_device_id(cache_path.as_deref())? {
       session_config.device_id = device_id;
     }
 
@@ -1278,19 +1278,25 @@ fn should_retry_with_fresh_credentials(
 
 /// Stable Connect device id, persisted in the streaming cache dir so every
 /// launch and every in-app recovery registers as the same device (#297).
-fn get_or_create_device_id(cache_path: Option<&std::path::Path>) -> Option<String> {
-  let cache_path = cache_path?;
+fn get_or_create_device_id(cache_path: Option<&Path>) -> Result<Option<String>> {
+  let Some(cache_path) = cache_path else {
+    return Ok(None);
+  };
+  crate::core::paths::ensure_private_dir(cache_path)?;
   let id_file = cache_path.join("device_id");
-  if let Ok(existing) = std::fs::read_to_string(&id_file) {
-    let trimmed = existing.trim();
-    if !trimmed.is_empty() {
-      return Some(trimmed.to_string());
+  match std::fs::read_to_string(&id_file) {
+    Ok(existing) => {
+      let trimmed = existing.trim();
+      if !trimmed.is_empty() {
+        return Ok(Some(trimmed.to_string()));
+      }
     }
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+    Err(e) => return Err(e).with_context(|| format!("reading {}", id_file.display())),
   }
   let id = new_device_id_string();
-  let _ = std::fs::create_dir_all(cache_path);
-  let _ = std::fs::write(&id_file, &id);
-  Some(id)
+  std::fs::write(&id_file, &id).with_context(|| format!("writing {}", id_file.display()))?;
+  Ok(Some(id))
 }
 
 /// Hyphenated UUID-v4-shaped string, matching librespot's default device id format.
@@ -1324,8 +1330,9 @@ fn new_device_id_string() -> String {
 #[cfg(test)]
 mod tests {
   use super::{
-    get_or_create_device_id, new_device_id_string, should_retry_with_fresh_credentials,
-    wait_for_oauth_callback_port, RecoveringSink, StreamingConnectionState,
+    get_or_create_device_id, migrate_legacy_streaming_cache_if_unclaimed, new_device_id_string,
+    should_retry_with_fresh_credentials, wait_for_oauth_callback_port, RecoveringSink,
+    StreamingConnectionState,
   };
   use librespot_playback::{audio_backend, convert::Converter, decoder::AudioPacket};
   use std::sync::Arc;
@@ -1469,8 +1476,8 @@ mod tests {
     let dir = std::env::temp_dir().join(format!("spotatui_device_id_test_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 
-    let first = get_or_create_device_id(Some(&dir)).unwrap();
-    let second = get_or_create_device_id(Some(&dir)).unwrap();
+    let first = get_or_create_device_id(Some(&dir)).unwrap().unwrap();
+    let second = get_or_create_device_id(Some(&dir)).unwrap().unwrap();
     assert_eq!(first, second);
     assert_eq!(
       std::fs::read_to_string(dir.join("device_id"))
@@ -1484,16 +1491,84 @@ mod tests {
 
   #[test]
   fn device_id_none_without_cache_path() {
-    assert!(get_or_create_device_id(None).is_none());
+    assert!(get_or_create_device_id(None).unwrap().is_none());
+  }
+
+  #[test]
+  fn device_id_errors_when_cache_path_setup_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = dir.path().join("not_a_directory");
+    std::fs::write(&cache_path, "not a directory").unwrap();
+
+    let err = get_or_create_device_id(Some(&cache_path)).unwrap_err();
+    assert!(err.to_string().contains("creating"));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn device_id_errors_when_persistence_write_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = dir.path().join("cache");
+    std::fs::create_dir_all(&cache_path).unwrap();
+    std::os::unix::fs::symlink(
+      dir.path().join("missing_parent").join("device_id"),
+      cache_path.join("device_id"),
+    )
+    .unwrap();
+
+    let err = get_or_create_device_id(Some(&cache_path)).unwrap_err();
+    assert!(err.to_string().contains("writing"));
+  }
+
+  #[test]
+  fn legacy_streaming_cache_migration_preserves_connect_device_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path().join("config");
+    let cache_path = dir.path().join("cache").join("streaming_cache");
+    let legacy_cache_path = config_dir.join("streaming_cache");
+    std::fs::create_dir_all(&legacy_cache_path).unwrap();
+    std::fs::write(legacy_cache_path.join("device_id"), "legacy-device-id\n").unwrap();
+    std::fs::write(
+      legacy_cache_path.join("credentials.json"),
+      "legacy credentials",
+    )
+    .unwrap();
+
+    assert!(migrate_legacy_streaming_cache_if_unclaimed(&config_dir, &cache_path).unwrap());
+
+    assert!(!legacy_cache_path.exists());
+    assert_eq!(
+      get_or_create_device_id(Some(&cache_path)).unwrap().unwrap(),
+      "legacy-device-id"
+    );
+    assert_eq!(
+      std::fs::read_to_string(cache_path.join("credentials.json")).unwrap(),
+      "legacy credentials"
+    );
   }
 }
 
 /// Helper to get the default cache path for streaming
 pub fn get_default_cache_path() -> Option<PathBuf> {
-  dirs::home_dir().map(|home| {
-    home
-      .join(".config")
-      .join("spotatui")
-      .join("streaming_cache")
-  })
+  let cache_path = crate::core::paths::app_cache_dir()?.join("streaming_cache");
+  if let Some(config_dir) = crate::core::paths::app_config_dir() {
+    if let Err(error) = migrate_legacy_streaming_cache_if_unclaimed(&config_dir, &cache_path) {
+      log::warn!(
+        "failed to migrate legacy streaming cache from {} to {}: {error}",
+        config_dir.join("streaming_cache").display(),
+        cache_path.display()
+      );
+    }
+  }
+  Some(cache_path)
+}
+
+fn migrate_legacy_streaming_cache_if_unclaimed(
+  app_config_dir: &Path,
+  cache_path: &Path,
+) -> Result<bool> {
+  crate::core::migrations::migrate_legacy_path_if_unclaimed(
+    &app_config_dir.join("streaming_cache"),
+    cache_path,
+  )
 }

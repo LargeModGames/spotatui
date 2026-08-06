@@ -1075,6 +1075,7 @@ mod tests {
     app.user_config.path_to_config = Some(UserConfigPaths {
       config_file_path: dir.path().join("config.yml"),
     });
+    app.state_path = Some(dir.path().join("state.yml"));
     app.search_results.tracks = Some(Paged {
       items: vec![TrackInfo {
         uri: Some("radio:https://example.com/stream".to_string()),
@@ -1100,9 +1101,9 @@ mod tests {
     let favorite_key = app.user_config.keys.like_track;
     handle_app(favorite_key, &mut app);
 
-    assert_eq!(app.user_config.behavior.radio_stations.len(), 1);
+    assert_eq!(app.runtime_state.radio_stations.len(), 1);
     assert_eq!(
-      app.user_config.behavior.radio_stations[0].url,
+      app.runtime_state.radio_stations[0].url,
       "https://example.com/stream"
     );
     assert_eq!(

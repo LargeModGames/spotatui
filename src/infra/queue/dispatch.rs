@@ -94,7 +94,11 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
     }
     IoEvent::ChangeVolume(volume) => {
       player.set_volume(*volume as f32 / 100.0);
-      app.lock().await.user_config.behavior.volume_percent = *volume;
+      let mut app = app.lock().await;
+      app.runtime_state.volume_percent = *volume;
+      app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
+        *volume,
+      ));
       Some(true)
     }
     // Skip the queued track: advance to the next queued item (or resume).
@@ -542,7 +546,7 @@ async fn finish_decoded_fetch(
     guard.dispatch(IoEvent::AdvanceNativeQueue);
     return;
   }
-  player.set_volume(guard.user_config.behavior.volume_percent as f32 / 100.0);
+  player.set_volume(guard.runtime_state.volume_percent as f32 / 100.0);
   if let Some(QueueNowPlaying::Decoded(d)) = guard.queue_now.as_mut() {
     d.tempfile = Some(tmp);
     d.advancing = false;
@@ -659,7 +663,7 @@ async fn release_librespot(app: &Arc<Mutex<App>>) {
 
 #[cfg(feature = "local-files")]
 async fn apply_volume(app: &Arc<Mutex<App>>, player: &Arc<LocalPlayer>) {
-  let volume = app.lock().await.user_config.behavior.volume_percent;
+  let volume = app.lock().await.runtime_state.volume_percent;
   player.set_volume(volume as f32 / 100.0);
 }
 

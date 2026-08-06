@@ -866,7 +866,7 @@ fn fullscreen_view_playbar_area(app: &App) -> Option<Rect> {
   }
 
   let root = Rect::new(0, 0, app.size.width, app.size.height);
-  let (_, playbar_area) = fullscreen_view_layout(&app.user_config.behavior, root);
+  let (_, playbar_area) = fullscreen_view_layout(&app.runtime_state, root);
   playbar_area
 }
 
@@ -1386,13 +1386,13 @@ mod tests {
   }
 
   #[test]
-  fn fullscreen_view_playbar_area_uses_configured_height() {
+  fn fullscreen_view_playbar_area_uses_runtime_state_height() {
     let mut app = App::default();
     app.size = Size {
       width: 160,
       height: 50,
     };
-    app.user_config.behavior.playbar_height_rows = 8;
+    app.runtime_state.playbar_height_rows = 8;
 
     let playbar_area = fullscreen_view_playbar_area(&app).expect("fullscreen playbar area");
 
@@ -1406,7 +1406,7 @@ mod tests {
       width: 160,
       height: 50,
     };
-    app.user_config.behavior.playbar_height_rows = 0;
+    app.runtime_state.playbar_height_rows = 0;
 
     assert!(fullscreen_view_playbar_area(&app).is_none());
   }
@@ -1418,7 +1418,7 @@ mod tests {
       width: 160,
       height: 50,
     };
-    app.user_config.behavior.playbar_height_rows = 0;
+    app.runtime_state.playbar_height_rows = 0;
     app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView);
     with_playbar_context(&mut app);
 
@@ -1446,7 +1446,7 @@ mod tests {
       width: 160,
       height: 50,
     };
-    app.user_config.behavior.playbar_height_rows = 8;
+    app.runtime_state.playbar_height_rows = 8;
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     with_playbar_context(&mut app);
 
@@ -1470,7 +1470,7 @@ mod tests {
       width: 160,
       height: 50,
     };
-    app.user_config.behavior.playbar_height_rows = 3;
+    app.runtime_state.playbar_height_rows = 3;
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     with_playbar_context(&mut app);
 

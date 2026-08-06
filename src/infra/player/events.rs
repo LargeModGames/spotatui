@@ -98,7 +98,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
 
     let initial_volume = {
       let app = ctx.app.lock().await;
-      app.user_config.behavior.volume_percent
+      app.runtime_state.volume_percent
     };
 
     let streaming_config = StreamingConfig {
@@ -876,8 +876,10 @@ async fn handle_player_events(
             if let Some(ref mut ctx) = app.current_playback_context {
               ctx.device.volume_percent = Some(volume_percent as u32);
             }
-            app.user_config.behavior.volume_percent = volume_percent.min(100);
-            let _ = app.user_config.save_config();
+            app.runtime_state.volume_percent = volume_percent.min(100);
+            let _ = app.save_runtime_state(
+              &crate::core::state::PersistedRuntimeState::volume_percent(volume_percent.min(100)),
+            );
           }
         }
       }

@@ -107,6 +107,40 @@ pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Resul
   std::fs::write(path, contents)
 }
 
+/// Atomically replace `path` with `contents`, written privately (0o600 on Unix
+/// via [`write_private_file`]).
+///
+/// The bytes go to a process-unique temporary sibling first, then a rename swaps
+/// it over `path`. The unique suffix (pid plus a per-process counter) keeps two
+/// concurrent writers from sharing one temp file and renaming each other's
+/// half-written bytes into place. On a failed write or rename the temp file is
+/// removed best-effort so aborted writes do not accumulate.
+pub(crate) fn write_private_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+  let tmp = unique_temp_path(path);
+  // Clean up on either failure (write or rename). Each attempt uses a fresh
+  // unique name, so a leaked temp from a partial write would otherwise persist.
+  if let Err(error) = write_private_file(&tmp, contents).and_then(|()| std::fs::rename(&tmp, path))
+  {
+    let _ = std::fs::remove_file(&tmp);
+    return Err(error.into());
+  }
+  Ok(())
+}
+
+/// A temporary sibling of `path` that no other process (or concurrent save in
+/// this one) will pick, so atomic writes never collide on a shared temp file.
+fn unique_temp_path(path: &Path) -> std::path::PathBuf {
+  use std::sync::atomic::{AtomicU64, Ordering};
+  static COUNTER: AtomicU64 = AtomicU64::new(0);
+  let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+  let mut name = path
+    .file_name()
+    .map(|name| name.to_os_string())
+    .unwrap_or_default();
+  name.push(format!(".{}.{}.tmp", std::process::id(), seq));
+  path.with_file_name(name)
+}
+
 fn persist_token_to_file(mut token: Token, path: &Path) -> Result<()> {
   preserve_refresh_token_from_file(&mut token, path);
   let token_json = serde_json::to_string_pretty(&token)?;

@@ -694,7 +694,7 @@ fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
 
 #[cfg(feature = "cover-art")]
 pub fn draw_cover_art_view(f: &mut Frame<'_>, app: &App) {
-  let (content_area, playbar_area) = fullscreen_view_layout(&app.user_config.behavior, f.area());
+  let (content_area, playbar_area) = fullscreen_view_layout(&app.runtime_state, f.area());
 
   draw_cover_art_content(f, app, content_area);
   if let Some(playbar_area) = playbar_area {
@@ -873,7 +873,7 @@ fn draw_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     is_playing: !local.player.is_paused(),
     position_ms: local.player.position().as_millis(),
     duration_ms: local.duration_ms,
-    volume_percent: app.user_config.behavior.volume_percent,
+    volume_percent: app.runtime_state.volume_percent,
     // Only show the indicator for multi-track queues; a single file is noise.
     queue_position: (local.queue.len() > 1).then(|| (local.index + 1, local.queue.len())),
     live: false,
@@ -897,7 +897,7 @@ fn draw_subsonic_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     is_playing: !subsonic.player.is_paused(),
     position_ms: subsonic.player.position().as_millis(),
     duration_ms: track.map(|t| t.duration_ms).unwrap_or(0),
-    volume_percent: app.user_config.behavior.volume_percent,
+    volume_percent: app.runtime_state.volume_percent,
     queue_position: (subsonic.tracks.len() > 1)
       .then(|| (subsonic.index + 1, subsonic.tracks.len())),
     live: false,
@@ -921,7 +921,7 @@ fn draw_youtube_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     is_playing: !youtube.player.is_paused(),
     position_ms: youtube.player.position().as_millis(),
     duration_ms: track.map(|t| t.duration_ms).unwrap_or(0),
-    volume_percent: app.user_config.behavior.volume_percent,
+    volume_percent: app.runtime_state.volume_percent,
     queue_position: (youtube.tracks.len() > 1).then(|| (youtube.index + 1, youtube.tracks.len())),
     live: false,
     show_modes: true,
@@ -954,7 +954,7 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     is_playing: !radio.player.is_paused(),
     position_ms: radio.player.position().as_millis(),
     duration_ms: 0,
-    volume_percent: app.user_config.behavior.volume_percent,
+    volume_percent: app.runtime_state.volume_percent,
     queue_position: None,
     live: true,
     show_modes: false,
@@ -1145,7 +1145,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       is_playing: !d.player.is_paused(),
       position_ms: d.player.position().as_millis(),
       duration_ms: d.track.duration_ms,
-      volume_percent: app.user_config.behavior.volume_percent,
+      volume_percent: app.runtime_state.volume_percent,
       queue_position: None,
       live: false,
       // The native queue ignores the decoded shuffle/repeat modes (they belong
@@ -1166,7 +1166,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       is_playing: app.native_is_playing.unwrap_or(true),
       position_ms: app.song_progress_ms,
       duration_ms: track.duration_ms,
-      volume_percent: app.user_config.behavior.volume_percent,
+      volume_percent: app.runtime_state.volume_percent,
       queue_position: None,
       live: false,
       show_modes: false,

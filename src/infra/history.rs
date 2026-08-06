@@ -16,6 +16,8 @@ use tokio::task::{JoinHandle, JoinSet};
 
 const HISTORY_SUBDIR: &str = "history";
 const LISTENS_FILE_NAME: &str = "listens.jsonl";
+const LAST_RECAP_FILE_NAME: &str = "last_recap_at.txt";
+const LAST_SYNCED_FILE_NAME: &str = "last_synced_at.txt";
 const SYNC_BASE_URL: &str = "https://spotatui.com";
 const CLOUD_SYNC_PATH: &str = "/api/sync";
 const NOW_PLAYING_SYNC_PATH: &str = "/api/sync/now-playing";
@@ -542,24 +544,13 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
 /// Default output path for the shareable recap page, used by the automatic
 /// monthly check and the in-app `generate_recap` key.
 pub fn recap_output_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join("spotatui-recap.html"),
-  )
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join("spotatui-recap.html"))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 fn last_recap_file_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join(HISTORY_SUBDIR)
-      .join("last_recap_at.txt"),
-  )
+  history_state_file_path(LAST_RECAP_FILE_NAME)
 }
 
 fn auto_recap_is_due(last_recap_contents: Option<&str>, now_ts: i64) -> bool {
@@ -844,14 +835,13 @@ impl ListenRecord {
 }
 
 fn listens_file_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join(HISTORY_SUBDIR)
-      .join(LISTENS_FILE_NAME),
-  )
+  history_state_file_path(LISTENS_FILE_NAME)
+}
+
+fn history_state_file_path(file_name: &str) -> Result<PathBuf> {
+  crate::core::paths::app_state_dir()
+    .map(|dir| dir.join(HISTORY_SUBDIR).join(file_name))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 fn append_listen_record(record: &ListenRecord) -> Result<()> {
@@ -2237,14 +2227,7 @@ fn js_string(input: &str) -> String {
 }
 
 fn last_synced_file_path() -> Result<PathBuf> {
-  let home = dirs::home_dir().ok_or_else(|| anyhow!("No $HOME directory found for history"))?;
-  Ok(
-    home
-      .join(".config")
-      .join("spotatui")
-      .join(HISTORY_SUBDIR)
-      .join("last_synced_at.txt"),
-  )
+  history_state_file_path(LAST_SYNCED_FILE_NAME)
 }
 
 #[derive(Clone, Copy, Debug)]

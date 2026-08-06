@@ -26,10 +26,16 @@ Native streaming uses 320 kbps by default. To select a different quality, set
 streaming_bitrate: 320 # 96, 160, or 320 kbps
 ```
 
-`client.yml` is in the same app config directory as `config.yml` (for example,
-`~/.config/spotatui/client.yml` on Linux and macOS). This setting controls the
-librespot native player directly; the Spotify app may still describe a Connect
-device's quality as "Automatic".
+`client.yml` is in the spotatui app config directory (for example,
+`$XDG_CONFIG_HOME/spotatui/client.yml` when `XDG_CONFIG_HOME` is set to an
+absolute path, or `~/.config/spotatui/client.yml` when it is unset or not
+absolute). This setting controls the librespot native player directly; the
+Spotify app may still describe a Connect device's quality as "Automatic".
+
+Native-streaming credentials and audio cache are stored in the app cache
+directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
+`XDG_CACHE_HOME` is set to an absolute path, or
+`~/.cache/spotatui/streaming_cache` when it is unset or not absolute.
 
 ## Notes
 

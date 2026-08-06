@@ -109,7 +109,11 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       Some(player) => {
         player.set_volume(*volume as f32 / 100.0);
         // Keep the playbar's volume readout in sync.
-        app.lock().await.user_config.behavior.volume_percent = *volume;
+        let mut app = app.lock().await;
+        app.runtime_state.volume_percent = *volume;
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
+          *volume,
+        ));
         true
       }
       None => false,
@@ -305,7 +309,7 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
 
   match result {
     Ok(Ok(info)) => {
-      let volume = app.lock().await.user_config.behavior.volume_percent;
+      let volume = app.lock().await.runtime_state.volume_percent;
       player.set_volume(volume as f32 / 100.0);
 
       // Publish the session exactly once, now that the source is decoding.

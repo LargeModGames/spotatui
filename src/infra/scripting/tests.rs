@@ -3251,6 +3251,7 @@ mod screen_tests {
 mod config_tests {
   use super::*;
   use crate::core::app::App;
+  use crate::core::source::Source;
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
@@ -3283,6 +3284,48 @@ mod config_tests {
       ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Magenta:12345"),
       _ => panic!("expected config notify"),
     }
+  }
+
+  #[test]
+  fn config_exposes_runtime_backed_behavior_scalars() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    app.user_config.behavior.sidebar_width_percent = Some(20);
+    app.user_config.behavior.playbar_height_rows = Some(6);
+    app.user_config.behavior.library_height_percent = Some(30);
+    app.runtime_state.shuffle_enabled = true;
+    app.runtime_state.sidebar_width_percent = 42;
+    app.runtime_state.playbar_height_rows = 12;
+    app.runtime_state.library_height_percent = 64;
+    app.runtime_state.active_source = Source::Radio;
+    engine.on_tick(&mut app);
+
+    engine
+      .load_source(
+        "cfg",
+        r#"
+          local c = spotatui.config()
+          spotatui.notify(
+            table.concat({
+              tostring(c.behavior.shuffle_enabled),
+              tostring(c.behavior.sidebar_width_percent),
+              tostring(c.behavior.playbar_height_rows),
+              tostring(c.behavior.library_height_percent),
+              c.behavior.active_source
+            }, ":"),
+            1
+          )
+        "#,
+      )
+      .unwrap();
+
+    match one(&engine) {
+      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "true:42:12:64:radio"),
+      _ => panic!("expected runtime-backed config notify"),
+    }
+    assert_eq!(app.user_config.behavior.sidebar_width_percent, Some(20));
+    assert_eq!(app.user_config.behavior.playbar_height_rows, Some(6));
+    assert_eq!(app.user_config.behavior.library_height_percent, Some(30));
   }
 
   #[test]
