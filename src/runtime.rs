@@ -51,7 +51,7 @@ use crate::infra::network::{IoEvent, Network};
 use crate::infra::player;
 use crate::tui::banner::BANNER;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use backtrace::Backtrace;
 use clap::{Arg, ArgMatches, Command as ClapApp};
 use clap_complete::{generate, Shell};
@@ -434,16 +434,16 @@ fn setup_logging() -> anyhow::Result<()> {
   let log_dir = crate::core::paths::app_log_dir();
   let log_path = crate::core::paths::app_log_path();
 
-  // Ensure the directory exists. If not, create.
-  if !log_dir.exists() {
-    std::fs::create_dir_all(&log_dir).map_err(|e| {
-      anyhow::anyhow!(
-        "Failed to create log directory {}: {}",
-        log_dir.display(),
-        e
-      )
-    })?;
-  }
+  // Owner-only, not plain create_dir_all: this sits in the shared OS temp
+  // directory under a predictable name, so the default mode would leave the
+  // logs readable by every other local user.
+  crate::core::paths::ensure_private_dir(&log_dir).map_err(|e| {
+    anyhow::anyhow!(
+      "Failed to create log directory {}: {}",
+      log_dir.display(),
+      e
+    )
+  })?;
   // define format of log messages.
   fern::Dispatch::new()
     .format(|out, message, record| {
@@ -633,14 +633,18 @@ async fn run_auto_update(_matches: &ArgMatches, _user_config: &UserConfig) -> Op
 /// still owns (the OAuth callback port on 8989, stdin, the terminal) it would
 /// contend with. Authentication persists its token before returning, so the
 /// child reuses it rather than opening a second browser login.
-fn restart_after_update(new_version: Option<String>) {
+fn restart_after_update(new_version: Option<String>) -> Result<()> {
   let Some(new_version) = new_version else {
-    return;
+    return Ok(());
   };
 
   println!("Updated to v{}! Restarting...", new_version);
   // Re-exec the current binary with the same args, skipping the update check.
-  let exe = std::env::current_exe().expect("failed to get current executable path");
+  // Reported rather than panicked: the update is already installed by now, so
+  // an unreadable executable path should surface as an error the user can act
+  // on, not a backtrace.
+  let exe = std::env::current_exe()
+    .context("failed to get current executable path while restarting after an update")?;
   let args: Vec<String> = std::env::args().skip(1).collect();
   let status = std::process::Command::new(&exe)
     .args(&args)
@@ -1345,7 +1349,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // Only now that authentication has released the OAuth callback port and the
   // terminal. Runs before the `?` below so a broken auth state is still allowed
   // to restart into the newer build, which may be what fixes it.
-  restart_after_update(installed_update);
+  restart_after_update(installed_update)?;
 
   let authenticated: Option<auth::AuthenticatedClient> = authenticated?;
 

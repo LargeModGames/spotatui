@@ -76,7 +76,8 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   } else {
     Text::styled(BANNER, Style::default().fg(app.user_config.theme.banner))
   };
-  let base_changelog_lines = get_changelog_cache(&app.user_config.theme, changelog_area.width);
+  let base_changelog_lines =
+    get_changelog_cache(&app.user_config.theme, changelog_area.width, &app.log_path);
 
   // Contains the banner
   let top_text = Paragraph::new(banner_text)
@@ -179,12 +180,18 @@ fn get_clean_changelog() -> &'static str {
 fn get_changelog_cache(
   theme: &crate::core::user_config::Theme,
   changelog_width: u16,
+  log_path: &str,
 ) -> Arc<Vec<Line<'static>>> {
   let cache = CHANGELOG_CACHE.get_or_init(|| {
     let changelog = get_clean_changelog();
     let key = ChangelogCacheKey::from_theme(theme, changelog_width);
     Mutex::new(ChangelogCache {
-      changelog_lines: Arc::new(build_changelog_lines(changelog, theme, changelog_width)),
+      changelog_lines: Arc::new(build_changelog_lines(
+        changelog,
+        theme,
+        changelog_width,
+        log_path,
+      )),
       key,
     })
   });
@@ -192,7 +199,12 @@ fn get_changelog_cache(
   let key = ChangelogCacheKey::from_theme(theme, changelog_width);
   if cache.key != key {
     let changelog = get_clean_changelog();
-    cache.changelog_lines = Arc::new(build_changelog_lines(changelog, theme, changelog_width));
+    cache.changelog_lines = Arc::new(build_changelog_lines(
+      changelog,
+      theme,
+      changelog_width,
+      log_path,
+    ));
     cache.key = key;
   }
   Arc::clone(&cache.changelog_lines)
@@ -559,6 +571,7 @@ fn build_changelog_lines(
   changelog: &str,
   theme: &crate::core::user_config::Theme,
   max_width: u16,
+  log_path: &str,
 ) -> Vec<Line<'static>> {
   let mut lines: Vec<Line<'static>> = vec![];
   let max_width = usize::from(max_width);
@@ -580,10 +593,7 @@ fn build_changelog_lines(
   push_wrapped(
     &mut lines,
     &[StyledSegment {
-      text: format!(
-        "Log located in {}",
-        crate::core::paths::app_log_path().display()
-      ),
+      text: format!("Log located in {}", log_path),
       style: Style::default().fg(theme.hint),
     }],
   );
