@@ -1,12 +1,11 @@
 <h1>
-<p align="center">
-  spotatui
-</p>
+    <p align="center">
+        Spotatui
+    </p>
 </h1>
-
-> A terminal music player written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui) — native Spotify streaming, synced lyrics, a real-time audio visualizer, and optional Local, Subsonic/Navidrome, Internet Radio, and YouTube sources. Spotify is optional.
->
-> A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
+<p>
+    A terminal music player written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui) — native Spotify streaming, synced lyrics, a real-time audio visualizer, and optional Local, Subsonic/Navidrome, Internet Radio, and YouTube sources. Spotify is optional.
+</p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
@@ -17,66 +16,13 @@
 [![Upstream Contributors](https://img.shields.io/badge/upstream_contributors-94-orange.svg?style=flat-square)](#upstream-contributors-spotify-tui)
 
 
+## About
 
+A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
 
 ![Demo](.github/demo.gif)
 
-## Song History
-
-![Song History](https://spotatui-counter.spotatui.workers.dev/chart.svg)
-
-
-
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Quickstart](#quickstart)
-  - [Adding Spotify later](#adding-spotify-later)
-- [Music Sources](#music-sources)
-  - [Local Files](#local-files)
-  - [Subsonic / Navidrome](#subsonic--navidrome)
-  - [Internet Radio](#internet-radio)
-  - [YouTube](#youtube)
-- [Native Streaming](#native-streaming)
-- [Configuration](#configuration)
-  - [Discord Rich Presence](#discord-rich-presence)
-  - [Anonymous Song Counter](#anonymous-song-counter)
-- [Plugins](#plugins)
-- [Performance](#performance)
-- [Playback Requirements](#playback-requirements)
-  - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
-- [Using with spotifyd](#using-with-spotifyd)
-- [Migrating from spotify-tui](#migrating-from-spotify-tui)
-- [Libraries used](#libraries-used)
-- [Development](#development)
-  - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
-- [Help Wanted](#help-wanted)
-- [Maintainer](#maintainer)
-- [spotatui Contributors](#spotatui-contributors)
-- [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
-- [Star History](#star-history)
-- [Roadmap](#roadmap)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-
-
-
-## Features
-
-- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), or [YouTube](#youtube). The free sources need no Spotify account; press `d` to switch between them at any time.
-- **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
-- **Synced lyrics.** Line-by-line lyrics that follow playback.
-- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
-- **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
-- **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
-- **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
-- **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
-- **Lightweight.** ~78 MB RAM while streaming, versus a full Electron client. See [Performance](#performance).
-
-## Installation
+## Installation 
 
 > **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
 
@@ -136,6 +82,59 @@ Or download pre-built binaries from [GitHub Releases](https://github.com/LargeMo
 > **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, and YouTube. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube`.
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
+
+
+
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+  - [Adding Spotify later](#adding-spotify-later)
+- [Music Sources](#music-sources)
+  - [Local Files](#local-files)
+  - [Subsonic / Navidrome](#subsonic--navidrome)
+  - [Internet Radio](#internet-radio)
+  - [YouTube](#youtube)
+- [Native Streaming](#native-streaming)
+- [Configuration](#configuration)
+  - [Discord Rich Presence](#discord-rich-presence)
+  - [Anonymous Song Counter](#anonymous-song-counter)
+- [Plugins](#plugins)
+- [Performance](#performance)
+- [Playback Requirements](#playback-requirements)
+  - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
+- [Using with spotifyd](#using-with-spotifyd)
+- [Migrating from spotify-tui](#migrating-from-spotify-tui)
+- [Libraries used](#libraries-used)
+- [Development](#development)
+  - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
+- [Help Wanted](#help-wanted)
+- [Maintainer](#maintainer)
+- [spotatui Contributors](#spotatui-contributors)
+- [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
+- [Star History](#star-history)
+- [Roadmap](#roadmap)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
+
+
+## Features
+
+- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), or [YouTube](#youtube). The free sources need no Spotify account; press `d` to switch between them at any time.
+- **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
+- **Synced lyrics.** Line-by-line lyrics that follow playback.
+- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
+- **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
+- **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
+- **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
+- **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
+- **Lightweight.** ~78 MB RAM while streaming, versus a full Electron client. See [Performance](#performance).
 
 ## Quickstart
 
@@ -328,6 +327,8 @@ As of November 2024, Spotify removed access to certain API endpoints for new app
 
 For more information, see [Spotify's announcement about API changes](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api).
 
+
+
 ## Using with [spotifyd](https://github.com/Spotifyd/spotifyd)
 
 > **Note:** If you're using native streaming, you don't need spotifyd!
@@ -357,6 +358,20 @@ cp -r ~/.config/spotify-tui/* "$config_home/spotatui/"
 ```
 
 You may be asked to re-authenticate with Spotify the first time.
+
+## Song History
+
+![Song History](https://spotatui-counter.spotatui.workers.dev/chart.svg)
+
+## Star History
+
+<a href="https://www.star-history.com/?type=date&legend=top-left&repos=LargeModGames%2Fspotatui">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=LargeModGames/spotatui&type=date&theme=dark&legend=top-left&sealed_token=iryqtVEb4hcMJpt3uuX43JaGNlZRMV4-stDO4M8-7zH7g186IdrwSCU1PMWBv_YdK7DC4y6qw4sEKu9JXmHbR6c7clp1u8sL1AXI3D_dMW_KTnIjJYKDGw" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=LargeModGames/spotatui&type=date&legend=top-left&sealed_token=iryqtVEb4hcMJpt3uuX43JaGNlZRMV4-stDO4M8-7zH7g186IdrwSCU1PMWBv_YdK7DC4y6qw4sEKu9JXmHbR6c7clp1u8sL1AXI3D_dMW_KTnIjJYKDGw" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=LargeModGames/spotatui&type=date&legend=top-left&sealed_token=iryqtVEb4hcMJpt3uuX43JaGNlZRMV4-stDO4M8-7zH7g186IdrwSCU1PMWBv_YdK7DC4y6qw4sEKu9JXmHbR6c7clp1u8sL1AXI3D_dMW_KTnIjJYKDGw" />
+ </picture>
+</a>
 
 ## Libraries used
 
@@ -618,16 +633,6 @@ Thanks to all the contributors who built the original [spotify-tui](https://gith
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
 This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
-
-## Star History
-
-<a href="https://www.star-history.com/?type=date&legend=top-left&repos=LargeModGames%2Fspotatui">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=LargeModGames/spotatui&type=date&theme=dark&legend=top-left&sealed_token=iryqtVEb4hcMJpt3uuX43JaGNlZRMV4-stDO4M8-7zH7g186IdrwSCU1PMWBv_YdK7DC4y6qw4sEKu9JXmHbR6c7clp1u8sL1AXI3D_dMW_KTnIjJYKDGw" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=LargeModGames/spotatui&type=date&legend=top-left&sealed_token=iryqtVEb4hcMJpt3uuX43JaGNlZRMV4-stDO4M8-7zH7g186IdrwSCU1PMWBv_YdK7DC4y6qw4sEKu9JXmHbR6c7clp1u8sL1AXI3D_dMW_KTnIjJYKDGw" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=LargeModGames/spotatui&type=date&legend=top-left&sealed_token=iryqtVEb4hcMJpt3uuX43JaGNlZRMV4-stDO4M8-7zH7g186IdrwSCU1PMWBv_YdK7DC4y6qw4sEKu9JXmHbR6c7clp1u8sL1AXI3D_dMW_KTnIjJYKDGw" />
- </picture>
-</a>
 
 ## Roadmap
 
