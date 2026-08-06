@@ -15,7 +15,7 @@ Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/stat
 
 ## Safe by default
 
-A typo in `config.yml` never prevents the app from starting. Structural mistakes (an unknown sort field, a bad template placeholder, an invalid column id, an icon that is too wide) are logged as warnings and the affected value falls back to its built-in default. Warnings go to the log file whose path is printed at startup (`spotatui_logs/spotatuilog<pid>` inside your system temp directory: `/tmp` on Linux and macOS, `%TEMP%` on Windows).
+A typo in `config.yml` never prevents the app from starting. Structural mistakes (an unknown sort field, a bad template placeholder, an invalid column id, an icon that is too wide) are logged as warnings and the affected value falls back to its built-in default. Warnings go to the log file whose path is printed at startup, a `spotatui_logs/spotatuilog<pid>` file inside your system temp directory (`%TEMP%` on Windows, `$TMPDIR` where set, otherwise `/tmp`). The startup line reports the resolved path, so copy it from there rather than guessing.
 
 Only two kinds of errors are fatal: YAML syntax errors (the file cannot be parsed at all) and a handful of out-of-range numeric values that bypass the warn-and-fallback policy: `volume_increment` outside 0–100, a tick rate (or animation tick rate) outside 1–999ms, an unparseable `auto_update_delay`, `playback_poll_seconds` below 1, and `like_animation_frames` below 1.
 

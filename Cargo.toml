@@ -235,10 +235,10 @@ pkg-fmt = "zip"
 # as the `spotatui` branch advances. Note: crates.io publishes ignore [patch], so `cargo install`
 # users need the upstream release.
 [patch.crates-io]
-librespot-core     = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "00b77b271f3fb7baa16a750a179700daac77857a" }
-librespot-audio    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "00b77b271f3fb7baa16a750a179700daac77857a" }
-librespot-playback = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "00b77b271f3fb7baa16a750a179700daac77857a" }
-librespot-connect  = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "00b77b271f3fb7baa16a750a179700daac77857a" }
-librespot-oauth    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "00b77b271f3fb7baa16a750a179700daac77857a" }
-librespot-metadata = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "00b77b271f3fb7baa16a750a179700daac77857a" }
-librespot-protocol = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "00b77b271f3fb7baa16a750a179700daac77857a" }
+librespot-core     = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
+librespot-audio    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
+librespot-playback = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
+librespot-connect  = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
+librespot-oauth    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
+librespot-metadata = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
+librespot-protocol = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
