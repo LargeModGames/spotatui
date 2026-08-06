@@ -431,17 +431,18 @@ fn init_audio_backend() {
 fn init_audio_backend() {}
 
 fn setup_logging() -> anyhow::Result<()> {
-  // Get the current Process ID
-  let pid = std::process::id();
-
-  // Construct the log file path using the PID
-  let log_dir = "/tmp/spotatui_logs/";
-  let log_path = format!("{}spotatuilog{}", log_dir, pid);
+  let log_dir = crate::core::paths::app_log_dir();
+  let log_path = crate::core::paths::app_log_path();
 
   // Ensure the directory exists. If not, create.
-  if !std::path::Path::new(log_dir).exists() {
-    std::fs::create_dir_all(log_dir)
-      .map_err(|e| anyhow::anyhow!("Failed to create log directory {}: {}", log_dir, e))?;
+  if !log_dir.exists() {
+    std::fs::create_dir_all(&log_dir).map_err(|e| {
+      anyhow::anyhow!(
+        "Failed to create log directory {}: {}",
+        log_dir.display(),
+        e
+      )
+    })?;
   }
   // define format of log messages.
   fern::Dispatch::new()
@@ -460,7 +461,7 @@ fn setup_logging() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("Failed to initialize logger: {}", e))?;
 
   // Print the location of log for user reference.
-  println!("Logging to: {}", log_path);
+  println!("Logging to: {}", log_path.display());
 
   Ok(())
 }

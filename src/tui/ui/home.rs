@@ -581,8 +581,8 @@ fn build_changelog_lines(
     &mut lines,
     &[StyledSegment {
       text: format!(
-        "Log located in /tmp/spotatui_logs/spotatuilog{}",
-        std::process::id()
+        "Log located in {}",
+        crate::core::paths::app_log_path().display()
       ),
       style: Style::default().fg(theme.hint),
     }],
