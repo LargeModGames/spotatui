@@ -166,7 +166,7 @@ pub enum IoEvent {
   IncrementGlobalSongCount,
   FetchGlobalSongCount,
   FetchAnnouncements,
-  GetLyrics(String, String, f64),
+  GetLyrics(String, Vec<String>, f64),
   /// Get user's top tracks for Discover feature (with time range)
   GetUserTopTracks(crate::core::app::DiscoverTimeRange),
   /// Get Top Artists Mix - fetches top artists and their top tracks
@@ -799,8 +799,8 @@ impl Network {
       IoEvent::FetchAnnouncements => {
         self.fetch_announcements().await;
       }
-      IoEvent::GetLyrics(track, artist, duration) => {
-        self.get_lyrics(track, artist, duration).await;
+      IoEvent::GetLyrics(track, artists, duration) => {
+        self.get_lyrics(track, artists, duration).await;
       }
       #[cfg(feature = "cover-art")]
       IoEvent::FetchCoverArt(request) => {
@@ -1603,7 +1603,7 @@ mod tests {
       IoEvent::FetchGlobalSongCount,
       IoEvent::IncrementGlobalSongCount,
       IoEvent::FetchAnnouncements,
-      IoEvent::GetLyrics(String::new(), String::new(), 0.0),
+      IoEvent::GetLyrics(String::new(), Vec::new(), 0.0),
       IoEvent::GetFriendCode,
       IoEvent::GetFriends,
       IoEvent::AddFriendByCode(String::new()),

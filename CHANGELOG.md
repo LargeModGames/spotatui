@@ -7,6 +7,10 @@
 - **Help search highlights its matches**: While filtering the Help menu (search key, `/` by default), every occurrence of your search terms is now highlighted in the visible rows, so you can see at a glance which part of a row matched. Highlighting follows the same smart-case rule as the filter itself ([#408](https://github.com/LargeModGames/spotatui/issues/408)).
 - **Generated app state now uses XDG state/cache directories**: `config.yml` stays in the app config directory for user-authored settings, while runtime-managed state (`state.yml`), listening history, last playback session, and Spotify token caches move to the app state directory. Native streaming credentials and audio cache move to the app cache directory. Existing config-dir runtime fields, radio favorites, listening history, playback-session files, Spotify token caches, and legacy native streaming credentials and audio cache are migrated on first use when the new target path does not already exist, preserving free-source startup, existing in-app radio favorites, Spotify login sessions, and native streaming setup during upgrade. If a new state/cache target already exists, the legacy file or directory is left in place instead of being merged or overwritten.
 
+### Fixed
+
+- **Lyrics now load for collaborations**: A track credited to more than one artist (e.g. "Take Me Back" by Kygo and Max McNown) showed "No lyrics for this track" even when LRCLIB clearly had it. LRCLIB indexes each track under a single artist string, almost always the primary one, but spotatui sent the full joined credit ("Kygo, Max McNown") to both the exact `/api/get` and the fuzzy `/api/search` endpoint, so every collaboration missed. The playback snapshot now carries the artist names as a structured list instead of one pre-joined string (which also makes MPRIS `xesam:artist` a real array), and the LRCLIB lookup falls back to the primary artist alone when the full credit finds nothing ([#410](https://github.com/LargeModGames/spotatui/issues/410)).
+
 ## [v0.40.3] 2026-07-27
 
 ### Added

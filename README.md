@@ -76,25 +76,35 @@
 > **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
 
 ```bash
+# One-line installer — macOS, Linux, WSL. Grabs the prebuilt binary for your
+# system, verifies its checksum, and puts spotatui on your PATH. No Rust needed.
+curl -fsSL https://spotatui.com/install.sh | bash
+
 # Homebrew (macOS only)
 brew tap LargeModGames/spotatui
 brew install spotatui
 
-# Winget (Windows)
-winget install spotatui
-
-# Cargo
+# Cargo — compile from crates.io …
 cargo install --locked spotatui
+# … or fetch the prebuilt binary without compiling
+cargo binstall spotatui
 
-# Arch Linux (AUR) - pre-built binary (faster)
+# Arch Linux (AUR) — prebuilt binary (faster)
 yay -S spotatui-bin
-
-# Arch Linux (AUR) - build from source
+# …or build from source
 yay -S spotatui
 
-# Void Linux (Unofficial Repo)
+# Void Linux (unofficial repo)
 echo repository=https://raw.githubusercontent.com/Event-Horizon-VL/blackhole-vl/repository-x86_64 | sudo tee /etc/xbps.d/20-repository-extra.conf
 sudo xbps-install -S spotatui
+```
+
+```powershell
+# One-line installer — Windows PowerShell
+irm https://spotatui.com/install.ps1 | iex
+
+# …or via Winget
+winget install spotatui
 ```
 ```nix
 # NixOS (Flake)
@@ -117,6 +127,8 @@ inputs = {
 ```
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
+
+> **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, and YouTube. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube`.
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
@@ -450,6 +462,7 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/yhay81"><img src="https://avatars.githubusercontent.com/u/11132792?v=4?s=100" width="100px;" alt="Yusuke Hayashi"/><br /><sub><b>Yusuke Hayashi</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=yhay81" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/commits?author=yhay81" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://felixzieger.de"><img src="https://avatars.githubusercontent.com/u/67903933?v=4?s=100" width="100px;" alt="Felix"/><br /><sub><b>Felix</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=felixzieger" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/DinoLeung"><img src="https://avatars.githubusercontent.com/u/7704357?v=4?s=100" width="100px;" alt="Dino Leung"/><br /><sub><b>Dino Leung</b></sub></a><br /><a href="#platform-DinoLeung" title="Packaging/porting to new platform">📦</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/istipisti113"><img src="https://avatars.githubusercontent.com/u/42544437?v=4?s=100" width="100px;" alt="Szabó István"/><br /><sub><b>Szabó István</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=istipisti113" title="Documentation">📖</a></td>
     </tr>
   </tbody>
 </table>

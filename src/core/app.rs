@@ -981,7 +981,11 @@ pub(crate) fn shuffle_advance_index(
 #[derive(Clone, Debug, Default)]
 pub struct NativeTrackInfo {
   pub name: String,
-  pub artists_display: String,
+  /// Individual credited artist names, in order. Kept structured (not a
+  /// pre-joined display string) so the LRCLIB lookup can fall back to the
+  /// primary artist alone for collaborations (#410). Join with `", "` for
+  /// display.
+  pub artists: Vec<String>,
   #[allow(dead_code)]
   pub album: String, // Reserved for future use (e.g., displaying album in playbar)
   pub duration_ms: u32,

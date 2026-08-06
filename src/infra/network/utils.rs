@@ -74,15 +74,18 @@ struct AnnouncementRecord {
 }
 
 pub trait UtilsNetwork {
-  async fn get_lyrics(&mut self, track: String, artist: String, duration: f64);
+  async fn get_lyrics(&mut self, track: String, artists: Vec<String>, duration: f64);
   async fn increment_global_song_count(&mut self);
   async fn fetch_global_song_count(&mut self);
   async fn fetch_announcements(&mut self);
 }
 
 impl UtilsNetwork for Network {
-  async fn get_lyrics(&mut self, track: String, artist: String, duration: f64) {
-    let request_identity = (track.clone(), artist.clone());
+  async fn get_lyrics(&mut self, track: String, artists: Vec<String>, duration: f64) {
+    // The identity latch and the plugin-facing `lyrics_state_is_current` gate
+    // both key on the joined display credit (`primary_artist()`), so build the
+    // identity from the same join here.
+    let request_identity = (track.clone(), artists.join(", "));
     let client = super::requests::shared_http_client();
 
     // Update state to loading
@@ -96,7 +99,7 @@ impl UtilsNetwork for Network {
       app.lyrics_synced = false;
     }
 
-    let lrc_resp = fetch_lrclib_lyrics(client, &track, &artist, duration).await;
+    let lrc_resp = fetch_lrclib_lyrics(client, &track, &artists, duration).await;
 
     let mut app = self.app.lock().await;
     if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
@@ -323,39 +326,97 @@ impl UtilsNetwork for Network {
 /// seconds), so it 404s on small metadata differences even when LRCLIB has the
 /// song. When it misses, fall back to the fuzzy `/api/search` endpoint and pick
 /// the best-matching result.
+///
+/// Both endpoints are tried across every artist candidate (see
+/// [`artist_query_candidates`]): all `/api/get` candidates first, then all
+/// `/api/search` candidates, so an exact hit on the primary artist always beats
+/// a fuzzy hit on the full multi-artist credit.
 async fn fetch_lrclib_lyrics(
+  client: &reqwest::Client,
+  track: &str,
+  artists: &[String],
+  duration: f64,
+) -> Option<LrcResponse> {
+  let candidates = artist_query_candidates(artists);
+
+  for artist in &candidates {
+    if let Some(lrc_resp) = lrclib_get(client, track, artist, duration).await {
+      return Some(lrc_resp);
+    }
+  }
+
+  for artist in &candidates {
+    if let Some(lrc_resp) = lrclib_search(client, track, artist, duration).await {
+      return Some(lrc_resp);
+    }
+  }
+
+  None
+}
+
+/// The LRCLIB artist strings to try, in order. LRCLIB indexes each track under a
+/// single artist string, almost always the primary (first) credited artist. A
+/// collaboration reaches here as the joined `"A, B"` credit that
+/// `primary_artist()` builds for display, which matches neither `/api/get`
+/// (exact) nor `/api/search`, so those tracks find no lyrics even when LRCLIB
+/// has them (issue #410). Try the full credit first (correct for solo tracks and
+/// acts whose own name contains a comma, e.g. "Earth, Wind & Fire"), then the
+/// first credited artist alone. The first artist is taken from the structured
+/// list, never by splitting the joined string, so a comma inside an artist name
+/// is preserved.
+fn artist_query_candidates(artists: &[String]) -> Vec<String> {
+  let joined = artists.join(", ");
+  let mut candidates = vec![joined.clone()];
+  if let Some(first) = artists.first() {
+    let first = first.trim();
+    if !first.is_empty() && first != joined {
+      candidates.push(first.to_string());
+    }
+  }
+  candidates
+}
+
+/// Exact `/api/get` lookup for one artist string. Returns the record only when
+/// the request succeeds and it actually carries lyrics.
+async fn lrclib_get(
   client: &reqwest::Client,
   track: &str,
   artist: &str,
   duration: f64,
 ) -> Option<LrcResponse> {
-  let get_query = [
+  let query = [
     ("track_name", track.to_string()),
     ("artist_name", artist.to_string()),
     ("duration", (duration.round() as u64).to_string()),
   ];
-  if let Ok(resp) = client
+  let resp = client
     .get("https://lrclib.net/api/get")
-    .query(&get_query)
+    .query(&query)
     .send()
     .await
-  {
-    if resp.status().is_success() {
-      if let Ok(lrc_resp) = resp.json::<LrcResponse>().await {
-        if lrc_resp.has_lyrics() {
-          return Some(lrc_resp);
-        }
-      }
-    }
+    .ok()?;
+  if !resp.status().is_success() {
+    return None;
   }
+  let lrc_resp = resp.json::<LrcResponse>().await.ok()?;
+  lrc_resp.has_lyrics().then_some(lrc_resp)
+}
 
-  let search_query = [
+/// Fuzzy `/api/search` lookup for one artist string, reduced to the best hit via
+/// [`pick_search_result`].
+async fn lrclib_search(
+  client: &reqwest::Client,
+  track: &str,
+  artist: &str,
+  duration: f64,
+) -> Option<LrcResponse> {
+  let query = [
     ("track_name", track.to_string()),
     ("artist_name", artist.to_string()),
   ];
   let resp = client
     .get("https://lrclib.net/api/search")
-    .query(&search_query)
+    .query(&query)
     .send()
     .await
     .ok()?;
@@ -475,7 +536,48 @@ fn parse_announcement_level(level: Option<&str>) -> AnnouncementLevel {
 
 #[cfg(test)]
 mod tests {
-  use super::{parse_synced_lyrics, pick_search_result, synthesize_plain_lyrics, LrcResponse};
+  use super::{
+    artist_query_candidates, parse_synced_lyrics, pick_search_result, synthesize_plain_lyrics,
+    LrcResponse,
+  };
+
+  #[test]
+  fn artist_candidates_single_artist_has_no_fallback() {
+    // A solo track queries once; nothing extra to try.
+    assert_eq!(
+      artist_query_candidates(&["Kygo".to_string()]),
+      vec!["Kygo".to_string()]
+    );
+  }
+
+  #[test]
+  fn artist_candidates_add_primary_artist_for_collaborations() {
+    // LRCLIB stores "Take Me Back" under "Kygo" alone, so the joined credit must
+    // fall back to the first artist (issue #410).
+    assert_eq!(
+      artist_query_candidates(&["Kygo".to_string(), "Max McNown".to_string()]),
+      vec!["Kygo, Max McNown".to_string(), "Kygo".to_string()]
+    );
+  }
+
+  #[test]
+  fn artist_candidates_preserve_comma_inside_artist_name() {
+    // Splitting the joined display string on ", " would corrupt an act whose own
+    // name contains a comma; the primary artist must come from the structured
+    // list instead.
+    assert_eq!(
+      artist_query_candidates(&["Earth, Wind & Fire".to_string(), "Guest".to_string()]),
+      vec![
+        "Earth, Wind & Fire, Guest".to_string(),
+        "Earth, Wind & Fire".to_string(),
+      ]
+    );
+  }
+
+  #[test]
+  fn artist_candidates_empty_list_yields_single_empty_query() {
+    assert_eq!(artist_query_candidates(&[]), vec![String::new()]);
+  }
 
   #[test]
   fn parses_timestamped_lyric_lines_and_drops_untimed_ones() {

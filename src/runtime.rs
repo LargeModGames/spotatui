@@ -1396,11 +1396,10 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // Work with the cli (not really async)
   if let Some(cmd) = matches.subcommand_name() {
     info!("running in cli mode with command: {}", cmd);
-    // Save, because we checked if the subcommand is present at runtime
+    // Safe, because we checked if the subcommand is present at runtime
     let m = matches.subcommand_matches(cmd).unwrap();
-    #[cfg(feature = "streaming")]
-    let network = Network::new(spotify, client_config, &app, final_token_cache_path); // CLI doesn't use streaming
-    #[cfg(not(feature = "streaming"))]
+    // Both `Network::new` variants share one signature, so the same call
+    // compiles with or without `streaming`. CLI mode never uses streaming.
     let network = Network::new(spotify, client_config, &app, final_token_cache_path);
     let cli_result = cli::handle_matches(m, cmd.to_string(), network, user_config).await;
     app.lock().await.flush_state_save(true);
@@ -1761,9 +1760,6 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     let cloned_app = Arc::clone(&app);
     info!("spawning spotify network event handler");
     tokio::spawn(async move {
-      #[cfg(feature = "streaming")]
-      let mut network = Network::new(spotify, client_config, &app, final_token_cache_path);
-      #[cfg(not(feature = "streaming"))]
       let mut network = Network::new(spotify, client_config, &app, final_token_cache_path);
 
       // The saved-device startup decision moved into
