@@ -1884,6 +1884,9 @@ pub struct App {
   pub plugin_popup: Option<crate::core::plugin_api::PluginPopup>,
   /// Scroll offset for the plugin popup.
   pub plugin_popup_scroll: u16,
+  /// Where this run's log file is being written, resolved once here so draw
+  /// code can show it without doing the environment lookup every frame.
+  pub log_path: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -2176,6 +2179,7 @@ impl Default for App {
       plugin_playbar_segments: std::collections::BTreeMap::new(),
       plugin_popup: None,
       plugin_popup_scroll: 0,
+      log_path: crate::core::paths::app_log_path().display().to_string(),
     }
   }
 }
