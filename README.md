@@ -21,9 +21,9 @@ Native Spotify streaming, synced lyrics, a real-time audio visualizer, and optio
 ![Demo](.github/demo.gif)
 
 ## About
-<!--> 
+<!--
 A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
-<-->
+-->
 Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), but since then the project has diverged in multiple fronts. 
 <table>
     <tr>
