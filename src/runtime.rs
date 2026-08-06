@@ -1431,8 +1431,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
             .unwrap_or_else(|e| Err(anyhow::anyhow!("credential caching task panicked: {e}")));
           if let Err(error) = cached {
             warn!("native streaming authentication unavailable: {error}");
+            // Name the actual failure. The generic message left issue #414's
+            // reporter with a browser "unable to connect" page, a login that
+            // repeated every launch, and nothing on screen or in reach that
+            // said which half of startup had failed or why.
             app.lock().await.set_status_message(
-              "Native streaming authentication failed; using Spotify Connect.",
+              format!("Native streaming authentication failed ({error}); using Spotify Connect."),
               10,
             );
           }
