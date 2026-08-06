@@ -2239,9 +2239,7 @@ impl UserConfig {
     // corrupt the config. Do not log `content_yml`: it may contain plaintext
     // credentials.
     let content_yml = serde_yaml::to_string(&final_config)?;
-    let tmp_path = paths.config_file_path.with_extension("yml.tmp");
-    crate::core::auth::write_private_file(&tmp_path, content_yml.as_bytes())?;
-    fs::rename(&tmp_path, &paths.config_file_path)?;
+    crate::core::auth::write_private_file_atomic(&paths.config_file_path, content_yml.as_bytes())?;
 
     Ok(())
   }

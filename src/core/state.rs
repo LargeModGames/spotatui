@@ -292,21 +292,81 @@ pub fn default_state_path() -> Result<PathBuf> {
     .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
-/// Load state. A missing file means empty state; malformed state is returned as
-/// an error so callers can log and continue with config/default values.
-pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
+/// Outcome of reading `state.yml` off disk, before deciding how to react to a
+/// bad file. Loading (startup) surfaces a malformed file as an error, while
+/// saving heals it; both share this classification so the read logic lives in
+/// one place.
+enum StateRead {
+  /// The file is absent or blank; treat as empty state.
+  Empty,
+  /// The file parsed cleanly.
+  Parsed(PersistedRuntimeState),
+  /// The file was readable but its contents did not parse.
+  Malformed(anyhow::Error),
+  /// The file could not be read (permissions, other I/O error).
+  Unreadable(anyhow::Error),
+}
+
+fn read_state(path: &Path) -> StateRead {
   match std::fs::read_to_string(path) {
     Ok(contents) => {
       if contents.trim().is_empty() {
-        Ok(PersistedRuntimeState::default())
+        StateRead::Empty
       } else {
-        let state = serde_yaml::from_str(&contents)
-          .with_context(|| format!("malformed runtime state file: {}", path.display()))?;
-        Ok(sanitized_persisted_state(&state))
+        match serde_yaml::from_str::<PersistedRuntimeState>(&contents) {
+          Ok(state) => StateRead::Parsed(sanitized_persisted_state(&state)),
+          Err(error) => StateRead::Malformed(
+            anyhow::Error::new(error)
+              .context(format!("malformed runtime state file: {}", path.display())),
+          ),
+        }
       }
     }
-    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PersistedRuntimeState::default()),
-    Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => StateRead::Empty,
+    Err(error) => StateRead::Unreadable(
+      anyhow::Error::new(error).context(format!("reading {}", path.display())),
+    ),
+  }
+}
+
+/// Load state. A missing file means empty state; malformed state is returned as
+/// an error so callers can log and continue with config/default values.
+pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
+  match read_state(path) {
+    StateRead::Empty => Ok(PersistedRuntimeState::default()),
+    StateRead::Parsed(state) => Ok(state),
+    StateRead::Malformed(error) | StateRead::Unreadable(error) => Err(error),
+  }
+}
+
+/// Load existing state for a read-modify-write save, healing a corrupt file.
+///
+/// `save` re-reads `state.yml` before merging, so a malformed file would
+/// otherwise wedge every future save forever and surface a UI error on each
+/// runtime change (volume nudge, layout tweak). Mirror the `config.yml`
+/// fallback: move the unreadable file aside to `state.yml.bak` (best effort),
+/// warn, and continue from empty state. A genuine read failure is still
+/// propagated so a transient error never discards good data by overwriting it
+/// with defaults.
+fn load_for_save(path: &Path) -> Result<PersistedRuntimeState> {
+  match read_state(path) {
+    StateRead::Empty => Ok(PersistedRuntimeState::default()),
+    StateRead::Parsed(state) => Ok(state),
+    StateRead::Malformed(error) => {
+      let backup = path.with_extension("yml.bak");
+      match std::fs::rename(path, &backup) {
+        Ok(()) => log::warn!(
+          "[state] {error:#}; backed up to {} and starting from defaults",
+          backup.display()
+        ),
+        Err(rename_error) => log::warn!(
+          "[state] {error:#}; could not back up to {} ({rename_error}); overwriting with defaults",
+          backup.display()
+        ),
+      }
+      Ok(PersistedRuntimeState::default())
+    }
+    StateRead::Unreadable(error) => Err(error),
   }
 }
 
@@ -316,14 +376,14 @@ pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
 /// own one field, so blindly writing a whole in-memory snapshot would clobber
 /// updates made by another running instance.
 pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
-  let mut merged = load(path)?;
+  let mut merged = load_for_save(path)?;
   merge_state_patch(&mut merged, state);
   write_state(path, &merged)
 }
 
 /// Remove a radio station without sending a stale full station list.
 pub fn save_removing_radio_station(path: &Path, url: &str) -> Result<()> {
-  let mut merged = load(path)?;
+  let mut merged = load_for_save(path)?;
   if let Some(stations) = &mut merged.radio_stations {
     let url = url.trim();
     stations.retain(|station| station.url.trim() != url);
@@ -340,10 +400,8 @@ fn write_state(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
   if let Some(dir) = path.parent() {
     crate::core::paths::ensure_private_dir(dir)?;
   }
-  let tmp = path.with_extension("yml.tmp");
-  crate::core::auth::write_private_file(&tmp, yaml.as_bytes())
-    .with_context(|| format!("writing {}", tmp.display()))?;
-  std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
+  crate::core::auth::write_private_file_atomic(path, yaml.as_bytes())
+    .with_context(|| format!("writing {}", path.display()))?;
   Ok(())
 }
 
@@ -627,6 +685,45 @@ mod tests {
         ..Default::default()
       }
     );
+  }
+
+  #[test]
+  fn save_heals_a_malformed_state_file_and_keeps_a_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let garbage = "this: is: not: valid: yaml: [\n";
+    std::fs::write(&path, garbage).unwrap();
+
+    // A malformed file makes `load` fail, but `save` must still succeed.
+    assert!(load(&path).is_err());
+    save(&path, &PersistedRuntimeState::volume_percent(42)).unwrap();
+
+    // The corrupt bytes are preserved next to the healed file, untouched.
+    let backup = path.with_extension("yml.bak");
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), garbage);
+
+    // The rewritten file parses and reflects the patch, starting from defaults.
+    assert_eq!(
+      load(&path).unwrap(),
+      PersistedRuntimeState {
+        volume_percent: Some(42),
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
+  fn save_leaves_no_temporary_files_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    save(&path, &PersistedRuntimeState::volume_percent(30)).unwrap();
+
+    let has_temp = std::fs::read_dir(dir.path())
+      .unwrap()
+      .filter_map(Result::ok)
+      .any(|entry| entry.file_name().to_string_lossy().contains(".tmp"));
+    assert!(!has_temp, "atomic save left a temporary file behind");
   }
 
   #[test]
