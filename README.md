@@ -18,11 +18,31 @@ Native Spotify streaming, synced lyrics, a real-time audio visualizer, and optio
 [![Upstream Contributors](https://img.shields.io/badge/upstream_contributors-94-orange.svg?style=flat-square)](#upstream-contributors-spotify-tui)
 
 
-## About
-
-A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
-
 ![Demo](.github/demo.gif)
+
+## About
+<!--> 
+A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
+<-->
+Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), but since then the project has diverged in multiple fronts. 
+<table>
+    <tr>
+        <th> Differences </th>
+        <th> spotify-tui </th>
+        <th> spotatui </th>
+    </tr>
+    <tr>
+        <td>Spotify backend</td>
+        <td> todo </td>
+        <td> todo </td>
+    </tr>
+    <tr>
+        <td> Source(s) </td>
+        <td> Spotify </td>
+        <td> Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio </td>
+    </tr>
+</table>
+
 
 ## Installation 
 
