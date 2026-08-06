@@ -1,7 +1,7 @@
 <h1>
     <p align="center">
         <img src="https://cdn.discordapp.com/icons/1534820237122207815/e54d80b8280857dab9b4be463ec884a7.webp?size=80&quality=lossless"><br>
-        Spotatui
+        spotatui
     </p>
 </h1>
 <p align="center">
@@ -426,6 +426,25 @@ You may be asked to re-authenticate with Spotify the first time.
 1. Clone or fork this repo and `cd` to it
 1. And then `cargo run`
 
+### If you use NixOS or Nix in general:
+   ```bash
+    nix develop
+    cargo run
+   ```
+The flake will take care of all the dependencies for you, except for setting the audio backend.
+If you use alsa:
+   ```nix
+    hardware.alsa.enable = true;
+   ```
+Or if you use pipewire:
+   ```nix
+    services.pipewire = {
+        enable = true;
+        alsa.enable = true;
+        #your other settings 
+    };
+   ```
+ 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines.
 
 ### Windows Subsystem for Linux
