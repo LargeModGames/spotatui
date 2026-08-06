@@ -520,26 +520,27 @@ const SPOTIFY_PLAYER_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 /// spotify-player's redirect_uri - must match what's registered with their client_id
 const SPOTIFY_PLAYER_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
 
-fn wait_for_oauth_callback_port(
-  address: &str,
-  max_wait: Duration,
-  retry_delay: Duration,
-) -> Result<()> {
+/// Wait until `address` looks bindable, so the streaming consent is not opened
+/// while the Web API callback server still holds the port.
+///
+/// Advisory only, and deliberately so. librespot binds the port itself, so the
+/// most this can do is probe and release; between that release and librespot's
+/// own bind the port is unowned, which no amount of retrying can close. Returns
+/// whether the port came free rather than `Result`, because the caller must not
+/// treat "still busy" as fatal: librespot's bind is the authority and reports a
+/// far better error than this probe can.
+fn wait_for_oauth_callback_port(address: &str, max_wait: Duration, retry_delay: Duration) -> bool {
   let deadline = Instant::now() + max_wait;
   loop {
     match std::net::TcpListener::bind(address) {
       Ok(listener) => {
         drop(listener);
-        return Ok(());
+        return true;
       }
       Err(_) if Instant::now() < deadline => {
         std::thread::sleep(retry_delay.min(deadline.saturating_duration_since(Instant::now())));
       }
-      Err(error) => {
-        return Err(anyhow!(
-          "OAuth callback port {address} did not become available: {error}"
-        ));
-      }
+      Err(_) => return false,
     }
   }
 }
@@ -548,11 +549,15 @@ fn request_streaming_oauth_credentials() -> Result<Credentials> {
   // The Web API and streaming OAuth clients both use port 8989. On a fresh
   // profile their callback servers run back-to-back, so wait for the first
   // listener to be fully released before librespot opens the second consent.
-  wait_for_oauth_callback_port(
+  // Advisory: if it is still busy we go ahead anyway and let librespot's own
+  // bind produce the real error, rather than refusing to try at all.
+  if !wait_for_oauth_callback_port(
     "127.0.0.1:8989",
     Duration::from_secs(5),
     Duration::from_millis(50),
-  )?;
+  ) {
+    warn!("OAuth callback port 127.0.0.1:8989 still busy; attempting the streaming login anyway");
+  }
 
   let client_builder = OAuthClientBuilder::new(
     SPOTIFY_PLAYER_CLIENT_ID,
@@ -1412,11 +1417,32 @@ mod tests {
       drop(listener);
     });
 
-    wait_for_oauth_callback_port(&address, Duration::from_secs(1), Duration::from_millis(10))
-      .expect("callback port should become available after the first listener exits");
+    assert!(
+      wait_for_oauth_callback_port(&address, Duration::from_secs(1), Duration::from_millis(10)),
+      "callback port should become available after the first listener exits"
+    );
     release.join().unwrap();
 
     std::net::TcpListener::bind(address).expect("callback port should remain available");
+  }
+
+  /// A port that never frees is reported, not fatal: the caller logs and lets
+  /// librespot's own bind produce the authoritative error.
+  #[test]
+  fn oauth_callback_port_reports_a_port_that_stays_busy() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+
+    assert!(
+      !wait_for_oauth_callback_port(
+        &address,
+        Duration::from_millis(50),
+        Duration::from_millis(10)
+      ),
+      "a port held for the whole wait should report as unavailable"
+    );
+
+    drop(listener);
   }
 
   #[test]

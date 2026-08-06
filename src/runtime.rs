@@ -51,7 +51,7 @@ use crate::infra::network::{IoEvent, Network};
 use crate::infra::player;
 use crate::tui::banner::BANNER;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use backtrace::Backtrace;
 use clap::{Arg, ArgMatches, Command as ClapApp};
 use clap_complete::{generate, Shell};
@@ -431,18 +431,19 @@ fn init_audio_backend() {
 fn init_audio_backend() {}
 
 fn setup_logging() -> anyhow::Result<()> {
-  // Get the current Process ID
-  let pid = std::process::id();
+  let log_dir = crate::core::paths::app_log_dir();
+  let log_path = crate::core::paths::app_log_path();
 
-  // Construct the log file path using the PID
-  let log_dir = "/tmp/spotatui_logs/";
-  let log_path = format!("{}spotatuilog{}", log_dir, pid);
-
-  // Ensure the directory exists. If not, create.
-  if !std::path::Path::new(log_dir).exists() {
-    std::fs::create_dir_all(log_dir)
-      .map_err(|e| anyhow::anyhow!("Failed to create log directory {}: {}", log_dir, e))?;
-  }
+  // Owner-only, not plain create_dir_all: this sits in the shared OS temp
+  // directory under a predictable name, so the default mode would leave the
+  // logs readable by every other local user.
+  crate::core::paths::ensure_private_dir(&log_dir).map_err(|e| {
+    anyhow::anyhow!(
+      "Failed to create log directory {}: {}",
+      log_dir.display(),
+      e
+    )
+  })?;
   // define format of log messages.
   fern::Dispatch::new()
     .format(|out, message, record| {
@@ -460,7 +461,7 @@ fn setup_logging() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("Failed to initialize logger: {}", e))?;
 
   // Print the location of log for user reference.
-  println!("Logging to: {}", log_path);
+  println!("Logging to: {}", log_path.display());
 
   Ok(())
 }
@@ -563,14 +564,23 @@ async fn handle_self_update_command(_matches: &ArgMatches) -> Result<bool> {
   Ok(false)
 }
 
+/// Run the auto-update check, returning the new version when one was installed.
+///
+/// Deliberately does NOT restart here. This runs concurrently with
+/// authentication, and restarting mid-authentication deadlocks startup: the
+/// re-exec blocks this task in `Command::status()`, which stops the joined
+/// authentication future from being polled while it still owns the OAuth
+/// callback port, so the child cannot bind that port and the parent never
+/// releases it. See `restart_after_update`, which the caller invokes once
+/// authentication has finished.
 #[cfg(feature = "self-update")]
-async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) {
+async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) -> Option<String> {
   if matches.subcommand_name().is_some()
     || std::env::var_os("SPOTATUI_SKIP_UPDATE").is_some()
     || matches.get_flag("no-update")
     || user_config.behavior.disable_auto_update
   {
-    return;
+    return None;
   }
 
   println!("Checking for updates...");
@@ -593,24 +603,7 @@ async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) {
     };
 
   match update_result {
-    Some(cli::UpdateOutcome::Installed(new_version)) => {
-      println!("Updated to v{}! Restarting...", new_version);
-      // Re-exec the current binary with the same args, skipping the update check.
-      let exe = std::env::current_exe().expect("failed to get current executable path");
-      let args: Vec<String> = std::env::args().skip(1).collect();
-      let status = std::process::Command::new(&exe)
-        .args(&args)
-        .env("SPOTATUI_SKIP_UPDATE", "1")
-        .status();
-      match status {
-        Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(0)),
-        Err(e) => {
-          eprintln!("Failed to restart after update: {}", e);
-          eprintln!("Please restart spotatui manually.");
-          std::process::exit(1);
-        }
-      }
-    }
+    Some(cli::UpdateOutcome::Installed(new_version)) => Some(new_version),
     Some(cli::UpdateOutcome::Pending {
       version,
       secs_remaining,
@@ -620,14 +613,52 @@ async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) {
         version,
         crate::core::user_config::format_update_delay_secs(secs_remaining)
       );
+      None
     }
     // Up-to-date, check failed, or no update — continue normally.
-    _ => {}
+    _ => None,
   }
 }
 
 #[cfg(not(feature = "self-update"))]
-async fn run_auto_update(_matches: &ArgMatches, _user_config: &UserConfig) {}
+async fn run_auto_update(_matches: &ArgMatches, _user_config: &UserConfig) -> Option<String> {
+  None
+}
+
+/// Re-exec into the freshly installed binary. Never returns when an update was
+/// installed.
+///
+/// Must be called only once startup is no longer holding resources the child
+/// will need. The child repeats startup from scratch, so anything this process
+/// still owns (the OAuth callback port on 8989, stdin, the terminal) it would
+/// contend with. Authentication persists its token before returning, so the
+/// child reuses it rather than opening a second browser login.
+fn restart_after_update(new_version: Option<String>) -> Result<()> {
+  let Some(new_version) = new_version else {
+    return Ok(());
+  };
+
+  println!("Updated to v{}! Restarting...", new_version);
+  // Re-exec the current binary with the same args, skipping the update check.
+  // Reported rather than panicked: the update is already installed by now, so
+  // an unreadable executable path should surface as an error the user can act
+  // on, not a backtrace.
+  let exe = std::env::current_exe()
+    .context("failed to get current executable path while restarting after an update")?;
+  let args: Vec<String> = std::env::args().skip(1).collect();
+  let status = std::process::Command::new(&exe)
+    .args(&args)
+    .env("SPOTATUI_SKIP_UPDATE", "1")
+    .status();
+  match status {
+    Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(0)),
+    Err(e) => {
+      eprintln!("Failed to restart after update: {}", e);
+      eprintln!("Please restart spotatui manually.");
+      std::process::exit(1);
+    }
+  }
+}
 
 /// Everything native streaming needs that used to gate the first frame:
 /// account probe, librespot session handshake, player event handler, and the
@@ -1302,7 +1333,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // network round trips and neither depends on the other, so the check no
   // longer adds its own latency to startup. (An update that actually installs
   // still restarts the process, exactly as before.)
-  let (authenticated, _) = tokio::join!(
+  let (authenticated, installed_update) = tokio::join!(
     async {
       if spotify_required {
         auth::authenticate_with_fallback(&mut client_config, &config_paths)
@@ -1314,6 +1345,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     },
     run_auto_update(&matches, &user_config)
   );
+
+  // Only now that authentication has released the OAuth callback port and the
+  // terminal. Runs before the `?` below so a broken auth state is still allowed
+  // to restart into the newer build, which may be what fixes it.
+  restart_after_update(installed_update)?;
+
   let authenticated: Option<auth::AuthenticatedClient> = authenticated?;
 
   // Which Spotify app the session actually authenticated as, when the user would
@@ -1431,8 +1468,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
             .unwrap_or_else(|e| Err(anyhow::anyhow!("credential caching task panicked: {e}")));
           if let Err(error) = cached {
             warn!("native streaming authentication unavailable: {error}");
+            // Name the actual failure. The generic message left issue #414's
+            // reporter with a browser "unable to connect" page, a login that
+            // repeated every launch, and nothing on screen or in reach that
+            // said which half of startup had failed or why.
             app.lock().await.set_status_message(
-              "Native streaming authentication failed; using Spotify Connect.",
+              format!("Native streaming authentication failed ({error}); using Spotify Connect."),
               10,
             );
           }
