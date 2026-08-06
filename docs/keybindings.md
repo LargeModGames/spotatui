@@ -40,7 +40,9 @@ Press `Enter` to apply the filter and `Esc` to clear it.
 
 ## Customizing Keybindings
 
-Edit `~/.config/spotatui/config.yml`:
+Edit `config.yml` in the spotatui app config directory (`$XDG_CONFIG_HOME/spotatui`
+when `XDG_CONFIG_HOME` is set to an absolute path, or `~/.config/spotatui` when
+it is unset or not absolute):
 
 ```yaml
 keybindings:

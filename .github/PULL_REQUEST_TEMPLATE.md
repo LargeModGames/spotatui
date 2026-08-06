@@ -13,3 +13,6 @@
 # Additional notes
 
 <!-- Screenshots for UI changes, breaking change callouts, or follow-up work. -->
+
+---
+<sub>💬 Questions or want to chat with other contributors? Join the [spotatui Discord](https://spotatui.com/discord).</sub>

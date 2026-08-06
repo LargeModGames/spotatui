@@ -29,8 +29,14 @@ use crate::cli;
 use crate::core::app::App;
 use crate::core::auth;
 use crate::core::config::ClientConfig;
+use crate::core::layout::MAX_PLAYBAR_ROWS;
+use crate::core::migrations::{
+  apply_legacy_config_radio_station_migration, apply_legacy_config_runtime_state_migration,
+  apply_legacy_state_file_migrations,
+};
+use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::{
-  validate_tick_rate_milliseconds, StartupBehavior, UserConfig, UserConfigPaths,
+  validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
 };
 #[cfg(feature = "discord-rpc")]
 use crate::infra::discord_rpc;
@@ -478,12 +484,8 @@ fn install_panic_hook() {
     }
 
     ratatui::restore();
-    let panic_log_path = dirs::home_dir().map(|home| {
-      home
-        .join(".config")
-        .join("spotatui")
-        .join("spotatui_panic.log")
-    });
+    let panic_log_path =
+      crate::core::paths::app_state_dir().map(|dir| dir.join("spotatui_panic.log"));
 
     if let Some(path) = panic_log_path.as_ref() {
       if let Some(parent) = path.parent() {
@@ -980,6 +982,41 @@ fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
   Ok(())
 }
 
+fn apply_configured_runtime_defaults(
+  runtime_state: &mut RuntimeState,
+  persisted_state: &PersistedRuntimeState,
+  behavior: &BehaviorConfig,
+) -> PersistedRuntimeState {
+  let mut applied_defaults = PersistedRuntimeState::default();
+
+  if persisted_state.volume_percent.is_none() {
+    if let Some(volume_percent) = behavior.volume_percent {
+      runtime_state.volume_percent = volume_percent.min(100);
+      applied_defaults.volume_percent = Some(runtime_state.volume_percent);
+    }
+  }
+  if persisted_state.sidebar_width_percent.is_none() {
+    if let Some(sidebar_width_percent) = behavior.sidebar_width_percent {
+      runtime_state.sidebar_width_percent = sidebar_width_percent.min(100);
+      applied_defaults.sidebar_width_percent = Some(runtime_state.sidebar_width_percent);
+    }
+  }
+  if persisted_state.playbar_height_rows.is_none() {
+    if let Some(playbar_height_rows) = behavior.playbar_height_rows {
+      runtime_state.playbar_height_rows = playbar_height_rows.min(MAX_PLAYBAR_ROWS);
+      applied_defaults.playbar_height_rows = Some(runtime_state.playbar_height_rows);
+    }
+  }
+  if persisted_state.library_height_percent.is_none() {
+    if let Some(library_height_percent) = behavior.library_height_percent {
+      runtime_state.library_height_percent = library_height_percent.min(100);
+      applied_defaults.library_height_percent = Some(runtime_state.library_height_percent);
+    }
+  }
+
+  applied_defaults
+}
+
 pub async fn run() -> Result<()> {
   setup_logging()?;
   info!("spotatui {} starting up", env!("CARGO_PKG_VERSION"));
@@ -997,7 +1034,7 @@ pub async fn run() -> Result<()> {
     .override_usage("Press `?` while running the app to see keybindings")
     .before_help(BANNER)
     .after_help(
-      "Client authentication settings are stored in $HOME/.config/spotatui/client.yml (use --reconfigure-auth to update them)",
+      "Client authentication settings are stored in the spotatui config directory (use --reconfigure-auth to update them)",
     )
     .arg(
       Arg::new("tick-rate")
@@ -1068,6 +1105,10 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     return Ok(());
   }
 
+  if let Err(e) = apply_legacy_state_file_migrations() {
+    log::warn!("[state] failed to migrate legacy app data files: {e}");
+  }
+
   if let Some(history_matches) = matches.subcommand_matches("history") {
     println!("{}", cli::handle_history_matches(history_matches)?);
     return Ok(());
@@ -1089,9 +1130,76 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     user_config.path_to_config.replace(path);
   }
   user_config.load_config()?;
+  let mut runtime_state = RuntimeState::default();
+  let mut persisted_state = PersistedRuntimeState::default();
+  let mut state_path = None;
+  let mut should_save_initial_state = false;
+  let mut can_save_initial_state = false;
+  match crate::core::state::default_state_path() {
+    Ok(path) => {
+      let state_file_exists = path.exists();
+      match crate::core::state::load(&path) {
+        Ok(state) => {
+          persisted_state = state;
+          runtime_state.apply_persisted(&persisted_state);
+          if !state_file_exists {
+            should_save_initial_state = true;
+          }
+          can_save_initial_state = true;
+          state_path = Some(path);
+        }
+        Err(e) => {
+          log::warn!("[state] ignoring unreadable runtime state: {e}");
+        }
+      }
+    }
+    Err(e) => {
+      log::warn!("[state] runtime state path is unavailable: {e}");
+    }
+  }
+  let default_fields =
+    apply_configured_runtime_defaults(&mut runtime_state, &persisted_state, &user_config.behavior);
+  let legacy_radio_fields = apply_legacy_config_radio_station_migration(
+    &mut runtime_state,
+    &persisted_state,
+    &user_config.behavior,
+  );
+  let legacy_runtime_fields = match user_config
+    .path_to_config
+    .as_ref()
+    .map(|paths| paths.config_file_path.clone())
+  {
+    Some(config_path) => match apply_legacy_config_runtime_state_migration(
+      &config_path,
+      &mut runtime_state,
+      &persisted_state,
+    ) {
+      Ok(fields) => fields,
+      Err(e) => {
+        log::warn!("[state] failed to read legacy runtime fields from config.yml: {e}");
+        PersistedRuntimeState::default()
+      }
+    },
+    None => PersistedRuntimeState::default(),
+  };
+  let state = if should_save_initial_state {
+    runtime_state.to_persisted()
+  } else {
+    let mut state = default_fields;
+    state.merge_patch(&legacy_radio_fields);
+    state.merge_patch(&legacy_runtime_fields);
+    state
+  };
+  if can_save_initial_state && !state.is_empty() {
+    if let Some(path) = &state_path {
+      if let Err(e) = crate::core::state::save(path, &state) {
+        log::warn!("[state] failed to save initial runtime state: {e}");
+      }
+    }
+  }
   info!("user config loaded successfully");
 
-  let initial_shuffle_enabled = user_config.behavior.shuffle_enabled;
+  let initial_shuffle_enabled = runtime_state.shuffle_enabled;
   let initial_startup_behavior = user_config.behavior.startup_behavior;
 
   // Load the persisted non-Spotify playback session so the last song can resume
@@ -1142,7 +1250,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // otherwise launch the Spotify-only auth wizard on a fresh install. Skipped for
   // CLI subcommands (Spotify-only) and when `--reconfigure-auth` is requested.
   if matches.subcommand_name().is_none() && !matches.get_flag("reconfigure-auth") {
-    crate::core::first_run::run_first_run_picker(&mut user_config, &mut client_config).await?;
+    crate::core::first_run::run_first_run_picker(
+      &mut user_config,
+      &mut runtime_state,
+      &mut client_config,
+    )
+    .await?;
   }
   client_config.load_config()?;
   info!("client authentication config loaded");
@@ -1183,7 +1296,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // when unauthenticated). A free-source TUI launch tries a silent token load and
   // tolerates its absence; the user can add Spotify later via in-TUI login.
   let spotify_required = matches.subcommand_name().is_some()
-    || user_config.behavior.active_source == crate::core::source::Source::Spotify;
+    || runtime_state.active_source == crate::core::source::Source::Spotify;
 
   // The GitHub update check runs concurrently with authentication: both are
   // network round trips and neither depends on the other, so the check no
@@ -1253,9 +1366,11 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   info!("app state initialized");
 
   // Initialise app state
-  let app = Arc::new(Mutex::new(App::new(
+  let app = Arc::new(Mutex::new(App::new_with_state(
     sync_io_tx,
     user_config.clone(),
+    runtime_state.clone(),
+    state_path.clone(),
     token_expiry,
   )));
 
@@ -1286,10 +1401,9 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     // Both `Network::new` variants share one signature, so the same call
     // compiles with or without `streaming`. CLI mode never uses streaming.
     let network = Network::new(spotify, client_config, &app, final_token_cache_path);
-    println!(
-      "{}",
-      cli::handle_matches(m, cmd.to_string(), network, user_config).await?
-    );
+    let cli_result = cli::handle_matches(m, cmd.to_string(), network, user_config).await;
+    app.lock().await.flush_state_save(true);
+    println!("{}", cli_result?);
   // Launch the UI (async)
   } else {
     info!("launching interactive terminal ui");
@@ -1602,7 +1716,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         token_cache_path: final_token_cache_path.clone(),
         client_config: client_config.clone(),
         redirect_uri: selected_redirect_uri.clone(),
-        volume_percent: user_config.behavior.volume_percent,
+        volume_percent: runtime_state.volume_percent,
         device_startup_behavior,
         // A restored non-Spotify session owns the startup play/pause decision;
         // otherwise the deferred task fires it once the device is selected.
@@ -1720,7 +1834,8 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     )
     .await;
     if ui_result.is_err() {
-      cloned_app.lock().await.flush_config_save(true);
+      let mut app = cloned_app.lock().await;
+      app.flush_state_save(true);
     }
     ui_result?;
   }
@@ -2198,7 +2313,10 @@ async fn handle_mpris_events(
             if let Some(ref mut ctx) = app_lock.current_playback_context {
               ctx.shuffle_state = shuffle;
             }
-            app_lock.user_config.behavior.shuffle_enabled = shuffle;
+            app_lock.runtime_state.shuffle_enabled = shuffle;
+            app_lock.schedule_state_save(
+              crate::core::state::PersistedRuntimeState::shuffle_enabled(shuffle),
+            );
           }
           continue;
         }
@@ -2208,7 +2326,10 @@ async fn handle_mpris_events(
         if let Some(ref mut ctx) = app_lock.current_playback_context {
           ctx.shuffle_state = shuffle;
         }
-        app_lock.user_config.behavior.shuffle_enabled = shuffle;
+        app_lock.runtime_state.shuffle_enabled = shuffle;
+        app_lock.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+          shuffle,
+        ));
         app_lock.dispatch(IoEvent::Shuffle(shuffle));
       }
       MprisEvent::SetLoopStatus(loop_status) => {
@@ -2670,13 +2791,72 @@ async fn route_decoded_windows_event(
 
 #[cfg(test)]
 mod tests {
-  use super::{startup_device_decision, StartupDeviceEvent};
-  use crate::core::user_config::StartupBehavior;
+  use super::{apply_configured_runtime_defaults, startup_device_decision, StartupDeviceEvent};
+  use crate::core::layout::MAX_PLAYBAR_ROWS;
+  use crate::core::state::{PersistedRuntimeState, RuntimeState};
+  use crate::core::user_config::{StartupBehavior, UserConfig};
   use rspotify::model::{device::Device, DeviceType};
 
   const NATIVE_NAME: &str = "spotatui";
   const NATIVE_ID: &str = "native-device";
   const EXTERNAL_ID: &str = "phone-device";
+
+  fn user_config_with_runtime_defaults() -> UserConfig {
+    let mut config = UserConfig::new();
+    config.behavior.volume_percent = Some(80);
+    config.behavior.sidebar_width_percent = Some(40);
+    config.behavior.playbar_height_rows = Some(MAX_PLAYBAR_ROWS + 1);
+    config.behavior.library_height_percent = Some(60);
+    config
+  }
+
+  #[test]
+  fn configured_runtime_defaults_do_not_override_persisted_state() {
+    let config = user_config_with_runtime_defaults();
+    let persisted = PersistedRuntimeState {
+      volume_percent: Some(42),
+      sidebar_width_percent: Some(25),
+      playbar_height_rows: Some(5),
+      library_height_percent: Some(35),
+      ..Default::default()
+    };
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&persisted);
+
+    assert_eq!(
+      apply_configured_runtime_defaults(&mut runtime, &persisted, &config.behavior),
+      PersistedRuntimeState::default()
+    );
+    assert_eq!(runtime.volume_percent, 42);
+    assert_eq!(runtime.sidebar_width_percent, 25);
+    assert_eq!(runtime.playbar_height_rows, 5);
+    assert_eq!(runtime.library_height_percent, 35);
+  }
+
+  #[test]
+  fn configured_runtime_defaults_seed_only_missing_persisted_fields() {
+    let config = user_config_with_runtime_defaults();
+    let persisted = PersistedRuntimeState {
+      volume_percent: Some(42),
+      ..Default::default()
+    };
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&persisted);
+
+    assert_eq!(
+      apply_configured_runtime_defaults(&mut runtime, &persisted, &config.behavior),
+      PersistedRuntimeState {
+        sidebar_width_percent: Some(40),
+        playbar_height_rows: Some(MAX_PLAYBAR_ROWS),
+        library_height_percent: Some(60),
+        ..Default::default()
+      }
+    );
+    assert_eq!(runtime.volume_percent, 42);
+    assert_eq!(runtime.sidebar_width_percent, 40);
+    assert_eq!(runtime.playbar_height_rows, MAX_PLAYBAR_ROWS);
+    assert_eq!(runtime.library_height_percent, 60);
+  }
 
   #[allow(deprecated)]
   fn device(id: &str, name: &str) -> Device {

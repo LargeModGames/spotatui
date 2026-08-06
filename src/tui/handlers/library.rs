@@ -90,8 +90,12 @@ pub fn handler(key: Key, app: &mut App) {
       8 => {
         app.active_source = Source::Local;
         // Mirror the persisted value so the selection survives restarts.
-        app.user_config.behavior.active_source = Source::Local;
-        if let Err(e) = app.user_config.save_config() {
+        app.runtime_state.active_source = Source::Local;
+        if let Err(e) =
+          app.save_runtime_state(&crate::core::state::PersistedRuntimeState::active_source(
+            app.runtime_state.active_source,
+          ))
+        {
           log::warn!("[source] failed to persist active_source: {e}");
         }
         app.selected_playlist_index = Some(0);

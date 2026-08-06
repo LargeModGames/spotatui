@@ -1,7 +1,8 @@
 //! Persist the last non-Spotify playback session so it survives restarts.
 //!
 //! The browse-scope [`Source`](crate::core::source::Source) is already persisted
-//! in `config.yml` (see `BehaviorConfig::active_source`). What this module adds
+//! in `state.yml` (see [`RuntimeState::active_source`](crate::core::state::RuntimeState::active_source)).
+//! What this module adds
 //! is the *playback* side: which track/queue was playing, where in it, and
 //! whether it was paused — so that after a restart the app can resume the exact
 //! song on the same source.
@@ -11,7 +12,7 @@
 //! A playback session is a machine-written, frequently-updated blob (a queue of
 //! [`TrackInfo`], an index, a live position). Serializing that into the
 //! hand-editable `config.yml` would bury the user's real settings under churning
-//! metadata. So it lives in its own `last_session.yml` next to the app config,
+//! metadata. So it lives in its own `last_session.yml` under the app state dir,
 //! mirroring the `youtube_playlists.yml` precedent.
 //!
 //! ## Per-source shape
@@ -113,14 +114,14 @@ pub enum PersistedPlayback {
 }
 
 /// Location of the session file: `$SPOTATUI_LAST_SESSION_PATH` when set, else
-/// `<config dir>/last_session.yml` next to the app config.
+/// `<state dir>/last_session.yml`.
 pub fn default_session_path() -> Result<PathBuf> {
   if let Ok(path) = std::env::var(PATH_ENV) {
     return Ok(PathBuf::from(path));
   }
-  crate::core::user_config::default_app_config_dir()
+  crate::core::paths::app_state_dir()
     .map(|dir| dir.join(FILE_NAME))
-    .ok_or_else(|| anyhow!("cannot resolve the spotatui config directory"))
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui state directory"))
 }
 
 /// Load the persisted session. A missing file means "no session to resume"

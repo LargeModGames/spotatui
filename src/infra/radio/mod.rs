@@ -3,7 +3,7 @@
 //! Plays direct HTTP(S) icecast/shoutcast-style streams (SomaFM, most stations
 //! in the radio-browser.info directory). Stations come from two places:
 //!
-//! - the user's config list (`behavior.radio_stations`, name + URL pairs),
+//! - the user's saved station list (`state.yml`, name + URL pairs),
 //!   shown in the sidebar when the Radio source is active;
 //! - in-app search of the community [radio-browser.info](https://api.radio-browser.info)
 //!   directory (30k+ stations), via [`RadioSource`].

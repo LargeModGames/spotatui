@@ -1,8 +1,10 @@
 use crate::core::app::{ActiveBlock, App};
+use crate::core::state::RuntimeState;
 use crate::core::user_config::BehaviorConfig;
 use ratatui::layout::{Constraint, Layout, Rect};
 
 pub const COMPACT_TOP_ROW_THRESHOLD: u16 = 60;
+pub const MAX_PLAYBAR_ROWS: u16 = 50;
 const COMPACT_HELP_WIDTH: u16 = 6;
 const COMPACT_SETTINGS_WIDTH: u16 = 10;
 
@@ -49,23 +51,24 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
   let margin = main_layout_margin(app);
   let wide_layout = is_wide_layout(app);
   let behavior = &app.user_config.behavior;
+  let runtime_state = &app.runtime_state;
 
   let (input_area, routes_area, playbar_area) = if wide_layout {
     if behavior.playbar_position == "top" {
       let [playbar_area, routes_area] = root.layout(
-        &Layout::vertical([playbar_constraint(behavior), Constraint::Min(1)]).margin(margin),
+        &Layout::vertical([playbar_constraint(runtime_state), Constraint::Min(1)]).margin(margin),
       );
       (None, routes_area, playbar_area)
     } else {
       let [routes_area, playbar_area] = root.layout(
-        &Layout::vertical([Constraint::Min(1), playbar_constraint(behavior)]).margin(margin),
+        &Layout::vertical([Constraint::Min(1), playbar_constraint(runtime_state)]).margin(margin),
       );
       (None, routes_area, playbar_area)
     }
   } else if behavior.playbar_position == "top" {
     let [playbar_area, input_area, routes_area] = root.layout(
       &Layout::vertical([
-        playbar_constraint(behavior),
+        playbar_constraint(runtime_state),
         Constraint::Length(3),
         Constraint::Min(1),
       ])
@@ -77,7 +80,7 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
       &Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
-        playbar_constraint(behavior),
+        playbar_constraint(runtime_state),
       ])
       .margin(margin),
     );
@@ -85,7 +88,7 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
   };
 
   let (user_area, content_area) = split_routes_area(app, routes_area);
-  let library = library_constraints(behavior);
+  let library = library_constraints(runtime_state);
   let (input, help, settings, library_area, playlist_area) = if wide_layout {
     let [input_area, library_area, playlist_area] = user_area.layout(&Layout::vertical([
       Constraint::Length(3),
@@ -131,11 +134,11 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
   })
 }
 
-/// Returns horizontal constraints for the [sidebar, content] split based on config.
+/// Returns horizontal constraints for the [sidebar, content] split based on runtime state.
 /// When sidebar_width_percent is 0, the sidebar is hidden (zero length).
 /// When sidebar_width_percent is 100, content is hidden.
-pub fn sidebar_constraints(behavior: &BehaviorConfig) -> [Constraint; 2] {
-  let sidebar = behavior.sidebar_width_percent.min(100) as u16;
+pub fn sidebar_constraints(state: &RuntimeState) -> [Constraint; 2] {
+  let sidebar = state.sidebar_width_percent.min(100) as u16;
   let content = 100u16.saturating_sub(sidebar);
   [
     Constraint::Percentage(sidebar),
@@ -148,7 +151,7 @@ fn split_routes_area(app: &App, routes_area: Rect) -> (Rect, Rect) {
   let sidebar = if sidebar_is_hidden(app) {
     [Constraint::Length(0), Constraint::Min(1)]
   } else {
-    sidebar_constraints(behavior)
+    sidebar_constraints(&app.runtime_state)
   };
 
   match behavior.sidebar_position.as_str() {
@@ -206,15 +209,15 @@ pub fn split_input_help_and_settings(app: &App, input_row_area: Rect) -> [Rect; 
   input_row_area.layout(&Layout::horizontal(constraints))
 }
 
-/// Returns the playbar height constraint based on config.
+/// Returns the playbar height constraint based on runtime state.
 /// When playbar_height_rows is 0, the playbar is hidden.
-pub fn playbar_constraint(behavior: &BehaviorConfig) -> Constraint {
-  Constraint::Length(behavior.playbar_height_rows)
+pub fn playbar_constraint(state: &RuntimeState) -> Constraint {
+  Constraint::Length(state.playbar_height_rows)
 }
 
 /// Returns vertical constraints for the [library, playlists] split within the sidebar.
-pub fn library_constraints(behavior: &BehaviorConfig) -> [Constraint; 2] {
-  let library = behavior.library_height_percent.min(100) as u16;
+pub fn library_constraints(state: &RuntimeState) -> [Constraint; 2] {
+  let library = state.library_height_percent.min(100) as u16;
   let playlists = 100u16.saturating_sub(library);
   [
     Constraint::Percentage(library),
@@ -225,14 +228,14 @@ pub fn library_constraints(behavior: &BehaviorConfig) -> [Constraint; 2] {
 /// Returns the fullscreen content/playbar split used by lyrics and cover-art views.
 ///
 /// When `playbar_height_rows` is 0, the playbar is hidden and the content area fills the screen.
-pub fn fullscreen_view_layout(behavior: &BehaviorConfig, area: Rect) -> (Rect, Option<Rect>) {
-  if behavior.playbar_height_rows == 0 {
+pub fn fullscreen_view_layout(state: &RuntimeState, area: Rect) -> (Rect, Option<Rect>) {
+  if state.playbar_height_rows == 0 {
     return (area, None);
   }
 
   let chunks = Layout::vertical([
     Constraint::Min(0),
-    Constraint::Length(behavior.playbar_height_rows),
+    Constraint::Length(state.playbar_height_rows),
   ])
   .split(area);
   let content_area = chunks[0];
@@ -283,28 +286,29 @@ pub fn miniplayer_playbar_area(area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::user_config::UserConfig;
 
-  fn make_behavior_with(sidebar_pct: u8, playbar_rows: u16) -> BehaviorConfig {
-    let mut cfg = UserConfig::new();
-    cfg.behavior.sidebar_width_percent = sidebar_pct;
-    cfg.behavior.playbar_height_rows = playbar_rows;
-    cfg.behavior
+  fn make_state_with(sidebar_pct: u8, playbar_rows: u16) -> RuntimeState {
+    RuntimeState {
+      sidebar_width_percent: sidebar_pct,
+      playbar_height_rows: playbar_rows,
+      ..RuntimeState::default()
+    }
   }
 
-  fn make_behavior_with_library(library_pct: u8) -> BehaviorConfig {
-    let mut cfg = UserConfig::new();
-    cfg.behavior.library_height_percent = library_pct;
-    cfg.behavior
+  fn make_state_with_library(library_pct: u8) -> RuntimeState {
+    RuntimeState {
+      library_height_percent: library_pct,
+      ..RuntimeState::default()
+    }
   }
 
-  fn make_behavior(sidebar_pct: u8) -> BehaviorConfig {
-    make_behavior_with(sidebar_pct, 6)
+  fn make_state(sidebar_pct: u8) -> RuntimeState {
+    make_state_with(sidebar_pct, 6)
   }
 
   #[test]
   fn default_sidebar_is_20_percent() {
-    let b = make_behavior(20);
+    let b = make_state(20);
     let [sidebar, content] = sidebar_constraints(&b);
     assert_eq!(sidebar, Constraint::Percentage(20));
     assert_eq!(content, Constraint::Percentage(80));
@@ -312,7 +316,7 @@ mod tests {
 
   #[test]
   fn hidden_sidebar_gives_zero_percent() {
-    let b = make_behavior(0);
+    let b = make_state(0);
     let [sidebar, content] = sidebar_constraints(&b);
     assert_eq!(sidebar, Constraint::Percentage(0));
     assert_eq!(content, Constraint::Percentage(100));
@@ -320,7 +324,7 @@ mod tests {
 
   #[test]
   fn full_sidebar_hides_content() {
-    let b = make_behavior(100);
+    let b = make_state(100);
     let [sidebar, content] = sidebar_constraints(&b);
     assert_eq!(sidebar, Constraint::Percentage(100));
     assert_eq!(content, Constraint::Percentage(0));
@@ -328,7 +332,7 @@ mod tests {
 
   #[test]
   fn over_100_percent_is_clamped() {
-    let mut b = make_behavior(20);
+    let mut b = make_state(20);
     b.sidebar_width_percent = 255;
     let [sidebar, content] = sidebar_constraints(&b);
     assert_eq!(sidebar, Constraint::Percentage(100));
@@ -337,19 +341,19 @@ mod tests {
 
   #[test]
   fn default_playbar_is_6_rows() {
-    let b = make_behavior_with(20, 6);
+    let b = make_state_with(20, 6);
     assert_eq!(playbar_constraint(&b), Constraint::Length(6));
   }
 
   #[test]
   fn hidden_playbar_is_zero_rows() {
-    let b = make_behavior_with(20, 0);
+    let b = make_state_with(20, 0);
     assert_eq!(playbar_constraint(&b), Constraint::Length(0));
   }
 
   #[test]
   fn default_library_is_30_percent() {
-    let b = make_behavior_with_library(30);
+    let b = make_state_with_library(30);
     let [lib, playlists] = library_constraints(&b);
     assert_eq!(lib, Constraint::Percentage(30));
     assert_eq!(playlists, Constraint::Percentage(70));
@@ -357,7 +361,7 @@ mod tests {
 
   #[test]
   fn hidden_library_gives_zero_percent() {
-    let b = make_behavior_with_library(0);
+    let b = make_state_with_library(0);
     let [lib, playlists] = library_constraints(&b);
     assert_eq!(lib, Constraint::Percentage(0));
     assert_eq!(playlists, Constraint::Percentage(100));
@@ -365,7 +369,7 @@ mod tests {
 
   #[test]
   fn library_over_100_percent_is_clamped() {
-    let mut b = make_behavior_with_library(30);
+    let mut b = make_state_with_library(30);
     b.library_height_percent = 255;
     let [lib, playlists] = library_constraints(&b);
     assert_eq!(lib, Constraint::Percentage(100));
@@ -374,7 +378,7 @@ mod tests {
 
   #[test]
   fn fullscreen_layout_hides_playbar_when_height_is_zero() {
-    let b = make_behavior_with(20, 0);
+    let b = make_state_with(20, 0);
     let area = Rect::new(2, 4, 80, 24);
 
     let (content, playbar) = fullscreen_view_layout(&b, area);
@@ -385,7 +389,7 @@ mod tests {
 
   #[test]
   fn fullscreen_layout_splits_content_and_playbar_when_height_is_set() {
-    let b = make_behavior_with(20, 6);
+    let b = make_state_with(20, 6);
     let area = Rect::new(2, 4, 80, 24);
 
     let (content, playbar) = fullscreen_view_layout(&b, area);

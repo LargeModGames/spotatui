@@ -2,6 +2,15 @@
   "version": 1,
   "announcements": [
     {
+      "id": "2026-08-06-discord-community",
+      "title": "Join the spotatui Discord",
+      "body": "spotatui now has a community Discord: a place for install help, feature ideas, listening parties, and showing off your terminal setup. Come hang out, get support faster, and hear about new releases first.",
+      "level": "info",
+      "url": "https://spotatui.com/discord",
+      "starts_at": "2026-08-06T00:00:00Z",
+      "ends_at": null
+    },
+    {
       "id": "2026-07-04-multi-source-playback",
       "title": "New: play from more than just Spotify",
       "body": "spotatui is no longer Spotify-only. You can now stream from local files, a Subsonic/Navidrome server, internet radio, and YouTube, all from the same interface. Spotify is now optional at first-time setup, so pick whichever sources you want from the interactive source picker on first run. Cover art, lyrics, Discord Rich Presence, and media-key controls work across every source. Enable the free sources with the `all-sources` build feature.",

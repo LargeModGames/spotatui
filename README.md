@@ -9,6 +9,7 @@
 > A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
+[![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
 [![Upstream](https://img.shields.io/badge/upstream-Rigellute%2Fspotify--tui-blue)](https://github.com/Rigellute/spotify-tui)
 [![X](https://img.shields.io/badge/@LargeModGames-000000?logo=x&logoColor=white)](https://twitter.com/LargeModGames)
 [![Songs played using Spotatui](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&logo=spotify&logoColor=1ed760&style=flat-square&cacheSeconds=600)](https://github.com/LargeModGames/spotatui)
@@ -215,13 +216,13 @@ Prefer setting the password via the `SPOTATUI_SUBSONIC_PASSWORD` environment var
 
 ### Internet Radio
 
-Search the radio-browser.info directory in-app (Enter plays a station directly), and press the save key (`F` by default) to keep a station in your sidebar. Saved stations live under `behavior.radio_stations`; the playbar shows a `LIVE` badge with the stream's now-playing title.
+Search the radio-browser.info directory in-app (Enter plays a station directly), and press the save key (`F` by default) to keep a station in your sidebar. Stations can also be preconfigured in `config.yml`; stations saved in-app live in `state.yml`. The playbar shows a `LIVE` badge with the stream's now-playing title.
 
 ### YouTube
 
 Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recommended). No Google account, API key, or cookies — search and playback are anonymous. If playback breaks after a YouTube change, updating yt-dlp (`yt-dlp -U`) is the fix; no spotatui update needed.
 
-**Local YouTube playlists** live in `~/.config/spotatui/youtube_playlists.yml`, a plain human-editable file you can back up or share. Create one from the sidebar, add tracks with `w`, and play a playlist as a queue with `Enter`.
+**Local YouTube playlists** live in the spotatui config directory as `youtube_playlists.yml`, a plain human-editable file you can back up or share. Create one from the sidebar, add tracks with `w`, and play a playlist as a queue with `Enter`.
 
 ## Native Streaming
 
@@ -235,7 +236,7 @@ See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/N
 
 ## Configuration
 
-The config file is at `${HOME}/.config/spotatui/config.yml`. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
+The config file is at `$XDG_CONFIG_HOME/spotatui/config.yml` when `XDG_CONFIG_HOME` is set to an absolute path, falling back to `${HOME}/.config/spotatui/config.yml` when it is unset or not absolute. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
 
 Nearly everything is customizable: keybindings, themes, icons, playbar button labels, status-line and window-title format templates, table columns (reorder/rename/resize), default sorting per screen, startup screen, and layout (sidebar/playbar position). Invalid values fall back to defaults with a logged warning — a config typo never blocks startup.
 
@@ -243,7 +244,7 @@ Nearly everything is customizable: keybindings, themes, icons, playbar button la
 - Full config reference: [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration)
 - Built-in themes (Spotify, Dracula, Nord, …): [Themes Wiki](https://github.com/LargeModGames/spotatui/wiki/Themes)
 
-spotatui also stores local listening history at `${HOME}/.config/spotatui/history/listens.jsonl`, which powers `spotatui history recap`. Short or skipped plays are stored but excluded from recap totals.
+spotatui also stores local listening history at `$XDG_STATE_HOME/spotatui/history/listens.jsonl` when `XDG_STATE_HOME` is set to an absolute path, falling back to `${HOME}/.local/state/spotatui/history/listens.jsonl` when it is unset or not absolute. This powers `spotatui history recap`. Short or skipped plays are stored but excluded from recap totals.
 
 ### Discord Rich Presence
 
@@ -259,7 +260,7 @@ You can also override the app ID via `SPOTATUI_DISCORD_APP_ID`, or disable it in
 
 ### Anonymous Song Counter
 
-spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment when a new song starts. It is enabled by default and can be disabled with `enable_global_song_count: false` in `~/.config/spotatui/config.yml`. This is purely a fun community metric with zero tracking of individual users.
+spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment when a new song starts. It is enabled by default and can be disabled with `enable_global_song_count: false` in `config.yml`. This is purely a fun community metric with zero tracking of individual users.
 
 ### GitHub Profile Widget
 
@@ -342,13 +343,17 @@ Follow the spotifyd documentation to get set up. After that:
 If you used the original `spotify-tui` before:
 
 - The binary name changed from `spt` to `spotatui`.
-- Config paths changed: `~/.config/spotify-tui/` → `~/.config/spotatui/`.
+- Config paths changed: `~/.config/spotify-tui/` -> `$XDG_CONFIG_HOME/spotatui/` when `XDG_CONFIG_HOME` is set to an absolute path, or `~/.config/spotatui/` when it is unset or not absolute.
 
 You can copy your existing config:
 
 ```bash
-mkdir -p ~/.config/spotatui
-cp -r ~/.config/spotify-tui/* ~/.config/spotatui/
+case "${XDG_CONFIG_HOME:-}" in
+  /*) config_home="$XDG_CONFIG_HOME" ;;
+  *) config_home="$HOME/.config" ;;
+esac
+mkdir -p "$config_home/spotatui"
+cp -r ~/.config/spotify-tui/* "$config_home/spotatui/"
 ```
 
 You may be asked to re-authenticate with Spotify the first time.

@@ -2,12 +2,16 @@
 
 spotatui reads `config.yml` from the app config directory:
 
-- Linux / macOS: `~/.config/spotatui/config.yml`
-- Windows: `C:\Users\<you>\.config\spotatui\config.yml`
+- `$XDG_CONFIG_HOME/spotatui/config.yml` when `XDG_CONFIG_HOME` is set to an absolute path.
+- `${HOME}/.config/spotatui/config.yml` otherwise.
+
+You can also point spotatui at a specific config file with `--config <path>`.
 
 All fields are optional; omitted values use the built-in defaults. A complete, commented example lives in [`examples/config.example.yml`](../examples/config.example.yml).
 
 Simple values (numbers, toggles, icons, positions) can also be changed live in the in-app **Settings** screen (see the hint in the top-right of the UI). Structured config — `format:` templates, `tables:` columns, and `playbar_control_labels` — is file-only. Edit the file while the app is closed: saving from the Settings screen rewrites the `behavior`, `theme`, and `keybindings` sections, but your `format:`, `tables:`, and `plugin_commands:` sections survive in-app saves untouched.
+
+Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/state.yml` when `XDG_STATE_HOME` is set to an absolute path, or `${HOME}/.local/state/spotatui/state.yml` when it is unset or not absolute. This includes volume, shuffle, active source, seen announcements, resized pane dimensions, and saved radio stations. The Spotify OAuth token cache and local listening history also live under the app state directory. Native streaming credentials and audio cache live under `$XDG_CACHE_HOME/spotatui/streaming_cache` when `XDG_CACHE_HOME` is set to an absolute path, or `${HOME}/.cache/spotatui/streaming_cache` when it is unset or not absolute. `sync_token` remains user config and is stored in `config.yml`.
 
 ## Safe by default
 
@@ -35,7 +39,7 @@ behavior:
 
   # Volume
   volume_increment: 10             # step for + / - (0..=100, fatal if outside)
-  volume_percent: 100              # startup volume
+  volume_percent: 100              # initial volume default; saved runtime volume wins once present
 
   # Scrolling
   table_scroll_padding: 5          # rows kept visible below the selection before
@@ -82,20 +86,34 @@ Valid fields per screen:
 
 `default` keeps the order the API returns (playlist order, date saved, play order). A field that is not valid for that screen falls back to `default` with a warning.
 
+## Internet Radio
+
+Preconfigured stations can be declared in `config.yml`:
+
+```yaml
+behavior:
+  radio_stations:
+    - name: SomaFM Groove Salad
+      url: https://ice1.somafm.com/groovesalad-128-mp3
+```
+
+Stations saved from inside the app are stored in `state.yml`. The sidebar merges configured stations first and app-saved stations second, deduped by stream URL. To remove a configured station, edit `config.yml`; the in-app remove action only removes app-saved stations from `state.yml`.
+
 ## Layout
 
 ```yaml
 behavior:
   sidebar_position: left    # left | right | hidden
   playbar_position: bottom  # bottom | top
-  sidebar_width_percent: 20 # 0 hides the sidebar entirely
-  library_height_percent: 30
-  playbar_height_rows: 6    # 0 hides the playbar
+  sidebar_width_percent: 20 # initial sidebar width default; saved runtime size wins once present
+  library_height_percent: 30 # initial library height default; saved runtime size wins once present
+  playbar_height_rows: 6    # initial playbar height default, 0..=50; 0 hides it; saved runtime size wins once present
   small_terminal_width: 150
   small_terminal_height: 45
 ```
 
 - `sidebar_position: hidden` gives the content the full width, but the sidebar auto-reveals while the Library or Playlists panel has keyboard focus or is hovered, so it never becomes unreachable.
+- `sidebar_width_percent`, `library_height_percent`, and `playbar_height_rows` are configured initial defaults. Runtime resize changes use `{` / `}` for sidebar width, `(` / `)` for playbar height, `(` / `)` while hovering Library or Playlists for the library/sidebar split, and `|` to reset sizes; those changes persist in `state.yml` and are not overwritten by configured defaults after state exists. Configured `playbar_height_rows` is capped at 50 rows when applied at startup or when resetting the layout.
 - `small_terminal_width` / `small_terminal_height` are the responsive-layout breakpoints. At or above `small_terminal_width` columns the app uses the wide layout (search box inside the sidebar); below it the search box gets its own full-width top row. `enforce_wide_search_bar: true` forces the full-width search row regardless of width.
 - Unknown position strings fall back to the default with a warning.
 - Mouse hit-testing follows every arrangement automatically.

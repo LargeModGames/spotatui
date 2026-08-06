@@ -17,14 +17,20 @@ spotatui plugin remove <name>      # uninstall
 spotatui plugin new <name>         # scaffold a new plugin to start from
 ```
 
-Plugins are cloned into `~/.config/spotatui/plugins/<name>/` and loaded at startup. Restart
-spotatui after installing, and bind any commands the plugin registers under `plugin_commands` in
-`config.yml`.
+Plugins are cloned into `plugins/<name>/` under the spotatui app config directory
+(`$XDG_CONFIG_HOME/spotatui` when `XDG_CONFIG_HOME` is set to an absolute path,
+or `~/.config/spotatui` when it is unset or not absolute) and loaded at startup.
+Restart spotatui after installing, and bind any commands the plugin registers
+under `plugin_commands` in `config.yml`.
 
 Plugins are not sandboxed and run with full app privileges and network access, so only install
 ones you trust. See [Trust and safety](docs/scripting.md#trust-and-safety).
 
-You can also drop a single `.lua` file into `~/.config/spotatui/plugins/` by hand.
+You can also drop a single `.lua` file into the app config directory's `plugins/`
+folder by hand. Manual examples use `${XDG_CONFIG_HOME:-$HOME/.config}` for
+brevity. That matches spotatui when `XDG_CONFIG_HOME` is unset or absolute; if
+it is relative, spotatui ignores it and loads plugins from
+`$HOME/.config/spotatui/plugins`, so copy there instead.
 
 ## First-party examples
 

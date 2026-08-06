@@ -1,6 +1,7 @@
 //! `spotatui plugin` subcommand: a thin git-based installer for Lua plugins.
 //!
-//! Plugins are git repositories cloned into `~/.config/spotatui/plugins/<name>/`, where the
+//! Plugins are git repositories cloned into the app config directory's
+//! `plugins/<name>/`, where the
 //! engine loads `main.lua` (or `init.lua`) at startup. Installed plugins are tracked in a
 //! `plugins.lock` file next to the `plugins/` directory so they can be listed and updated.
 
@@ -19,7 +20,7 @@ pub fn plugin_subcommand() -> Command {
     .about("Install and manage Lua plugins")
     .long_about(
       "Manage Lua plugins installed from git repositories. Plugins are cloned into \
-~/.config/spotatui/plugins/<name>/ and loaded at startup (main.lua, or init.lua). \
+the spotatui config directory's plugins/<name>/ and loaded at startup (main.lua, or init.lua). \
 Requires `git` on your PATH.",
     )
     .subcommand_required(true)
@@ -74,7 +75,7 @@ Requires `git` on your PATH.",
       Command::new("new")
         .about("Scaffold a new plugin to start from")
         .long_about(
-          "Create a new directory plugin in ~/.config/spotatui/plugins/<name>/ with a working \
+          "Create a new directory plugin in the spotatui config directory's plugins/<name>/ with a working \
 main.lua and a README.md to edit and publish.",
         )
         .arg(
@@ -366,7 +367,7 @@ Registers a `{name}_hello` command that shows a notification. Edit `main.lua` to
 spotatui plugin add owner/{name}
 ```
 
-Or copy this directory into `~/.config/spotatui/plugins/`.
+Or copy this directory into the spotatui config directory's `plugins/`.
 
 ## Key binding
 

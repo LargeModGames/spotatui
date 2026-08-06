@@ -335,7 +335,10 @@ impl Network {
         ctx.is_playing = true;
         ctx.shuffle_state = true;
       }
-      app.user_config.behavior.shuffle_enabled = true;
+      app.runtime_state.shuffle_enabled = true;
+      app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+        true,
+      ));
       generation
     };
 

@@ -420,9 +420,13 @@ pub struct ConfigSnapshot {
   pub behavior: BehaviorSnapshot,
 }
 
-/// Build a [`ConfigSnapshot`] from the live user config. Theme colors use the
-/// same string forms `parse_theme_item` accepts (named or `"r, g, b"`).
-pub fn config_snapshot(config: &crate::core::user_config::UserConfig) -> ConfigSnapshot {
+/// Build a [`ConfigSnapshot`] from the live user config and runtime state.
+/// Theme colors use the same string forms `parse_theme_item` accepts (named or
+/// `"r, g, b"`).
+pub fn config_snapshot(
+  config: &crate::core::user_config::UserConfig,
+  runtime_state: &crate::core::state::RuntimeState,
+) -> ConfigSnapshot {
   use crate::core::user_config::color_to_string;
   let t = &config.theme;
   let theme: std::collections::BTreeMap<String, String> = [
@@ -467,12 +471,12 @@ pub fn config_snapshot(config: &crate::core::user_config::UserConfig) -> ConfigS
       playing_icon: b.playing_icon.clone(),
       paused_icon: b.paused_icon.clone(),
       set_window_title: b.set_window_title,
-      shuffle_enabled: b.shuffle_enabled,
+      shuffle_enabled: runtime_state.shuffle_enabled,
       stop_after_current_track: b.stop_after_current_track,
-      sidebar_width_percent: b.sidebar_width_percent,
-      playbar_height_rows: b.playbar_height_rows,
-      library_height_percent: b.library_height_percent,
-      active_source: format!("{:?}", b.active_source).to_lowercase(),
+      sidebar_width_percent: runtime_state.sidebar_width_percent,
+      playbar_height_rows: runtime_state.playbar_height_rows,
+      library_height_percent: runtime_state.library_height_percent,
+      active_source: format!("{:?}", runtime_state.active_source).to_lowercase(),
     },
   }
 }
@@ -818,6 +822,7 @@ pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::{source::Source, state::RuntimeState, user_config::UserConfig};
   use chrono::Utc;
   use rspotify::model::{
     context::{Actions, CurrentPlaybackContext},
@@ -963,6 +968,41 @@ mod tests {
     assert_eq!(dev.id.as_deref(), Some("dev-abc"));
     assert_eq!(dev.name, "Living Room TV");
     assert_eq!(dev.kind, "tv");
+  }
+
+  // --- config_snapshot ---
+
+  #[test]
+  fn config_snapshot_uses_runtime_state_for_migrated_fields_without_mutating_config() {
+    let mut config = UserConfig::new();
+    config.behavior.volume_percent = Some(10);
+    config.behavior.sidebar_width_percent = Some(20);
+    config.behavior.playbar_height_rows = Some(6);
+    config.behavior.library_height_percent = Some(30);
+    config.behavior.stop_after_current_track = true;
+
+    let runtime_state = RuntimeState {
+      shuffle_enabled: true,
+      sidebar_width_percent: 42,
+      playbar_height_rows: 12,
+      library_height_percent: 64,
+      active_source: Source::Radio,
+      ..RuntimeState::default()
+    };
+
+    let snapshot = config_snapshot(&config, &runtime_state);
+
+    assert!(snapshot.behavior.shuffle_enabled);
+    assert_eq!(snapshot.behavior.sidebar_width_percent, 42);
+    assert_eq!(snapshot.behavior.playbar_height_rows, 12);
+    assert_eq!(snapshot.behavior.library_height_percent, 64);
+    assert_eq!(snapshot.behavior.active_source, "radio");
+    assert!(snapshot.behavior.stop_after_current_track);
+
+    assert_eq!(config.behavior.volume_percent, Some(10));
+    assert_eq!(config.behavior.sidebar_width_percent, Some(20));
+    assert_eq!(config.behavior.playbar_height_rows, Some(6));
+    assert_eq!(config.behavior.library_height_percent, Some(30));
   }
 
   // --- PlaylistInfo::from_simplified ---

@@ -3,8 +3,8 @@
 -- A small example of the async HTTP + JSON API. Useful for scrobblers, Discord/Slack
 -- webhooks, home-automation triggers, or a "what am I listening to" endpoint.
 --
--- Install (single file):
---   cp now-playing-webhook.lua ~/.config/spotatui/plugins/
+-- Install (single file; see PLUGINS.md for config path rules):
+--   cp now-playing-webhook.lua "${XDG_CONFIG_HOME:-$HOME/.config}/spotatui/plugins/"
 -- Edit WEBHOOK_URL below first.
 
 local WEBHOOK_URL = "https://example.com/webhook"
