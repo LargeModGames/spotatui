@@ -308,23 +308,39 @@ enum StateRead {
 }
 
 fn read_state(path: &Path) -> StateRead {
-  match std::fs::read_to_string(path) {
-    Ok(contents) => {
-      if contents.trim().is_empty() {
-        StateRead::Empty
-      } else {
-        match serde_yaml::from_str::<PersistedRuntimeState>(&contents) {
-          Ok(state) => StateRead::Parsed(sanitized_persisted_state(&state)),
-          Err(error) => StateRead::Malformed(
-            anyhow::Error::new(error)
-              .context(format!("malformed runtime state file: {}", path.display())),
-          ),
-        }
-      }
+  // Read raw bytes so non-UTF-8 contents count as a corrupt file we can heal on
+  // save, not an I/O error to propagate. `read_to_string` would fold invalid
+  // UTF-8 (e.g. a write truncated mid-multibyte-character) into `ErrorKind`,
+  // leaving it wedged forever.
+  let bytes = match std::fs::read(path) {
+    Ok(bytes) => bytes,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return StateRead::Empty,
+    Err(error) => {
+      return StateRead::Unreadable(
+        anyhow::Error::new(error).context(format!("reading {}", path.display())),
+      )
     }
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => StateRead::Empty,
-    Err(error) => StateRead::Unreadable(
-      anyhow::Error::new(error).context(format!("reading {}", path.display())),
+  };
+
+  let contents = match std::str::from_utf8(&bytes) {
+    Ok(contents) => contents,
+    Err(error) => {
+      return StateRead::Malformed(
+        anyhow::Error::new(error)
+          .context(format!("malformed runtime state file: {}", path.display())),
+      )
+    }
+  };
+
+  if contents.trim().is_empty() {
+    return StateRead::Empty;
+  }
+
+  match serde_yaml::from_str::<PersistedRuntimeState>(contents) {
+    Ok(state) => StateRead::Parsed(sanitized_persisted_state(&state)),
+    Err(error) => StateRead::Malformed(
+      anyhow::Error::new(error)
+        .context(format!("malformed runtime state file: {}", path.display())),
     ),
   }
 }
@@ -703,6 +719,28 @@ mod tests {
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), garbage);
 
     // The rewritten file parses and reflects the patch, starting from defaults.
+    assert_eq!(
+      load(&path).unwrap(),
+      PersistedRuntimeState {
+        volume_percent: Some(42),
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
+  fn save_heals_a_non_utf8_state_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    // A write truncated mid-multibyte-character leaves invalid UTF-8 on disk.
+    let garbage = b"volume_percent: 5\xff\xfe";
+    std::fs::write(&path, garbage).unwrap();
+
+    assert!(load(&path).is_err());
+    save(&path, &PersistedRuntimeState::volume_percent(42)).unwrap();
+
+    let backup = path.with_extension("yml.bak");
+    assert_eq!(std::fs::read(&backup).unwrap(), garbage);
     assert_eq!(
       load(&path).unwrap(),
       PersistedRuntimeState {
