@@ -25,23 +25,11 @@ Native Spotify streaming, synced lyrics, a real-time audio visualizer, and optio
 A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
 -->
 Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), but since then the project has diverged in multiple fronts. 
-<table>
-    <tr>
-        <th> Differences </th>
-        <th> spotify-tui </th>
-        <th> spotatui </th>
-    </tr>
-    <tr>
-        <td>Spotify backend</td>
-        <td> spotifyd </td>
-        <td> native client </td>
-    </tr>
-    <tr>
-        <td> Source(s) </td>
-        <td> Spotify </td>
-        <td> Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio </td>
-    </tr>
-</table>
+
+| Key differences | spotify-tui | spotatui |
+|---|---|---|
+| Spotify backend | spotifyd | native client |
+| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio |
 
 
 ## Table of Contents
@@ -82,6 +70,18 @@ Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), bu
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
+## Features
+
+- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), or [YouTube](#youtube). The free sources need no Spotify account; press `d` to switch between them at any time.
+- **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
+- **Synced lyrics.** Line-by-line lyrics that follow playback.
+- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
+- **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
+- **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
+- **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
+- **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
+- **Lightweight.** ~78 MB RAM while streaming, versus a full Electron client. See [Performance](#performance).
+
 ## Installation 
 
 > **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
@@ -118,7 +118,7 @@ irm https://spotatui.com/install.ps1 | iex
 winget install spotatui
 ```
 ```nix
-# NixOS (Flake)
+# NixOS (Flake, recommended for NixOS)
 
 # Add spotatui to your flake inputs:
 inputs = {
@@ -137,27 +137,17 @@ inputs = {
 }
 ```
 
+```nix
+# NixOS with cargo
+nix develop
+cargo install --path .
+```
+
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
 > **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, and YouTube. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube`.
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
-
-
-
-
-
-## Features
-
-- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), or [YouTube](#youtube). The free sources need no Spotify account; press `d` to switch between them at any time.
-- **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
-- **Synced lyrics.** Line-by-line lyrics that follow playback.
-- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
-- **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
-- **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
-- **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
-- **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
-- **Lightweight.** ~78 MB RAM while streaming, versus a full Electron client. See [Performance](#performance).
 
 ## Quickstart
 
@@ -185,11 +175,11 @@ Once you're in:
 A few CLI examples to get you started:
 
 ```bash
-spotatui --completions zsh                       # Shell completions (bash, powershell, and more supported)
+spotatui --completions zsh                                # Shell completions (bash, powershell, and more supported)
 spotatui play --name "Your Playlist" --playlist --random  # Play a random song from a playlist
-spotatui playback --toggle                       # Play/pause current playback
-spotatui list --liked --limit 50                 # List your liked songs
-spotatui history recap --period 30d --output ./recap.html  # Generate a shareable listening recap
+spotatui playback --toggle                                # Play/pause current playback
+spotatui list --liked --limit 50                          # List your liked songs
+spotatui history recap --period 30d --output ./recap.html # Generate a shareable listening recap
 ```
 
 ### Adding Spotify later
