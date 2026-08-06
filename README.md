@@ -1,4 +1,8 @@
-# spotatui
+<h1>
+<p align="center">
+  spotatui
+</p>
+</h1>
 
 > A terminal music player written in Rust, powered by [Ratatui](https://github.com/ratatui-org/ratatui) — native Spotify streaming, synced lyrics, a real-time audio visualizer, and optional Local, Subsonic/Navidrome, Internet Radio, and YouTube sources. Spotify is optional.
 >
