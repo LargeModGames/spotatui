@@ -33,8 +33,8 @@ Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), bu
     </tr>
     <tr>
         <td>Spotify backend</td>
-        <td> todo </td>
-        <td> todo </td>
+        <td> spotifyd </td>
+        <td> native client </td>
     </tr>
     <tr>
         <td> Source(s) </td>
@@ -43,6 +43,42 @@ Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), bu
     </tr>
 </table>
 
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [Installation](#installation)
+- [Features](#features)
+- [Quickstart](#quickstart)
+  - [Adding Spotify later](#adding-spotify-later)
+- [Music Sources](#music-sources)
+  - [Local Files](#local-files)
+  - [Subsonic / Navidrome](#subsonic--navidrome)
+  - [Internet Radio](#internet-radio)
+  - [YouTube](#youtube)
+- [Native Streaming](#native-streaming)
+- [Configuration](#configuration)
+  - [Discord Rich Presence](#discord-rich-presence)
+  - [Anonymous Song Counter](#anonymous-song-counter)
+  - [GitHub Profile Widget](#github-profile-widget)
+- [Plugins](#plugins)
+- [Performance](#performance)
+- [Playback Requirements](#playback-requirements)
+  - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
+- [Using with spotifyd](#using-with-spotifyd)
+- [Migrating from spotify-tui](#migrating-from-spotify-tui)
+- [Song History](#song-history)
+- [Star History](#star-history)
+- [Libraries used](#libraries-used)
+- [Development](#development)
+  - [If you use NixOS or Nix in general:](#if-you-use-nixos-or-nix-in-general)
+  - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
+- [Help Wanted](#help-wanted)
+- [Maintainer](#maintainer)
+- [spotatui Contributors](#spotatui-contributors)
+- [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
+- [Roadmap](#roadmap)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 ## Installation 
 
@@ -106,43 +142,6 @@ Or download pre-built binaries from [GitHub Releases](https://github.com/LargeMo
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
 
-
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Quickstart](#quickstart)
-  - [Adding Spotify later](#adding-spotify-later)
-- [Music Sources](#music-sources)
-  - [Local Files](#local-files)
-  - [Subsonic / Navidrome](#subsonic--navidrome)
-  - [Internet Radio](#internet-radio)
-  - [YouTube](#youtube)
-- [Native Streaming](#native-streaming)
-- [Configuration](#configuration)
-  - [Discord Rich Presence](#discord-rich-presence)
-  - [Anonymous Song Counter](#anonymous-song-counter)
-- [Plugins](#plugins)
-- [Performance](#performance)
-- [Playback Requirements](#playback-requirements)
-  - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
-- [Using with spotifyd](#using-with-spotifyd)
-- [Migrating from spotify-tui](#migrating-from-spotify-tui)
-- [Libraries used](#libraries-used)
-- [Development](#development)
-  - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
-- [Help Wanted](#help-wanted)
-- [Maintainer](#maintainer)
-- [spotatui Contributors](#spotatui-contributors)
-- [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
-- [Star History](#star-history)
-- [Roadmap](#roadmap)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 
 
