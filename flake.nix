@@ -40,7 +40,9 @@
             pkgs.apple-sdk
             pkgs.portaudio
           ];
-        librespotOutputHash = "sha256-F1pAhVgxYsbmLXOcbOEU6mGYZO1n94EWCXn5yjhPxv0=";
+        # Update alongside the [patch.crates-io] rev in Cargo.toml; the Nix build
+        # fails with a hash mismatch that reports the correct value otherwise.
+        librespotOutputHash = "sha256-N/ImWrtEyhKyjvZd8zVCelKtsAV1kHoFHMwCoe5ddI0=";
       in
       {
         # Build dependencies for rust
