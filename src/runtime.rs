@@ -564,14 +564,23 @@ async fn handle_self_update_command(_matches: &ArgMatches) -> Result<bool> {
   Ok(false)
 }
 
+/// Run the auto-update check, returning the new version when one was installed.
+///
+/// Deliberately does NOT restart here. This runs concurrently with
+/// authentication, and restarting mid-authentication deadlocks startup: the
+/// re-exec blocks this task in `Command::status()`, which stops the joined
+/// authentication future from being polled while it still owns the OAuth
+/// callback port, so the child cannot bind that port and the parent never
+/// releases it. See `restart_after_update`, which the caller invokes once
+/// authentication has finished.
 #[cfg(feature = "self-update")]
-async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) {
+async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) -> Option<String> {
   if matches.subcommand_name().is_some()
     || std::env::var_os("SPOTATUI_SKIP_UPDATE").is_some()
     || matches.get_flag("no-update")
     || user_config.behavior.disable_auto_update
   {
-    return;
+    return None;
   }
 
   println!("Checking for updates...");
@@ -594,24 +603,7 @@ async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) {
     };
 
   match update_result {
-    Some(cli::UpdateOutcome::Installed(new_version)) => {
-      println!("Updated to v{}! Restarting...", new_version);
-      // Re-exec the current binary with the same args, skipping the update check.
-      let exe = std::env::current_exe().expect("failed to get current executable path");
-      let args: Vec<String> = std::env::args().skip(1).collect();
-      let status = std::process::Command::new(&exe)
-        .args(&args)
-        .env("SPOTATUI_SKIP_UPDATE", "1")
-        .status();
-      match status {
-        Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(0)),
-        Err(e) => {
-          eprintln!("Failed to restart after update: {}", e);
-          eprintln!("Please restart spotatui manually.");
-          std::process::exit(1);
-        }
-      }
-    }
+    Some(cli::UpdateOutcome::Installed(new_version)) => Some(new_version),
     Some(cli::UpdateOutcome::Pending {
       version,
       secs_remaining,
@@ -621,14 +613,48 @@ async fn run_auto_update(matches: &ArgMatches, user_config: &UserConfig) {
         version,
         crate::core::user_config::format_update_delay_secs(secs_remaining)
       );
+      None
     }
     // Up-to-date, check failed, or no update — continue normally.
-    _ => {}
+    _ => None,
   }
 }
 
 #[cfg(not(feature = "self-update"))]
-async fn run_auto_update(_matches: &ArgMatches, _user_config: &UserConfig) {}
+async fn run_auto_update(_matches: &ArgMatches, _user_config: &UserConfig) -> Option<String> {
+  None
+}
+
+/// Re-exec into the freshly installed binary. Never returns when an update was
+/// installed.
+///
+/// Must be called only once startup is no longer holding resources the child
+/// will need. The child repeats startup from scratch, so anything this process
+/// still owns (the OAuth callback port on 8989, stdin, the terminal) it would
+/// contend with. Authentication persists its token before returning, so the
+/// child reuses it rather than opening a second browser login.
+fn restart_after_update(new_version: Option<String>) {
+  let Some(new_version) = new_version else {
+    return;
+  };
+
+  println!("Updated to v{}! Restarting...", new_version);
+  // Re-exec the current binary with the same args, skipping the update check.
+  let exe = std::env::current_exe().expect("failed to get current executable path");
+  let args: Vec<String> = std::env::args().skip(1).collect();
+  let status = std::process::Command::new(&exe)
+    .args(&args)
+    .env("SPOTATUI_SKIP_UPDATE", "1")
+    .status();
+  match status {
+    Ok(exit_status) => std::process::exit(exit_status.code().unwrap_or(0)),
+    Err(e) => {
+      eprintln!("Failed to restart after update: {}", e);
+      eprintln!("Please restart spotatui manually.");
+      std::process::exit(1);
+    }
+  }
+}
 
 /// Everything native streaming needs that used to gate the first frame:
 /// account probe, librespot session handshake, player event handler, and the
@@ -1303,7 +1329,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   // network round trips and neither depends on the other, so the check no
   // longer adds its own latency to startup. (An update that actually installs
   // still restarts the process, exactly as before.)
-  let (authenticated, _) = tokio::join!(
+  let (authenticated, installed_update) = tokio::join!(
     async {
       if spotify_required {
         auth::authenticate_with_fallback(&mut client_config, &config_paths)
@@ -1315,6 +1341,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     },
     run_auto_update(&matches, &user_config)
   );
+
+  // Only now that authentication has released the OAuth callback port and the
+  // terminal. Runs before the `?` below so a broken auth state is still allowed
+  // to restart into the newer build, which may be what fixes it.
+  restart_after_update(installed_update);
+
   let authenticated: Option<auth::AuthenticatedClient> = authenticated?;
 
   // Which Spotify app the session actually authenticated as, when the user would
