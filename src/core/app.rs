@@ -100,6 +100,10 @@ const DEFAULT_ROUTE: Route = Route {
 /// This prevents the UI from jumping back to old positions while the seek completes
 pub const SEEK_POSITION_IGNORE_MS: u128 = 500;
 
+/// The public "spotatui community" playlist pinned to the top of the Spotify
+/// playlists sidebar.
+pub const COMMUNITY_PLAYLIST_ID: &str = "0tjRxKAUgoz95pWeW17wYx";
+
 #[cfg(feature = "streaming")]
 const FRESH_NATIVE_ACTIVITY_WINDOW: Duration = Duration::from_secs(5);
 
@@ -309,6 +313,7 @@ pub enum ActiveBlock {
 
   AnnouncementPrompt,
   RecapPrompt,
+  CommunityPinPrompt,
   ExitPrompt,
   Settings,
   SortMenu,
@@ -356,6 +361,7 @@ pub enum RouteId {
 
   AnnouncementPrompt,
   RecapPrompt,
+  CommunityPinPrompt,
   ExitPrompt,
   Settings,
   HelpMenu,
@@ -1037,6 +1043,10 @@ pub enum PlaylistFolderItem {
     /// Folder ID this playlist is visible in
     current_id: usize,
   },
+  /// The pinned "spotatui community" playlist. Injected at display time only
+  /// (never stored in `playlist_folder_items`); opens the community playlist
+  /// when selected.
+  CommunityPin,
 }
 
 /// A row in the add-to-playlist picker dialog: a navigable folder or an
@@ -1724,6 +1734,10 @@ pub struct App {
   pub _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
   /// Flattened folder+playlist items for display navigation
   pub playlist_folder_items: Vec<PlaylistFolderItem>,
+  /// Backing storage for the injected community-playlist pin so display methods
+  /// can hand out a `&PlaylistFolderItem`. Never stored in
+  /// `playlist_folder_items`.
+  pub community_pin_item: PlaylistFolderItem,
   /// Current folder ID being viewed (0 = root)
   pub current_playlist_folder_id: usize,
   /// Incremented every time playlists are refreshed to guard stale background tasks
@@ -1912,6 +1926,7 @@ impl Default for App {
       stats_data: None,
       listening_streaks: None,
       recap_prompt: None,
+      community_pin_item: PlaylistFolderItem::CommunityPin,
       artists_list_index: 0,
       local_playlists: Vec::new(),
       local_playlists_index: 0,
@@ -3333,7 +3348,26 @@ impl App {
       PlaylistFolderItem::Playlist { current_id, .. } => {
         *current_id == self.current_playlist_folder_id
       }
+      PlaylistFolderItem::CommunityPin => false,
     }
+  }
+
+  /// Whether the user already follows the community playlist (its id is present
+  /// in the loaded playlists), in which case the pin is suppressed.
+  pub fn follows_community_playlist(&self) -> bool {
+    self
+      .all_playlists
+      .iter()
+      .any(|p| p.id.as_deref() == Some(COMMUNITY_PLAYLIST_ID))
+  }
+
+  /// Whether the community-playlist pin should be shown as row 0 of the Spotify
+  /// playlists sidebar.
+  pub fn community_pin_visible(&self) -> bool {
+    self.active_source == Source::Spotify
+      && self.user_config.behavior.pin_community_playlist
+      && self.current_playlist_folder_id == 0
+      && !self.follows_community_playlist()
   }
 
   /// Get the number of items visible in the current folder level.
@@ -3364,6 +3398,10 @@ impl App {
     if self.user_config.behavior.group_folders_first {
       items.sort_by_key(|item| !matches!(item, PlaylistFolderItem::Folder(_)));
     }
+    // Injected after sorting so the pin is always row 0, regardless of grouping.
+    if self.community_pin_visible() {
+      items.insert(0, &self.community_pin_item);
+    }
     items
   }
 
@@ -3372,7 +3410,7 @@ impl App {
   pub fn get_playlist_for_item(&self, item: &PlaylistFolderItem) -> Option<&PlaylistInfo> {
     match item {
       PlaylistFolderItem::Playlist { index, .. } => self.all_playlists.get(*index),
-      PlaylistFolderItem::Folder(_) => None,
+      PlaylistFolderItem::Folder(_) | PlaylistFolderItem::CommunityPin => None,
     }
   }
 
@@ -3380,16 +3418,22 @@ impl App {
   #[allow(dead_code)]
   pub fn get_selected_playlist_id(&self) -> Option<String> {
     let selected_index = self.selected_playlist_index?;
-    if let Some(PlaylistFolderItem::Playlist { index, .. }) =
-      self.get_playlist_display_item_at(selected_index)
-    {
-      return self.all_playlists.get(*index).and_then(|p| p.id.clone());
+    // Row 0 is the "+ Add Playlist" entry; display items start at row 1.
+    let display_index = selected_index.checked_sub(1)?;
+    match self.get_playlist_display_item_at(display_index) {
+      Some(PlaylistFolderItem::Playlist { index, .. }) => {
+        return self.all_playlists.get(*index).and_then(|p| p.id.clone());
+      }
+      // The pin is not a stored playlist; don't let the raw-page fallback below
+      // return an unrelated playlist's id for it.
+      Some(PlaylistFolderItem::CommunityPin) => return None,
+      Some(PlaylistFolderItem::Folder(_)) | None => {}
     }
 
     self
       .playlists
       .as_ref()
-      .and_then(|playlists| playlists.items.get(selected_index))
+      .and_then(|playlists| playlists.items.get(display_index))
       .and_then(|playlist| playlist.id.clone())
   }
 
@@ -6613,8 +6657,10 @@ impl App {
   pub fn user_unfollow_playlist(&mut self) {
     info!("unfollowing playlist");
     if let (Some(selected_index), Some(user)) = (self.selected_playlist_index, &self.user) {
-      if let Some(PlaylistFolderItem::Playlist { index, .. }) =
-        self.get_playlist_display_item_at(selected_index)
+      // Row 0 is the "+ Add Playlist" entry; display items start at row 1.
+      if let Some(PlaylistFolderItem::Playlist { index, .. }) = selected_index
+        .checked_sub(1)
+        .and_then(|i| self.get_playlist_display_item_at(i))
       {
         // Pass the stored string ids straight through to the IoEvent.
         let ids = self.all_playlists.get(*index).and_then(|playlist| {
@@ -7066,6 +7112,13 @@ impl App {
           name: "Monthly Recap Prompt".to_string(),
           description: "Show a popup once a month when your listening recap is ready".to_string(),
           value: SettingValue::Bool(self.user_config.behavior.enable_monthly_recap_prompt),
+        },
+        SettingItem {
+          id: "behavior.pin_community_playlist".to_string(),
+          name: "Community Playlist Pin".to_string(),
+          description: "Pin the spotatui community playlist to the top of your Spotify playlists"
+            .to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.pin_community_playlist),
         },
         #[cfg(feature = "telemetry")]
         SettingItem {
@@ -7711,6 +7764,11 @@ impl App {
         "behavior.enable_monthly_recap_prompt" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_monthly_recap_prompt = *v;
+          }
+        }
+        "behavior.pin_community_playlist" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.pin_community_playlist = *v;
           }
         }
         #[cfg(feature = "telemetry")]
@@ -9443,6 +9501,9 @@ mod tests {
       playlist_folder_items: vec![playlist(0), folder("A"), playlist(1), folder("B")],
       ..Default::default()
     };
+    // Keep this test focused on folder hoisting; the community pin is exercised
+    // separately.
+    app.user_config.behavior.pin_community_playlist = false;
 
     // Off (default): order is untouched.
     app.user_config.behavior.group_folders_first = false;
@@ -9452,6 +9513,7 @@ mod tests {
       .map(|i| match i {
         PlaylistFolderItem::Folder(f) => f.name.as_str(),
         PlaylistFolderItem::Playlist { .. } => "P",
+        PlaylistFolderItem::CommunityPin => "C",
       })
       .collect();
     assert_eq!(names, vec!["P", "A", "P", "B"]);
@@ -9464,6 +9526,7 @@ mod tests {
       .map(|i| match i {
         PlaylistFolderItem::Folder(f) => f.name.as_str(),
         PlaylistFolderItem::Playlist { .. } => "P",
+        PlaylistFolderItem::CommunityPin => "C",
       })
       .collect();
     assert_eq!(names, vec!["A", "B", "P", "P"]);
@@ -9472,6 +9535,55 @@ mod tests {
       app.get_playlist_display_item_at(0),
       Some(PlaylistFolderItem::Folder(_))
     ));
+  }
+
+  #[test]
+  fn community_pin_is_first_display_item_when_visible() {
+    let app = App::default();
+    // Default Spotify source + default-on toggle + root folder + not following.
+    // The pin is the first *display* item (sidebar row 1, below "+ Add Playlist").
+    assert!(app.community_pin_visible());
+    assert!(matches!(
+      app.get_playlist_display_item_at(0),
+      Some(PlaylistFolderItem::CommunityPin)
+    ));
+    assert_eq!(app.get_playlist_display_count(), 1);
+  }
+
+  #[test]
+  fn community_pin_hidden_outside_root_folder() {
+    let mut app = App::default();
+    assert!(app.community_pin_visible());
+    app.current_playlist_folder_id = 3;
+    assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn community_pin_hidden_when_toggle_off() {
+    let mut app = App::default();
+    app.user_config.behavior.pin_community_playlist = false;
+    assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn community_pin_hidden_when_already_following() {
+    let mut app = App::default();
+    assert!(app.community_pin_visible());
+    app.all_playlists = vec![playlist_info(
+      COMMUNITY_PLAYLIST_ID,
+      "spotatui community",
+      "spotatui",
+      false,
+    )];
+    assert!(app.follows_community_playlist());
+    assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn community_pin_hidden_under_non_spotify_source() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    assert!(!app.community_pin_visible());
   }
 
   #[cfg(feature = "streaming")]

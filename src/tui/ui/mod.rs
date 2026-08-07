@@ -34,9 +34,9 @@ pub use self::player::draw_miniplayer;
 pub use self::player::{draw_device_list, draw_playbar};
 pub use self::plugin_screen::draw_plugin_screen;
 pub use self::popups::{
-  draw_announcement_prompt, draw_dialog, draw_error_screen, draw_exit_prompt, draw_help_menu,
-  draw_party, draw_plugin_popup, draw_queue, draw_recap_prompt, draw_sort_menu,
-  ensure_help_menu_model,
+  draw_announcement_prompt, draw_community_pin_prompt, draw_dialog, draw_error_screen,
+  draw_exit_prompt, draw_help_menu, draw_party, draw_plugin_popup, draw_queue, draw_recap_prompt,
+  draw_sort_menu, ensure_help_menu_model,
 };
 pub use self::search::{draw_input_and_help_box, draw_search_results};
 pub use self::stats::draw_stats;
@@ -124,6 +124,7 @@ fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
     | RouteId::MiniPlayer
     | RouteId::AnnouncementPrompt
     | RouteId::RecapPrompt
+    | RouteId::CommunityPinPrompt
     | RouteId::ExitPrompt
     | RouteId::Settings
     | RouteId::HelpMenu

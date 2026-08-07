@@ -778,6 +778,7 @@ pub struct BehaviorConfigString {
   pub enable_announcements: Option<bool>,
   pub announcement_feed_url: Option<String>,
   pub enable_monthly_recap_prompt: Option<bool>,
+  pub pin_community_playlist: Option<bool>,
   pub liked_icon: Option<String>,
   pub shuffle_icon: Option<String>,
   pub repeat_track_icon: Option<String>,
@@ -863,6 +864,9 @@ pub struct BehaviorConfig {
   pub enable_announcements: bool,
   pub announcement_feed_url: Option<String>,
   pub enable_monthly_recap_prompt: bool,
+  /// Pin the public "spotatui community" playlist to the top of the Spotify
+  /// playlists sidebar.
+  pub pin_community_playlist: bool,
   pub liked_icon: String,
   pub shuffle_icon: String,
   pub repeat_track_icon: String,
@@ -1174,6 +1178,7 @@ impl UserConfig {
         enable_announcements: true,
         announcement_feed_url: None,
         enable_monthly_recap_prompt: true,
+        pin_community_playlist: true,
         liked_icon: "♥".to_string(),
         shuffle_icon: "🔀".to_string(),
         repeat_track_icon: "🔂".to_string(),
@@ -1511,6 +1516,10 @@ impl UserConfig {
 
     if let Some(enable_monthly_recap_prompt) = behavior_config.enable_monthly_recap_prompt {
       self.behavior.enable_monthly_recap_prompt = enable_monthly_recap_prompt;
+    }
+
+    if let Some(pin_community_playlist) = behavior_config.pin_community_playlist {
+      self.behavior.pin_community_playlist = pin_community_playlist;
     }
 
     if let Some(announcement_feed_url) = behavior_config.announcement_feed_url {
@@ -2035,6 +2044,7 @@ impl UserConfig {
       enable_announcements: Some(self.behavior.enable_announcements),
       announcement_feed_url: self.behavior.announcement_feed_url.clone(),
       enable_monthly_recap_prompt: Some(self.behavior.enable_monthly_recap_prompt),
+      pin_community_playlist: Some(self.behavior.pin_community_playlist),
       liked_icon: Some(self.behavior.liked_icon.clone()),
       shuffle_icon: Some(self.behavior.shuffle_icon.clone()),
       repeat_track_icon: Some(self.behavior.repeat_track_icon.clone()),

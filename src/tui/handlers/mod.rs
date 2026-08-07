@@ -5,6 +5,7 @@ mod announcement_prompt;
 mod artist;
 mod artists;
 mod common_key_events;
+mod community_pin_prompt;
 #[cfg(feature = "cover-art")]
 mod cover_art_view;
 mod create_playlist;
@@ -410,6 +411,7 @@ fn is_input_mode(app: &App) -> bool {
       | ActiveBlock::ExitPrompt
       | ActiveBlock::CreatePlaylistForm
       | ActiveBlock::RecapPrompt
+      | ActiveBlock::CommunityPinPrompt
   )
 }
 
@@ -522,6 +524,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::RecapPrompt => {
       recap_prompt::handler(key, app);
     }
+    ActiveBlock::CommunityPinPrompt => {
+      community_pin_prompt::handler(key, app);
+    }
     ActiveBlock::PluginScreen => {
       plugin_screen::handler(key, app);
     }
@@ -597,6 +602,10 @@ fn handle_escape(app: &mut App) {
     ActiveBlock::RecapPrompt => {
       app.recap_prompt = None;
       app.pop_navigation_stack();
+    }
+    // Esc keeps the pin but still marks the prompt shown so it never re-nags.
+    ActiveBlock::CommunityPinPrompt => {
+      community_pin_prompt::handler(Key::Esc, app);
     }
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);

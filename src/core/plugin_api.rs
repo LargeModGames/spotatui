@@ -638,6 +638,7 @@ pub fn route_name(route: &crate::core::app::Route) -> String {
     RouteId::Dialog => "dialog",
     RouteId::AnnouncementPrompt => "announcement",
     RouteId::RecapPrompt => "recap_prompt",
+    RouteId::CommunityPinPrompt => "community_pin_prompt",
     RouteId::ExitPrompt => "exit_prompt",
     RouteId::Settings => "settings",
     RouteId::HelpMenu => "help",

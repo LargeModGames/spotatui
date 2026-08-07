@@ -25,6 +25,11 @@ pub fn draw_library_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 }
 
+/// Sidebar label for the pinned community playlist.
+fn community_pin_label() -> String {
+  "\u{1F4CC} spotatui community".to_string()
+}
+
 pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let highlight_state = {
     let current_route = app.get_current_route();
@@ -131,11 +136,17 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let display_items = app.get_playlist_display_items();
 
   let playlist_items: Vec<String> = if app.playlist_folder_items.is_empty() {
-    // Fallback only when folder-aware items are not initialized yet
-    match &app.playlists {
-      Some(p) => p.items.iter().map(|item| item.name.to_owned()).collect(),
-      None => vec![],
+    // Fallback only when folder-aware items are not initialized yet. Keep the
+    // pin at row 0 so this branch stays consistent with the display-item count
+    // (which injects the pin) and the Enter/click index math.
+    let mut names: Vec<String> = Vec::new();
+    if app.community_pin_visible() {
+      names.push(community_pin_label());
     }
+    if let Some(p) = &app.playlists {
+      names.extend(p.items.iter().map(|item| item.name.to_owned()));
+    }
+    names
   } else {
     display_items
       .iter()
@@ -153,12 +164,14 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           .get(*index)
           .map(|p| p.name.clone())
           .unwrap_or_else(|| "Unknown".to_string()),
+        crate::core::app::PlaylistFolderItem::CommunityPin => community_pin_label(),
       })
       .collect()
   };
 
-  let mut display_list = playlist_items;
-  display_list.push("+ Add Playlist".to_string());
+  // "+ Add Playlist" is the leading row (row 0), above the display items.
+  let mut display_list = vec!["+ Add Playlist".to_string()];
+  display_list.extend(playlist_items);
 
   draw_selectable_list(
     f,
@@ -283,6 +296,83 @@ mod tests {
     assert!(
       content.contains("Liked Songs"),
       "Spotify library entries should render: {content}"
+    );
+  }
+
+  #[test]
+  fn community_pin_renders_below_add_and_above_playlists() {
+    use crate::core::app::PlaylistFolderItem;
+    use crate::core::test_helpers::playlist_info;
+    let mut app = App::default(); // Spotify default, toggle on by default
+    app.all_playlists = vec![playlist_info(
+      "37i9dQZF1DXcBWIGoYBM5M",
+      "My Mix",
+      "me",
+      false,
+    )];
+    app.playlist_folder_items = vec![PlaylistFolderItem::Playlist {
+      index: 0,
+      current_id: 0,
+    }];
+    let content = rendered(&app, Rect::new(0, 0, 40, 40));
+    // Top-to-bottom: "+ Add Playlist", then the pin, then the user's playlists.
+    let add_idx = content
+      .find("Add Playlist")
+      .expect("Add Playlist should render");
+    let pin_idx = content
+      .find("spotatui community")
+      .expect("pin should render for Spotify");
+    let mix_idx = content.find("My Mix").expect("real playlist should render");
+    assert!(add_idx < pin_idx, "Add must be above the pin: {content}");
+    assert!(pin_idx < mix_idx, "pin must be above playlists: {content}");
+  }
+
+  #[test]
+  fn community_pin_absent_under_non_spotify_source() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    app.local_playlists = vec![folder("Jazz")];
+    let content = rendered(&app, Rect::new(0, 0, 40, 40));
+    assert!(
+      !content.contains("spotatui community"),
+      "pin must not render off Spotify: {content}"
+    );
+  }
+
+  #[test]
+  fn community_pin_absent_when_toggle_off() {
+    let mut app = App::default();
+    app.user_config.behavior.pin_community_playlist = false;
+    let content = rendered(&app, Rect::new(0, 0, 40, 40));
+    assert!(
+      !content.contains("spotatui community"),
+      "pin must not render when toggled off: {content}"
+    );
+  }
+
+  #[test]
+  fn community_pin_absent_when_already_following() {
+    use crate::core::app::{PlaylistFolderItem, COMMUNITY_PLAYLIST_ID};
+    use crate::core::test_helpers::playlist_info;
+    let mut app = App::default();
+    app.all_playlists = vec![playlist_info(
+      COMMUNITY_PLAYLIST_ID,
+      "Community Follow",
+      "spotatui",
+      false,
+    )];
+    app.playlist_folder_items = vec![PlaylistFolderItem::Playlist {
+      index: 0,
+      current_id: 0,
+    }];
+    let content = rendered(&app, Rect::new(0, 0, 40, 40));
+    assert!(
+      content.contains("Community Follow"),
+      "followed playlist should render: {content}"
+    );
+    assert!(
+      !content.contains("spotatui community"),
+      "pin must be suppressed when already following: {content}"
     );
   }
 }

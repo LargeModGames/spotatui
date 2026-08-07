@@ -952,6 +952,51 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
   f.render_widget(paragraph, rect);
 }
 
+pub fn draw_community_pin_prompt(f: &mut Frame<'_>, app: &App) {
+  let width = std::cmp::min(f.area().width.saturating_sub(4), 66);
+  let height = 14;
+  let rect = f
+    .area()
+    .centered(Constraint::Length(width), Constraint::Length(height));
+
+  f.render_widget(Clear, rect);
+
+  let text = vec![
+    Line::from(Span::styled(
+      "\u{1F4CC} spotatui community playlist pinned",
+      Style::default()
+        .fg(app.user_config.theme.active)
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+    )),
+    Line::from(""),
+    Line::from(
+      "The \"spotatui community\" playlist is now pinned to the top of your Spotify playlists.",
+    ),
+    Line::from("Add songs to it any time with the /queue command in the spotatui Discord."),
+    Line::from(""),
+    Line::from("Keep it pinned, or hide it (you can re-enable it later in Settings)."),
+    Line::from(""),
+    Line::from(Span::styled(
+      "[Enter] keep   [h] hide   (Esc keeps it)",
+      Style::default().fg(app.user_config.theme.inactive),
+    )),
+  ];
+
+  let paragraph = Paragraph::new(text)
+    .style(app.user_config.theme.base_style())
+    .alignment(Alignment::Left)
+    .wrap(Wrap { trim: false })
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .style(app.user_config.theme.base_style())
+        .border_style(Style::default().fg(app.user_config.theme.active))
+        .title(" Community Playlist "),
+    );
+
+  f.render_widget(paragraph, rect);
+}
+
 pub fn draw_exit_prompt(f: &mut Frame<'_>, app: &App) {
   let width = std::cmp::min(f.area().width.saturating_sub(4), 56);
   let height = 8;
