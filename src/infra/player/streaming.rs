@@ -69,8 +69,22 @@ impl DeferredPlayerCommand {
   fn apply(self, spirc: &Spirc, player: &Player) -> std::result::Result<(), librespot_core::Error> {
     match self {
       Self::Load(request) => spirc.load(request),
-      Self::Play => spirc.play(),
-      Self::Pause => spirc.pause(),
+      // Play/Pause go to both the Player and Spirc: Spirc's handlers no-op
+      // whenever its play_status doesn't cover the current audio (any track
+      // direct-loaded via `player.load` leaves it Stopped, since Spirc drops
+      // events with a play_request_id it didn't issue), while the direct Player
+      // command always acts on whatever is actually loaded. The double-send is
+      // safe in both directions: the Player ignores commands invalid for its
+      // state, and Spirc re-syncs its status from the resulting Paused/Playing
+      // events.
+      Self::Play => {
+        player.play();
+        spirc.play()
+      }
+      Self::Pause => {
+        player.pause();
+        spirc.pause()
+      }
       Self::Stop => {
         player.stop();
         Ok(())

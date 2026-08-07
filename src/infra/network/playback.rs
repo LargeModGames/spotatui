@@ -2364,9 +2364,11 @@ impl PlaybackNetwork for Network {
         )
       };
       if transition_advanced {
+        info!("continuation for {previous_track_id}: playback already advanced");
         return;
       }
       if let Some(next) = raw_next {
+        info!("continuation for {previous_track_id}: starting next raw-list track");
         let uris = next
           .uris
           .map(|items| crate::infra::network::ids::playable_ids(&items));
@@ -2405,6 +2407,9 @@ impl PlaybackNetwork for Network {
           == 0;
 
         if still_on_finished_track {
+          log::info!(
+            "continuation for {previous_track_id}: still on finished track, skipping ahead"
+          );
           #[cfg(feature = "streaming")]
           if native_active {
             let native_device_id = self.app.lock().await.native_device_id.clone();
@@ -2432,6 +2437,9 @@ impl PlaybackNetwork for Network {
         } else if current_id.is_some() {
           // Spirc may already have selected the next item but left it paused.
           // Resume that item instead of issuing another skip and losing a track.
+          log::info!(
+            "continuation for {previous_track_id}: resuming the already-selected next item"
+          );
           self.start_playback(None, None, None).await;
         }
       }
