@@ -3430,10 +3430,18 @@ impl App {
       Some(PlaylistFolderItem::Folder(_)) | None => {}
     }
 
+    // In the raw-page fallback the pin is also rendered (row 1, above the pages),
+    // so a row past it maps to `items[display_index - 1]`. The CommunityPin guard
+    // above means this only runs at display_index >= 1 when the pin is visible.
+    let raw_index = if self.community_pin_visible() {
+      display_index.checked_sub(1)?
+    } else {
+      display_index
+    };
     self
       .playlists
       .as_ref()
-      .and_then(|playlists| playlists.items.get(display_index))
+      .and_then(|playlists| playlists.items.get(raw_index))
       .and_then(|playlist| playlist.id.clone())
   }
 
@@ -9584,6 +9592,36 @@ mod tests {
     let mut app = App::default();
     app.active_source = Source::Local;
     assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn selected_playlist_id_offsets_past_pin_in_raw_fallback() {
+    // Folder-aware items not yet initialized, so the sidebar falls back to the
+    // raw playlist pages. Rendered rows: [+ Add Playlist, pin, First, Second].
+    let mut app = App::default();
+    assert!(app.community_pin_visible());
+    assert!(app.playlist_folder_items.is_empty());
+    app.playlists = Some(Paged {
+      items: vec![
+        playlist_info("00000000000000000000a0", "First", "me", false),
+        playlist_info("00000000000000000000a1", "Second", "me", false),
+      ],
+      total: 2,
+      ..Default::default()
+    });
+
+    // Row 3 is the second raw page item, not the off-by-one neighbor.
+    app.selected_playlist_index = Some(3);
+    assert_eq!(
+      app.get_selected_playlist_id().as_deref(),
+      Some("00000000000000000000a1")
+    );
+    // Row 2 is the first raw page item.
+    app.selected_playlist_index = Some(2);
+    assert_eq!(
+      app.get_selected_playlist_id().as_deref(),
+      Some("00000000000000000000a0")
+    );
   }
 
   #[cfg(feature = "streaming")]

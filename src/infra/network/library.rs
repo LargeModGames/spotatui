@@ -9,6 +9,7 @@ use crate::core::app::{
 };
 use crate::core::plugin_api::{PlaylistInfo, ShowInfo, TrackInfo};
 use crate::core::source::Source;
+use crate::core::state::PersistedRuntimeState;
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
@@ -701,15 +702,28 @@ async fn finish_playlists_fetch(
 
   reconcile_playlist_selection(&mut app, preferred.0.as_deref(), preferred.1, preferred.2);
 
-  // A user who already follows the community playlist never sees this prompt (no
-  // pin to explain); if they later unfollow, the pin appears for the first time
-  // and this can fire then — intended, not a bug.
+  maybe_prompt_community_pin(&mut app);
+}
+
+/// Offer the one-time community-pin hide prompt once the full playlist list is
+/// known. A user who already follows the community playlist never sees it (no
+/// pin to explain); if they later unfollow, the pin appears for the first time
+/// and this can fire then — intended, not a bug.
+fn maybe_prompt_community_pin(app: &mut App) {
   if app.active_source == Source::Spotify
     && !app.runtime_state.community_pin_prompt_shown
     && app.user_config.behavior.pin_community_playlist
     && !app.follows_community_playlist()
     && app.get_current_route().id != RouteId::CommunityPinPrompt
   {
+    // Mark shown at push time, not only on dismiss, so paths that close the
+    // prompt without going through its handler (the back key, mouse-interactive
+    // layout dismissal) can never make it reappear.
+    app.runtime_state.community_pin_prompt_shown = true;
+    if let Err(e) = app.save_runtime_state(&PersistedRuntimeState::community_pin_prompt_shown(true))
+    {
+      log::warn!("failed to persist community pin prompt state: {}", e);
+    }
     app.push_navigation_stack(RouteId::CommunityPinPrompt, ActiveBlock::CommunityPinPrompt);
   }
 }
@@ -1561,6 +1575,24 @@ mod tests {
       app.get_playlist_display_item_at(idx - 1),
       Some(PlaylistFolderItem::Playlist { index: 1, .. })
     ));
+  }
+
+  #[test]
+  fn community_pin_prompt_marks_shown_at_push_time() {
+    let dir = tempfile::tempdir().unwrap();
+    // Trigger conditions: Spotify source, flag false, toggle on, not following.
+    let mut app = App::default();
+    app.state_path = Some(dir.path().join("state.yml"));
+    assert!(app.active_source == Source::Spotify);
+    assert!(app.user_config.behavior.pin_community_playlist);
+    assert!(!app.follows_community_playlist());
+    assert!(!app.runtime_state.community_pin_prompt_shown);
+
+    maybe_prompt_community_pin(&mut app);
+
+    // Shown is marked at push time so a non-handler dismissal can't reappear it.
+    assert!(app.runtime_state.community_pin_prompt_shown);
+    assert_eq!(app.get_current_route().id, RouteId::CommunityPinPrompt);
   }
 
   #[test]
