@@ -793,6 +793,7 @@ async fn handle_player_events(
         // native queue takes over, and a dropped decision here strands the
         // queue (nothing advances, nothing continues).
         let mut reissue_queue_slot: Option<(String, bool)> = None;
+        let mut end_decision = "ensure-playback-continues";
         let should_ensure_playback = {
           let mut app = app.lock().await;
           if let Some(ref mut ctx) = app.current_playback_context {
@@ -802,6 +803,7 @@ async fn handle_player_events(
           app.last_track_id = None;
           app.native_track_info = None;
           if app.user_config.behavior.stop_after_current_track {
+            end_decision = "stop-after-current";
             app.pending_stop_after_track = true;
             app.set_native_playback_intent(false);
             false
@@ -811,15 +813,18 @@ async fn handle_player_events(
             // during an in-place reconnect and possibly discarded). Reissue it
             // instead of letting the advance below consume the never-played
             // item; the guard's reload budget bounds the retries.
+            end_decision = "reissue-queue-slot";
             reissue_queue_slot = Some((uri, app.queue_slot_desired_playing));
             false
           } else if app.handle_native_spotify_track_end() {
+            end_decision = "native-queue-takeover";
             // The native queue takes priority: a queued Spotify track that just
             // ended advances the queue; a context track that ended while items
             // wait suspends the context (preempting Spirc's self-advance) and
             // hands off to the queue.
             false
           } else if app.native_raw_list_playback_exhausted(&previous_track_id) {
+            end_decision = "raw-list-exhausted";
             // The raw URI list ran out with repeat off: stopping here is
             // legitimate, so record stopped intent instead of arming the
             // watchdog. This must happen under this lock, before the watchdog
@@ -833,6 +838,7 @@ async fn handle_player_events(
             true
           }
         };
+        info!("end of track {}: {}", previous_track_id, end_decision);
 
         if let Some((uri, desired_playing)) = reissue_queue_slot {
           info!(
