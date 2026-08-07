@@ -771,6 +771,10 @@ pub async fn start_ui(
             ui::draw_main_layout(f, &app);
             ui::draw_recap_prompt(f, &app);
           }
+          ActiveBlock::CommunityPinPrompt => {
+            ui::draw_main_layout(f, &app);
+            ui::draw_community_pin_prompt(f, &app);
+          }
           ActiveBlock::ExitPrompt => ui::draw_exit_prompt(f, &app),
           ActiveBlock::Settings => ui::settings::draw_settings(f, &app),
           ActiveBlock::PluginScreen => ui::draw_plugin_screen(f, &app),

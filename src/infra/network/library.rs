@@ -4,9 +4,12 @@ use super::requests::{
 };
 use super::{IoEvent, Network};
 use crate::core::app::{
-  App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
+  ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
+  RouteId,
 };
 use crate::core::plugin_api::{PlaylistInfo, ShowInfo, TrackInfo};
+use crate::core::source::Source;
+use crate::core::state::PersistedRuntimeState;
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
@@ -698,6 +701,31 @@ async fn finish_playlists_fetch(
   app.playlist_folder_items = folder_items;
 
   reconcile_playlist_selection(&mut app, preferred.0.as_deref(), preferred.1, preferred.2);
+
+  maybe_prompt_community_pin(&mut app);
+}
+
+/// Offer the one-time community-pin hide prompt once the full playlist list is
+/// known. A user who already follows the community playlist never sees it (no
+/// pin to explain); if they later unfollow, the pin appears for the first time
+/// and this can fire then — intended, not a bug.
+fn maybe_prompt_community_pin(app: &mut App) {
+  if app.active_source == Source::Spotify
+    && !app.runtime_state.community_pin_prompt_shown
+    && app.user_config.behavior.pin_community_playlist
+    && !app.follows_community_playlist()
+    && app.get_current_route().id != RouteId::CommunityPinPrompt
+  {
+    // Mark shown at push time, not only on dismiss, so paths that close the
+    // prompt without going through its handler (the back key, mouse-interactive
+    // layout dismissal) can never make it reappear.
+    app.runtime_state.community_pin_prompt_shown = true;
+    if let Err(e) = app.save_runtime_state(&PersistedRuntimeState::community_pin_prompt_shown(true))
+    {
+      log::warn!("failed to persist community pin prompt state: {}", e);
+    }
+    app.push_navigation_stack(RouteId::CommunityPinPrompt, ActiveBlock::CommunityPinPrompt);
+  }
 }
 
 impl LibraryNetwork for Network {
@@ -1508,6 +1536,9 @@ mod tests {
 
     // Root order: P0, folderA, P1, folderB. Restore selection to P1.
     let mut app = App::default();
+    // Keep this test about folder-first ordering; the community pin is covered
+    // by its own tests.
+    app.user_config.behavior.pin_community_playlist = false;
     app.all_playlists = vec![
       playlist_info("00000000000000000000p0", "P0", "me", false),
       playlist_info("00000000000000000000p1", "P1", "me", false),
@@ -1536,14 +1567,32 @@ mod tests {
 
     reconcile_playlist_selection(&mut app, Some("00000000000000000000p1"), 0, None);
 
-    // Sorted view is [A, B, P0, P1]; P1 lives at display index 3, and the
-    // restored index must resolve back to P1 (not P0 at the unsorted index 2).
+    // Sorted display view is [A, B, P0, P1]; P1 is display index 3, which maps
+    // to sidebar row 4 (row 0 is the leading "+ Add Playlist" entry).
     let idx = app.selected_playlist_index.expect("selection restored");
-    assert_eq!(idx, 3);
+    assert_eq!(idx, 4);
     assert!(matches!(
-      app.get_playlist_display_item_at(idx),
+      app.get_playlist_display_item_at(idx - 1),
       Some(PlaylistFolderItem::Playlist { index: 1, .. })
     ));
+  }
+
+  #[test]
+  fn community_pin_prompt_marks_shown_at_push_time() {
+    let dir = tempfile::tempdir().unwrap();
+    // Trigger conditions: Spotify source, flag false, toggle on, not following.
+    let mut app = App::default();
+    app.state_path = Some(dir.path().join("state.yml"));
+    assert!(app.active_source == Source::Spotify);
+    assert!(app.user_config.behavior.pin_community_playlist);
+    assert!(!app.follows_community_playlist());
+    assert!(!app.runtime_state.community_pin_prompt_shown);
+
+    maybe_prompt_community_pin(&mut app);
+
+    // Shown is marked at push time so a non-handler dismissal can't reappear it.
+    assert!(app.runtime_state.community_pin_prompt_shown);
+    assert_eq!(app.get_current_route().id, RouteId::CommunityPinPrompt);
   }
 
   #[test]
@@ -1672,6 +1721,7 @@ fn reconcile_playlist_selection(
     app.playlist_folder_items.iter().any(|item| match item {
       PlaylistFolderItem::Folder(folder) => folder.current_id == folder_id,
       PlaylistFolderItem::Playlist { current_id, .. } => *current_id == folder_id,
+      PlaylistFolderItem::CommunityPin => false,
     })
   };
 
@@ -1692,11 +1742,12 @@ fn reconcile_playlist_selection(
           .get(*index)
           .filter(|playlist| playlist.id.as_deref() == Some(playlist_id))
           .map(|_| display_idx),
-        PlaylistFolderItem::Folder(_) => None,
+        PlaylistFolderItem::Folder(_) | PlaylistFolderItem::CommunityPin => None,
       });
 
     if let Some(display_idx) = visible_playlist_index {
-      app.selected_playlist_index = Some(display_idx);
+      // Sidebar rows are offset by the leading "+ Add Playlist" row.
+      app.selected_playlist_index = Some(display_idx + 1);
       return;
     }
 
@@ -1724,15 +1775,18 @@ fn reconcile_playlist_selection(
             .get(*index)
             .filter(|playlist| playlist.id.as_deref() == Some(playlist_id))
             .map(|_| idx),
-          PlaylistFolderItem::Folder(_) => None,
+          PlaylistFolderItem::Folder(_) | PlaylistFolderItem::CommunityPin => None,
         });
       if let Some(idx) = display_idx {
-        app.selected_playlist_index = Some(idx);
+        // Sidebar rows are offset by the leading "+ Add Playlist" row.
+        app.selected_playlist_index = Some(idx + 1);
         return;
       }
     }
   }
 
+  // Sidebar rows run 0..=count: row 0 is "+ Add Playlist", items follow, so a
+  // preferred row clamps to `count` (the last item), not `count - 1`.
   let visible_count = app.get_playlist_display_count();
   if visible_count == 0 {
     app.current_playlist_folder_id = 0;
@@ -1740,12 +1794,12 @@ fn reconcile_playlist_selection(
     app.selected_playlist_index = if root_count == 0 {
       None
     } else {
-      Some(preferred_selected_index.unwrap_or(0).min(root_count - 1))
+      Some(preferred_selected_index.unwrap_or(0).min(root_count))
     };
     return;
   }
 
-  app.selected_playlist_index = Some(preferred_selected_index.unwrap_or(0).min(visible_count - 1));
+  app.selected_playlist_index = Some(preferred_selected_index.unwrap_or(0).min(visible_count));
 }
 
 #[cfg(feature = "streaming")]
