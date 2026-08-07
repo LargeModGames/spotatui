@@ -415,9 +415,8 @@ async fn suppressed_no_device_error_while_pending(network: &Network, e: &anyhow:
 
 #[cfg(feature = "streaming")]
 fn is_restriction_violated_error(e: &anyhow::Error) -> bool {
-  e.to_string()
-    .to_ascii_lowercase()
-    .contains("restriction violated")
+  let text = e.to_string().to_ascii_lowercase();
+  text.contains("403") && text.contains("restriction violated")
 }
 
 /// De-escalate a `403 Restriction violated` to a status message while the
@@ -430,11 +429,15 @@ async fn suppressed_restriction_violation_while_pending(
   if !is_restriction_violated_error(e) {
     return false;
   }
-  let mut app = network.app.lock().await;
-  if !(app.native_backend_pending || app.native_activation_pending) {
-    return false;
+  {
+    let app = network.app.lock().await;
+    if !(app.native_backend_pending || app.native_activation_pending) {
+      return false;
+    }
   }
-  app.set_status_message("Native streaming is still settling…", 5);
+  network
+    .show_status_message("Native streaming is still settling…".to_string(), 5)
+    .await;
   true
 }
 
@@ -777,8 +780,9 @@ async fn start_native_context_via_api(
         Ok(_) => true,
         Err(e) => {
           warn!("native start succeeded but shuffle toggle was rejected: {e}");
-          let mut app = network.app.lock().await;
-          app.set_error_status_message("Playback started; couldn't apply shuffle.", 6);
+          network
+            .show_status_message("Playback started; couldn't apply shuffle.".to_string(), 6)
+            .await;
           false
         }
       };
@@ -810,6 +814,9 @@ async fn start_native_context_via_api(
       app.dispatch(IoEvent::GetCurrentPlayback);
     }
     Err(e) => {
+      if suppressed_restriction_violation_while_pending(network, &e).await {
+        return;
+      }
       let mut app = network.app.lock().await;
       // Both routes failed for this request; drop the parked copy so an
       // unrelated later recovery can't replay it.
@@ -1613,8 +1620,9 @@ impl PlaybackNetwork for Network {
           Ok(_) => true,
           Err(e) => {
             log::warn!("start succeeded but shuffle toggle was rejected: {e}");
-            let mut app = self.app.lock().await;
-            app.set_error_status_message("Playback started; couldn't apply shuffle.", 6);
+            self
+              .show_status_message("Playback started; couldn't apply shuffle.".to_string(), 6)
+              .await;
             false
           }
         };
@@ -2781,6 +2789,16 @@ mod tests {
   fn restriction_violated_error_does_not_match_other_forbidden() {
     assert!(!is_restriction_violated_error(&anyhow!(
       "Spotify API 403 Forbidden failed: Premium required"
+    )));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn restriction_violated_error_requires_403_status() {
+    // The phrase alone must not classify a non-403 error as a player-command
+    // restriction violation.
+    assert!(!is_restriction_violated_error(&anyhow!(
+      "Some unrelated failure: restriction violated on resource"
     )));
   }
 
