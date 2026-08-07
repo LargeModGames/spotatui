@@ -413,6 +413,39 @@ async fn suppressed_no_device_error_while_pending(network: &Network, e: &anyhow:
   true
 }
 
+#[cfg(feature = "streaming")]
+fn is_restriction_violated_error(e: &anyhow::Error) -> bool {
+  e.to_string()
+    .to_ascii_lowercase()
+    .contains("restriction violated")
+}
+
+/// De-escalate a `403 Restriction violated` to a status message while the
+/// native session is still settling; a steady-state restriction stays fatal.
+#[cfg(feature = "streaming")]
+async fn suppressed_restriction_violation_while_pending(
+  network: &Network,
+  e: &anyhow::Error,
+) -> bool {
+  if !is_restriction_violated_error(e) {
+    return false;
+  }
+  let mut app = network.app.lock().await;
+  if !(app.native_backend_pending || app.native_activation_pending) {
+    return false;
+  }
+  app.set_status_message("Native streaming is still settling…", 5);
+  true
+}
+
+/// Transient native-session errors (`NO_ACTIVE_DEVICE` 404 or `Restriction
+/// violated` 403) a command can hit while the native backend is coming up.
+#[cfg(feature = "streaming")]
+async fn suppressed_transient_native_command_error(network: &Network, e: &anyhow::Error) -> bool {
+  suppressed_no_device_error_while_pending(network, e).await
+    || suppressed_restriction_violation_while_pending(network, e).await
+}
+
 fn api_confirms_native_info_is_current(
   native_name: &str,
   item: &PlayableItem,
@@ -727,7 +760,9 @@ async fn start_native_context_via_api(
     .await
   {
     Ok(_) => {
-      if let Err(e) = network
+      // Playback started; a rejected shuffle toggle is non-fatal and must not
+      // be recorded as applied (native polling won't self-correct it).
+      let shuffle_applied = match network
         .spotify_api_request_json(
           Method::PUT,
           "me/player/shuffle",
@@ -739,20 +774,29 @@ async fn start_native_context_via_api(
         )
         .await
       {
-        let mut app = network.app.lock().await;
-        app.handle_error(anyhow!(e));
-      }
+        Ok(_) => true,
+        Err(e) => {
+          warn!("native start succeeded but shuffle toggle was rejected: {e}");
+          let mut app = network.app.lock().await;
+          app.set_error_status_message("Playback started; couldn't apply shuffle.", 6);
+          false
+        }
+      };
 
       let mut app = network.app.lock().await;
       app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(6);
       if let Some(ctx) = &mut app.current_playback_context {
         ctx.is_playing = true;
-        ctx.shuffle_state = desired_shuffle_state;
+        if shuffle_applied {
+          ctx.shuffle_state = desired_shuffle_state;
+        }
       }
-      app.runtime_state.shuffle_enabled = desired_shuffle_state;
-      app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
-        desired_shuffle_state,
-      ));
+      if shuffle_applied {
+        app.runtime_state.shuffle_enabled = desired_shuffle_state;
+        app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+          desired_shuffle_state,
+        ));
+      }
       // Keep the recovery chain alive: if the API accepted the start but the
       // native device never emits a player event, the watchdog fires again and
       // the bounded attempt counter eventually drops the request with a
@@ -1557,7 +1601,7 @@ impl PlaybackNetwork for Network {
 
     match result {
       Ok(_) => {
-        if let Err(e) = self
+        let shuffle_applied = match self
           .spotify_api_request_json(
             Method::PUT,
             "me/player/shuffle",
@@ -1566,19 +1610,28 @@ impl PlaybackNetwork for Network {
           )
           .await
         {
-          let mut app = self.app.lock().await;
-          app.handle_error(anyhow!(e));
-        }
+          Ok(_) => true,
+          Err(e) => {
+            log::warn!("start succeeded but shuffle toggle was rejected: {e}");
+            let mut app = self.app.lock().await;
+            app.set_error_status_message("Playback started; couldn't apply shuffle.", 6);
+            false
+          }
+        };
 
         let mut app = self.app.lock().await;
         if let Some(ctx) = &mut app.current_playback_context {
           ctx.is_playing = true;
-          ctx.shuffle_state = desired_shuffle_state;
+          if shuffle_applied {
+            ctx.shuffle_state = desired_shuffle_state;
+          }
         }
-        app.runtime_state.shuffle_enabled = desired_shuffle_state;
-        app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
-          desired_shuffle_state,
-        ));
+        if shuffle_applied {
+          app.runtime_state.shuffle_enabled = desired_shuffle_state;
+          app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+            desired_shuffle_state,
+          ));
+        }
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
@@ -1715,6 +1768,13 @@ impl PlaybackNetwork for Network {
           drop(app);
         }
 
+        // De-escalate a native-settling restriction violation; don't park it
+        // (no replay-owner guarantee). External plays succeed rather than 403.
+        #[cfg(feature = "streaming")]
+        if suppressed_restriction_violation_while_pending(self, &e).await {
+          return;
+        }
+
         let mut app = self.app.lock().await;
         app.handle_error(e);
       }
@@ -1827,7 +1887,7 @@ impl PlaybackNetwork for Network {
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
-        if suppressed_no_device_error_while_pending(self, &e).await {
+        if suppressed_transient_native_command_error(self, &e).await {
           return;
         }
         let mut app = self.app.lock().await;
@@ -1854,7 +1914,7 @@ impl PlaybackNetwork for Network {
       .await
     {
       #[cfg(feature = "streaming")]
-      if suppressed_no_device_error_while_pending(self, &e).await {
+      if suppressed_transient_native_command_error(self, &e).await {
         return;
       }
       let mut app = self.app.lock().await;
@@ -1880,7 +1940,7 @@ impl PlaybackNetwork for Network {
       .await
     {
       #[cfg(feature = "streaming")]
-      if suppressed_no_device_error_while_pending(self, &e).await {
+      if suppressed_transient_native_command_error(self, &e).await {
         return;
       }
       let mut app = self.app.lock().await;
@@ -1910,7 +1970,7 @@ impl PlaybackNetwork for Network {
       .await
     {
       #[cfg(feature = "streaming")]
-      if suppressed_no_device_error_while_pending(self, &e).await {
+      if suppressed_transient_native_command_error(self, &e).await {
         return;
       }
       let mut app = self.app.lock().await;
@@ -1953,7 +2013,7 @@ impl PlaybackNetwork for Network {
       .await
     {
       #[cfg(feature = "streaming")]
-      if suppressed_no_device_error_while_pending(self, &e).await {
+      if suppressed_transient_native_command_error(self, &e).await {
         return;
       }
       let mut app = self.app.lock().await;
@@ -1998,7 +2058,7 @@ impl PlaybackNetwork for Network {
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
-        if suppressed_no_device_error_while_pending(self, &e).await {
+        if suppressed_transient_native_command_error(self, &e).await {
           return;
         }
         let mut app = self.app.lock().await;
@@ -2037,7 +2097,7 @@ impl PlaybackNetwork for Network {
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
-        if suppressed_no_device_error_while_pending(self, &e).await {
+        if suppressed_transient_native_command_error(self, &e).await {
           return;
         }
         let mut app = self.app.lock().await;
@@ -2103,7 +2163,7 @@ impl PlaybackNetwork for Network {
           app.last_dispatched_volume = None;
         }
         #[cfg(feature = "streaming")]
-        if suppressed_no_device_error_while_pending(self, &e).await {
+        if suppressed_transient_native_command_error(self, &e).await {
           return;
         }
         let mut app = self.app.lock().await;
@@ -2420,6 +2480,10 @@ impl PlaybackNetwork for Network {
         app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(3));
       }
       Err(e) => {
+        #[cfg(feature = "streaming")]
+        if suppressed_transient_native_command_error(self, &e).await {
+          return;
+        }
         let mut app = self.app.lock().await;
         app.handle_error(anyhow!(e));
       }
@@ -2700,6 +2764,23 @@ mod tests {
     )));
     assert!(!is_no_active_device_error(&anyhow!(
       "Spotify API 404 failed for https://example.test/404"
+    )));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn restriction_violated_error_matches_player_command_signal() {
+    assert!(is_restriction_violated_error(&anyhow!(
+      "{}",
+      r#"Spotify API 403 Forbidden failed: {"error":{"status":403,"message":"Player command failed: Restriction violated","reason":"UNKNOWN"}}"#
+    )));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn restriction_violated_error_does_not_match_other_forbidden() {
+    assert!(!is_restriction_violated_error(&anyhow!(
+      "Spotify API 403 Forbidden failed: Premium required"
     )));
   }
 
