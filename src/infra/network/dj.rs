@@ -260,8 +260,9 @@ impl Network {
       app.extend_native_queue_from_dj(std::mem::take(&mut report.resolved))
     };
     // After the block, not inside it: the network layer's helper takes the lock
-    // itself.
-    self.show_status_message(format!("MCP: {summary}"), 5).await;
+    // itself. "DJ:", not "MCP:", because this handler serves both front doors and
+    // `DjToolCall` does not carry which one asked.
+    self.show_status_message(format!("DJ: {summary}"), 5).await;
 
     let mut text = format!("Queued {accepted} track(s):\n{}", queued_labels.join("\n"));
     // Report the misses explicitly: MCP clients feed execution detail back to

@@ -234,20 +234,39 @@ impl AgentCliBrain {
       format!("could not run `{program}`. Is it installed and on PATH? (behavior.dj_agent_command)")
     })?;
 
-    if self.prompt_via == PromptDelivery::Stdin {
+    let stdin = match self.prompt_via {
+      PromptDelivery::Stdin => Some(
+        child
+          .stdin
+          .take()
+          .ok_or_else(|| anyhow!("could not open stdin for `{program}`"))?,
+      ),
+      PromptDelivery::Arg => None,
+    };
+
+    // The write and the wait have to run *together*. The prompt is not small —
+    // it carries every tool schema plus this turn's tool results — and an agent
+    // CLI starts printing to stdout immediately. Writing it all first deadlocks
+    // once both pipes fill: we wait for the child to read, the child waits for
+    // us to read. Worse, that hang is in `write_all`, before the timeout below
+    // is ever armed, so the serial IoEvent pump stops for good.
+    let feed = async {
       // Dropping stdin is what tells the CLI the prompt is complete; without it
       // the child waits for more input and we hit the timeout instead.
-      let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("could not open stdin for `{program}`"))?;
-      stdin.write_all(prompt.as_bytes()).await?;
-      stdin.shutdown().await?;
-      drop(stdin);
-    }
+      if let Some(mut stdin) = stdin {
+        stdin.write_all(prompt.as_bytes()).await?;
+        stdin.shutdown().await?;
+      }
+      Ok::<_, std::io::Error>(())
+    };
+    let feed_and_wait = async {
+      let (written, output) = tokio::join!(feed, child.wait_with_output());
+      written.with_context(|| format!("could not send the prompt to `{program}`"))?;
+      output.with_context(|| format!("`{program}` failed to run"))
+    };
 
-    let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
-      Ok(result) => result.with_context(|| format!("`{program}` failed to run"))?,
+    let output = match tokio::time::timeout(self.timeout, feed_and_wait).await {
+      Ok(result) => result?,
       // `kill_on_drop` reaps the child when the future is dropped here.
       Err(_) => {
         return Err(anyhow!(
@@ -349,6 +368,22 @@ echo 'not logged in' >&2
 exit 1"#,
         ),
         ("chatty-dj", "cat >/dev/null\necho 'I would rather not.'"),
+        // Fills its stdout pipe *before* it reads a byte of stdin, which is what
+        // a real agent CLI does with its progress chatter. Feed it a prompt
+        // larger than the pipe buffer and only a concurrent write survives.
+        (
+          "backpressure-dj",
+          r#"i=0
+while [ $i -lt 2000 ]; do
+  echo 'still thinking .............................................................'
+  i=$((i + 1))
+done
+PROMPT=$(cat)
+case "$PROMPT" in
+  *"Take the next step now"*) echo '{"say":"drained","tool_calls":[]}' ;;
+  *) echo '{"say":"no prompt received","tool_calls":[]}' ;;
+esac"#,
+        ),
         ("slow-dj", "sleep 30"),
       ]
       .into_iter()
@@ -441,6 +476,42 @@ exit 1"#,
       .await
       .unwrap();
     assert_eq!(reply.say.as_deref(), Some("got it"));
+  }
+
+  /// A prompt bigger than the pipe buffer, against a CLI that talks first.
+  ///
+  /// Writing the whole prompt before collecting the output deadlocks here, and the
+  /// outer timeout is the point of the test: that hang lands in `write_all`,
+  /// *before* the brain arms its own timeout, so a regression would otherwise stop
+  /// the suite rather than fail it.
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn a_prompt_larger_than_the_pipe_buffer_does_not_deadlock() {
+    let command = stub("backpressure-dj");
+    let request = DjRequest {
+      want: 2,
+      scratch: vec![super::super::ToolExchange {
+        name: "search_tracks".into(),
+        arguments: serde_json::json!({"query": "everything"}),
+        result: "Nude — Radiohead [spotify:track:abc] [new]\n".repeat(4000),
+      }],
+      ..DjRequest::default()
+    };
+    let prompt = format!("{}\n\n{}", system_prompt(), user_prompt(&request));
+    assert!(
+      prompt.len() > 64 * 1024,
+      "the prompt must exceed the pipe buffer to exercise this at all, was {}",
+      prompt.len()
+    );
+
+    let reply = tokio::time::timeout(
+      Duration::from_secs(30),
+      brain(vec![command], PromptDelivery::Stdin).step(&request),
+    )
+    .await
+    .expect("deadlocked: the prompt write must run alongside the output read")
+    .unwrap();
+    assert_eq!(reply.say.as_deref(), Some("drained"));
   }
 
   #[cfg(unix)]

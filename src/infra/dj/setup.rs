@@ -173,26 +173,26 @@ pub(crate) fn detect_backends_with(
 ) -> Vec<BackendOption> {
   let mut rows: Vec<BackendOption> = own_command_row(behavior, &probe).into_iter().collect();
 
-  rows.extend(
-    agent_cli::PRESETS
-      .iter()
-      .filter(|preset| RECOMMENDED_AGENTS.contains(&preset.key) || probe(preset.key))
-      .map(|preset| {
-        let ready = probe(preset.key);
-        BackendOption {
-          backend: "agent_cli",
-          agent: Some(preset.key),
-          command: None,
-          label: format!("{} (no API key)", preset.key),
-          note: if ready {
-            agent_note(preset.key).to_string()
-          } else {
-            format!("{}{NOT_INSTALLED}", agent_note(preset.key))
-          },
-          ready,
-        }
-      }),
-  );
+  // One probe per preset, not two: `on_path` re-reads `PATH` and stats every
+  // directory in it, and the picker opens on a keypress.
+  rows.extend(agent_cli::PRESETS.iter().filter_map(|preset| {
+    let ready = probe(preset.key);
+    if !ready && !RECOMMENDED_AGENTS.contains(&preset.key) {
+      return None;
+    }
+    Some(BackendOption {
+      backend: "agent_cli",
+      agent: Some(preset.key),
+      command: None,
+      label: format!("{} (no API key)", preset.key),
+      note: if ready {
+        agent_note(preset.key).to_string()
+      } else {
+        format!("{}{NOT_INSTALLED}", agent_note(preset.key))
+      },
+      ready,
+    })
+  }));
 
   let has_key = anthropic_key_present(env_key, behavior);
   rows.push(BackendOption {
@@ -288,8 +288,8 @@ pub struct ModelOption {
 const CLAUDE_CLI_MODELS: &[(&str, &str)] = &[
   ("haiku", "cheapest, easiest on a Pro plan"),
   ("sonnet", "balanced"),
-  ("opus", "heaviest, a Pro plan hits its limit fast"),
-  ("fable", "heaviest"),
+  ("opus", "heavy, a Pro plan hits its limit fast"),
+  ("fable", "heaviest, hits it faster still"),
 ];
 
 /// Anthropic API model ids with list price per million tokens (input/output).
@@ -316,9 +316,9 @@ const AGY_MODELS: &[(&str, &str)] = &[
   ("gemini-3.6-flash-high", ""),
   ("gemini-3.5-flash-low", ""),
   ("gemini-3.1-pro-low", ""),
-  ("gemini-3.1-pro-high", "heaviest"),
+  ("gemini-3.1-pro-high", "heaviest Gemini"),
   ("claude-sonnet-4-6", ""),
-  ("claude-opus-4-6-thinking", "heaviest"),
+  ("claude-opus-4-6-thinking", "heaviest of all"),
   ("gpt-oss-120b-medium", ""),
 ];
 

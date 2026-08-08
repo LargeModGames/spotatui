@@ -429,8 +429,9 @@ impl Network {
       return true;
     }
     // Bypasses the gate but NOT onto the service lane: the handler needs the real
-    // Spotify client, and answers an unauthenticated caller itself so the MCP
-    // client gets a diagnosable error instead of a dropped channel.
+    // Spotify client, and answers an unauthenticated caller itself so whichever
+    // front door asked — an MCP client or the in-TUI DJ — gets a diagnosable
+    // error instead of a dropped channel.
     #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
     if matches!(io_event, IoEvent::DjToolCall(_)) {
       return true;
@@ -1669,7 +1670,8 @@ mod tests {
   /// track name needs the real Spotify client, and the service lane builds its
   /// `Network` with `None` for it. It must bypass the gate so the handler can
   /// answer an unauthenticated caller with a diagnosable message instead of
-  /// dropping the `oneshot` an MCP client is blocked on.
+  /// dropping the `oneshot`. Both front doors block on that channel: an MCP
+  /// client through the server, and the in-TUI DJ through its own tool loop.
   #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
   #[test]
   fn dj_tool_calls_bypass_auth_but_stay_on_the_serial_lane() {

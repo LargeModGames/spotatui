@@ -17,6 +17,62 @@ pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
 const MAX_TOKENS: u32 = 2048;
 
+/// Which token-limit field this server takes.
+///
+/// `max_tokens` is what every OpenAI-compatible server has always accepted;
+/// OpenAI's newer models require `max_completion_tokens` and reject the old name.
+/// Sending the new one everywhere would break the local servers this backend
+/// exists for, so it is a downgrade the server asks for, not a default.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TokenLimit {
+  MaxTokens,
+  MaxCompletionTokens,
+}
+
+impl TokenLimit {
+  fn field(self) -> &'static str {
+    match self {
+      Self::MaxTokens => "max_tokens",
+      Self::MaxCompletionTokens => "max_completion_tokens",
+    }
+  }
+}
+
+/// A non-success HTTP reply, kept as a type so the retry can read the status.
+///
+/// The retry used to search the *rendered* error for "400" or "response_format",
+/// which both the base URL (`http://localhost:11400/v1`) and the model's own
+/// words could contain — so unrelated failures bought a second, full-price model
+/// call. Only this error means "the server refused something we sent".
+#[derive(Debug)]
+struct RejectedRequest {
+  status: reqwest::StatusCode,
+  message: String,
+}
+
+impl RejectedRequest {
+  /// The two statuses an OpenAI-compatible server uses for a field it will not
+  /// take. A 401, 404, 429, or 5xx is a real failure and retrying is pure waste.
+  fn rejected_a_field(&self) -> bool {
+    self.status == reqwest::StatusCode::BAD_REQUEST
+      || self.status == reqwest::StatusCode::UNPROCESSABLE_ENTITY
+  }
+
+  /// Whether the *server's own* message names this field. Deliberately not the
+  /// rendered error chain, which is what made the old guard misfire.
+  fn blames(&self, field: &str) -> bool {
+    self.message.contains(field)
+  }
+}
+
+impl std::fmt::Display for RejectedRequest {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}: {}", self.status, self.message)
+  }
+}
+
+impl std::error::Error for RejectedRequest {}
+
 pub struct OpenAiCompatBrain {
   /// Optional: a local server usually needs none.
   api_key: Option<String>,
@@ -35,33 +91,64 @@ impl OpenAiCompatBrain {
     }
   }
 
+  /// One turn, downgrading the request only for fields the server actually
+  /// refused.
+  ///
+  /// Both downgrades are one-way and each fires at most once, so a turn costs at
+  /// most three requests and cannot loop.
   pub async fn step(&self, request: &DjRequest) -> Result<DjStep> {
-    // First attempt asks the server to enforce the schema. A server that does not
-    // understand `response_format` typically 400s, so fall back to prompting
-    // alone rather than treating that as a hard failure.
-    match self.attempt(request, true).await {
-      Ok(reply) => Ok(reply),
-      Err(e) if e.to_string().contains("response_format") || e.to_string().contains("400") => {
-        log::debug!("DJ: server rejected response_format, retrying without it: {e}");
-        self.attempt(request, false).await
+    let mut structured = true;
+    let mut tokens = TokenLimit::MaxTokens;
+    loop {
+      let error = match self.attempt(request, structured, tokens).await {
+        Ok(reply) => return Ok(reply),
+        Err(error) => error,
+      };
+
+      // Only the server refusing a field we sent is worth paying for a second
+      // model call. A transport error, a 401, or a reply we could not parse
+      // would fail exactly the same way twice.
+      let Some(rejected) = error.downcast_ref::<RejectedRequest>() else {
+        return Err(error);
+      };
+      if !rejected.rejected_a_field() {
+        return Err(error);
       }
-      Err(e) => Err(e),
+
+      if tokens == TokenLimit::MaxTokens && rejected.blames("max_tokens") {
+        // OpenAI's newer models take `max_completion_tokens` and refuse the old
+        // name outright, so dropping `response_format` here would fix nothing.
+        log::debug!("DJ: server rejected max_tokens, retrying with max_completion_tokens");
+        tokens = TokenLimit::MaxCompletionTokens;
+      } else if structured {
+        // Plenty of local servers reject `response_format`. The prompt alone plus
+        // the tolerant parser is enough, so this is not a hard failure.
+        log::debug!("DJ: server rejected response_format, retrying without it: {error}");
+        structured = false;
+      } else {
+        return Err(error);
+      }
     }
   }
 
-  async fn attempt(&self, request: &DjRequest, structured: bool) -> Result<DjStep> {
+  async fn attempt(
+    &self,
+    request: &DjRequest,
+    structured: bool,
+    tokens: TokenLimit,
+  ) -> Result<DjStep> {
     let mut body = json!({
       "model": self.model,
-      "max_tokens": MAX_TOKENS,
       "messages": [
         { "role": "system", "content": system_prompt() },
         { "role": "user", "content": user_prompt(request) },
       ],
     });
+    body[tokens.field()] = json!(MAX_TOKENS);
     if structured {
       body["response_format"] = json!({
         "type": "json_schema",
-        "json_schema": { "name": "dj_reply", "strict": true, "schema": step_schema() }
+        "json_schema": { "name": "dj_reply", "schema": step_schema() }
       });
     }
 
@@ -92,7 +179,13 @@ impl OpenAiCompatBrain {
         .and_then(|error| error.get("message"))
         .and_then(Value::as_str)
         .unwrap_or("no error message");
-      return Err(anyhow!("{status}: {message}"));
+      return Err(
+        RejectedRequest {
+          status,
+          message: message.to_string(),
+        }
+        .into(),
+      );
     }
 
     let text = payload
@@ -238,6 +331,55 @@ mod tests {
     let second: Value = serde_json::from_str(&bodies[1]).unwrap();
     assert!(first.get("response_format").is_some());
     assert!(second.get("response_format").is_none());
+  }
+
+  #[tokio::test]
+  async fn a_rejected_max_tokens_is_retried_with_max_completion_tokens() {
+    // OpenAI's newer models refuse `max_tokens` outright. Dropping
+    // `response_format` instead would fail the same way a second time.
+    let (base_url, server) = serve(vec![
+      (
+        "400 Bad Request",
+        json!({"error": {"message": "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}),
+      ),
+      (
+        "200 OK",
+        completion(r#"{"say":"newer model","tool_calls":[]}"#),
+      ),
+    ])
+    .await;
+    let brain = OpenAiCompatBrain::new(None, None, Some(base_url));
+    let reply = brain.step(&request()).await.unwrap();
+    assert_eq!(reply.say.as_deref(), Some("newer model"));
+
+    let bodies = server.await.unwrap();
+    assert_eq!(bodies.len(), 2, "should have retried exactly once");
+    let second: Value = serde_json::from_str(&bodies[1]).unwrap();
+    assert!(second.get("max_completion_tokens").is_some());
+    assert!(second.get("max_tokens").is_none());
+    assert!(
+      second.get("response_format").is_some(),
+      "the token field was the complaint, so the schema request survives"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_reply_that_merely_mentions_400_is_not_retried() {
+    // The retry reads the HTTP status, not the rendered error. This reply parses
+    // to an error whose text contains both old triggers, and it must still cost
+    // exactly one model call.
+    let (base_url, server) = serve(vec![(
+      "200 OK",
+      completion("sorry, I hit error 400 on response_format"),
+    )])
+    .await;
+    let brain = OpenAiCompatBrain::new(None, None, Some(base_url));
+    assert!(brain.step(&request()).await.is_err());
+    assert_eq!(
+      server.await.unwrap().len(),
+      1,
+      "an unparseable reply is not a rejected field"
+    );
   }
 
   #[tokio::test]

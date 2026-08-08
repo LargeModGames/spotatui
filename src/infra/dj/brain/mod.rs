@@ -52,7 +52,15 @@ pub fn shared_client() -> reqwest::Client {
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
         .build()
-        .unwrap_or_default()
+        .unwrap_or_else(|e| {
+          // Nothing can put the timeouts back: they only exist on the builder
+          // that just failed. Say so, so a DJ turn that hangs forever has a
+          // reason in the log rather than looking like a stuck model.
+          log::warn!(
+            "DJ: could not build the timed HTTP client ({e}); falling back to an untimed one"
+          );
+          reqwest::Client::default()
+        })
     })
     .clone()
 }
@@ -200,6 +208,13 @@ fn tool_catalogue() -> String {
 /// `arguments` is deliberately an unconstrained object: the per-tool schemas vary,
 /// and no single schema can describe them all. [`super::tools::parse_call`]
 /// validates the arguments properly once the tool is known.
+///
+/// That is also why this is **not** offered to OpenAI as a `strict` schema.
+/// Strict structured output requires `properties` and `additionalProperties:
+/// false` on every object, which a free-form argument bag cannot have; asking for
+/// strict anyway earns a 400 and a second, unstructured request on every turn.
+/// Non-strict, the schema is still sent and still guides the reply, and
+/// [`parse_step`] is tolerant enough to cover the rest.
 pub fn step_schema() -> Value {
   json!({
     "type": "object",
@@ -213,7 +228,8 @@ pub fn step_schema() -> Value {
             "name": {"type": "string", "enum": TOOLS.iter().map(|tool| tool.name).collect::<Vec<_>>()},
             "arguments": {"type": "object"}
           },
-          "required": ["name", "arguments"]
+          "required": ["name", "arguments"],
+          "additionalProperties": false
         }
       }
     },

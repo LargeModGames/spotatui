@@ -1741,10 +1741,16 @@ impl UserConfig {
         }
       }
       if let Some(dj_agent_command) = behavior_config.dj_agent_command {
-        if dj_agent_command.iter().any(|part| !part.trim().is_empty()) {
+        // Only argv[0] has to be a real word: it is the program to exec, and a
+        // blank one reaches `spawn` as a confusing ENOENT. Later arguments are
+        // left alone, since a CLI can legitimately take an empty one.
+        if dj_agent_command
+          .first()
+          .is_some_and(|program| !program.trim().is_empty())
+        {
           self.behavior.dj_agent_command = dj_agent_command;
         } else {
-          log::warn!("behavior.dj_agent_command is empty; keeping the default");
+          log::warn!("behavior.dj_agent_command has no program to run; keeping the default");
         }
       }
       if let Some(dj_agent_prompt_via) = behavior_config.dj_agent_prompt_via {
@@ -2973,8 +2979,13 @@ volume_increment: 5
     config.behavior.dj_agent_command = vec!["codex".to_string()];
     config.behavior.dj_agent_prompt_via = Some("arg".to_string());
     config.behavior.dj_agent_model = Some("haiku".to_string());
+    config.behavior.dj_agent_timeout_secs = 240;
+    config.behavior.dj_model = Some("some-model".to_string());
+    config.behavior.dj_base_url = Some("http://localhost:1234/v1".to_string());
+    config.behavior.dj_api_key = Some("sk-not-a-real-key".to_string());
 
-    // Mirrors what `save_config` writes, then reads it back.
+    // Mirrors what `save_config` writes, then reads it back. Every persisted DJ
+    // key belongs here: one left out is one a persistence regression keeps green.
     let written = serde_yaml::to_string(&BehaviorConfigString {
       dj_backend: Some(config.behavior.dj_backend.clone()),
       dj_batch_size: Some(config.behavior.dj_batch_size),
@@ -2982,6 +2993,10 @@ volume_increment: 5
       dj_agent_command: Some(config.behavior.dj_agent_command.clone()),
       dj_agent_prompt_via: config.behavior.dj_agent_prompt_via.clone(),
       dj_agent_model: config.behavior.dj_agent_model.clone(),
+      dj_agent_timeout_secs: Some(config.behavior.dj_agent_timeout_secs),
+      dj_model: config.behavior.dj_model.clone(),
+      dj_base_url: config.behavior.dj_base_url.clone(),
+      dj_api_key: config.behavior.dj_api_key.clone(),
       ..Default::default()
     })
     .unwrap();
@@ -2999,6 +3014,33 @@ volume_increment: 5
       Some("arg")
     );
     assert_eq!(reloaded.behavior.dj_agent_model.as_deref(), Some("haiku"));
+    assert_eq!(reloaded.behavior.dj_agent_timeout_secs, 240);
+    assert_eq!(reloaded.behavior.dj_model.as_deref(), Some("some-model"));
+    assert_eq!(
+      reloaded.behavior.dj_base_url.as_deref(),
+      Some("http://localhost:1234/v1")
+    );
+    assert_eq!(
+      reloaded.behavior.dj_api_key.as_deref(),
+      Some("sk-not-a-real-key")
+    );
+  }
+
+  /// argv[0] is the program to exec, so a blank one is no command at all.
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn a_dj_agent_command_without_a_program_keeps_the_default() {
+    let default = super::default_dj_agent_command();
+
+    let config = loaded("dj_agent_command:\n  - '   '\n  - -p");
+    assert_eq!(
+      config.behavior.dj_agent_command, default,
+      "a blank argv[0] reaches spawn as a confusing ENOENT"
+    );
+
+    // A blank *later* argument is the user's business, so it still loads.
+    let config = loaded("dj_agent_command:\n  - claude\n  - ''");
+    assert_eq!(config.behavior.dj_agent_command, vec!["claude", ""]);
   }
 
   #[cfg(feature = "ai-dj")]

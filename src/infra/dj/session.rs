@@ -45,7 +45,12 @@ fn agent_scratch_dir() -> std::path::PathBuf {
 }
 
 /// The API-key precedence rule: the env var wins, the config field is the
-/// fallback, and a blank env var counts as unset.
+/// fallback, and a blank value from either counts as unset.
+///
+/// Blank has to mean unset on both sides, because `setup::anthropic_key_present`
+/// reads them that way when it decides whether the picker shows a key as present.
+/// A blank config key that got through here would be sent as an empty bearer
+/// token, which fails less clearly than no credential at all.
 ///
 /// Split out so the tests can drive both branches without calling `set_var`:
 /// `setenv`/`getenv` are not thread-safe (which is why they are `unsafe` in edition
@@ -55,8 +60,13 @@ fn agent_scratch_dir() -> std::path::PathBuf {
 fn resolve_api_key_with(env_key: Option<&str>, behavior: &BehaviorConfig) -> Option<String> {
   env_key
     .filter(|key| !key.trim().is_empty())
+    .or_else(|| {
+      behavior
+        .dj_api_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+    })
     .map(str::to_string)
-    .or_else(|| behavior.dj_api_key.clone())
 }
 
 pub fn period_from_config(value: &str) -> RecapPeriod {
@@ -365,6 +375,20 @@ mod tests {
       resolve_api_key_with(None, &behavior).as_deref(),
       Some("from-config"),
       "and neither is an unset one"
+    );
+  }
+
+  #[test]
+  fn a_blank_config_key_is_no_key_at_all() {
+    // The picker reads it that way, so this has to agree: a config key of spaces
+    // showing as "not ready" while the session sent it as a bearer token is a
+    // failure with no visible cause.
+    let mut behavior = behavior("openai_compat");
+    behavior.dj_api_key = Some("   ".to_string());
+    assert_eq!(resolve_api_key_with(None, &behavior), None);
+    assert_eq!(
+      resolve_api_key_with(Some("from-env"), &behavior).as_deref(),
+      Some("from-env")
     );
   }
 
