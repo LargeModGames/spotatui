@@ -912,3 +912,301 @@ mod tests {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// The in-TUI DJ
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "ai-dj")]
+mod in_tui {
+  use super::*;
+  use crate::infra::dj::agent::Turn;
+  use crate::infra::dj::brain::DjBrain;
+  use crate::infra::dj::exec::AppExecutor;
+  use crate::infra::dj::session;
+  use crate::infra::dj::{AskDjRequest, DjState, QUEUE_LOW_WATER};
+  use std::sync::Arc;
+
+  impl Network {
+    /// Service lane: run one DJ turn.
+    ///
+    /// The turn loop lives in `dj::agent`; this assembles what it needs and
+    /// reports how it ended. Tool calls that need the catalogue go back down the
+    /// serial lane from inside the loop, because this lane's `Network` has no
+    /// Spotify client.
+    ///
+    /// Writes no `you` line: the handler already pushed what the listener typed,
+    /// synchronously, so it is on screen while this lane is still waiting on the
+    /// brain. See `AskDjRequest::extra_instruction`.
+    pub async fn ask_dj(&mut self, request: AskDjRequest) {
+      let outcome = self.run_turn(&request).await;
+      let mut app = self.app.lock().await;
+      // Whether this turn is still the current one. Read before `finish_turn`
+      // purely for clarity — that call does not touch `turn_seq`.
+      let owned = app.dj.turn_seq == request.turn_seq;
+      // Only if this turn still owns the flag: an abandoned turn finishing would
+      // otherwise clear the flag its replacement had already set, and the refill
+      // tick gates on exactly that flag.
+      app.dj.finish_turn(request.turn_seq);
+      match outcome {
+        Ok(turn) => {
+          // The listener's words only become the standing auto-queue direction
+          // when the turn actually did something. Otherwise "what did I play last
+          // week?" would silently steer every later refill. A vibe the model set
+          // itself is more considered than the raw sentence, so it wins.
+          if turn.acted && !turn.abandoned && !turn.vibe_set {
+            if let Some(vibe) = request.vibe_on_success {
+              app.dj.vibe = Some(vibe);
+            }
+          }
+          // A refill happens while the listener is on another screen, so the
+          // transcript is not a surface they can see. The interactive case is
+          // deliberately left transcript-only.
+          if request.must_act && !turn.abandoned {
+            if turn.acted {
+              app.set_status_message("DJ: topped up the queue".to_string(), 5);
+            } else {
+              // A turn that had to queue and did not is a failure, not a quiet
+              // success. A vibe shift has just *emptied* the queue, and with
+              // auto-queue off nothing retries — so saying nothing leaves the
+              // listener with silence and no explanation.
+              let message = "DJ: nothing was queued that time. Ask again, or try a different \
+                             direction.";
+              app.dj.push_line(DjLine::system(message));
+              app.set_error_status_message(message.to_string(), 6);
+            }
+          }
+        }
+        Err(e) => {
+          log::warn!("DJ: turn failed: {e}");
+          // Silent when the turn has been superseded. An agent CLI hits its
+          // timeout a minute and a half after the listener moved on, and a
+          // failure toast for a turn they abandoned would land over the
+          // conversation they are now having.
+          if !owned {
+            return;
+          }
+          // Naming the backend matters when several are configurable: "DJ error"
+          // alone does not say whether to check the CLI or the key.
+          let backend = session::build_brain(&app.user_config.behavior)
+            .map(|brain| brain.label())
+            .unwrap_or("DJ");
+          let message = format!("DJ error ({backend}): {e}");
+          app.dj.push_line(DjLine::system(message.clone()));
+          // A toast, never `handle_error` — that pushes a modal error page over
+          // whatever the user was doing.
+          app.set_error_status_message(message, 8);
+        }
+      }
+    }
+
+    async fn run_turn(
+      &mut self,
+      request: &AskDjRequest,
+    ) -> anyhow::Result<crate::infra::dj::agent::TurnOutcome> {
+      let (brain, io_tx): (DjBrain, _) = {
+        let app = self.app.lock().await;
+        (
+          session::build_brain(&app.user_config.behavior)?,
+          app.io_tx_clone(),
+        )
+      };
+      let Some(io_tx) = io_tx else {
+        anyhow::bail!("no event channel available");
+      };
+      let context = session::turn_context(&self.app, request.extra_instruction.as_deref()).await?;
+      // Silent: the DJ transcript already shows every call, so the MCP front
+      // door's status-bar announcements would be duplicated and misattributed.
+      let executor = AppExecutor::silent(Arc::clone(&self.app), io_tx);
+
+      Turn {
+        app: &self.app,
+        brain: &brain,
+        context: &context,
+        executor: &executor,
+        generation: request.generation,
+        must_act: request.must_act,
+      }
+      .run()
+      .await
+    }
+
+    /// Service lane: refill the queue because it is running low.
+    pub async fn dj_top_up(&mut self, generation: u64, turn_seq: u64) {
+      // Cheap early bail before spending a brain call on a stale request.
+      {
+        let mut app = self.app.lock().await;
+        if app.dj.generation != generation || !app.dj.auto_queue {
+          log::debug!("DJ: dropping a stale top-up (generation {generation})");
+          app.dj.finish_turn(turn_seq);
+          return;
+        }
+      }
+      self
+        .ask_dj(AskDjRequest {
+          extra_instruction: None,
+          generation,
+          // Nobody is watching a refill, so it may not stop to ask anything.
+          must_act: true,
+          vibe_on_success: None,
+          turn_seq,
+        })
+        .await;
+    }
+  }
+
+  /// Whether the queue is low enough to want a refill.
+  ///
+  /// Free function so the tick can ask without constructing a `Network`.
+  ///
+  /// `external_spotify_device` gates the whole thing, because `queue_len` is
+  /// only a meaningful measure of runway when queued tracks actually land in
+  /// the native queue. On an external Connect device
+  /// `App::add_track_to_native_queue` diverts every Spotify track to the Web
+  /// API queue instead, so `native_queue` stays empty no matter how much the DJ
+  /// queues — and refilling on it would add a fresh batch per brain call,
+  /// forever. The remote queue's depth is not cheaply observable, so the DJ
+  /// waits until the native queue feeds playback again.
+  pub fn wants_top_up(queue_len: usize, dj: &DjState, external_spotify_device: bool) -> bool {
+    !external_spotify_device && dj.auto_queue && !dj.thinking && queue_len <= QUEUE_LOW_WATER
+  }
+
+  #[cfg(test)]
+  mod tests {
+    use super::*;
+    use crate::core::app::App;
+
+    /// A `Network` with no Spotify client, plus the `App` it shares.
+    #[cfg(unix)]
+    async fn network_with_app() -> (Network, std::sync::Arc<tokio::sync::Mutex<App>>) {
+      let (tx, rx) = std::sync::mpsc::channel();
+      // Leaked deliberately: dropping the receiver would make every dispatch fail
+      // as "shutting down", which is not the state under test.
+      std::mem::forget(rx);
+      let app = std::sync::Arc::new(tokio::sync::Mutex::new(App::new(
+        tx,
+        crate::core::user_config::UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+      let network = Network::new(
+        None,
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::env::temp_dir().join("spotatui-dj-turn-test-cache.json"),
+      );
+      (network, app)
+    }
+
+    /// A stub agent CLI that answers with words and never calls a tool.
+    #[cfg(unix)]
+    fn say_only_stub() -> std::path::PathBuf {
+      use std::os::unix::fs::PermissionsExt;
+      static STUB: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+      STUB
+        .get_or_init(|| {
+          let dir =
+            std::env::temp_dir().join(format!("spotatui-turn-stub-{}", std::process::id()));
+          std::fs::create_dir_all(&dir).unwrap();
+          let path = dir.join("say-only");
+          std::fs::write(
+            &path,
+            "#!/bin/sh\ncat >/dev/null\necho '{\"say\":\"What sort of mood?\",\"tool_calls\":[]}'\n",
+          )
+          .unwrap();
+          std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+          path
+        })
+        .clone()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refill_that_queues_nothing_says_so_rather_than_going_quiet() {
+      // A vibe shift drops the DJ's queued tracks *first*, so a turn that then
+      // queues nothing leaves the listener in silence. With auto-queue off there
+      // is no tick to retry it either, so this message is the only signal.
+      let (mut network, app) = network_with_app().await;
+      let turn_seq = {
+        let mut app = app.lock().await;
+        app.user_config.behavior.dj_agent_command =
+          vec![say_only_stub().to_string_lossy().to_string()];
+        app.user_config.behavior.dj_agent_prompt_via = Some("stdin".to_string());
+        app.dj.begin_turn()
+      };
+
+      network
+        .ask_dj(AskDjRequest {
+          extra_instruction: None,
+          generation: 0,
+          must_act: true,
+          vibe_on_success: None,
+          turn_seq,
+        })
+        .await;
+
+      let app = app.lock().await;
+      assert!(!app.dj.thinking, "the flag has to be released either way");
+      let transcript: Vec<&str> = app
+        .dj
+        .transcript
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect();
+      assert!(
+        transcript.iter().any(|t| t.contains("nothing was queued")),
+        "{transcript:?}"
+      );
+      assert!(
+        app.status_message_is_error,
+        "and it is reported as a failure"
+      );
+    }
+
+    #[test]
+    fn top_up_is_wanted_only_when_enabled_idle_and_low() {
+      let mut dj = DjState {
+        auto_queue: true,
+        ..DjState::default()
+      };
+      assert!(wants_top_up(0, &dj, false), "an empty queue wants a refill");
+      assert!(
+        wants_top_up(QUEUE_LOW_WATER, &dj, false),
+        "at the watermark"
+      );
+      assert!(!wants_top_up(QUEUE_LOW_WATER + 1, &dj, false), "above it");
+
+      dj.thinking = true;
+      assert!(
+        !wants_top_up(0, &dj, false),
+        "must not stack refills while one is in flight"
+      );
+
+      dj.thinking = false;
+      dj.auto_queue = false;
+      assert!(!wants_top_up(0, &dj, false), "DJ off means no refill");
+    }
+
+    #[test]
+    fn no_refill_while_an_external_spotify_device_owns_playback() {
+      // On an external Connect device, queued Spotify tracks are diverted to the
+      // Web API queue and `native_queue` stays empty — so a length of 0 is not
+      // "out of runway", and refilling on it queues a batch per brain call
+      // forever.
+      let dj = DjState {
+        auto_queue: true,
+        ..DjState::default()
+      };
+      assert!(
+        !wants_top_up(0, &dj, true),
+        "an empty native queue proves nothing on a remote device"
+      );
+      assert!(
+        wants_top_up(0, &dj, false),
+        "and refills resume once playback is back on this device"
+      );
+    }
+  }
+}
+
+#[cfg(feature = "ai-dj")]
+pub use in_tui::wants_top_up;

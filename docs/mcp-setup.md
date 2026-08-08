@@ -243,4 +243,6 @@ To undo everything: remove the server from your client
   send. `get_listening_history` returns track, artist, and album *names* only.
 * Turning it off is one line: `mcp_enabled: false`, then restart.
 
-See also [`docs/configuration.md`](configuration.md) for every config key.
+See also [`docs/ai-dj.md`](ai-dj.md) for the DJ that runs **inside** spotatui
+without an agent, and [`docs/configuration.md`](configuration.md) for every
+config key.

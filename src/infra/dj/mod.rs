@@ -9,26 +9,23 @@
 //!   API key, or a local model, and which uses the same tools internally.
 //!
 //! The split that matters for anyone extending this: [`brief`] and [`tools`]
-//! only ever touch `App`, while [`resolve`] and [`library`] need the real Spotify
-//! client. That is what decides which IoEvent lane a DJ event belongs on — see
-//! `crate::infra::network::mod` (`runs_on_service_lane`), whose service lane
-//! builds its `Network` with `None` for the client.
+//! only ever touch `App`, while [`resolve`] needs the real Spotify client. That
+//! is why the DJ's IoEvents land on two different lanes — see
+//! `crate::infra::network::mod` (`runs_on_service_lane`).
 
 // `dj-core` is an implementation feature with no consumer of its own — it exists
 // to be pulled in by `mcp-server` and `ai-dj`, exactly as `audio-decode` is
 // pulled in by the media sources. Enabled on its own, everything here is
 // legitimately unreachable, so scope the allow to that case rather than blanket
 // it (cf. `#[cfg_attr(not(feature = "scripting"), allow(dead_code))]` in
-// `infra::network`). Deliberately still `not(mcp-server)` rather than
-// `not(any(mcp-server, ai-dj))`: an `ai-dj` build has the DJ's brains but not yet
-// the screen that drives them, so the allow has to stay active there too. It
-// grows its `ai-dj` arm when that screen lands.
-#![cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
+// `infra::network`).
+#![cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
 
-/// The in-TUI DJ's model backends.
-// Nothing drives them yet; the DJ screen, the next PR in this stack, is the consumer.
+/// The in-TUI DJ's turn loop: brain, tools, repeat.
 #[cfg(feature = "ai-dj")]
-#[allow(dead_code)]
+pub mod agent;
+/// The in-TUI DJ's model backends.
+#[cfg(feature = "ai-dj")]
 pub mod brain;
 pub mod brief;
 /// How a tool call reaches the live player. Shared by both front doors, and
@@ -42,15 +39,11 @@ pub mod exec;
 pub mod library;
 pub mod resolve;
 /// Turn assembly for the in-TUI DJ.
-// Nothing drives it yet; the DJ screen, the next PR in this stack, is the consumer.
 #[cfg(feature = "ai-dj")]
-#[allow(dead_code)]
 pub mod session;
 /// What AI the listener has, and which of its models: the data behind the DJ's
 /// setup picker.
-// Nothing draws it yet; the DJ screen, the next PR in this stack, is the consumer.
 #[cfg(feature = "ai-dj")]
-#[allow(dead_code)]
 pub mod setup;
 /// The tool surface, shared by both front doors: the MCP server publishes it
 /// verbatim, and the in-TUI DJ's agent loop drives the same table.
@@ -132,8 +125,7 @@ impl DjSuggestion {
 }
 
 /// Who said a line in the DJ transcript.
-// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DjSpeaker {
   User,
@@ -143,16 +135,14 @@ pub enum DjSpeaker {
   System,
 }
 
-// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DjLine {
   pub speaker: DjSpeaker,
   pub text: String,
 }
 
-// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 impl DjLine {
   pub fn user(text: impl Into<String>) -> Self {
     Self {
@@ -181,8 +171,7 @@ impl DjLine {
 /// (`App::add_track_to_native_queue`); a deep queue cannot respond to a vibe
 /// shift; and one model invocation per batch (rather than per track) is what
 /// keeps latency and subscription usage sane.
-// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 pub const DEFAULT_BATCH: usize = 6;
 pub const MAX_BATCH: usize = 8;
 
@@ -190,13 +179,11 @@ pub const MAX_BATCH: usize = 8;
 /// 6–8 minutes of runway, comfortably more than the worst case for a refill:
 /// `agent::MAX_STEPS_MUST_ACT` brain calls at `behavior.dj_agent_timeout_secs`
 /// each. That bound is why a refill gets fewer steps than a conversation.
-// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 pub const QUEUE_LOW_WATER: usize = 2;
 
 /// Everything the DJ keeps on `App`.
-// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 #[derive(Clone, Debug, Default)]
 pub struct DjState {
   /// Whether the DJ keeps the queue topped up as tracks finish.
@@ -255,6 +242,18 @@ pub struct DjState {
   /// A crawl is in flight. Guards against a second one being dispatched behind it
   /// (the toggle and the first turn can both ask).
   pub library_indexing: bool,
+  /// The backend/model picker, when it is open. `None` = closed.
+  ///
+  /// DJ-local rather than `app.dialog`: a `DialogContext::DjSetup` variant would
+  /// force `#[cfg(feature = "ai-dj")]` arms into `draw_dialog`'s exhaustive match,
+  /// `handle_escape` and `mouse.rs`, and `app.dialog` is an `Option<String>` that
+  /// could not carry a two-step cursor anyway.
+  ///
+  /// Gated one level finer than the struct around it (`dj-core`), which is safe
+  /// because neither `App` initializer names the field and `Default` is derived.
+  /// That is what lets the picker's types live in an `ai-dj`-only module.
+  #[cfg(feature = "ai-dj")]
+  pub setup: Option<setup::DjSetup>,
 }
 
 impl DjState {
@@ -270,8 +269,7 @@ impl DjState {
   ///
   /// Every path that starts a turn goes through here, so the returned value is
   /// the one thing allowed to clear `thinking` again.
-  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-  #[allow(dead_code)]
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn begin_turn(&mut self) -> u64 {
     self.thinking = true;
     self.turn_seq = self.turn_seq.wrapping_add(1);
@@ -279,8 +277,7 @@ impl DjState {
   }
 
   /// Clear the progress flag, but only if `seq` still owns it.
-  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-  #[allow(dead_code)]
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn finish_turn(&mut self, seq: u64) {
     if self.turn_seq == seq {
       self.thinking = false;
@@ -288,8 +285,7 @@ impl DjState {
     }
   }
 
-  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-  #[allow(dead_code)]
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn push_line(&mut self, line: DjLine) {
     self.transcript.push(line);
     // The transcript is a conversation, not a log; an unbounded Vec here would
@@ -301,8 +297,16 @@ impl DjState {
     }
   }
 
-  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-  #[allow(dead_code)]
+  /// Close the picker, resetting every part of it together.
+  ///
+  /// One named dismissal path, so a step and a cursor can never be left
+  /// half-finished for the next open to render.
+  #[cfg(feature = "ai-dj")]
+  pub fn close_setup(&mut self) {
+    self.setup = None;
+  }
+
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn take_input(&mut self) -> String {
     let text = self.input.iter().collect::<String>();
     self.input.clear();
@@ -375,4 +379,37 @@ mod tests {
     };
     assert_eq!(suggestion.label(), "Nude — Radiohead");
   }
+}
+
+/// Payload for `IoEvent::AskDj`.
+#[cfg(feature = "ai-dj")]
+pub struct AskDjRequest {
+  /// A one-shot steer for the brain that is **not** in the transcript.
+  ///
+  /// The caller owns the transcript: whatever the listener typed is pushed by the
+  /// handler before this event is dispatched, and reaches the brain through the
+  /// conversation history that `session::turn_context` builds from it. Pushing it
+  /// here as well is what produced the doubled `you` line. Use this field only for
+  /// an instruction the listener never typed, such as the vibe shift's "change
+  /// direction" — those are deliberately transient and do not persist into later
+  /// turns' history.
+  pub extra_instruction: Option<String>,
+  /// Generation this turn was dispatched for. Re-checked before anything is
+  /// queued so a turn the user has since abandoned is dropped.
+  pub generation: u64,
+  /// Whether this turn must end in music rather than words.
+  ///
+  /// Set for an auto-queue refill and a vibe shift. Both run with nobody watching
+  /// the screen, where a clarifying question is indistinguishable from a hang.
+  pub must_act: bool,
+  /// Which turn this is, from [`DjState::begin_turn`]. Only this turn may clear
+  /// the progress flag when it ends.
+  pub turn_seq: u64,
+  /// What to store as the standing auto-queue direction, but only if the turn
+  /// actually queues something.
+  ///
+  /// Conditional because the DJ can now hold a conversation: setting it
+  /// unconditionally made "what have I been listening to?" the vibe every later
+  /// refill followed.
+  pub vibe_on_success: Option<String>,
 }

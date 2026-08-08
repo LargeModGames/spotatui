@@ -47,8 +47,7 @@ impl AppExecutor {
   }
 
   /// For the in-TUI DJ, which reports its own tool calls in the transcript.
-  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
-  #[allow(dead_code)]
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn silent(app: Arc<Mutex<App>>, io_tx: Sender<IoEvent>) -> Self {
     Self {
       app,

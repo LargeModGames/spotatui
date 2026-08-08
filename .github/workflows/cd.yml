@@ -79,9 +79,9 @@ jobs:
       - name: Build release binary
         run: |
           if [ -z "${{ matrix.audio_features }}" ]; then
-            cargo build --release --target ${{ matrix.target }} --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server
+            cargo build --release --target ${{ matrix.target }} --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj
           else
-            cargo build --release --target ${{ matrix.target }} --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,${{ matrix.audio_features }}
+            cargo build --release --target ${{ matrix.target }} --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,${{ matrix.audio_features }}
           fi
         shell: bash
 

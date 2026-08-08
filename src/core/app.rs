@@ -64,31 +64,37 @@ use rspotify::model::{
 
 use crate::infra::queue::RepeatMode;
 
-/// Sidebar library entries. The "Local Files" entry only appears when the
-/// `local-files` feature is built in (otherwise there is nothing to browse).
-#[cfg(feature = "local-files")]
-pub const LIBRARY_OPTIONS: [&str; 9] = [
-  "Discover",
-  "Recently Played",
-  "Friends",
-  "Stats",
-  "Liked Songs",
-  "Albums",
-  "Artists",
-  "Podcasts",
-  "Local Files",
-];
-#[cfg(not(feature = "local-files"))]
-pub const LIBRARY_OPTIONS: [&str; 8] = [
-  "Discover",
-  "Recently Played",
-  "Friends",
-  "Stats",
-  "Liked Songs",
-  "Albums",
-  "Artists",
-  "Podcasts",
-];
+/// Sidebar library entries.
+///
+/// Built at first use rather than declared as a `const` per feature combination.
+/// Feature-gated rows ("Local Files", "AI DJ") used to mean one `#[cfg]` arm per
+/// combination, which is a cartesian product that doubles with every new gated
+/// row; composing the list instead stays linear. Callers should look entries up
+/// by name (`iter().position(...)`) rather than by index, since the index depends
+/// on which features are built in.
+pub fn library_options() -> &'static [&'static str] {
+  static OPTIONS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+  OPTIONS.get_or_init(|| {
+    // `mut` is only used by the gated pushes below, so a build with neither
+    // feature would otherwise warn.
+    #[allow(unused_mut)]
+    let mut options = vec![
+      "Discover",
+      "Recently Played",
+      "Friends",
+      "Stats",
+      "Liked Songs",
+      "Albums",
+      "Artists",
+      "Podcasts",
+    ];
+    #[cfg(feature = "local-files")]
+    options.push("Local Files");
+    #[cfg(feature = "ai-dj")]
+    options.push("AI DJ");
+    options
+  })
+}
 
 const DEFAULT_ROUTE: Route = Route {
   id: RouteId::Home,
@@ -323,6 +329,9 @@ pub enum ActiveBlock {
   Friends,
   LocalBrowser,
   Stats,
+  /// The AI DJ screen's prompt + transcript.
+  #[cfg(feature = "ai-dj")]
+  AiDj,
   /// A plugin-registered custom screen (the screen name lives in
   /// [`RouteId::PluginScreen`]; `ActiveBlock` is `Copy` and can't carry it).
   /// Only script effects construct it.
@@ -369,8 +378,13 @@ pub enum RouteId {
   Party,
   CreatePlaylist,
   Friends,
+  /// Only reachable when `local-files` is built in (the sidebar row that opens it
+  /// is gated on that feature).
+  #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
   LocalBrowser,
   Stats,
+  #[cfg(feature = "ai-dj")]
+  AiDj,
   /// A plugin-registered custom screen, keyed by its registered name.
   /// Only script effects construct it.
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
@@ -2231,6 +2245,10 @@ impl App {
     // Read the persisted active source before moving runtime_state into the struct,
     // so the restored value overrides the Source::default() set by App::default().
     let active_source = runtime_state.active_source;
+    // Same reason: read before the move. The config only seeds the DJ's filter;
+    // the toggle owns it from then on.
+    #[cfg(feature = "ai-dj")]
+    let dj_avoid_library = user_config.behavior.dj_avoid_library;
     // Resolve configurable per-context default sort states. Config validation
     // already rejected invalid specs at load time, so parse failure here is a
     // defensive fallback to the built-in default sort.
@@ -2290,6 +2308,11 @@ impl App {
       album_sort,
       artist_sort,
       recently_played_sort,
+      #[cfg(feature = "ai-dj")]
+      dj: crate::infra::dj::DjState {
+        avoid_library: dj_avoid_library,
+        ..crate::infra::dj::DjState::default()
+      },
       ..App::default()
     }
   }
@@ -2335,6 +2358,22 @@ impl App {
         println!("Error from dispatch {}", e);
         // TODO: handle error
       };
+    }
+  }
+
+  /// [`Self::dispatch`] without setting `is_loading`.
+  ///
+  /// For work with its own progress surface. A DJ brain call runs for up to
+  /// `dj_agent_timeout_secs` (minutes), and `dispatch` would pin the global
+  /// spinner until the service-lane task finishes — the exact UX bug
+  /// `DjState::thinking` exists to avoid, and the reason the MCP executor sends
+  /// straight down the channel instead of dispatching.
+  #[cfg(feature = "ai-dj")]
+  pub fn dispatch_without_spinner(&self, action: IoEvent) {
+    if let Some(io_tx) = &self.io_tx {
+      if let Err(e) = io_tx.send(action) {
+        log::warn!("dispatch_without_spinner failed (shutting down?): {e}");
+      }
     }
   }
 
@@ -4549,7 +4588,7 @@ impl App {
   /// The recently-played window is added by the caller from the taste brief;
   /// this covers only what `App` itself knows.
   #[cfg(feature = "dj-core")]
-  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
+  #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
   pub fn dj_skip_keys(&self) -> std::collections::HashSet<String> {
     use crate::infra::dj::dedupe_key;
     let mut keys: std::collections::HashSet<String> = self
@@ -4578,7 +4617,7 @@ impl App {
   /// here: they are set and replaced within one lock, before any draw, and the
   /// caller overwrites them with a single aggregate message afterwards.
   #[cfg(feature = "dj-core")]
-  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
+  #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
   pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> usize {
     let mut accepted = 0usize;
     for track in tracks {
@@ -4613,9 +4652,7 @@ impl App {
   /// by URI, so a track the user queued by hand *and* the DJ also picked goes
   /// too; that is the DJ's pick as much as theirs.
   #[cfg(feature = "dj-core")]
-  // Only the in-TUI DJ's vibe shift calls this; the allow narrows to
-  // `not(ai-dj)` once that front door lands.
-  #[allow(dead_code)]
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn drop_dj_queued_tracks(&mut self) -> usize {
     let dj_uris = std::mem::take(&mut self.dj.queued_uris);
     if dj_uris.is_empty() {

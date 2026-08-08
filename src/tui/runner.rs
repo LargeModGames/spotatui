@@ -286,6 +286,100 @@ fn help_menu_captures_key_before_back(app: &App, key: Key) -> bool {
       || (key == Key::Esc && !app.help_filter.is_empty()))
 }
 
+/// The DJ screen is a typing surface, exactly like `ActiveBlock::Input`, and the
+/// runner's back-key branch has to leave it alone for the same reason: the default
+/// back key is `q`, and both the prompt ("play me some Queen") and the picker's
+/// free-text model step ("qwen2.5-coder") need that character to be text. Without
+/// this the key never reaches `handle_app`, so the picker's "swallows everything"
+/// guarantee is void — the route pops out from under an open modal.
+///
+/// Leaving the screen still works: `ai_dj::handler` pops the stack on Esc once
+/// there is nothing left to abandon.
+#[cfg(feature = "ai-dj")]
+fn dj_captures_key_before_back(app: &App) -> bool {
+  app.get_current_route().active_block == ActiveBlock::AiDj
+}
+
+/// Blocks that must see the configurable back key *before* the runner acts on it
+/// themselves. Ordering is the whole point, so this is one predicate rather than
+/// two conditions spelled out at the call site: a screen that is missing here has
+/// its route popped instead of receiving the key, however well its own handler
+/// copes with it.
+fn key_reaches_handlers_before_back(app: &App, key: Key) -> bool {
+  #[cfg(feature = "ai-dj")]
+  if dj_captures_key_before_back(app) {
+    return true;
+  }
+  help_menu_captures_key_before_back(app, key)
+}
+
+/// One keypress, from the runner's event loop. Returns `true` when the user asked
+/// to quit and the loop must break.
+///
+/// Extracted from the loop so the ordering of these branches is testable: the bug
+/// this guards against is not "does the DJ handler cope with `q`" but "does `q`
+/// ever get as far as the DJ handler". `Key::Ctrl('c')` stays at the call site,
+/// because it is an unconditional quit that predates any of this.
+fn dispatch_key(key: Key, app: &mut App) -> bool {
+  let current_active_block = app.get_current_route().active_block;
+
+  if current_active_block == ActiveBlock::ExitPrompt {
+    match key {
+      Key::Enter | Key::Char('y') | Key::Char('Y') => {
+        app.close_io_channel();
+        return true;
+      }
+      Key::Esc | Key::Char('n') | Key::Char('N') => {
+        app.pop_navigation_stack();
+      }
+      _ if key == app.user_config.keys.back => {
+        app.pop_navigation_stack();
+      }
+      _ => {}
+    }
+  } else if current_active_block == ActiveBlock::Input {
+    handlers::input_handler(key, app);
+  } else if key_reaches_handlers_before_back(app, key) {
+    handlers::handle_app(key, app);
+  } else if key == app.user_config.keys.back {
+    if !back_key_clears_playlist_filter(app, current_active_block) {
+      if current_active_block == ActiveBlock::Settings {
+        handlers::handle_app(key, app);
+      } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
+        if let Some(dismissed_id) = app.dismiss_active_announcement() {
+          app.runtime_state.mark_announcement_seen(dismissed_id);
+          let patch = crate::core::state::PersistedRuntimeState::announcements(
+            &app.runtime_state.seen_announcement_ids,
+            &app.runtime_state.dismissed_announcements,
+          );
+          if let Err(error) = app.save_runtime_state(&patch) {
+            app.handle_error(anyhow!(
+              "Failed to persist dismissed announcement: {}",
+              error
+            ));
+          }
+        }
+
+        if app.active_announcement.is_none() {
+          app.pop_navigation_stack();
+        }
+      } else if app.get_current_route().active_block != ActiveBlock::Input {
+        let pop_result = match app.pop_navigation_stack() {
+          Some(ref x) if x.id == RouteId::Search => app.pop_navigation_stack(),
+          Some(x) => Some(x),
+          None => None,
+        };
+        if pop_result.is_none() {
+          app.push_navigation_stack(RouteId::ExitPrompt, ActiveBlock::ExitPrompt);
+        }
+      }
+    }
+  } else {
+    handlers::handle_app(key, app);
+  }
+  false
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -377,13 +471,18 @@ mod tests {
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   }
 
+  // Both help tests assert through `key_reaches_handlers_before_back`, the function
+  // the runner actually consults, rather than through
+  // `help_menu_captures_key_before_back` directly. On the Help route the two agree,
+  // but only the outer one fails when Help stops being wired into the gate at all,
+  // which is the way this protection would realistically be lost.
   #[test]
   fn help_filter_captures_back_key_while_editing() {
     let mut app = app();
     app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
     app.help_filter_editing = true;
 
-    assert!(help_menu_captures_key_before_back(
+    assert!(key_reaches_handlers_before_back(
       &app,
       app.user_config.keys.back
     ));
@@ -395,11 +494,64 @@ mod tests {
     app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
     app.help_filter = "volume".to_string();
 
-    assert!(help_menu_captures_key_before_back(&app, Key::Esc));
-    assert!(!help_menu_captures_key_before_back(
+    assert!(key_reaches_handlers_before_back(&app, Key::Esc));
+    assert!(!key_reaches_handlers_before_back(
       &app,
       app.user_config.keys.back
     ));
+  }
+
+  /// The default back key is `q`, and the DJ's free-text model step exists so an
+  /// Ollama user can type `qwen2.5-coder`. If the runner claims the key first, the
+  /// first character of that name closes the screen instead.
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn the_back_key_types_into_the_dj_picker_instead_of_closing_the_screen() {
+    use crate::infra::dj::setup::{DjSetup, DjSetupStep};
+
+    let mut app = app();
+    app.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
+    let mut setup = DjSetup::new(&app.user_config.behavior);
+    setup.step = DjSetupStep::Custom;
+    setup.custom.clear();
+    app.dj.setup = Some(setup);
+
+    assert_eq!(
+      app.user_config.keys.back,
+      Key::Char('q'),
+      "the default this test is about"
+    );
+    assert!(!dispatch_key(app.user_config.keys.back, &mut app));
+
+    assert_eq!(app.dj.setup.as_ref().unwrap().custom, "q");
+    assert_eq!(
+      app.get_current_route().id,
+      RouteId::AiDj,
+      "and the picker is still open on the screen it belongs to"
+    );
+  }
+
+  /// The other half of the same rule: exempting the DJ must not exempt everything
+  /// else. `q` on an ordinary screen still goes back.
+  #[test]
+  fn the_back_key_still_pops_the_route_outside_the_dj() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+
+    assert!(!dispatch_key(app.user_config.keys.back, &mut app));
+
+    assert_ne!(app.get_current_route().id, RouteId::TrackTable);
+  }
+
+  /// `y` at the exit prompt is the one keypress that ends the process, and the
+  /// runner's loop reads that from this return value now that the chain is a
+  /// function.
+  #[test]
+  fn confirming_the_exit_prompt_asks_the_loop_to_break() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::ExitPrompt, ActiveBlock::ExitPrompt);
+
+    assert!(dispatch_key(Key::Char('y'), &mut app));
   }
 }
 
@@ -831,61 +983,10 @@ pub async fn start_ui(
           break;
         }
 
-        let current_active_block = app.get_current_route().active_block;
-
-        if current_active_block == ActiveBlock::ExitPrompt {
-          match key {
-            Key::Enter | Key::Char('y') | Key::Char('Y') => {
-              app.close_io_channel();
-              break;
-            }
-            Key::Esc | Key::Char('n') | Key::Char('N') => {
-              app.pop_navigation_stack();
-            }
-            _ if key == app.user_config.keys.back => {
-              app.pop_navigation_stack();
-            }
-            _ => {}
-          }
-        } else if current_active_block == ActiveBlock::Input {
-          handlers::input_handler(key, &mut app);
-        } else if help_menu_captures_key_before_back(&app, key) {
-          handlers::handle_app(key, &mut app);
-        } else if key == app.user_config.keys.back {
-          if !back_key_clears_playlist_filter(&mut app, current_active_block) {
-            if current_active_block == ActiveBlock::Settings {
-              handlers::handle_app(key, &mut app);
-            } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
-              if let Some(dismissed_id) = app.dismiss_active_announcement() {
-                app.runtime_state.mark_announcement_seen(dismissed_id);
-                let patch = crate::core::state::PersistedRuntimeState::announcements(
-                  &app.runtime_state.seen_announcement_ids,
-                  &app.runtime_state.dismissed_announcements,
-                );
-                if let Err(error) = app.save_runtime_state(&patch) {
-                  app.handle_error(anyhow!(
-                    "Failed to persist dismissed announcement: {}",
-                    error
-                  ));
-                }
-              }
-
-              if app.active_announcement.is_none() {
-                app.pop_navigation_stack();
-              }
-            } else if app.get_current_route().active_block != ActiveBlock::Input {
-              let pop_result = match app.pop_navigation_stack() {
-                Some(ref x) if x.id == RouteId::Search => app.pop_navigation_stack(),
-                Some(x) => Some(x),
-                None => None,
-              };
-              if pop_result.is_none() {
-                app.push_navigation_stack(RouteId::ExitPrompt, ActiveBlock::ExitPrompt);
-              }
-            }
-          }
-        } else {
-          handlers::handle_app(key, &mut app);
+        // `break` before the scripting hook below, not after: a quit must not run
+        // one more round of pending plugin commands on its way out.
+        if dispatch_key(key, &mut app) {
+          break;
         }
         #[cfg(feature = "scripting")]
         if let Some(engine) = script_engine.as_mut() {
@@ -1050,6 +1151,29 @@ pub async fn start_ui(
           };
           if advance {
             app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
+          }
+        }
+
+        // Auto-queue refill. Dispatch only: this path holds `&mut App`, so the
+        // brain call itself must happen on the detached service lane. The
+        // generation goes along for the ride so a refill the user has since
+        // abandoned (DJ off, vibe shift, source change) can be dropped when it
+        // lands instead of queueing tracks for a session that is gone.
+        #[cfg(feature = "ai-dj")]
+        {
+          if crate::infra::network::dj::wants_top_up(
+            app.native_queue.len(),
+            &app.dj,
+            app.spotify_external_device_active(),
+          ) {
+            let turn_seq = app.dj.begin_turn();
+            let generation = app.dj.generation;
+            // Not `dispatch`: that pins the global `is_loading` spinner until the
+            // service-lane task finishes, which for a brain call is minutes. The
+            // DJ's own `thinking` flag is the progress surface here.
+            app.dispatch_without_spinner(crate::infra::network::IoEvent::DjTopUp(
+              generation, turn_seq,
+            ));
           }
         }
 

@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, App, LIBRARY_OPTIONS};
+use crate::core::app::{library_options, ActiveBlock, App};
 use crate::core::layout::{is_wide_layout, library_constraints, split_input_help_and_settings};
 use crate::core::source::Source;
 use ratatui::{
@@ -19,7 +19,7 @@ pub fn draw_library_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     app,
     layout_chunk,
     "Library",
-    &LIBRARY_OPTIONS,
+    library_options(),
     highlight_state,
     Some(app.library.selected_index),
   );
