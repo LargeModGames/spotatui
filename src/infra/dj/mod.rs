@@ -19,21 +19,39 @@
 // pulled in by the media sources. Enabled on its own, everything here is
 // legitimately unreachable, so scope the allow to that case rather than blanket
 // it (cf. `#[cfg_attr(not(feature = "scripting"), allow(dead_code))]` in
-// `infra::network`). The condition grows an `ai-dj` arm when that front door
-// lands.
+// `infra::network`). Deliberately still `not(mcp-server)` rather than
+// `not(any(mcp-server, ai-dj))`: an `ai-dj` build has the DJ's brains but not yet
+// the screen that drives them, so the allow has to stay active there too. It
+// grows its `ai-dj` arm when that screen lands.
 #![cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
 
+/// The in-TUI DJ's model backends.
+// Nothing drives them yet; the DJ screen, the next PR in this stack, is the consumer.
+#[cfg(feature = "ai-dj")]
+#[allow(dead_code)]
+pub mod brain;
 pub mod brief;
 /// How a tool call reaches the live player. Shared by both front doors, and
 /// gated on having one: it constructs `IoEvent::DjToolCall`, which bare
 /// `dj-core` does not compile.
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 pub mod exec;
 /// The avoid-library filter's two lookups. Shared: the in-TUI DJ filters with it
 /// by default, and the MCP front door uses it to mark `search_tracks` results as
 /// owned and to honour `queue_tracks(exclude_owned)`.
 pub mod library;
 pub mod resolve;
+/// Turn assembly for the in-TUI DJ.
+// Nothing drives it yet; the DJ screen, the next PR in this stack, is the consumer.
+#[cfg(feature = "ai-dj")]
+#[allow(dead_code)]
+pub mod session;
+/// What AI the listener has, and which of its models: the data behind the DJ's
+/// setup picker.
+// Nothing draws it yet; the DJ screen, the next PR in this stack, is the consumer.
+#[cfg(feature = "ai-dj")]
+#[allow(dead_code)]
+pub mod setup;
 /// The tool surface, shared by both front doors: the MCP server publishes it
 /// verbatim, and the in-TUI DJ's agent loop drives the same table.
 pub mod tools;

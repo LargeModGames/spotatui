@@ -8,18 +8,18 @@
 use super::Network;
 use crate::core::plugin_api::TrackInfo;
 use crate::infra::dj::resolve::{self, ResolveReport};
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use crate::infra::dj::tools::{DjToolCall, QueueItem, ToolOutcome};
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use crate::infra::dj::MAX_BATCH;
 use crate::infra::dj::{library, DjLibrary, DjLine, DjSuggestion};
 use crate::infra::network::IoEvent;
 use rspotify::model::track::FullTrack;
 use serde::Deserialize;
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use serde_json::json;
 use std::collections::HashSet;
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use tokio::sync::oneshot;
 
 #[derive(Deserialize, Debug)]
@@ -28,7 +28,7 @@ struct TracksResponse {
 }
 
 /// The tool handlers behind `DjToolCall`, shared by both front doors.
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 impl Network {
   /// Run a DJ tool call that needs the catalogue, and answer the waiting caller.
   ///
@@ -260,8 +260,9 @@ impl Network {
       app.extend_native_queue_from_dj(std::mem::take(&mut report.resolved))
     };
     // After the block, not inside it: the network layer's helper takes the lock
-    // itself.
-    self.show_status_message(format!("MCP: {summary}"), 5).await;
+    // itself. "DJ:", not "MCP:", because this handler serves both front doors and
+    // `DjToolCall` does not carry which one asked.
+    self.show_status_message(format!("DJ: {summary}"), 5).await;
 
     let mut text = format!("Queued {accepted} track(s):\n{}", queued_labels.join("\n"));
     // Report the misses explicitly: MCP clients feed execution detail back to
@@ -431,7 +432,7 @@ impl Network {
 /// `"; "` between reasons: that is already the separator *within* a bucket, and a
 /// track label is `"Title — Artist"`, so neither semicolons nor dashes can
 /// separate the groups unambiguously.
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 fn nothing_queued_detail(report: &ResolveReport) -> String {
   let mut reasons = Vec::new();
   if !report.unresolved.is_empty() {
@@ -457,7 +458,7 @@ fn nothing_queued_detail(report: &ResolveReport) -> String {
 
 /// What `search_tracks` was able to work out about ownership for one page of
 /// results.
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 struct Ownership {
   /// Track IDs the listener already has.
   owned: HashSet<String>,
@@ -472,7 +473,7 @@ impl Network {
   /// Look up exact Spotify URIs so the queue shows real titles rather than raw
   /// URIs. Non-Spotify URIs are queued as-is, since only their own source can
   /// describe them.
-  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
+  #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
   async fn tracks_for_uris(&self, uris: &[String]) -> (Vec<TrackInfo>, Vec<String>) {
     let mut resolved = Vec::new();
     let mut missing = Vec::new();
@@ -692,7 +693,7 @@ impl Network {
 }
 
 /// Tests for the shared tool handlers, which exist under either front door.
-#[cfg(all(test, feature = "mcp-server"))]
+#[cfg(all(test, any(feature = "mcp-server", feature = "ai-dj")))]
 mod tests {
   use super::*;
   use crate::core::app::App;

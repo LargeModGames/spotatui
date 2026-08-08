@@ -49,7 +49,7 @@ pub fn queue_item_source(uri: &str) -> QueueItemSource {
 /// track at all, so the content after the prefix has to be non-empty: a model
 /// that emits the prefix and stops must be told the argument is wrong rather
 /// than have an empty handle queued for it.
-#[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
 pub fn is_playable_track_uri(uri: &str) -> bool {
   ["spotify:track:", "file:", "subsonic:", "youtube:"]
     .iter()
@@ -74,7 +74,7 @@ pub fn is_playable_track_uri(uri: &str) -> bool {
 /// plays through the Web API on an external Connect device, so
 /// [`source_available`]'s stricter answer (which is about the *native* player)
 /// would refuse a URI that works.
-#[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
 pub fn missing_source_feature(uri: &str) -> Option<&'static str> {
   let source = queue_item_source(uri);
   if source == QueueItemSource::Spotify || source_available(source) {

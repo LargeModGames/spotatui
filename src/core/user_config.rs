@@ -800,6 +800,26 @@ pub struct BehaviorConfigString {
   pub playbar_cover_art_size_percent: Option<u16>,
   #[cfg(feature = "mcp-server")]
   pub mcp_enabled: Option<bool>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_backend: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_command: Option<Vec<String>>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_prompt_via: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_timeout_secs: Option<u64>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_model: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_model: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_base_url: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_api_key: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_batch_size: Option<usize>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_history_period: Option<String>,
   pub keepawake_enabled: Option<bool>,
   pub enable_media_keys: Option<bool>,
   pub sync_token: Option<String>,
@@ -897,6 +917,54 @@ pub struct BehaviorConfig {
   /// `~/.config/spotatui/mcp.json`.
   #[cfg(feature = "mcp-server")]
   pub mcp_enabled: bool,
+  /// Which DJ brain to use: `agent_cli`, `anthropic`, or `openai_compat`.
+  #[cfg(feature = "ai-dj")]
+  pub dj_backend: String,
+  /// argv for the `agent_cli` backend. A config field rather than a hardcoded
+  /// table so any headless agent works and spotatui never tracks their flags.
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_command: Vec<String>,
+  /// How the prompt reaches that CLI: `stdin` or `arg`.
+  ///
+  /// `None` means "unset: the preset decides". It has to be optional, because a
+  /// resolved `String` here can never fall through to the preset's own mode, and
+  /// getting it wrong is not cosmetic: `agy` ignores stdin entirely, so a prompt
+  /// written there is silently dropped and the DJ answers something else.
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_prompt_via: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_timeout_secs: u64,
+  /// Model for the `agent_cli` backend, passed as that CLI's own model flag
+  /// (`claude --model haiku`).
+  ///
+  /// Separate from [`Self::dj_model`] on purpose: they are different namespaces.
+  /// `dj_model` is an API model id billed per token; this is a CLI alias spent
+  /// against the subscription the CLI is already logged into. One field would make
+  /// `claude-haiku-4-5` and `haiku` interchangeable, and they are not.
+  #[cfg(feature = "ai-dj")]
+  pub dj_agent_model: Option<String>,
+  /// Model id for the API backends (`anthropic`, `openai_compat`).
+  #[cfg(feature = "ai-dj")]
+  pub dj_model: Option<String>,
+  /// Base URL for `openai_compat`. Defaults to Ollama's local endpoint.
+  #[cfg(feature = "ai-dj")]
+  pub dj_base_url: Option<String>,
+  /// API key for the HTTP backends.
+  ///
+  /// **Stored in plaintext in the YAML config** — prefer the
+  /// `SPOTATUI_DJ_API_KEY` environment variable, which overrides this field at
+  /// request time and is never written to disk. The config directory is `0700`
+  /// on unix and carries a `.gitignore`, but a plaintext secret is still a
+  /// plaintext secret.
+  #[cfg(feature = "ai-dj")]
+  pub dj_api_key: Option<String>,
+  /// How many tracks the DJ queues per round. Clamped to the resolver's cap.
+  #[cfg(feature = "ai-dj")]
+  pub dj_batch_size: usize,
+  /// History window the taste brief summarises: `7d`, `30d`, `month`, `year`,
+  /// `all`.
+  #[cfg(feature = "ai-dj")]
+  pub dj_history_period: String,
   pub keepawake_enabled: bool,
   /// When false, spotatui ignores OS media-control commands (headphone
   /// play/pause/skip buttons, media keys, MPRIS/SMTC/Now Playing, playerctl).
@@ -953,6 +1021,25 @@ pub struct BehaviorConfig {
   pub library_height_percent: Option<u8>,
   pub small_terminal_width: u16,
   pub small_terminal_height: u16,
+}
+
+/// The DJ brains a config may name. Module-level rather than a local `const` in
+/// the load validator so the validator and the picker cannot drift apart.
+#[cfg(feature = "ai-dj")]
+pub const DJ_BACKENDS: [&str; 3] = ["agent_cli", "anthropic", "openai_compat"];
+
+/// The shipped default backend.
+#[cfg(feature = "ai-dj")]
+pub const DEFAULT_DJ_BACKEND: &str = "agent_cli";
+
+/// The shipped default `agent_cli` argv.
+///
+/// A function rather than a `const` because it allocates, and one source of truth
+/// so nothing else has to keep a second copy of the argv spotatui ships in step
+/// with this one.
+#[cfg(feature = "ai-dj")]
+pub fn default_dj_agent_command() -> Vec<String> {
+  vec!["claude".to_string(), "-p".to_string()]
 }
 
 impl BehaviorConfig {
@@ -1211,6 +1298,28 @@ impl UserConfig {
         playbar_cover_art_size_percent: 100,
         #[cfg(feature = "mcp-server")]
         mcp_enabled: false,
+        #[cfg(feature = "ai-dj")]
+        dj_backend: DEFAULT_DJ_BACKEND.to_string(),
+        #[cfg(feature = "ai-dj")]
+        dj_agent_command: default_dj_agent_command(),
+        // Unset, so the preset's own delivery mode applies. Pinning "stdin" here
+        // would silently break `agy`, which reads the prompt from argv only.
+        #[cfg(feature = "ai-dj")]
+        dj_agent_prompt_via: None,
+        #[cfg(feature = "ai-dj")]
+        dj_agent_timeout_secs: 90,
+        #[cfg(feature = "ai-dj")]
+        dj_agent_model: None,
+        #[cfg(feature = "ai-dj")]
+        dj_model: None,
+        #[cfg(feature = "ai-dj")]
+        dj_base_url: None,
+        #[cfg(feature = "ai-dj")]
+        dj_api_key: None,
+        #[cfg(feature = "ai-dj")]
+        dj_batch_size: crate::infra::dj::DEFAULT_BATCH,
+        #[cfg(feature = "ai-dj")]
+        dj_history_period: "30d".to_string(),
         keepawake_enabled: true,
         enable_media_keys: true,
         sync_token: None,
@@ -1617,6 +1726,84 @@ impl UserConfig {
     #[cfg(feature = "mcp-server")]
     if let Some(mcp_enabled) = behavior_config.mcp_enabled {
       self.behavior.mcp_enabled = mcp_enabled;
+    }
+    #[cfg(feature = "ai-dj")]
+    {
+      if let Some(dj_backend) = behavior_config.dj_backend {
+        let normalized = dj_backend.trim().to_ascii_lowercase();
+        if DJ_BACKENDS.contains(&normalized.as_str()) {
+          self.behavior.dj_backend = normalized;
+        } else {
+          log::warn!(
+            "behavior.dj_backend '{dj_backend}' is not one of {DJ_BACKENDS:?}; keeping '{}'",
+            self.behavior.dj_backend
+          );
+        }
+      }
+      if let Some(dj_agent_command) = behavior_config.dj_agent_command {
+        // Only argv[0] has to be a real word: it is the program to exec, and a
+        // blank one reaches `spawn` as a confusing ENOENT. Later arguments are
+        // left alone, since a CLI can legitimately take an empty one.
+        if dj_agent_command
+          .first()
+          .is_some_and(|program| !program.trim().is_empty())
+        {
+          self.behavior.dj_agent_command = dj_agent_command;
+        } else {
+          log::warn!("behavior.dj_agent_command has no program to run; keeping the default");
+        }
+      }
+      if let Some(dj_agent_prompt_via) = behavior_config.dj_agent_prompt_via {
+        match crate::infra::dj::brain::agent_cli::PromptDelivery::from_config_str(
+          &dj_agent_prompt_via,
+        ) {
+          // Store the canonical form, so `arg`/`argv`/`last-arg` all read back the
+          // same way.
+          Some(delivery) => {
+            self.behavior.dj_agent_prompt_via = Some(delivery.to_config_str().to_string())
+          }
+          None => log::warn!(
+            "behavior.dj_agent_prompt_via '{dj_agent_prompt_via}' is not 'stdin' or 'arg';              keeping '{}'",
+            self
+              .behavior
+              .dj_agent_prompt_via
+              .as_deref()
+              .unwrap_or("unset")
+          ),
+        }
+      }
+      if let Some(secs) = behavior_config.dj_agent_timeout_secs {
+        // A sub-second timeout would kill every agent before it started.
+        self.behavior.dj_agent_timeout_secs = secs.clamp(5, 600);
+      }
+      if let Some(dj_agent_model) = behavior_config.dj_agent_model {
+        self.behavior.dj_agent_model =
+          Some(dj_agent_model).filter(|model| !model.trim().is_empty());
+      }
+      if let Some(dj_model) = behavior_config.dj_model {
+        self.behavior.dj_model = Some(dj_model).filter(|model| !model.trim().is_empty());
+      }
+      if let Some(dj_base_url) = behavior_config.dj_base_url {
+        self.behavior.dj_base_url = Some(dj_base_url).filter(|url| !url.trim().is_empty());
+      }
+      if let Some(dj_api_key) = behavior_config.dj_api_key {
+        self.behavior.dj_api_key = Some(dj_api_key).filter(|key| !key.trim().is_empty());
+      }
+      if let Some(dj_batch_size) = behavior_config.dj_batch_size {
+        self.behavior.dj_batch_size = dj_batch_size.clamp(1, crate::infra::dj::MAX_BATCH);
+      }
+      if let Some(dj_history_period) = behavior_config.dj_history_period {
+        const PERIODS: [&str; 5] = ["7d", "30d", "month", "year", "all"];
+        let normalized = dj_history_period.trim().to_ascii_lowercase();
+        if PERIODS.contains(&normalized.as_str()) {
+          self.behavior.dj_history_period = normalized;
+        } else {
+          log::warn!(
+            "behavior.dj_history_period '{dj_history_period}' is not one of {PERIODS:?};              keeping '{}'",
+            self.behavior.dj_history_period
+          );
+        }
+      }
     }
     if let Some(keepawake_enabled) = behavior_config.keepawake_enabled {
       self.behavior.keepawake_enabled = keepawake_enabled;
@@ -2094,6 +2281,28 @@ impl UserConfig {
       playbar_cover_art_size_percent: Some(self.behavior.playbar_cover_art_size_percent),
       #[cfg(feature = "mcp-server")]
       mcp_enabled: Some(self.behavior.mcp_enabled),
+      #[cfg(feature = "ai-dj")]
+      dj_backend: Some(self.behavior.dj_backend.clone()),
+      #[cfg(feature = "ai-dj")]
+      dj_agent_command: Some(self.behavior.dj_agent_command.clone()),
+      // Passed through rather than wrapped in `Some`: it is already an `Option`,
+      // and `null` on disk is what lets the preset decide.
+      #[cfg(feature = "ai-dj")]
+      dj_agent_prompt_via: self.behavior.dj_agent_prompt_via.clone(),
+      #[cfg(feature = "ai-dj")]
+      dj_agent_timeout_secs: Some(self.behavior.dj_agent_timeout_secs),
+      #[cfg(feature = "ai-dj")]
+      dj_agent_model: self.behavior.dj_agent_model.clone(),
+      #[cfg(feature = "ai-dj")]
+      dj_model: self.behavior.dj_model.clone(),
+      #[cfg(feature = "ai-dj")]
+      dj_base_url: self.behavior.dj_base_url.clone(),
+      #[cfg(feature = "ai-dj")]
+      dj_api_key: self.behavior.dj_api_key.clone(),
+      #[cfg(feature = "ai-dj")]
+      dj_batch_size: Some(self.behavior.dj_batch_size),
+      #[cfg(feature = "ai-dj")]
+      dj_history_period: Some(self.behavior.dj_history_period.clone()),
       keepawake_enabled: Some(self.behavior.keepawake_enabled),
       enable_media_keys: Some(self.behavior.enable_media_keys),
       // --- Phase 2/3/6 new fields (persist whatever the user set) ---
@@ -2711,6 +2920,154 @@ mod tests {
       serde_yaml::from_str("playbar_cover_art_size_percent: 250").unwrap();
     config.load_behaviorconfig(behavior).unwrap();
     assert_eq!(config.behavior.playbar_cover_art_size_percent, 200);
+  }
+
+  /// A config written by a build *with* the DJ features must still load in a
+  /// build without them, and vice versa.
+  ///
+  /// This is a real cross-build hazard, not a hypothetical: a user can save from
+  /// the Settings screen on an `ai-dj` build and then run a slim release binary.
+  /// `BehaviorConfigString` has no `deny_unknown_fields`, so serde ignores keys it
+  /// does not know — this test is what keeps that true if the derive ever changes.
+  #[test]
+  fn unknown_behavior_keys_are_ignored_rather_than_fatal() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    // Every DJ/MCP key, as an `ai-dj` + `mcp-server` build would write them,
+    // alongside a key that no build has ever had.
+    let yaml = "
+mcp_enabled: true
+dj_backend: openai_compat
+dj_agent_command:
+  - claude
+  - -p
+dj_agent_prompt_via: stdin
+dj_agent_timeout_secs: 120
+dj_agent_model: haiku
+dj_model: some-model
+dj_base_url: http://localhost:11434/v1
+dj_api_key: secret
+dj_batch_size: 7
+dj_history_period: 7d
+dj_configured: true
+a_key_from_the_future: 42
+volume_increment: 5
+";
+    let parsed: BehaviorConfigString =
+      serde_yaml::from_str(yaml).expect("unknown keys must not fail the parse");
+    // The key every build does understand still came through.
+    assert_eq!(parsed.volume_increment, Some(5));
+
+    // And the merge accepts it without erroring.
+    let mut config = UserConfig::new();
+    config
+      .load_behaviorconfig(parsed)
+      .expect("loading must not fail");
+    assert_eq!(config.behavior.volume_increment, 5);
+  }
+
+  /// The DJ keys a build *does* understand survive a save/load round trip.
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn dj_behavior_keys_round_trip_through_yaml() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    let mut config = UserConfig::new();
+    config.behavior.dj_backend = "openai_compat".to_string();
+    config.behavior.dj_batch_size = 7;
+    config.behavior.dj_history_period = "7d".to_string();
+    config.behavior.dj_agent_command = vec!["codex".to_string()];
+    config.behavior.dj_agent_prompt_via = Some("arg".to_string());
+    config.behavior.dj_agent_model = Some("haiku".to_string());
+    config.behavior.dj_agent_timeout_secs = 240;
+    config.behavior.dj_model = Some("some-model".to_string());
+    config.behavior.dj_base_url = Some("http://localhost:1234/v1".to_string());
+    config.behavior.dj_api_key = Some("sk-not-a-real-key".to_string());
+
+    // Mirrors what `save_config` writes, then reads it back. Every persisted DJ
+    // key belongs here: one left out is one a persistence regression keeps green.
+    let written = serde_yaml::to_string(&BehaviorConfigString {
+      dj_backend: Some(config.behavior.dj_backend.clone()),
+      dj_batch_size: Some(config.behavior.dj_batch_size),
+      dj_history_period: Some(config.behavior.dj_history_period.clone()),
+      dj_agent_command: Some(config.behavior.dj_agent_command.clone()),
+      dj_agent_prompt_via: config.behavior.dj_agent_prompt_via.clone(),
+      dj_agent_model: config.behavior.dj_agent_model.clone(),
+      dj_agent_timeout_secs: Some(config.behavior.dj_agent_timeout_secs),
+      dj_model: config.behavior.dj_model.clone(),
+      dj_base_url: config.behavior.dj_base_url.clone(),
+      dj_api_key: config.behavior.dj_api_key.clone(),
+      ..Default::default()
+    })
+    .unwrap();
+
+    let mut reloaded = UserConfig::new();
+    reloaded
+      .load_behaviorconfig(serde_yaml::from_str(&written).unwrap())
+      .unwrap();
+    assert_eq!(reloaded.behavior.dj_backend, "openai_compat");
+    assert_eq!(reloaded.behavior.dj_batch_size, 7);
+    assert_eq!(reloaded.behavior.dj_history_period, "7d");
+    assert_eq!(reloaded.behavior.dj_agent_command, vec!["codex"]);
+    assert_eq!(
+      reloaded.behavior.dj_agent_prompt_via.as_deref(),
+      Some("arg")
+    );
+    assert_eq!(reloaded.behavior.dj_agent_model.as_deref(), Some("haiku"));
+    assert_eq!(reloaded.behavior.dj_agent_timeout_secs, 240);
+    assert_eq!(reloaded.behavior.dj_model.as_deref(), Some("some-model"));
+    assert_eq!(
+      reloaded.behavior.dj_base_url.as_deref(),
+      Some("http://localhost:1234/v1")
+    );
+    assert_eq!(
+      reloaded.behavior.dj_api_key.as_deref(),
+      Some("sk-not-a-real-key")
+    );
+  }
+
+  /// argv[0] is the program to exec, so a blank one is no command at all.
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn a_dj_agent_command_without_a_program_keeps_the_default() {
+    let default = super::default_dj_agent_command();
+
+    let config = loaded("dj_agent_command:\n  - '   '\n  - -p");
+    assert_eq!(
+      config.behavior.dj_agent_command, default,
+      "a blank argv[0] reaches spawn as a confusing ENOENT"
+    );
+
+    // A blank *later* argument is the user's business, so it still loads.
+    let config = loaded("dj_agent_command:\n  - claude\n  - ''");
+    assert_eq!(config.behavior.dj_agent_command, vec!["claude", ""]);
+  }
+
+  #[cfg(feature = "ai-dj")]
+  fn loaded(yaml: &str) -> super::UserConfig {
+    use super::{BehaviorConfigString, UserConfig};
+    let mut config = UserConfig::new();
+    config
+      .load_behaviorconfig(serde_yaml::from_str::<BehaviorConfigString>(yaml).unwrap())
+      .unwrap();
+    config
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn an_invalid_dj_agent_prompt_via_keeps_the_previous_value() {
+    let config = loaded("dj_agent_prompt_via: carrier pigeon");
+    assert_eq!(
+      config.behavior.dj_agent_prompt_via, None,
+      "unset stays unset, so the preset still decides"
+    );
+
+    let config = loaded("dj_agent_prompt_via: argv");
+    assert_eq!(
+      config.behavior.dj_agent_prompt_via.as_deref(),
+      Some("arg"),
+      "the canonical form is stored, not what the user typed"
+    );
   }
 
   #[test]

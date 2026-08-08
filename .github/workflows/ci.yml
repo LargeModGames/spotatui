@@ -36,18 +36,21 @@ jobs:
             args: "--locked"
           # The exact feature set shipped for Linux by cd.yml, so every new
           # source subsystem (local-files, subsonic, internet-radio, youtube),
-          # cover-art, and the MCP server are compiled and tested in CI.
+          # cover-art, and both DJ front doors are compiled and tested in CI.
           # Keep this list in sync with cd.yml's `Build release binary` step
           # whenever a feature is added there, or the release build becomes the
           # first place a break shows up.
-          # `dj-core` is implied by `mcp-server`, so it is exercised here too.
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
-          # `mcp-server` is the first front door onto `dj-core`, and it has to build
-          # on its own: this slim leg proves the MCP door compiles without the rest
-          # of the release feature set that all-sources turns on around it.
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+          # `mcp-server` and `ai-dj` are two front doors on the same `dj-core`
+          # implementation, and each has to build without the other: the shared
+          # code is gated `any(mcp-server, ai-dj)`, so a gate that names only one
+          # of them still passes all-sources. Only a single-door leg catches it.
+          # Both are slim, so they cost a fraction of the all-sources leg.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,mcp-server"
+          - name: ai-dj-only
+            args: "--locked --no-default-features --features telemetry,ai-dj"
           # Slim build used for fast local iteration (matches CLAUDE.md).
           - name: slim
             args: "--locked --no-default-features --features telemetry"
@@ -81,10 +84,12 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
-          # See the check job for why the mcp-only leg exists.
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+          # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,mcp-server"
+          - name: ai-dj-only
+            args: "--locked --no-default-features --features telemetry,ai-dj"
           - name: slim
             args: "--locked --no-default-features --features telemetry"
     env:
@@ -135,10 +140,12 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
-          # See the check job for why the mcp-only leg exists.
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+          # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,mcp-server"
+          - name: ai-dj-only
+            args: "--locked --no-default-features --features telemetry,ai-dj"
           - name: slim
             args: "--locked --no-default-features --features telemetry"
     env:
