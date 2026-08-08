@@ -1,3 +1,5 @@
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+pub mod dj;
 pub mod friends;
 pub mod ids;
 pub mod library;
@@ -279,6 +281,52 @@ pub enum IoEvent {
   /// auth.
   #[cfg(feature = "cover-art")]
   FetchCoverArt(crate::tui::cover_art::CoverArtRequest),
+  /// A DJ tool call that needs the live Spotify client, plus the channel to
+  /// answer on.
+  ///
+  /// Runs on the **serial** lane, not the service lane: resolving a track name
+  /// to a URI needs the real Spotify client, and the service lane deliberately
+  /// builds its `Network` with `None` for it. It does bypass the auth *gate* so
+  /// the handler can answer an unauthenticated caller with a useful message
+  /// rather than silently dropping the response channel.
+  ///
+  /// Boxed because the payload is much larger than the other variants.
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+  DjToolCall(
+    Box<(
+      crate::infra::dj::tools::DjToolCall,
+      tokio::sync::oneshot::Sender<crate::infra::dj::tools::ToolOutcome>,
+    )>,
+  ),
+  /// Ask the in-TUI DJ's brain for tracks. Optionally carries the listener's
+  /// words; `None` means "keep the queue going in the current direction".
+  ///
+  /// Runs on the **service** lane: a brain call can take a minute or more (an
+  /// agent CLI is a subprocess with real startup cost), and parking that on the
+  /// serial pump would freeze every other event behind it. It touches only
+  /// `self.app` plus its own HTTP client / subprocess, which is exactly the
+  /// service-lane contract.
+  #[cfg(feature = "ai-dj")]
+  AskDj(Box<crate::infra::dj::AskDjRequest>),
+  /// Top the queue up because it is running low.
+  ///
+  /// Fields, in order: the DJ generation this refill was dispatched for, so a
+  /// stale one can be dropped; and the turn sequence from `DjState::begin_turn`,
+  /// so only this refill may clear the progress flag. Both are `u64`, so a
+  /// transposition would compile and then discard the wrong turn's flag.
+  #[cfg(feature = "ai-dj")]
+  DjTopUp(u64, u64),
+  /// Crawl the listener's own playlists for the avoid-library filter.
+  ///
+  /// Serial lane: it needs the real Spotify client. Dispatched when the filter is
+  /// switched on, so the index is usually warm by the time the first batch comes
+  /// back from the brain; the resolve step builds it inline if it is not.
+  ///
+  /// The MCP front door dispatches it too, from `search_tracks`, so that marking
+  /// results as owned never crawls *inside* a latency-sensitive tool call. Hence
+  /// the gate is both features rather than `ai-dj` alone.
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+  DjIndexLibrary,
 }
 
 /// An in-flight in-TUI Spotify login. Holds the exact PKCE client that generated
@@ -401,6 +449,20 @@ impl Network {
     if matches!(io_event, IoEvent::RestoreNativePlayback(_)) {
       return true;
     }
+    // Bypasses the gate but NOT onto the service lane: the handler needs the real
+    // Spotify client, and answers an unauthenticated caller itself so whichever
+    // front door asked — an MCP client or the in-TUI DJ — gets a diagnosable
+    // error instead of a dropped channel.
+    #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+    if matches!(io_event, IoEvent::DjToolCall(_)) {
+      return true;
+    }
+    // The brain call needs no Spotify session at all. The tool calls the loop
+    // makes from inside it do, and those go back through `DjToolCall` above.
+    #[cfg(feature = "ai-dj")]
+    if matches!(io_event, IoEvent::AskDj(_) | IoEvent::DjTopUp(..)) {
+      return true;
+    }
     matches!(
       io_event,
       IoEvent::RefreshAuthentication
@@ -457,6 +519,10 @@ impl Network {
     }
     #[cfg(feature = "cover-art")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+      return true;
+    }
+    #[cfg(feature = "ai-dj")]
+    if matches!(io_event, IoEvent::AskDj(_) | IoEvent::DjTopUp(..)) {
       return true;
     }
     matches!(
@@ -805,6 +871,23 @@ impl Network {
       #[cfg(feature = "cover-art")]
       IoEvent::FetchCoverArt(request) => {
         self.fetch_cover_art(request).await;
+      }
+      #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+      IoEvent::DjToolCall(payload) => {
+        let (call, responder) = *payload;
+        self.run_dj_tool_call(call, responder).await;
+      }
+      #[cfg(feature = "ai-dj")]
+      IoEvent::AskDj(request) => {
+        self.ask_dj(*request).await;
+      }
+      #[cfg(feature = "ai-dj")]
+      IoEvent::DjTopUp(generation, turn_seq) => {
+        self.dj_top_up(generation, turn_seq).await;
+      }
+      #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+      IoEvent::DjIndexLibrary => {
+        self.dj_index_library().await;
       }
       IoEvent::GetUserTopTracks(time_range) => {
         self.get_user_top_tracks(time_range).await;
@@ -1617,6 +1700,48 @@ mod tests {
       assert!(Network::runs_on_service_lane(&event));
       assert!(Network::event_bypasses_spotify_auth(&event));
     }
+
+    // The DJ's two service-lane events, which the array above cannot hold: they
+    // only exist under `ai-dj`. They are the whole reason this drift matters —
+    // a brain call left on the serial pump blocks every other event for minutes.
+    #[cfg(feature = "ai-dj")]
+    for event in [
+      IoEvent::AskDj(Box::new(crate::infra::dj::AskDjRequest {
+        extra_instruction: None,
+        generation: 0,
+        must_act: false,
+        turn_seq: 0,
+        vibe_on_success: None,
+      })),
+      IoEvent::DjTopUp(0, 0),
+    ] {
+      assert!(Network::runs_on_service_lane(&event));
+      assert!(Network::event_bypasses_spotify_auth(&event));
+    }
+  }
+
+  /// `DjToolCall` is the one event that bypasses the auth gate *without* moving
+  /// onto the service lane, so it gets its own assertion.
+  ///
+  /// Both halves matter. It must stay on the serial lane because resolving a
+  /// track name needs the real Spotify client, and the service lane builds its
+  /// `Network` with `None` for it. It must bypass the gate so the handler can
+  /// answer an unauthenticated caller with a diagnosable message instead of
+  /// dropping the `oneshot`. Both front doors block on that channel: an MCP
+  /// client through the server, and the in-TUI DJ through its own tool loop.
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+  #[test]
+  fn dj_tool_calls_bypass_auth_but_stay_on_the_serial_lane() {
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    let event = IoEvent::DjToolCall(Box::new((
+      crate::infra::dj::tools::DjToolCall::GetNowPlaying,
+      tx,
+    )));
+    assert!(Network::event_bypasses_spotify_auth(&event));
+    assert!(
+      !Network::runs_on_service_lane(&event),
+      "the service lane has no Spotify client, so the resolver could not run there"
+    );
   }
 
   #[tokio::test]

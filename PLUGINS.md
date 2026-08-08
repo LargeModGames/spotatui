@@ -1,5 +1,9 @@
 # Plugins
 
+*This file covers spotatui's in-app **Lua plugins**. For the **agent plugin** that
+connects AI agents and MCP clients to spotatui, see
+[`agent-plugin/README.md`](agent-plugin/README.md).*
+
 spotatui runs user-written Lua plugins. They react to playback events, add commands and key
 bindings, draw popups and playbar segments, restyle the theme, and make async HTTP requests.
 See [`docs/scripting.md`](docs/scripting.md) for the full API and

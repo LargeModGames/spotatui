@@ -37,6 +37,8 @@ pub struct RuntimeState {
   pub playbar_height_rows: u16,
   pub library_height_percent: u8,
   pub radio_stations: Vec<RadioStationConfig>,
+  /// Whether the one-time community-playlist-pin prompt has been shown.
+  pub community_pin_prompt_shown: bool,
 }
 
 impl Default for RuntimeState {
@@ -51,6 +53,7 @@ impl Default for RuntimeState {
       playbar_height_rows: 6,
       library_height_percent: 30,
       radio_stations: Vec::new(),
+      community_pin_prompt_shown: false,
     }
   }
 }
@@ -84,6 +87,9 @@ impl RuntimeState {
     if let Some(radio_stations) = &state.radio_stations {
       self.radio_stations = sanitized_radio_stations(radio_stations);
     }
+    if let Some(community_pin_prompt_shown) = state.community_pin_prompt_shown {
+      self.community_pin_prompt_shown = community_pin_prompt_shown;
+    }
   }
 
   pub fn to_persisted(&self) -> PersistedRuntimeState {
@@ -97,6 +103,7 @@ impl RuntimeState {
       playbar_height_rows: Some(self.playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
       library_height_percent: Some(self.library_height_percent.min(100)),
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
+      community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
     }
   }
 
@@ -192,6 +199,8 @@ pub struct PersistedRuntimeState {
   pub library_height_percent: Option<u8>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub radio_stations: Option<Vec<RadioStationConfig>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub community_pin_prompt_shown: Option<bool>,
 }
 
 impl PersistedRuntimeState {
@@ -268,6 +277,13 @@ impl PersistedRuntimeState {
     }
   }
 
+  pub fn community_pin_prompt_shown(community_pin_prompt_shown: bool) -> Self {
+    Self {
+      community_pin_prompt_shown: Some(community_pin_prompt_shown),
+      ..Default::default()
+    }
+  }
+
   pub fn merge_patch(&mut self, patch: &Self) {
     merge_state_patch(self, patch);
   }
@@ -282,6 +298,7 @@ impl PersistedRuntimeState {
       && self.playbar_height_rows.is_none()
       && self.library_height_percent.is_none()
       && self.radio_stations.is_none()
+      && self.community_pin_prompt_shown.is_none()
   }
 }
 
@@ -437,6 +454,7 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .radio_stations
       .as_deref()
       .map(sanitized_radio_stations),
+    community_pin_prompt_shown: state.community_pin_prompt_shown,
   }
 }
 
@@ -476,6 +494,9 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
       merged.radio_stations.as_deref().unwrap_or(&[]),
       radio_stations,
     ));
+  }
+  if let Some(community_pin_prompt_shown) = patch.community_pin_prompt_shown {
+    merged.community_pin_prompt_shown = Some(community_pin_prompt_shown);
   }
 }
 
@@ -601,6 +622,7 @@ mod tests {
         name: "Station".to_string(),
         url: "https://example.test/stream".to_string(),
       }]),
+      community_pin_prompt_shown: Some(true),
     };
 
     save(&path, &state).unwrap();
@@ -621,6 +643,20 @@ mod tests {
       assert_eq!(dir_mode, 0o700);
       assert_eq!(file_mode, 0o600);
     }
+  }
+
+  #[test]
+  fn community_pin_prompt_shown_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    save(
+      &path,
+      &PersistedRuntimeState::community_pin_prompt_shown(true),
+    )
+    .unwrap();
+
+    assert_eq!(load(&path).unwrap().community_pin_prompt_shown, Some(true));
   }
 
   #[test]

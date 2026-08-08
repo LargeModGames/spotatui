@@ -6,10 +6,10 @@ use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use rspotify::model::idtypes::PlaylistId;
 
-/// Total items in the sidebar Playlists panel. For Spotify this is
-/// playlists/folders + the "Add Playlist" entry; for Local it is the folder
-/// count (no write capability, so no "Add Playlist").
-fn total_display_count(app: &App) -> usize {
+/// Total rows in the sidebar Playlists panel. For Spotify this is the leading
+/// "+ Add Playlist" row + playlists/folders; for Local it is the folder count
+/// (no write capability, so no "Add Playlist").
+pub(crate) fn total_display_count(app: &App) -> usize {
   match app.active_source {
     Source::Local => app.local_playlists.len(),
     Source::Subsonic => app.subsonic_playlists.len(),
@@ -205,16 +205,17 @@ pub fn handler(key: Key, app: &mut App) {
     }
     Key::Enter => {
       if let Some(selected_idx) = app.selected_playlist_index {
-        let playlist_count = app.get_playlist_display_count();
-        if selected_idx == playlist_count {
-          // "Add Playlist" entry selected
+        if selected_idx == 0 {
+          // "+ Add Playlist" is the leading row (row 0).
           app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
-        } else if let Some(item) = app.get_playlist_display_item_at(selected_idx) {
+        } else if let Some(item) = app.get_playlist_display_item_at(selected_idx - 1) {
           match item {
             PlaylistFolderItem::Folder(folder) => {
               // Navigate into/out of folder
               app.current_playlist_folder_id = folder.target_id;
-              app.selected_playlist_index = Some(0);
+              // Land on the first item below the leading "+ Add Playlist" row.
+              let has_items = app.get_playlist_display_count() > 0;
+              app.selected_playlist_index = Some(if has_items { 1 } else { 0 });
             }
             PlaylistFolderItem::Playlist { index, .. } => {
               // Open the playlist tracks: navigates immediately with the
@@ -230,6 +231,13 @@ pub fn handler(key: Key, app: &mut App) {
                 }
               }
             }
+            PlaylistFolderItem::CommunityPin => {
+              if let Ok(playlist_id) = PlaylistId::from_id(crate::core::app::COMMUNITY_PLAYLIST_ID)
+              {
+                app.active_playlist_index = None;
+                app.open_playlist_tracks(playlist_id.into_static(), TrackTableContext::MyPlaylists);
+              }
+            }
           }
         }
       }
@@ -237,8 +245,9 @@ pub fn handler(key: Key, app: &mut App) {
     // Deleting playlists is a Spotify-only (PlaylistWriter) action.
     Key::Char('D') if app.active_source == Source::Spotify => {
       if let Some(selected_idx) = app.selected_playlist_index {
-        if let Some(PlaylistFolderItem::Playlist { index, .. }) =
-          app.get_playlist_display_item_at(selected_idx)
+        if let Some(PlaylistFolderItem::Playlist { index, .. }) = selected_idx
+          .checked_sub(1)
+          .and_then(|i| app.get_playlist_display_item_at(i))
         {
           if let Some(playlist) = app.all_playlists.get(*index) {
             let selected_playlist = &playlist.name;
@@ -289,6 +298,9 @@ mod tests {
   fn enter_playlist_dispatches_only_visible_page_load() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    // Exercise a real playlist (row 1, below the leading "+ Add Playlist" row),
+    // not the pinned community entry.
+    app.user_config.behavior.pin_community_playlist = false;
     app.all_playlists = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "Test Playlist",
@@ -299,12 +311,12 @@ mod tests {
       index: 0,
       current_id: 0,
     }];
-    app.selected_playlist_index = Some(0);
+    app.selected_playlist_index = Some(1);
 
     handler(Key::Enter, &mut app);
 
     match rx.recv().unwrap() {
-      IoEvent::GetPlaylistItems(_, 0) => {}
+      IoEvent::GetPlaylistItems(id, 0) => assert_eq!(id, "37i9dQZF1DXcBWIGoYBM5M"),
       _ => panic!("expected playlist page fetch"),
     }
 
@@ -315,6 +327,9 @@ mod tests {
   fn enter_playlist_navigates_immediately_and_dedups_inflight_open() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    // Exercise a real playlist (row 1, below the leading "+ Add Playlist" row),
+    // not the pinned community entry.
+    app.user_config.behavior.pin_community_playlist = false;
     app.all_playlists = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "Test Playlist",
@@ -325,14 +340,14 @@ mod tests {
       index: 0,
       current_id: 0,
     }];
-    app.selected_playlist_index = Some(0);
+    app.selected_playlist_index = Some(1);
 
     handler(Key::Enter, &mut app);
 
     // The screen opens on the press itself, not on response arrival.
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
     match rx.recv().unwrap() {
-      IoEvent::GetPlaylistItems(_, 0) => {}
+      IoEvent::GetPlaylistItems(id, 0) => assert_eq!(id, "37i9dQZF1DXcBWIGoYBM5M"),
       _ => panic!("expected playlist page fetch"),
     }
 
@@ -342,6 +357,57 @@ mod tests {
     app.pop_navigation_stack();
     handler(Key::Enter, &mut app);
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn enter_on_row_zero_opens_add_playlist_form() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    // Row 0 is always the "+ Add Playlist" entry.
+    app.selected_playlist_index = Some(0);
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::CreatePlaylist);
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn enter_on_community_pin_opens_community_playlist() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    // No real playlists: the pin is the only display item, at sidebar row 1
+    // (row 0 is "+ Add Playlist").
+    assert!(app.community_pin_visible());
+    app.selected_playlist_index = Some(1);
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+    // The pin is not a real sidebar selection.
+    assert_eq!(app.active_playlist_index, None);
+    match rx.recv().unwrap() {
+      IoEvent::GetPlaylistItems(id, 0) => {
+        assert_eq!(id, crate::core::app::COMMUNITY_PLAYLIST_ID)
+      }
+      _ => panic!("expected community playlist fetch"),
+    }
+  }
+
+  #[test]
+  fn shift_d_on_community_pin_is_a_no_op() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert!(app.community_pin_visible());
+    // Sidebar row 1 is the pin (row 0 is "+ Add Playlist").
+    app.selected_playlist_index = Some(1);
+    let route_before = app.get_current_route().id.clone();
+
+    handler(Key::Char('D'), &mut app);
+
+    assert_eq!(app.get_current_route().id, route_before);
+    assert!(app.dialog.is_none());
     assert!(rx.try_recv().is_err());
   }
 

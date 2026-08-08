@@ -21,7 +21,7 @@ This table shows what is possible with the Spotify API, what is implemented, and
 | artists | ❌ | Get multiple artists by IDs | No |
 | artist_albums | ✅ | Get an artist's albums | Yes |
 | artist_top_tracks | ✅ | Get an artist's top 10 tracks | Yes |
-| artist_related_artists | ✅ | Get similar artists | Yes |
+| artist_related_artists | ⚠️ | Get similar artists — restricted alongside `recommendations` (see below) | Yes |
 | **Albums** |
 | album | ✅ | Get a single album by ID | Yes |
 | albums | ❌ | Get multiple albums by IDs | No |
@@ -67,7 +67,7 @@ This table shows what is possible with the Spotify API, what is implemented, and
 | volume | ✅ | Set volume | Yes |
 | shuffle | ✅ | Toggle shuffle | Yes |
 | **Other** |
-| recommendations | ✅ | Get recommendations | Yes |
+| recommendations | ⚠️ | Get recommendations — **403 for any app registered after 2024-11-27** ([announcement](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api)). spotatui users register their own client ID, so this is effectively dead for new users; the AI DJ deliberately does not use it and has the model do the recommending instead | Yes |
 | audio_analysis | ❌ | Get audio analysis (visualization now uses local FFT, not this endpoint) | Yes |
 | featured_playlists | ❌ | Get featured playlists | Yes |
 | new_releases | ❌ | Get new releases | Yes |

@@ -66,9 +66,12 @@ Key event → tui/event/ → tui/handlers/handle_app()
 ### Navigation / routing
 
 `App` holds a navigation stack of `Route` values. Each `Route` contains:
-- `RouteId` — which screen to render (Home, Search, Artist, AlbumTracks, Queue, Settings, Party, …)
-- `ActiveBlock` — which block currently has keyboard focus
-- `HoveredBlock` — which block the cursor is hovering
+- `id: RouteId` — which screen to render (Home, Search, Artist, AlbumTracks, Queue, Settings, Party, …)
+- `active_block: ActiveBlock` — which block currently has keyboard focus
+- `hovered_block: ActiveBlock` — which block the cursor is hovering
+
+Note there is no `HoveredBlock` *type*: `hovered_block` is a second field of the
+same `ActiveBlock` enum.
 
 Use `app.push_navigation_stack(RouteId::X, ActiveBlock::X)` to navigate and `app.pop_navigation_stack()` to go back.
 
@@ -120,6 +123,52 @@ Always check `app.user_config.keys.<action>` instead of hard-coding key literals
 - `--no-default-features --features telemetry` is the minimal build used for CI and fast iteration.
 - Platform-specific audio backends (ALSA, PipeWire, PortAudio, Rodio) are gated behind their own features.
 - `cover-art` feature enables album art rendering via `ratatui-image`.
+- `dj-core` is a shared implementation feature (taste brief, name→URI resolver,
+  bulk enqueue) pulled in by `mcp-server` and `ai-dj`, the way `audio-decode` is
+  pulled in by the media sources. None of the three are in `default`.
+- `mcp-server` adds the `spotatui mcp` MCP server; `ai-dj` adds the in-TUI DJ
+  screen and its model backends. Neither adds a crate dependency.
+
+### Adding a feature-gated sidebar row
+
+`library_options()` (`src/core/app.rs`) composes the sidebar list at first use
+rather than declaring one `const` per feature combination — gated rows would
+otherwise be a cartesian product. Look entries up **by name**
+(`library_options().iter().position(...)`), never by index: the index of any row
+after a gated one depends on which features are built in.
+
+### The DJ's two IoEvent lanes
+
+`AskDj` / `DjTopUp` run on the **service** lane (detached; a brain call can take
+minutes) and touch only `App`. `DjIndexLibrary` and
+`DjToolCall` run on the **serial** lane, because resolving a track name (or
+crawling playlists) needs the real Spotify client and the service lane builds its
+`Network` with `None` for it. Any background DJ result re-checks
+`app.dj.generation` before writing, so a batch the user has abandoned is dropped.
+
+### The avoid-library filter
+
+Two gates, and both are needed. `resolve_suggestions` rejects on the *name the
+model gave* before paying for a search; `reject_owned_tracks` rejects on the
+*resolved track ID* afterwards, which is the only way to catch a track the model
+named differently enough to normalise apart (and the only gate that sees `uri`
+entries at all). Rejections go in `ResolveReport::in_library`, never `duplicates`
+(wrong words for the user) and never `unresolved` (tells the model a real track
+does not exist).
+
+Filtering is **on by default in-TUI only**. Over MCP the agent was told to queue
+specific tracks, so both gates are off unless it passes
+`queue_tracks(exclude_owned: true)`; `search_tracks` instead *marks* each result
+`owned`, which informs the choice without dropping anything behind the agent's
+back. `play_now` is never filtered.
+
+The index cost drives where the crawl runs. `search_tracks` must never crawl
+inline — it dispatches `IoEvent::DjIndexLibrary` and marks that one page from
+Liked Songs alone, saying so in the result, because seconds of pagination inside a
+tool call head-of-line-blocks the whole serial lane (the bug `ai_dj::open` exists
+to avoid). `queue_tracks(exclude_owned)` is the one caller that *does* crawl
+inline, via `dj_library_index`, and refuses the call outright if the crawl fails:
+it was asked for a guarantee, so queueing unfiltered would be worse than failing.
 
 ### Native streaming playback
 

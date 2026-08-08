@@ -37,6 +37,11 @@ Press `Enter` to apply the filter and `Esc` to clear it.
 | `Alt-,`     | Open settings (`Ctrl-,` on macOS) |
 | `?`         | Show help                 |
 | `q`         | Go back / Quit            |
+| `Ctrl-j`    | Open the AI DJ (`ai-dj` builds) |
+| `Ctrl-t`    | Toggle DJ auto-queue      |
+| `Ctrl-y`    | DJ vibe shift             |
+| `Ctrl-o`    | DJ fresh tracks only      |
+| `Ctrl-g`    | Choose the DJ's AI/model  |
 
 ## Customizing Keybindings
 
@@ -66,3 +71,34 @@ config file is structured.
 - Special keys: `"enter"`, `"esc"`, `"tab"`
 
 > **Note:** Three-key combinations like `ctrl-alt-q` are not supported.
+
+## AI DJ keys
+
+Only present in builds with the `ai-dj` feature. All five are rebindable as
+`dj_open`, `dj_toggle_auto_queue`, `dj_vibe_shift`, `dj_toggle_fresh_only`, and
+`dj_pick_model`.
+
+| Action | Default | Config key |
+|---|---|---|
+| Open the AI DJ screen | `Ctrl-j` | `dj_open` |
+| Toggle continuous auto-queue | `Ctrl-t` | `dj_toggle_auto_queue` |
+| Vibe shift (drop the DJ's queued tail, change direction) | `Ctrl-y` | `dj_vibe_shift` |
+| Toggle "only tracks I don't already have" | `Ctrl-o` | `dj_toggle_fresh_only` |
+| Choose which AI and model the DJ uses | `Ctrl-g` | `dj_pick_model` |
+
+On the DJ screen itself the prompt takes every printable key, so `j`/`k` type
+rather than navigate; scroll the transcript with the arrow and page keys. `Esc`
+clears a half-typed prompt, and leaves the screen when the prompt is already empty.
+
+The four action keys other than `dj_open` still work while the prompt has focus,
+because they carry a modifier. If you rebind one to a bare character, that character
+types instead, since a typing surface has to be able to contain it.
+
+While the AI/model picker is open it is modal and takes every key: `↑`/`↓` (or
+`j`/`k`) move, `1`-`9` pick a numbered row, `Enter` chooses, and `Esc` steps back
+one step at a time, closing the picker from the first step and keeping whatever
+brain you already had. Nothing else reaches the DJ or the rest of the app, so a
+keypress cannot start background work with the backend you are mid-way through
+replacing.
+
+See [`docs/ai-dj.md`](ai-dj.md).

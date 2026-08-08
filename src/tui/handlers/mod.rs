@@ -1,3 +1,5 @@
+#[cfg(feature = "ai-dj")]
+mod ai_dj;
 mod album_list;
 mod album_tracks;
 mod analysis;
@@ -5,6 +7,7 @@ mod announcement_prompt;
 mod artist;
 mod artists;
 mod common_key_events;
+mod community_pin_prompt;
 #[cfg(feature = "cover-art")]
 mod cover_art_view;
 mod create_playlist;
@@ -145,6 +148,15 @@ pub fn handle_app(key: Key, app: &mut App) {
     return;
   }
 
+  // The DJ prompt is a typing surface, so it needs first refusal on every key —
+  // otherwise global bindings eat any character that happens to be a shortcut
+  // ('d' for devices, space for play/pause, and so on).
+  #[cfg(feature = "ai-dj")]
+  if app.get_current_route().active_block == ActiveBlock::AiDj {
+    handle_block_events(key, app);
+    return;
+  }
+
   // When Create Playlist form is open, all keys go directly to the form handler
   // (so typed characters aren't stolen by global bindings like 'd', space, etc.)
   if app.get_current_route().active_block == ActiveBlock::CreatePlaylistForm {
@@ -195,6 +207,29 @@ pub fn handle_app(key: Key, app: &mut App) {
     }
     _ if key == app.user_config.keys.jump_to_context => {
       handle_jump_to_context(app);
+    }
+    // Reachable from anywhere, including sources whose sidebar has no Library
+    // panel (only Spotify draws one), which is why a global binding exists at all
+    // and not just the sidebar row.
+    #[cfg(feature = "ai-dj")]
+    _ if key == app.user_config.keys.dj_open => {
+      ai_dj::open(app);
+    }
+    #[cfg(feature = "ai-dj")]
+    _ if key == app.user_config.keys.dj_toggle_auto_queue => {
+      ai_dj::toggle_auto_queue(app);
+    }
+    #[cfg(feature = "ai-dj")]
+    _ if key == app.user_config.keys.dj_vibe_shift => {
+      ai_dj::vibe_shift(app);
+    }
+    #[cfg(feature = "ai-dj")]
+    _ if key == app.user_config.keys.dj_toggle_fresh_only => {
+      ai_dj::toggle_fresh_only(app);
+    }
+    #[cfg(feature = "ai-dj")]
+    _ if key == app.user_config.keys.dj_pick_model => {
+      ai_dj::open_picker(app);
     }
     _ if key == app.user_config.keys.manage_devices => {
       // Open the combined Source & Device picker immediately so it is reachable
@@ -410,7 +445,17 @@ fn is_input_mode(app: &App) -> bool {
       | ActiveBlock::ExitPrompt
       | ActiveBlock::CreatePlaylistForm
       | ActiveBlock::RecapPrompt
-  )
+      | ActiveBlock::CommunityPinPrompt
+  ) || {
+    #[cfg(feature = "ai-dj")]
+    {
+      app.get_current_route().active_block == ActiveBlock::AiDj
+    }
+    #[cfg(not(feature = "ai-dj"))]
+    {
+      false
+    }
+  }
 }
 
 // Handle event for the current active block
@@ -519,8 +564,15 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Stats => {
       stats::handler(key, app);
     }
+    #[cfg(feature = "ai-dj")]
+    ActiveBlock::AiDj => {
+      ai_dj::handler(key, app);
+    }
     ActiveBlock::RecapPrompt => {
       recap_prompt::handler(key, app);
+    }
+    ActiveBlock::CommunityPinPrompt => {
+      community_pin_prompt::handler(key, app);
     }
     ActiveBlock::PluginScreen => {
       plugin_screen::handler(key, app);
@@ -530,6 +582,12 @@ fn handle_block_events(key: Key, app: &mut App) {
 
 fn handle_escape(app: &mut App) {
   match app.get_current_route().active_block {
+    // Delegated rather than duplicated, the way `ActiveBlock::Friends` is below.
+    // The DJ's Esc is now three-state (step back through the picker, clear a
+    // half-typed prompt, leave the screen), so a second copy of the rule here would
+    // go stale the moment either side changed.
+    #[cfg(feature = "ai-dj")]
+    ActiveBlock::AiDj => ai_dj::handler(Key::Esc, app),
     ActiveBlock::SearchResultBlock => {
       app.search_results.selected_block = SearchResultBlock::Empty;
     }
@@ -597,6 +655,10 @@ fn handle_escape(app: &mut App) {
     ActiveBlock::RecapPrompt => {
       app.recap_prompt = None;
       app.pop_navigation_stack();
+    }
+    // Esc keeps the pin but still marks the prompt shown so it never re-nags.
+    ActiveBlock::CommunityPinPrompt => {
+      community_pin_prompt::handler(Key::Esc, app);
     }
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);
@@ -1123,6 +1185,27 @@ mod tests {
     assert_eq!(
       app.status_message.as_deref(),
       Some("Copy URL isn't available for Local Files")
+    );
+  }
+
+  /// The DJ's own tests all call `ai_dj::handler` directly, which is the branch
+  /// taken once the DJ screen already has focus (`handle_app` returns early for
+  /// `ActiveBlock::AiDj`). That leaves the `dj_pick_model` arm of the global match
+  /// untested, and it is the arm that makes the key work from Home, Search, Library
+  /// or anywhere else — which is the only reason a global binding exists rather
+  /// than a DJ-screen-local one.
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn the_reopen_binding_opens_the_dj_with_the_picker_from_another_screen() {
+    let mut app = App::default();
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.dj_pick_model, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::AiDj);
+    assert!(
+      app.dj.setup.is_some(),
+      "and it arrives with the picker already up, not on an empty prompt"
     );
   }
 

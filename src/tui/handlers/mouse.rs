@@ -1,6 +1,6 @@
 use super::{common_key_events, library, lyrics_view, playbar, playlist, settings};
 use crate::core::app::{
-  ActiveBlock, App, RouteId, SettingValue, SettingsCategory, LIBRARY_OPTIONS,
+  library_options, ActiveBlock, App, RouteId, SettingValue, SettingsCategory,
 };
 use crate::core::layout::{
   compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
@@ -417,6 +417,7 @@ fn is_main_layout_mouse_interactive(active_block: ActiveBlock) -> bool {
       | ActiveBlock::SortMenu
       | ActiveBlock::Party
       | ActiveBlock::RecapPrompt
+      | ActiveBlock::CommunityPinPrompt
   )
 }
 
@@ -467,7 +468,7 @@ fn set_input_cursor_from_column(input_area: Rect, mouse_column: u16, app: &mut A
 }
 
 fn select_clicked_library_item(mouse_row: u16, list_area: Rect, app: &mut App) {
-  let item_count = LIBRARY_OPTIONS.len();
+  let item_count = library_options().len();
   let selected_index = app.library.selected_index.min(item_count.saturating_sub(1));
 
   let Some(clicked_index) =
@@ -485,7 +486,9 @@ fn select_clicked_library_item(mouse_row: u16, list_area: Rect, app: &mut App) {
 }
 
 fn select_clicked_playlist(mouse_row: u16, list_area: Rect, app: &mut App) {
-  let item_count = app.get_playlist_display_count();
+  // The rendered row count, including the leading "+ Add Playlist" row under
+  // Spotify (and the trailing "+ New Playlist" row under YouTube).
+  let item_count = playlist::total_display_count(app);
   if item_count == 0 {
     return;
   }
@@ -923,6 +926,9 @@ mod tests {
   }
 
   fn with_playlist_items(app: &mut App) {
+    // Keep these row-index assertions about real playlists; the community pin
+    // is exercised in dedicated tests.
+    app.user_config.behavior.pin_community_playlist = false;
     app.playlist_folder_items = vec![
       PlaylistFolderItem::Playlist {
         index: 0,
@@ -1725,6 +1731,55 @@ mod tests {
     assert_eq!(app.selected_playlist_index, Some(1));
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::MyPlaylists);
+  }
+
+  #[test]
+  fn click_reaches_last_playlist_row() {
+    // Rows: [+ Add Playlist, P0, P1, P2]. The last playlist (row 3) is only
+    // reachable because the click count includes every rendered row.
+    let mut app = App::default();
+    app.size = Size {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+    with_playlist_items(&mut app);
+    app.selected_playlist_index = Some(0);
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let x = areas.playlists.x + 1;
+    let y = areas.playlists.y + 4; // title border + row index 3
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+
+    assert_eq!(app.selected_playlist_index, Some(3));
+  }
+
+  #[test]
+  fn double_click_add_row_opens_create_form() {
+    // Row 0 is "+ Add Playlist"; clicking an already-selected row opens it.
+    let mut app = App::default();
+    app.size = Size {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+    with_playlist_items(&mut app);
+    app.selected_playlist_index = Some(0);
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let x = areas.playlists.x + 1;
+    let y = areas.playlists.y + 1; // title border + row index 0
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+
+    assert_eq!(app.get_current_route().id, RouteId::CreatePlaylist);
   }
 
   #[test]

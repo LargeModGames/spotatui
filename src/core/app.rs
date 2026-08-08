@@ -64,31 +64,37 @@ use rspotify::model::{
 
 use crate::infra::queue::RepeatMode;
 
-/// Sidebar library entries. The "Local Files" entry only appears when the
-/// `local-files` feature is built in (otherwise there is nothing to browse).
-#[cfg(feature = "local-files")]
-pub const LIBRARY_OPTIONS: [&str; 9] = [
-  "Discover",
-  "Recently Played",
-  "Friends",
-  "Stats",
-  "Liked Songs",
-  "Albums",
-  "Artists",
-  "Podcasts",
-  "Local Files",
-];
-#[cfg(not(feature = "local-files"))]
-pub const LIBRARY_OPTIONS: [&str; 8] = [
-  "Discover",
-  "Recently Played",
-  "Friends",
-  "Stats",
-  "Liked Songs",
-  "Albums",
-  "Artists",
-  "Podcasts",
-];
+/// Sidebar library entries.
+///
+/// Built at first use rather than declared as a `const` per feature combination.
+/// Feature-gated rows ("Local Files", "AI DJ") used to mean one `#[cfg]` arm per
+/// combination, which is a cartesian product that doubles with every new gated
+/// row; composing the list instead stays linear. Callers should look entries up
+/// by name (`iter().position(...)`) rather than by index, since the index depends
+/// on which features are built in.
+pub fn library_options() -> &'static [&'static str] {
+  static OPTIONS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+  OPTIONS.get_or_init(|| {
+    // `mut` is only used by the gated pushes below, so a build with neither
+    // feature would otherwise warn.
+    #[allow(unused_mut)]
+    let mut options = vec![
+      "Discover",
+      "Recently Played",
+      "Friends",
+      "Stats",
+      "Liked Songs",
+      "Albums",
+      "Artists",
+      "Podcasts",
+    ];
+    #[cfg(feature = "local-files")]
+    options.push("Local Files");
+    #[cfg(feature = "ai-dj")]
+    options.push("AI DJ");
+    options
+  })
+}
 
 const DEFAULT_ROUTE: Route = Route {
   id: RouteId::Home,
@@ -99,6 +105,10 @@ const DEFAULT_ROUTE: Route = Route {
 /// How long to ignore position updates after a seek (ms)
 /// This prevents the UI from jumping back to old positions while the seek completes
 pub const SEEK_POSITION_IGNORE_MS: u128 = 500;
+
+/// The public "spotatui community" playlist pinned to the top of the Spotify
+/// playlists sidebar.
+pub const COMMUNITY_PLAYLIST_ID: &str = "0tjRxKAUgoz95pWeW17wYx";
 
 #[cfg(feature = "streaming")]
 const FRESH_NATIVE_ACTIVITY_WINDOW: Duration = Duration::from_secs(5);
@@ -309,6 +319,7 @@ pub enum ActiveBlock {
 
   AnnouncementPrompt,
   RecapPrompt,
+  CommunityPinPrompt,
   ExitPrompt,
   Settings,
   SortMenu,
@@ -318,6 +329,9 @@ pub enum ActiveBlock {
   Friends,
   LocalBrowser,
   Stats,
+  /// The AI DJ screen's prompt + transcript.
+  #[cfg(feature = "ai-dj")]
+  AiDj,
   /// A plugin-registered custom screen (the screen name lives in
   /// [`RouteId::PluginScreen`]; `ActiveBlock` is `Copy` and can't carry it).
   /// Only script effects construct it.
@@ -356,6 +370,7 @@ pub enum RouteId {
 
   AnnouncementPrompt,
   RecapPrompt,
+  CommunityPinPrompt,
   ExitPrompt,
   Settings,
   HelpMenu,
@@ -363,8 +378,13 @@ pub enum RouteId {
   Party,
   CreatePlaylist,
   Friends,
+  /// Only reachable when `local-files` is built in (the sidebar row that opens it
+  /// is gated on that feature).
+  #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
   LocalBrowser,
   Stats,
+  #[cfg(feature = "ai-dj")]
+  AiDj,
   /// A plugin-registered custom screen, keyed by its registered name.
   /// Only script effects construct it.
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
@@ -1037,6 +1057,10 @@ pub enum PlaylistFolderItem {
     /// Folder ID this playlist is visible in
     current_id: usize,
   },
+  /// The pinned "spotatui community" playlist. Injected at display time only
+  /// (never stored in `playlist_folder_items`); opens the community playlist
+  /// when selected.
+  CommunityPin,
 }
 
 /// A row in the add-to-playlist picker dialog: a navigable folder or an
@@ -1458,6 +1482,10 @@ pub struct App {
   /// keys are discarded.
   #[cfg(feature = "cover-art")]
   pub desired_cover_art_key: Option<String>,
+  /// AI DJ session state: transcript, auto-queue toggle, vibe, and the
+  /// generation counter that invalidates in-flight background work.
+  #[cfg(feature = "dj-core")]
+  pub dj: crate::infra::dj::DjState,
   // Inputs:
   // input is the string for input;
   // input_idx is the index of the cursor in terms of character;
@@ -1724,6 +1752,10 @@ pub struct App {
   pub _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
   /// Flattened folder+playlist items for display navigation
   pub playlist_folder_items: Vec<PlaylistFolderItem>,
+  /// Backing storage for the injected community-playlist pin so display methods
+  /// can hand out a `&PlaylistFolderItem`. Never stored in
+  /// `playlist_folder_items`.
+  pub community_pin_item: PlaylistFolderItem,
   /// Current folder ID being viewed (0 = root)
   pub current_playlist_folder_id: usize,
   /// Incremented every time playlists are refreshed to guard stale background tasks
@@ -1912,6 +1944,7 @@ impl Default for App {
       stats_data: None,
       listening_streaks: None,
       recap_prompt: None,
+      community_pin_item: PlaylistFolderItem::CommunityPin,
       artists_list_index: 0,
       local_playlists: Vec::new(),
       local_playlists_index: 0,
@@ -2147,6 +2180,8 @@ impl Default for App {
       cover_art_status: CoverArtStatus::default(),
       #[cfg(feature = "cover-art")]
       desired_cover_art_key: None,
+      #[cfg(feature = "dj-core")]
+      dj: crate::infra::dj::DjState::default(),
       friends: Vec::new(),
       friends_loading: false,
       friend_code: None,
@@ -2210,6 +2245,10 @@ impl App {
     // Read the persisted active source before moving runtime_state into the struct,
     // so the restored value overrides the Source::default() set by App::default().
     let active_source = runtime_state.active_source;
+    // Same reason: read before the move. The config only seeds the DJ's filter;
+    // the toggle owns it from then on.
+    #[cfg(feature = "ai-dj")]
+    let dj_avoid_library = user_config.behavior.dj_avoid_library;
     // Resolve configurable per-context default sort states. Config validation
     // already rejected invalid specs at load time, so parse failure here is a
     // defensive fallback to the built-in default sort.
@@ -2269,6 +2308,11 @@ impl App {
       album_sort,
       artist_sort,
       recently_played_sort,
+      #[cfg(feature = "ai-dj")]
+      dj: crate::infra::dj::DjState {
+        avoid_library: dj_avoid_library,
+        ..crate::infra::dj::DjState::default()
+      },
       ..App::default()
     }
   }
@@ -2314,6 +2358,22 @@ impl App {
         println!("Error from dispatch {}", e);
         // TODO: handle error
       };
+    }
+  }
+
+  /// [`Self::dispatch`] without setting `is_loading`.
+  ///
+  /// For work with its own progress surface. A DJ brain call runs for up to
+  /// `dj_agent_timeout_secs` (minutes), and `dispatch` would pin the global
+  /// spinner until the service-lane task finishes — the exact UX bug
+  /// `DjState::thinking` exists to avoid, and the reason the MCP executor sends
+  /// straight down the channel instead of dispatching.
+  #[cfg(feature = "ai-dj")]
+  pub fn dispatch_without_spinner(&self, action: IoEvent) {
+    if let Some(io_tx) = &self.io_tx {
+      if let Err(e) = io_tx.send(action) {
+        log::warn!("dispatch_without_spinner failed (shutting down?): {e}");
+      }
     }
   }
 
@@ -3333,7 +3393,26 @@ impl App {
       PlaylistFolderItem::Playlist { current_id, .. } => {
         *current_id == self.current_playlist_folder_id
       }
+      PlaylistFolderItem::CommunityPin => false,
     }
+  }
+
+  /// Whether the user already follows the community playlist (its id is present
+  /// in the loaded playlists), in which case the pin is suppressed.
+  pub fn follows_community_playlist(&self) -> bool {
+    self
+      .all_playlists
+      .iter()
+      .any(|p| p.id.as_deref() == Some(COMMUNITY_PLAYLIST_ID))
+  }
+
+  /// Whether the community-playlist pin should be shown as row 0 of the Spotify
+  /// playlists sidebar.
+  pub fn community_pin_visible(&self) -> bool {
+    self.active_source == Source::Spotify
+      && self.user_config.behavior.pin_community_playlist
+      && self.current_playlist_folder_id == 0
+      && !self.follows_community_playlist()
   }
 
   /// Get the number of items visible in the current folder level.
@@ -3364,6 +3443,10 @@ impl App {
     if self.user_config.behavior.group_folders_first {
       items.sort_by_key(|item| !matches!(item, PlaylistFolderItem::Folder(_)));
     }
+    // Injected after sorting so the pin is always row 0, regardless of grouping.
+    if self.community_pin_visible() {
+      items.insert(0, &self.community_pin_item);
+    }
     items
   }
 
@@ -3372,7 +3455,7 @@ impl App {
   pub fn get_playlist_for_item(&self, item: &PlaylistFolderItem) -> Option<&PlaylistInfo> {
     match item {
       PlaylistFolderItem::Playlist { index, .. } => self.all_playlists.get(*index),
-      PlaylistFolderItem::Folder(_) => None,
+      PlaylistFolderItem::Folder(_) | PlaylistFolderItem::CommunityPin => None,
     }
   }
 
@@ -3380,16 +3463,30 @@ impl App {
   #[allow(dead_code)]
   pub fn get_selected_playlist_id(&self) -> Option<String> {
     let selected_index = self.selected_playlist_index?;
-    if let Some(PlaylistFolderItem::Playlist { index, .. }) =
-      self.get_playlist_display_item_at(selected_index)
-    {
-      return self.all_playlists.get(*index).and_then(|p| p.id.clone());
+    // Row 0 is the "+ Add Playlist" entry; display items start at row 1.
+    let display_index = selected_index.checked_sub(1)?;
+    match self.get_playlist_display_item_at(display_index) {
+      Some(PlaylistFolderItem::Playlist { index, .. }) => {
+        return self.all_playlists.get(*index).and_then(|p| p.id.clone());
+      }
+      // The pin is not a stored playlist; don't let the raw-page fallback below
+      // return an unrelated playlist's id for it.
+      Some(PlaylistFolderItem::CommunityPin) => return None,
+      Some(PlaylistFolderItem::Folder(_)) | None => {}
     }
 
+    // In the raw-page fallback the pin is also rendered (row 1, above the pages),
+    // so a row past it maps to `items[display_index - 1]`. The CommunityPin guard
+    // above means this only runs at display_index >= 1 when the pin is visible.
+    let raw_index = if self.community_pin_visible() {
+      display_index.checked_sub(1)?
+    } else {
+      display_index
+    };
     self
       .playlists
       .as_ref()
-      .and_then(|playlists| playlists.items.get(selected_index))
+      .and_then(|playlists| playlists.items.get(raw_index))
       .and_then(|playlist| playlist.id.clone())
   }
 
@@ -4483,6 +4580,89 @@ impl App {
     if self.is_native_streaming_active_for_playback() && !self.queue_owns_playback() {
       self.dispatch(IoEvent::GetQueue);
     }
+  }
+
+  /// Dedupe keys for everything the DJ should not queue again: what is already
+  /// waiting in the native queue, plus the track playing right now.
+  ///
+  /// The recently-played window is added by the caller from the taste brief;
+  /// this covers only what `App` itself knows.
+  #[cfg(feature = "dj-core")]
+  #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
+  pub fn dj_skip_keys(&self) -> std::collections::HashSet<String> {
+    use crate::infra::dj::dedupe_key;
+    let mut keys: std::collections::HashSet<String> = self
+      .native_queue
+      .iter()
+      .map(|track| dedupe_key(&track.name, &track.artists.join(", ")))
+      .collect();
+    if let Some(snapshot) = crate::infra::media_metadata::current_playback_snapshot(self) {
+      keys.insert(dedupe_key(
+        &snapshot.metadata.title,
+        &snapshot.primary_artist(),
+      ));
+    }
+    keys
+  }
+
+  /// Queue a batch of DJ-chosen tracks, returning how many were accepted.
+  ///
+  /// Routes every track through [`Self::add_track_to_native_queue`] rather than
+  /// pushing into `native_queue` directly, so the no-URI guard, the radio
+  /// rejection, and the external-Connect-device fallback to the Spotify Web API
+  /// queue all still apply. That fallback is also why callers cap the batch:
+  /// on an external device each track costs its own API round trip.
+  ///
+  /// The per-track status messages the single-track path emits are harmless
+  /// here: they are set and replaced within one lock, before any draw, and the
+  /// caller overwrites them with a single aggregate message afterwards.
+  #[cfg(feature = "dj-core")]
+  #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
+  pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> usize {
+    let mut accepted = 0usize;
+    for track in tracks {
+      // Mirror `add_track_to_native_queue`'s rejections so the count we report
+      // is honest, rather than inferring them from a length change.
+      let Some(uri) = track.uri.clone() else {
+        continue;
+      };
+      if uri.starts_with("radio:") {
+        continue;
+      }
+      let before = self.native_queue.len();
+      self.add_track_to_native_queue(track);
+      accepted += 1;
+      // A Spotify track on an external Connect device is dispatched to the Web
+      // API queue instead of pushed locally, so only remember what a vibe shift
+      // would actually be able to drop again. Remembered by URI, not position:
+      // the queue can be reordered, appended to, or pruned by hand before the
+      // shift happens.
+      if self.native_queue.len() > before {
+        self.dj.queued_uris.insert(uri);
+      }
+    }
+    accepted
+  }
+
+  /// Drop the DJ's own contributions from the queue.
+  ///
+  /// Used by a vibe shift: a new direction that only takes effect after the
+  /// already-queued tracks have played reads as broken, so the DJ's own picks go
+  /// and anything the user queued by hand stays — wherever it sits. Matching is
+  /// by URI, so a track the user queued by hand *and* the DJ also picked goes
+  /// too; that is the DJ's pick as much as theirs.
+  #[cfg(feature = "dj-core")]
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  pub fn drop_dj_queued_tracks(&mut self) -> usize {
+    let dj_uris = std::mem::take(&mut self.dj.queued_uris);
+    if dj_uris.is_empty() {
+      return 0;
+    }
+    let before = self.native_queue.len();
+    self
+      .native_queue
+      .retain(|track| !track.uri.as_ref().is_some_and(|uri| dj_uris.contains(uri)));
+    before - self.native_queue.len()
   }
 
   /// Whether the native queue's playback slot currently owns the output (either a
@@ -6613,8 +6793,10 @@ impl App {
   pub fn user_unfollow_playlist(&mut self) {
     info!("unfollowing playlist");
     if let (Some(selected_index), Some(user)) = (self.selected_playlist_index, &self.user) {
-      if let Some(PlaylistFolderItem::Playlist { index, .. }) =
-        self.get_playlist_display_item_at(selected_index)
+      // Row 0 is the "+ Add Playlist" entry; display items start at row 1.
+      if let Some(PlaylistFolderItem::Playlist { index, .. }) = selected_index
+        .checked_sub(1)
+        .and_then(|i| self.get_playlist_display_item_at(i))
       {
         // Pass the stored string ids straight through to the IoEvent.
         let ids = self.all_playlists.get(*index).and_then(|playlist| {
@@ -7066,6 +7248,13 @@ impl App {
           name: "Monthly Recap Prompt".to_string(),
           description: "Show a popup once a month when your listening recap is ready".to_string(),
           value: SettingValue::Bool(self.user_config.behavior.enable_monthly_recap_prompt),
+        },
+        SettingItem {
+          id: "behavior.pin_community_playlist".to_string(),
+          name: "Community Playlist Pin".to_string(),
+          description: "Pin the spotatui community playlist to the top of your Spotify playlists"
+            .to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.pin_community_playlist),
         },
         #[cfg(feature = "telemetry")]
         SettingItem {
@@ -7711,6 +7900,11 @@ impl App {
         "behavior.enable_monthly_recap_prompt" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_monthly_recap_prompt = *v;
+          }
+        }
+        "behavior.pin_community_playlist" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.pin_community_playlist = *v;
           }
         }
         #[cfg(feature = "telemetry")]
@@ -8727,6 +8921,56 @@ mod tests {
     }
   }
 
+  /// A vibe shift drops the DJ's picks by identity, not by truncating a tail
+  /// count: the DJ's tracks stop being a contiguous tail the moment the user
+  /// queues by hand after a batch lands (or deletes a DJ pick from the queue
+  /// screen), and the old count-based truncate took the user's track instead.
+  #[cfg(feature = "dj-core")]
+  #[test]
+  fn a_vibe_shift_drops_the_djs_picks_and_keeps_what_the_user_queued_after_them() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+
+    app.extend_native_queue_from_dj(vec![
+      queue_track(Some("subsonic:track:dj1"), "DJ Pick 1"),
+      queue_track(Some("subsonic:track:dj2"), "DJ Pick 2"),
+    ]);
+    // The desync case: the user queues by hand *after* the DJ's batch, so the
+    // DJ's picks are no longer the queue's tail.
+    app.add_track_to_native_queue(queue_track(Some("subsonic:track:mine"), "My Track"));
+
+    assert_eq!(app.drop_dj_queued_tracks(), 2);
+    assert_eq!(app.native_queue.len(), 1);
+    assert_eq!(
+      app.native_queue[0].name, "My Track",
+      "the user's own pick must survive the shift"
+    );
+
+    // The set was consumed: a second shift with nothing new queued drops nothing.
+    assert_eq!(app.drop_dj_queued_tracks(), 0);
+  }
+
+  /// Deleting a DJ pick from the queue screen must not make a later vibe shift
+  /// overreach — the count-based version truncated by the stale count.
+  #[cfg(feature = "dj-core")]
+  #[test]
+  fn a_dj_pick_removed_by_hand_does_not_widen_the_vibe_shift() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+
+    app.add_track_to_native_queue(queue_track(Some("subsonic:track:mine"), "My Track"));
+    app.extend_native_queue_from_dj(vec![
+      queue_track(Some("subsonic:track:dj1"), "DJ Pick 1"),
+      queue_track(Some("subsonic:track:dj2"), "DJ Pick 2"),
+    ]);
+    // The user deletes one DJ pick by hand (queue-screen removal).
+    app.native_queue.retain(|track| track.name != "DJ Pick 2");
+
+    assert_eq!(app.drop_dj_queued_tracks(), 1, "only the remaining DJ pick");
+    assert_eq!(app.native_queue.len(), 1);
+    assert_eq!(app.native_queue[0].name, "My Track");
+  }
+
   #[test]
   fn add_track_to_native_queue_pushes_normal_track() {
     let (tx, rx) = channel();
@@ -9443,6 +9687,9 @@ mod tests {
       playlist_folder_items: vec![playlist(0), folder("A"), playlist(1), folder("B")],
       ..Default::default()
     };
+    // Keep this test focused on folder hoisting; the community pin is exercised
+    // separately.
+    app.user_config.behavior.pin_community_playlist = false;
 
     // Off (default): order is untouched.
     app.user_config.behavior.group_folders_first = false;
@@ -9452,6 +9699,7 @@ mod tests {
       .map(|i| match i {
         PlaylistFolderItem::Folder(f) => f.name.as_str(),
         PlaylistFolderItem::Playlist { .. } => "P",
+        PlaylistFolderItem::CommunityPin => "C",
       })
       .collect();
     assert_eq!(names, vec!["P", "A", "P", "B"]);
@@ -9464,6 +9712,7 @@ mod tests {
       .map(|i| match i {
         PlaylistFolderItem::Folder(f) => f.name.as_str(),
         PlaylistFolderItem::Playlist { .. } => "P",
+        PlaylistFolderItem::CommunityPin => "C",
       })
       .collect();
     assert_eq!(names, vec!["A", "B", "P", "P"]);
@@ -9472,6 +9721,85 @@ mod tests {
       app.get_playlist_display_item_at(0),
       Some(PlaylistFolderItem::Folder(_))
     ));
+  }
+
+  #[test]
+  fn community_pin_is_first_display_item_when_visible() {
+    let app = App::default();
+    // Default Spotify source + default-on toggle + root folder + not following.
+    // The pin is the first *display* item (sidebar row 1, below "+ Add Playlist").
+    assert!(app.community_pin_visible());
+    assert!(matches!(
+      app.get_playlist_display_item_at(0),
+      Some(PlaylistFolderItem::CommunityPin)
+    ));
+    assert_eq!(app.get_playlist_display_count(), 1);
+  }
+
+  #[test]
+  fn community_pin_hidden_outside_root_folder() {
+    let mut app = App::default();
+    assert!(app.community_pin_visible());
+    app.current_playlist_folder_id = 3;
+    assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn community_pin_hidden_when_toggle_off() {
+    let mut app = App::default();
+    app.user_config.behavior.pin_community_playlist = false;
+    assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn community_pin_hidden_when_already_following() {
+    let mut app = App::default();
+    assert!(app.community_pin_visible());
+    app.all_playlists = vec![playlist_info(
+      COMMUNITY_PLAYLIST_ID,
+      "spotatui community",
+      "spotatui",
+      false,
+    )];
+    assert!(app.follows_community_playlist());
+    assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn community_pin_hidden_under_non_spotify_source() {
+    let mut app = App::default();
+    app.active_source = Source::Local;
+    assert!(!app.community_pin_visible());
+  }
+
+  #[test]
+  fn selected_playlist_id_offsets_past_pin_in_raw_fallback() {
+    // Folder-aware items not yet initialized, so the sidebar falls back to the
+    // raw playlist pages. Rendered rows: [+ Add Playlist, pin, First, Second].
+    let mut app = App::default();
+    assert!(app.community_pin_visible());
+    assert!(app.playlist_folder_items.is_empty());
+    app.playlists = Some(Paged {
+      items: vec![
+        playlist_info("00000000000000000000a0", "First", "me", false),
+        playlist_info("00000000000000000000a1", "Second", "me", false),
+      ],
+      total: 2,
+      ..Default::default()
+    });
+
+    // Row 3 is the second raw page item, not the off-by-one neighbor.
+    app.selected_playlist_index = Some(3);
+    assert_eq!(
+      app.get_selected_playlist_id().as_deref(),
+      Some("00000000000000000000a1")
+    );
+    // Row 2 is the first raw page item.
+    app.selected_playlist_index = Some(2);
+    assert_eq!(
+      app.get_selected_playlist_id().as_deref(),
+      Some("00000000000000000000a0")
+    );
   }
 
   #[cfg(feature = "streaming")]

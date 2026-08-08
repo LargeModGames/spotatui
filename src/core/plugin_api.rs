@@ -638,6 +638,7 @@ pub fn route_name(route: &crate::core::app::Route) -> String {
     RouteId::Dialog => "dialog",
     RouteId::AnnouncementPrompt => "announcement",
     RouteId::RecapPrompt => "recap_prompt",
+    RouteId::CommunityPinPrompt => "community_pin_prompt",
     RouteId::ExitPrompt => "exit_prompt",
     RouteId::Settings => "settings",
     RouteId::HelpMenu => "help",
@@ -647,6 +648,8 @@ pub fn route_name(route: &crate::core::app::Route) -> String {
     RouteId::Friends => "friends",
     RouteId::LocalBrowser => "local_browser",
     RouteId::Stats => "stats",
+    #[cfg(feature = "ai-dj")]
+    RouteId::AiDj => "ai_dj",
     RouteId::PluginScreen(name) => return format!("plugin:{name}"),
   }
   .to_string()
