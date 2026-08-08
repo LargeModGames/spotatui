@@ -1166,7 +1166,7 @@ pub async fn start_ui(
             &app.dj,
             app.spotify_external_device_active(),
           ) {
-            let turn_seq = app.dj.begin_turn();
+            let turn_seq = app.dj.begin_turn(crate::infra::dj::TurnKind::Refill);
             let generation = app.dj.generation;
             // Not `dispatch`: that pins the global `is_loading` spinner until the
             // service-lane task finishes, which for a brain call is minutes. The

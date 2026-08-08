@@ -1077,7 +1077,6 @@ mod in_tui {
     use crate::core::app::App;
 
     /// A `Network` with no Spotify client, plus the `App` it shares.
-    #[cfg(unix)]
     async fn network_with_app() -> (Network, std::sync::Arc<tokio::sync::Mutex<App>>) {
       let (tx, rx) = std::sync::mpsc::channel();
       // Leaked deliberately: dropping the receiver would make every dispatch fail
@@ -1131,7 +1130,7 @@ mod in_tui {
         app.user_config.behavior.dj_agent_command =
           vec![say_only_stub().to_string_lossy().to_string()];
         app.user_config.behavior.dj_agent_prompt_via = Some("stdin".to_string());
-        app.dj.begin_turn()
+        app.dj.begin_turn(crate::infra::dj::TurnKind::Ask)
       };
 
       network
@@ -1204,6 +1203,32 @@ mod in_tui {
         wants_top_up(0, &dj, false),
         "and refills resume once playback is back on this device"
       );
+    }
+
+    #[tokio::test]
+    async fn a_stale_top_up_releases_the_progress_flag_before_bailing() {
+      // The `finish_turn` in that bail is load-bearing, not tidiness: the
+      // dispatcher already set `thinking`, and `wants_top_up` gates on it, so a
+      // bail that skipped it would stop auto-queue for the rest of the session
+      // with nothing on screen to explain why.
+      let (mut network, app) = network_with_app().await;
+      let turn_seq = {
+        let mut app = app.lock().await;
+        app.dj.auto_queue = true;
+        let turn_seq = app.dj.begin_turn(crate::infra::dj::TurnKind::Refill);
+        // The listener moved on while the refill was in flight.
+        app.dj.bump_generation();
+        turn_seq
+      };
+
+      network.dj_top_up(0, turn_seq).await;
+
+      let app = app.lock().await;
+      assert!(
+        !app.dj.thinking,
+        "a dropped refill must not wedge auto-queue"
+      );
+      assert!(wants_top_up(0, &app.dj, false));
     }
   }
 }

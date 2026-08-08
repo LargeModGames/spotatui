@@ -11,7 +11,7 @@
 use super::common_key_events;
 use crate::core::app::{ActiveBlock, App, RouteId};
 use crate::infra::dj::setup::{DjSetup, DjSetupChoice, DjSetupStep};
-use crate::infra::dj::{AskDjRequest, DjLine, MAX_BATCH};
+use crate::infra::dj::{AskDjRequest, DjLine, TurnKind, MAX_BATCH};
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use unicode_width::UnicodeWidthChar;
@@ -68,7 +68,13 @@ pub fn handler(key: Key, app: &mut App) {
         app.dj.input_cursor = 0;
       }
     }
-    k if common_key_events::left_event(k, &app.user_config.keys) && app.dj.input.is_empty() => {
+    // Non-character keys only, for the same reason the modifier block above says:
+    // `keys.move_left` defaults to a bare `h`, and this arm sits above
+    // `Key::Char(c)`, so without the guard a prompt could never begin with one.
+    k if !matches!(k, Key::Char(_))
+      && common_key_events::left_event(k, &app.user_config.keys)
+      && app.dj.input.is_empty() =>
+    {
       common_key_events::handle_left_event(app)
     }
     Key::Enter => submit(app),
@@ -187,7 +193,7 @@ fn submit(app: &mut App) {
   app.dj.scroll = 0;
   // A new instruction supersedes any refill already in flight.
   let generation = app.dj.bump_generation();
-  let turn_seq = app.dj.begin_turn();
+  let turn_seq = app.dj.begin_turn(TurnKind::Ask);
   app.dj.push_line(DjLine::user(text.clone()));
 
   // No `extra_instruction`: the line above *is* the instruction, and the brain
@@ -214,9 +220,21 @@ fn submit(app: &mut App) {
 /// already short.
 pub fn toggle_auto_queue(app: &mut App) {
   app.dj.auto_queue = !app.dj.auto_queue;
-  // Either direction invalidates work in flight: switching off should drop a
-  // pending refill, and switching on starts a fresh one.
-  let generation = app.dj.bump_generation();
+  // Either direction invalidates a *refill* in flight: switching off should drop
+  // a pending one, and switching on starts a fresh one.
+  //
+  // A question the listener typed is not this toggle's to abandon. Bumping the
+  // generation would make its answer land and be discarded, and clearing
+  // `thinking` would let `submit` start a second brain call alongside the first.
+  // Nothing is left unguarded by skipping both: no refill can be in flight while
+  // an ask is (`wants_top_up` gates on the same flag), and later refills are
+  // already stopped by `auto_queue` itself.
+  let asked_turn_in_flight = app.dj.asked_turn_in_flight();
+  let generation = if asked_turn_in_flight {
+    app.dj.generation
+  } else {
+    app.dj.bump_generation()
+  };
   if app.dj.auto_queue {
     // Same rule the runner tick applies, so the immediate refill and the ongoing
     // ones cannot disagree — on an external Connect device the native queue never
@@ -232,11 +250,13 @@ pub fn toggle_auto_queue(app: &mut App) {
       app.set_status_message("DJ auto-queue on", 4);
     }
     if crate::infra::network::dj::wants_top_up(app.native_queue.len(), &app.dj, external) {
-      let turn_seq = app.dj.begin_turn();
+      let turn_seq = app.dj.begin_turn(TurnKind::Refill);
       app.dispatch_without_spinner(IoEvent::DjTopUp(generation, turn_seq));
     }
   } else {
-    app.dj.thinking = false;
+    if !asked_turn_in_flight {
+      app.dj.thinking = false;
+    }
     app.set_status_message("DJ auto-queue off", 4);
   }
 }
@@ -276,17 +296,21 @@ pub fn open(app: &mut App) {
 
 /// Show the picker, whether or not the DJ screen is already open.
 ///
-/// The route is pushed only when it is not already current: a second `RouteId::AiDj`
-/// on the nav stack would mean the Esc that should leave the DJ screen lands the
-/// user back on it instead.
+/// Focus and the route are handled exactly as [`open`] handles them, and for the
+/// same reasons: the route is pushed only when it is not already current, and
+/// focus is restored when it is. Skipping the restore left the modal painted while
+/// `active_block` was still the sidebar, so `handle_app` fed every key to the
+/// sidebar's handler and the picker accepted nothing.
 ///
 /// Deliberately does not consult `dj_is_configured()` — pressing the key *is* the
 /// request.
 pub fn open_picker(app: &mut App) {
-  if app.get_current_route().id != RouteId::AiDj {
+  if app.get_current_route().id == RouteId::AiDj {
+    app.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
+  } else {
     app.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
-    request_library_index(app);
   }
+  request_library_index(app);
   open_setup(app);
 }
 
@@ -555,7 +579,7 @@ pub fn vibe_shift(app: &mut App) {
   }
   let generation = app.dj.bump_generation();
   let dropped = app.drop_dj_queued_tracks();
-  let turn_seq = app.dj.begin_turn();
+  let turn_seq = app.dj.begin_turn(TurnKind::Ask);
   app.dj.scroll = 0;
   app.dj.push_line(DjLine::system(if dropped > 0 {
     format!("Shifting the vibe (dropped {dropped} queued track(s))")
@@ -759,6 +783,88 @@ mod tests {
       RouteId::AiDj,
       "one Esc must be enough to leave the DJ"
     );
+  }
+
+  #[test]
+  fn opening_the_picker_from_the_sidebar_gives_it_the_keyboard() {
+    // Same reachable state as the test above, and the symptom is worse: the modal
+    // paints, but `handle_app` keeps routing keys to the sidebar's handler, so the
+    // picker is visible and accepts nothing.
+    let (mut app, _rx) = dj_app();
+    app.set_current_route_state(Some(ActiveBlock::Library), None);
+    open_picker(&mut app);
+    assert!(app.dj.setup.is_some(), "the picker should be open");
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::AiDj,
+      "a painted modal that cannot be typed into is worse than no modal"
+    );
+    app.pop_navigation_stack();
+    assert_ne!(
+      app.get_current_route().id,
+      RouteId::AiDj,
+      "one Esc must be enough to leave the DJ"
+    );
+  }
+
+  #[test]
+  fn a_prompt_can_begin_with_the_move_left_character() {
+    // `keys.move_left` is a bare `h` by default and the left arm sits above
+    // `Key::Char(c)`, so without a guard the prompt could never start with one.
+    let (mut app, _rx) = dj_app();
+    type_text(&mut app, "hello");
+    assert_eq!(app.dj.input.iter().collect::<String>(), "hello");
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::AiDj,
+      "typing must not move focus to the sidebar"
+    );
+    // The real left bindings still leave an empty prompt.
+    app.dj.input.clear();
+    app.dj.input_idx = 0;
+    app.dj.input_cursor = 0;
+    handler(Key::Left, &mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Empty,
+      "the arrow still hands focus to the sidebar"
+    );
+  }
+
+  #[test]
+  fn turning_auto_queue_off_does_not_abandon_a_question_in_flight() {
+    // The listener asked something and then flipped the toggle. Clearing the flag
+    // would let `submit` start a second brain call beside the first, and bumping
+    // the generation would make the answer they are waiting for land and be
+    // discarded.
+    let (mut app, rx) = dj_app();
+    type_text(&mut app, "something warm");
+    handler(Key::Enter, &mut app);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::AskDj(_))));
+    let generation = app.dj.generation;
+
+    app.dj.auto_queue = true;
+    toggle_auto_queue(&mut app);
+
+    assert!(!app.dj.auto_queue);
+    assert!(app.dj.thinking, "the question is still being answered");
+    assert_eq!(
+      app.dj.generation, generation,
+      "bumping it would throw away the answer the listener is waiting for"
+    );
+  }
+
+  #[test]
+  fn turning_auto_queue_off_still_abandons_a_refill() {
+    let (mut app, _rx) = dj_app();
+    app.dj.auto_queue = true;
+    app.dj.begin_turn(TurnKind::Refill);
+    let generation = app.dj.generation;
+
+    toggle_auto_queue(&mut app);
+
+    assert!(!app.dj.thinking, "nobody is waiting on a refill");
+    assert_ne!(app.dj.generation, generation);
   }
 
   #[test]

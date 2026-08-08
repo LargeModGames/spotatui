@@ -37,13 +37,20 @@ pub fn handler(key: Key, app: &mut App) {
     // `library` should probably be an array of structs with enums rather than just using indexes
     // like this
     Key::Enter => {
-      // Matched by NAME, before the positional arms below, because the index of a
-      // feature-gated row depends on which features are built in: with
-      // `local-files` off, "AI DJ" sits at index 8 — exactly where the literal
-      // `8 =>` arm expects "Local Files".
+      // Every feature-gated row is matched by NAME, before the positional arms
+      // below, because its index depends on which features are built in: with
+      // `local-files` off, "AI DJ" sits where "Local Files" sits without it. The
+      // positional arms cover only the rows that are always present.
       #[cfg(feature = "ai-dj")]
       if Some(app.library.selected_index) == library_options().iter().position(|o| *o == "AI DJ") {
         super::ai_dj::open(app);
+        return;
+      }
+      #[cfg(feature = "local-files")]
+      if Some(app.library.selected_index)
+        == library_options().iter().position(|o| *o == "Local Files")
+      {
+        open_local_source(app);
         return;
       }
       match app.library.selected_index {
@@ -95,35 +102,30 @@ pub fn handler(key: Key, app: &mut App) {
           app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
           app.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
         }
-        // Local Files (only present when the `local-files` feature is built in).
-        // Doubles as the "switch to Local source" shortcut: it flips the active
-        // source so the sidebar re-scopes to local folders, then opens the browser.
-        //
-        // Gated so index 8 cannot be claimed here in a build where this row does
-        // not exist — see the name-based lookup above.
-        #[cfg(feature = "local-files")]
-        8 => {
-          app.active_source = Source::Local;
-          // Mirror the persisted value so the selection survives restarts.
-          app.runtime_state.active_source = Source::Local;
-          if let Err(e) =
-            app.save_runtime_state(&crate::core::state::PersistedRuntimeState::active_source(
-              app.runtime_state.active_source,
-            ))
-          {
-            log::warn!("[source] failed to persist active_source: {e}");
-          }
-          app.selected_playlist_index = Some(0);
-          app.local_playlists_index = 0;
-          app.dispatch(IoEvent::GetLocalPlaylists);
-          app.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
-        }
         // This is required because Rust can't tell if this pattern is exhaustive
         _ => {}
       }
     }
     _ => (),
   };
+}
+
+/// Doubles as the "switch to Local source" shortcut: it flips the active source
+/// so the sidebar re-scopes to local folders, then opens the browser.
+#[cfg(feature = "local-files")]
+fn open_local_source(app: &mut App) {
+  app.active_source = Source::Local;
+  // Mirror the persisted value so the selection survives restarts.
+  app.runtime_state.active_source = Source::Local;
+  if let Err(e) = app.save_runtime_state(&crate::core::state::PersistedRuntimeState::active_source(
+    app.runtime_state.active_source,
+  )) {
+    log::warn!("[source] failed to persist active_source: {e}");
+  }
+  app.selected_playlist_index = Some(0);
+  app.local_playlists_index = 0;
+  app.dispatch(IoEvent::GetLocalPlaylists);
+  app.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
 }
 
 #[cfg(test)]

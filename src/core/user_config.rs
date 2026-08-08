@@ -3128,6 +3128,7 @@ volume_increment: 5
     config.behavior.dj_model = Some("some-model".to_string());
     config.behavior.dj_base_url = Some("http://localhost:1234/v1".to_string());
     config.behavior.dj_api_key = Some("sk-not-a-real-key".to_string());
+    config.behavior.dj_avoid_library = true;
     config.behavior.dj_configured = Some(true);
 
     // Mirrors what `save_config` writes, then reads it back. Every persisted DJ
@@ -3143,6 +3144,7 @@ volume_increment: 5
       dj_model: config.behavior.dj_model.clone(),
       dj_base_url: config.behavior.dj_base_url.clone(),
       dj_api_key: config.behavior.dj_api_key.clone(),
+      dj_avoid_library: Some(config.behavior.dj_avoid_library),
       dj_configured: config.behavior.dj_configured,
       ..Default::default()
     })
@@ -3171,6 +3173,7 @@ volume_increment: 5
       reloaded.behavior.dj_api_key.as_deref(),
       Some("sk-not-a-real-key")
     );
+    assert!(reloaded.behavior.dj_avoid_library);
     assert_eq!(reloaded.behavior.dj_configured, Some(true));
   }
 

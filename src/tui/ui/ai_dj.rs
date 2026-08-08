@@ -311,6 +311,11 @@ pub(crate) fn wrap_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
 
 /// Wrap on word boundaries, falling back to a hard break for a word longer than
 /// the line. Uses display width, so CJK and emoji do not overflow.
+/// Rendered columns, which is what every layout decision in this file needs.
+fn display_width(text: &str) -> usize {
+  text.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
   if width == 0 {
     return vec![text.to_string()];
@@ -416,7 +421,10 @@ fn option_lines(
   if note.is_empty() {
     return vec![Line::from(Span::styled(head, style))];
   }
-  if head.chars().count() + note.chars().count() <= inner_width {
+  // Columns, like every other measurement in this file: `label` can be the
+  // listener's own `dj_agent_command`, so a path with wide characters would
+  // measure at half its real width here and overflow the modal.
+  if display_width(&head) + display_width(note) <= inner_width {
     return vec![Line::from(vec![
       Span::styled(head, style),
       Span::styled(note.to_string(), note_style),
@@ -663,7 +671,21 @@ fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
   // search input does.
   let cursor = app.dj.input_cursor as usize;
   let scroll = cursor.saturating_sub(inner.width.saturating_sub(1) as usize);
-  let visible: String = typed.chars().skip(scroll).collect();
+  // Dropped by display width, not by character: `cursor` counts columns, and
+  // `skip(scroll)` counted characters. Twenty CJK glyphs in a twenty-column box
+  // put `scroll` past the end of a twenty-character string, so the prompt went
+  // blank while the listener kept typing.
+  let mut dropped = 0usize;
+  let visible: String = typed
+    .chars()
+    .skip_while(|c| {
+      if dropped >= scroll {
+        return false;
+      }
+      dropped += c.width().unwrap_or(0);
+      true
+    })
+    .collect();
 
   let mut spans = vec![Span::styled(visible, Style::default().fg(theme.text))];
   if focused {

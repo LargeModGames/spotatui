@@ -308,8 +308,12 @@ pub enum IoEvent {
   /// service-lane contract.
   #[cfg(feature = "ai-dj")]
   AskDj(Box<crate::infra::dj::AskDjRequest>),
-  /// Top the queue up because it is running low. Carries the DJ generation it was
-  /// dispatched for, so a stale refill can be dropped.
+  /// Top the queue up because it is running low.
+  ///
+  /// Fields, in order: the DJ generation this refill was dispatched for, so a
+  /// stale one can be dropped; and the turn sequence from `DjState::begin_turn`,
+  /// so only this refill may clear the progress flag. Both are `u64`, so a
+  /// transposition would compile and then discard the wrong turn's flag.
   #[cfg(feature = "ai-dj")]
   DjTopUp(u64, u64),
   /// Crawl the listener's own playlists for the avoid-library filter.
@@ -1693,6 +1697,24 @@ mod tests {
       IoEvent::GenerateRecap(RecapPeriod::SevenDays),
     ];
     for event in events {
+      assert!(Network::runs_on_service_lane(&event));
+      assert!(Network::event_bypasses_spotify_auth(&event));
+    }
+
+    // The DJ's two service-lane events, which the array above cannot hold: they
+    // only exist under `ai-dj`. They are the whole reason this drift matters —
+    // a brain call left on the serial pump blocks every other event for minutes.
+    #[cfg(feature = "ai-dj")]
+    for event in [
+      IoEvent::AskDj(Box::new(crate::infra::dj::AskDjRequest {
+        extra_instruction: None,
+        generation: 0,
+        must_act: false,
+        turn_seq: 0,
+        vibe_on_success: None,
+      })),
+      IoEvent::DjTopUp(0, 0),
+    ] {
       assert!(Network::runs_on_service_lane(&event));
       assert!(Network::event_bypasses_spotify_auth(&event));
     }

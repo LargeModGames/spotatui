@@ -246,6 +246,9 @@ A **bare binary name expands to a known preset**, so this is enough:
 
 ```yaml
   dj_agent_command: ["codex"]     # becomes ["codex", "exec", "-"]
+```
+
+```yaml
   dj_agent_command: ["agy"]       # becomes ["agy", "-p"], with arg delivery
 ```
 
@@ -357,16 +360,20 @@ a plaintext secret. This mirrors how the Subsonic password is handled.
 
 ## What is sent to the model
 
-Only **aggregate names**, built from your local `listens.jsonl`:
+Track, artist, and album **names** only. Three sources, and nothing else:
 
-* top artists, tracks, and albums over the configured window
-* the last ~25 distinct plays, so the DJ can be told not to repeat them
-* what is playing now
-* your current steer, if you gave one
+* the taste brief, built from your local `listens.jsonl`: top artists, tracks, and
+  albums over the configured window, plus the last ~25 distinct plays so the DJ can
+  be told not to repeat them
+* what is playing now, and your current steer if you gave one
+* the conversation itself — the last 24 lines of the DJ transcript, which is
+  whatever you typed and whatever it said back
 
 **Not sent:** timestamps, play counts tied to a clock, Spotify IDs, URIs, your
-account, or anything identifying you. That is a property of building the brief from
-aggregates rather than raw records, not a filter applied afterwards.
+account, or anything identifying you. For the brief that is a property of building
+it from aggregates rather than raw records, not a filter applied afterwards. The
+conversation is the exception you control directly: it is sent verbatim, so treat
+the prompt as you would any chat window.
 
 Tune the window with `behavior.dj_history_period` (`7d`, `30d`, `month`, `year`,
 `all`).

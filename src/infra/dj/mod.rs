@@ -182,6 +182,21 @@ pub const MAX_BATCH: usize = 8;
 #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 pub const QUEUE_LOW_WATER: usize = 2;
 
+/// Why a turn was started, which decides who may abandon it.
+///
+/// A refill runs with nobody watching, so the auto-queue toggle is free to drop
+/// one. A question the listener typed is theirs, and dropping it would look like
+/// the DJ ignoring them.
+#[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TurnKind {
+  /// The listener asked for something, or shifted the vibe.
+  #[default]
+  Ask,
+  /// An auto-queue refill.
+  Refill,
+}
+
 /// Everything the DJ keeps on `App`.
 #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 #[derive(Clone, Debug, Default)]
@@ -242,6 +257,9 @@ pub struct DjState {
   /// A crawl is in flight. Guards against a second one being dispatched behind it
   /// (the toggle and the first turn can both ask).
   pub library_indexing: bool,
+  /// What the turn holding [`Self::thinking`] is, so the auto-queue toggle can
+  /// abandon a refill without abandoning a question the listener asked.
+  pub turn_kind: TurnKind,
   /// The backend/model picker, when it is open. `None` = closed.
   ///
   /// DJ-local rather than `app.dialog`: a `DialogContext::DjSetup` variant would
@@ -270,10 +288,21 @@ impl DjState {
   /// Every path that starts a turn goes through here, so the returned value is
   /// the one thing allowed to clear `thinking` again.
   #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
-  pub fn begin_turn(&mut self) -> u64 {
+  pub fn begin_turn(&mut self, kind: TurnKind) -> u64 {
     self.thinking = true;
+    self.turn_kind = kind;
     self.turn_seq = self.turn_seq.wrapping_add(1);
     self.turn_seq
+  }
+
+  /// Whether the turn holding the progress flag is one the listener is waiting on.
+  ///
+  /// The auto-queue toggle abandons work in flight, and it may only abandon its
+  /// own: a listener who asked a question and then flipped the toggle is still
+  /// owed the answer.
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  pub fn asked_turn_in_flight(&self) -> bool {
+    self.thinking && self.turn_kind == TurnKind::Ask
   }
 
   /// Clear the progress flag, but only if `seq` still owns it.
@@ -346,8 +375,8 @@ mod tests {
     // clear the flag, `wants_top_up` would see an idle DJ with a short queue and
     // dispatch C, and B and C would both queue a batch.
     let mut state = DjState::default();
-    let a = state.begin_turn();
-    let b = state.begin_turn();
+    let a = state.begin_turn(TurnKind::Refill);
+    let b = state.begin_turn(TurnKind::Refill);
     assert_ne!(a, b);
 
     state.finish_turn(a);

@@ -235,9 +235,9 @@ spotatui can pick music for you, from your own listening history. Two ways in:
 
 That file is written as instructions *for the agent*, and `spotatui mcp status` gives it a safe, checkable probe of every step. Full guide: [`docs/mcp-setup.md`](docs/mcp-setup.md).
 
-**Or use the DJ built into the TUI** (`--features ai-dj`) — press `Ctrl-j` for a DJ screen with a chat prompt, `Ctrl-t` for continuous auto-queue, `Ctrl-y` to shift the vibe, `Ctrl-g` to choose which AI and model it uses. It drives the same tools as the MCP server, so it can search, check your queue and queue tracks, and it will ask what you actually want before it plays anything rather than queueing on every message. Its brain is a locally installed agent CLI (`claude`, `codex`, `agy`, `copilot`, `opencode`, no key), an API key, or a local model via Ollama / LM Studio; it asks which one on your first visit, since the agent CLIs spend the coding subscription you already pay for. Full guide: [`docs/ai-dj.md`](docs/ai-dj.md).
+**Or use the DJ built into the TUI** (`--features ai-dj`) — press `Ctrl-j` for a DJ screen with a chat prompt, `Ctrl-t` for continuous auto-queue, `Ctrl-y` to shift the vibe, `Ctrl-o` for "only tracks I don't already have", `Ctrl-g` to choose which AI and model it uses. It drives the same tools as the MCP server, so it can search, check your queue and queue tracks, and it will ask what you actually want before it plays anything rather than queueing on every message. Its brain is a locally installed agent CLI (`claude`, `codex`, `agy`, `copilot`, `opencode`, no key), an API key, or a local model via Ollama / LM Studio; it asks which one on your first visit, since the agent CLIs spend the coding subscription you already pay for. Full guide: [`docs/ai-dj.md`](docs/ai-dj.md).
 
-Only aggregate track, artist, and album *names* from your local history are ever sent to a model — no identifiers, no timestamps.
+What reaches a model is track, artist, and album *names*: aggregates from your local history, what is playing now, and the conversation you typed. No identifiers, no timestamps, no account. Full breakdown in [`docs/ai-dj.md`](docs/ai-dj.md#what-is-sent-to-the-model).
 
 ```bash
 cargo install --locked spotatui --features mcp-server,ai-dj
