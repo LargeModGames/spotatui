@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src=".github/spotatui-logo.png"><br>
+  <img src=".github/spotatui-logo.png" alt="spotatui logo"><br>
   spotatui
 </h1>
 <p align="center">
@@ -17,18 +17,6 @@
 
 
 ![Demo](.github/demo.gif)
-
-## About
-<!--
-A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
--->
-Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), but since then the project has diverged in multiple fronts. 
-
-| Key differences | spotify-tui | spotatui |
-|---|---|---|
-| Spotify backend | spotifyd | native client |
-| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio |
-
 
 ## Table of Contents
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
@@ -68,6 +56,17 @@ Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), bu
 - [Roadmap](#roadmap)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
+## About
+<!--
+A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
+-->
+Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), but since then the project has diverged in multiple fronts. 
+
+| Key differences | spotify-tui | spotatui |
+|---|---|---|
+| Spotify backend | spotifyd | native client |
+| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio |
 
 ## Features
 
@@ -135,6 +134,20 @@ inputs = {
   ];
 }
 ```
+
+The flake will take care of all the dependencies for you, except for setting the audio backend.
+If you use alsa:
+   ```nix
+    hardware.alsa.enable = true;
+   ```
+Or if you use pipewire:
+   ```nix
+    services.pipewire = {
+        enable = true;
+        alsa.enable = true;
+        #your other settings 
+    };
+   ```
 
 ```nix
 # NixOS with cargo
@@ -437,23 +450,9 @@ You may be asked to re-authenticate with Spotify the first time.
 1. Clone or fork this repo and `cd` to it
 1. And then `cargo run`
 
-### If you use NixOS or Nix in general:
+### Nix
    ```bash
     nix develop
-    cargo run
-   ```
-The flake will take care of all the dependencies for you, except for setting the audio backend.
-If you use alsa:
-   ```nix
-    hardware.alsa.enable = true;
-   ```
-Or if you use pipewire:
-   ```nix
-    services.pipewire = {
-        enable = true;
-        alsa.enable = true;
-        #your other settings 
-    };
    ```
  
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines.
