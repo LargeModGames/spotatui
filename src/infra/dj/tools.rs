@@ -483,21 +483,35 @@ pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Optio
 /// What, if anything, will actually act on a vibe that was just set.
 ///
 /// Worth a sentence rather than a bare "vibe set". The vibe is a standing
-/// direction for the *in-TUI* auto-queue DJ, and in a build without one nothing
-/// consumes it on its own. An agent told only "DJ vibe set to: mellow"
-/// reasonably concludes the music is about to change, and would be wrong.
+/// direction for the *in-TUI* auto-queue DJ, and there are two ordinary
+/// situations where nothing consumes it on its own: a build without `ai-dj`
+/// (`--features mcp-server` alone is a complete build, and the commonest one),
+/// and a build with it where the listener has not switched auto-queue on. An
+/// agent told only "DJ vibe set to: mellow" reasonably concludes the music is
+/// about to change, and would be wrong both times.
 ///
 /// It is never *ignored*, which is why this points at the fallback: the vibe is
 /// stored on `App` and comes back out through `get_listening_history`, so an
 /// agent running its own top-up loop can read it and honour it itself.
 fn vibe_effect(app: &App) -> &'static str {
-  // `App::dj` exists under `dj-core`, so `auto_queue` is readable here — but it
-  // is permanently false in a build with no in-TUI DJ, and saying "auto-queue is
-  // off" would imply it could be turned on. Once `ai-dj` exists this grows the
-  // arm that reports the live toggle.
-  let _ = app;
-  "This build has no built-in auto-queue DJ, so nothing will act on it automatically. It is \
-   stored and returned by get_listening_history, so you can follow it yourself when you queue."
+  #[cfg(feature = "ai-dj")]
+  {
+    if app.dj.auto_queue {
+      "The built-in DJ will follow it from its next refill."
+    } else {
+      "The built-in DJ's auto-queue is off, so nothing will act on it until the user turns it on; \
+       queue tracks yourself in the meantime. get_listening_history returns it either way."
+    }
+  }
+  #[cfg(not(feature = "ai-dj"))]
+  {
+    // `App::dj` exists under `dj-core`, so `auto_queue` is readable here — but it
+    // is permanently false in this build, and saying "auto-queue is off" would
+    // imply it could be turned on.
+    let _ = app;
+    "This build has no built-in auto-queue DJ, so nothing will act on it automatically. It is \
+     stored and returned by get_listening_history, so you can follow it yourself when you queue."
+  }
 }
 
 async fn history_outcome(
@@ -924,9 +938,16 @@ mod tests {
       "the agent needs to be told it can read the vibe back: {}",
       outcome.text
     );
+    #[cfg(feature = "ai-dj")]
+    assert!(
+      outcome.text.contains("auto-queue is off"),
+      "a default App has auto-queue off: {}",
+      outcome.text
+    );
+    #[cfg(not(feature = "ai-dj"))]
     assert!(
       outcome.text.contains("no built-in auto-queue DJ"),
-      "with no in-TUI DJ there is nothing to switch on, and saying \"off\" would imply there is: {}",
+      "without ai-dj there is no DJ to switch on, and saying \"off\" would imply there is: {}",
       outcome.text
     );
   }

@@ -1,6 +1,6 @@
 use super::{common_key_events, library, lyrics_view, playbar, playlist, settings};
 use crate::core::app::{
-  ActiveBlock, App, RouteId, SettingValue, SettingsCategory, LIBRARY_OPTIONS,
+  library_options, ActiveBlock, App, RouteId, SettingValue, SettingsCategory,
 };
 use crate::core::layout::{
   compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
@@ -468,7 +468,7 @@ fn set_input_cursor_from_column(input_area: Rect, mouse_column: u16, app: &mut A
 }
 
 fn select_clicked_library_item(mouse_row: u16, list_area: Rect, app: &mut App) {
-  let item_count = LIBRARY_OPTIONS.len();
+  let item_count = library_options().len();
   let selected_index = app.library.selected_index.min(item_count.saturating_sub(1));
 
   let Some(clicked_index) =

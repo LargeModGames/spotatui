@@ -227,13 +227,21 @@ Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recom
 
 ## AI DJ
 
-spotatui can pick music for you, from your own listening history.
+spotatui can pick music for you, from your own listening history. Two ways in:
 
 **Drive it from your coding agent** (`--features mcp-server`) — spotatui exposes the player and your listening history as [MCP](https://modelcontextprotocol.io) tools, so Claude Code, Codex, Gemini CLI, or any MCP client becomes the DJ. **No API key**: it uses the agent subscription you already have. Setup is one line you hand to your agent:
 
 > Read `docs/mcp-setup.md` in the spotatui repo and set up the spotatui MCP server for me, following it exactly.
 
 That file is written as instructions *for the agent*, and `spotatui mcp status` gives it a safe, checkable probe of every step. Full guide: [`docs/mcp-setup.md`](docs/mcp-setup.md).
+
+**Or use the DJ built into the TUI** (`--features ai-dj`) — press `Ctrl-j` for a DJ screen with a chat prompt, `Ctrl-t` for continuous auto-queue, `Ctrl-y` to shift the vibe, `Ctrl-o` for "only tracks I don't already have", `Ctrl-g` to choose which AI and model it uses. It drives the same tools as the MCP server, so it can search, check your queue and queue tracks, and it will ask what you actually want before it plays anything rather than queueing on every message. Its brain is a locally installed agent CLI (`claude`, `codex`, `agy`, `copilot`, `opencode`, no key), an API key, or a local model via Ollama / LM Studio; it asks which one on your first visit, since the agent CLIs spend the coding subscription you already pay for. Full guide: [`docs/ai-dj.md`](docs/ai-dj.md).
+
+What reaches a model is track, artist, and album *names*: aggregates from your local history, what is playing now, and the conversation you typed. No identifiers, no timestamps, no account. Full breakdown in [`docs/ai-dj.md`](docs/ai-dj.md#what-is-sent-to-the-model).
+
+```bash
+cargo install --locked spotatui --features mcp-server,ai-dj
+```
 
 ## Native Streaming
 
@@ -325,6 +333,7 @@ Playing Spotify tracks requires a **Premium** account. With a free Spotify accou
 As of November 2024, Spotify removed access to certain API endpoints for new applications. The following features **only work if your Spotify Developer application was created before November 27, 2024**:
 
 - **Related Artists** — the "Related Artists" section on an artist page.
+- **Recommendations** — seed-based recommendations. The **AI DJ** does not depend on this endpoint: it has a model do the recommending and only uses Spotify to look the tracks up, so it works regardless of when your app was created.
 - **Audio Analysis** — spotatui no longer depends on it. The **audio visualizer** (press `v`) now uses **local real-time FFT analysis** of your system audio, so it works regardless of your app's creation date:
 
   | Platform    | Status               | Notes                                    |

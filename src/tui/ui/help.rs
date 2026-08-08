@@ -533,6 +533,38 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       key_bindings.listening_party.to_string(),
       String::from("General"),
     ],
+    // `docs/keybindings.md` promises `?` lists every binding, and until now none of
+    // the DJ's five were here.
+    #[cfg(feature = "ai-dj")]
+    vec![
+      String::from("Open the AI DJ screen"),
+      key_bindings.dj_open.to_string(),
+      String::from("AI DJ"),
+    ],
+    #[cfg(feature = "ai-dj")]
+    vec![
+      String::from("Toggle DJ auto-queue (keep the queue topped up)"),
+      key_bindings.dj_toggle_auto_queue.to_string(),
+      String::from("AI DJ"),
+    ],
+    #[cfg(feature = "ai-dj")]
+    vec![
+      String::from("Shift the vibe (drop the DJ's queued tracks and re-ask)"),
+      key_bindings.dj_vibe_shift.to_string(),
+      String::from("AI DJ"),
+    ],
+    #[cfg(feature = "ai-dj")]
+    vec![
+      String::from("Toggle \"only tracks I do not already have\""),
+      key_bindings.dj_toggle_fresh_only.to_string(),
+      String::from("AI DJ"),
+    ],
+    #[cfg(feature = "ai-dj")]
+    vec![
+      String::from("Choose which AI and model the DJ uses"),
+      key_bindings.dj_pick_model.to_string(),
+      String::from("AI DJ"),
+    ],
   ]
 }
 

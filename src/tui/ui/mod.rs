@@ -1,3 +1,5 @@
+#[cfg(feature = "ai-dj")]
+pub mod ai_dj;
 pub mod artist;
 pub mod audio_analysis;
 pub mod columns;
@@ -100,6 +102,10 @@ fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
     }
     RouteId::Friends => {
       draw_friends(f, app, content_area);
+    }
+    #[cfg(feature = "ai-dj")]
+    RouteId::AiDj => {
+      ai_dj::draw_ai_dj(f, app, content_area);
     }
     RouteId::Stats => {
       draw_stats(f, app, content_area);

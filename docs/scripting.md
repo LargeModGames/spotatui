@@ -445,13 +445,17 @@ To bind a command to a key, add a `plugin_commands` section to `config.yml`:
 ```yaml
 plugin_commands:
   toggle_lyrics: "ctrl-l"
-  show_stats: "ctrl-g"
+  show_stats: "ctrl-k"
 ```
 
 Each entry maps a command name to a key string. The key string uses the same format as the
 built-in keybindings (e.g. `ctrl-l`, `alt-x`, `f1`, `space`). Entries are silently skipped when
 the key string is invalid, the key is a reserved navigation key, or the key already has a named
 action bound to it. The remaining entries are loaded normally.
+
+Which keys are already taken depends on the build: an `ai-dj` build claims `ctrl-j`, `ctrl-t`,
+`ctrl-y`, `ctrl-o` and `ctrl-g` for the DJ, so a plugin binding on one of those is dropped on
+load with only a log line to say so. Check `?` in a running spotatui for the live list.
 
 When the bound key is pressed, the corresponding command callback fires after the current key
 handler returns. An error in the callback is reported as a highlighted status message (6-second

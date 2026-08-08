@@ -247,3 +247,39 @@ The ▶ now-playing marker attaches to the `title` column, or to the first colum
 ## Keybindings, theme, and plugins
 
 The `keybindings:` section rebinds ~40 named actions (`back: q`, `next_track: n`, modifier syntax like `ctrl-s` / `alt-,`), and `theme:` sets a preset plus 16 individual color slots (`"R, G, B"` or named colors) — both are easiest to edit from the in-app Settings screen, which writes them back to this file. `behavior.banner_gradient: false` draws the home-screen banner in the theme's banner color instead of the animated RGB gradient. The Terminal (ANSI) preset defaults this to `false` so the banner follows the terminal palette live (pywal etc.); every other preset defaults to `true`. An explicit `banner_gradient:` value in the config wins over the preset default. `plugin_commands:` maps extra keys to Lua plugin commands. See [`examples/config.example.yml`](../examples/config.example.yml) and the [scripting docs](scripting.md).
+
+## AI DJ and the MCP server
+
+Both are opt-in cargo features, so these keys only exist in a build that includes
+them.
+
+| Key | Feature | Default | Meaning |
+|---|---|---|---|
+| `mcp_enabled` | `mcp-server` | `false` | Open the local MCP control socket so a coding agent can drive playback |
+| `dj_backend` | `ai-dj` | `agent_cli` | `agent_cli`, `anthropic`, or `openai_compat` |
+| `dj_agent_command` | `ai-dj` | `["claude", "-p"]` | argv for `agent_cli`; a bare binary name expands to a known preset (`claude`, `codex`, `agy`, or the legacy `gemini`) |
+| `dj_agent_model` | `ai-dj` | unset | Model passed as that CLI's own flag (`claude --model haiku`, `agy --model gemini-3.6-flash-low`); unset passes no flag |
+| `dj_agent_prompt_via` | `ai-dj` | unset (the preset decides) | `stdin` or `arg`. `agy` ignores stdin, so leaving this unset is what keeps it working |
+| `dj_agent_timeout_secs` | `ai-dj` | `90` | Clamped to 5–600 |
+| `dj_model` | `ai-dj` | unset | Model id for the API backends; the agent CLIs use `dj_agent_model` instead |
+| `dj_base_url` | `ai-dj` | Ollama's local endpoint | Base URL for `openai_compat` |
+| `dj_api_key` | `ai-dj` | unset | Plaintext; prefer `SPOTATUI_DJ_API_KEY` |
+| `dj_batch_size` | `ai-dj` | `6` | Tracks queued per round, max 8 |
+| `dj_history_period` | `ai-dj` | `30d` | History window summarised for the model |
+| `dj_avoid_library` | `ai-dj` | `false` | Start in "only tracks I don't already have" mode |
+| `dj_configured` | `ai-dj` | unset | Written by the in-TUI AI/model picker (`Ctrl-g`). `true` stops the DJ asking which AI to use on your first visit |
+
+`mcp_enabled` is off by default because opening a socket that can control the
+player and read your listening history is a deliberate act. It binds loopback only
+and requires the token in `~/.config/spotatui/mcp.json` (mode `0600`).
+
+`SPOTATUI_DJ_API_KEY` overrides `dj_api_key` at request time and never touches
+disk — the same arrangement as `SPOTATUI_SUBSONIC_PASSWORD`.
+
+You do not have to write the `dj_backend` / `dj_agent_command` / model keys by hand:
+the DJ asks which AI and which model on your first visit and writes the answer back
+here, and `Ctrl-g` reopens that picker. It never touches `dj_api_key` or
+`dj_base_url`, so those two remain yours.
+
+Setup, tools, and troubleshooting: [`docs/mcp-setup.md`](mcp-setup.md) and
+[`docs/ai-dj.md`](ai-dj.md).

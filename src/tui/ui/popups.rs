@@ -669,7 +669,13 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
   }
 }
 
-fn centered_modal_rect(bounds: Rect, requested_width: u16, requested_height: u16) -> Rect {
+/// A modal box centred horizontally and a third of the way down `bounds`, clamped
+/// to fit. Shared so every overlay in the app sits in the same place.
+pub(crate) fn centered_modal_rect(
+  bounds: Rect,
+  requested_width: u16,
+  requested_height: u16,
+) -> Rect {
   let width = requested_width.min(bounds.width.saturating_sub(2).max(1));
   let height = requested_height.min(bounds.height.saturating_sub(2).max(1));
   let left = bounds.x + bounds.width.saturating_sub(width) / 2;

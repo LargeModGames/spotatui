@@ -681,6 +681,16 @@ pub struct KeyBindingsString {
   jump_to_start: Option<String>,
   jump_to_end: Option<String>,
   jump_to_album: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  dj_open: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  dj_toggle_auto_queue: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  dj_vibe_shift: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  dj_toggle_fresh_only: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  dj_pick_model: Option<String>,
   jump_to_artist_album: Option<String>,
   jump_to_context: Option<String>,
   manage_devices: Option<String>,
@@ -726,6 +736,23 @@ pub struct KeyBindings {
   pub jump_to_start: Key,
   pub jump_to_end: Key,
   pub jump_to_album: Key,
+  /// Open the AI DJ screen. A global binding rather than only a sidebar row: the
+  /// Library panel is not drawn for non-Spotify sources, so the row alone would
+  /// make the DJ unreachable there.
+  #[cfg(feature = "ai-dj")]
+  pub dj_open: Key,
+  #[cfg(feature = "ai-dj")]
+  pub dj_toggle_auto_queue: Key,
+  #[cfg(feature = "ai-dj")]
+  pub dj_vibe_shift: Key,
+  /// Toggle "only tracks I do not already have" for DJ recommendations.
+  #[cfg(feature = "ai-dj")]
+  pub dj_toggle_fresh_only: Key,
+  /// Reopen the "which AI, which model" picker. Which brain the DJ uses is the one
+  /// setting that costs money (or quota) per turn, so it has to be changeable
+  /// without hand-editing YAML.
+  #[cfg(feature = "ai-dj")]
+  pub dj_pick_model: Key,
   pub jump_to_artist_album: Key,
   pub jump_to_context: Key,
   pub manage_devices: Key,
@@ -820,6 +847,10 @@ pub struct BehaviorConfigString {
   pub dj_batch_size: Option<usize>,
   #[cfg(feature = "ai-dj")]
   pub dj_history_period: Option<String>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_avoid_library: Option<bool>,
+  #[cfg(feature = "ai-dj")]
+  pub dj_configured: Option<bool>,
   pub keepawake_enabled: Option<bool>,
   pub enable_media_keys: Option<bool>,
   pub sync_token: Option<String>,
@@ -965,6 +996,25 @@ pub struct BehaviorConfig {
   /// `all`.
   #[cfg(feature = "ai-dj")]
   pub dj_history_period: String,
+  /// Start the DJ in "only tracks I do not already have" mode: reject anything in
+  /// Liked Songs or the listener's own playlists instead of recommending it.
+  ///
+  /// Only the starting value; the DJ screen toggles it per session, because which
+  /// mode is wanted depends on the ask. Turning it on costs one crawl of every
+  /// playlist the first time it is used in a session.
+  #[cfg(feature = "ai-dj")]
+  pub dj_avoid_library: bool,
+  /// Whether the DJ's backend and model have ever been chosen deliberately.
+  ///
+  /// `Option<bool>`, not `bool`. Key *presence* cannot be the signal: `save_config`
+  /// writes every `dj_*` key unconditionally as `Some(...)`, and it saves from hot
+  /// paths (volume, shuffle, sidebar resize, shutdown, first run), so every install
+  /// that has ever changed its volume already has the whole `dj_*` block on disk.
+  /// A bare `bool` is worse still: the first unrelated save would write `false` and
+  /// pin it there forever. Only the `Option` fields survive `build_behavior`
+  /// untouched, so this round-trips as `null` until the picker sets it.
+  #[cfg(feature = "ai-dj")]
+  pub dj_configured: Option<bool>,
   pub keepawake_enabled: bool,
   /// When false, spotatui ignores OS media-control commands (headphone
   /// play/pause/skip buttons, media keys, MPRIS/SMTC/Now Playing, playerctl).
@@ -1024,19 +1074,21 @@ pub struct BehaviorConfig {
 }
 
 /// The DJ brains a config may name. Module-level rather than a local `const` in
-/// the load validator so the validator and the picker cannot drift apart.
+/// the load validator so the validator, the picker and [`BehaviorConfig::dj_is_configured`]
+/// cannot drift apart.
 #[cfg(feature = "ai-dj")]
 pub const DJ_BACKENDS: [&str; 3] = ["agent_cli", "anthropic", "openai_compat"];
 
-/// The shipped default backend.
+/// The shipped default backend. Also what "not configured" compares against.
 #[cfg(feature = "ai-dj")]
 pub const DEFAULT_DJ_BACKEND: &str = "agent_cli";
 
 /// The shipped default `agent_cli` argv.
 ///
 /// A function rather than a `const` because it allocates, and one source of truth
-/// so nothing else has to keep a second copy of the argv spotatui ships in step
-/// with this one.
+/// because [`BehaviorConfig::dj_is_configured`] asks "is this still the value
+/// spotatui shipped?" — a second copy would answer that question wrongly the first
+/// time either changed.
 #[cfg(feature = "ai-dj")]
 pub fn default_dj_agent_command() -> Vec<String> {
   vec!["claude".to_string(), "-p".to_string()]
@@ -1054,6 +1106,31 @@ impl BehaviorConfig {
     } else {
       ratatui::style::Modifier::empty()
     }
+  }
+
+  /// Has the DJ already been set up, by the picker or by hand?
+  ///
+  /// Two signals, and both are needed. The marker covers "the picker ran, or the
+  /// user dismissed it". Value-differs-from-default covers the user who configured
+  /// the DJ in their YAML before the picker existed: those values can only have
+  /// been typed, because `save_config` writes the defaults back verbatim.
+  ///
+  /// Deliberately absent: `dj_batch_size`, `dj_history_period`, `dj_avoid_library`
+  /// and the timeout are tuning, not a choice of AI. So is `dj_agent_prompt_via`,
+  /// and that one is the trap — `save_config` already wrote `stdin` into every
+  /// existing install, so counting it would mean nobody is ever asked, including
+  /// the Claude Pro users this picker exists for.
+  #[cfg(feature = "ai-dj")]
+  pub fn dj_is_configured(&self) -> bool {
+    if self.dj_configured == Some(true) {
+      return true;
+    }
+    self.dj_backend != DEFAULT_DJ_BACKEND
+      || self.dj_agent_command != default_dj_agent_command()
+      || self.dj_agent_model.is_some()
+      || self.dj_model.is_some()
+      || self.dj_api_key.is_some()
+      || self.dj_base_url.is_some()
   }
 }
 
@@ -1220,6 +1297,24 @@ impl UserConfig {
         jump_to_start: Key::Ctrl('a'),
         jump_to_end: Key::Ctrl('e'),
         jump_to_album: Key::Char('a'),
+        #[cfg(feature = "ai-dj")]
+        dj_open: Key::Ctrl('j'),
+        #[cfg(feature = "ai-dj")]
+        dj_toggle_auto_queue: Key::Ctrl('t'),
+        #[cfg(feature = "ai-dj")]
+        dj_vibe_shift: Key::Ctrl('y'),
+        // Ctrl+O for "only new". The readline-ish keys the DJ prompt implements
+        // (Ctrl+A/B/D/E/F/H/U) are all spoken for, and this has to work while the
+        // prompt has focus.
+        #[cfg(feature = "ai-dj")]
+        dj_toggle_fresh_only: Key::Ctrl('o'),
+        // Ctrl+G, chosen because it is the only unused modifier key that also
+        // survives the DJ prompt: Ctrl+L is the macOS settings alias, Ctrl+N is
+        // `down_event` for every list in the app, and Ctrl+K / Ctrl+W kill a line in
+        // the search input. Needs a modifier at all because the DJ prompt takes
+        // every bare character.
+        #[cfg(feature = "ai-dj")]
+        dj_pick_model: Key::Ctrl('g'),
         jump_to_artist_album: Key::Char('A'),
         jump_to_context: Key::Char('o'),
         manage_devices: Key::Char('d'),
@@ -1320,6 +1415,12 @@ impl UserConfig {
         dj_batch_size: crate::infra::dj::DEFAULT_BATCH,
         #[cfg(feature = "ai-dj")]
         dj_history_period: "30d".to_string(),
+        // Off by default: the filter costs a playlist crawl, and "more like this"
+        // is a perfectly reasonable thing to want from a DJ.
+        #[cfg(feature = "ai-dj")]
+        dj_avoid_library: false,
+        #[cfg(feature = "ai-dj")]
+        dj_configured: None,
         keepawake_enabled: true,
         enable_media_keys: true,
         sync_token: None,
@@ -1422,6 +1523,16 @@ impl UserConfig {
     to_keys!(jump_to_start);
     to_keys!(jump_to_end);
     to_keys!(jump_to_album);
+    #[cfg(feature = "ai-dj")]
+    to_keys!(dj_open);
+    #[cfg(feature = "ai-dj")]
+    to_keys!(dj_toggle_auto_queue);
+    #[cfg(feature = "ai-dj")]
+    to_keys!(dj_vibe_shift);
+    #[cfg(feature = "ai-dj")]
+    to_keys!(dj_toggle_fresh_only);
+    #[cfg(feature = "ai-dj")]
+    to_keys!(dj_pick_model);
     to_keys!(jump_to_artist_album);
     to_keys!(jump_to_context);
     to_keys!(manage_devices);
@@ -1804,6 +1915,14 @@ impl UserConfig {
           );
         }
       }
+      if let Some(dj_avoid_library) = behavior_config.dj_avoid_library {
+        self.behavior.dj_avoid_library = dj_avoid_library;
+      }
+      // No validation to do: the only value that means anything is `true`, and a
+      // config that says `false` is telling us the picker has not run yet.
+      if let Some(dj_configured) = behavior_config.dj_configured {
+        self.behavior.dj_configured = Some(dj_configured);
+      }
     }
     if let Some(keepawake_enabled) = behavior_config.keepawake_enabled {
       self.behavior.keepawake_enabled = keepawake_enabled;
@@ -2065,6 +2184,16 @@ impl UserConfig {
       k.jump_to_start,
       k.jump_to_end,
       k.jump_to_album,
+      #[cfg(feature = "ai-dj")]
+      k.dj_open,
+      #[cfg(feature = "ai-dj")]
+      k.dj_toggle_auto_queue,
+      #[cfg(feature = "ai-dj")]
+      k.dj_vibe_shift,
+      #[cfg(feature = "ai-dj")]
+      k.dj_toggle_fresh_only,
+      #[cfg(feature = "ai-dj")]
+      k.dj_pick_model,
       k.jump_to_artist_album,
       k.jump_to_context,
       k.manage_devices,
@@ -2303,6 +2432,12 @@ impl UserConfig {
       dj_batch_size: Some(self.behavior.dj_batch_size),
       #[cfg(feature = "ai-dj")]
       dj_history_period: Some(self.behavior.dj_history_period.clone()),
+      #[cfg(feature = "ai-dj")]
+      dj_avoid_library: Some(self.behavior.dj_avoid_library),
+      // Never `Some(false)`: an automatic save must not answer the picker's
+      // question on the user's behalf.
+      #[cfg(feature = "ai-dj")]
+      dj_configured: self.behavior.dj_configured,
       keepawake_enabled: Some(self.behavior.keepawake_enabled),
       enable_media_keys: Some(self.behavior.enable_media_keys),
       // --- Phase 2/3/6 new fields (persist whatever the user set) ---
@@ -2386,6 +2521,16 @@ impl UserConfig {
       jump_to_start: Some(key_to_config_string(self.keys.jump_to_start)),
       jump_to_end: Some(key_to_config_string(self.keys.jump_to_end)),
       jump_to_album: Some(key_to_config_string(self.keys.jump_to_album)),
+      #[cfg(feature = "ai-dj")]
+      dj_open: Some(key_to_config_string(self.keys.dj_open)),
+      #[cfg(feature = "ai-dj")]
+      dj_toggle_auto_queue: Some(key_to_config_string(self.keys.dj_toggle_auto_queue)),
+      #[cfg(feature = "ai-dj")]
+      dj_vibe_shift: Some(key_to_config_string(self.keys.dj_vibe_shift)),
+      #[cfg(feature = "ai-dj")]
+      dj_toggle_fresh_only: Some(key_to_config_string(self.keys.dj_toggle_fresh_only)),
+      #[cfg(feature = "ai-dj")]
+      dj_pick_model: Some(key_to_config_string(self.keys.dj_pick_model)),
       jump_to_artist_album: Some(key_to_config_string(self.keys.jump_to_artist_album)),
       jump_to_context: Some(key_to_config_string(self.keys.jump_to_context)),
       manage_devices: Some(key_to_config_string(self.keys.manage_devices)),
@@ -2983,6 +3128,8 @@ volume_increment: 5
     config.behavior.dj_model = Some("some-model".to_string());
     config.behavior.dj_base_url = Some("http://localhost:1234/v1".to_string());
     config.behavior.dj_api_key = Some("sk-not-a-real-key".to_string());
+    config.behavior.dj_avoid_library = true;
+    config.behavior.dj_configured = Some(true);
 
     // Mirrors what `save_config` writes, then reads it back. Every persisted DJ
     // key belongs here: one left out is one a persistence regression keeps green.
@@ -2997,6 +3144,8 @@ volume_increment: 5
       dj_model: config.behavior.dj_model.clone(),
       dj_base_url: config.behavior.dj_base_url.clone(),
       dj_api_key: config.behavior.dj_api_key.clone(),
+      dj_avoid_library: Some(config.behavior.dj_avoid_library),
+      dj_configured: config.behavior.dj_configured,
       ..Default::default()
     })
     .unwrap();
@@ -3024,6 +3173,8 @@ volume_increment: 5
       reloaded.behavior.dj_api_key.as_deref(),
       Some("sk-not-a-real-key")
     );
+    assert!(reloaded.behavior.dj_avoid_library);
+    assert_eq!(reloaded.behavior.dj_configured, Some(true));
   }
 
   /// argv[0] is the program to exec, so a blank one is no command at all.
@@ -3043,6 +3194,58 @@ volume_increment: 5
     assert_eq!(config.behavior.dj_agent_command, vec!["claude", ""]);
   }
 
+  /// The reopen binding is really registered, not just declared.
+  ///
+  /// Several sites have to agree for a binding to work and a miss in any of them
+  /// fails silently. This covers the three that are reachable without a config file
+  /// on disk: the shipped default, the rebind path, and the named-action list that
+  /// stops a plugin shadowing it.
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn the_dj_model_picker_binding_round_trips_and_is_reserved() {
+    use super::{KeyBindingsString, UserConfig};
+    use crate::tui::event::Key;
+    use std::collections::HashMap;
+
+    let mut config = UserConfig::new();
+    assert_eq!(config.keys.dj_pick_model, Key::Ctrl('g'));
+
+    config
+      .load_keybindings(KeyBindingsString {
+        dj_pick_model: Some("ctrl-x".to_string()),
+        ..Default::default()
+      })
+      .unwrap();
+    assert_eq!(config.keys.dj_pick_model, Key::Ctrl('x'));
+
+    // Named actions are off limits to Lua `plugin_commands`, or a plugin silently
+    // steals the binding.
+    let mut entries = HashMap::new();
+    entries.insert("steal_it".to_string(), "ctrl-x".to_string());
+    config.load_plugin_commands(entries);
+    assert!(config.plugin_command_keys.is_empty());
+  }
+
+  /// The exact YAML an existing install carries: every `dj_*` key present, every
+  /// one of them written by an automatic `save_config` rather than typed.
+  #[cfg(feature = "ai-dj")]
+  fn machine_written_dj_defaults() -> &'static str {
+    "
+dj_backend: agent_cli
+dj_agent_command:
+  - claude
+  - -p
+dj_agent_prompt_via: stdin
+dj_agent_timeout_secs: 90
+dj_batch_size: 6
+dj_history_period: 30d
+dj_avoid_library: false
+dj_model: null
+dj_base_url: null
+dj_api_key: null
+"
+  }
+
   #[cfg(feature = "ai-dj")]
   fn loaded(yaml: &str) -> super::UserConfig {
     use super::{BehaviorConfigString, UserConfig};
@@ -3051,6 +3254,101 @@ volume_increment: 5
       .load_behaviorconfig(serde_yaml::from_str::<BehaviorConfigString>(yaml).unwrap())
       .unwrap();
     config
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn a_fresh_config_is_not_treated_as_a_configured_dj() {
+    use super::UserConfig;
+    assert!(!UserConfig::new().behavior.dj_is_configured());
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn an_install_carrying_only_machine_written_dj_defaults_is_still_asked_once() {
+    // The test that keeps the predicate from silently excluding everybody: every
+    // key below is present on disk today, so presence can never be the signal.
+    // `dj_agent_prompt_via: stdin` in particular is the trap.
+    let config = loaded(machine_written_dj_defaults());
+    assert!(
+      !config.behavior.dj_is_configured(),
+      "a config written entirely by save_config has not chosen anything"
+    );
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn the_completion_marker_makes_a_default_config_count_as_configured() {
+    let yaml = format!("{}dj_configured: true\n", machine_written_dj_defaults());
+    assert!(loaded(&yaml).behavior.dj_is_configured());
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn a_hand_edited_dj_backend_counts_as_configured_without_the_marker() {
+    assert!(loaded("dj_backend: anthropic").behavior.dj_is_configured());
+    assert!(loaded("dj_agent_command:\n  - agy")
+      .behavior
+      .dj_is_configured());
+    assert!(loaded("dj_agent_model: haiku").behavior.dj_is_configured());
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn a_configured_api_key_counts_as_configured_without_the_marker() {
+    assert!(loaded("dj_api_key: sk-whatever")
+      .behavior
+      .dj_is_configured());
+    assert!(loaded("dj_base_url: http://localhost:11434/v1")
+      .behavior
+      .dj_is_configured());
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn tuning_the_dj_is_not_choosing_an_ai() {
+    // Batch size and the history window are knobs, not a backend choice, so a user
+    // who touched them is still owed the question.
+    let config = loaded("dj_batch_size: 3\ndj_history_period: 7d\ndj_avoid_library: true");
+    assert!(!config.behavior.dj_is_configured());
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn the_configured_marker_stays_null_until_something_sets_it() {
+    use super::{UserConfig, UserConfigPaths, UserConfigString};
+
+    // Through the real save path, because that is where the hazard is: `save_config`
+    // runs from volume changes and shutdown, and if it wrote `false` it would answer
+    // the picker's question on the user's behalf and pin the answer forever.
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: config_path.clone(),
+    });
+
+    config.save_config().unwrap();
+    let on_disk = |path: &std::path::Path| -> super::BehaviorConfigString {
+      let raw = std::fs::read_to_string(path).unwrap();
+      serde_yaml::from_str::<UserConfigString>(&raw)
+        .unwrap()
+        .behavior
+        .unwrap()
+    };
+    let saved = on_disk(&config_path);
+    assert_eq!(
+      saved.dj_configured, None,
+      "an automatic save answers nothing"
+    );
+    assert_eq!(
+      saved.dj_agent_prompt_via, None,
+      "and leaves the delivery mode for the preset to decide"
+    );
+
+    config.behavior.dj_configured = Some(true);
+    config.save_config().unwrap();
+    assert_eq!(on_disk(&config_path).dj_configured, Some(true));
   }
 
   #[cfg(feature = "ai-dj")]
@@ -3078,10 +3376,13 @@ volume_increment: 5
 
     let mut config = UserConfig::new();
     let mut entries = HashMap::new();
-    entries.insert("toggle_lyrics".to_string(), "ctrl-g".to_string());
+    // Ctrl+K rather than Ctrl+G: with `ai-dj` built in, Ctrl+G is `dj_pick_model`
+    // and `load_plugin_commands` correctly refuses to shadow a named action, so the
+    // old fixture would only have passed in the slim build.
+    entries.insert("toggle_lyrics".to_string(), "ctrl-k".to_string());
     config.load_plugin_commands(entries);
     assert_eq!(
-      config.plugin_command_keys.get(&Key::Ctrl('g')),
+      config.plugin_command_keys.get(&Key::Ctrl('k')),
       Some(&"toggle_lyrics".to_string())
     );
   }

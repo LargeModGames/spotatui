@@ -298,12 +298,33 @@ pub enum IoEvent {
       tokio::sync::oneshot::Sender<crate::infra::dj::tools::ToolOutcome>,
     )>,
   ),
+  /// Ask the in-TUI DJ's brain for tracks. Optionally carries the listener's
+  /// words; `None` means "keep the queue going in the current direction".
+  ///
+  /// Runs on the **service** lane: a brain call can take a minute or more (an
+  /// agent CLI is a subprocess with real startup cost), and parking that on the
+  /// serial pump would freeze every other event behind it. It touches only
+  /// `self.app` plus its own HTTP client / subprocess, which is exactly the
+  /// service-lane contract.
+  #[cfg(feature = "ai-dj")]
+  AskDj(Box<crate::infra::dj::AskDjRequest>),
+  /// Top the queue up because it is running low.
+  ///
+  /// Fields, in order: the DJ generation this refill was dispatched for, so a
+  /// stale one can be dropped; and the turn sequence from `DjState::begin_turn`,
+  /// so only this refill may clear the progress flag. Both are `u64`, so a
+  /// transposition would compile and then discard the wrong turn's flag.
+  #[cfg(feature = "ai-dj")]
+  DjTopUp(u64, u64),
   /// Crawl the listener's own playlists for the avoid-library filter.
   ///
-  /// Serial lane: it needs the real Spotify client. Dispatched by `search_tracks`,
-  /// so that marking results as owned never crawls *inside* a latency-sensitive
-  /// tool call; the resolve step builds the index inline if it is not warm yet.
-  /// The in-TUI DJ will dispatch it too, when the filter is switched on.
+  /// Serial lane: it needs the real Spotify client. Dispatched when the filter is
+  /// switched on, so the index is usually warm by the time the first batch comes
+  /// back from the brain; the resolve step builds it inline if it is not.
+  ///
+  /// The MCP front door dispatches it too, from `search_tracks`, so that marking
+  /// results as owned never crawls *inside* a latency-sensitive tool call. Hence
+  /// the gate is both features rather than `ai-dj` alone.
   #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
   DjIndexLibrary,
 }
@@ -436,6 +457,12 @@ impl Network {
     if matches!(io_event, IoEvent::DjToolCall(_)) {
       return true;
     }
+    // The brain call needs no Spotify session at all. The tool calls the loop
+    // makes from inside it do, and those go back through `DjToolCall` above.
+    #[cfg(feature = "ai-dj")]
+    if matches!(io_event, IoEvent::AskDj(_) | IoEvent::DjTopUp(..)) {
+      return true;
+    }
     matches!(
       io_event,
       IoEvent::RefreshAuthentication
@@ -492,6 +519,10 @@ impl Network {
     }
     #[cfg(feature = "cover-art")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+      return true;
+    }
+    #[cfg(feature = "ai-dj")]
+    if matches!(io_event, IoEvent::AskDj(_) | IoEvent::DjTopUp(..)) {
       return true;
     }
     matches!(
@@ -845,6 +876,14 @@ impl Network {
       IoEvent::DjToolCall(payload) => {
         let (call, responder) = *payload;
         self.run_dj_tool_call(call, responder).await;
+      }
+      #[cfg(feature = "ai-dj")]
+      IoEvent::AskDj(request) => {
+        self.ask_dj(*request).await;
+      }
+      #[cfg(feature = "ai-dj")]
+      IoEvent::DjTopUp(generation, turn_seq) => {
+        self.dj_top_up(generation, turn_seq).await;
       }
       #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
       IoEvent::DjIndexLibrary => {
@@ -1658,6 +1697,24 @@ mod tests {
       IoEvent::GenerateRecap(RecapPeriod::SevenDays),
     ];
     for event in events {
+      assert!(Network::runs_on_service_lane(&event));
+      assert!(Network::event_bypasses_spotify_auth(&event));
+    }
+
+    // The DJ's two service-lane events, which the array above cannot hold: they
+    // only exist under `ai-dj`. They are the whole reason this drift matters —
+    // a brain call left on the serial pump blocks every other event for minutes.
+    #[cfg(feature = "ai-dj")]
+    for event in [
+      IoEvent::AskDj(Box::new(crate::infra::dj::AskDjRequest {
+        extra_instruction: None,
+        generation: 0,
+        must_act: false,
+        turn_seq: 0,
+        vibe_on_success: None,
+      })),
+      IoEvent::DjTopUp(0, 0),
+    ] {
       assert!(Network::runs_on_service_lane(&event));
       assert!(Network::event_bypasses_spotify_auth(&event));
     }
