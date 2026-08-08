@@ -160,6 +160,7 @@ impl TasteBrief {
   ///
   /// Consumed by the MCP `get_listening_history` tool, which tells the agent to
   /// ask the user rather than infer from nothing.
+  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
   pub fn is_sparse(&self) -> bool {
     self.total_plays < 5
   }

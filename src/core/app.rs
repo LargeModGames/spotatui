@@ -4549,8 +4549,7 @@ impl App {
   /// The recently-played window is added by the caller from the taste brief;
   /// this covers only what `App` itself knows.
   #[cfg(feature = "dj-core")]
-  // No front door calls this yet; the gate narrows once one lands.
-  #[allow(dead_code)]
+  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
   pub fn dj_skip_keys(&self) -> std::collections::HashSet<String> {
     use crate::infra::dj::dedupe_key;
     let mut keys: std::collections::HashSet<String> = self
@@ -4579,8 +4578,7 @@ impl App {
   /// here: they are set and replaced within one lock, before any draw, and the
   /// caller overwrites them with a single aggregate message afterwards.
   #[cfg(feature = "dj-core")]
-  // No front door calls this yet; the gate narrows once one lands.
-  #[allow(dead_code)]
+  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
   pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> usize {
     let mut accepted = 0usize;
     for track in tracks {
@@ -4615,7 +4613,8 @@ impl App {
   /// by URI, so a track the user queued by hand *and* the DJ also picked goes
   /// too; that is the DJ's pick as much as theirs.
   #[cfg(feature = "dj-core")]
-  // No front door calls this yet; the gate narrows once one lands.
+  // Only the in-TUI DJ's vibe shift calls this; the allow narrows to
+  // `not(ai-dj)` once that front door lands.
   #[allow(dead_code)]
   pub fn drop_dj_queued_tracks(&mut self) -> usize {
     let dj_uris = std::mem::take(&mut self.dj.queued_uris);

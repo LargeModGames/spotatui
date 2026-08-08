@@ -460,8 +460,14 @@ fn setup_logging() -> anyhow::Result<()> {
     .apply()
     .map_err(|e| anyhow::anyhow!("Failed to initialize logger: {}", e))?;
 
-  // Print the location of log for user reference.
-  println!("Logging to: {}", log_path.display());
+  // Print the location of log for user reference — on stderr, not stdout.
+  //
+  // stdout belongs to program output: `spotatui history recap` writes HTML there
+  // and `spotatui mcp` writes JSON-RPC there, where the MCP spec is explicit
+  // that a server "MUST NOT write anything to its stdout that is not a valid MCP
+  // message" (a stray line makes every client fail to start). A diagnostic notice
+  // is exactly what stderr is for, and it stays visible on a terminal either way.
+  eprintln!("Logging to: {}", log_path.display());
 
   Ok(())
 }
@@ -1115,6 +1121,11 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     clap_app = clap_app.subcommand(cli::plugin_subcommand());
   }
 
+  #[cfg(feature = "mcp-server")]
+  {
+    clap_app = clap_app.subcommand(cli::mcp_subcommand());
+  }
+
   let matches = clap_app.clone().get_matches();
 
   // Shell completions don't need any spotify work
@@ -1142,6 +1153,21 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
 
   if let Some(history_matches) = matches.subcommand_matches("history") {
     println!("{}", cli::handle_history_matches(history_matches)?);
+    return Ok(());
+  }
+
+  // The MCP server owns stdout for the protocol, so it must return before any
+  // other startup path can print to it — and it needs no Spotify auth of its
+  // own, since the running TUI holds the session.
+  #[cfg(feature = "mcp-server")]
+  if let Some(mcp_matches) = matches.subcommand_matches("mcp") {
+    // `status` is the safe probe an agent (or a human) can run; bare `mcp` is the
+    // server and blocks on stdin until the client closes it.
+    if let Some(status_matches) = mcp_matches.subcommand_matches("status") {
+      let code = crate::infra::mcp::run_status(status_matches.get_flag("json")).await;
+      std::process::exit(code);
+    }
+    crate::infra::mcp::run_relay().await?;
     return Ok(());
   }
 
@@ -1492,6 +1518,38 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     }
 
     let history_collector = crate::infra::history::spawn_history_collector(Arc::clone(&app));
+
+    // Opt-in MCP control socket. Nothing listens unless the user asked for it;
+    // a bind failure is reported and shrugged off rather than blocking startup,
+    // since the player is perfectly usable without it.
+    #[cfg(feature = "mcp-server")]
+    {
+      let (enabled, io_tx) = {
+        let app_ref = app.lock().await;
+        (
+          app_ref.user_config.behavior.mcp_enabled,
+          app_ref.io_tx_clone(),
+        )
+      };
+      if enabled {
+        match io_tx {
+          Some(io_tx) => match crate::infra::mcp::spawn_listener(Arc::clone(&app), io_tx).await {
+            Ok(port) => {
+              let mut app_mut = app.lock().await;
+              if app_mut.status_message.is_none() {
+                app_mut.set_status_message(format!("MCP server listening on 127.0.0.1:{port}"), 6);
+              }
+            }
+            Err(e) => {
+              log::warn!("MCP: could not start the control socket: {e}");
+              let mut app_mut = app.lock().await;
+              app_mut.set_error_status_message(format!("MCP server failed to start: {e}"), 8);
+            }
+          },
+          None => log::warn!("MCP: no IoEvent sender available; control socket not started"),
+        }
+      }
+    }
     // Native streaming needs a Spotify session; when it will be attempted, the
     // account probe and librespot handshake run in a background task after the
     // UI is up (see `deferred_streaming_startup`) instead of gating the first
@@ -1874,6 +1932,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       history_collector,
     )
     .await;
+    // Unpublish the control file on the way out, whether the UI exited cleanly
+    // or not: leaving it behind sends the next `spotatui mcp` at a port nothing
+    // is listening on, which reads as a broken MCP server rather than an absent
+    // one.
+    #[cfg(feature = "mcp-server")]
+    crate::infra::mcp::clear_handshake();
     if ui_result.is_err() {
       let mut app = cloned_app.lock().await;
       app.flush_state_save(true);

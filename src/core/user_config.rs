@@ -798,6 +798,8 @@ pub struct BehaviorConfigString {
   pub draw_cover_art_forced: Option<bool>,
   #[cfg(feature = "cover-art")]
   pub playbar_cover_art_size_percent: Option<u16>,
+  #[cfg(feature = "mcp-server")]
+  pub mcp_enabled: Option<bool>,
   pub keepawake_enabled: Option<bool>,
   pub enable_media_keys: Option<bool>,
   pub sync_token: Option<String>,
@@ -886,6 +888,15 @@ pub struct BehaviorConfig {
   pub draw_cover_art_forced: bool,
   #[cfg(feature = "cover-art")]
   pub playbar_cover_art_size_percent: u16,
+  /// Whether to open the local MCP control socket so `spotatui mcp` (and through
+  /// it Claude Code, Codex, or any MCP client) can drive playback.
+  ///
+  /// Off by default. Opening a socket that can control the player and read
+  /// listening history is a security-posture change, so it is a deliberate act;
+  /// the socket binds loopback-only and requires the token from
+  /// `~/.config/spotatui/mcp.json`.
+  #[cfg(feature = "mcp-server")]
+  pub mcp_enabled: bool,
   pub keepawake_enabled: bool,
   /// When false, spotatui ignores OS media-control commands (headphone
   /// play/pause/skip buttons, media keys, MPRIS/SMTC/Now Playing, playerctl).
@@ -1198,6 +1209,8 @@ impl UserConfig {
         draw_cover_art_forced: false,
         #[cfg(feature = "cover-art")]
         playbar_cover_art_size_percent: 100,
+        #[cfg(feature = "mcp-server")]
+        mcp_enabled: false,
         keepawake_enabled: true,
         enable_media_keys: true,
         sync_token: None,
@@ -1600,6 +1613,10 @@ impl UserConfig {
     if let Some(playbar_cover_art_size_percent) = behavior_config.playbar_cover_art_size_percent {
       self.behavior.playbar_cover_art_size_percent =
         clamp_playbar_cover_art_size_percent(playbar_cover_art_size_percent);
+    }
+    #[cfg(feature = "mcp-server")]
+    if let Some(mcp_enabled) = behavior_config.mcp_enabled {
+      self.behavior.mcp_enabled = mcp_enabled;
     }
     if let Some(keepawake_enabled) = behavior_config.keepawake_enabled {
       self.behavior.keepawake_enabled = keepawake_enabled;
@@ -2075,6 +2092,8 @@ impl UserConfig {
       draw_cover_art_forced: Some(self.behavior.draw_cover_art_forced),
       #[cfg(feature = "cover-art")]
       playbar_cover_art_size_percent: Some(self.behavior.playbar_cover_art_size_percent),
+      #[cfg(feature = "mcp-server")]
+      mcp_enabled: Some(self.behavior.mcp_enabled),
       keepawake_enabled: Some(self.behavior.keepawake_enabled),
       enable_media_keys: Some(self.behavior.enable_media_keys),
       // --- Phase 2/3/6 new fields (persist whatever the user set) ---

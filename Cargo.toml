@@ -168,6 +168,11 @@ youtube = ["audio-decode", "dep:tempfile"]
 # Pulled by `mcp-server` and `ai-dj` the same way `audio-decode` is pulled by the
 # media sources.
 dj-core = []
+# Expose the player and listening history as MCP tools over a `spotatui mcp`
+# stdio server, so Claude Code / Codex / any MCP client can drive playback. No
+# LLM client and no API key are compiled in: `--features mcp-server` alone is a
+# complete "drive it from your coding agent" build.
+mcp-server = ["dj-core"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 pub struct ToolSpec {
   pub name: &'static str,
   /// MCP-only: the in-TUI DJ renders `name` and `description` alone.
+  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
   pub title: &'static str,
   pub description: &'static str,
   /// Whether the tool only reads state. Surfaced to MCP clients so they can
@@ -240,6 +241,7 @@ pub struct ToolOutcome {
   pub text: String,
   /// Machine-readable mirror, when the tool has one. MCP-only: the in-TUI DJ
   /// feeds `text` back to its model, which reads prose perfectly well.
+  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
   pub structured: Option<Value>,
   /// True for an execution failure the model can act on and retry.
   pub is_error: bool,
