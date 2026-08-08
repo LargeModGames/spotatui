@@ -66,6 +66,32 @@ pub async fn run() -> Result<()> {
 struct Upstream {
   reader: tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
   writer: tokio::net::tcp::OwnedWriteHalf,
+  /// Whether a line has come back from this socket that proves the token was
+  /// accepted.
+  ///
+  /// The control channel answers a *good* token with silence and a bad one with
+  /// one non-MCP line, so nothing distinguishes the two until the socket first
+  /// speaks. Checked once rather than on every response: one well-formed line
+  /// settles it for the life of the connection.
+  token_checked: bool,
+}
+
+/// The control channel's answer to a bad token, which is one line followed by a
+/// hang-up. It is not MCP traffic and must never reach the agent as the response
+/// to its request; a JSON-RPC error response is distinguishable because its
+/// `error` is an object, not a bare string.
+fn control_rejection(line: &str) -> Option<String> {
+  match serde_json::from_str::<serde_json::Value>(line)
+    .ok()?
+    .get("error")?
+    .as_str()?
+  {
+    "unauthorized" => Some(
+      "spotatui rejected the control token; the control file is stale, so restart spotatui"
+        .to_string(),
+    ),
+    _ => None,
+  }
 }
 
 /// Why a forward failed, which is what decides whether it may be sent again.
@@ -250,6 +276,7 @@ impl Relay {
     let mut upstream = Upstream {
       reader: BufReader::new(read_half).lines(),
       writer,
+      token_checked: false,
     };
     if let Some(handshake) = self.handshake.clone() {
       // The reply is the TUI's answer to a handshake the agent already had
@@ -261,8 +288,19 @@ impl Relay {
       // Deadlined like every other upstream read: a socket that accepts the
       // replay and never answers would otherwise block here forever, and this
       // runs before any of the agent's own lines get a chance.
-      match tokio::time::timeout(HANDSHAKE_REPLAY_TIMEOUT, upstream.reader.next_line()).await {
-        Ok(Ok(Some(_))) => {}
+      let replay =
+        tokio::time::timeout(HANDSHAKE_REPLAY_TIMEOUT, upstream.reader.next_line()).await;
+      match replay {
+        Ok(Ok(Some(reply))) => {
+          // The rejection line arrives exactly here on a stale control file, and
+          // taking it for a handshake answer would mark a socket the server has
+          // already hung up on as healthy.
+          if let Some(reason) = control_rejection(&reply) {
+            self.offline_reason = reason;
+            return false;
+          }
+          upstream.token_checked = true;
+        }
         Ok(_) => {
           self.offline_reason = "spotatui closed the connection during the handshake".to_string();
           return false;
@@ -302,8 +340,21 @@ impl Relay {
     // then dropped rather than reused, since a late answer arriving on it would
     // be read as the *next* request's response and desynchronise the stream for
     // the rest of the session.
-    match tokio::time::timeout(response_timeout, upstream.reader.next_line()).await {
-      Ok(Ok(Some(response))) => Ok(Some(response)),
+    let read = tokio::time::timeout(response_timeout, upstream.reader.next_line()).await;
+    match read {
+      Ok(Ok(Some(response))) => {
+        // With no handshake to replay, this is the connection's first line, so
+        // it is where a rejected token surfaces. `Unsent`, not `Sent`: the
+        // control layer refuses before the MCP server ever reads the request, so
+        // nothing was applied and a replay cannot duplicate anything.
+        if !upstream.token_checked {
+          if let Some(reason) = control_rejection(&response) {
+            return Err(ForwardError::Unsent(anyhow::anyhow!("{reason}")));
+          }
+          upstream.token_checked = true;
+        }
+        Ok(Some(response))
+      }
       Ok(Ok(None)) => Err(ForwardError::Sent(anyhow::anyhow!(
         "spotatui closed the connection"
       ))),
@@ -563,6 +614,29 @@ mod tests {
     });
   }
 
+  /// A stand-in TUI whose token never matches: it answers with the control
+  /// channel's own rejection line and hangs up, exactly as `serve_connection`
+  /// does.
+  fn fake_tui_that_rejects_the_token(listener: TcpListener) {
+    tokio::spawn(async move {
+      loop {
+        let Ok((stream, _)) = listener.accept().await else {
+          break;
+        };
+        tokio::spawn(async move {
+          let (read_half, mut write_half) = stream.into_split();
+          let mut lines = BufReader::new(read_half).lines();
+          if lines.next_line().await.is_err() {
+            return;
+          }
+          let _ = write_half
+            .write_all(b"{\"error\":\"unauthorized\"}\n")
+            .await;
+        });
+      }
+    });
+  }
+
   /// A relay pointed at `port`, with no dependence on any shared path or env.
   fn relay_for(port: u16, token: &str) -> Relay {
     let token = token.to_string();
@@ -702,6 +776,57 @@ mod tests {
     assert!(
       text.contains("may or may not have been applied"),
       "the agent has to be told it is unknown, not that nothing happened: {text}"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_rejected_control_token_becomes_an_offline_error_not_a_response() {
+    // The control channel answers a bad token with one non-MCP line and hangs
+    // up. Forwarded as-is it becomes the agent's "response" to a request it is
+    // still waiting on, under no id it recognises.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fake_tui_that_rejects_the_token(listener);
+    let mut relay = relay_for(port, "stale-token");
+
+    let response: serde_json::Value =
+      serde_json::from_str(&relay.handle(&modern_call()).await.unwrap()).unwrap();
+
+    assert!(
+      response["result"]["isError"] == json!(true),
+      "the rejection must be reported, not relayed: {response}"
+    );
+    let text = response.to_string();
+    assert!(
+      text.contains("control token"),
+      "the reason has to name the stale control file: {text}"
+    );
+    // Nothing reached the server, so the agent must not be warned off retrying.
+    assert!(
+      !text.contains("may or may not have been applied"),
+      "a refused token applied nothing: {text}"
+    );
+  }
+
+  #[tokio::test]
+  async fn the_handshake_replay_does_not_accept_a_rejection_as_a_valid_reply() {
+    // The same line arriving one read earlier. Taken for a handshake answer, it
+    // marked a socket the server had already hung up on as healthy.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fake_tui_that_rejects_the_token(listener);
+    let mut relay = relay_for(port, "stale-token");
+    relay.handshake = Some(
+      json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "2025-06-18"}})
+      .to_string(),
+    );
+
+    assert!(!relay.ensure_upstream().await, "the socket is not usable");
+    assert!(
+      relay.offline_reason.contains("control token"),
+      "{}",
+      relay.offline_reason
     );
   }
 

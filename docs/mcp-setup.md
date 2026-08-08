@@ -46,8 +46,13 @@ spotatui mcp status          # human-readable report
 spotatui mcp status --json   # same thing, machine-readable
 ```
 
-Run it now to see the starting state. Expect it to fail at `control-file`; that is
-normal before setup.
+Run it now to see the starting state. Two outcomes are both normal before setup,
+and they mean different things:
+
+* it fails at `control-file` — the binary is right, the socket is not on yet.
+  Go to Step 2.
+* it fails with `unrecognized subcommand 'mcp'` — this build does not have the
+  feature at all. Go to Step 1.
 
 ### Step 1 — Confirm the binary has the feature compiled in
 
@@ -154,8 +159,9 @@ command = "spotatui"
 args = ["mcp"]
 ```
 
-If `spotatui` is not on `PATH` for the client's environment, use the absolute path
-from `command -v spotatui`.
+If `spotatui` is not on `PATH` for the client's environment, use the absolute
+path: `command -v spotatui` on Linux and macOS, `Get-Command spotatui` in
+PowerShell.
 
 ### Step 6 — Confirm the tools are visible
 
