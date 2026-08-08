@@ -30,6 +30,58 @@ pub fn queue_item_source(uri: &str) -> QueueItemSource {
   }
 }
 
+/// Whether a URI names something that can actually be queued or played.
+///
+/// [`queue_item_source`] classifies by scheme and treats everything it does not
+/// recognise as Spotify, which is the right default for an item that already
+/// came out of the player. It is the wrong default for a URI handed in from
+/// outside: free text, an `https://open.spotify.com/...` link, and
+/// `spotify:album:`/`spotify:playlist:` would all be classified Spotify and then
+/// queued as if they were tracks.
+///
+/// So callers taking a URI from an agent gate on this first. `spotify:track:` is
+/// the only Spotify form that names a single track; the other three schemes are
+/// opaque handles minted by their own sources, which cannot be validated further
+/// here. `radio:` is deliberately absent — a live stream is not a finite track
+/// and `App::add_track_to_native_queue` rejects it.
+// Nothing calls this until a DJ front door lands.
+#[allow(dead_code)]
+pub fn is_playable_track_uri(uri: &str) -> bool {
+  uri.starts_with("spotify:track:")
+    || uri.starts_with("file:")
+    || uri.starts_with("subsonic:")
+    || uri.starts_with("youtube:")
+}
+
+/// The Cargo feature that would make `uri`'s source playable, if this build is
+/// missing it.
+///
+/// [`is_playable_track_uri`] answers "is this the right *kind* of URI", which is
+/// a property of the scheme alone. Whether anything in *this* binary can consume
+/// it is a second question: the per-source routers are each `#[cfg]`-gated, so an
+/// `--features mcp-server` build accepts `youtube:` as well-formed and then has
+/// nothing to play it with. Callers taking a URI from an agent ask both, so the
+/// agent is told which build it is talking to rather than being told the track
+/// started.
+/// Spotify is deliberately never reported here: without `streaming` it still
+/// plays through the Web API on an external Connect device, so
+/// [`source_available`]'s stricter answer (which is about the *native* player)
+/// would refuse a URI that works.
+// Nothing calls this until a DJ front door lands.
+#[allow(dead_code)]
+pub fn missing_source_feature(uri: &str) -> Option<&'static str> {
+  let source = queue_item_source(uri);
+  if source == QueueItemSource::Spotify || source_available(source) {
+    return None;
+  }
+  Some(match source {
+    QueueItemSource::LocalFile => "local-files",
+    QueueItemSource::Subsonic => "subsonic",
+    QueueItemSource::YouTube => "youtube",
+    QueueItemSource::Spotify => unreachable!("returned above"),
+  })
+}
+
 /// A short, human-readable tag for a queue item's source, shown in the Queue
 /// screen next to each row.
 pub fn source_label(source: QueueItemSource) -> &'static str {
@@ -147,10 +199,68 @@ mod tests {
   }
 
   #[test]
+  fn only_single_track_uris_are_playable() {
+    for uri in [
+      "spotify:track:7o2AeQZzfCERsRmOM86EcB",
+      "file:/home/jay/Music/a.flac",
+      "subsonic:track:1",
+      "youtube:5NV6Rdv1a3I",
+    ] {
+      assert!(is_playable_track_uri(uri), "{uri} should be playable");
+    }
+    // The cases that used to be fabricated into a track and reported as queued.
+    // `queue_item_source` classifies every one of these as Spotify, which is
+    // exactly why the queue path cannot gate on it alone.
+    for uri in [
+      "not-a-uri",
+      "",
+      "spotify:album:1DFixLWuPkv3KT3TnV35m3",
+      "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M",
+      "spotify:episode:512ojhOuo1ktJprKbVcKyQ",
+      "spotify:artist:4tZwfgrHOc3mvqYlEYSvVi",
+      "https://open.spotify.com/track/7o2AeQZzfCERsRmOM86EcB",
+      "radio:https://example.com/stream.aac",
+    ] {
+      assert!(!is_playable_track_uri(uri), "{uri} should not be playable");
+    }
+  }
+
+  #[test]
   fn source_labels_are_stable() {
     assert_eq!(source_label(QueueItemSource::Spotify), "Spotify");
     assert_eq!(source_label(QueueItemSource::LocalFile), "Local");
     assert_eq!(source_label(QueueItemSource::Subsonic), "Subsonic");
     assert_eq!(source_label(QueueItemSource::YouTube), "YouTube");
+  }
+
+  #[test]
+  fn spotify_is_never_reported_as_missing_a_feature() {
+    // Without `streaming` a Spotify track still plays through the Web API on an
+    // external Connect device, so gating it on `source_available` would refuse a
+    // URI that works. This is the one scheme that must always pass.
+    assert_eq!(missing_source_feature("spotify:track:abc"), None);
+  }
+
+  #[test]
+  fn a_scheme_whose_source_is_not_compiled_in_names_the_feature() {
+    // The point of the whole helper: `is_playable_track_uri` says these are
+    // well-formed, but the routers that consume them are `#[cfg]`-gated, so an
+    // `--features mcp-server` build would accept and then silently drop them.
+    for (uri, feature, compiled_in) in [
+      (
+        "file:/music/a.flac",
+        "local-files",
+        cfg!(feature = "local-files"),
+      ),
+      ("subsonic:abc", "subsonic", cfg!(feature = "subsonic")),
+      ("youtube:abc", "youtube", cfg!(feature = "youtube")),
+    ] {
+      assert!(is_playable_track_uri(uri), "{uri} should be well-formed");
+      assert_eq!(
+        missing_source_feature(uri),
+        if compiled_in { None } else { Some(feature) },
+        "{uri}"
+      );
+    }
   }
 }

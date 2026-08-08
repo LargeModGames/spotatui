@@ -14,9 +14,12 @@ pub struct ArtistSearchResponse {
   artists: Page<FullArtist>,
 }
 
+/// `pub(crate)` so the DJ resolver can reuse the track-search shape: unlike the
+/// handlers in this module, it needs a *returned* result rather than a write into
+/// `App` (see `crate::infra::dj::resolve`).
 #[derive(Deserialize, Debug)]
-struct TrackSearchResponse {
-  tracks: Page<FullTrack>,
+pub(crate) struct TrackSearchResponse {
+  pub(crate) tracks: Page<FullTrack>,
 }
 
 #[derive(Deserialize, Debug)]
