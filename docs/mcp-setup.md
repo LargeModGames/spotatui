@@ -126,7 +126,20 @@ previous run — have the user restart spotatui again.
 
 ### Step 5 — Register the server with your client
 
-Use whichever line matches the client you are running in:
+> **Plugin-capable clients can replace this step.** The repo ships an *agent
+> plugin* (`agent-plugin/`) that registers this server and adds a DJ skill in one
+> install: in Claude Code, `/plugin marketplace add LargeModGames/spotatui` then
+> `/plugin install spotatui@spotatui`; clients that read the
+> [Agent Plugins](https://agent-plugins.org) format load the same directory. See
+> [`agent-plugin/README.md`](../agent-plugin/README.md). Steps 1-4 above are still
+> required either way — the plugin registers the server, it cannot build the
+> binary, set `mcp_enabled`, or start spotatui.
+>
+> **If you installed the plugin, skip the rest of this step and go to Step 6.**
+> Running a registration command as well would register the server twice, and its
+> tools would appear under both names.
+
+Otherwise, use whichever line matches the client you are running in:
 
 ```bash
 # Claude Code
@@ -167,7 +180,8 @@ PowerShell.
 
 Reload or restart your client so it picks up the new server, then list your tools.
 You should see eight, all prefixed with the server name (`mcp__spotatui__…` in
-Claude Code):
+Claude Code, or `mcp__plugin_spotatui_spotatui__…` if you installed the plugin —
+a plugin's tools carry its name too):
 
 | Tool | What it does |
 |---|---|

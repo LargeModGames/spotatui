@@ -1,0 +1,15 @@
+{
+  "name": "spotatui",
+  "version": "0.1.0",
+  "description": "Turn any MCP-capable coding agent into a DJ for spotatui, the terminal Spotify client.",
+  "homepage": "https://github.com/LargeModGames/spotatui",
+  "repository": "https://github.com/LargeModGames/spotatui",
+  "license": "MIT",
+  "keywords": [
+    "spotify",
+    "music",
+    "dj",
+    "mcp",
+    "tui"
+  ]
+}
