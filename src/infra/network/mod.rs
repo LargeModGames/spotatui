@@ -1,3 +1,5 @@
+#[cfg(feature = "dj-core")]
+pub mod dj;
 pub mod friends;
 pub mod ids;
 pub mod library;
@@ -279,6 +281,15 @@ pub enum IoEvent {
   /// auth.
   #[cfg(feature = "cover-art")]
   FetchCoverArt(crate::tui::cover_art::CoverArtRequest),
+  /// Crawl the listener's own playlists for the avoid-library filter.
+  ///
+  /// Serial lane: it needs the real Spotify client. Both front doors dispatch it
+  /// — the in-TUI DJ when the filter is switched on, and MCP from
+  /// `search_tracks` — so that marking results as owned never crawls *inside* a
+  /// latency-sensitive tool call. Neither exists yet, hence the allow.
+  #[cfg(feature = "dj-core")]
+  #[allow(dead_code)]
+  DjIndexLibrary,
 }
 
 /// An in-flight in-TUI Spotify login. Holds the exact PKCE client that generated
@@ -805,6 +816,10 @@ impl Network {
       #[cfg(feature = "cover-art")]
       IoEvent::FetchCoverArt(request) => {
         self.fetch_cover_art(request).await;
+      }
+      #[cfg(feature = "dj-core")]
+      IoEvent::DjIndexLibrary => {
+        self.dj_index_library().await;
       }
       IoEvent::GetUserTopTracks(time_range) => {
         self.get_user_top_tracks(time_range).await;

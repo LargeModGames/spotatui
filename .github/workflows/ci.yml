@@ -37,8 +37,10 @@ jobs:
           # The exact feature set shipped for Linux by cd.yml, so every new
           # source subsystem (local-files, subsonic, internet-radio, youtube)
           # and cover-art is compiled and tested in CI.
+          # `dj-core` has no consumer of its own yet, so all-sources is where it
+          # gets exercised until its front doors land.
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,dj-core,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
           # Slim build used for fast local iteration (matches CLAUDE.md).
           - name: slim
             args: "--locked --no-default-features --features telemetry"
@@ -72,7 +74,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,dj-core,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
           - name: slim
             args: "--locked --no-default-features --features telemetry"
     env:
@@ -123,7 +125,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,dj-core,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
           - name: slim
             args: "--locked --no-default-features --features telemetry"
     env:

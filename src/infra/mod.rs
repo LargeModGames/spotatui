@@ -1,6 +1,8 @@
 pub mod audio;
 #[cfg(feature = "discord-rpc")]
 pub mod discord_rpc;
+#[cfg(feature = "dj-core")]
+pub mod dj;
 pub mod history;
 #[cfg(feature = "local-files")]
 pub mod local;

@@ -120,6 +120,12 @@ Always check `app.user_config.keys.<action>` instead of hard-coding key literals
 - `--no-default-features --features telemetry` is the minimal build used for CI and fast iteration.
 - Platform-specific audio backends (ALSA, PipeWire, PortAudio, Rodio) are gated behind their own features.
 - `cover-art` feature enables album art rendering via `ratatui-image`.
+- `dj-core` is a shared implementation feature (taste brief, name→URI resolver,
+  library index, bulk enqueue) that exists to be pulled in by `mcp-server` and
+  `ai-dj`, the way `audio-decode` is pulled in by the media sources. Not in
+  `default`. Neither front door is built yet, so nothing consumes it and
+  everything under `src/infra/dj/` is dead code for now — that is what the
+  crate-level `#![allow(dead_code)]` in `src/infra/dj/mod.rs` is for.
 
 ### Native streaming playback
 

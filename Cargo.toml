@@ -161,6 +161,14 @@ internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
 # LocalPlayer. Unofficial-fragile by design — see plan-multi-source.md.
 youtube = ["audio-decode", "dep:tempfile"]
 
+# --- AI DJ / MCP -------------------------------------------------------------
+# Shared tool layer behind both front doors: the taste brief built from the local
+# listening history, the name -> URI resolver, and the bulk enqueue. Pure logic,
+# no new crates (reqwest / tokio "full" / serde_json are already non-optional).
+# Pulled by `mcp-server` and `ai-dj` the same way `audio-decode` is pulled by the
+# media sources.
+dj-core = []
+
 [dev-dependencies]
 tempfile = "3"
 
