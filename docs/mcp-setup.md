@@ -126,6 +126,15 @@ previous run — have the user restart spotatui again.
 
 ### Step 5 — Register the server with your client
 
+> **Plugin-capable clients can replace this step.** The repo ships an *agent
+> plugin* (`agent-plugin/`) that registers this server and adds a DJ skill in one
+> install: in Claude Code, `/plugin marketplace add LargeModGames/spotatui` then
+> `/plugin install spotatui@spotatui`; clients that read the
+> [Agent Plugins](https://agent-plugins.org) format load the same directory. See
+> [`agent-plugin/README.md`](../agent-plugin/README.md). Steps 1-4 above are still
+> required either way — the plugin registers the server, it cannot build the
+> binary, set `mcp_enabled`, or start spotatui.
+
 Use whichever line matches the client you are running in:
 
 ```bash
