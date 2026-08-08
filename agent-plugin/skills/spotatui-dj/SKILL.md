@@ -10,9 +10,11 @@ visible status message in their TUI, so act deliberately and report what happene
 
 ## Before anything else
 
-The eight spotatui tools (in Claude Code they are prefixed `mcp__spotatui__`) are
-visible whenever the plugin's server is registered. Whether a *call* succeeds is a
-separate question: that additionally needs spotatui itself running, built with
+The eight spotatui tools are visible whenever the plugin's server is registered.
+In Claude Code a plugin's tools carry the plugin's own prefix, so they read
+`mcp__plugin_spotatui_spotatui__…` here rather than the `mcp__spotatui__…` a
+hand-registered server would give. Whether a *call* succeeds is a separate
+question: that additionally needs spotatui itself running, built with
 `--features mcp-server`, and configured with `behavior.mcp_enabled: true`.
 Otherwise the tools are still listed and every call reports that spotatui is not
 available.
@@ -67,7 +69,9 @@ first (`query` required, `limit` 1-20, default 10) and queue the URIs it returns
 Every result is marked **`owned`** (in their Liked Songs, or in a playlist they own
 or collaborate on) or **`new`**.
 
-* They asked for something they have not heard: prefer results marked `new`.
+* They asked for something they do not already have: prefer results marked `new`.
+  `new` means "not in their library", not "never heard" — nothing here reads their
+  play history.
 * They named a specific track: queue it whether they own it or not. That is what
   they asked for.
 

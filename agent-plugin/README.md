@@ -16,7 +16,7 @@ installs a DJ skill alongside it, in two formats at once:
 
 ## What is inside
 
-```
+```text
 agent-plugin/
 ├── plugin.json                    Agent Plugins 1.0 manifest
 ├── mcp.json                       Agent Plugins 1.0 MCP server config
@@ -36,7 +36,8 @@ The plugin registers the server; it cannot install the binary. Before installing
 
 1. spotatui built with the feature: `cargo install --locked spotatui --features mcp-server`
    (it is not in `default`), or, from a checkout: `cargo install --path . --features mcp-server`.
-2. `behavior.mcp_enabled: true` in `~/.config/spotatui/config.yml`.
+2. `behavior.mcp_enabled: true` in `config.yml` — at the path `spotatui mcp status`
+   reports, since `XDG_CONFIG_HOME` and Windows resolve it elsewhere.
 3. spotatui running — the socket opens at startup, so restart it after step 2.
 4. `spotatui` on the `PATH` the agent client spawns processes with.
 
@@ -48,7 +49,7 @@ on stdin.
 
 **Claude Code**
 
-```
+```text
 /plugin marketplace add LargeModGames/spotatui
 /plugin install spotatui@spotatui
 ```

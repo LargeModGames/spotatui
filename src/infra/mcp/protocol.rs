@@ -103,9 +103,9 @@ pub fn instructions() -> &'static str {
    could not find, so read the result rather than assuming every track was \
    queued. Prefer queue_tracks over play_now unless the user asked to hear \
    something immediately. search_tracks marks each result as owned when the user \
-   already has it (Liked Songs, or a playlist they own): when they asked for \
-   something new, pick the ones marked new, or pass exclude_owned to queue_tracks \
-   to have it skip the rest for you."
+   already has it (Liked Songs, or a playlist they own or collaborate on): when \
+   they asked for something new, pick the ones marked new, or pass exclude_owned \
+   to queue_tracks to have it skip the rest for you."
 }
 
 /// A JSON-RPC id. Kept as a `Value` because the spec allows string or number and
