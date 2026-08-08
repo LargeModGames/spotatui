@@ -94,6 +94,37 @@ fn control_rejection(line: &str) -> Option<String> {
   }
 }
 
+/// Whether `reply` is the JSON-RPC response to `request`.
+///
+/// The handshake replay is the one line the relay reads on its own account, so
+/// nothing downstream would notice a socket that answered with something else.
+/// A control file outliving the process that wrote it is how that happens:
+/// shutdown unpublishes it, a crash does not, and by the time the next relay
+/// reads it the port may belong to anything. Taking that process's first line
+/// for the handshake answer would mark its socket healthy and hand the agent
+/// its next one as a response.
+fn answers_request(reply: &str, request: &str) -> bool {
+  let Ok(reply) = serde_json::from_str::<serde_json::Value>(reply) else {
+    return false;
+  };
+  if reply.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+    || (reply.get("result").is_none() && reply.get("error").is_none())
+  {
+    return false;
+  }
+  // Matched on id whenever the request carries one, which `initialize` always
+  // does. One without an id is a notification the server never answers, so
+  // there would be no reply here to match in the first place.
+  match serde_json::from_str::<serde_json::Value>(request)
+    .ok()
+    .and_then(|request| request.get("id").cloned())
+    .filter(|id| !id.is_null())
+  {
+    Some(id) => reply.get("id") == Some(&id),
+    None => true,
+  }
+}
+
 /// Why a forward failed, which is what decides whether it may be sent again.
 ///
 /// The distinction is the whole point: MCP tool calls are not idempotent, so
@@ -297,6 +328,12 @@ impl Relay {
           // already hung up on as healthy.
           if let Some(reason) = control_rejection(&reply) {
             self.offline_reason = reason;
+            return false;
+          }
+          if !answers_request(&reply, &handshake) {
+            self.offline_reason = "the handshake was answered by something that is not spotatui; \
+                                   the control file may name a port another process now holds"
+              .to_string();
             return false;
           }
           upstream.token_checked = true;
@@ -637,6 +674,31 @@ mod tests {
     });
   }
 
+  /// A stand-in that takes the token line and then answers the replayed
+  /// handshake with `reply`, whatever that is. Holds the socket open afterwards,
+  /// so a rejection has to come from validating the line rather than a hang-up.
+  fn fake_tui_answering_with(listener: TcpListener, reply: String) {
+    tokio::spawn(async move {
+      loop {
+        let Ok((stream, _)) = listener.accept().await else {
+          break;
+        };
+        let reply = reply.clone();
+        tokio::spawn(async move {
+          let (read_half, mut write_half) = stream.into_split();
+          let mut lines = BufReader::new(read_half).lines();
+          for _ in 0..2 {
+            if !matches!(lines.next_line().await, Ok(Some(_))) {
+              return;
+            }
+          }
+          let _ = write_half.write_all(format!("{reply}\n").as_bytes()).await;
+          std::future::pending::<()>().await;
+        });
+      }
+    });
+  }
+
   /// A relay pointed at `port`, with no dependence on any shared path or env.
   fn relay_for(port: u16, token: &str) -> Relay {
     let token = token.to_string();
@@ -828,6 +890,40 @@ mod tests {
       "{}",
       relay.offline_reason
     );
+  }
+
+  #[tokio::test]
+  async fn a_handshake_answered_by_something_other_than_spotatui_is_not_trusted() {
+    // A crash leaves the control file behind (only shutdown unpublishes it), so
+    // the port in it can end up belonging to an unrelated process. Its first
+    // line used to pass as the handshake answer, which marked the socket healthy
+    // and sent the agent whatever came next as a JSON-RPC response.
+    for reply in [
+      // Not JSON-RPC at all.
+      json!({"hello": "not spotatui"}).to_string(),
+      // Well-formed, but answering a request nobody here sent.
+      json!({"jsonrpc": "2.0", "id": 99, "result": {}}).to_string(),
+    ] {
+      let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+      let port = listener.local_addr().unwrap().port();
+      fake_tui_answering_with(listener, reply.clone());
+      let mut relay = relay_for(port, "tok");
+      relay.handshake = Some(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": "2025-06-18"}})
+        .to_string(),
+      );
+
+      assert!(
+        !relay.ensure_upstream().await,
+        "{reply} must not pass as the handshake answer"
+      );
+      assert!(
+        relay.offline_reason.contains("not spotatui"),
+        "{}",
+        relay.offline_reason
+      );
+    }
   }
 
   #[tokio::test]
