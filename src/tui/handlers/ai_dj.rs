@@ -255,7 +255,11 @@ pub fn toggle_auto_queue(app: &mut App) {
     }
   } else {
     if !asked_turn_in_flight {
-      app.dj.thinking = false;
+      // `finish_turn`, not a bare flag clear: it drops the step counter with the
+      // flag. Left behind, that counter belongs to a turn nobody is waiting on,
+      // and the next refill would paint it as its own progress until its first
+      // step lands.
+      app.dj.finish_turn(app.dj.turn_seq);
     }
     app.set_status_message("DJ auto-queue off", 4);
   }
@@ -859,11 +863,16 @@ mod tests {
     let (mut app, _rx) = dj_app();
     app.dj.auto_queue = true;
     app.dj.begin_turn(TurnKind::Refill);
+    app.dj.step = Some((2, 4));
     let generation = app.dj.generation;
 
     toggle_auto_queue(&mut app);
 
     assert!(!app.dj.thinking, "nobody is waiting on a refill");
+    assert!(
+      app.dj.step.is_none(),
+      "a counter left from an abandoned turn would read as the next one's progress"
+    );
     assert_ne!(app.dj.generation, generation);
   }
 
