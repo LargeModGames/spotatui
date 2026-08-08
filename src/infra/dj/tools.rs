@@ -351,7 +351,11 @@ pub fn parse_call(name: &str, args: &Value) -> Result<DjToolCall, ToolCallError>
           (Some(uri), _, _) if !uri.trim().is_empty() => {
             items.push(QueueItem::Uri(uri.trim().to_string()))
           }
-          (_, Some(title), Some(artist)) if !title.trim().is_empty() => {
+          // Both halves have to be real: a blank artist resolves to nothing, so
+          // accepting it would turn an argument error into a silent "not found".
+          (_, Some(title), Some(artist))
+            if !title.trim().is_empty() && !artist.trim().is_empty() =>
+          {
             items.push(QueueItem::Named(DjSuggestion {
               title: title.trim().to_string(),
               artist: artist.trim().to_string(),
@@ -563,9 +567,17 @@ async fn now_playing_outcome(app: &Arc<Mutex<App>>) -> ToolOutcome {
         }),
       )
     }
+    // Same keys as the playing branch, `is_live` included: a payload whose shape
+    // depends on playback state makes a client read a missing key as unknown
+    // rather than as "no, this is not a live stream".
     None => ToolOutcome::with_data(
       format!("Nothing is playing ({queue_depth} track(s) queued)"),
-      json!({"track": Value::Null, "is_playing": false, "queue_depth": queue_depth}),
+      json!({
+        "track": Value::Null,
+        "is_playing": false,
+        "is_live": false,
+        "queue_depth": queue_depth,
+      }),
     ),
   }
 }
@@ -841,10 +853,46 @@ mod tests {
   fn queue_rejects_incomplete_entries_and_oversized_batches() {
     assert!(parse_call("queue_tracks", &json!({"tracks": [{"title": "Nude"}]})).is_err());
     assert!(parse_call("queue_tracks", &json!({"tracks": []})).is_err());
+    // A blank half is as incomplete as a missing one. Accepted, it would build a
+    // suggestion nothing can resolve and be reported as "not in the catalogue",
+    // which tells the model the track does not exist instead of that it sent a
+    // bad argument.
+    for entry in [
+      json!({"title": "Nude", "artist": "   "}),
+      json!({"title": "  ", "artist": "Radiohead"}),
+    ] {
+      assert!(
+        matches!(
+          parse_call("queue_tracks", &json!({"tracks": [entry.clone()]})),
+          Err(ToolCallError::InvalidArguments(_))
+        ),
+        "{entry} should be an argument error"
+      );
+    }
     let too_many: Vec<_> = (0..MAX_BATCH + 1)
       .map(|i| json!({"uri": format!("spotify:track:{i}")}))
       .collect();
     assert!(parse_call("queue_tracks", &json!({"tracks": too_many})).is_err());
+  }
+
+  #[tokio::test]
+  async fn now_playing_keeps_one_payload_shape_whether_or_not_anything_plays() {
+    // A default `App` has no playback context and no native track, so the
+    // snapshot is `None` — the branch that used to drop `is_live`.
+    let app = Arc::new(Mutex::new(App::default()));
+    let outcome = execute_app_only(&app, &DjToolCall::GetNowPlaying)
+      .await
+      .expect("get_now_playing is answered without the network");
+    let data = outcome
+      .structured
+      .expect("now_playing returns structured data");
+
+    assert_eq!(data.get("track"), Some(&Value::Null));
+    assert_eq!(data.get("is_playing"), Some(&json!(false)));
+    // The key the playing branch always sends. Absent, a client cannot tell "not
+    // a live stream" from "this build never says".
+    assert_eq!(data.get("is_live"), Some(&json!(false)));
+    assert_eq!(data.get("queue_depth"), Some(&json!(0)));
   }
 
   #[tokio::test]

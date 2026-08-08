@@ -25,6 +25,28 @@ use std::collections::HashSet;
 /// keep the response cheap.
 const CANDIDATES: usize = 5;
 
+/// Shortest normalised title allowed to match as a *substring* rather than
+/// exactly.
+///
+/// "Go" or "Hey" is a substring of half the catalogue, so for a title that short
+/// the substring branch stops rejecting anything and the resolver hands back
+/// whatever search felt like returning. Four is the lowest bar that still lets
+/// the suffix cases through: "Nude" inside "Nude - Remastered 2017" is exactly
+/// four characters, and that is the case this whole branch exists for. Anything
+/// shorter has to match exactly.
+const MIN_SUBSTRING_TITLE: usize = 4;
+
+/// What separates two artists inside one credit.
+///
+/// The catalogue joins its artist list with `", "`; a model writes a
+/// collaboration with `&`, `;`, ` x ` or `feat.`. Splitting on these is the whole
+/// point of [`shares_an_artist`] — a `contains` test accepts "Radiohead Tribute
+/// Band" for "Radiohead", which is a different band playing the same songs.
+const CREDIT_PUNCTUATION: [char; 3] = [',', ';', '&'];
+/// Standalone words that join two artists. Matched as whole tokens, never as
+/// substrings: "Daft Punk" contains "ft ".
+const CREDIT_JOIN_WORDS: [&str; 4] = ["x", "feat", "ft", "featuring"];
+
 /// What came back from a resolve pass.
 ///
 /// Not `Eq`: `TrackInfo` is only `PartialEq` (its shape is pinned by the plugin
@@ -231,7 +253,7 @@ fn match_score(
 
   let title_score = if ct == wt {
     2
-  } else if ct.contains(&wt) || wt.contains(&ct) {
+  } else if contains_meaningfully(&ct, &wt) {
     // Covers "Weird Fishes" vs "Weird Fishes / Arpeggi" and
     // "Nude" vs "Nude - Remastered".
     1
@@ -240,10 +262,12 @@ fn match_score(
   };
 
   // An artist mismatch on an otherwise-matching title is usually a cover, a
-  // karaoke version, or a different band entirely — all wrong.
+  // karaoke version, or a different band entirely — all wrong. A credit is a
+  // *list* of artists, so the question is whether the two credits name an artist
+  // in common, not whether one string sits inside the other.
   let artist_score = if ca == wa {
     2
-  } else if !wa.is_empty() && (ca.contains(&wa) || wa.contains(&ca)) {
+  } else if !wa.is_empty() && shares_an_artist(candidate_artist, want_artist) {
     1
   } else if wa.is_empty() {
     0
@@ -252,6 +276,72 @@ fn match_score(
   };
 
   Some(title_score * 2 + artist_score)
+}
+
+/// Substring title match, guarded on the length of the *contained* title in
+/// whichever direction it matched — see [`MIN_SUBSTRING_TITLE`].
+fn contains_meaningfully(candidate: &str, wanted: &str) -> bool {
+  let long_enough = |title: &str| title.chars().count() >= MIN_SUBSTRING_TITLE;
+  (long_enough(wanted) && candidate.contains(wanted))
+    || (long_enough(candidate) && wanted.contains(candidate))
+}
+
+/// Whether two credits name at least one artist in common.
+///
+/// Equality per listed artist, not containment across the whole credit. That is
+/// what separates the two cases this has to get right: "Bob Moses, RAC" and
+/// "Bob Moses" list an artist in common and are the same track, while "Radiohead
+/// Tribute Band" lists exactly one artist, which is not Radiohead.
+fn shares_an_artist(candidate: &str, wanted: &str) -> bool {
+  let wanted = credited_artists(wanted);
+  !wanted.is_empty()
+    && credited_artists(candidate)
+      .iter()
+      .any(|name| wanted.contains(name))
+}
+
+/// Split a credit into the artists it names, each normalised for comparison.
+fn credited_artists(credit: &str) -> Vec<String> {
+  let mut names = Vec::new();
+  for chunk in credit.split(CREDIT_PUNCTUATION) {
+    let mut current: Vec<&str> = Vec::new();
+    for token in chunk.split_whitespace() {
+      let bare = token
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+      if CREDIT_JOIN_WORDS.contains(&bare.as_str()) {
+        push_artist(&mut names, &current);
+        current.clear();
+      } else {
+        current.push(token);
+      }
+    }
+    push_artist(&mut names, &current);
+  }
+  if names.is_empty() {
+    // An artist named after a join word (there is a producer called X) splits to
+    // nothing; fall back to the credit whole rather than to "matches anything".
+    push_artist(&mut names, &[credit]);
+  }
+  names
+}
+
+fn push_artist(names: &mut Vec<String>, tokens: &[&str]) {
+  let name = artist_key(&tokens.join(" "));
+  if !name.is_empty() {
+    names.push(name);
+  }
+}
+
+/// Normalise one artist name for equality: [`normalize`] plus a dropped leading
+/// "the", because a model writes "Chemical Brothers" for a catalogue credited
+/// "The Chemical Brothers" and that is the same band.
+fn artist_key(name: &str) -> String {
+  let normalized = normalize(name);
+  normalized
+    .strip_prefix("the ")
+    .unwrap_or(&normalized)
+    .to_string()
 }
 
 /// YouTube fallback for tracks Spotify does not have (or cannot license).
@@ -368,6 +458,81 @@ mod tests {
       "Bob Moses, RAC"
     )
     .is_some());
+  }
+
+  #[test]
+  fn a_tribute_band_is_not_the_artist() {
+    // The case containment cannot see: "radiohead tribute band" contains
+    // "radiohead", and a token-subset test does not help either — {radiohead} is
+    // a subset of {radiohead, tribute, band}. One listed artist, and it is not
+    // the one that was asked for.
+    assert_eq!(
+      match_score("Nude", "Radiohead Tribute Band", "Nude", "Radiohead"),
+      None
+    );
+    // And the other way round, for a model that names the tribute act.
+    assert_eq!(
+      match_score("Nude", "Radiohead", "Nude", "Radiohead Tribute Band"),
+      None
+    );
+  }
+
+  #[test]
+  fn a_credit_that_lists_the_artist_still_matches() {
+    // Whichever side carries the longer credit, and whichever separator the
+    // model reached for.
+    for (candidate, wanted) in [
+      ("Bob Moses, RAC", "Bob Moses"),
+      ("Bob Moses", "Bob Moses, RAC"),
+      ("Kaytranada & Anderson .Paak", "Kaytranada"),
+      ("Skrillex x Diplo", "Diplo"),
+      ("Calvin Harris feat. Rihanna", "Rihanna"),
+      ("Calvin Harris (feat. Rihanna)", "Calvin Harris"),
+    ] {
+      assert!(
+        match_score("Tearing Me Up", candidate, "Tearing Me Up", wanted).is_some(),
+        "{candidate} should match {wanted}"
+      );
+    }
+  }
+
+  #[test]
+  fn a_leading_the_is_not_a_different_band() {
+    // A model writes the credit without the article about as often as with it.
+    assert!(match_score(
+      "Block Rockin Beats",
+      "The Chemical Brothers",
+      "Block Rockin Beats",
+      "Chemical Brothers"
+    )
+    .is_some());
+  }
+
+  #[test]
+  fn a_join_word_is_not_matched_inside_a_name() {
+    // "daft punk" contains "ft " — splitting on raw substrings would cut the
+    // band in half and then match "punk" against anything punk.
+    assert_eq!(
+      match_score("Around the World", "Daft Punk", "Around the World", "Punk"),
+      None
+    );
+  }
+
+  #[test]
+  fn a_short_title_has_to_match_exactly() {
+    // "go" is a substring of half the catalogue, so the substring branch stops
+    // rejecting anything for a title this short.
+    assert_eq!(
+      match_score("Go Your Own Way", "Fleetwood Mac", "Go", "Fleetwood Mac"),
+      None
+    );
+    // Same in the other direction: a short *candidate* inside a long request.
+    assert_eq!(
+      match_score("Go", "Fleetwood Mac", "Go Your Own Way", "Fleetwood Mac"),
+      None
+    );
+    // The title itself is still perfectly resolvable, exactly.
+    assert!(match_score("Go", "The Chemical Brothers", "Go", "Chemical Brothers").is_some());
   }
 
   #[test]

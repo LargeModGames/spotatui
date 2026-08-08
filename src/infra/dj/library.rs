@@ -97,7 +97,10 @@ fn is_own_playlist(entry: &PlaylistEntry, owner_id: &str) -> bool {
 ///
 /// Errors only if the playlist listing itself fails. A single unreadable playlist
 /// is skipped and logged: a partial index still filters, while failing the whole
-/// crawl would turn the feature off for one bad playlist.
+/// crawl would turn the feature off for one bad playlist. A skip marks the index
+/// [`truncated`](DjLibrary::truncated) all the same — the filter is no longer
+/// answering from everything the listener has, and a summary that claimed
+/// otherwise would read as the filter working when it is quietly under-filtering.
 pub async fn build_index(net: &Network, owner_id: &str) -> anyhow::Result<DjLibrary> {
   let mut library = DjLibrary::default();
   let playlist_ids = own_playlist_ids(net, owner_id).await?;
@@ -110,7 +113,12 @@ pub async fn build_index(net: &Network, owner_id: &str) -> anyhow::Result<DjLibr
     }
     match collect_playlist(net, &id, &mut library).await {
       Ok(()) => {}
-      Err(e) => log::debug!("DJ: skipping playlist {id} while indexing: {e}"),
+      Err(e) => {
+        // Keep going, but stop claiming the index is complete: the tracks in
+        // this playlist will not be filtered, and only `truncated` says so.
+        library.truncated = true;
+        log::debug!("DJ: skipping playlist {id} while indexing: {e}");
+      }
     }
   }
 

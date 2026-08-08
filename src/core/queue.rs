@@ -44,13 +44,21 @@ pub fn queue_item_source(uri: &str) -> QueueItemSource {
 /// opaque handles minted by their own sources, which cannot be validated further
 /// here. `radio:` is deliberately absent — a live stream is not a finite track
 /// and `App::add_track_to_native_queue` rejects it.
+///
+/// A bare scheme with nothing behind it (`spotify:track:`, `file:`) names no
+/// track at all, so the content after the prefix has to be non-empty: a model
+/// that emits the prefix and stops must be told the argument is wrong rather
+/// than have an empty handle queued for it.
 // Nothing calls this until a DJ front door lands.
 #[allow(dead_code)]
 pub fn is_playable_track_uri(uri: &str) -> bool {
-  uri.starts_with("spotify:track:")
-    || uri.starts_with("file:")
-    || uri.starts_with("subsonic:")
-    || uri.starts_with("youtube:")
+  ["spotify:track:", "file:", "subsonic:", "youtube:"]
+    .iter()
+    .any(|prefix| {
+      uri
+        .strip_prefix(prefix)
+        .is_some_and(|rest| !rest.trim().is_empty())
+    })
 }
 
 /// The Cargo feature that would make `uri`'s source playable, if this build is
@@ -220,6 +228,13 @@ mod tests {
       "spotify:artist:4tZwfgrHOc3mvqYlEYSvVi",
       "https://open.spotify.com/track/7o2AeQZzfCERsRmOM86EcB",
       "radio:https://example.com/stream.aac",
+      // A bare scheme names no track: the prefix is right and there is nothing
+      // behind it.
+      "spotify:track:",
+      "spotify:track:   ",
+      "file:",
+      "subsonic:",
+      "youtube:",
     ] {
       assert!(!is_playable_track_uri(uri), "{uri} should not be playable");
     }
