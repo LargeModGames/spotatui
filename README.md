@@ -27,34 +27,39 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 ## Table of Contents
 
-- [Features](#features)
-- [Installation](#installation)
-- [Quickstart](#quickstart)
-  - [Adding Spotify later](#adding-spotify-later)
-- [Music Sources](#music-sources)
-  - [Local Files](#local-files)
-  - [Subsonic / Navidrome](#subsonic--navidrome)
-  - [Internet Radio](#internet-radio)
-  - [YouTube](#youtube)
-- [Native Streaming](#native-streaming)
-- [Configuration](#configuration)
-  - [Discord Rich Presence](#discord-rich-presence)
-  - [Anonymous Song Counter](#anonymous-song-counter)
-- [Plugins](#plugins)
-- [Performance](#performance)
-- [Playback Requirements](#playback-requirements)
-  - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
-- [Using with spotifyd](#using-with-spotifyd)
-- [Migrating from spotify-tui](#migrating-from-spotify-tui)
-- [Libraries used](#libraries-used)
-- [Development](#development)
-  - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
-- [Help Wanted](#help-wanted)
-- [Maintainer](#maintainer)
-- [spotatui Contributors](#spotatui-contributors)
-- [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
-- [Star History](#star-history)
-- [Roadmap](#roadmap)
+- [spotatui](#spotatui)
+  - [Song History](#song-history)
+  - [Table of Contents](#table-of-contents)
+  - [Features](#features)
+  - [Installation](#installation)
+  - [Quickstart](#quickstart)
+    - [Adding Spotify later](#adding-spotify-later)
+  - [Music Sources](#music-sources)
+    - [Local Files](#local-files)
+    - [Subsonic / Navidrome](#subsonic--navidrome)
+    - [Internet Radio](#internet-radio)
+    - [YouTube](#youtube)
+  - [AI DJ](#ai-dj)
+  - [Native Streaming](#native-streaming)
+  - [Configuration](#configuration)
+    - [Discord Rich Presence](#discord-rich-presence)
+    - [Anonymous Song Counter](#anonymous-song-counter)
+    - [GitHub Profile Widget](#github-profile-widget)
+  - [Plugins](#plugins)
+  - [Performance](#performance)
+  - [Playback Requirements](#playback-requirements)
+    - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
+  - [Using with spotifyd](#using-with-spotifyd)
+  - [Migrating from spotify-tui](#migrating-from-spotify-tui)
+  - [Libraries used](#libraries-used)
+  - [Development](#development)
+    - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
+  - [Help Wanted](#help-wanted)
+  - [Maintainer](#maintainer)
+  - [spotatui Contributors](#spotatui-contributors)
+  - [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
+  - [Star History](#star-history)
+  - [Roadmap](#roadmap)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -219,6 +224,16 @@ Search the radio-browser.info directory in-app (Enter plays a station directly),
 Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recommended). No Google account, API key, or cookies — search and playback are anonymous. If playback breaks after a YouTube change, updating yt-dlp (`yt-dlp -U`) is the fix; no spotatui update needed.
 
 **Local YouTube playlists** live in the spotatui config directory as `youtube_playlists.yml`, a plain human-editable file you can back up or share. Create one from the sidebar, add tracks with `w`, and play a playlist as a queue with `Enter`.
+
+## AI DJ
+
+spotatui can pick music for you, from your own listening history.
+
+**Drive it from your coding agent** (`--features mcp-server`) — spotatui exposes the player and your listening history as [MCP](https://modelcontextprotocol.io) tools, so Claude Code, Codex, Gemini CLI, or any MCP client becomes the DJ. **No API key**: it uses the agent subscription you already have. Setup is one line you hand to your agent:
+
+> Read `docs/mcp-setup.md` in the spotatui repo and set up the spotatui MCP server for me, following it exactly.
+
+That file is written as instructions *for the agent*, and `spotatui mcp status` gives it a safe, checkable probe of every step. Full guide: [`docs/mcp-setup.md`](docs/mcp-setup.md).
 
 ## Native Streaming
 

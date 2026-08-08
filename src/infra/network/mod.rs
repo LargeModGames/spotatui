@@ -1,4 +1,4 @@
-#[cfg(feature = "dj-core")]
+#[cfg(feature = "mcp-server")]
 pub mod dj;
 pub mod friends;
 pub mod ids;
@@ -281,14 +281,30 @@ pub enum IoEvent {
   /// auth.
   #[cfg(feature = "cover-art")]
   FetchCoverArt(crate::tui::cover_art::CoverArtRequest),
+  /// A DJ tool call that needs the live Spotify client, plus the channel to
+  /// answer on.
+  ///
+  /// Runs on the **serial** lane, not the service lane: resolving a track name
+  /// to a URI needs the real Spotify client, and the service lane deliberately
+  /// builds its `Network` with `None` for it. It does bypass the auth *gate* so
+  /// the handler can answer an unauthenticated caller with a useful message
+  /// rather than silently dropping the response channel.
+  ///
+  /// Boxed because the payload is much larger than the other variants.
+  #[cfg(feature = "mcp-server")]
+  DjToolCall(
+    Box<(
+      crate::infra::dj::tools::DjToolCall,
+      tokio::sync::oneshot::Sender<crate::infra::dj::tools::ToolOutcome>,
+    )>,
+  ),
   /// Crawl the listener's own playlists for the avoid-library filter.
   ///
-  /// Serial lane: it needs the real Spotify client. Both front doors dispatch it
-  /// — the in-TUI DJ when the filter is switched on, and MCP from
-  /// `search_tracks` — so that marking results as owned never crawls *inside* a
-  /// latency-sensitive tool call. Neither exists yet, hence the allow.
-  #[cfg(feature = "dj-core")]
-  #[allow(dead_code)]
+  /// Serial lane: it needs the real Spotify client. Dispatched by `search_tracks`,
+  /// so that marking results as owned never crawls *inside* a latency-sensitive
+  /// tool call; the resolve step builds the index inline if it is not warm yet.
+  /// The in-TUI DJ will dispatch it too, when the filter is switched on.
+  #[cfg(feature = "mcp-server")]
   DjIndexLibrary,
 }
 
@@ -410,6 +426,13 @@ impl Network {
     }
     #[cfg(feature = "streaming")]
     if matches!(io_event, IoEvent::RestoreNativePlayback(_)) {
+      return true;
+    }
+    // Bypasses the gate but NOT onto the service lane: the handler needs the real
+    // Spotify client, and answers an unauthenticated caller itself so the MCP
+    // client gets a diagnosable error instead of a dropped channel.
+    #[cfg(feature = "mcp-server")]
+    if matches!(io_event, IoEvent::DjToolCall(_)) {
       return true;
     }
     matches!(
@@ -817,7 +840,12 @@ impl Network {
       IoEvent::FetchCoverArt(request) => {
         self.fetch_cover_art(request).await;
       }
-      #[cfg(feature = "dj-core")]
+      #[cfg(feature = "mcp-server")]
+      IoEvent::DjToolCall(payload) => {
+        let (call, responder) = *payload;
+        self.run_dj_tool_call(call, responder).await;
+      }
+      #[cfg(feature = "mcp-server")]
       IoEvent::DjIndexLibrary => {
         self.dj_index_library().await;
       }
@@ -1632,6 +1660,29 @@ mod tests {
       assert!(Network::runs_on_service_lane(&event));
       assert!(Network::event_bypasses_spotify_auth(&event));
     }
+  }
+
+  /// `DjToolCall` is the one event that bypasses the auth gate *without* moving
+  /// onto the service lane, so it gets its own assertion.
+  ///
+  /// Both halves matter. It must stay on the serial lane because resolving a
+  /// track name needs the real Spotify client, and the service lane builds its
+  /// `Network` with `None` for it. It must bypass the gate so the handler can
+  /// answer an unauthenticated caller with a diagnosable message instead of
+  /// dropping the `oneshot` an MCP client is blocked on.
+  #[cfg(feature = "mcp-server")]
+  #[test]
+  fn dj_tool_calls_bypass_auth_but_stay_on_the_serial_lane() {
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    let event = IoEvent::DjToolCall(Box::new((
+      crate::infra::dj::tools::DjToolCall::GetNowPlaying,
+      tx,
+    )));
+    assert!(Network::event_bypasses_spotify_auth(&event));
+    assert!(
+      !Network::runs_on_service_lane(&event),
+      "the service lane has no Spotify client, so the resolver could not run there"
+    );
   }
 
   #[tokio::test]

@@ -123,9 +123,36 @@ Always check `app.user_config.keys.<action>` instead of hard-coding key literals
 - `dj-core` is a shared implementation feature (taste brief, name→URI resolver,
   library index, bulk enqueue) that exists to be pulled in by `mcp-server` and
   `ai-dj`, the way `audio-decode` is pulled in by the media sources. Not in
-  `default`. Neither front door is built yet, so nothing consumes it and
-  everything under `src/infra/dj/` is dead code for now — that is what the
-  crate-level `#![allow(dead_code)]` in `src/infra/dj/mod.rs` is for.
+  `default`. Built on its own it still has no consumer, which is what the
+  crate-level `#![cfg_attr(not(feature = "mcp-server"), allow(dead_code))]` in
+  `src/infra/dj/mod.rs` is for; that condition grows an `ai-dj` arm when the
+  second front door lands.
+- `mcp-server` adds the `spotatui mcp` MCP server, the first front door onto
+  `dj-core`. It adds no crate dependency: no LLM client and no API key are
+  compiled in.
+
+### The avoid-library filter
+
+Two gates, and both are needed. `resolve_suggestions` rejects on the *name the
+model gave* before paying for a search; `reject_owned_tracks` rejects on the
+*resolved track ID* afterwards, which is the only way to catch a track the model
+named differently enough to normalise apart (and the only gate that sees `uri`
+entries at all). Rejections go in `ResolveReport::in_library`, never `duplicates`
+(wrong words for the user) and never `unresolved` (tells the model a real track
+does not exist).
+
+Over MCP both gates are off by default: the agent was told to queue specific
+tracks, so it gets them unless it passes `queue_tracks(exclude_owned: true)`.
+`search_tracks` instead *marks* each result `owned`, which informs the choice
+without dropping anything behind the agent's back. `play_now` is never filtered.
+
+The index cost drives where the crawl runs. `search_tracks` must never crawl
+inline — it dispatches `IoEvent::DjIndexLibrary` and marks that one page from
+Liked Songs alone, saying so in the result, because seconds of pagination inside a
+tool call head-of-line-blocks the whole serial lane.
+`queue_tracks(exclude_owned)` is the one caller that *does* crawl inline, via
+`dj_library_index`, and refuses the call outright if the crawl fails: it was asked
+for a guarantee, so queueing unfiltered would be worse than failing.
 
 ### Native streaming playback
 

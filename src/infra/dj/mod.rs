@@ -16,12 +16,19 @@
 
 // `dj-core` is an implementation feature with no consumer of its own — it exists
 // to be pulled in by `mcp-server` and `ai-dj`, exactly as `audio-decode` is
-// pulled in by the media sources. Neither front door is built yet, so everything
-// here is legitimately unreachable for now; the allow narrows back to
-// `not(any(mcp-server, ai-dj))` once the first one lands.
-#![allow(dead_code)]
+// pulled in by the media sources. Enabled on its own, everything here is
+// legitimately unreachable, so scope the allow to that case rather than blanket
+// it (cf. `#[cfg_attr(not(feature = "scripting"), allow(dead_code))]` in
+// `infra::network`). The condition grows an `ai-dj` arm when that front door
+// lands.
+#![cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
 
 pub mod brief;
+/// How a tool call reaches the live player. Shared by both front doors, and
+/// gated on having one: it constructs `IoEvent::DjToolCall`, which bare
+/// `dj-core` does not compile.
+#[cfg(feature = "mcp-server")]
+pub mod exec;
 /// The avoid-library filter's two lookups. Shared: the in-TUI DJ filters with it
 /// by default, and the MCP front door uses it to mark `search_tracks` results as
 /// owned and to honour `queue_tracks(exclude_owned)`.
@@ -107,6 +114,8 @@ impl DjSuggestion {
 }
 
 /// Who said a line in the DJ transcript.
+// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DjSpeaker {
   User,
@@ -116,12 +125,16 @@ pub enum DjSpeaker {
   System,
 }
 
+// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DjLine {
   pub speaker: DjSpeaker,
   pub text: String,
 }
 
+// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+#[allow(dead_code)]
 impl DjLine {
   pub fn user(text: impl Into<String>) -> Self {
     Self {
@@ -150,6 +163,8 @@ impl DjLine {
 /// (`App::add_track_to_native_queue`); a deep queue cannot respond to a vibe
 /// shift; and one model invocation per batch (rather than per track) is what
 /// keeps latency and subscription usage sane.
+// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+#[allow(dead_code)]
 pub const DEFAULT_BATCH: usize = 6;
 pub const MAX_BATCH: usize = 8;
 
@@ -157,9 +172,13 @@ pub const MAX_BATCH: usize = 8;
 /// 6–8 minutes of runway, comfortably more than the worst case for a refill:
 /// `agent::MAX_STEPS_MUST_ACT` brain calls at `behavior.dj_agent_timeout_secs`
 /// each. That bound is why a refill gets fewer steps than a conversation.
+// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+#[allow(dead_code)]
 pub const QUEUE_LOW_WATER: usize = 2;
 
 /// Everything the DJ keeps on `App`.
+// Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct DjState {
   /// Whether the DJ keeps the queue topped up as tracks finish.
@@ -233,6 +252,8 @@ impl DjState {
   ///
   /// Every path that starts a turn goes through here, so the returned value is
   /// the one thing allowed to clear `thinking` again.
+  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+  #[allow(dead_code)]
   pub fn begin_turn(&mut self) -> u64 {
     self.thinking = true;
     self.turn_seq = self.turn_seq.wrapping_add(1);
@@ -240,6 +261,8 @@ impl DjState {
   }
 
   /// Clear the progress flag, but only if `seq` still owns it.
+  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+  #[allow(dead_code)]
   pub fn finish_turn(&mut self, seq: u64) {
     if self.turn_seq == seq {
       self.thinking = false;
@@ -247,6 +270,8 @@ impl DjState {
     }
   }
 
+  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+  #[allow(dead_code)]
   pub fn push_line(&mut self, line: DjLine) {
     self.transcript.push(line);
     // The transcript is a conversation, not a log; an unbounded Vec here would
@@ -258,6 +283,8 @@ impl DjState {
     }
   }
 
+  // Only the in-TUI DJ uses this; the allow narrows to `not(ai-dj)` once it lands.
+  #[allow(dead_code)]
   pub fn take_input(&mut self) -> String {
     let text = self.input.iter().collect::<String>();
     self.input.clear();
