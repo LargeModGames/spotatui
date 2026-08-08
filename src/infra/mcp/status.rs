@@ -75,8 +75,15 @@ pub async fn run(as_json: bool) -> i32 {
     Err(e) => checks.push(Check::fail(
       "control-file",
       format!(
-        "{e}. Start spotatui and set `behavior.mcp_enabled: true` in \
-         ~/.config/spotatui/config.yml, then restart it."
+        "{e}. Start spotatui and set `behavior.mcp_enabled: true` in {}, then restart it.",
+        // The resolved path, not a hard-coded `~/.config`: with an absolute
+        // XDG_CONFIG_HOME the agent would otherwise be sent to edit a file
+        // spotatui never reads, and this check would keep failing.
+        control::handshake_path()
+          .ok()
+          .and_then(|path| path.parent().map(|dir| dir.join("config.yml")))
+          .map(|path| path.display().to_string())
+          .unwrap_or_else(|| "the spotatui config directory".into())
       ),
     )),
   }

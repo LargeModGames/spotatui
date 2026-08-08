@@ -3,7 +3,7 @@
 > **Give this to your AI agent.** Copy the line below into Claude Code, Codex,
 > Gemini CLI, Cursor, or any agent that can read files and run commands:
 >
-> ```
+> ```text
 > Read docs/mcp-setup.md in the spotatui repo (or
 > https://raw.githubusercontent.com/LargeModGames/spotatui/main/docs/mcp-setup.md)
 > and set up the spotatui MCP server for me, following it exactly.
@@ -21,7 +21,7 @@ agent can act as your DJ: read what you have been listening to, search the
 catalogue, and queue tracks. **No API key is required** — the agent you already
 have installed and authenticated does the thinking.
 
-```
+```text
 Your agent ──stdio(MCP)──> `spotatui mcp` ──loopback TCP──> running spotatui
 ```
 
@@ -63,7 +63,7 @@ spotatui mcp status
   ```bash
   cargo install --locked spotatui --features mcp-server
   # or, from a checkout:
-  cargo install --path . --features mcp-server
+  cargo install --locked --path . --features mcp-server
   ```
 
   The feature is not in `default`, so a plain `cargo build` omits it. Do not
@@ -72,7 +72,7 @@ spotatui mcp status
 
 ### Step 2 — Turn on the control socket
 
-The socket is **opt-in**. Edit `~/.config/spotatui/config.yml` and set, under the
+The socket is **opt-in**. Edit spotatui's `config.yml` and set, under the
 `behavior:` key:
 
 ```yaml
@@ -83,7 +83,11 @@ behavior:
 Create the `behavior:` section if the file does not have one. Do not remove or
 reorder anything else in the file.
 
-> On Windows the path is `%USERPROFILE%\.config\spotatui\config.yml`.
+> **Which `config.yml`.** spotatui resolves its config directory as
+> `$XDG_CONFIG_HOME/spotatui` when `XDG_CONFIG_HOME` is set to an *absolute*
+> path, and `~/.config/spotatui` otherwise — so do not assume the second one.
+> `spotatui mcp status` prints the resolved directory; use the path it reports.
+> On Windows the fallback is `%USERPROFILE%\.config\spotatui`.
 
 ### Step 3 — Restart spotatui
 
@@ -103,11 +107,14 @@ spotatui mcp status
 
 All three checks must read `ok`, and the exit code must be `0`:
 
-```
+```text
 ok   binary         spotatui 0.40.3 with the mcp-server feature
 ok   control-file   found (port 43219, pid 12345) at /home/you/.config/spotatui/mcp.json
 ok   connection     handshake accepted; server speaks protocol 2026-07-28
 ```
+
+The `control-file` line reports the path spotatui actually resolved, which is
+where its `config.yml` lives too.
 
 If `connection` fails but `control-file` passed, the control file is stale from a
 previous run — have the user restart spotatui again.
@@ -222,8 +229,8 @@ To undo everything: remove the server from your client
 
 ## What the user should know
 
-* The socket listens on **loopback only** and requires a token from
-  `~/.config/spotatui/mcp.json` (mode `0600`, in a `0700` directory). A local
+* The socket listens on **loopback only** and requires a token from `mcp.json`
+  in the same config directory (mode `0600`, in a `0700` directory). A local
   process that can read that file can control your player and read your listening
   history — the same trust level as the existing Spotify token cache.
 * **Data sent to your agent's model provider:** whatever the agent chooses to

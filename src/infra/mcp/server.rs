@@ -164,10 +164,15 @@ async fn handle_request<E: ToolExecutor>(
       if let Some(response) = require_era(session, params, id) {
         return response;
       }
-      let name = params
+      // A missing `name` is a malformed request, not a call to a tool called
+      // "". Defaulting it to empty reported `METHOD_NOT_FOUND: Unknown tool: `,
+      // which tells the client nothing about what to fix.
+      let Some(name) = params
         .and_then(|params| params.get("name"))
         .and_then(Value::as_str)
-        .unwrap_or_default();
+      else {
+        return proto::error_response(id, proto::INVALID_PARAMS, "tools/call requires params.name");
+      };
       let args = params
         .and_then(|params| params.get("arguments"))
         .cloned()
@@ -506,6 +511,27 @@ mod tests {
     .await;
     assert_eq!(response["error"]["code"], json!(proto::METHOD_NOT_FOUND));
     assert!(response.get("result").is_none());
+  }
+
+  #[tokio::test]
+  async fn a_call_with_no_tool_name_is_invalid_params_not_an_unknown_tool() {
+    // Defaulting the missing name to "" reported `Unknown tool: ` under
+    // METHOD_NOT_FOUND, which names nothing and points the client at the wrong
+    // problem: the request shape is what is wrong, not the tool table.
+    let mut session = Session::default();
+    let response = exchange(
+      &mut session,
+      json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "_meta": modern_meta(),
+        "arguments": {}
+      }}),
+    )
+    .await;
+    assert_eq!(response["error"]["code"], json!(proto::INVALID_PARAMS));
+    assert!(response["error"]["message"]
+      .as_str()
+      .unwrap()
+      .contains("params.name"));
   }
 
   #[tokio::test]

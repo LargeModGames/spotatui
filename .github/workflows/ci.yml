@@ -37,8 +37,9 @@ jobs:
           # The exact feature set shipped for Linux by cd.yml, so every new
           # source subsystem (local-files, subsonic, internet-radio, youtube),
           # cover-art, and the MCP server are compiled and tested in CI.
-          # Keep this list in sync with cd.yml:77/79 whenever a feature is added
-          # there, or the release build becomes the first place a break shows up.
+          # Keep this list in sync with cd.yml's `Build release binary` step
+          # whenever a feature is added there, or the release build becomes the
+          # first place a break shows up.
           # `dj-core` is implied by `mcp-server`, so it is exercised here too.
           - name: all-sources
             args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"

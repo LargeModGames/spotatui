@@ -257,10 +257,11 @@ impl Network {
     let summary = report.summary();
     let accepted = {
       let mut app = self.app.lock().await;
-      let accepted = app.extend_native_queue_from_dj(std::mem::take(&mut report.resolved));
-      app.set_status_message(format!("MCP: {summary}"), 5);
-      accepted
+      app.extend_native_queue_from_dj(std::mem::take(&mut report.resolved))
     };
+    // After the block, not inside it: the network layer's helper takes the lock
+    // itself.
+    self.show_status_message(format!("MCP: {summary}"), 5).await;
 
     let mut text = format!("Queued {accepted} track(s):\n{}", queued_labels.join("\n"));
     // Report the misses explicitly: MCP clients feed execution detail back to
@@ -874,20 +875,39 @@ mod tests {
     assert!(!nothing_queued_detail(&ResolveReport::default()).is_empty());
   }
 
+  #[tokio::test]
+  async fn a_radio_uri_is_reported_as_a_stream_rather_than_queued_as_a_track() {
+    // A live stream is not a finite track, and `add_track_to_native_queue`
+    // rejects it — so queueing one would leave a row that can never advance.
+    // The reason has to say *stream*: told "not found", the model learns the
+    // station does not exist and goes looking for another spelling.
+    let network = unauthenticated_network().await;
+    let (resolved, missing) = network.tracks_for_uris(&["radio:somafm".to_string()]).await;
+    assert!(resolved.is_empty(), "{resolved:?}");
+    assert_eq!(missing.len(), 1);
+    assert!(
+      missing[0].contains("a radio stream, not a track"),
+      "{missing:?}"
+    );
+  }
+
+  /// `play_now`'s URI gate lives in `tools::parse_call`, which is the only
+  /// producer of `DjToolCall::PlayNow`, so `dj_play_now` never sees a URI that
+  /// is not a single playable track. This pins that the two stay joined up:
+  /// widening the parse gate without widening the lane's build-capability check
+  /// is what would let a URI through to a router that does not exist.
   #[test]
-  fn non_spotify_uris_are_queued_as_is_and_radio_is_rejected() {
-    // `tracks_for_uris` needs no network for these branches, so exercise the
-    // classification directly.
-    let uris = vec![
-      "youtube:video:abc".to_string(),
-      "radio:somafm".to_string(),
-      "file:/music/a.flac".to_string(),
-    ];
-    let non_spotify: Vec<_> = uris
-      .iter()
-      .filter(|uri| !uri.starts_with("spotify:track:"))
-      .collect();
-    assert_eq!(non_spotify.len(), 3);
-    assert!(uris.iter().any(|uri| uri.starts_with("radio:")));
+  fn play_now_only_ever_reaches_the_lane_with_a_playable_track_uri() {
+    for uri in [
+      "not-a-uri",
+      "spotify:album:1DFixLWuPkv3KT3TnV35m3",
+      "https://open.spotify.com/track/7o2AeQZzfCERsRmOM86EcB",
+      "radio:somafm",
+    ] {
+      assert!(
+        crate::infra::dj::tools::parse_call("play_now", &json!({"uri": uri})).is_err(),
+        "{uri} must not reach the network lane at all"
+      );
+    }
   }
 }

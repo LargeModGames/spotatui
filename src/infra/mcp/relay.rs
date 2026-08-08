@@ -18,8 +18,24 @@ use super::executor::OfflineExecutor;
 use super::protocol as proto;
 use super::server;
 use anyhow::Result;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+
+/// How long a forwarded request may go unanswered before the relay gives up on
+/// the socket.
+///
+/// Deliberately generous rather than snappy: `queue_tracks(exclude_owned)`
+/// crawls the whole playlist library inline before it answers, and the serial
+/// lane it runs on is head-of-line blocking, so a short deadline would turn a
+/// slow-but-working call into a false failure. It exists only to bound the
+/// unbounded case — a stopped process or a half-open connection, where nothing
+/// is ever coming and the agent's whole MCP session would otherwise hang.
+const UPSTREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
+/// The handshake replay is answered from memory the moment it lands, so it gets
+/// its own, much shorter deadline: waiting five minutes to discover a socket is
+/// dead would strand every line behind it.
+const HANDSHAKE_REPLAY_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Entry point for the `mcp` subcommand.
 ///
@@ -116,6 +132,9 @@ struct Relay {
   offline_reason: String,
   /// Only used while offline; upstream answers carry the TUI's own session.
   session: server::Session,
+  /// A field rather than the constant so the deadline is testable without
+  /// waiting it out or manipulating the clock.
+  response_timeout: Duration,
 }
 
 impl Default for Relay {
@@ -126,6 +145,7 @@ impl Default for Relay {
       handshake: None,
       offline_reason: String::new(),
       session: server::Session::default(),
+      response_timeout: UPSTREAM_RESPONSE_TIMEOUT,
     }
   }
 }
@@ -192,7 +212,12 @@ impl Relay {
               }
             }
           }
-          self.offline_reason = format!("lost the connection to spotatui ({e})");
+          // Left as `ensure_upstream` set it. The reconnect is the step that
+          // failed, and its reason ("is spotatui running with
+          // behavior.mcp_enabled set?") is the one the user can act on;
+          // overwriting it with the earlier send error hands the agent the
+          // staler half of the story.
+          log::debug!("MCP relay: reconnect failed after {e}");
         }
         Err(sent @ ForwardError::Sent(_)) => {
           // Deliberately *not* retried. spotatui had the request when the socket
@@ -233,9 +258,21 @@ impl Relay {
         self.offline_reason = format!("could not replay the handshake to spotatui ({e})");
         return false;
       }
-      if upstream.reader.next_line().await.ok().flatten().is_none() {
-        self.offline_reason = "spotatui closed the connection during the handshake".to_string();
-        return false;
+      // Deadlined like every other upstream read: a socket that accepts the
+      // replay and never answers would otherwise block here forever, and this
+      // runs before any of the agent's own lines get a chance.
+      match tokio::time::timeout(HANDSHAKE_REPLAY_TIMEOUT, upstream.reader.next_line()).await {
+        Ok(Ok(Some(_))) => {}
+        Ok(_) => {
+          self.offline_reason = "spotatui closed the connection during the handshake".to_string();
+          return false;
+        }
+        Err(_) => {
+          self.offline_reason =
+            "spotatui did not answer the handshake in time; it may be stopped or wedged"
+              .to_string();
+          return false;
+        }
       }
     }
     self.upstream = Some(upstream);
@@ -248,6 +285,7 @@ impl Relay {
     line: &str,
     expects_response: bool,
   ) -> std::result::Result<Option<String>, ForwardError> {
+    let response_timeout = self.response_timeout;
     let upstream = self
       .upstream
       .as_mut()
@@ -259,13 +297,21 @@ impl Relay {
       return Ok(None);
     }
     // Past this point the request is in spotatui's hands, so every failure is
-    // `Sent`: it may already have queued the tracks.
-    match upstream.reader.next_line().await {
-      Ok(Some(response)) => Ok(Some(response)),
-      Ok(None) => Err(ForwardError::Sent(anyhow::anyhow!(
+    // `Sent`: it may already have queued the tracks. That includes the deadline
+    // expiring, which is why it maps to the same variant — and why the socket is
+    // then dropped rather than reused, since a late answer arriving on it would
+    // be read as the *next* request's response and desynchronise the stream for
+    // the rest of the session.
+    match tokio::time::timeout(response_timeout, upstream.reader.next_line()).await {
+      Ok(Ok(Some(response))) => Ok(Some(response)),
+      Ok(Ok(None)) => Err(ForwardError::Sent(anyhow::anyhow!(
         "spotatui closed the connection"
       ))),
-      Err(e) => Err(ForwardError::Sent(e.into())),
+      Ok(Err(e)) => Err(ForwardError::Sent(e.into())),
+      Err(_) => Err(ForwardError::Sent(anyhow::anyhow!(
+        "spotatui did not answer within {}s",
+        response_timeout.as_secs()
+      ))),
     }
   }
 
@@ -489,6 +535,34 @@ mod tests {
     seen
   }
 
+  /// A stand-in TUI that reads the request and then simply never answers, the
+  /// way a stopped process or a half-open connection does. Holds the socket open
+  /// rather than dropping it, so only a deadline can end the wait.
+  fn fake_tui_that_never_answers(listener: TcpListener, token: String) {
+    tokio::spawn(async move {
+      loop {
+        let Ok((stream, _)) = listener.accept().await else {
+          break;
+        };
+        let token = token.clone();
+        tokio::spawn(async move {
+          let (read_half, _write_half) = stream.into_split();
+          let mut lines = BufReader::new(read_half).lines();
+          let Ok(Some(first)) = lines.next_line().await else {
+            return;
+          };
+          assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&first).unwrap()["token"],
+            json!(token)
+          );
+          // Read everything, answer nothing, and keep both halves alive.
+          while let Ok(Some(_)) = lines.next_line().await {}
+          std::future::pending::<()>().await;
+        });
+      }
+    });
+  }
+
   /// A relay pointed at `port`, with no dependence on any shared path or env.
   fn relay_for(port: u16, token: &str) -> Relay {
     let token = token.to_string();
@@ -628,6 +702,44 @@ mod tests {
     assert!(
       text.contains("may or may not have been applied"),
       "the agent has to be told it is unknown, not that nothing happened: {text}"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_player_that_takes_the_request_and_never_answers_does_not_hang_the_session() {
+    // `run` handles one agent line at a time, so an upstream read with no
+    // deadline blocks every later tool call too — a stopped spotatui would take
+    // the agent's whole MCP session down with it. The deadline has to end the
+    // wait, and it has to be reported as `Sent`: the request did land, so the
+    // agent must not be told nothing happened.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fake_tui_that_never_answers(listener, "tok".to_string());
+    let mut relay = Relay {
+      response_timeout: std::time::Duration::from_millis(100),
+      ..relay_for(port, "tok")
+    };
+
+    let response: serde_json::Value = serde_json::from_str(
+      &tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        relay.handle(&modern_call()),
+      )
+      .await
+      .expect("the deadline must fire rather than hanging")
+      .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(response["result"]["isError"], json!(true));
+    let text = response.to_string();
+    assert!(
+      text.contains("may or may not have been applied"),
+      "a delivered-then-unanswered request has to say so: {text}"
+    );
+    assert!(
+      relay.upstream.is_none(),
+      "the socket must be dropped, or a late answer would be read as the next request's"
     );
   }
 

@@ -29,29 +29,39 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
 const HANDSHAKE_FILE: &str = "mcp.json";
-/// Overrides the handshake file location. Test-only: the real path is derived from
-/// the config directory, and a test must not write into the user's own.
+/// Overrides the handshake file location so a test does not write into the
+/// user's own config directory. Compiled in **only** under `cfg(test)`: in a
+/// release build the path always derives from the config directory, so no
+/// inherited environment can move the token file out of the `0700` directory
+/// that protects it, or point a relay at a port and token of its choosing.
+#[cfg(test)]
 const HANDSHAKE_PATH_ENV: &str = "SPOTATUI_MCP_HANDSHAKE_PATH";
 /// A connecting relay has to present its token immediately; without a deadline a
 /// silent connection would hold a task open forever.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// A token line is around 50 bytes. The cap is what stops a pre-authentication
+/// connection from growing an unbounded `String`: the handshake deadline bounds
+/// how *long* a client may write for, not how much.
+const MAX_HANDSHAKE_BYTES: u64 = 4096;
 
 /// What the TUI publishes so a relay can find and authenticate to it.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Handshake {
   pub port: u16,
   pub token: String,
-  /// PID of the TUI that wrote this, so a relay can tell a live socket from a
-  /// stale file left by a process that was killed.
+  /// PID of the TUI that wrote this. Reported by `spotatui mcp status` so a file
+  /// left behind by a killed process can be traced back to it; reachability
+  /// itself is decided by the connection probe, not by this.
   pub pid: u32,
 }
 
 pub fn handshake_path() -> Result<PathBuf> {
+  #[cfg(test)]
   if let Ok(path) = std::env::var(HANDSHAKE_PATH_ENV) {
     if !path.trim().is_empty() {
       return Ok(PathBuf::from(path));
@@ -108,11 +118,20 @@ pub fn clear_handshake() {
   }
 }
 
-fn generate_token() -> String {
-  // 128 bits from the OS CSPRNG, hex-encoded.
-  let high = rand::random::<u64>();
-  let low = rand::random::<u64>();
-  format!("{high:016x}{low:016x}")
+fn generate_token() -> Result<String> {
+  // 128 bits straight from the OS CSPRNG, hex-encoded. `SysRng` rather than the
+  // thread RNG so the entropy source is the one the comment claims, with no
+  // userspace state to reason about for a value that authenticates a socket.
+  use rand::rngs::SysRng;
+  use rand::TryRng;
+  let mut rng = SysRng;
+  let high = rng
+    .try_next_u64()
+    .context("could not read from the system random source")?;
+  let low = rng
+    .try_next_u64()
+    .context("could not read from the system random source")?;
+  Ok(format!("{high:016x}{low:016x}"))
 }
 
 /// Bind the control listener and serve connections until the process exits.
@@ -125,7 +144,7 @@ pub async fn spawn_listener(app: Arc<Mutex<App>>, io_tx: Sender<IoEvent>) -> Res
     .await
     .context("could not bind the MCP control socket on 127.0.0.1")?;
   let port = listener.local_addr()?.port();
-  let token = generate_token();
+  let token = generate_token()?;
 
   write_handshake(&Handshake {
     port,
@@ -140,6 +159,11 @@ pub async fn spawn_listener(app: Arc<Mutex<App>>, io_tx: Sender<IoEvent>) -> Res
         Ok(accepted) => accepted,
         Err(e) => {
           log::warn!("MCP: accept failed: {e}");
+          // A transient error is fine to retry at once, but a persistent one
+          // (EMFILE, for instance) returns immediately every time, so retrying
+          // with no delay spins a core and fills the log for the life of the
+          // process. Back off enough to make that harmless.
+          tokio::time::sleep(std::time::Duration::from_millis(100)).await;
           continue;
         }
       };
@@ -180,10 +204,25 @@ async fn serve_connection(
   // The token line comes before any MCP traffic. This is our own transport, so a
   // non-MCP handshake line is fine here; the stdio channel the relay presents to
   // the agent stays pure MCP.
+  //
+  // Read through a cap rather than straight from the reader: this runs *before*
+  // the token check, so any local process could otherwise open a connection and
+  // write newline-free bytes for the whole timeout, growing one `String` per
+  // connection with no credential and no limit on connections.
   let mut first_line = String::new();
-  let read = tokio::time::timeout(handshake_timeout, reader.read_line(&mut first_line)).await;
+  let read = tokio::time::timeout(
+    handshake_timeout,
+    (&mut reader)
+      .take(MAX_HANDSHAKE_BYTES)
+      .read_line(&mut first_line),
+  )
+  .await;
   match read {
     Ok(Ok(0)) => anyhow::bail!("client closed before handshake"),
+    // The cap was reached without a newline, so this is not a handshake line.
+    Ok(Ok(n)) if n as u64 == MAX_HANDSHAKE_BYTES && !first_line.ends_with('\n') => {
+      anyhow::bail!("handshake line too long")
+    }
     Ok(Ok(_)) => {}
     Ok(Err(e)) => return Err(e.into()),
     Err(_) => anyhow::bail!("handshake timed out"),
@@ -227,8 +266,8 @@ mod tests {
 
   #[test]
   fn generated_tokens_are_long_and_distinct() {
-    let a = generate_token();
-    let b = generate_token();
+    let a = generate_token().unwrap();
+    let b = generate_token().unwrap();
     assert_eq!(a.len(), 32, "128 bits, hex-encoded");
     assert_ne!(a, b);
     assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
@@ -397,5 +436,34 @@ mod tests {
       .unwrap();
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("timed out"));
+  }
+
+  #[tokio::test]
+  async fn a_handshake_line_that_never_ends_is_rejected_rather_than_buffered() {
+    // Regression guard: the deadline bounds how long an unauthenticated client
+    // may write, not how much. Without the cap, a local process could hold a
+    // connection open writing newline-free bytes and grow a `String` per
+    // connection, before presenting any token.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (io_tx, _io_rx) = std::sync::mpsc::channel();
+    let app = Arc::new(Mutex::new(App::default()));
+
+    let server = tokio::spawn(async move {
+      let (stream, _) = listener.accept().await.unwrap();
+      serve_connection(stream, app, io_tx, "t".to_string(), HANDSHAKE_TIMEOUT).await
+    });
+
+    let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let flood = vec![b'a'; MAX_HANDSHAKE_BYTES as usize * 2];
+    // The write may fail once the server hangs up mid-flood, which is the point.
+    let _ = client.write_all(&flood).await;
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+      .await
+      .expect("the cap must fire well inside the handshake deadline")
+      .unwrap();
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("too long"), "{error}");
   }
 }

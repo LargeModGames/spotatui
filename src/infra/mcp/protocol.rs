@@ -151,12 +151,16 @@ pub fn unsupported_version_response(id: Option<&Id>, requested: &str) -> Value {
 pub fn result_response(id: Option<&Id>, era: &Era, mut body: Map<String, Value>) -> Value {
   if !era.is_legacy() {
     body.insert("resultType".to_string(), json!("complete"));
-    let meta = body
-      .entry("_meta".to_string())
-      .or_insert_with(|| json!({}))
-      .as_object_mut()
-      .expect("_meta is always inserted as an object");
-    meta.insert(META_SERVER_INFO.to_string(), server_info());
+    // `or_insert_with` hands back whatever is already there, so a future caller
+    // that put a non-object under `_meta` would panic a connection task here.
+    // Overwrite it instead: the field is ours to shape.
+    let entry = body.entry("_meta".to_string()).or_insert_with(|| json!({}));
+    if !entry.is_object() {
+      *entry = json!({});
+    }
+    if let Some(meta) = entry.as_object_mut() {
+      meta.insert(META_SERVER_INFO.to_string(), server_info());
+    }
   }
   json!({
     "jsonrpc": "2.0",
