@@ -173,6 +173,10 @@ dj-core = []
 # LLM client and no API key are compiled in: `--features mcp-server` alone is a
 # complete "drive it from your coding agent" build.
 mcp-server = ["dj-core"]
+# The in-TUI DJ: a DJ screen with a chat prompt, continuous auto-queue and a
+# vibe-shift key, backed by a locally-installed agent CLI, an API key, or a local
+# model. Deliberately not in `default`: it egresses to a third-party provider.
+ai-dj = ["dj-core"]
 
 [dev-dependencies]
 tempfile = "3"

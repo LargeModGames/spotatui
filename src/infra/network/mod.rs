@@ -1,4 +1,4 @@
-#[cfg(feature = "mcp-server")]
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 pub mod dj;
 pub mod friends;
 pub mod ids;
@@ -291,7 +291,7 @@ pub enum IoEvent {
   /// rather than silently dropping the response channel.
   ///
   /// Boxed because the payload is much larger than the other variants.
-  #[cfg(feature = "mcp-server")]
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
   DjToolCall(
     Box<(
       crate::infra::dj::tools::DjToolCall,
@@ -304,7 +304,7 @@ pub enum IoEvent {
   /// so that marking results as owned never crawls *inside* a latency-sensitive
   /// tool call; the resolve step builds the index inline if it is not warm yet.
   /// The in-TUI DJ will dispatch it too, when the filter is switched on.
-  #[cfg(feature = "mcp-server")]
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
   DjIndexLibrary,
 }
 
@@ -431,7 +431,7 @@ impl Network {
     // Bypasses the gate but NOT onto the service lane: the handler needs the real
     // Spotify client, and answers an unauthenticated caller itself so the MCP
     // client gets a diagnosable error instead of a dropped channel.
-    #[cfg(feature = "mcp-server")]
+    #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
     if matches!(io_event, IoEvent::DjToolCall(_)) {
       return true;
     }
@@ -840,12 +840,12 @@ impl Network {
       IoEvent::FetchCoverArt(request) => {
         self.fetch_cover_art(request).await;
       }
-      #[cfg(feature = "mcp-server")]
+      #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
       IoEvent::DjToolCall(payload) => {
         let (call, responder) = *payload;
         self.run_dj_tool_call(call, responder).await;
       }
-      #[cfg(feature = "mcp-server")]
+      #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
       IoEvent::DjIndexLibrary => {
         self.dj_index_library().await;
       }
@@ -1670,7 +1670,7 @@ mod tests {
   /// `Network` with `None` for it. It must bypass the gate so the handler can
   /// answer an unauthenticated caller with a diagnosable message instead of
   /// dropping the `oneshot` an MCP client is blocked on.
-  #[cfg(feature = "mcp-server")]
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
   #[test]
   fn dj_tool_calls_bypass_auth_but_stay_on_the_serial_lane() {
     let (tx, _rx) = tokio::sync::oneshot::channel();
