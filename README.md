@@ -149,11 +149,6 @@ Or if you use pipewire:
     };
    ```
 
-```nix
-# NixOS with cargo
-nix develop
-cargo install --path .
-```
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
