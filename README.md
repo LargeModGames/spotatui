@@ -65,7 +65,7 @@ Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), bu
 
 | Key differences | spotify-tui | spotatui |
 |---|---|---|
-| Spotify backend | spotifyd | native client |
+| Spotify backend | external Connect device (spotifyd, official client, ...) | built-in native client |
 | Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio |
 
 ## Features
