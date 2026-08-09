@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src=".github/spotatui-logo.png" alt="spotatui logo"><br>
+  <img src=".github/spotatui-logo.png" alt="spotatui logo" width="200"><br>
   spotatui
 </h1>
 <p align="center">
@@ -18,10 +18,11 @@
 
 ![Demo](.github/demo.gif)
 
-## Table of Contents
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+## Table of Contents
 
+- [About](#about)
 - [Features](#features)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
@@ -47,7 +48,6 @@
 - [Star History](#star-history)
 - [Libraries used](#libraries-used)
 - [Development](#development)
-  - [If you use NixOS or Nix in general:](#if-you-use-nixos-or-nix-in-general)
   - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
 - [Help Wanted](#help-wanted)
 - [Maintainer](#maintainer)
@@ -58,10 +58,7 @@
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 ## About
-<!--
-A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui).
--->
-Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), but since then the project has diverged in multiple fronts. 
+A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui) that has since diverged on multiple fronts.
 
 | Key differences | spotify-tui | spotatui |
 |---|---|---|
