@@ -80,7 +80,7 @@ Originally a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui), bu
 - **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
 - **Lightweight.** ~78 MB RAM while streaming, versus a full Electron client. See [Performance](#performance).
 
-## Installation 
+## Installation
 
 > **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
 
@@ -145,7 +145,7 @@ Or if you use pipewire:
     services.pipewire = {
         enable = true;
         alsa.enable = true;
-        #your other settings 
+        #your other settings
     };
    ```
 
@@ -368,8 +368,6 @@ As of November 2024, Spotify removed access to certain API endpoints for new app
 
 For more information, see [Spotify's announcement about API changes](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api).
 
-
-
 ## Using with [spotifyd](https://github.com/Spotifyd/spotifyd)
 
 > **Note:** If you're using native streaming, you don't need spotifyd!
@@ -445,11 +443,6 @@ You may be asked to re-authenticate with Spotify the first time.
 1. Clone or fork this repo and `cd` to it
 1. And then `cargo run`
 
-### Nix
-   ```bash
-    nix develop
-   ```
- 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines.
 
 ### Windows Subsystem for Linux
