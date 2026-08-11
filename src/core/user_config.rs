@@ -185,6 +185,7 @@ pub enum ThemePreset {
   Gruvbox,
   GruvboxLight,
   CatppuccinMocha,
+  TokyoNight,
   Custom, // When user has manually customized colors
 }
 
@@ -203,6 +204,7 @@ impl ThemePreset {
       ThemePreset::Gruvbox,
       ThemePreset::GruvboxLight,
       ThemePreset::CatppuccinMocha,
+      ThemePreset::TokyoNight,
       ThemePreset::Custom,
     ]
   }
@@ -221,6 +223,7 @@ impl ThemePreset {
       ThemePreset::Gruvbox => "Gruvbox",
       ThemePreset::GruvboxLight => "Gruvbox Light",
       ThemePreset::CatppuccinMocha => "Catppuccin Mocha",
+      ThemePreset::TokyoNight => "Tokyo Night",
       ThemePreset::Custom => "Custom",
     }
   }
@@ -239,6 +242,7 @@ impl ThemePreset {
       "Gruvbox" => ThemePreset::Gruvbox,
       "Gruvbox Light" => ThemePreset::GruvboxLight,
       "Catppuccin Mocha" => ThemePreset::CatppuccinMocha,
+      "Tokyo Night" => ThemePreset::TokyoNight,
       _ => ThemePreset::Custom,
     }
   }
@@ -494,6 +498,26 @@ impl ThemePreset {
         background: Color::Reset,
         header: Color::Rgb(29, 185, 84),             // Spotify Green
         highlighted_lyrics: Color::Rgb(29, 185, 84), // Spotify Green
+      },
+      ThemePreset::TokyoNight => Theme {
+        analysis_bar: Color::Rgb(122, 162, 247), //Darker blue #7aa2f7
+        analysis_bar_text: Color::Rgb(42, 195, 222), // Light blue #2ac3de
+        active: Color::Rgb(115, 218, 202),       // Teal #73daca
+        banner: Color::Rgb(42, 195, 222),        // Light blue #2ac3de
+        error_border: Color::Rgb(247, 118, 142), // Red #f7768e
+        error_text: Color::Rgb(247, 118, 142),   // Red #f7768e
+        hint: Color::Rgb(255, 158, 100),         // Orange #ff9e64
+        hovered: Color::Rgb(157, 124, 216),      // Purple #9d7cd8
+        inactive: Color::Rgb(192, 202, 245),     // Light blue #c0caf5
+        playbar_background: Color::Rgb(36, 40, 59), // Gray #24283b
+        playbar_progress: Color::Rgb(122, 162, 247), //Darker blue #7aa2f7
+        playbar_progress_text: Color::Rgb(169, 177, 214), // Light purple #a9b1d6
+        playbar_text: Color::Rgb(122, 162, 247), //Darker blue #7aa2f7
+        selected: Color::Rgb(125, 207, 255),     // Light blue #7dcfff
+        text: Color::Rgb(169, 177, 214),         // Light purple #a9b1d6
+        background: Color::Rgb(36, 40, 59),      // Gray #24283b
+        header: Color::Rgb(122, 162, 247),       // Blue #7aa2f7,
+        highlighted_lyrics: Color::Rgb(42, 195, 222), // Light blue #2ac3de
       },
       ThemePreset::Custom => Theme::default(), // Won't be used directly
     }
