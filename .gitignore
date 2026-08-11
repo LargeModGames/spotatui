@@ -26,5 +26,3 @@ tags
 
 # build artifacts from the worker-relay subproject
 worker-relay/node_modules/
-result
-/result
