@@ -47,7 +47,7 @@ fn should_replay_published_queue_slot(
   request: &StreamingRecoveryRequest,
   queue_now_is_spotify: bool,
 ) -> bool {
-  request.restore_playback && queue_now_is_spotify
+  request.restore_playback && request.reselect_device && queue_now_is_spotify
 }
 
 /// Bundled context for player event handling tasks.
@@ -1370,15 +1370,31 @@ mod tests {
   }
 
   #[test]
-  fn idle_backend_rebuild_does_not_replay_a_published_queue_slot() {
+  fn queue_slot_replay_requires_confirmed_native_restoration() {
     let idle_rebuild = StreamingRecoveryRequest::default();
     assert!(!should_replay_published_queue_slot(&idle_rebuild, true));
 
-    let restoring = StreamingRecoveryRequest {
+    let unconfirmed_restoration = StreamingRecoveryRequest {
       restore_playback: true,
       ..StreamingRecoveryRequest::default()
     };
-    assert!(should_replay_published_queue_slot(&restoring, true));
-    assert!(!should_replay_published_queue_slot(&restoring, false));
+    assert!(!should_replay_published_queue_slot(
+      &unconfirmed_restoration,
+      true
+    ));
+
+    let confirmed_restoration = StreamingRecoveryRequest {
+      reselect_device: true,
+      restore_playback: true,
+      ..StreamingRecoveryRequest::default()
+    };
+    assert!(should_replay_published_queue_slot(
+      &confirmed_restoration,
+      true
+    ));
+    assert!(!should_replay_published_queue_slot(
+      &confirmed_restoration,
+      false
+    ));
   }
 }
