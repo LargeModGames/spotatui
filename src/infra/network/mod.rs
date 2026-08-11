@@ -450,7 +450,10 @@ impl Network {
       return true;
     }
     #[cfg(feature = "streaming")]
-    if matches!(io_event, IoEvent::RestoreNativePlayback(_)) {
+    if matches!(
+      io_event,
+      IoEvent::RestoreNativePlayback(_) | IoEvent::ReplayPublishedSpotifyQueueSlot
+    ) {
       return true;
     }
     // Bypasses the gate but NOT onto the service lane: the handler needs the real
@@ -1724,6 +1727,20 @@ mod tests {
       assert!(Network::runs_on_service_lane(&event));
       assert!(Network::event_bypasses_spotify_auth(&event));
     }
+  }
+
+  /// The queue router normally consumes this event first. If that invariant is
+  /// ever broken, its network fallback is still a no-op and must not trigger a
+  /// token refresh or login prompt before being discarded.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn queue_slot_replay_fallback_bypasses_auth_but_stays_serial() {
+    let event = IoEvent::ReplayPublishedSpotifyQueueSlot;
+    assert!(Network::event_bypasses_spotify_auth(&event));
+    assert!(
+      !Network::runs_on_service_lane(&event),
+      "the queue router owns replay ordering on the serial event pump"
+    );
   }
 
   /// `DjToolCall` is the one event that bypasses the auth gate *without* moving
