@@ -3207,6 +3207,7 @@ impl App {
       self.native_backend_pending = tx
         .send(crate::infra::player::StreamingRecoveryRequest {
           reselect_device,
+          restore_playback: true,
           continue_after_track: None,
         })
         .is_ok();

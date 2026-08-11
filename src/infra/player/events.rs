@@ -6,7 +6,8 @@ use crate::infra::macos_media;
 use crate::infra::mpris;
 use crate::infra::network::IoEvent;
 use crate::infra::player::{
-  get_default_cache_path, PlayerEvent, StreamingConfig, StreamingConnectionState, StreamingPlayer,
+  get_default_cache_path, PlayerEvent, SessionDisconnectReason, StreamingConfig,
+  StreamingConnectionState, StreamingPlayer,
 };
 use log::info;
 use std::sync::{
@@ -20,10 +21,33 @@ const STALLED_PLAYBACK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const END_OF_TRACK_CONTINUATION_DELAY: Duration = Duration::from_millis(500);
 const END_OF_TRACK_RECONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionDisconnectRecovery {
+  Stop,
+  RebuildIdle,
+  RestorePlayback,
+}
+
+fn session_disconnect_recovery(reason: SessionDisconnectReason) -> SessionDisconnectRecovery {
+  match reason {
+    SessionDisconnectReason::ExternalDeviceHandoff => SessionDisconnectRecovery::RebuildIdle,
+    SessionDisconnectReason::UnexpectedShutdown => SessionDisconnectRecovery::RestorePlayback,
+    SessionDisconnectReason::LocalCommand => SessionDisconnectRecovery::Stop,
+  }
+}
+
 #[derive(Clone, Default)]
 pub struct StreamingRecoveryRequest {
   pub reselect_device: bool,
+  pub restore_playback: bool,
   pub continue_after_track: Option<String>,
+}
+
+fn should_replay_published_queue_slot(
+  request: &StreamingRecoveryRequest,
+  queue_now_is_spotify: bool,
+) -> bool {
+  request.restore_playback && queue_now_is_spotify
 }
 
 /// Bundled context for player event handling tasks.
@@ -68,6 +92,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
   while let Some(mut request) = ctx.recovery_rx.recv().await {
     while let Ok(next_request) = ctx.recovery_rx.try_recv() {
       request.reselect_device |= next_request.reselect_device;
+      request.restore_playback |= next_request.restore_playback;
       if next_request.continue_after_track.is_some() {
         request.continue_after_track = next_request.continue_after_track;
       }
@@ -159,7 +184,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         let mut replay_queue_slot = false;
         if app.pending_start_playback.is_some() {
           app.replay_pending_start_playback();
-        } else if app.queue_now_is_spotify() {
+        } else if should_replay_published_queue_slot(&request, app.queue_now_is_spotify()) {
           // The published queue slot outranks snapshot restore: its direct
           // load was discarded with the replaced player, and for a queue
           // playing over an idle app there is no snapshot whose TrackChanged
@@ -914,7 +939,7 @@ async fn handle_player_events(
           windows_media.set_position(position_ms as u64);
         }
       }
-      PlayerEvent::SessionDisconnected { .. } => {
+      PlayerEvent::SessionDisconnected { reason, .. } => {
         #[cfg(all(feature = "mpris", target_os = "linux"))]
         if let Some(ref mpris) = mpris_manager {
           mpris.set_stopped();
@@ -930,18 +955,29 @@ async fn handle_player_events(
           windows_media.set_stopped();
         }
 
-        let unexpected_disconnect = !player.is_connected();
+        let recovery = session_disconnect_recovery(reason);
+        let (status_message, restore_playback) = match recovery {
+          SessionDisconnectRecovery::Stop => ("Native streaming stopped.", false),
+          SessionDisconnectRecovery::RebuildIdle => {
+            ("Playback moved to another Spotify device.", false)
+          }
+          SessionDisconnectRecovery::RestorePlayback => {
+            ("Native streaming disconnected; attempting recovery.", true)
+          }
+        };
         if let Some(request) = disconnect_streaming_player(
           &app,
           &player,
           &shared_position,
           &shared_is_playing,
-          "Native streaming disconnected; attempting recovery.",
-          unexpected_disconnect,
+          status_message,
+          restore_playback,
         )
         .await
         {
-          let _ = recovery_tx.send(request);
+          if recovery != SessionDisconnectRecovery::Stop {
+            let _ = recovery_tx.send(request);
+          }
         }
         return;
       }
@@ -1201,7 +1237,7 @@ async fn disconnect_streaming_player(
   shared_position: &Arc<AtomicU64>,
   shared_is_playing: &Arc<AtomicBool>,
   status_message: &str,
-  allow_reselect_device: bool,
+  restore_playback: bool,
 ) -> Option<StreamingRecoveryRequest> {
   let mut app_lock = app.lock().await;
   let current_player = app_lock.streaming_player.as_ref()?;
@@ -1212,7 +1248,7 @@ async fn disconnect_streaming_player(
   // Spotify Connect sends SessionDisconnected when the user intentionally moves
   // playback to another device. At that point the API context can still be the
   // old native device, so only reselect native for non-Connect-disconnect paths.
-  let reselect_device = allow_reselect_device && current_playback_matches_native(&app_lock, player);
+  let reselect_device = restore_playback && current_playback_matches_native(&app_lock, player);
   let continue_after_track = if reselect_device {
     let position_ms = u32::try_from(shared_position.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
     let is_playing = shared_is_playing.load(Ordering::Relaxed);
@@ -1266,6 +1302,7 @@ async fn disconnect_streaming_player(
 
   Some(StreamingRecoveryRequest {
     reselect_device,
+    restore_playback,
     continue_after_track,
   })
 }
@@ -1273,7 +1310,9 @@ async fn disconnect_streaming_player(
 #[cfg(test)]
 mod tests {
   use super::{
-    recovery_watchdog_should_escalate, unavailable_is_transport_related, StreamingConnectionState,
+    recovery_watchdog_should_escalate, session_disconnect_recovery,
+    should_replay_published_queue_slot, unavailable_is_transport_related, SessionDisconnectReason,
+    SessionDisconnectRecovery, StreamingConnectionState, StreamingRecoveryRequest,
     STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
   use std::time::Duration;
@@ -1312,5 +1351,34 @@ mod tests {
       false,
       StreamingConnectionState::Connected { generation: 2 }
     ));
+  }
+
+  #[test]
+  fn session_disconnect_recovery_respects_device_handoffs_and_local_shutdowns() {
+    assert_eq!(
+      session_disconnect_recovery(SessionDisconnectReason::ExternalDeviceHandoff),
+      SessionDisconnectRecovery::RebuildIdle
+    );
+    assert_eq!(
+      session_disconnect_recovery(SessionDisconnectReason::UnexpectedShutdown),
+      SessionDisconnectRecovery::RestorePlayback
+    );
+    assert_eq!(
+      session_disconnect_recovery(SessionDisconnectReason::LocalCommand),
+      SessionDisconnectRecovery::Stop
+    );
+  }
+
+  #[test]
+  fn idle_backend_rebuild_does_not_replay_a_published_queue_slot() {
+    let idle_rebuild = StreamingRecoveryRequest::default();
+    assert!(!should_replay_published_queue_slot(&idle_rebuild, true));
+
+    let restoring = StreamingRecoveryRequest {
+      restore_playback: true,
+      ..StreamingRecoveryRequest::default()
+    };
+    assert!(should_replay_published_queue_slot(&restoring, true));
+    assert!(!should_replay_published_queue_slot(&restoring, false));
   }
 }
