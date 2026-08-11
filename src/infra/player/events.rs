@@ -43,11 +43,14 @@ pub struct StreamingRecoveryRequest {
   pub continue_after_track: Option<String>,
 }
 
+/// Restore intent alone decides the replay: an idle-app queue never matches
+/// the native context (`reselect_device` stays false), and a handoff teardown
+/// must not replay at all (#437).
 fn should_replay_published_queue_slot(
   request: &StreamingRecoveryRequest,
   queue_now_is_spotify: bool,
 ) -> bool {
-  request.restore_playback && request.reselect_device && queue_now_is_spotify
+  request.restore_playback && queue_now_is_spotify
 }
 
 /// Bundled context for player event handling tasks.
@@ -88,14 +91,26 @@ pub fn spawn_streaming_recovery_handler(ctx: StreamingRecoveryContext) {
   });
 }
 
+/// Intent ORs across coalesced transport-drop requests, but a handoff
+/// (`restore_playback == false`) stickily vetoes restore/reselect: restoring
+/// over the user's handoff would steal playback back (#437).
+fn merge_recovery_requests(request: &mut StreamingRecoveryRequest, next: StreamingRecoveryRequest) {
+  if !request.restore_playback || !next.restore_playback {
+    request.reselect_device = false;
+    request.restore_playback = false;
+    request.continue_after_track = None;
+    return;
+  }
+  request.reselect_device |= next.reselect_device;
+  if next.continue_after_track.is_some() {
+    request.continue_after_track = next.continue_after_track;
+  }
+}
+
 async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
   while let Some(mut request) = ctx.recovery_rx.recv().await {
     while let Ok(next_request) = ctx.recovery_rx.try_recv() {
-      request.reselect_device |= next_request.reselect_device;
-      request.restore_playback |= next_request.restore_playback;
-      if next_request.continue_after_track.is_some() {
-        request.continue_after_track = next_request.continue_after_track;
-      }
+      merge_recovery_requests(&mut request, next_request);
     }
 
     if active_streaming_player(&ctx.app).await.is_some() {
@@ -177,6 +192,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           app.dispatch(IoEvent::AutoSelectStreamingDevice(
             ctx.client_config.streaming_device_name.clone(),
             false,
+            true,
           ));
         }
         // A new explicit playback request wins over restoring older intent.
@@ -204,7 +220,9 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           } else {
             app.set_status_message("Native streaming recovered.", 6);
           }
-        } else {
+        } else if request.restore_playback {
+          // A handoff rebuild instead keeps the teardown's "moved to another
+          // device" message.
           app.set_status_message("Native streaming recovered.", 6);
         }
         drop(app);
@@ -975,7 +993,13 @@ async fn handle_player_events(
         )
         .await
         {
-          if recovery != SessionDisconnectRecovery::Stop {
+          if recovery == SessionDisconnectRecovery::Stop {
+            // No rebuild follows a Stop; release the pending latch so later
+            // requests can't park forever. (Presently unreachable: local
+            // shutdowns remove the player before this event, failing the
+            // ptr_eq guard above.)
+            app.lock().await.native_backend_pending = false;
+          } else {
             let _ = recovery_tx.send(request);
           }
         }
@@ -1245,9 +1269,9 @@ async fn disconnect_streaming_player(
     return None;
   }
 
-  // Spotify Connect sends SessionDisconnected when the user intentionally moves
-  // playback to another device. At that point the API context can still be the
-  // old native device, so only reselect native for non-Connect-disconnect paths.
+  // Only a restoring teardown (unexpected shutdown / forced recovery) may
+  // reselect, and only while the API context still points at the native
+  // device. The flag also gates the queue-slot replay in the returned request.
   let reselect_device = restore_playback && current_playback_matches_native(&app_lock, player);
   let continue_after_track = if reselect_device {
     let position_ms = u32::try_from(shared_position.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
@@ -1272,6 +1296,17 @@ async fn disconnect_streaming_player(
     app_lock.clear_native_playback_recovery();
     None
   };
+
+  if !restore_playback {
+    // A handoff or local stop invalidates parked playback intent and the
+    // published queue slot; replaying either would steal playback back, and a
+    // leftover slot would ghost-own the playbar and transport (#437).
+    app_lock.pending_start_playback = None;
+    if app_lock.queue_now_is_spotify() {
+      app_lock.queue_now = None;
+      app_lock.spotify_queue_guard_reloads = 0;
+    }
+  }
 
   app_lock.streaming_player = None;
   // Stop the old Connect session so it doesn't linger as a ghost device (#297).
@@ -1310,7 +1345,7 @@ async fn disconnect_streaming_player(
 #[cfg(test)]
 mod tests {
   use super::{
-    recovery_watchdog_should_escalate, session_disconnect_recovery,
+    merge_recovery_requests, recovery_watchdog_should_escalate, session_disconnect_recovery,
     should_replay_published_queue_slot, unavailable_is_transport_related, SessionDisconnectReason,
     SessionDisconnectRecovery, StreamingConnectionState, StreamingRecoveryRequest,
     STALLED_PLAYBACK_RECOVERY_TIMEOUT,
@@ -1370,31 +1405,91 @@ mod tests {
   }
 
   #[test]
-  fn queue_slot_replay_requires_confirmed_native_restoration() {
-    let idle_rebuild = StreamingRecoveryRequest::default();
-    assert!(!should_replay_published_queue_slot(&idle_rebuild, true));
-
-    let unconfirmed_restoration = StreamingRecoveryRequest {
+  fn queue_slot_replay_follows_restore_intent_not_reselect() {
+    // A queue playing over an idle app recovers with restore intent but no
+    // native context match (reselect stays false); the slot must still replay.
+    let idle_app_restore = StreamingRecoveryRequest {
       restore_playback: true,
       ..StreamingRecoveryRequest::default()
     };
+    assert!(should_replay_published_queue_slot(&idle_app_restore, true));
     assert!(!should_replay_published_queue_slot(
-      &unconfirmed_restoration,
-      true
-    ));
-
-    let confirmed_restoration = StreamingRecoveryRequest {
-      reselect_device: true,
-      restore_playback: true,
-      ..StreamingRecoveryRequest::default()
-    };
-    assert!(should_replay_published_queue_slot(
-      &confirmed_restoration,
-      true
-    ));
-    assert!(!should_replay_published_queue_slot(
-      &confirmed_restoration,
+      &idle_app_restore,
       false
     ));
+
+    // A handoff rebuild never replays, regardless of reselect.
+    let handoff = StreamingRecoveryRequest::default();
+    assert!(!should_replay_published_queue_slot(&handoff, true));
+    let handoff_with_reselect = StreamingRecoveryRequest {
+      reselect_device: true,
+      ..StreamingRecoveryRequest::default()
+    };
+    assert!(!should_replay_published_queue_slot(
+      &handoff_with_reselect,
+      true
+    ));
+  }
+
+  #[test]
+  fn recovery_request_merge_ors_intent_across_transport_drops() {
+    let mut request = StreamingRecoveryRequest {
+      restore_playback: true,
+      continue_after_track: Some("older".to_string()),
+      ..StreamingRecoveryRequest::default()
+    };
+    merge_recovery_requests(
+      &mut request,
+      StreamingRecoveryRequest {
+        reselect_device: true,
+        restore_playback: true,
+        continue_after_track: None,
+      },
+    );
+    assert!(request.reselect_device);
+    assert!(request.restore_playback);
+    // The newest non-None continuation wins; None does not erase it.
+    assert_eq!(request.continue_after_track.as_deref(), Some("older"));
+
+    merge_recovery_requests(
+      &mut request,
+      StreamingRecoveryRequest {
+        reselect_device: false,
+        restore_playback: true,
+        continue_after_track: Some("newer".to_string()),
+      },
+    );
+    assert!(request.reselect_device);
+    assert_eq!(request.continue_after_track.as_deref(), Some("newer"));
+  }
+
+  #[test]
+  fn recovery_request_merge_handoff_vetoes_restore_intent() {
+    let restore = StreamingRecoveryRequest {
+      reselect_device: true,
+      restore_playback: true,
+      continue_after_track: Some("track".to_string()),
+    };
+    let handoff = StreamingRecoveryRequest::default();
+
+    // Handoff queued behind a restore request.
+    let mut request = restore.clone();
+    merge_recovery_requests(&mut request, handoff.clone());
+    assert!(!request.reselect_device);
+    assert!(!request.restore_playback);
+    assert!(request.continue_after_track.is_none());
+
+    // Restore queued behind a handoff request.
+    let mut request = handoff;
+    merge_recovery_requests(&mut request, restore.clone());
+    assert!(!request.reselect_device);
+    assert!(!request.restore_playback);
+    assert!(request.continue_after_track.is_none());
+
+    // The veto is sticky: a later restore request cannot resurrect intent.
+    merge_recovery_requests(&mut request, restore);
+    assert!(!request.reselect_device);
+    assert!(!request.restore_playback);
+    assert!(request.continue_after_track.is_none());
   }
 }

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **Native streaming no longer steals playback back after a Spotify Connect handoff**: When playback moves from spotatui to a phone, car, or another device, spotatui now rebuilds only an idle Connect backend and does not reselect itself. Unexpected native-session shutdowns still restore playback, while local shutdowns stay stopped, preserving recovery during unstable VPN or network connections ([#437](https://github.com/LargeModGames/spotatui/issues/437)).
+- **Native streaming no longer steals playback back after a Spotify Connect handoff**: session teardowns are now classified by librespot's disconnect reason instead of inferred from connection state. When playback moves from spotatui to a phone, car, or another device, the rebuilt Connect backend stays idle: the published queue slot and any parked playback request are cleared instead of replayed, the dead queue slot no longer owns the playbar and transport controls, recovery re-registration no longer transfers playback off a device that took over, and the "Playback moved to another Spotify device." message is no longer overwritten by a bogus "recovered" notice. Unexpected shutdowns still restore playback, including a queue playing over an idle app, and local shutdowns stay stopped ([#437](https://github.com/LargeModGames/spotatui/issues/437)).
 
 ## [v0.41.0] 2026-08-10
 

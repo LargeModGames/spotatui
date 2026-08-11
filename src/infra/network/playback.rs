@@ -64,7 +64,12 @@ pub trait PlaybackNetwork {
   async fn change_volume(&mut self, volume: u8);
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool);
   #[cfg(feature = "streaming")]
-  async fn auto_select_streaming_device(&mut self, device_name: String, persist_device_id: bool);
+  async fn auto_select_streaming_device(
+    &mut self,
+    device_name: String,
+    persist_device_id: bool,
+    yield_to_external_playback: bool,
+  );
   async fn ensure_playback_continues(&mut self, previous_track_id: String);
   /// Resume a native-Spotify context suspended under the native queue, targeting
   /// the resume track via an offset URI. Falls back to playing just the track
@@ -1796,6 +1801,11 @@ impl PlaybackNetwork for Network {
       if app.pending_start_playback.is_some() {
         return;
       }
+      // A stale RestoreNativePlayback (e.g. queued before a handoff cleared
+      // the snapshot) must not escalate into a reselecting recovery (#437).
+      if app.native_playback_restore_generation() != Some(generation) {
+        return;
+      }
       let Some(player) = app
         .streaming_player
         .as_ref()
@@ -2261,7 +2271,12 @@ impl PlaybackNetwork for Network {
   }
 
   #[cfg(feature = "streaming")]
-  async fn auto_select_streaming_device(&mut self, device_name: String, persist_device_id: bool) {
+  async fn auto_select_streaming_device(
+    &mut self,
+    device_name: String,
+    persist_device_id: bool,
+    yield_to_external_playback: bool,
+  ) {
     if let Some(player) = current_streaming_player(self).await {
       let activation_time = Instant::now();
       let native_device_id = player.device_id();
@@ -2276,8 +2291,18 @@ impl PlaybackNetwork for Network {
         let recent_activation = app
           .last_device_activation
           .is_some_and(|instant| instant.elapsed() < Duration::from_secs(5));
+        // Recovery re-registration only (startup passes false): if the
+        // refreshed context shows another device actively playing, register
+        // idle instead of transferring playback off it.
+        let external_playback_active = yield_to_external_playback
+          && app.current_playback_context.as_ref().is_some_and(|ctx| {
+            ctx.is_playing && ctx.device.id.as_deref() != Some(native_device_id.as_str())
+          });
         (
-          !app.native_activation_pending && !app.is_streaming_active && !recent_activation,
+          !app.native_activation_pending
+            && !app.is_streaming_active
+            && !recent_activation
+            && !external_playback_active,
           native_device_preference_update(
             self.client_config.device_id.as_deref(),
             persist_device_id,
