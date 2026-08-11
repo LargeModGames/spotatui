@@ -45,6 +45,14 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     return true;
   }
 
+  #[cfg(feature = "streaming")]
+  if let IoEvent::ReplayPublishedSpotifyQueueSlot = event {
+    if replay_published_spotify_slot(app).await {
+      log::info!("replayed published Spotify queue slot after native recovery");
+    }
+    return true;
+  }
+
   // Transport for the queue slot's own player (Pause / Seek / Volume / Next /
   // bare-resume). Only meaningful when a decoded queued track owns the sink;
   // compiles out entirely without a queueable decoded source.

@@ -68,6 +68,10 @@ pub enum IoEvent {
   /// the librespot backend. This is a direct Spirc load and does not use the Web API.
   #[cfg(feature = "streaming")]
   RestoreNativePlayback(u64),
+  /// Replay the published native Spotify queue slot after recovery. Routed by
+  /// the native queue before the Spotify network handler.
+  #[cfg(feature = "streaming")]
+  ReplayPublishedSpotifyQueueSlot,
   UpdateSearchLimits(u32, u32),
   Seek(u32),
   NextTrack,
@@ -829,6 +833,8 @@ impl Network {
       // Consumed by the queue router before it reaches the network; only lands
       // here if the router somehow let it through. No Spotify work to do.
       IoEvent::AdvanceNativeQueue => {}
+      #[cfg(feature = "streaming")]
+      IoEvent::ReplayPublishedSpotifyQueueSlot => {}
       // Consumed by a per-source router when a decoded source owns playback; only
       // lands here otherwise (e.g. Spotify is playing). No Spotify work to do.
       IoEvent::ReplayCurrentTrack => {}

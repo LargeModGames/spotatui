@@ -282,6 +282,28 @@ fn should_activate_native_for_playback(context: NativeActivationContext) -> bool
 }
 
 #[cfg(feature = "streaming")]
+fn should_yield_native_recovery(
+  yield_to_external_playback: bool,
+  current_is_playing: bool,
+  current_device_id: Option<&str>,
+  native_device_id: &str,
+) -> bool {
+  yield_to_external_playback && current_is_playing && current_device_id != Some(native_device_id)
+}
+
+#[cfg(feature = "streaming")]
+fn clear_native_recovery_intent_for_external_playback(app: &mut App) {
+  app.is_streaming_active = false;
+  app.native_activation_pending = false;
+  app.last_device_activation = None;
+  app.clear_native_playback_recovery();
+  if app.queue_now_is_spotify() {
+    app.queue_now = None;
+    app.spotify_queue_guard_reloads = 0;
+  }
+}
+
+#[cfg(feature = "streaming")]
 fn native_device_preference_update(
   saved_device_id: Option<&str>,
   explicit_persist: bool,
@@ -2280,7 +2302,7 @@ impl PlaybackNetwork for Network {
     if let Some(player) = current_streaming_player(self).await {
       let activation_time = Instant::now();
       let native_device_id = player.device_id();
-      let (should_transfer, native_preference_update) = {
+      let (should_transfer, external_playback_active, native_preference_update) = {
         let app = self.app.lock().await;
         let saved_device_matches_native = saved_device_matches_native_player(
           self.client_config.device_id.as_deref(),
@@ -2294,15 +2316,20 @@ impl PlaybackNetwork for Network {
         // Recovery re-registration only (startup passes false): if the
         // refreshed context shows another device actively playing, register
         // idle instead of transferring playback off it.
-        let external_playback_active = yield_to_external_playback
-          && app.current_playback_context.as_ref().is_some_and(|ctx| {
-            ctx.is_playing && ctx.device.id.as_deref() != Some(native_device_id.as_str())
-          });
+        let external_playback_active = app.current_playback_context.as_ref().is_some_and(|ctx| {
+          should_yield_native_recovery(
+            yield_to_external_playback,
+            ctx.is_playing,
+            ctx.device.id.as_deref(),
+            &native_device_id,
+          )
+        });
         (
           !app.native_activation_pending
             && !app.is_streaming_active
             && !recent_activation
             && !external_playback_active,
+          external_playback_active,
           native_device_preference_update(
             self.client_config.device_id.as_deref(),
             persist_device_id,
@@ -2313,27 +2340,38 @@ impl PlaybackNetwork for Network {
 
       {
         let mut app = self.app.lock().await;
-        app.is_streaming_active = true;
-        app.native_activation_pending = true;
-        app.last_device_activation = Some(activation_time);
-        app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
+        if external_playback_active {
+          clear_native_recovery_intent_for_external_playback(&mut app);
+          app.set_status_message("Playback remains on another Spotify device.", 8);
+        } else {
+          app.is_streaming_active = true;
+          app.native_activation_pending = true;
+          app.last_device_activation = Some(activation_time);
+          app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
+        }
       }
 
-      if should_transfer {
-        let _ = player.transfer(None);
+      if !external_playback_active {
+        if should_transfer {
+          let _ = player.transfer(None);
+        }
+        player.activate();
       }
-      player.activate();
       self
         .native_idle_recovery
         .settle_current_episode(activation_time);
 
       {
         let mut app = self.app.lock().await;
-        app.is_streaming_active = true;
+        app.is_streaming_active = !external_playback_active;
         app.native_activation_pending = false;
         app.native_device_id = Some(native_device_id.clone());
-        app.last_device_activation = Some(activation_time);
-        app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
+        if external_playback_active {
+          app.last_device_activation = None;
+        } else {
+          app.last_device_activation = Some(activation_time);
+          app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
+        }
         persist_native_device_id_if_needed(
           &mut self.client_config,
           &mut app,
@@ -2625,6 +2663,25 @@ mod tests {
       name: name.to_string(),
       _type: DeviceType::Computer,
       volume_percent: Some(50),
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  fn queued_track(uri: &str) -> crate::core::plugin_api::TrackInfo {
+    crate::core::plugin_api::TrackInfo {
+      uri: Some(uri.to_string()),
+      name: "Queued".to_string(),
+      artists: vec!["Artist".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 180_000,
+      id: None,
+      album_id: None,
+      artist_refs: Vec::new(),
+      is_playable: true,
+      is_local: false,
+      track_number: 1,
+      explicit: false,
+      image_url: None,
     }
   }
 
@@ -3062,6 +3119,74 @@ mod tests {
         ..Default::default()
       },
     ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn recovery_yields_to_an_active_external_device() {
+    assert!(should_yield_native_recovery(
+      true,
+      true,
+      Some("phone-device"),
+      "native-device"
+    ));
+    assert!(!should_yield_native_recovery(
+      true,
+      true,
+      Some("native-device"),
+      "native-device"
+    ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn startup_and_paused_external_playback_do_not_trigger_recovery_yield() {
+    assert!(!should_yield_native_recovery(
+      false,
+      true,
+      Some("phone-device"),
+      "native-device"
+    ));
+    assert!(!should_yield_native_recovery(
+      true,
+      false,
+      Some("phone-device"),
+      "native-device"
+    ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn yielding_clears_stale_native_intent_but_keeps_explicit_playback() {
+    use crate::infra::queue::QueueNowPlaying;
+
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec!["spotify:track:recover".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    app.park_start_playback(Some("spotify:playlist:explicit".to_string()), None, None);
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queued_track("spotify:track:queued"),
+    });
+    app.spotify_queue_guard_reloads = 2;
+    app.is_streaming_active = true;
+    app.native_activation_pending = true;
+    app.last_device_activation = Some(Instant::now());
+
+    clear_native_recovery_intent_for_external_playback(&mut app);
+
+    assert!(!app.is_streaming_active);
+    assert!(!app.native_activation_pending);
+    assert!(app.last_device_activation.is_none());
+    assert!(app.native_playback_recovery.is_none());
+    assert!(app.queue_now.is_none());
+    assert_eq!(app.spotify_queue_guard_reloads, 0);
+    assert!(app.pending_start_playback.is_some());
   }
 
   #[cfg(feature = "streaming")]

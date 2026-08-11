@@ -53,6 +53,13 @@ fn should_replay_published_queue_slot(
   request.restore_playback && queue_now_is_spotify
 }
 
+fn recovery_needs_native_selection(
+  request: &StreamingRecoveryRequest,
+  replay_queue_slot: bool,
+) -> bool {
+  request.reselect_device || replay_queue_slot
+}
+
 /// Bundled context for player event handling tasks.
 /// Groups all shared state and managers needed by event handlers.
 pub struct PlayerEventContext {
@@ -188,7 +195,12 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         });
 
         let mut app = ctx.app.lock().await;
-        if request.reselect_device {
+        // Queue replay over an otherwise idle app also needs the serialized
+        // ownership check. Auto-selection can then clear the slot before the
+        // replay event if another device became active during the rebuild.
+        let replay_queue_slot = app.pending_start_playback.is_none()
+          && should_replay_published_queue_slot(&request, app.queue_now_is_spotify());
+        if recovery_needs_native_selection(&request, replay_queue_slot) {
           app.dispatch(IoEvent::AutoSelectStreamingDevice(
             ctx.client_config.streaming_device_name.clone(),
             false,
@@ -197,15 +209,14 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         }
         // A new explicit playback request wins over restoring older intent.
         // Both paths are queued after device selection on the serial IoEvent pump.
-        let mut replay_queue_slot = false;
         if app.pending_start_playback.is_some() {
           app.replay_pending_start_playback();
-        } else if should_replay_published_queue_slot(&request, app.queue_now_is_spotify()) {
+        } else if replay_queue_slot {
           // The published queue slot outranks snapshot restore: its direct
           // load was discarded with the replaced player, and for a queue
           // playing over an idle app there is no snapshot whose TrackChanged
           // would trigger the reload guard.
-          replay_queue_slot = true;
+          app.dispatch(IoEvent::ReplayPublishedSpotifyQueueSlot);
         } else if let Some(previous_track_id) = request.continue_after_track {
           if app.native_transition_has_advanced(&previous_track_id) {
             if let Some(generation) = app.native_playback_restore_generation() {
@@ -224,12 +235,6 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           // A handoff rebuild instead keeps the teardown's "moved to another
           // device" message.
           app.set_status_message("Native streaming recovered.", 6);
-        }
-        drop(app);
-        if replay_queue_slot
-          && crate::infra::queue::dispatch::replay_published_spotify_slot(&ctx.app).await
-        {
-          info!("replayed published Spotify queue slot after native recovery");
         }
       }
       Err(e) => {
@@ -1345,10 +1350,10 @@ async fn disconnect_streaming_player(
 #[cfg(test)]
 mod tests {
   use super::{
-    merge_recovery_requests, recovery_watchdog_should_escalate, session_disconnect_recovery,
-    should_replay_published_queue_slot, unavailable_is_transport_related, SessionDisconnectReason,
-    SessionDisconnectRecovery, StreamingConnectionState, StreamingRecoveryRequest,
-    STALLED_PLAYBACK_RECOVERY_TIMEOUT,
+    merge_recovery_requests, recovery_needs_native_selection, recovery_watchdog_should_escalate,
+    session_disconnect_recovery, should_replay_published_queue_slot,
+    unavailable_is_transport_related, SessionDisconnectReason, SessionDisconnectRecovery,
+    StreamingConnectionState, StreamingRecoveryRequest, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
   use std::time::Duration;
 
@@ -1429,6 +1434,17 @@ mod tests {
       &handoff_with_reselect,
       true
     ));
+  }
+
+  #[test]
+  fn idle_app_queue_recovery_still_checks_device_ownership_before_replay() {
+    let idle_app_restore = StreamingRecoveryRequest {
+      restore_playback: true,
+      ..StreamingRecoveryRequest::default()
+    };
+
+    assert!(recovery_needs_native_selection(&idle_app_restore, true));
+    assert!(!recovery_needs_native_selection(&idle_app_restore, false));
   }
 
   #[test]
