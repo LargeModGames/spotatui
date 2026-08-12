@@ -26,11 +26,26 @@ cargo test --no-default-features --features telemetry
 ```
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
-(`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` across a three-leg
-matrix — `default` (streaming + audio-viz), `all-sources` (the full release feature
-set from `cd.yml`), and `slim` — so `#[cfg(feature = "…")]` tests (e.g. `streaming`)
-that the slim command skips still run in CI. To reproduce a leg locally, run
-`cargo test` (default) or `cargo test --features all-sources`.
+(`.github/workflows/ci.yml`, on `ubuntu-latest`) runs `check`, `test`, and `clippy`
+across a **five-leg** feature matrix:
+
+| Leg | Features |
+|-----|----------|
+| `default` | streaming + audio-viz (a plain `cargo test`) |
+| `all-sources` | the full release feature set from `cd.yml` |
+| `mcp-only` | `telemetry,mcp-server` |
+| `ai-dj-only` | `telemetry,ai-dj` |
+| `slim` | `telemetry` |
+
+so `#[cfg(feature = "…")]` tests (e.g. `streaming`) that the slim command skips still
+run in CI. `mcp-only` and `ai-dj-only` matter more than their size suggests: both
+enable `dj-core` **without** `streaming`, a combination none of the three commands
+above covers, so code that assumes dj-core implies streaming compiles locally and
+fails CI. To reproduce a leg locally, run `cargo test` (default) or
+`cargo test --features all-sources`.
+
+Note that CI runs `clippy` on the **bin target only** (no `--all-targets`), so lints
+in `#[cfg(test)]` code are not gated. Run `cargo test` to compile test code.
 
 ## Run a Single Test
 
@@ -75,6 +90,40 @@ same `ActiveBlock` enum.
 
 Use `app.push_navigation_stack(RouteId::X, ActiveBlock::X)` to navigate and `app.pop_navigation_stack()` to go back.
 
+### The `core/app/` module folder
+
+`App` was one 10,920-line file; it is now a folder. The struct itself stays **flat** —
+all ~230 fields are declared once in `src/core/app/mod.rs` — and its ~210 methods are
+split across sibling modules by concern, each contributing its own `impl App { … }` block.
+
+| Area | Files |
+|------|-------|
+| Foundation | `mod.rs` (the `App` struct + `dispatch`), `construction.rs` (`Default`/`new`), `route.rs`, `models.rs`, `help.rs`, `scrollable_pages.rs`, `status.rs` |
+| Config & input | `keybindings.rs`, `settings_schema.rs`, `settings_apply.rs` |
+| Presentation | `lyrics.rs`, `album_theme.rs`, `tick.rs` |
+| Playback | `seek.rs`, `volume.rs`, `transport.rs`, `shuffle_repeat.rs`, `playback_routing.rs` |
+| Native streaming | `native_backend.rs`, `native_recovery.rs`, `native_shuffle.rs` |
+| Queue | `queue.rs`, `dj.rs`, `queue_suspend.rs`, `persistence.rs` |
+| Library & playlists | `library.rs`, `playlists.rs`, `playlist_folders.rs`, `playlist_pages.rs` |
+| Screens & test support | `friends.rs`, `discover.rs`, `plugins.rs`, `test_support.rs` |
+
+Three rules when working in here:
+
+- **Import from `crate::core::app`, never the submodule path.** `mod.rs` blanket
+  re-exports every module (`pub use route::*;` …), so `use crate::core::app::{App,
+  RouteId, ActiveBlock}` keeps working no matter which file an item lives in. Moving a
+  type between modules then costs nothing outside the folder.
+- **Child modules open with `use super::*;`** and declare no imports of their own. All
+  external imports live in `mod.rs`, so a child inherits them with no per-`cfg`
+  bookkeeping, and a glob never trips `unused_imports`.
+- **A private helper called from a sibling module needs `pub(super)`.** Rust privacy is
+  per-module, so a plain `fn` in `seek.rs` is invisible to `tick.rs` even though both are
+  `impl App`. Private *fields* of `App` need no change: they are declared in `mod.rs` and
+  are visible to all its descendants.
+
+Tests are colocated: each module carries its own `#[cfg(test)] mod tests`. Fixtures shared
+by more than one module's tests live in `test_support.rs` as `pub(super) fn`.
+
 ### Listening Party / sync
 
 The Party feature (`src/infra/network/sync.rs`) connects host and guests via WebSocket relay using `SyncMessage` enums. `IoEvent::StartParty`, `JoinParty`, `SyncPlayback`, and `LeaveParty` drive the party lifecycle from handlers.
@@ -83,7 +132,7 @@ The Party feature (`src/infra/network/sync.rs`) connects host and guests via Web
 
 ### Adding a new screen / feature
 
-1. Add a variant to `RouteId` and `ActiveBlock` in `src/core/app.rs`.
+1. Add a variant to `RouteId` and `ActiveBlock` in `src/core/app/route.rs`.
 2. Create `src/tui/handlers/<screen>.rs` with a `pub fn handler(key: Key, app: &mut App)` function and register it in `src/tui/handlers/mod.rs` (`handle_block_events` match arm).
 3. Create `src/tui/ui/<screen>.rs` with a draw function and wire it into `src/tui/ui/mod.rs`.
 4. Add any new Spotify API calls as `IoEvent` variants in `src/infra/network/mod.rs` and implement them in the appropriate `src/infra/network/<concern>.rs` file.
@@ -94,7 +143,7 @@ Call `app.dispatch(IoEvent::SomeVariant)` from a handler — never call async Sp
 
 ### Paginated results
 
-Use `ScrollableResultPages<T>` (defined in `src/core/app.rs`) for any data that comes back page-by-page from the Spotify API.
+Use `ScrollableResultPages<T>` (defined in `src/core/app/scrollable_pages.rs`) for any data that comes back page-by-page from the Spotify API.
 
 For `ScrollableResultPages<Page<T>>` caches specifically:
 - key and dedupe cached pages by `page.offset`, not by insertion order
@@ -131,7 +180,7 @@ Always check `app.user_config.keys.<action>` instead of hard-coding key literals
 
 ### Adding a feature-gated sidebar row
 
-`library_options()` (`src/core/app.rs`) composes the sidebar list at first use
+`library_options()` (`src/core/app/library.rs`) composes the sidebar list at first use
 rather than declaring one `const` per feature combination — gated rows would
 otherwise be a cartesian product. Look entries up **by name**
 (`library_options().iter().position(...)`), never by index: the index of any row
