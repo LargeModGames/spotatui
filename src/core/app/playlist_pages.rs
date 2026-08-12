@@ -365,7 +365,7 @@ mod tests {
     app.playlist_track_table_id = Some(playlist_id.clone());
     app
       .playlist_track_pages
-      .add_pages(empty_playlist_page(0, 40, 20, true));
+      .upsert_page_by_offset(empty_playlist_page(0, 40, 20, true));
     app.playlist_tracks = Some(empty_playlist_page(0, 40, 20, true));
     app.playlist_offset = 20;
     app.track_table.selected_index = 1;

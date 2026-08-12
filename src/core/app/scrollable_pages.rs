@@ -104,7 +104,7 @@ mod tests {
   #[test]
   fn upsert_page_by_offset_preserves_active_index() {
     let mut pages = ScrollableResultPages::new();
-    pages.add_pages(saved_tracks_domain_page(
+    pages.upsert_page_by_offset(saved_tracks_domain_page(
       0,
       4,
       &["0000000000000000000001", "0000000000000000000002"],
@@ -126,7 +126,7 @@ mod tests {
   #[test]
   fn upsert_page_by_offset_replaces_duplicate_page() {
     let mut pages = ScrollableResultPages::new();
-    pages.add_pages(saved_tracks_domain_page(
+    pages.upsert_page_by_offset(saved_tracks_domain_page(
       0,
       2,
       &["0000000000000000000001", "0000000000000000000002"],
@@ -151,13 +151,13 @@ mod tests {
   #[test]
   fn upsert_page_by_offset_keeps_active_page_when_inserting_before_it() {
     let mut pages = ScrollableResultPages::new();
-    pages.add_pages(saved_tracks_domain_page(
+    pages.upsert_page_by_offset(saved_tracks_domain_page(
       0,
       6,
       &["0000000000000000000001", "0000000000000000000002"],
       true,
     ));
-    pages.add_pages(saved_tracks_domain_page(
+    pages.upsert_page_by_offset(saved_tracks_domain_page(
       4,
       6,
       &["0000000000000000000005", "0000000000000000000006"],
@@ -175,5 +175,42 @@ mod tests {
     assert_eq!(inserted_index, 1);
     assert_eq!(pages.index, 2);
     assert_eq!(pages.pages[pages.index].offset, 4);
+  }
+
+  #[test]
+  fn out_of_order_upserts_keep_offset_lookups_correct() {
+    let mut pages = ScrollableResultPages::new();
+    pages.upsert_page_by_offset(saved_tracks_domain_page(
+      4,
+      6,
+      &["0000000000000000000005", "0000000000000000000006"],
+      false,
+    ));
+    pages.upsert_page_by_offset(saved_tracks_domain_page(
+      0,
+      6,
+      &["0000000000000000000001", "0000000000000000000002"],
+      true,
+    ));
+    pages.upsert_page_by_offset(saved_tracks_domain_page(
+      2,
+      6,
+      &["0000000000000000000003", "0000000000000000000004"],
+      true,
+    ));
+
+    // The cache is stored sorted by offset regardless of insertion order, so
+    // every offset lookup binary-searches to the right page.
+    assert!(pages.pages.windows(2).all(|w| w[0].offset < w[1].offset));
+    assert_eq!(pages.page_index_for_offset(0), Some(0));
+    assert_eq!(pages.page_index_for_offset(2), Some(1));
+    assert_eq!(pages.page_index_for_offset(4), Some(2));
+    assert_eq!(pages.page_index_for_offset(3), None);
+    assert_eq!(
+      pages.pages[pages.page_index_for_offset(2).unwrap()].items[0]
+        .id
+        .as_deref(),
+      Some("0000000000000000000003")
+    );
   }
 }
