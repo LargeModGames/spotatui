@@ -270,9 +270,10 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
-            let selected_album = &albums.items[selected_index];
-            if let Some(ref id_str) = selected_album.id {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id_str.clone()));
+            if let Some(selected_album) = albums.items.get(selected_index) {
+              if let Some(ref id_str) = selected_album.id {
+                self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id_str.clone()));
+              }
             }
           }
         }
@@ -305,9 +306,10 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
-            let selected_album = &albums.items[selected_index];
-            if let Some(ref id_str) = selected_album.id {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id_str.clone()));
+            if let Some(selected_album) = albums.items.get(selected_index) {
+              if let Some(ref id_str) = selected_album.id {
+                self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id_str.clone()));
+              }
             }
           }
         }
@@ -377,9 +379,10 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
-            let selected_artist = &artists.items[selected_index];
-            if let Some(ref id_str) = selected_artist.id {
-              self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
+            if let Some(selected_artist) = artists.items.get(selected_index) {
+              if let Some(ref id_str) = selected_artist.id {
+                self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
+              }
             }
           }
         }
@@ -397,9 +400,13 @@ impl App {
       }
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
-          let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          if let Some(id_str) = &selected_artis.id {
-            self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
+          if let Some(selected_artis) = artist
+            .related_artists
+            .get(artist.selected_related_artist_index)
+          {
+            if let Some(id_str) = &selected_artis.id {
+              self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
+            }
           }
         }
       }
@@ -413,18 +420,23 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
-            let selected_artist = &artists.items[selected_index];
-            if let Some(ref id_str) = selected_artist.id {
-              self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
+            if let Some(selected_artist) = artists.items.get(selected_index) {
+              if let Some(ref id_str) = selected_artist.id {
+                self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
+              }
             }
           }
         }
       }
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
-          let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          if let Some(id_str) = &selected_artis.id {
-            self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
+          if let Some(selected_artis) = artist
+            .related_artists
+            .get(artist.selected_related_artist_index)
+          {
+            if let Some(id_str) = &selected_artis.id {
+              self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
+            }
           }
         }
       }
@@ -487,8 +499,12 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(shows) = &self.search_results.shows {
           if let Some(selected_index) = self.search_results.selected_shows_index {
-            if let Some(ref id_str) = shows.items[selected_index].id {
-              self.dispatch(IoEvent::CurrentUserSavedShowDelete(id_str.clone()));
+            if let Some(id_str) = shows
+              .items
+              .get(selected_index)
+              .and_then(|show| show.id.clone())
+            {
+              self.dispatch(IoEvent::CurrentUserSavedShowDelete(id_str));
             }
           }
         }

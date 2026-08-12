@@ -82,7 +82,7 @@ Five top-level units under `src/`:
 
 ### Data flow
 
-```
+```text
 crossterm thread (tui/event/) → runner.rs loop (draws the frame, then reads one event)
   → runner::dispatch_key   - exit prompt, ActiveBlock::Input, the configurable back key
   → handlers::handle_app   - plugin popup modal → help filter → global keybindings

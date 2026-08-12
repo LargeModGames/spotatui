@@ -59,7 +59,7 @@ impl App {
       };
 
       let new_progress = min(
-        old_progress as u32 + self.user_config.behavior.seek_milliseconds,
+        (old_progress as u32).saturating_add(self.user_config.behavior.seek_milliseconds),
         duration_ms,
       );
 

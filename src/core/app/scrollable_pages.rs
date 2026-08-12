@@ -27,6 +27,14 @@ impl<T> ScrollableResultPages<T> {
     self.pages.clear();
   }
 
+  /// Append a page and jump the visible index to it.
+  ///
+  /// Index-ordered caches only (saved albums/shows/artists, show episodes).
+  /// The **offset-keyed** caches (saved tracks, playlist tracks) must insert via
+  /// [`Self::upsert_page_by_offset`] instead: their lookups binary-search on
+  /// `Paged::offset`, and one out-of-order `add_pages` breaks the sorted
+  /// invariant they depend on — and this method also repoints the visible index
+  /// to the tail, clobbering the page the user is looking at.
   pub fn add_pages(&mut self, new_pages: T) {
     self.pages.push(new_pages);
     // Whenever a new page is added, set the active index to the end of the vector

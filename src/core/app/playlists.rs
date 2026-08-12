@@ -192,7 +192,9 @@ impl App {
       ..
     } = self.search_results
     {
-      let selected_playlist = &playlists.items[selected_index];
+      let Some(selected_playlist) = playlists.items.get(selected_index) else {
+        return;
+      };
       let selected_public = selected_playlist.public;
       if let Some(ref playlist_id_str) = selected_playlist.id {
         // owner_id carries the Spotify user id (populated in PlaylistInfo::from_simplified).
@@ -238,7 +240,9 @@ impl App {
       self.search_results.selected_playlists_index,
       &self.user,
     ) {
-      let selected_playlist = &playlists.items[selected_index];
+      let Some(selected_playlist) = playlists.items.get(selected_index) else {
+        return;
+      };
       // `user.id` is the domain string id (UserInfo) and `selected_playlist.id`
       // is an Option<String> (PlaylistInfo); both pass straight to the IoEvent.
       if let Some(ref id_str) = selected_playlist.id {

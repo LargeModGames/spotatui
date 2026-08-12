@@ -1,5 +1,9 @@
 use super::*;
 
+/// Debounce window for coalescing hot-path runtime-state saves (volume,
+/// shuffle) into one disk write, and the retry delay after a failed save.
+const STATE_SAVE_DEBOUNCE_MS: u64 = 500;
+
 impl App {
   /// Snapshot the currently-playing non-Spotify session for persistence, or
   /// `None` when Spotify (or nothing) owns playback. Reads the live position and
@@ -209,7 +213,6 @@ impl App {
     if patch.is_empty() {
       return;
     }
-    const STATE_SAVE_DEBOUNCE_MS: u64 = 500;
     self.pending_state_save_patch.merge_patch(&patch);
     self.state_save_due = Some(Instant::now() + Duration::from_millis(STATE_SAVE_DEBOUNCE_MS));
   }
@@ -245,7 +248,12 @@ impl App {
     let outcome = self.runtime_state.add_radio_station(name, url)?;
     if outcome == RadioStationAddOutcome::Added {
       let Some(station) = self.runtime_state.radio_stations.get(before_len).cloned() else {
-        return Ok(outcome);
+        // `Added` promises the station was appended at `before_len`; if it is
+        // not there, don't report success for a station that was never saved.
+        self.runtime_state.radio_stations.truncate(before_len);
+        return Err(anyhow!(
+          "added radio station was not found at the expected position; not persisted"
+        ));
       };
       if let Err(error) = self.save_runtime_state(&PersistedRuntimeState::radio_station(station)) {
         self.runtime_state.radio_stations.truncate(before_len);
@@ -315,6 +323,10 @@ impl App {
       self.state_save_due = None;
       if let Err(e) = self.save_runtime_state(&patch) {
         self.pending_state_save_patch.merge_patch(&patch);
+        // Keep the save scheduled: with the deadline cleared the retained patch
+        // would never be retried (this fn returns early on a `None` deadline),
+        // and the forced shutdown flush would silently drop it.
+        self.state_save_due = Some(Instant::now() + Duration::from_millis(STATE_SAVE_DEBOUNCE_MS));
         self.handle_error(anyhow!("Failed to save state: {}", e));
       }
     }

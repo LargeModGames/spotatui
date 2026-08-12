@@ -178,7 +178,7 @@ impl App {
   /// Returns `true` when the queue took over (an `AdvanceNativeQueue` was
   /// dispatched, so the caller must **not** fall back to
   /// `EnsurePlaybackContinues`), `false` to let the normal continue-playback path
-  /// run. Two cases:
+  /// run. Three cases:
   ///
   /// - **A queued Spotify track just ended** (`queue_now_is_spotify`): clear the
   ///   slot *now* — before the advance is processed — so the Spirc self-advance
