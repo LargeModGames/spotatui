@@ -26,7 +26,7 @@ git clone --recurse-submodules https://github.com/LargeModGames/spotatui.git
 ```
 
 ### 🎨 Create Themes
-Love customization? Add a new theme preset! Check out `src/user_config/theme.rs` for examples.
+Love customization? Add a new theme preset! Check out `ThemePreset` in `src/core/user_config.rs` for examples, and `docs/themes.md` for the theming docs.
 
 ### 🧪 Test on Your Setup
 - Try pre-releases and report issues
@@ -69,12 +69,16 @@ cargo run --no-default-features --features telemetry
 
 ### Before Opening a PR
 
-Run these checks (same as CI):
+Run these checks (the fast local gate):
 ```bash
 cargo fmt --all
 cargo clippy --no-default-features --features telemetry -- -D warnings
 cargo test --no-default-features --features telemetry
 ```
+
+CI runs a wider five-leg feature matrix (see `.github/workflows/ci.yml`), including
+a plain `cargo test` with default features, and passes `--locked` - regenerate
+`Cargo.lock` if you touch `Cargo.toml`. See `AGENTS.md` for the full matrix.
 
 ### PR Tips
 - Add/adjust tests when changing behavior
