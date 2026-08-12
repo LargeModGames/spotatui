@@ -1291,20 +1291,27 @@ impl PlaybackNetwork for Network {
       }
     };
 
+    // Dominant-color extraction for the adaptive theme: one pass over a 64x64
+    // thumbnail, but still done here, off the App lock, like the decode above.
+    let palette = result
+      .as_ref()
+      .ok()
+      .and_then(crate::core::cover_theme::extract_palette);
+
     let mut app = self.app.lock().await;
     if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
       return;
     }
     match result {
       Ok(img) => {
-        app.cover_art.store_decoded(key, img);
+        app.store_cover_art(key, img, palette);
         app.cover_art_status = CoverArtStatus::Loaded;
       }
       Err(err) => {
         log::warn!("cover art load failed: {err}");
         // Drop any stale art so the pane shows the "unavailable" placeholder
         // rather than the previous track's image.
-        app.cover_art.clear();
+        app.clear_cover_art();
         app.cover_art_status = CoverArtStatus::Failed;
       }
     }

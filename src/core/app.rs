@@ -754,7 +754,7 @@ const LYRICS_SCROLL_ANIM: Duration = Duration::from_millis(300);
 /// Symmetric acceleration/deceleration so the whole-row steps a terminal can
 /// show land evenly spaced in time (a first-frame jump followed by a slow
 /// tail reads as stutter, not smoothness).
-fn ease_in_out_cubic(t: f64) -> f64 {
+pub(crate) fn ease_in_out_cubic(t: f64) -> f64 {
   if t < 0.5 {
     4.0 * t * t * t
   } else {
@@ -1482,6 +1482,17 @@ pub struct App {
   /// keys are discarded.
   #[cfg(feature = "cover-art")]
   pub desired_cover_art_key: Option<String>,
+  /// Accent colors extracted from the current cover art. Stored even while
+  /// Adaptive Theme is off, so toggling it on recolors immediately without a
+  /// refetch. Cleared together with the art itself.
+  #[cfg(feature = "cover-art")]
+  pub cover_art_palette: Option<crate::core::cover_theme::AlbumPalette>,
+  /// Whether an album-derived theme is applied, and the user theme to restore.
+  #[cfg(feature = "cover-art")]
+  pub cover_theme_state: crate::core::cover_theme::CoverThemeState,
+  /// In-flight fade of the live theme, advanced by `update_on_tick`.
+  #[cfg(feature = "cover-art")]
+  pub theme_transition: Option<crate::core::cover_theme::ThemeTransition>,
   /// AI DJ session state: transcript, auto-queue toggle, vibe, and the
   /// generation counter that invalidates in-flight background work.
   #[cfg(feature = "dj-core")]
@@ -2180,6 +2191,12 @@ impl Default for App {
       cover_art_status: CoverArtStatus::default(),
       #[cfg(feature = "cover-art")]
       desired_cover_art_key: None,
+      #[cfg(feature = "cover-art")]
+      cover_art_palette: None,
+      #[cfg(feature = "cover-art")]
+      cover_theme_state: crate::core::cover_theme::CoverThemeState::default(),
+      #[cfg(feature = "cover-art")]
+      theme_transition: None,
       #[cfg(feature = "dj-core")]
       dj: crate::infra::dj::DjState::default(),
       friends: Vec::new(),
@@ -3580,9 +3597,184 @@ impl App {
     }
   }
 
+  /// The user's own theme: the restore target while an album-derived theme is
+  /// applied (or fading out), otherwise the live theme. Settings rows must be
+  /// built from this, never from the live theme, or album accents would leak
+  /// into `custom_theme` and persist on the next settings save.
+  #[cfg(feature = "cover-art")]
+  pub fn user_theme(&self) -> crate::core::user_config::Theme {
+    use crate::core::cover_theme::CoverThemeState;
+    match self.cover_theme_state {
+      CoverThemeState::Active { base } | CoverThemeState::Restoring { base } => base,
+      CoverThemeState::Inactive => self.user_config.theme,
+    }
+  }
+
+  #[cfg(not(feature = "cover-art"))]
+  pub fn user_theme(&self) -> crate::core::user_config::Theme {
+    self.user_config.theme
+  }
+
+  /// Whether an adaptive-theme fade is animating (drives the fast tick rate).
+  #[cfg(feature = "cover-art")]
+  pub fn theme_fade_active(&self) -> bool {
+    self.theme_transition.is_some()
+  }
+
+  #[cfg(not(feature = "cover-art"))]
+  pub fn theme_fade_active(&self) -> bool {
+    false
+  }
+
+  /// Store freshly decoded cover art together with the palette extracted from
+  /// it. The single entry point that keeps the adaptive theme in sync with the
+  /// art: `None` for the palette fades back to the user's own theme.
+  #[cfg(feature = "cover-art")]
+  pub fn store_cover_art(
+    &mut self,
+    key: String,
+    img: image::DynamicImage,
+    palette: Option<crate::core::cover_theme::AlbumPalette>,
+  ) {
+    self.cover_art.store_decoded(key, img);
+    match palette {
+      Some(palette) => self.set_cover_art_palette(palette),
+      None => self.clear_cover_art_palette(),
+    }
+  }
+
+  /// Drop the stored cover art together with its palette; the adaptive theme
+  /// follows the art and fades back to the user's own theme.
+  #[cfg(feature = "cover-art")]
+  pub fn clear_cover_art(&mut self) {
+    self.cover_art.clear();
+    self.clear_cover_art_palette();
+  }
+
+  /// Store the palette extracted from freshly loaded cover art and, when
+  /// Adaptive Theme is on, fade the UI accents toward it.
+  #[cfg(feature = "cover-art")]
+  fn set_cover_art_palette(&mut self, palette: crate::core::cover_theme::AlbumPalette) {
+    self.cover_art_palette = Some(palette);
+    self.apply_cover_theme();
+  }
+
+  /// Drop the stored palette and fade back to the user's own theme. A cheap
+  /// no-op when nothing is applied, so it is safe on every tick of the
+  /// "no art" path.
+  #[cfg(feature = "cover-art")]
+  fn clear_cover_art_palette(&mut self) {
+    self.cover_art_palette = None;
+    self.restore_cover_theme();
+  }
+
+  /// Fade toward the theme derived from the stored palette, capturing the
+  /// user's theme as the restore base on first application.
+  #[cfg(feature = "cover-art")]
+  fn apply_cover_theme(&mut self) {
+    use crate::core::cover_theme::{derive_theme, CoverThemeState};
+    if !self.user_config.behavior.cover_art_theme {
+      return;
+    }
+    let Some(palette) = self.cover_art_palette else {
+      return;
+    };
+    // Re-applying while active or mid-restore keeps the original base; only
+    // from Inactive is the live theme really the user's own (a fade-out in
+    // flight leaves a blend in `user_config.theme` that must not be captured).
+    let base = self.user_theme();
+    self.cover_theme_state = CoverThemeState::Active { base };
+    let target = derive_theme(&base, &palette);
+    self.begin_theme_transition(target);
+  }
+
+  /// Fade back to the user's own theme, if an album theme is applied.
+  #[cfg(feature = "cover-art")]
+  fn restore_cover_theme(&mut self) {
+    use crate::core::cover_theme::CoverThemeState;
+    if let CoverThemeState::Active { base } = self.cover_theme_state {
+      self.cover_theme_state = if self.begin_theme_transition(base) {
+        CoverThemeState::Restoring { base }
+      } else {
+        CoverThemeState::Inactive
+      };
+    }
+  }
+
+  /// Start fading the live theme toward `target`. Returns false when the
+  /// theme is already there (nothing to animate). A transition already headed
+  /// to the same target is left to finish rather than restarted.
+  #[cfg(feature = "cover-art")]
+  fn begin_theme_transition(&mut self, target: crate::core::user_config::Theme) -> bool {
+    use crate::core::cover_theme::ThemeTransition;
+    if let Some(transition) = &self.theme_transition {
+      if transition.target() == target {
+        return true;
+      }
+    }
+    if self.user_config.theme == target {
+      self.theme_transition = None;
+      return false;
+    }
+    self.theme_transition = Some(ThemeTransition::new(self.user_config.theme, target));
+    true
+  }
+
+  /// Reconcile the adaptive theme after `apply_settings_changes` rewrote
+  /// `user_config.theme` from the settings rows (which every save does, for
+  /// every row). The rows carry the user's own colors, so that rewrite is the
+  /// new base; what was actually on screen (`live_before`) is put back so the
+  /// fade continues from there. `enabled_before` is the Adaptive Theme flag
+  /// before the save, so a flip re-applies or restores.
+  #[cfg(feature = "cover-art")]
+  fn reconcile_cover_theme_after_settings(
+    &mut self,
+    live_before: crate::core::user_config::Theme,
+    enabled_before: bool,
+  ) {
+    use crate::core::cover_theme::CoverThemeState;
+    match self.cover_theme_state {
+      CoverThemeState::Inactive => {}
+      previous => {
+        let base = self.user_config.theme;
+        self.cover_theme_state = CoverThemeState::Active { base };
+        self.user_config.theme = live_before;
+        self.theme_transition = None;
+        if matches!(previous, CoverThemeState::Restoring { .. }) {
+          self.restore_cover_theme();
+        } else {
+          self.apply_cover_theme();
+        }
+      }
+    }
+    if self.user_config.behavior.cover_art_theme != enabled_before {
+      if self.user_config.behavior.cover_art_theme {
+        self.apply_cover_theme();
+      } else {
+        self.restore_cover_theme();
+      }
+    }
+  }
+
   pub fn update_on_tick(&mut self, elapsed: Duration) {
     // Increment global animation tick (wraps after ~9.4 quintillion ticks, effectively never)
     self.animation_tick = self.animation_tick.wrapping_add(1);
+
+    // Advance an adaptive-theme fade. Real elapsed time, not tick count, so
+    // the fade speed is independent of the configured tick rates.
+    #[cfg(feature = "cover-art")]
+    if let Some(transition) = self.theme_transition.as_mut() {
+      transition.advance(elapsed);
+      self.user_config.theme = transition.current();
+      if transition.is_complete() {
+        self.theme_transition = None;
+        // A finished fade-out means the user's own theme is back in place.
+        if let crate::core::cover_theme::CoverThemeState::Restoring { .. } = self.cover_theme_state
+        {
+          self.cover_theme_state = crate::core::cover_theme::CoverThemeState::Inactive;
+        }
+      }
+    }
 
     // Periodic party sync: host broadcasts state about every 2 seconds.
     // Keep this before early-return paths so sync still happens during native-streaming fast paths.
@@ -7618,6 +7810,10 @@ impl App {
         },
       ],
       SettingsCategory::Theme => {
+        // The user's own colors, not the live theme: while an album-derived
+        // theme is applied the live theme is a blend, and rows built from it
+        // would be written back into custom_theme on save.
+        let user_theme = self.user_theme();
         vec![
           SettingItem {
             id: "theme.preset".to_string(),
@@ -7629,13 +7825,13 @@ impl App {
             id: "theme.active".to_string(),
             name: "Active Color".to_string(),
             description: "Color for active elements".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.active)),
+            value: SettingValue::Color(color_to_string(user_theme.active)),
           },
           SettingItem {
             id: "theme.banner".to_string(),
             name: "Banner Color".to_string(),
             description: "Color for banner text".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.banner)),
+            value: SettingValue::Color(color_to_string(user_theme.banner)),
           },
           SettingItem {
             id: "behavior.banner_gradient".to_string(),
@@ -7644,89 +7840,97 @@ impl App {
               .to_string(),
             value: SettingValue::Bool(self.user_config.behavior.banner_gradient),
           },
+          #[cfg(feature = "cover-art")]
+          SettingItem {
+            id: "behavior.cover_art_theme".to_string(),
+            name: "Adaptive Theme".to_string(),
+            description: "Recolor UI accents from the current cover art, fading on track change"
+              .to_string(),
+            value: SettingValue::Bool(self.user_config.behavior.cover_art_theme),
+          },
           SettingItem {
             id: "theme.hint".to_string(),
             name: "Hint Color".to_string(),
             description: "Color for hints".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.hint)),
+            value: SettingValue::Color(color_to_string(user_theme.hint)),
           },
           SettingItem {
             id: "theme.hovered".to_string(),
             name: "Hovered Color".to_string(),
             description: "Color for hovered elements".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.hovered)),
+            value: SettingValue::Color(color_to_string(user_theme.hovered)),
           },
           SettingItem {
             id: "theme.selected".to_string(),
             name: "Selected Color".to_string(),
             description: "Color for selected items".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.selected)),
+            value: SettingValue::Color(color_to_string(user_theme.selected)),
           },
           SettingItem {
             id: "theme.inactive".to_string(),
             name: "Inactive Color".to_string(),
             description: "Color for inactive elements".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.inactive)),
+            value: SettingValue::Color(color_to_string(user_theme.inactive)),
           },
           SettingItem {
             id: "theme.text".to_string(),
             name: "Text Color".to_string(),
             description: "Default text color".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.text)),
+            value: SettingValue::Color(color_to_string(user_theme.text)),
           },
           SettingItem {
             id: "theme.error_text".to_string(),
             name: "Error Text Color".to_string(),
             description: "Color for error messages".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.error_text)),
+            value: SettingValue::Color(color_to_string(user_theme.error_text)),
           },
           SettingItem {
             id: "theme.error_border".to_string(),
             name: "Error Border Color".to_string(),
             description: "Border color for error messages".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.error_border)),
+            value: SettingValue::Color(color_to_string(user_theme.error_border)),
           },
           SettingItem {
             id: "theme.playbar_background".to_string(),
             name: "Playbar Background".to_string(),
             description: "Background color for playbar".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.playbar_background)),
+            value: SettingValue::Color(color_to_string(user_theme.playbar_background)),
           },
           SettingItem {
             id: "theme.playbar_progress".to_string(),
             name: "Playbar Progress".to_string(),
             description: "Color for playbar progress".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.playbar_progress)),
+            value: SettingValue::Color(color_to_string(user_theme.playbar_progress)),
           },
           SettingItem {
             id: "theme.playbar_progress_text".to_string(),
             name: "Playbar Progress Text".to_string(),
             description: "Color for playbar progress text".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.playbar_progress_text)),
+            value: SettingValue::Color(color_to_string(user_theme.playbar_progress_text)),
           },
           SettingItem {
             id: "theme.playbar_text".to_string(),
             name: "Playbar Text".to_string(),
             description: "Color for playbar text".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.playbar_text)),
+            value: SettingValue::Color(color_to_string(user_theme.playbar_text)),
           },
           SettingItem {
             id: "theme.highlighted_lyrics".to_string(),
             name: "Lyrics Highlight".to_string(),
             description: "Color for current lyrics line".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.highlighted_lyrics)),
+            value: SettingValue::Color(color_to_string(user_theme.highlighted_lyrics)),
           },
           SettingItem {
             id: "theme.background".to_string(),
             name: "Background".to_string(),
             description: "Color for the background".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.background)),
+            value: SettingValue::Color(color_to_string(user_theme.background)),
           },
           SettingItem {
             id: "theme.header".to_string(),
             name: "Header".to_string(),
             description: "Color for the header".to_string(),
-            value: SettingValue::Color(color_to_string(self.user_config.theme.header)),
+            value: SettingValue::Color(color_to_string(user_theme.header)),
           },
         ]
       }
@@ -7742,6 +7946,20 @@ impl App {
     use crate::core::user_config::{parse_theme_item, ThemePreset};
 
     let mut settings_error: Option<String> = None;
+    // What is actually on screen right now, put back by the reconciliation at
+    // the end so an adaptive-theme fade continues from it.
+    #[cfg(feature = "cover-art")]
+    let cover_theme_live_before = self.user_config.theme;
+    #[cfg(feature = "cover-art")]
+    let cover_art_theme_before = self.user_config.behavior.cover_art_theme;
+    // Run the arms against the user's own colors rather than the live blend:
+    // settings_items holds only the current category's rows, so a save from
+    // another category rewrites no theme field at all, and analysis_bar has no
+    // row in any category. Whatever survives the arms IS the new base theme.
+    #[cfg(feature = "cover-art")]
+    {
+      self.user_config.theme = self.user_theme();
+    }
     for setting in &self.settings_items {
       match setting.id.as_str() {
         // Behavior settings
@@ -8012,6 +8230,12 @@ impl App {
         "behavior.draw_cover_art" => {
           if let SettingValue::Bool(v) = setting.value {
             self.user_config.behavior.draw_cover_art = v;
+          }
+        }
+        #[cfg(feature = "cover-art")]
+        "behavior.cover_art_theme" => {
+          if let SettingValue::Bool(v) = setting.value {
+            self.user_config.behavior.cover_art_theme = v;
           }
         }
         #[cfg(feature = "cover-art")]
@@ -8426,6 +8650,8 @@ impl App {
         _ => {}
       }
     }
+    #[cfg(feature = "cover-art")]
+    self.reconcile_cover_theme_after_settings(cover_theme_live_before, cover_art_theme_before);
     if let Some(message) = settings_error {
       self.set_status_message(message, 4);
     }
@@ -10473,5 +10699,221 @@ mod tests {
 
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
     assert!(app.is_fetching_current_playback);
+  }
+
+  #[cfg(feature = "cover-art")]
+  mod cover_theme_tests {
+    use super::*;
+    use crate::core::cover_theme::{derive_theme, AlbumPalette, CoverThemeState};
+    use crate::core::user_config::ThemePreset;
+
+    const PALETTE: AlbumPalette = AlbumPalette {
+      primary: (200, 30, 40),
+      secondary: (30, 60, 220),
+    };
+
+    fn app_with_adaptive_on() -> App {
+      let mut app = App::default();
+      app.user_config.behavior.cover_art_theme = true;
+      app
+    }
+
+    #[test]
+    fn palette_application_fades_in_and_clear_restores_the_user_theme() {
+      let mut app = app_with_adaptive_on();
+      let user = app.user_config.theme;
+
+      app.set_cover_art_palette(PALETTE);
+      assert!(matches!(
+        app.cover_theme_state,
+        CoverThemeState::Active { .. }
+      ));
+      assert!(app.theme_transition.is_some());
+
+      // A tick longer than the fade completes it: accents changed, the
+      // structural colors kept.
+      app.update_on_tick(Duration::from_secs(2));
+      assert!(app.theme_transition.is_none());
+      assert_ne!(app.user_config.theme.active, user.active);
+      assert_eq!(app.user_config.theme.text, user.text);
+      assert_eq!(app.user_config.theme.background, user.background);
+
+      app.clear_cover_art_palette();
+      assert!(matches!(
+        app.cover_theme_state,
+        CoverThemeState::Restoring { .. }
+      ));
+      app.update_on_tick(Duration::from_secs(2));
+      assert_eq!(app.user_config.theme, user);
+      assert_eq!(app.cover_theme_state, CoverThemeState::Inactive);
+    }
+
+    #[test]
+    fn palette_is_stored_but_not_applied_while_disabled() {
+      let mut app = App::default();
+      assert!(!app.user_config.behavior.cover_art_theme);
+      let user = app.user_config.theme;
+
+      app.set_cover_art_palette(PALETTE);
+
+      assert_eq!(app.cover_theme_state, CoverThemeState::Inactive);
+      assert!(app.theme_transition.is_none());
+      assert_eq!(app.user_config.theme, user);
+      assert_eq!(app.cover_art_palette, Some(PALETTE));
+    }
+
+    #[test]
+    fn user_theme_reports_the_base_while_an_album_theme_is_applied() {
+      let mut app = app_with_adaptive_on();
+      let user = app.user_config.theme;
+      app.set_cover_art_palette(PALETTE);
+      app.update_on_tick(Duration::from_secs(2));
+
+      assert_ne!(app.user_config.theme, user);
+      assert_eq!(app.user_theme(), user);
+    }
+
+    #[test]
+    fn settings_rewrite_becomes_the_new_base_and_rederives() {
+      let mut app = app_with_adaptive_on();
+      app.set_cover_art_palette(PALETTE);
+      app.update_on_tick(Duration::from_secs(2));
+      let displayed = app.user_config.theme;
+
+      // What apply_settings_changes does on save: the arms rewrite the live
+      // theme with the user's own colors (here: a new preset), then the
+      // reconciliation runs.
+      let new_user = ThemePreset::Dracula.to_theme();
+      app.user_config.theme = new_user;
+      app.reconcile_cover_theme_after_settings(displayed, true);
+
+      assert!(
+        matches!(app.cover_theme_state, CoverThemeState::Active { base } if base == new_user)
+      );
+      app.update_on_tick(Duration::from_secs(2));
+      assert_eq!(app.user_config.theme, derive_theme(&new_user, &PALETTE));
+      assert_eq!(app.user_theme(), new_user);
+    }
+
+    #[test]
+    fn toggle_off_restores_and_toggle_on_reapplies_the_stored_palette() {
+      let mut app = app_with_adaptive_on();
+      let user = app.user_config.theme;
+      app.set_cover_art_palette(PALETTE);
+      app.update_on_tick(Duration::from_secs(2));
+
+      // Toggle off the way a settings save does: through
+      // apply_settings_changes, which resets the live theme to the base
+      // before the arms run.
+      app.settings_items = vec![SettingItem {
+        id: "behavior.cover_art_theme".to_string(),
+        name: "Adaptive Theme".to_string(),
+        description: String::new(),
+        value: SettingValue::Bool(false),
+      }];
+      app.apply_settings_changes();
+      app.update_on_tick(Duration::from_secs(2));
+      assert_eq!(app.user_config.theme, user);
+      assert_eq!(app.cover_theme_state, CoverThemeState::Inactive);
+
+      // Toggling back on recolors immediately from the stored palette.
+      app.settings_items[0].value = SettingValue::Bool(true);
+      app.apply_settings_changes();
+      assert!(matches!(
+        app.cover_theme_state,
+        CoverThemeState::Active { .. }
+      ));
+      assert!(app.theme_transition.is_some());
+    }
+
+    #[test]
+    fn save_from_another_category_keeps_the_base_theme() {
+      let mut app = app_with_adaptive_on();
+      let user = app.user_config.theme;
+      app.set_cover_art_palette(PALETTE);
+      app.update_on_tick(Duration::from_secs(2));
+      assert_ne!(app.user_config.theme, user);
+
+      // A save from the Behavior category: settings_items holds only that
+      // category's rows, so no theme.* arm rewrites `user_config.theme` with
+      // the user's own colors. The base must not drift to the blend.
+      app.settings_items = vec![SettingItem {
+        id: "behavior.seek_milliseconds".to_string(),
+        name: "Seek Duration (ms)".to_string(),
+        description: String::new(),
+        value: SettingValue::Number(app.user_config.behavior.seek_milliseconds as i64),
+      }];
+      app.apply_settings_changes();
+
+      assert_eq!(app.user_theme(), user, "base drifted to the blended theme");
+
+      app.clear_cover_art_palette();
+      app.update_on_tick(Duration::from_secs(2));
+      assert_eq!(
+        app.user_config.theme, user,
+        "did not restore the user theme"
+      );
+    }
+
+    #[test]
+    fn track_change_during_restore_keeps_the_original_base() {
+      let mut app = app_with_adaptive_on();
+      let user = app.user_config.theme;
+      app.set_cover_art_palette(PALETTE);
+      app.update_on_tick(Duration::from_secs(2));
+
+      // Art clears (fade-out starts) and new art arrives mid-fade: the base
+      // captured must be the user's theme, not the half-restored blend.
+      app.clear_cover_art_palette();
+      app.update_on_tick(Duration::from_millis(100));
+      assert!(matches!(
+        app.cover_theme_state,
+        CoverThemeState::Restoring { .. }
+      ));
+      app.set_cover_art_palette(AlbumPalette {
+        primary: (30, 200, 90),
+        secondary: (200, 30, 40),
+      });
+      match app.cover_theme_state {
+        CoverThemeState::Active { base } => assert_eq!(base, user),
+        other => panic!("expected Active, got {other:?}"),
+      }
+    }
+
+    #[test]
+    fn custom_theme_save_does_not_leak_album_analysis_bar_into_base() {
+      let mut app = app_with_adaptive_on();
+      app.user_config.current_preset = ThemePreset::Custom;
+      app.user_config.custom_theme = app.user_config.theme;
+      let user = app.user_config.theme;
+
+      app.set_cover_art_palette(PALETTE);
+      app.update_on_tick(Duration::from_secs(2));
+      // analysis_bar is album-colored while applied, and has no settings row
+      // in any category, so a save must not treat the live value as the
+      // user's choice.
+      assert_ne!(app.user_config.theme.analysis_bar, user.analysis_bar);
+
+      // Settings -> Theme, save without changing anything.
+      app.settings_category = crate::core::app::SettingsCategory::Theme;
+      app.load_settings_for_category();
+      app.apply_settings_changes();
+      assert_eq!(app.user_theme().analysis_bar, user.analysis_bar);
+
+      // Turning adaptive theming off (a real settings save) restores the
+      // user's analysis_bar.
+      app.settings_items = vec![SettingItem {
+        id: "behavior.cover_art_theme".to_string(),
+        name: "Adaptive Theme".to_string(),
+        description: String::new(),
+        value: SettingValue::Bool(false),
+      }];
+      app.apply_settings_changes();
+      app.update_on_tick(Duration::from_secs(2));
+      assert_eq!(
+        app.user_config.theme.analysis_bar, user.analysis_bar,
+        "album accent stuck in analysis_bar after adaptive theme off"
+      );
+    }
   }
 }

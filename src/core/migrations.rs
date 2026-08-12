@@ -178,6 +178,9 @@ fn set_private_dir_permissions(path: &Path) -> Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
       .with_context(|| format!("setting private permissions on {}", path.display()))?;
   }
+  // Windows scopes %APPDATA% to the user already; nothing to tighten.
+  #[cfg(not(unix))]
+  let _ = path;
 
   Ok(())
 }
