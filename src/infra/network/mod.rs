@@ -68,6 +68,10 @@ pub enum IoEvent {
   /// the librespot backend. This is a direct Spirc load and does not use the Web API.
   #[cfg(feature = "streaming")]
   RestoreNativePlayback(u64),
+  /// Replay the published native Spotify queue slot after recovery. Routed by
+  /// the native queue before the Spotify network handler.
+  #[cfg(feature = "streaming")]
+  ReplayPublishedSpotifyQueueSlot,
   UpdateSearchLimits(u32, u32),
   Seek(u32),
   NextTrack,
@@ -116,7 +120,7 @@ pub enum IoEvent {
   GetAlbum(String),
   TransferPlaybackToDevice(String, bool),
   #[allow(dead_code)]
-  AutoSelectStreamingDevice(String, bool), // Auto-select a device by name (used for native streaming)
+  AutoSelectStreamingDevice(String, bool, bool), // Auto-select a device by name (used for native streaming): (device name, persist_device_id, yield_to_external_playback)
   GetAlbumForTrack(String),
   CurrentUserSavedTracksContains(Vec<String>),
   GetCurrentUserSavedShows(Option<u32>),
@@ -446,7 +450,10 @@ impl Network {
       return true;
     }
     #[cfg(feature = "streaming")]
-    if matches!(io_event, IoEvent::RestoreNativePlayback(_)) {
+    if matches!(
+      io_event,
+      IoEvent::RestoreNativePlayback(_) | IoEvent::ReplayPublishedSpotifyQueueSlot
+    ) {
       return true;
     }
     // Bypasses the gate but NOT onto the service lane: the handler needs the real
@@ -767,9 +774,9 @@ impl Network {
           .await;
       }
       #[cfg(feature = "streaming")]
-      IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id) => {
+      IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id, yield_to_external) => {
         self
-          .auto_select_streaming_device(device_name, persist_device_id)
+          .auto_select_streaming_device(device_name, persist_device_id, yield_to_external)
           .await;
       }
       #[cfg(not(feature = "streaming"))]
@@ -829,6 +836,8 @@ impl Network {
       // Consumed by the queue router before it reaches the network; only lands
       // here if the router somehow let it through. No Spotify work to do.
       IoEvent::AdvanceNativeQueue => {}
+      #[cfg(feature = "streaming")]
+      IoEvent::ReplayPublishedSpotifyQueueSlot => {}
       // Consumed by a per-source router when a decoded source owns playback; only
       // lands here otherwise (e.g. Spotify is playing). No Spotify work to do.
       IoEvent::ReplayCurrentTrack => {}
@@ -1718,6 +1727,20 @@ mod tests {
       assert!(Network::runs_on_service_lane(&event));
       assert!(Network::event_bypasses_spotify_auth(&event));
     }
+  }
+
+  /// The queue router normally consumes this event first. If that invariant is
+  /// ever broken, its network fallback is still a no-op and must not trigger a
+  /// token refresh or login prompt before being discarded.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn queue_slot_replay_fallback_bypasses_auth_but_stays_serial() {
+    let event = IoEvent::ReplayPublishedSpotifyQueueSlot;
+    assert!(Network::event_bypasses_spotify_auth(&event));
+    assert!(
+      !Network::runs_on_service_lane(&event),
+      "the queue router owns replay ordering on the serial event pump"
+    );
   }
 
   /// `DjToolCall` is the one event that bypasses the auth gate *without* moving

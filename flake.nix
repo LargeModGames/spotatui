@@ -42,7 +42,7 @@
           ];
         # Update alongside the [patch.crates-io] rev in Cargo.toml; the Nix build
         # fails with a hash mismatch that reports the correct value otherwise.
-        librespotOutputHash = "sha256-N/ImWrtEyhKyjvZd8zVCelKtsAV1kHoFHMwCoe5ddI0=";
+        librespotOutputHash = "sha256-vUBIP+e9HYq3PKilYbdRtJk4qJAT7Vjn0l1ALe5qNbA=";
       in
       {
         # Build dependencies for rust

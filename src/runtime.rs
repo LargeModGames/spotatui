@@ -332,7 +332,7 @@ impl StartupDeviceEvent {
       StartupDeviceEvent::AutoSelectStreaming {
         device_name,
         persist_device_id,
-      } => IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id),
+      } => IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id, false),
     }
   }
 }
