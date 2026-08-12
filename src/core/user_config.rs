@@ -110,7 +110,7 @@ pub struct UserTheme {
   pub highlighted_lyrics: Option<String>,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Theme {
   #[allow(dead_code)]
   pub analysis_bar: Color,
@@ -849,6 +849,8 @@ pub struct BehaviorConfigString {
   pub draw_cover_art_forced: Option<bool>,
   #[cfg(feature = "cover-art")]
   pub playbar_cover_art_size_percent: Option<u16>,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_theme: Option<bool>,
   #[cfg(feature = "mcp-server")]
   pub mcp_enabled: Option<bool>,
   #[cfg(feature = "ai-dj")]
@@ -963,6 +965,10 @@ pub struct BehaviorConfig {
   pub draw_cover_art_forced: bool,
   #[cfg(feature = "cover-art")]
   pub playbar_cover_art_size_percent: u16,
+  /// Recolor the UI accents from the current track's cover art, fading on
+  /// track change. Off by default so a chosen preset stays untouched.
+  #[cfg(feature = "cover-art")]
+  pub cover_art_theme: bool,
   /// Whether to open the local MCP control socket so `spotatui mcp` (and through
   /// it Claude Code, Codex, or any MCP client) can drive playback.
   ///
@@ -1415,6 +1421,8 @@ impl UserConfig {
         draw_cover_art_forced: false,
         #[cfg(feature = "cover-art")]
         playbar_cover_art_size_percent: 100,
+        #[cfg(feature = "cover-art")]
+        cover_art_theme: false,
         #[cfg(feature = "mcp-server")]
         mcp_enabled: false,
         #[cfg(feature = "ai-dj")]
@@ -1857,6 +1865,10 @@ impl UserConfig {
     if let Some(playbar_cover_art_size_percent) = behavior_config.playbar_cover_art_size_percent {
       self.behavior.playbar_cover_art_size_percent =
         clamp_playbar_cover_art_size_percent(playbar_cover_art_size_percent);
+    }
+    #[cfg(feature = "cover-art")]
+    if let Some(cover_art_theme) = behavior_config.cover_art_theme {
+      self.behavior.cover_art_theme = cover_art_theme;
     }
     #[cfg(feature = "mcp-server")]
     if let Some(mcp_enabled) = behavior_config.mcp_enabled {
@@ -2432,6 +2444,8 @@ impl UserConfig {
       draw_cover_art_forced: Some(self.behavior.draw_cover_art_forced),
       #[cfg(feature = "cover-art")]
       playbar_cover_art_size_percent: Some(self.behavior.playbar_cover_art_size_percent),
+      #[cfg(feature = "cover-art")]
+      cover_art_theme: Some(self.behavior.cover_art_theme),
       #[cfg(feature = "mcp-server")]
       mcp_enabled: Some(self.behavior.mcp_enabled),
       #[cfg(feature = "ai-dj")]
@@ -2663,6 +2677,15 @@ impl UserConfig {
   #[cfg(feature = "cover-art")]
   pub fn do_draw_cover_art(&self, full_image_support: bool) -> bool {
     self.behavior.draw_cover_art && (self.behavior.draw_cover_art_forced || full_image_support)
+  }
+
+  /// Whether anything needs the cover art fetched and decoded: the art pane,
+  /// or the adaptive theme, which extracts its palette from the decoded image
+  /// even when the pane itself is hidden (disabled, or a terminal without
+  /// image support). Draw sites keep their own `do_draw_cover_art` gate.
+  #[cfg(feature = "cover-art")]
+  pub fn needs_cover_art(&self, full_image_support: bool) -> bool {
+    self.do_draw_cover_art(full_image_support) || self.behavior.cover_art_theme
   }
 }
 

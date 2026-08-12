@@ -1,6 +1,8 @@
 pub mod app;
 pub mod auth;
 pub mod config;
+#[cfg(feature = "cover-art")]
+pub mod cover_theme;
 pub mod first_run;
 pub mod format;
 pub mod layout;

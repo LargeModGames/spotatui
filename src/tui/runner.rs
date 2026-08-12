@@ -204,6 +204,8 @@ fn cover_art_request_for(
       path,
     });
   }
+  #[cfg(not(feature = "local-files"))]
+  let _ = app;
 
   snapshot
     .metadata
@@ -889,7 +891,8 @@ pub async fn start_ui(
         || current_route.active_block == ActiveBlock::Analysis
         || (current_route.id == RouteId::LyricsView
           && app.lyrics_status == crate::core::app::LyricsStatus::Found)
-        || app.liked_song_animation_frame.is_some();
+        || app.liked_song_animation_frame.is_some()
+        || app.theme_fade_active();
       let current_tick_rate = if animation_active {
         app.user_config.behavior.animation_tick_rate_milliseconds
       } else {
@@ -1100,7 +1103,7 @@ pub async fn start_ui(
             use crate::core::app::CoverArtStatus;
             let enabled = app
               .user_config
-              .do_draw_cover_art(app.cover_art.full_image_support());
+              .needs_cover_art(app.cover_art.full_image_support());
             let desired = if enabled {
               snapshot
                 .as_ref()
@@ -1124,7 +1127,7 @@ pub async fn start_ui(
                 // No art to show (radio, art disabled, nothing playing): drop
                 // any stale image once, so the pane shows the placeholder.
                 if last_cover_art_key.take().is_some() || app.cover_art.available() {
-                  app.cover_art.clear();
+                  app.clear_cover_art();
                 }
                 app.cover_art_status = if enabled && snapshot.is_some() {
                   CoverArtStatus::Unavailable
