@@ -1,7 +1,7 @@
 // PipeWire-native audio capture for Linux
 // This provides direct access to PipeWire's audio graph for monitor capture
 
-use super::analyzer::{create_shared_analyzer, SharedAnalyzer, SpectrumData};
+use super::analyzer::{create_shared_analyzer, spectrum_for, SharedAnalyzer, SpectrumData};
 use pipewire as pw;
 use pw::spa::param::audio::AudioInfoRaw;
 use pw::spa::pod::Pod;
@@ -18,10 +18,12 @@ pub struct PipeWireCapture {
 }
 
 impl PipeWireCapture {
-  /// Create a new PipeWire audio capture manager
+  /// Create a new PipeWire audio capture manager sized for `display_bars`
   /// Returns None if PipeWire initialization fails
-  pub fn new() -> Option<Self> {
-    let analyzer = create_shared_analyzer();
+  pub fn new(display_bars: usize) -> Option<Self> {
+    // Built at the rate we request below; the param_changed callback swaps in
+    // the rate PipeWire actually negotiates.
+    let analyzer = create_shared_analyzer(48000, display_bars);
     let active = Arc::new(AtomicBool::new(true));
 
     let analyzer_clone = analyzer.clone();
@@ -48,17 +50,14 @@ impl PipeWireCapture {
     }
   }
 
-  /// Get the current spectrum data
-  pub fn get_spectrum(&self) -> Option<SpectrumData> {
+  /// Get the current spectrum data, sized to `desired_bars` (the analyzer
+  /// rebuilds its plan when the count changes, and clamps unsupportable counts)
+  pub fn get_spectrum(&self, desired_bars: usize) -> Option<SpectrumData> {
     if !self.active.load(Ordering::Relaxed) {
       return None;
     }
 
-    if let Ok(mut analyzer) = self.analyzer.lock() {
-      Some(analyzer.process())
-    } else {
-      None
-    }
+    spectrum_for(&self.analyzer, desired_bars)
   }
 
   /// Check if audio capture is currently active
@@ -102,21 +101,29 @@ fn run_pipewire_capture(
 
   let active_clone = active.clone();
   let analyzer_clone = analyzer.clone();
+  let param_analyzer = analyzer.clone();
 
   // Set up stream listener
   let _listener = stream
     .add_local_listener_with_user_data(StreamData::default())
-    .param_changed(|_, user_data, id, param| {
+    .param_changed(move |_, user_data, id, param| {
       let Some(param) = param else { return };
       if id != pw::spa::param::ParamType::Format.as_raw() {
         return;
       }
 
-      // Parse the format to get channel count
+      // Parse the format to get channel count and negotiated sample rate
       if let Ok(mut format) = user_data.format.lock() {
         if format.parse(param).is_ok() {
           let channels = format.channels();
           user_data.channels.store(channels, Ordering::Relaxed);
+
+          let rate = format.rate();
+          if rate > 0 {
+            if let Ok(mut analyzer) = param_analyzer.lock() {
+              analyzer.set_sample_rate(rate);
+            }
+          }
         }
       }
     })
@@ -149,23 +156,16 @@ fn run_pipewire_capture(
         // Only process the valid portion of the buffer
         let valid_bytes = &samples_bytes[..n_bytes.min(samples_bytes.len())];
 
-        // Convert bytes to f32 samples and mix to mono
-        let mono_samples: Vec<f32> = valid_bytes
+        // Decode the interleaved f32 stream; the analyzer owns the channel
+        // rule (0/1 through, mono duplicated) so it is stated in one place.
+        let samples: Vec<f32> = valid_bytes
           .chunks_exact(mem::size_of::<f32>())
-          .enumerate()
-          .filter_map(|(i, chunk)| {
-            // Simple mono mixdown - take one sample per frame
-            if i % n_channels == 0 {
-              Some(f32::from_le_bytes(chunk.try_into().unwrap_or([0; 4])))
-            } else {
-              None
-            }
-          })
+          .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap_or([0; 4])))
           .collect();
 
-        if !mono_samples.is_empty() {
+        if !samples.is_empty() {
           if let Ok(mut analyzer) = analyzer_clone.lock() {
-            analyzer.push_samples(&mono_samples);
+            analyzer.push_frames(&samples, n_channels);
           }
         }
       }

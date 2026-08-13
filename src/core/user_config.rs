@@ -527,24 +527,26 @@ impl ThemePreset {
 /// Available audio visualizer styles
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub enum VisualizerStyle {
-  /// Equalizer mode: Uses tui-equalizer with half-block bars and brightness effect
+  /// Cava mode: cava's engine and mirrored stereo layout drawn in eighth blocks
   ///
-  /// Note: Older configs may contain `Classic`; it is accepted as an alias for `Equalizer`.
+  /// Note: Older configs may contain `Equalizer` (a removed style) or `Classic`
+  /// (its even older name); both are accepted as aliases so existing config
+  /// files keep loading and roll over to Cava.
   #[default]
-  #[serde(alias = "Classic")]
-  Equalizer,
+  #[serde(alias = "Classic", alias = "Equalizer")]
+  Cava,
   /// BarGraph mode: Uses tui-bar-graph with Braille patterns for high-resolution display
   BarGraph,
 }
 
 impl VisualizerStyle {
   pub fn all() -> &'static [VisualizerStyle] {
-    &[VisualizerStyle::Equalizer, VisualizerStyle::BarGraph]
+    &[VisualizerStyle::Cava, VisualizerStyle::BarGraph]
   }
 
   pub fn name(&self) -> &'static str {
     match self {
-      VisualizerStyle::Equalizer => "Equalizer",
+      VisualizerStyle::Cava => "Cava",
       VisualizerStyle::BarGraph => "Bar Graph",
     }
   }
@@ -2845,6 +2847,19 @@ pub fn color_to_string(color: Color) -> String {
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn removed_visualizer_styles_deserialize_as_cava() {
+    use super::VisualizerStyle;
+    // Configs written before the Equalizer style was removed (or before it
+    // was renamed from Classic) must keep loading, rolling over to Cava.
+    for old_name in ["Equalizer", "Classic", "Cava"] {
+      let style: VisualizerStyle = serde_yaml::from_str(old_name).unwrap();
+      assert_eq!(style, VisualizerStyle::Cava, "{old_name}");
+    }
+    let style: VisualizerStyle = serde_yaml::from_str("BarGraph").unwrap();
+    assert_eq!(style, VisualizerStyle::BarGraph);
+  }
+
   #[test]
   fn test_parse_key() {
     use super::parse_key;

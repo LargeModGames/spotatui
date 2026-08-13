@@ -1387,19 +1387,25 @@ pub async fn start_ui(
           let in_analysis_view = app.get_current_route().active_block == ActiveBlock::Analysis;
 
           if in_analysis_view {
+            let desired_bars = ui::audio_analysis::visualizer_bar_count(
+              app.user_config.behavior.visualizer_style,
+              ui::audio_analysis::visualizer_inner_width(&app),
+            );
+
             if audio_capture.is_none() {
-              audio_capture = audio::AudioCaptureManager::new();
+              // Built at the count we are about to ask for, so the first frame
+              // does not immediately throw the fresh cavacore plan away.
+              audio_capture = audio::AudioCaptureManager::new(desired_bars);
               app.audio_capture_active = audio_capture.is_some();
             }
 
             if let Some(ref capture) = audio_capture {
-              if let Some(spectrum) = capture.get_spectrum() {
-                app.spectrum_data = Some(app::SpectrumData {
-                  bands: spectrum.bands,
-                  peak: spectrum.peak,
-                });
-                app.audio_capture_active = capture.is_active();
+              if let Some(spectrum) = capture.get_spectrum(desired_bars) {
+                app.spectrum_data = Some(spectrum);
               }
+              // Kept outside the spectrum arm: a dead stream must drop the
+              // "Capturing audio" status instead of freezing it on.
+              app.audio_capture_active = capture.is_active();
             }
           } else if audio_capture.is_some() {
             audio_capture = None;
