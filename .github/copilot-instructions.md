@@ -308,6 +308,10 @@ never config:
   mpris, discord-rpc, self-update, scripting`. Notably **not** in default:
   `cover-art` (so a plain `cargo run` has no album art, though every shipped
   binary enables it), the four sources, and the DJ features.
+- Cover art is two features: `art-decode` is the frontend-agnostic decode half
+  (`dep:image`, fills `core::art::CoverArtStore`, feeds the adaptive theme;
+  never enabled by hand); `cover-art` layers the ratatui-image terminal
+  rendering on top and keeps its pre-split meaning for users and CI.
 - `audio-viz` (PipeWire, Linux-only) and `audio-viz-cpal` are **visualizer
   capture** backends, not playback. The librespot *playback* backend is chosen by
   `[target.'cfg(...)']` dependency blocks in Cargo.toml, not by the `*-backend`

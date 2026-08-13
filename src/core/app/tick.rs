@@ -41,7 +41,7 @@ impl App {
 
     // Advance an adaptive-theme fade. Real elapsed time, not tick count, so
     // the fade speed is independent of the configured tick rates.
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     if let Some(transition) = self.theme_transition.as_mut() {
       transition.advance(elapsed);
       self.user_config.theme = transition.current();

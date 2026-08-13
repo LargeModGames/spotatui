@@ -184,12 +184,12 @@ fn draw_cover_art(f: &mut Frame<'_>, app: &App, area: Rect, fit: PluginCoverArtF
       f,
       app,
       area,
-      crate::tui::cover_art::status_message(app.cover_art_status),
+      crate::tui::cover_art::status_message(app.cover_art.status),
     );
     return;
   }
 
-  let fitted = app.cover_art.plugin_size_for(area, fit).unwrap_or(area);
+  let fitted = crate::tui::cover_art::plugin_size_for(area, fit, &app.cover_art).unwrap_or(area);
   let target = center_rect_within(area, fitted);
 
   // Clear the whole slot, not just `target`: a previous track's image may have
@@ -202,7 +202,7 @@ fn draw_cover_art(f: &mut Frame<'_>, app: &App, area: Rect, fit: PluginCoverArtF
     Block::default().style(app.user_config.theme.base_style()),
     area,
   );
-  app.cover_art.render_plugin(f, target, fit);
+  crate::tui::cover_art::render_plugin(f, target, fit, &app.cover_art);
 }
 
 #[cfg(not(feature = "cover-art"))]
@@ -500,6 +500,7 @@ mod tests {
   #[cfg(feature = "cover-art")]
   #[test]
   fn cover_art_image_slot_restores_the_theme_background() {
+    crate::tui::cover_art::init_test_renderer();
     let content = PluginScreenContent {
       title: "Demo".to_string(),
       widgets: vec![PluginWidget::new(PluginWidgetKind::CoverArt {

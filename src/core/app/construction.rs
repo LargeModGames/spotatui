@@ -248,17 +248,15 @@ impl Default for App {
       native_playback_generation: 0,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
       mpris_manager: None,
-      #[cfg(feature = "cover-art")]
-      cover_art: crate::tui::cover_art::CoverArt::new(),
-      #[cfg(feature = "cover-art")]
-      cover_art_status: CoverArtStatus::default(),
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
+      cover_art: crate::core::art::CoverArtStore::default(),
+      #[cfg(feature = "art-decode")]
       desired_cover_art_key: None,
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       cover_art_palette: None,
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       cover_theme_state: crate::core::cover_theme::CoverThemeState::default(),
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       theme_transition: None,
       #[cfg(feature = "dj-core")]
       dj: crate::infra::dj::DjState::default(),

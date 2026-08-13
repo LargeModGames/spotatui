@@ -146,7 +146,12 @@ mpris = ["mpris-server"]  # MPRIS D-Bus integration (Linux only)
 macos-media = ["objc2-media-player", "objc2-foundation", "objc2-app-kit", "objc2", "block2", "streaming"]  # macOS Now Playing integration
 windows-media = ["smtc-tokio", "streaming"] # windows SMTC integration
 discord-rpc = ["discord-rich-presence"]
-cover-art = ["ratatui-image", "image"]
+# The frontend-agnostic decode half of cover art: fetch + `image`-decode into
+# the store frontends render from (also feeds the adaptive theme's palette
+# extraction). Not meant to be enabled by hand: `cover-art` layers the
+# terminal rendering on top and keeps its pre-split meaning for users and CI.
+art-decode = ["dep:image"]
+cover-art = ["tui", "art-decode", "dep:ratatui-image"]
 scripting = ["dep:mlua"]
 # Shared audio decode/output engine (rodio bundles symphonia). Pulled by any
 # source that plays decoded audio through the local sink (local files, Subsonic).

@@ -112,8 +112,6 @@ mod volume;
 #[cfg(test)]
 mod test_support;
 
-#[cfg(feature = "cover-art")]
-pub use album_theme::*;
 pub use discover::*;
 pub use friends::*;
 pub use help::*;
@@ -199,25 +197,25 @@ pub struct App {
   /// replay of the slot can honor a user's pause.
   #[cfg(feature = "streaming")]
   pub queue_slot_desired_playing: bool,
-  #[cfg(feature = "cover-art")]
-  pub cover_art: crate::tui::cover_art::CoverArt,
-  /// Status of the current track's cover art, driving the placeholder message.
-  #[cfg(feature = "cover-art")]
-  pub cover_art_status: CoverArtStatus,
+  /// Decoded cover art for the current track plus its load status. The TUI
+  /// renderer (`tui::cover_art`) caches its terminal protocols on this
+  /// store's key.
+  #[cfg(feature = "art-decode")]
+  pub cover_art: crate::core::art::CoverArtStore,
   /// Image key currently desired by the UI. Detached decode results for older
   /// keys are discarded.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub desired_cover_art_key: Option<String>,
   /// Accent colors extracted from the current cover art. Stored even while
   /// Adaptive Theme is off, so toggling it on recolors immediately without a
   /// refetch. Cleared together with the art itself.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub cover_art_palette: Option<crate::core::cover_theme::AlbumPalette>,
   /// Whether an album-derived theme is applied, and the user theme to restore.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub cover_theme_state: crate::core::cover_theme::CoverThemeState,
   /// In-flight fade of the live theme, advanced by `update_on_tick`.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub theme_transition: Option<crate::core::cover_theme::ThemeTransition>,
   /// AI DJ session state: transcript, auto-queue toggle, vibe, and the
   /// generation counter that invalidates in-flight background work.

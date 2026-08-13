@@ -1,32 +1,11 @@
 use super::*;
 
-/// Status of the currently-playing track's cover art, mirroring [`LyricsStatus`].
-/// Drives the placeholder message shown when art can't be displayed, so a
-/// missing image reads as an explicit state rather than silently showing
-/// nothing (or, worse, the previous track's art).
-#[cfg(feature = "cover-art")]
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum CoverArtStatus {
-  /// Nothing is playing / no art has been requested yet.
-  #[default]
-  NotStarted,
-  /// A fetch/decode for the current track is in flight.
-  Loading,
-  /// Art for the current track is loaded and rendering.
-  Loaded,
-  /// The current source has no cover art to show (e.g. internet radio, or a
-  /// local file with no embedded picture).
-  Unavailable,
-  /// A fetch/decode was attempted for the current track but failed.
-  Failed,
-}
-
 impl App {
   /// The user's own theme: the restore target while an album-derived theme is
   /// applied (or fading out), otherwise the live theme. Settings rows must be
   /// built from this, never from the live theme, or album accents would leak
   /// into `custom_theme` and persist on the next settings save.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub fn user_theme(&self) -> crate::core::user_config::Theme {
     use crate::core::cover_theme::CoverThemeState;
     match self.cover_theme_state {
@@ -35,18 +14,18 @@ impl App {
     }
   }
 
-  #[cfg(not(feature = "cover-art"))]
+  #[cfg(not(feature = "art-decode"))]
   pub fn user_theme(&self) -> crate::core::user_config::Theme {
     self.user_config.theme
   }
 
   /// Whether an adaptive-theme fade is animating (drives the fast tick rate).
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub fn theme_fade_active(&self) -> bool {
     self.theme_transition.is_some()
   }
 
-  #[cfg(not(feature = "cover-art"))]
+  #[cfg(not(feature = "art-decode"))]
   pub fn theme_fade_active(&self) -> bool {
     false
   }
@@ -54,7 +33,7 @@ impl App {
   /// Store freshly decoded cover art together with the palette extracted from
   /// it. The single entry point that keeps the adaptive theme in sync with the
   /// art: `None` for the palette fades back to the user's own theme.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub fn store_cover_art(
     &mut self,
     key: String,
@@ -70,7 +49,7 @@ impl App {
 
   /// Drop the stored cover art together with its palette; the adaptive theme
   /// follows the art and fades back to the user's own theme.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub fn clear_cover_art(&mut self) {
     self.cover_art.clear();
     self.clear_cover_art_palette();
@@ -78,7 +57,7 @@ impl App {
 
   /// Store the palette extracted from freshly loaded cover art and, when
   /// Adaptive Theme is on, fade the UI accents toward it.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   fn set_cover_art_palette(&mut self, palette: crate::core::cover_theme::AlbumPalette) {
     self.cover_art_palette = Some(palette);
     self.apply_cover_theme();
@@ -87,7 +66,7 @@ impl App {
   /// Drop the stored palette and fade back to the user's own theme. A cheap
   /// no-op when nothing is applied, so it is safe on every tick of the
   /// "no art" path.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   fn clear_cover_art_palette(&mut self) {
     self.cover_art_palette = None;
     self.restore_cover_theme();
@@ -95,7 +74,7 @@ impl App {
 
   /// Fade toward the theme derived from the stored palette, capturing the
   /// user's theme as the restore base on first application.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   fn apply_cover_theme(&mut self) {
     use crate::core::cover_theme::{derive_theme, CoverThemeState};
     if !self.user_config.behavior.cover_art_theme {
@@ -114,7 +93,7 @@ impl App {
   }
 
   /// Fade back to the user's own theme, if an album theme is applied.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   fn restore_cover_theme(&mut self) {
     use crate::core::cover_theme::CoverThemeState;
     if let CoverThemeState::Active { base } = self.cover_theme_state {
@@ -129,7 +108,7 @@ impl App {
   /// Start fading the live theme toward `target`. Returns false when the
   /// theme is already there (nothing to animate). A transition already headed
   /// to the same target is left to finish rather than restarted.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   fn begin_theme_transition(&mut self, target: crate::core::user_config::Theme) -> bool {
     use crate::core::cover_theme::ThemeTransition;
     if let Some(transition) = &self.theme_transition {
@@ -151,7 +130,7 @@ impl App {
   /// new base; what was actually on screen (`live_before`) is put back so the
   /// fade continues from there. `enabled_before` is the Adaptive Theme flag
   /// before the save, so a flip re-applies or restores.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub(super) fn reconcile_cover_theme_after_settings(
     &mut self,
     live_before: crate::core::user_config::Theme,
@@ -182,11 +161,11 @@ impl App {
   }
 }
 
-#[cfg(all(test, feature = "cover-art"))]
+#[cfg(all(test, feature = "art-decode"))]
 mod tests {
   use super::*;
 
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   mod cover_theme_tests {
     use super::*;
     use crate::core::cover_theme::{derive_theme, AlbumPalette, CoverThemeState};

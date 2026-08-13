@@ -503,9 +503,9 @@ pub(crate) fn file_uri_to_path(uri: &str) -> Result<PathBuf> {
 /// and image decode), so callers must run this on a blocking thread rather than
 /// the async runtime. Returns an error when the file has no embedded artwork.
 ///
-/// Gated on both `local-files` (for `lofty`) and `cover-art` (for `image`), so
+/// Gated on both `local-files` (for `lofty`) and `art-decode` (for `image`), so
 /// builds enabling only one of them do not pull in the other's dependency.
-#[cfg(feature = "cover-art")]
+#[cfg(feature = "art-decode")]
 pub(crate) fn extract_embedded_cover(path: &Path) -> Result<image::DynamicImage> {
   let tagged = read_from_path(path).with_context(|| format!("reading tags from {:?}", path))?;
   let tag = tagged
