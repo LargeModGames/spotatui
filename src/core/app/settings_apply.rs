@@ -719,7 +719,7 @@ impl App {
 
   /// Updates the colour RGB entries when switching through the presets in themes
   pub fn sync_theme_color_settings(&mut self, theme: &crate::core::user_config::Theme) {
-    let mappings: [(&str, ratatui::style::Color); 16] = [
+    let mappings: [(&str, crate::core::theme::Color); 16] = [
       ("theme.active", theme.active),
       ("theme.banner", theme.banner),
       ("theme.hint", theme.hint),

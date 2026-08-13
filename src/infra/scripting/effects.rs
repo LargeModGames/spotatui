@@ -29,7 +29,7 @@ pub(crate) enum ScriptEffect {
   /// Show a plugin popup dialog.
   ShowPopup(PluginPopup),
   /// Apply theme color overrides at runtime (field name -> color).
-  SetTheme(Vec<(String, ratatui::style::Color)>),
+  SetTheme(Vec<(String, crate::core::theme::Color)>),
   /// A whitelisted IoEvent built by the API layer. Lua never constructs raw
   /// IoEvents; only the documented `spotatui.*` actions can produce these.
   Dispatch(IoEvent),

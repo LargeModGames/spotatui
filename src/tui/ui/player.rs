@@ -1,15 +1,16 @@
 #[cfg(feature = "cover-art")]
-use crate::core::layout::center_rect_within;
+use crate::tui::layout::center_rect_within;
 #[cfg(feature = "cover-art")]
-use crate::core::layout::fullscreen_view_layout;
+use crate::tui::layout::fullscreen_view_layout;
+use crate::tui::theme::{EmphasisExt, ThemeExt};
 #[cfg(feature = "cover-art")]
 use ratatui::layout::Alignment;
 
 use crate::core::{
   app::{ActiveBlock, App, SourceFocus},
-  layout::miniplayer_playbar_area,
   source::Source,
 };
+use crate::tui::layout::miniplayer_playbar_area;
 use ratatui::{
   layout::{Constraint, Layout, Position, Rect},
   style::{Modifier, Style},
@@ -678,7 +679,7 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
 }
 
 fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
-  let controls_style = Style::default().fg(app.user_config.theme.playbar_text);
+  let controls_style = Style::default().fg(app.user_config.theme.playbar_text.into());
   for hitbox in playbar_control_hitboxes_in_area(
     controls_area,
     &app.user_config.behavior,
@@ -722,7 +723,7 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
     // than a blank pane, so "no art" always reads as a deliberate outcome.
     let message = crate::tui::cover_art::status_message(app.cover_art_status);
     let p = Paragraph::new(message)
-      .style(Style::default().fg(app.user_config.theme.inactive))
+      .style(Style::default().fg(app.user_config.theme.inactive.into()))
       .alignment(Alignment::Center);
 
     let vertical_center = area.y + area.height / 2;
@@ -770,7 +771,7 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
       let title = Paragraph::new(name)
         .style(
           Style::default()
-            .fg(app.user_config.theme.selected)
+            .fg(app.user_config.theme.selected.into())
             .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
         )
         .alignment(Alignment::Center);
@@ -789,7 +790,7 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
       let artist_y = title_y + 1;
       if artist_y < area.y + area.height {
         let artist = Paragraph::new(artists)
-          .style(Style::default().fg(app.user_config.theme.playbar_text))
+          .style(Style::default().fg(app.user_config.theme.playbar_text.into()))
           .alignment(Alignment::Center);
         f.render_widget(
           artist,
@@ -1033,7 +1034,7 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
   )];
   if let Some(message) = app.status_message.as_ref() {
     let msg_style = if app.status_message_is_error {
-      Style::default().fg(app.user_config.theme.error_text)
+      Style::default().fg(app.user_config.theme.error_text.into())
     } else {
       get_color(highlight_state, app.user_config.theme)
     };
@@ -1043,22 +1044,22 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
   let title_block = Block::default()
     .borders(Borders::ALL)
     .border_type(BorderType::Rounded)
-    .style(Style::default().bg(app.user_config.theme.playbar_background))
+    .style(Style::default().bg(app.user_config.theme.playbar_background.into()))
     .title(Line::from(title_spans))
     .border_style(get_color(highlight_state, app.user_config.theme));
   f.render_widget(title_block, layout_chunk);
 
   let lines = Text::from(Span::styled(
     view.artists.clone(),
-    Style::default().fg(app.user_config.theme.playbar_text),
+    Style::default().fg(app.user_config.theme.playbar_text.into()),
   ));
   let artist = Paragraph::new(lines)
-    .style(Style::default().fg(app.user_config.theme.playbar_text))
+    .style(Style::default().fg(app.user_config.theme.playbar_text.into()))
     .block(
       Block::default().title(Span::styled(
         view.name.clone(),
         Style::default()
-          .fg(app.user_config.theme.selected)
+          .fg(app.user_config.theme.selected.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       )),
     );
@@ -1091,12 +1092,12 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
   let song_progress = LineGauge::default()
     .filled_style(
       Style::default()
-        .fg(app.user_config.theme.playbar_progress)
+        .fg(app.user_config.theme.playbar_progress.into())
         .add_modifier(modifier),
     )
     .unfilled_style(
       Style::default()
-        .fg(app.user_config.theme.playbar_background)
+        .fg(app.user_config.theme.playbar_background.into())
         .add_modifier(modifier),
     )
     .ratio(perc as f64 / 100.0)
@@ -1104,7 +1105,7 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     .unfilled_symbol(app.user_config.behavior.gauge_unfilled_icon.as_str())
     .label(Span::styled(
       &song_progress_label,
-      Style::default().fg(app.user_config.theme.playbar_progress_text),
+      Style::default().fg(app.user_config.theme.playbar_progress_text.into()),
     ));
   f.render_widget(song_progress, playbar_areas.progress_area);
 
@@ -1285,7 +1286,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       )];
       if let Some(message) = app.status_message.as_ref() {
         let msg_style = if app.status_message_is_error {
-          Style::default().fg(app.user_config.theme.error_text)
+          Style::default().fg(app.user_config.theme.error_text.into())
         } else {
           get_color(highlight_state, app.user_config.theme)
         };
@@ -1294,14 +1295,14 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       for seg in app.plugin_playbar_segments.values() {
         title_spans.push(Span::styled(
           format!(" | {}", seg),
-          Style::default().fg(app.user_config.theme.playbar_text),
+          Style::default().fg(app.user_config.theme.playbar_text.into()),
         ));
       }
 
       let title_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(Style::default().bg(app.user_config.theme.playbar_background))
+        .style(Style::default().bg(app.user_config.theme.playbar_background.into()))
         .title(Line::from(title_spans))
         .border_style(get_color(highlight_state, app.user_config.theme));
 
@@ -1355,16 +1356,16 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
       let lines = Text::from(Span::styled(
         display_artists,
-        Style::default().fg(app.user_config.theme.playbar_text),
+        Style::default().fg(app.user_config.theme.playbar_text.into()),
       ));
 
       let artist = Paragraph::new(lines)
-        .style(Style::default().fg(app.user_config.theme.playbar_text))
+        .style(Style::default().fg(app.user_config.theme.playbar_text.into()))
         .block(
           Block::default().title(Span::styled(
             track_name,
             Style::default()
-              .fg(app.user_config.theme.selected)
+              .fg(app.user_config.theme.selected.into())
               .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
           )),
         );
@@ -1388,12 +1389,12 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       let song_progress = LineGauge::default()
         .filled_style(
           Style::default()
-            .fg(app.user_config.theme.playbar_progress)
+            .fg(app.user_config.theme.playbar_progress.into())
             .add_modifier(modifier),
         )
         .unfilled_style(
           Style::default()
-            .fg(app.user_config.theme.playbar_background)
+            .fg(app.user_config.theme.playbar_background.into())
             .add_modifier(modifier),
         )
         .ratio(perc as f64 / 100.0)
@@ -1401,7 +1402,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .unfilled_symbol(app.user_config.behavior.gauge_unfilled_icon.as_str())
         .label(Span::styled(
           &song_progress_label,
-          Style::default().fg(app.user_config.theme.playbar_progress_text),
+          Style::default().fg(app.user_config.theme.playbar_progress_text.into()),
         ));
       f.render_widget(song_progress, progress_area);
 
@@ -1422,19 +1423,19 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             ctx.print(
               50.0,
               y_base,
-              Span::styled(heart.clone(), Style::default().fg(heart_color)),
+              Span::styled(heart.clone(), Style::default().fg(heart_color.into())),
             );
             // Left particle (lagging slightly)
             ctx.print(
               48.0,
               y_base - 3.0,
-              Span::styled(heart.clone(), Style::default().fg(heart_color)),
+              Span::styled(heart.clone(), Style::default().fg(heart_color.into())),
             );
             // Right particle (lagging slightly)
             ctx.print(
               52.0,
               y_base - 3.0,
-              Span::styled(heart.clone(), Style::default().fg(heart_color)),
+              Span::styled(heart.clone(), Style::default().fg(heart_color.into())),
             );
           });
 
@@ -1482,7 +1483,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       )];
       if let Some(message) = app.status_message.as_ref() {
         let msg_style = if app.status_message_is_error {
-          Style::default().fg(app.user_config.theme.error_text)
+          Style::default().fg(app.user_config.theme.error_text.into())
         } else {
           get_color(highlight_state, app.user_config.theme)
         };
@@ -1492,14 +1493,14 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       let title_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(Style::default().bg(app.user_config.theme.playbar_background))
+        .style(Style::default().bg(app.user_config.theme.playbar_background.into()))
         .title(Line::from(title_spans))
         .border_style(get_color(highlight_state, app.user_config.theme));
 
       f.render_widget(title_block, layout_chunk);
       f.render_widget(
         Paragraph::new("No active playback")
-          .style(Style::default().fg(app.user_config.theme.playbar_text)),
+          .style(Style::default().fg(app.user_config.theme.playbar_text.into())),
         artist_area,
       );
       draw_playbar_controls(f, app, playbar_areas.controls_area);
@@ -1510,16 +1511,16 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   if !drew_playbar {
     if let Some(message) = app.status_message.as_ref() {
       let msg_style = if app.status_message_is_error {
-        Style::default().fg(app.user_config.theme.error_text)
+        Style::default().fg(app.user_config.theme.error_text.into())
       } else {
-        Style::default().fg(app.user_config.theme.playbar_text)
+        Style::default().fg(app.user_config.theme.playbar_text.into())
       };
       let title_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(Style::default().bg(app.user_config.theme.playbar_background))
+        .style(Style::default().bg(app.user_config.theme.playbar_background.into()))
         .title(Span::styled(format!("Status: {}", message), msg_style))
-        .border_style(Style::default().fg(app.user_config.theme.inactive));
+        .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
       f.render_widget(title_block, layout_chunk);
     }
   }
@@ -1558,13 +1559,13 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   ];
 
   let instructions = Paragraph::new(instructions_text)
-    .style(Style::default().fg(app.user_config.theme.text))
+    .style(Style::default().fg(app.user_config.theme.text.into()))
     .wrap(Wrap { trim: true })
     .block(
       Block::default().borders(Borders::NONE).title(Span::styled(
         "Welcome to spotatui!",
         Style::default()
-          .fg(app.user_config.theme.active)
+          .fg(app.user_config.theme.active.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       )),
     );
@@ -1589,7 +1590,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
       let suffix = if is_active { "  (active)" } else { "" };
       let style = if is_active {
         Style::default()
-          .fg(app.user_config.theme.active)
+          .fg(app.user_config.theme.active.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
         app.user_config.theme.base_style()
@@ -1609,19 +1610,24 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   let source_list = List::new(source_items)
     .block(
       Block::default()
-        .title(Span::styled("Source", Style::default().fg(source_border)))
+        .title(Span::styled(
+          "Source",
+          Style::default().fg(source_border.into()),
+        ))
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(source_border)),
+        .border_style(Style::default().fg(source_border.into())),
     )
     .style(app.user_config.theme.base_style())
     .highlight_style(
       Style::default()
-        .fg(app.user_config.theme.active)
-        .bg(app.user_config.theme.inactive)
+        .fg(app.user_config.theme.active.into())
+        .bg(app.user_config.theme.inactive.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
-    .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
+    .highlight_symbol(
+      Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active.into())),
+    );
   f.render_stateful_widget(source_list, source_area, &mut source_state);
 
   // --- Devices panel (Spotify Connect only) ---
@@ -1640,7 +1646,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     "Devices"
   };
   let device_text_style = if non_spotify_active {
-    Style::default().fg(app.user_config.theme.inactive)
+    Style::default().fg(app.user_config.theme.inactive.into())
   } else {
     app.user_config.theme.base_style()
   };
@@ -1664,20 +1670,22 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
       Block::default()
         .title(Span::styled(
           devices_title,
-          Style::default().fg(devices_color),
+          Style::default().fg(devices_color.into()),
         ))
         .borders(Borders::ALL)
         .style(device_text_style)
-        .border_style(Style::default().fg(devices_color)),
+        .border_style(Style::default().fg(devices_color.into())),
     )
     .style(device_text_style)
     .highlight_style(
       Style::default()
-        .fg(app.user_config.theme.active)
-        .bg(app.user_config.theme.inactive)
+        .fg(app.user_config.theme.active.into())
+        .bg(app.user_config.theme.inactive.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
-    .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
+    .highlight_symbol(
+      Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active.into())),
+    );
   f.render_stateful_widget(device_list, devices_area, &mut state);
 }
 

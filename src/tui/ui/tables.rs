@@ -14,6 +14,7 @@ use rspotify::prelude::Id;
 
 use super::columns::{resolve_columns, ResolvedColumn, TableColumnSet};
 use super::util::{get_color, get_percentage_width, join_artist_names, millis_to_minutes};
+use crate::tui::theme::{EmphasisExt, ThemeExt};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TableId {
@@ -725,7 +726,7 @@ fn draw_table(
             cell.insert_str(0, &app.user_config.padded_playing_icon());
           }
           style = Style::default()
-            .fg(app.user_config.theme.active)
+            .fg(app.user_config.theme.active.into())
             .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
         }
 
@@ -742,7 +743,7 @@ fn draw_table(
           cell.insert_str(0, &app.user_config.padded_playing_icon());
         }
         style = Style::default()
-          .fg(app.user_config.theme.active)
+          .fg(app.user_config.theme.active.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
       }
       _ => {}
@@ -766,7 +767,7 @@ fn draw_table(
   let table = Table::new(rows, &widths)
     .header(
       Row::new(header.items.iter().map(|h| h.text.as_str()))
-        .style(Style::default().fg(app.user_config.theme.header)),
+        .style(Style::default().fg(app.user_config.theme.header.into())),
     )
     .block(
       Block::default()

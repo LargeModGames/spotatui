@@ -28,8 +28,9 @@ mod alsa_silence {
 use crate::cli;
 use crate::core::app::App;
 use crate::core::auth;
+use crate::core::banner::BANNER;
 use crate::core::config::ClientConfig;
-use crate::core::layout::MAX_PLAYBAR_ROWS;
+use crate::core::limits::MAX_PLAYBAR_ROWS;
 use crate::core::migrations::{
   apply_legacy_config_radio_station_migration, apply_legacy_config_runtime_state_migration,
   apply_legacy_state_file_migrations,
@@ -49,7 +50,6 @@ use crate::infra::network::requests::spotify_get_typed_compat_for_with_refresh;
 use crate::infra::network::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::infra::player;
-use crate::tui::banner::BANNER;
 
 use anyhow::{anyhow, Context, Result};
 use backtrace::Backtrace;
@@ -2897,7 +2897,7 @@ async fn route_decoded_windows_event(
 #[cfg(test)]
 mod tests {
   use super::{apply_configured_runtime_defaults, startup_device_decision, StartupDeviceEvent};
-  use crate::core::layout::MAX_PLAYBAR_ROWS;
+  use crate::core::limits::MAX_PLAYBAR_ROWS;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
   use crate::core::user_config::{StartupBehavior, UserConfig};
   use rspotify::model::{device::Device, DeviceType};

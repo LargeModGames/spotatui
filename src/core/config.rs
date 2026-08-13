@@ -1,4 +1,4 @@
-use crate::tui::banner::BANNER;
+use crate::core::banner::BANNER;
 use anyhow::{anyhow, Context, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{

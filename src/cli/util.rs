@@ -267,7 +267,7 @@ impl Format {
       Self::Position((curr, duration)) => {
         let current_progress_ms = *curr as u128;
         let duration = Duration::from_millis(*duration as u64);
-        crate::tui::ui::util::display_track_progress(current_progress_ms, duration)
+        crate::core::format::display_track_progress(current_progress_ms, duration)
       }
       Self::Flags((r, s, l)) => {
         let like = if *l {

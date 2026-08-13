@@ -307,7 +307,7 @@ pub(super) fn install_api(
   {
     let shared = shared.clone();
     let set_theme = lua.create_function(move |_, tbl: mlua::Table| {
-      let mut pairs: Vec<(String, ratatui::style::Color)> = Vec::new();
+      let mut pairs: Vec<(String, crate::core::theme::Color)> = Vec::new();
       for pair in tbl.pairs::<String, String>() {
         let (field, color_str) = pair?;
         // Validate field name

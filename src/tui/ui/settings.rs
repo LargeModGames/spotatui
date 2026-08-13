@@ -1,4 +1,5 @@
 use crate::core::app::{App, SettingValue, SettingsCategory};
+use crate::tui::theme::{EmphasisExt, ThemeExt};
 use ratatui::{
   layout::{Alignment, Constraint, Layout, Rect},
   style::{Modifier, Style},
@@ -46,7 +47,7 @@ fn draw_category_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
     )
     .highlight_style(
       Style::default()
-        .fg(app.user_config.theme.selected)
+        .fg(app.user_config.theme.selected.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .style(app.user_config.theme.base_style());
@@ -110,20 +111,20 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
       // Build the line with name and value
       let name_style = if is_selected {
         Style::default()
-          .fg(app.user_config.theme.selected)
+          .fg(app.user_config.theme.selected.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
-        Style::default().fg(app.user_config.theme.text)
+        Style::default().fg(app.user_config.theme.text.into())
       };
 
       let value_style = if is_editing {
         Style::default()
-          .fg(app.user_config.theme.hint)
+          .fg(app.user_config.theme.hint.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else if is_selected {
-        Style::default().fg(app.user_config.theme.selected)
+        Style::default().fg(app.user_config.theme.selected.into())
       } else {
-        Style::default().fg(app.user_config.theme.inactive)
+        Style::default().fg(app.user_config.theme.inactive.into())
       };
 
       let line = Line::from(vec![
@@ -147,17 +148,17 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(title)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(app.user_config.theme.inactive)),
+        .border_style(Style::default().fg(app.user_config.theme.inactive.into())),
     )
     .highlight_style(
       Style::default()
-        .fg(app.user_config.theme.selected)
+        .fg(app.user_config.theme.selected.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol(
       Line::from("▶ ").style(
         Style::default()
-          .fg(app.user_config.theme.selected)
+          .fg(app.user_config.theme.selected.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       ),
     );
@@ -213,15 +214,15 @@ fn draw_settings_help(f: &mut Frame<'_>, app: &App, area: Rect) {
   let help = Paragraph::new(help_text)
     .style(
       Style::default()
-        .fg(app.user_config.theme.hint)
-        .bg(app.user_config.theme.background),
+        .fg(app.user_config.theme.hint.into())
+        .bg(app.user_config.theme.background.into()),
     )
     .block(
       Block::default()
         .borders(Borders::ALL)
         .title("Controls")
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(app.user_config.theme.inactive)),
+        .border_style(Style::default().fg(app.user_config.theme.inactive.into())),
     );
 
   f.render_widget(help, area);
@@ -245,7 +246,7 @@ fn draw_unsaved_changes_prompt(f: &mut Frame<'_>, app: &App) {
     .title(" Unsaved Settings ")
     .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
-    .border_style(Style::default().fg(app.user_config.theme.active));
+    .border_style(Style::default().fg(app.user_config.theme.active.into()));
   f.render_widget(block, rect);
 
   let [message_area, buttons_area, hint_area] = rect.layout(
@@ -270,23 +271,23 @@ fn draw_unsaved_changes_prompt(f: &mut Frame<'_>, app: &App) {
   let yes = Paragraph::new("[ Yes ]")
     .alignment(Alignment::Center)
     .style(Style::default().fg(if yes_selected {
-      app.user_config.theme.hovered
+      app.user_config.theme.hovered.into()
     } else {
-      app.user_config.theme.inactive
+      app.user_config.theme.inactive.into()
     }));
   f.render_widget(yes, yes_area);
 
   let no = Paragraph::new("[ No ]")
     .alignment(Alignment::Center)
     .style(Style::default().fg(if yes_selected {
-      app.user_config.theme.inactive
+      app.user_config.theme.inactive.into()
     } else {
-      app.user_config.theme.hovered
+      app.user_config.theme.hovered.into()
     }));
   f.render_widget(no, no_area);
 
   let hint = Paragraph::new("Y: Yes | N: No | Enter: Select | Esc: Cancel")
     .alignment(Alignment::Center)
-    .style(Style::default().fg(app.user_config.theme.inactive));
+    .style(Style::default().fg(app.user_config.theme.inactive.into()));
   f.render_widget(hint, hint_area);
 }

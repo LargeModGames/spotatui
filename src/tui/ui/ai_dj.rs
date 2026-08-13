@@ -17,6 +17,7 @@ use crate::core::app::{ActiveBlock, App};
 use crate::infra::dj::setup::DjSetupStep;
 use crate::infra::dj::DjSpeaker;
 use crate::tui::event::Key;
+use crate::tui::theme::{EmphasisExt, ThemeExt};
 use crate::tui::ui::popups::centered_modal_rect;
 use crate::tui::ui::util::get_color;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -167,7 +168,7 @@ fn hint_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     rows.push(current);
   }
 
-  let style = Style::default().fg(app.user_config.theme.hint);
+  let style = Style::default().fg(app.user_config.theme.hint.into());
   rows
     .into_iter()
     .map(|line| Line::from(Span::styled(line, style)))
@@ -215,16 +216,16 @@ fn empty_hint(app: &App) -> Vec<Line<'static>> {
   let mut lines = vec![
     Line::from(Span::styled(
       "Ask the DJ for something, or turn auto-queue on.",
-      Style::default().fg(theme.text),
+      Style::default().fg(theme.text.into()),
     )),
     Line::from(""),
     Line::from(Span::styled(
       "\"something chill for focusing\"",
-      Style::default().fg(theme.inactive),
+      Style::default().fg(theme.inactive.into()),
     )),
     Line::from(Span::styled(
       "\"more like this but slower\"",
-      Style::default().fg(theme.inactive),
+      Style::default().fg(theme.inactive.into()),
     )),
     Line::from(""),
   ];
@@ -236,7 +237,7 @@ fn empty_hint(app: &App) -> Vec<Line<'static>> {
   if let Some(label) = crate::infra::dj::setup::active_label(&app.user_config.behavior) {
     lines.push(Line::from(Span::styled(
       format!("Using {label}."),
-      Style::default().fg(theme.inactive),
+      Style::default().fg(theme.inactive.into()),
     )));
   }
   lines.push(Line::from(Span::styled(
@@ -244,7 +245,7 @@ fn empty_hint(app: &App) -> Vec<Line<'static>> {
       "{} to change which AI and model the DJ uses.",
       app.user_config.keys.dj_pick_model
     ),
-    Style::default().fg(theme.inactive),
+    Style::default().fg(theme.inactive.into()),
   )));
   lines
 }
@@ -272,9 +273,9 @@ pub(crate) fn wrap_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
 
   for line in &app.dj.transcript {
     let (prefix, style) = match line.speaker {
-      DjSpeaker::User => ("you  ", Style::default().fg(theme.active)),
-      DjSpeaker::Dj => ("dj   ", Style::default().fg(theme.text)),
-      DjSpeaker::System => ("     ", Style::default().fg(theme.inactive)),
+      DjSpeaker::User => ("you  ", Style::default().fg(theme.active.into())),
+      DjSpeaker::Dj => ("dj   ", Style::default().fg(theme.text.into())),
+      DjSpeaker::System => ("     ", Style::default().fg(theme.inactive.into())),
     };
     let body_width = width.saturating_sub(prefix.len()).max(1);
     for (index, chunk) in wrap_text(&line.text, body_width).into_iter().enumerate() {
@@ -286,7 +287,7 @@ pub(crate) fn wrap_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
         " ".repeat(prefix.len())
       };
       rows.push(Line::from(vec![
-        Span::styled(label, Style::default().fg(theme.inactive)),
+        Span::styled(label, Style::default().fg(theme.inactive.into())),
         Span::styled(chunk, style),
       ]));
     }
@@ -302,7 +303,7 @@ pub(crate) fn wrap_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
     rows.push(Line::from(Span::styled(
       label,
       Style::default()
-        .fg(theme.inactive)
+        .fg(theme.inactive.into())
         .add_modifier(Modifier::ITALIC),
     )));
   }
@@ -399,15 +400,15 @@ fn option_lines(
   };
   let style = if selected {
     Style::default()
-      .fg(theme.active)
+      .fg(theme.active.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   } else if ready {
-    Style::default().fg(theme.text)
+    Style::default().fg(theme.text.into())
   } else {
     // Dimmed but still selectable: "I am about to install it" is a real answer.
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
-  let note_style = Style::default().fg(theme.inactive);
+  let note_style = Style::default().fg(theme.inactive.into());
   // Pad the label out to the note column so the notes line up down the list, but
   // never past the modal's own edge: on a narrow modal the padding is what would
   // push the label itself into truncation.
@@ -452,7 +453,7 @@ fn draw_setup(f: &mut Frame, app: &App, layout_chunk: Rect) {
     return;
   };
   let theme = app.user_config.theme;
-  let hint_style = Style::default().fg(theme.hint);
+  let hint_style = Style::default().fg(theme.hint.into());
 
   // Two passes over `centered_modal_rect`, because each axis depends on the other:
   // the width decides how many lines a row takes (a note that does not fit moves to
@@ -507,11 +508,11 @@ fn draw_setup(f: &mut Frame, app: &App, layout_chunk: Rect) {
     rows.push(Line::from(vec![
       Span::styled(
         format!("  {}", setup.custom),
-        Style::default().fg(theme.text),
+        Style::default().fg(theme.text.into()),
       ),
       // A painted caret, the same idiom `draw_prompt` uses: the hardware cursor is
       // owned by the search box.
-      Span::styled("▏", Style::default().fg(theme.active)),
+      Span::styled("▏", Style::default().fg(theme.active.into())),
     ]));
     row_spans.push((0, rows.len()));
   }
@@ -573,12 +574,12 @@ fn draw_setup(f: &mut Frame, app: &App, layout_chunk: Rect) {
     .title(Span::styled(
       title,
       Style::default()
-        .fg(theme.header)
+        .fg(theme.header.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(theme.base_style())
-    .border_style(Style::default().fg(theme.active));
+    .border_style(Style::default().fg(theme.active.into()));
   let inner = block.inner(rect);
   f.render_widget(block, rect);
   if inner.width == 0 || inner.height == 0 {
@@ -687,10 +688,13 @@ fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
     })
     .collect();
 
-  let mut spans = vec![Span::styled(visible, Style::default().fg(theme.text))];
+  let mut spans = vec![Span::styled(
+    visible,
+    Style::default().fg(theme.text.into()),
+  )];
   if focused {
     // A painted caret: the hardware cursor is owned by the search box.
-    spans.push(Span::styled("▏", Style::default().fg(theme.active)));
+    spans.push(Span::styled("▏", Style::default().fg(theme.active.into())));
   }
   f.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
@@ -699,14 +703,14 @@ fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
 mod tests {
   use super::*;
   use crate::core::app::RouteId;
+  use crate::core::geometry::Viewport;
   use crate::infra::dj::DjLine;
   use ratatui::backend::TestBackend;
-  use ratatui::layout::Size;
   use ratatui::Terminal;
 
   fn app_with(lines: Vec<DjLine>, width: u16, height: u16) -> App {
     let mut app = App::default();
-    app.size = Size { width, height };
+    app.size = Viewport { width, height };
     app.dj.transcript = lines;
     app.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
     app

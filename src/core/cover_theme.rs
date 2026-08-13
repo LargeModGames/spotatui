@@ -5,7 +5,7 @@
 //! Everything here is pure pixel/color math on data the cover-art pipeline
 //! already decodes, so it behaves identically on every platform and terminal.
 
-use ratatui::style::Color;
+use crate::core::theme::Color;
 use std::time::Duration;
 
 use crate::core::app::ease_in_out_cubic;

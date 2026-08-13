@@ -1,6 +1,6 @@
 use crate::core::app::{library_options, ActiveBlock, App};
-use crate::core::layout::{is_wide_layout, library_constraints, split_input_help_and_settings};
 use crate::core::source::Source;
+use crate::tui::layout::{is_wide_layout, library_constraints, split_input_help_and_settings};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   Frame,

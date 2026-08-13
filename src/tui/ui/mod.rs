@@ -20,7 +20,7 @@ pub mod tables;
 pub mod util;
 
 use crate::core::app::{App, RouteId};
-use crate::core::layout::{compute_main_layout, is_wide_layout};
+use crate::tui::layout::{compute_main_layout, is_wide_layout};
 use ratatui::{layout::Rect, Frame};
 
 pub use self::artist::draw_artist_albums;
@@ -146,11 +146,12 @@ fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
 mod tests {
   use super::*;
   use crate::core::app::ActiveBlock;
-  use ratatui::{backend::TestBackend, buffer::Buffer, layout::Size, Terminal};
+  use crate::core::geometry::Viewport;
+  use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 
   fn render(width: u16, height: u16) -> (App, Buffer) {
     let mut app = App::default();
-    app.size = Size { width, height };
+    app.size = Viewport { width, height };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| draw_main_layout(f, &app)).unwrap();
@@ -212,7 +213,7 @@ mod tests {
   #[test]
   fn stats_route_renders_period_tabs() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };

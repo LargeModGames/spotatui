@@ -1,4 +1,5 @@
 use crate::core::app::{App, CreatePlaylistFocus, CreatePlaylistStage};
+use crate::tui::theme::{EmphasisExt, ThemeExt};
 use ratatui::{
   layout::{Constraint, Direction, Layout, Rect},
   style::{Modifier, Style},
@@ -32,12 +33,12 @@ fn draw_name_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .title(Span::styled(
       "Create Playlist (Esc to cancel)",
       Style::default()
-        .fg(theme.header)
+        .fg(theme.header.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(theme.base_style())
-    .border_style(Style::default().fg(theme.active));
+    .border_style(Style::default().fg(theme.active.into()));
   f.render_widget(block, area);
 
   let inner = Layout::default()
@@ -57,7 +58,7 @@ fn draw_name_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
   let input = Paragraph::new(name_text).style(theme.base_style()).block(
     Block::default()
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme.active)),
+      .border_style(Style::default().fg(theme.active.into())),
   );
   f.render_widget(input, inner[1]);
   f.set_cursor_position((
@@ -66,7 +67,7 @@ fn draw_name_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
   ));
 
   let hint = Paragraph::new("Press Enter to continue, Esc to cancel")
-    .style(Style::default().fg(theme.inactive));
+    .style(Style::default().fg(theme.inactive.into()));
   f.render_widget(hint, inner[2]);
 }
 
@@ -82,12 +83,12 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .title(Span::styled(
       title,
       Style::default()
-        .fg(theme.header)
+        .fg(theme.header.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(theme.base_style())
-    .border_style(Style::default().fg(theme.active));
+    .border_style(Style::default().fg(theme.active.into()));
   f.render_widget(block, area);
 
   let inner = Layout::default()
@@ -99,15 +100,15 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
   // Search input
   let search_text: String = app.create_playlist_search_input.iter().collect();
   let search_border_style = if app.create_playlist_focus == CreatePlaylistFocus::SearchInput {
-    Style::default().fg(theme.active)
+    Style::default().fg(theme.active.into())
   } else {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
   let search_input = Paragraph::new(search_text).style(theme.base_style()).block(
     Block::default()
       .title(Span::styled(
         "Search (Enter to search)",
-        Style::default().fg(theme.header),
+        Style::default().fg(theme.header.into()),
       ))
       .borders(Borders::ALL)
       .border_style(search_border_style),
@@ -128,9 +129,9 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
 
   // Left: search results
   let results_border_style = if app.create_playlist_focus == CreatePlaylistFocus::SearchResults {
-    Style::default().fg(theme.active)
+    Style::default().fg(theme.active.into())
   } else {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
   let result_items: Vec<ListItem> = app
     .create_playlist_search_results
@@ -153,14 +154,14 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
       Block::default()
         .title(Span::styled(
           "Results (Enter to add)",
-          Style::default().fg(theme.header),
+          Style::default().fg(theme.header.into()),
         ))
         .borders(Borders::ALL)
         .border_style(results_border_style),
     )
     .highlight_style(
       Style::default()
-        .fg(theme.selected)
+        .fg(theme.selected.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .style(theme.base_style());
@@ -168,9 +169,9 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
 
   // Right: added tracks
   let added_border_style = if app.create_playlist_focus == CreatePlaylistFocus::AddedTracks {
-    Style::default().fg(theme.active)
+    Style::default().fg(theme.active.into())
   } else {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
 
   let added_items: Vec<ListItem> = app
@@ -198,14 +199,14 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
       Block::default()
         .title(Span::styled(
           added_tracks_title,
-          Style::default().fg(theme.header),
+          Style::default().fg(theme.header.into()),
         ))
         .borders(Borders::ALL)
         .border_style(added_border_style),
     )
     .highlight_style(
       Style::default()
-        .fg(theme.selected)
+        .fg(theme.selected.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .style(theme.base_style());

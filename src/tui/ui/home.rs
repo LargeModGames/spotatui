@@ -1,5 +1,5 @@
 use crate::core::app::{ActiveBlock, App};
-use crate::tui::banner::BANNER;
+use crate::core::banner::BANNER;
 use colorgrad::{self, Gradient};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use unicode_width::UnicodeWidthStr;
 
 use super::util::get_color;
+use crate::tui::theme::ThemeExt;
 
 #[derive(Clone, PartialEq)]
 struct ChangelogCacheKey {
@@ -26,11 +27,11 @@ struct ChangelogCacheKey {
 impl ChangelogCacheKey {
   fn from_theme(theme: &crate::core::user_config::Theme, changelog_width: u16) -> Self {
     Self {
-      text: theme.text,
-      hint: theme.hint,
-      inactive: theme.inactive,
-      banner: theme.banner,
-      active: theme.active,
+      text: theme.text.into(),
+      hint: theme.hint.into(),
+      inactive: theme.inactive.into(),
+      banner: theme.banner.into(),
+      active: theme.active.into(),
       changelog_width,
     }
   }
@@ -74,7 +75,10 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       app.animation_tick,
     ))
   } else {
-    Text::styled(BANNER, Style::default().fg(app.user_config.theme.banner))
+    Text::styled(
+      BANNER,
+      Style::default().fg(app.user_config.theme.banner.into()),
+    )
   };
   let base_changelog_lines =
     get_changelog_cache(&app.user_config.theme, changelog_area.width, &app.log_path);
@@ -93,7 +97,7 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     if streaks.current_days > 0 {
       let mut spans = vec![Span::styled(
         format!("{}-day listening streak", streaks.current_days),
-        Style::default().fg(app.user_config.theme.active),
+        Style::default().fg(app.user_config.theme.active.into()),
       )];
       if streaks.today_ms > 0 {
         spans.push(Span::styled(
@@ -101,12 +105,12 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             " · {} today",
             crate::infra::history::format_duration(streaks.today_ms)
           ),
-          Style::default().fg(app.user_config.theme.hint),
+          Style::default().fg(app.user_config.theme.hint.into()),
         ));
       } else {
         spans.push(Span::styled(
           " · listen today to keep it!",
-          Style::default().fg(app.user_config.theme.hint),
+          Style::default().fg(app.user_config.theme.hint.into()),
         ));
       }
       changelog_lines.push(Line::from(spans));
@@ -128,14 +132,14 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     "Global song counter unavailable (telemetry disabled in this build).".to_string()
   };
 
-  let counter_style = Style::default().fg(app.user_config.theme.hint);
+  let counter_style = Style::default().fg(app.user_config.theme.hint.into());
   changelog_lines.push(Line::from(vec![Span::styled(
     counter_message,
     counter_style,
   )]));
   changelog_lines.push(Line::from(vec![Span::styled(
     "Join the community on Discord: https://spotatui.com/discord",
-    Style::default().fg(app.user_config.theme.active),
+    Style::default().fg(app.user_config.theme.active.into()),
   )]));
   changelog_lines.push(Line::from(""));
 
@@ -224,7 +228,11 @@ fn borrow_line<'a>(line: &'a Line<'static>) -> Line<'a> {
 }
 
 struct BannerGradientCache {
-  key: (Color, Color, Color),
+  key: (
+    crate::core::theme::Color,
+    crate::core::theme::Color,
+    crate::core::theme::Color,
+  ),
   gradient: colorgrad::LinearGradient,
 }
 
@@ -254,9 +262,9 @@ fn build_banner_gradient(theme: &crate::core::user_config::Theme) -> colorgrad::
     }
   }
 
-  let c1 = to_rgba(theme.banner);
-  let c2 = to_rgba(theme.hovered);
-  let c3 = to_rgba(theme.active);
+  let c1 = to_rgba(theme.banner.into());
+  let c2 = to_rgba(theme.hovered.into());
+  let c3 = to_rgba(theme.active.into());
 
   // Build a looping gradient: banner → hovered → active → banner
   // This ensures a smooth wrap-around for continuous animation
@@ -550,7 +558,7 @@ mod tests {
     // so an ANSI color (Terminal preset) passes through to the terminal.
     app.user_config.behavior.banner_gradient = false;
     app.user_config.theme = crate::core::user_config::ThemePreset::Terminal.to_theme();
-    assert_eq!(banner_fg(&app), app.user_config.theme.banner);
+    assert_eq!(banner_fg(&app), app.user_config.theme.banner.into());
   }
 
   #[test]
@@ -594,7 +602,7 @@ fn build_changelog_lines(
     &mut lines,
     &[StyledSegment {
       text: format!("Log located in {}", log_path),
-      style: Style::default().fg(theme.hint),
+      style: Style::default().fg(theme.hint.into()),
     }],
   );
 
@@ -604,7 +612,7 @@ fn build_changelog_lines(
       text:
         "Please report any bugs or missing features to https://github.com/LargeModGames/spotatui"
           .to_string(),
-      style: Style::default().fg(theme.hint),
+      style: Style::default().fg(theme.hint.into()),
     }],
   );
   lines.push(Line::from(""));
@@ -612,16 +620,16 @@ fn build_changelog_lines(
   for line in changelog.lines() {
     if line.starts_with("- ") {
       let content = line.trim_start_matches("- ");
-      let segments = parse_markdown_inline(content, Style::default().fg(theme.text));
+      let segments = parse_markdown_inline(content, Style::default().fg(theme.text.into()));
       let bullet_prefix = "  • ";
       let indent = " ".repeat(UnicodeWidthStr::width(bullet_prefix));
       lines.extend(wrap_segments_with_indent(
         &segments,
         max_width,
         bullet_prefix,
-        Style::default().fg(theme.inactive),
+        Style::default().fg(theme.inactive.into()),
         &indent,
-        Style::default().fg(theme.text),
+        Style::default().fg(theme.text.into()),
       ));
       continue;
     }
@@ -632,7 +640,7 @@ fn build_changelog_lines(
         &[StyledSegment {
           text: line.trim_start_matches("# ").to_string(),
           style: Style::default()
-            .fg(theme.banner)
+            .fg(theme.banner.into())
             .add_modifier(Modifier::BOLD),
         }],
       );
@@ -642,12 +650,12 @@ fn build_changelog_lines(
         &[StyledSegment {
           text: format!("═══ {} ═══", line.trim_start_matches("## ")),
           style: Style::default()
-            .fg(theme.active)
+            .fg(theme.active.into())
             .add_modifier(Modifier::BOLD),
         }],
       );
     } else {
-      let segments = parse_markdown_inline(line, Style::default().fg(theme.text));
+      let segments = parse_markdown_inline(line, Style::default().fg(theme.text.into()));
       push_wrapped(&mut lines, &segments);
     }
   }

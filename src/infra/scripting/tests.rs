@@ -1141,7 +1141,7 @@ fn popup_styled_table_lines() {
     ScriptEffect::ShowPopup(p) => {
       assert_eq!(p.lines.len(), 1);
       assert_eq!(p.lines[0].text, "bold red");
-      assert_eq!(p.lines[0].fg, Some(ratatui::style::Color::Red));
+      assert_eq!(p.lines[0].fg, Some(crate::core::theme::Color::Red));
       assert!(p.lines[0].bold);
       assert!(!p.lines[0].italic);
     }
@@ -1233,7 +1233,7 @@ fn set_theme_valid_field_queues_effect() {
     ScriptEffect::SetTheme(pairs) => {
       assert_eq!(pairs.len(), 1);
       assert_eq!(pairs[0].0, "playbar_text");
-      assert_eq!(pairs[0].1, ratatui::style::Color::Magenta);
+      assert_eq!(pairs[0].1, crate::core::theme::Color::Magenta);
     }
     other => panic!("unexpected: {:?}", std::mem::discriminant(&other)),
   }
@@ -1285,12 +1285,12 @@ mod theme_effect_tests {
       .borrow_mut()
       .push(ScriptEffect::SetTheme(vec![(
         "playbar_text".to_string(),
-        ratatui::style::Color::Magenta,
+        crate::core::theme::Color::Magenta,
       )]));
     engine.drain_effects(&mut app);
     assert_eq!(
       app.user_config.theme.playbar_text,
-      ratatui::style::Color::Magenta
+      crate::core::theme::Color::Magenta
     );
   }
 }
@@ -3267,7 +3267,7 @@ mod config_tests {
   fn config_exposes_theme_and_behavior_scalars() {
     let mut engine = ScriptEngine::new().unwrap();
     let (mut app, _rx) = make_app();
-    app.user_config.theme.playbar_text = ratatui::style::Color::Magenta;
+    app.user_config.theme.playbar_text = crate::core::theme::Color::Magenta;
     app.user_config.behavior.seek_milliseconds = 12345;
     engine.on_tick(&mut app);
 
