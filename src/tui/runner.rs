@@ -382,6 +382,29 @@ fn dispatch_key(key: Key, app: &mut App) -> bool {
   false
 }
 
+/// Bars the analyzer should produce for the visualizer block's inner width.
+/// Each style has its own geometry; the analyzer clamps counts its sample rate
+/// cannot support, and renderers draw from `bands.len()`, so a stale count
+/// during a resize race only mis-sizes one frame.
+/// The only production caller is behind the audio-viz feature gates; slim
+/// builds still compile (and test) the function itself.
+#[allow(dead_code)]
+fn visualizer_bar_count(
+  style: crate::core::user_config::VisualizerStyle,
+  inner_width: u16,
+) -> usize {
+  use crate::core::user_config::VisualizerStyle;
+  match style {
+    // Braille has 2x horizontal resolution: one real bar per half-cell.
+    VisualizerStyle::BarGraph => (inner_width as usize * 2).max(2),
+    // Capped at ~40 bars (the classic cava look at a normal font); the
+    // renderer widens bars to fill the terminal, so dense fonts get chunky
+    // columns instead of one pencil bar per 3 columns. Below ~120 columns
+    // this degrades to exactly cava's auto rule (bar width 2, spacing 1).
+    VisualizerStyle::Cava => ((inner_width as usize + 1) / 3).clamp(2, 40),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -396,6 +419,30 @@ mod tests {
       crate::core::user_config::UserConfig::new(),
       Some(SystemTime::now()),
     )
+  }
+
+  #[test]
+  fn visualizer_bar_count_follows_each_styles_geometry() {
+    use crate::core::user_config::VisualizerStyle;
+
+    // BarGraph gets two Braille bars per cell.
+    assert_eq!(visualizer_bar_count(VisualizerStyle::BarGraph, 100), 200);
+
+    // Cava: one bar per 3 columns (bar width 2 + spacing 1).
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 80), 27);
+  }
+
+  #[test]
+  fn visualizer_bar_count_clamps_degenerate_widths() {
+    use crate::core::user_config::VisualizerStyle;
+
+    // Zero-width terminals still request a drawable minimum.
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 0), 2);
+    assert_eq!(visualizer_bar_count(VisualizerStyle::BarGraph, 0), 2);
+
+    // The ~40-bar cap holds on wide terminals and dense fonts.
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 4000), 40);
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 216), 40);
   }
 
   #[test]
@@ -1393,13 +1440,21 @@ pub async fn start_ui(
             }
 
             if let Some(ref capture) = audio_capture {
-              if let Some(spectrum) = capture.get_spectrum() {
+              // Visualizer block inner width: the frame minus the main layout
+              // margin on both sides and the block's two border columns.
+              let margin = crate::core::layout::main_layout_margin(&app);
+              let inner_width = app.size.width.saturating_sub(margin * 2 + 2);
+              let desired_bars =
+                visualizer_bar_count(app.user_config.behavior.visualizer_style, inner_width);
+              if let Some(spectrum) = capture.get_spectrum(desired_bars) {
                 app.spectrum_data = Some(app::SpectrumData {
                   bands: spectrum.bands,
                   peak: spectrum.peak,
                 });
-                app.audio_capture_active = capture.is_active();
               }
+              // Kept outside the spectrum arm: a dead stream must drop the
+              // "Capturing audio" status instead of freezing it on.
+              app.audio_capture_active = capture.is_active();
             }
           } else if audio_capture.is_some() {
             audio_capture = None;

@@ -67,7 +67,7 @@ pub struct TrackTable {
 /// Spectrum data for local audio visualization
 #[derive(Clone, Default)]
 pub struct SpectrumData {
-  pub bands: [f32; 12],
+  pub bands: Vec<f32>,
   pub peak: f32,
 }
 

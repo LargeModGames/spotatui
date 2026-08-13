@@ -31,7 +31,7 @@ impl AudioCaptureManager {
     // Get a compatible config that won't interfere with playback
     let config = Self::get_compatible_config(&device)?;
 
-    let analyzer = create_shared_analyzer();
+    let analyzer = create_shared_analyzer(config.sample_rate);
     let active = Arc::new(AtomicBool::new(true));
 
     let stream = Self::build_stream(&device, &config, analyzer.clone(), active.clone())?;
@@ -48,13 +48,15 @@ impl AudioCaptureManager {
     })
   }
 
-  /// Get the current spectrum data
-  pub fn get_spectrum(&self) -> Option<SpectrumData> {
+  /// Get the current spectrum data, sized to `desired_bars` (the analyzer
+  /// rebuilds its plan when the count changes, and clamps unsupportable counts)
+  pub fn get_spectrum(&self, desired_bars: usize) -> Option<SpectrumData> {
     if !self.active.load(Ordering::Relaxed) {
       return None;
     }
 
     if let Ok(mut analyzer) = self.analyzer.lock() {
+      analyzer.set_bars(desired_bars);
       Some(analyzer.process())
     } else {
       None
@@ -184,14 +186,19 @@ impl AudioCaptureManager {
     let active_clone = active.clone();
 
     let data_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-      // Convert to mono by averaging channels
-      let mono_samples: Vec<f32> = data
+      // Interleaved stereo frames for the analyzer, matching cava's default
+      // stereo pipeline: channels 0/1 pass through, a mono device duplicates.
+      let stereo_samples: Vec<f32> = data
         .chunks(channels)
-        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+        .flat_map(|frame| {
+          let left = frame.first().copied().unwrap_or(0.0);
+          let right = frame.get(1).copied().unwrap_or(left);
+          [left, right]
+        })
         .collect();
 
       if let Ok(mut analyzer) = analyzer.lock() {
-        analyzer.push_samples(&mono_samples);
+        analyzer.push_samples(&stereo_samples);
       }
     };
 

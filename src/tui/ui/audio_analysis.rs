@@ -2,16 +2,14 @@ use crate::core::app::App;
 use crate::core::layout::main_layout_margin;
 use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle};
 use ratatui::{
-  buffer::Buffer,
   layout::{Constraint, Layout, Rect},
-  style::Style,
+  style::{Color, Style},
   text::{Line, Span},
-  widgets::{Block, Borders, Paragraph, Widget},
+  widgets::{Block, Borders, Paragraph},
   Frame,
 };
 
 use tui_bar_graph::{BarGraph, BarStyle, ColorMode};
-use tui_equalizer::{Band, Equalizer};
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
   let margin = main_layout_margin(app);
@@ -76,13 +74,18 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
 
     // Render the appropriate visualizer based on user setting
     match visualizer_style {
-      VisualizerStyle::Equalizer => {
-        f.render_widget(bar_chart_block, visualizer_area);
-        render_equalizer(f, &spectrum.bands, inner_area);
-      }
       VisualizerStyle::BarGraph => {
         f.render_widget(bar_chart_block, visualizer_area);
         render_bar_graph(f, &spectrum.bands, inner_area);
+      }
+      VisualizerStyle::Cava => {
+        f.render_widget(bar_chart_block, visualizer_area);
+        render_cava(
+          f,
+          &spectrum.bands,
+          inner_area,
+          app.user_config.theme.analysis_bar,
+        );
       }
     }
   } else {
@@ -113,110 +116,6 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
   }
 }
 
-/// Render equalizer-style visualization using tui-equalizer
-/// https://github.com/joshka/tui-equalizer
-///
-/// The tui-equalizer widget renders each band at 2 chars wide, left-aligned.
-/// We pass the 12 frequency bands directly for a clean look.
-fn render_equalizer(f: &mut Frame<'_>, bands: &[f32], area: Rect) {
-  if bands.is_empty() || area.width == 0 || area.height == 0 {
-    return;
-  }
-
-  // tui-equalizer renders best (and fastest) with a small, fixed number of bands.
-  // We deliberately keep this to the raw analyzer band count (12).
-  let eq_bands: Vec<Band> = bands
-    .iter()
-    .map(|&v| {
-      // Visually boost quieter signals so the equalizer "reaches" higher.
-      const EQ_GAMMA: f64 = 0.65; // < 1.0 boosts lows
-      const EQ_GAIN: f64 = 1.35; // overall gain
-      let value = (v.clamp(0.0, 1.0) as f64).powf(EQ_GAMMA) * EQ_GAIN;
-      Band::from(value.clamp(0.0, 1.0))
-    })
-    .collect();
-
-  let equalizer = Equalizer {
-    bands: eq_bands,
-    brightness: 1.0,
-  };
-
-  // Cap height to keep rendering fast on very tall terminals.
-  const MAX_EQ_HEIGHT: u16 = 24;
-  let render_height = area.height.clamp(1, MAX_EQ_HEIGHT);
-  let base_width = (bands.len() as u16) * 2;
-
-  // Render into a small off-screen buffer, then "stretch" each band horizontally by repeating it.
-  // This fills the available width without generating additional (interpolated) bands.
-  let tmp_area = Rect::new(0, 0, base_width, render_height);
-  let mut tmp = Buffer::empty(tmp_area);
-  equalizer.render(tmp_area, &mut tmp);
-
-  // tui-equalizer draws only the left cell of each 2-cell band. Duplicate it into the right cell
-  // so we don't alternate colored/default cells (a major perf hit on Windows terminals).
-  for band_index in 0..(bands.len() as u16) {
-    let left_x = band_index * 2;
-    let right_x = left_x + 1;
-    for y in 0..render_height {
-      let left_cell = tmp[(left_x, y)].clone();
-      tmp[(right_x, y)] = left_cell;
-    }
-  }
-
-  let target_width = area.width & !1;
-  if target_width < base_width {
-    // Too narrow to fit all bands; just render what we can centered.
-    let render_width = target_width.max(2);
-    let render_x = area.x + area.width.saturating_sub(render_width) / 2;
-    let render_area = Rect {
-      x: render_x,
-      y: area.y + area.height.saturating_sub(render_height),
-      width: render_width,
-      height: render_height,
-    };
-    let buf = f.buffer_mut();
-    for y in 0..render_height {
-      for x in 0..render_width {
-        buf[(render_area.x + x, render_area.y + y)] = tmp[(x, y)].clone();
-      }
-    }
-    return;
-  }
-
-  // Distribute width evenly across bands in 2-cell "pairs" so each band stays aligned.
-  let pairs_total = (target_width / 2) as usize;
-  let band_count = bands.len();
-  let pairs_per_band = pairs_total / band_count;
-  if pairs_per_band == 0 {
-    return;
-  }
-  let extra_pairs = pairs_total % band_count;
-
-  let render_area = Rect {
-    x: area.x,
-    y: area.y + area.height.saturating_sub(render_height),
-    width: target_width,
-    height: render_height,
-  };
-
-  let buf = f.buffer_mut();
-  let mut x_cursor: u16 = 0;
-  for band_index in 0..band_count {
-    let band_pairs = pairs_per_band + usize::from(band_index < extra_pairs);
-    let band_width = (band_pairs as u16) * 2;
-    let src_x = (band_index as u16) * 2;
-
-    for y in 0..render_height {
-      let cell = tmp[(src_x, y)].clone();
-      for dx in 0..band_width {
-        buf[(render_area.x + x_cursor + dx, render_area.y + y)] = cell.clone();
-      }
-    }
-
-    x_cursor += band_width;
-  }
-}
-
 /// Render bar graph-style visualization using tui-bar-graph
 /// https://github.com/joshka/tui-widgets/tree/main/tui-bar-graph
 ///
@@ -226,9 +125,18 @@ fn render_bar_graph(f: &mut Frame<'_>, bands: &[f32], area: Rect) {
     return;
   }
 
-  // In Braille mode the widget has 2x horizontal resolution, so feed 2 values per cell.
+  // Bands normally arrive sized for Braille resolution (2 per cell, computed
+  // by the runner), each a real analyzer bar. When they don't match - the
+  // analyzer caps bar counts at what the sample rate supports (513 at
+  // 44.1/48 kHz, i.e. terminals wider than ~257 columns), or a style switch /
+  // resize lags one frame - stretch them across the full width instead of
+  // leaving the right side blank (the widget draws left-aligned).
   let target_width = (area.width as usize) * 2;
-  let data = interpolate_bands(bands, target_width);
+  let data: Vec<f64> = if bands.len() == target_width {
+    bands.iter().map(|&v| f64::from(v)).collect()
+  } else {
+    interpolate_bands(bands, target_width)
+  };
 
   let bar_graph = BarGraph::new(data)
     .with_gradient(colorgrad::preset::turbo())
@@ -239,13 +147,14 @@ fn render_bar_graph(f: &mut Frame<'_>, bands: &[f32], area: Rect) {
   f.render_widget(bar_graph, area);
 }
 
-/// Interpolate band values to fill the target width for smoother display
+/// Linearly interpolate band values onto `target_width` points (only used when
+/// the analyzer could not supply one real bar per Braille half-column).
 fn interpolate_bands(bands: &[f32], target_width: usize) -> Vec<f64> {
   if bands.is_empty() {
     return vec![0.0; target_width];
   }
   if bands.len() == 1 {
-    return vec![bands[0] as f64; target_width];
+    return vec![f64::from(bands[0]); target_width];
   }
 
   let mut result = Vec::with_capacity(target_width);
@@ -257,13 +166,130 @@ fn interpolate_bands(bands: &[f32], target_width: usize) -> Vec<f64> {
     let frac = pos - idx as f64;
 
     let value = if idx + 1 < bands.len() {
-      bands[idx] as f64 * (1.0 - frac) + bands[idx + 1] as f64 * frac
+      f64::from(bands[idx]) * (1.0 - frac) + f64::from(bands[idx + 1]) * frac
     } else {
-      bands[idx.min(bands.len() - 1)] as f64
+      f64::from(bands[idx.min(bands.len() - 1)])
     };
 
     result.push(value);
   }
 
   result
+}
+
+/// Bar glyphs from empty to full block, indexed by filled eighths (0-8).
+const EIGHTH_GLYPHS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Total filled eighths for a bar value in a column `rows` cells tall, with
+/// cava's idle floor of one eighth (the signature resting line). u32 math:
+/// rows * 8 would overflow u16 on pathological (>8191-row) terminal heights.
+fn bar_eighths(value: f32, rows: u16) -> u32 {
+  let max_eighths = u32::from(rows) * 8;
+  let total = (value.clamp(0.0, 1.0) * max_eighths as f32) as u32;
+  total.clamp(1, max_eighths)
+}
+
+/// Eighths filled (0-8) in the cell `row` rows above the column's bottom.
+fn cell_eighths(total_eighths: u32, row: u16) -> u32 {
+  total_eighths.saturating_sub(u32::from(row) * 8).min(8)
+}
+
+/// Bar width and spacing for the cava style. The bar count is capped (~40),
+/// so bars widen with the terminal to fill the area at roughly cava's 2:1
+/// bar-to-gap ratio; cava's own 2-wide/1-gap geometry is the floor, keeping
+/// dense fonts on the classic chunky-column look instead of pencil bars.
+fn cava_bar_layout(inner_width: u16, bars: u16) -> (u16, u16) {
+  if bars == 0 {
+    return (2, 1);
+  }
+  // u32 internals, footprint capped at the width: keeps the math (and the
+  // renderer's bar_width + spacing sums) off u16 overflow at any input.
+  let footprint = ((u32::from(inner_width) + 1) / u32::from(bars))
+    .max(3)
+    .min(u32::from(inner_width).max(3));
+  let spacing = ((footprint + 1) / 3).max(1);
+  ((footprint - spacing) as u16, spacing as u16)
+}
+
+/// Render cava-style visualization: one independent bar per band drawn in
+/// eighth blocks, widened to fill the width (see `cava_bar_layout`), centered.
+fn render_cava(f: &mut Frame<'_>, bands: &[f32], area: Rect, color: Color) {
+  if bands.is_empty() || area.width == 0 || area.height == 0 {
+    return;
+  }
+
+  let (bar_width, spacing) = cava_bar_layout(area.width, bands.len() as u16);
+  let step = bar_width + spacing;
+  let drawn_width = (bands.len() as u16) * step - spacing;
+  let x_offset = area.width.saturating_sub(drawn_width) / 2;
+  let style = Style::default().fg(color);
+  let buf = f.buffer_mut();
+
+  for (i, &value) in bands.iter().enumerate() {
+    let x0 = area.x + x_offset + (i as u16) * step;
+    // Clip bars that no longer fit (the bar count lags one frame on resize).
+    if x0 + bar_width > area.x + area.width {
+      break;
+    }
+
+    let total_eighths = bar_eighths(value, area.height);
+    for row in 0..area.height {
+      let filled = cell_eighths(total_eighths, row);
+      if filled == 0 {
+        break;
+      }
+      let glyph = EIGHTH_GLYPHS[filled as usize];
+      let y = area.y + area.height - 1 - row;
+      for dx in 0..bar_width {
+        buf[(x0 + dx, y)].set_char(glyph).set_style(style);
+      }
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn bar_eighths_has_cavas_idle_floor() {
+    assert_eq!(bar_eighths(0.0, 10), 1);
+  }
+
+  #[test]
+  fn bar_eighths_fills_the_column_at_full_scale() {
+    assert_eq!(bar_eighths(1.0, 10), 80);
+  }
+
+  #[test]
+  fn bar_eighths_clamps_overshoot() {
+    assert_eq!(bar_eighths(1.7, 10), 80);
+  }
+
+  #[test]
+  fn cava_bar_layout_widens_bars_to_fill_dense_terminals() {
+    // 216 columns, 40 bars: 5 columns per bar -> 3-wide bars, 2-wide gaps.
+    assert_eq!(cava_bar_layout(216, 40), (3, 2));
+    // 400 columns: 10 per bar -> 7-wide bars, 3-wide gaps (~2:1 holds).
+    assert_eq!(cava_bar_layout(400, 40), (7, 3));
+  }
+
+  #[test]
+  fn cava_bar_layout_floors_at_cavas_own_geometry() {
+    // Exactly enough room for 40 bars at cava's default 2+1 geometry.
+    assert_eq!(cava_bar_layout(119, 40), (2, 1));
+    // Narrow terminals (fewer bars requested) keep the 2+1 default.
+    assert_eq!(cava_bar_layout(80, 27), (2, 1));
+    // Too narrow to fit: geometry floors at 2+1 and the renderer clips.
+    assert_eq!(cava_bar_layout(5, 40), (2, 1));
+  }
+
+  #[test]
+  fn cell_glyphs_build_bottom_up() {
+    // 11 eighths in a 3-row column: full block, then three eighths, then air.
+    let glyphs: Vec<char> = (0..3)
+      .map(|row| EIGHTH_GLYPHS[cell_eighths(11, row) as usize])
+      .collect();
+    assert_eq!(glyphs, vec!['█', '▃', ' ']);
+  }
 }
