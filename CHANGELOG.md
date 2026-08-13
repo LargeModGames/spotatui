@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **Self-update now works on Linux ARM64**: the checksum verifier only knew four platforms, so `spotatui update` aborted with "unsupported platform" on aarch64 Linux (Raspberry Pi, ARM servers, Asahi) even though every release publishes `spotatui-linux-aarch64.tar.gz`. The platform table now covers all five published targets, with a test pinning it against the release workflow ([#440](https://github.com/LargeModGames/spotatui/issues/440)).
+
+- **A malformed keybinding no longer crashes spotatui at startup**: a binding like `ctrl-`, a bare `ctrl`, or a multi-key suffix like `ctrl-ab` in `config.yml` panicked (or was silently mis-read) during config load, before the UI existed. It is now a logged config warning naming the offending shortcut, that binding keeps its default, and the app starts normally, like every other invalid config value ([#441](https://github.com/LargeModGames/spotatui/issues/441)).
+
+- **The Stats screen can be chosen as the startup screen from Settings**: `startup_screen: "stats"` always worked when typed into `config.yml`, but the in-app Settings cycle never offered it. The cycle now matches the full startup-route list, and a test keeps the two from drifting again ([#443](https://github.com/LargeModGames/spotatui/issues/443)).
+
+- **Plugin keybindings can no longer silently shadow remove-from-queue**: the collision check that rejects plugin commands bound to named action keys was missing `remove_from_queue` (default `x`), so a plugin bound to `x` loaded without a warning and fought the queue view for the key. It is now rejected with the same collision warning as every other named action ([#445](https://github.com/LargeModGames/spotatui/issues/445)).
+
 - **Native streaming no longer steals playback back after a Spotify Connect handoff**: session teardowns are now classified by librespot's disconnect reason instead of inferred from connection state. When playback moves from spotatui to a phone, car, or another device, the rebuilt Connect backend stays idle: the published queue slot and any parked playback request are cleared instead of replayed, the dead queue slot no longer owns the playbar and transport controls, recovery re-registration no longer transfers playback off a device that took over, and the "Playback moved to another Spotify device." message is no longer overwritten by a bogus "recovered" notice. Unexpected shutdowns still restore playback, including a queue playing over an idle app, and local shutdowns stay stopped ([#437](https://github.com/LargeModGames/spotatui/issues/437)).
 
 ## [v0.41.0] 2026-08-10
