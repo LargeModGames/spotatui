@@ -97,6 +97,9 @@ fn count_app_field_writes(source: &str) -> usize {
       Some(b'+' | b'-' | b'*' | b'/' | b'%' | b'|' | b'&' | b'^') => {
         bytes.get(pos + 1) == Some(&b'=')
       }
+      Some(shift @ (b'<' | b'>')) => {
+        bytes.get(pos + 1) == Some(shift) && bytes.get(pos + 2) == Some(&b'=')
+      }
       Some(b'=') => !matches!(bytes.get(pos + 1), Some(b'=') | Some(b'>')),
       _ => false,
     };
@@ -144,18 +147,24 @@ fn ratchet_counters_match_the_checked_in_baselines() {
   let test_attribute_total = count_occurrences(&["src"], &[], concat!("#[", "test]"))
     + count_occurrences(&["src"], &[], concat!("#[", "tokio::test"));
 
+  // Every Rust file outside `src/tui/` is in scope, so a new top-level module
+  // (or a future `src/gui.rs`) cannot re-import the TUI unseen. This file is
+  // the one exclusion: it names the needle in its own doc and data, and being
+  // test-only it cannot couple anything to `tui/`.
+  let mut non_tui_files = Vec::new();
+  collect_rs_files(&root.join("src"), &mut non_tui_files);
+  let tui_dir = root.join("src").join("tui");
+  let gates_file = root.join("src").join("gates.rs");
+  non_tui_files.retain(|path| !path.starts_with(&tui_dir) && *path != gates_file);
+  let crate_tui_refs: usize = non_tui_files
+    .iter()
+    .map(|path| read_source(path).matches("crate::tui").count())
+    .sum();
+
   // (name, measured value, is_floor). Ratchets must match their baseline
   // exactly; the floor may only rise.
   let measured: [(&str, usize, bool); 6] = [
-    (
-      "crate_tui_refs_outside_tui",
-      count_occurrences(
-        &["src/core", "src/infra", "src/cli"],
-        &["src/runtime.rs"],
-        "crate::tui",
-      ),
-      false,
-    ),
+    ("crate_tui_refs_outside_tui", crate_tui_refs, false),
     ("app_field_writes_in_tui_handlers", app_field_writes, false),
     (
       "ioevent_refs_in_tui",
@@ -213,8 +222,8 @@ fn ratchet_counters_match_the_checked_in_baselines() {
 
 #[test]
 fn field_write_matcher_counts_assignment_operators() {
-  let src = "app.x = 1;\napp.a.b += 2;\napp.c -= 3;\napp.d *= 4;\n";
-  assert_eq!(count_app_field_writes(src), 4);
+  let src = "app.x = 1;\napp.a.b += 2;\napp.c -= 3;\napp.d *= 4;\napp.e <<= 1;\napp.f >>= 2;\n";
+  assert_eq!(count_app_field_writes(src), 6);
 }
 
 #[test]
@@ -224,6 +233,9 @@ fn field_write_matcher_ignores_comparisons_guards_calls_and_other_idents() {
              app.list.push(1);\n\
              foo(app.x);\n\
              if app.x != y {}\n\
+             if app.x <= y {}\n\
+             if app.x >= y {}\n\
+             let s = app.y << 2;\n\
              wrapped_app.x = 1;\n";
   assert_eq!(count_app_field_writes(src), 0);
 }
