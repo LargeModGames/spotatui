@@ -1,0 +1,12 @@
+# Ratchet baselines for the GUI substrate migration, asserted by src/gates.rs
+# on every cargo test leg (see its module doc for what each counter measures).
+#
+# A counter may only move toward its target. When a PR improves one, lower
+# the baseline here in the same PR. Never raise a baseline.
+
+crate_tui_refs_outside_tui = 19        # target 0
+app_field_writes_in_tui_handlers = 788 # target 0
+ioevent_refs_in_tui = 153              # target 0
+synthetic_keys_in_mouse_handler = 15   # target 0 (13 production + 2 test sites)
+wildcard_arms_in_action_tree = 0       # target 0, must stay 0
+test_attribute_total = 1336            # floor: may only rise
