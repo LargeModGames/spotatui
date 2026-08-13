@@ -13,6 +13,7 @@ use ratatui::{
 };
 
 use super::help::{get_filtered_help_docs, help_match_ranges};
+use crate::tui::theme::{EmphasisExt, ThemeExt};
 
 /// Rebuild [`App::help_menu_model`] if the terminal width, keybindings, or
 /// filter changed since the last build. Called from the event loop (and tests)
@@ -140,11 +141,11 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   let rows: Vec<Row<'_>> = if model.rows.is_empty() && !app.help_filter.is_empty() {
     vec![
       Row::new([format!("No help rows match '{}'", app.help_filter)])
-        .style(Style::default().fg(app.user_config.theme.inactive)),
+        .style(Style::default().fg(app.user_config.theme.inactive.into())),
     ]
   } else {
     let highlight_style = Style::default()
-      .fg(app.user_config.theme.active)
+      .fg(app.user_config.theme.active.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
     help_docs
       .iter()
@@ -176,34 +177,34 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   let theme = app.user_config.theme;
   let filter_line = if app.help_filter_editing {
     Line::from(vec![
-      Span::styled("Filter: ", Style::default().fg(theme.active)),
+      Span::styled("Filter: ", Style::default().fg(theme.active.into())),
       Span::styled(app.help_filter.clone(), help_menu_style),
-      Span::styled("▏", Style::default().fg(theme.active)),
+      Span::styled("▏", Style::default().fg(theme.active.into())),
       Span::styled(
         "  <Enter>: apply  <Esc>: cancel search",
-        Style::default().fg(theme.inactive),
+        Style::default().fg(theme.inactive.into()),
       ),
     ])
   } else if !app.help_filter.is_empty() {
     Line::from(vec![
       Span::styled(
         format!("matches for '{}'", app.help_filter),
-        Style::default().fg(theme.active),
+        Style::default().fg(theme.active.into()),
       ),
       Span::styled(
         format!(" ({})  <Esc>: clear filter", model.rows.len()),
-        Style::default().fg(theme.inactive),
+        Style::default().fg(theme.inactive.into()),
       ),
     ])
   } else {
     Line::from(vec![
       Span::styled(
         app.user_config.keys.search.to_string(),
-        Style::default().fg(theme.active),
+        Style::default().fg(theme.active.into()),
       ),
       Span::styled(
         ": filter rows  <Esc>: go back",
-        Style::default().fg(theme.inactive),
+        Style::default().fg(theme.inactive.into()),
       ),
     ])
   };
@@ -219,7 +220,7 @@ mod help_menu_tests {
   use ratatui::{backend::TestBackend, Terminal};
 
   fn rendered_help(app: &mut App) -> String {
-    app.size = ratatui::layout::Size {
+    app.size = crate::core::geometry::Viewport {
       width: 100,
       height: 30,
     };
@@ -265,7 +266,7 @@ mod help_menu_tests {
   fn help_menu_highlights_matched_text_in_filtered_rows() {
     let mut app = App::default();
     app.help_filter = "volume".to_string();
-    app.size = ratatui::layout::Size {
+    app.size = crate::core::geometry::Viewport {
       width: 100,
       height: 30,
     };
@@ -294,8 +295,14 @@ mod help_menu_tests {
     let unmatched = buffer
       .cell((match_x - "Increase ".len() as u16, match_y))
       .unwrap();
-    assert_eq!(matched.style().fg, Some(app.user_config.theme.active));
-    assert_ne!(unmatched.style().fg, Some(app.user_config.theme.active));
+    assert_eq!(
+      matched.style().fg,
+      Some(app.user_config.theme.active.into())
+    );
+    assert_ne!(
+      unmatched.style().fg,
+      Some(app.user_config.theme.active.into())
+    );
   }
 
   #[test]
@@ -510,9 +517,9 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
   // these extra rows never receive the highlight.
   let preview = context_preview_lines(app, 5);
   if !preview.is_empty() {
-    let header_style = Style::default().fg(app.user_config.theme.hint);
+    let header_style = Style::default().fg(app.user_config.theme.hint.into());
     let row_style = Style::default()
-      .fg(app.user_config.theme.inactive)
+      .fg(app.user_config.theme.inactive.into())
       .add_modifier(Modifier::DIM);
     items.push(ListItem::new(Span::styled("Up next from context:", header_style)).style(style));
     for line in preview {
@@ -545,11 +552,13 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
     .style(style)
     .highlight_style(
       Style::default()
-        .fg(app.user_config.theme.active)
-        .bg(app.user_config.theme.inactive)
+        .fg(app.user_config.theme.active.into())
+        .bg(app.user_config.theme.inactive.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
-    .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
+    .highlight_symbol(
+      Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active.into())),
+    );
   f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -565,33 +574,33 @@ pub fn draw_error_screen(f: &mut Frame<'_>, app: &App) {
       Span::raw("Api response: "),
       Span::styled(
         &app.api_error,
-        Style::default().fg(app.user_config.theme.error_text),
+        Style::default().fg(app.user_config.theme.error_text.into()),
       ),
     ]),
     Line::from(Span::styled(
       "If you are trying to play a track, please check that",
-      Style::default().fg(app.user_config.theme.text),
+      Style::default().fg(app.user_config.theme.text.into()),
     )),
     Line::from(Span::styled(
       " 1. You have a Spotify Premium Account",
-      Style::default().fg(app.user_config.theme.text),
+      Style::default().fg(app.user_config.theme.text.into()),
     )),
     Line::from(Span::styled(
       " 2. Your playback device is active and selected - press `d` to go to device selection menu",
-      Style::default().fg(app.user_config.theme.text),
+      Style::default().fg(app.user_config.theme.text.into()),
     )),
     Line::from(Span::styled(
       " 3. If you're using spotifyd as a playback device, your device name must not contain spaces",
-      Style::default().fg(app.user_config.theme.text),
+      Style::default().fg(app.user_config.theme.text.into()),
     )),
     Line::from(Span::styled("Hint: a playback device must be either an official spotify client or a light weight alternative such as spotifyd",
-        Style::default().fg(app.user_config.theme.hint)
+        Style::default().fg(app.user_config.theme.hint.into())
         ),
     ),
     Line::from(
       Span::styled(
           "\nPress <Esc> to return",
-          Style::default().fg(app.user_config.theme.inactive),
+          Style::default().fg(app.user_config.theme.inactive.into()),
       ),
     )
   ];
@@ -605,9 +614,9 @@ pub fn draw_error_screen(f: &mut Frame<'_>, app: &App) {
         .style(app.user_config.theme.base_style())
         .title(Span::styled(
           "Error",
-          Style::default().fg(app.user_config.theme.error_border),
+          Style::default().fg(app.user_config.theme.error_border.into()),
         ))
-        .border_style(Style::default().fg(app.user_config.theme.error_border)),
+        .border_style(Style::default().fg(app.user_config.theme.error_border.into())),
     );
   f.render_widget(playing_paragraph, chunks[0]);
 }
@@ -697,12 +706,12 @@ fn draw_confirmation_dialog(
     .title(Span::styled(
       title,
       Style::default()
-        .fg(app.user_config.theme.header)
+        .fg(app.user_config.theme.header.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
-    .border_style(Style::default().fg(app.user_config.theme.inactive));
+    .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
   f.render_widget(block, rect);
 
   let vchunks = Layout::default()
@@ -725,18 +734,18 @@ fn draw_confirmation_dialog(
 
   let ok = Paragraph::new(Span::raw("Ok"))
     .style(Style::default().fg(if app.confirm {
-      app.user_config.theme.hovered
+      app.user_config.theme.hovered.into()
     } else {
-      app.user_config.theme.inactive
+      app.user_config.theme.inactive.into()
     }))
     .alignment(Alignment::Center);
   f.render_widget(ok, hchunks[0]);
 
   let cancel = Paragraph::new(Span::raw("Cancel"))
     .style(Style::default().fg(if app.confirm {
-      app.user_config.theme.inactive
+      app.user_config.theme.inactive.into()
     } else {
-      app.user_config.theme.hovered
+      app.user_config.theme.hovered.into()
     }))
     .alignment(Alignment::Center);
   f.render_widget(cancel, hchunks[1]);
@@ -750,12 +759,12 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
     .title(Span::styled(
       "Add Track To Playlist",
       Style::default()
-        .fg(app.user_config.theme.header)
+        .fg(app.user_config.theme.header.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ))
     .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
-    .border_style(Style::default().fg(app.user_config.theme.inactive));
+    .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
   f.render_widget(block, rect);
 
   let vchunks = Layout::default()
@@ -790,7 +799,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
 
   if picker_rows.is_empty() {
     let empty_text = Paragraph::new("No editable playlists available")
-      .style(Style::default().fg(app.user_config.theme.inactive))
+      .style(Style::default().fg(app.user_config.theme.inactive.into()))
       .alignment(Alignment::Center);
     f.render_widget(empty_text, vchunks[1]);
   } else {
@@ -835,7 +844,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
 
     let list = List::new(items)
       .style(app.user_config.theme.base_style())
-      .highlight_style(Style::default().fg(app.user_config.theme.hovered))
+      .highlight_style(Style::default().fg(app.user_config.theme.hovered.into()))
       .highlight_symbol("▶ ");
 
     f.render_stateful_widget(list, vchunks[1], &mut list_state);
@@ -845,7 +854,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
     "Enter add/open | q cancel | {}/{} or arrows move | H/M/L jump",
     app.user_config.keys.move_down, app.user_config.keys.move_up,
   ))
-  .style(Style::default().fg(app.user_config.theme.inactive))
+  .style(Style::default().fg(app.user_config.theme.inactive.into()))
   .alignment(Alignment::Center);
   f.render_widget(footer, vchunks[2]);
 }
@@ -892,7 +901,7 @@ pub fn draw_announcement_prompt(f: &mut Frame<'_>, app: &App) {
   text.push(Line::from(""));
   text.push(Line::from(Span::styled(
     "[Press ENTER or ESC to dismiss]",
-    Style::default().fg(app.user_config.theme.inactive),
+    Style::default().fg(app.user_config.theme.inactive.into()),
   )));
 
   let paragraph = Paragraph::new(text)
@@ -903,7 +912,7 @@ pub fn draw_announcement_prompt(f: &mut Frame<'_>, app: &App) {
       Block::default()
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(accent_color))
+        .border_style(Style::default().fg(accent_color.into()))
         .title(" Announcement "),
     );
 
@@ -927,7 +936,7 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
     Line::from(Span::styled(
       "Your monthly listening recap is ready! 🎉",
       Style::default()
-        .fg(app.user_config.theme.active)
+        .fg(app.user_config.theme.active.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )),
     Line::from(""),
@@ -939,7 +948,7 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
     Line::from(""),
     Line::from(Span::styled(
       "[ENTER] Open   [ESC] Later   [d] Don't show this again",
-      Style::default().fg(app.user_config.theme.inactive),
+      Style::default().fg(app.user_config.theme.inactive.into()),
     )),
   ];
 
@@ -951,7 +960,7 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
       Block::default()
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(app.user_config.theme.active))
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
         .title(" Monthly Recap "),
     );
 
@@ -971,7 +980,7 @@ pub fn draw_community_pin_prompt(f: &mut Frame<'_>, app: &App) {
     Line::from(Span::styled(
       "\u{1F4CC} spotatui community playlist pinned",
       Style::default()
-        .fg(app.user_config.theme.active)
+        .fg(app.user_config.theme.active.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )),
     Line::from(""),
@@ -984,7 +993,7 @@ pub fn draw_community_pin_prompt(f: &mut Frame<'_>, app: &App) {
     Line::from(""),
     Line::from(Span::styled(
       "[Enter] keep   [h] hide   (Esc keeps it)",
-      Style::default().fg(app.user_config.theme.inactive),
+      Style::default().fg(app.user_config.theme.inactive.into()),
     )),
   ];
 
@@ -996,7 +1005,7 @@ pub fn draw_community_pin_prompt(f: &mut Frame<'_>, app: &App) {
       Block::default()
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(app.user_config.theme.active))
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
         .title(" Community Playlist "),
     );
 
@@ -1021,7 +1030,7 @@ pub fn draw_exit_prompt(f: &mut Frame<'_>, app: &App) {
     Line::from("Press Y for Yes or N for No"),
     Line::from(Span::styled(
       "[ENTER = Yes, ESC = No]",
-      Style::default().fg(app.user_config.theme.inactive),
+      Style::default().fg(app.user_config.theme.inactive.into()),
     )),
   ];
 
@@ -1032,7 +1041,7 @@ pub fn draw_exit_prompt(f: &mut Frame<'_>, app: &App) {
       Block::default()
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(app.user_config.theme.active))
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
         .title(" Confirm Exit "),
     );
 
@@ -1090,12 +1099,12 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
 
       let style = if i == app.sort_menu_selected {
         Style::default()
-          .fg(app.user_config.theme.active)
+          .fg(app.user_config.theme.active.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else if *field == current_sort.field {
-        Style::default().fg(app.user_config.theme.hovered)
+        Style::default().fg(app.user_config.theme.hovered.into())
       } else {
-        Style::default().fg(app.user_config.theme.text)
+        Style::default().fg(app.user_config.theme.text.into())
       };
 
       ListItem::new(text).style(style)
@@ -1114,20 +1123,22 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
       Block::default()
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
-        .border_style(Style::default().fg(app.user_config.theme.active))
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
         .title(Span::styled(
           title,
           Style::default()
-            .fg(app.user_config.theme.active)
+            .fg(app.user_config.theme.active.into())
             .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
         )),
     )
     .highlight_style(
       Style::default()
-        .fg(app.user_config.theme.active)
+        .fg(app.user_config.theme.active.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
-    .highlight_symbol(Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active)));
+    .highlight_symbol(
+      Line::from("▶ ").style(Style::default().fg(app.user_config.theme.active.into())),
+    );
 
   let mut state = ListState::default();
   state.select(Some(app.sort_menu_selected));
@@ -1150,9 +1161,9 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
 
   let style = app.user_config.theme.base_style();
   let active_style = Style::default()
-    .fg(app.user_config.theme.active)
+    .fg(app.user_config.theme.active.into())
     .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD));
-  let hint_style = Style::default().fg(app.user_config.theme.hint);
+  let hint_style = Style::default().fg(app.user_config.theme.hint.into());
 
   let mut lines: Vec<Line> = Vec::new();
 
@@ -1323,7 +1334,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
         .borders(Borders::ALL)
         .style(style)
         .title(Span::styled(title, active_style))
-        .border_style(Style::default().fg(app.user_config.theme.active)),
+        .border_style(Style::default().fg(app.user_config.theme.active.into())),
     )
     .alignment(Alignment::Center)
     .wrap(Wrap { trim: false });
@@ -1368,17 +1379,17 @@ pub fn draw_plugin_popup(f: &mut Frame<'_>, app: &App) {
   // Footer hint.
   ratatui_lines.push(Line::from(Span::styled(
     "(Esc to close)",
-    Style::default().fg(app.user_config.theme.hint),
+    Style::default().fg(app.user_config.theme.hint.into()),
   )));
 
   let block = Block::default()
     .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
-    .border_style(Style::default().fg(app.user_config.theme.active))
+    .border_style(Style::default().fg(app.user_config.theme.active.into()))
     .title(Span::styled(
       popup.title.clone(),
       Style::default()
-        .fg(app.user_config.theme.header)
+        .fg(app.user_config.theme.header.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ));
 
@@ -1392,7 +1403,7 @@ pub fn draw_plugin_popup(f: &mut Frame<'_>, app: &App) {
 fn build_popup_line<'a>(pl: &'a PopupLine) -> Line<'a> {
   let mut style = Style::default();
   if let Some(fg) = pl.fg {
-    style = style.fg(fg);
+    style = style.fg(fg.into());
   }
   if pl.bold {
     style = style.add_modifier(Modifier::BOLD);

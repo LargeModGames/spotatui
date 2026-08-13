@@ -1,3 +1,5 @@
+use crate::core::geometry::Viewport;
+use crate::core::input::Key;
 use crate::core::pagination::{CursorPaged, Paged};
 use crate::core::plugin_api::{
   ArtistInfo, EpisodeInfo, PlayableInfo, PlaylistInfo, SavedAlbumInfo, ShowInfo, TrackInfo,
@@ -18,9 +20,7 @@ use crate::infra::network::IoEvent;
   feature = "youtube"
 ))]
 use crate::infra::queue::QueueNowPlaying;
-use crate::tui::event::Key;
 use anyhow::anyhow;
-use ratatui::layout::Size;
 use rspotify::{
   model::enums::Country,
   model::{
@@ -272,7 +272,7 @@ pub struct App {
   pub selected_device_index: Option<usize>,
   pub selected_playlist_index: Option<usize>,
   pub active_playlist_index: Option<usize>,
-  pub size: Size,
+  pub size: Viewport,
   #[allow(dead_code)]
   pub small_search_limit: u32,
   pub song_progress_ms: u128,

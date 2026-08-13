@@ -1,5 +1,6 @@
 use crate::core::app::{ActiveBlock, App, ArtistBlock, SearchResultBlock};
 use crate::core::user_config::Theme;
+use crate::tui::theme::ThemeExt;
 use ratatui::{
   layout::Rect,
   style::{Modifier, Style},
@@ -38,15 +39,23 @@ pub fn get_artist_highlight_state(app: &App, block_to_match: ArtistBlock) -> (bo
 pub fn hint_span(key: &'static str, theme: Theme) -> Span<'static> {
   Span::styled(
     key,
-    Style::default().fg(theme.hint).add_modifier(Modifier::BOLD),
+    Style::default()
+      .fg(theme.hint.into())
+      .add_modifier(Modifier::BOLD),
   )
 }
 
 pub fn get_color((is_active, is_hovered): (bool, bool), theme: Theme) -> Style {
   match (is_active, is_hovered) {
-    (true, _) => Style::default().fg(theme.selected).bg(theme.background),
-    (false, true) => Style::default().fg(theme.hovered).bg(theme.background),
-    _ => Style::default().fg(theme.inactive).bg(theme.background),
+    (true, _) => Style::default()
+      .fg(theme.selected.into())
+      .bg(theme.background.into()),
+    (false, true) => Style::default()
+      .fg(theme.hovered.into())
+      .bg(theme.background.into()),
+    _ => Style::default()
+      .fg(theme.inactive.into())
+      .bg(theme.background.into()),
   }
 }
 
@@ -117,29 +126,9 @@ pub fn join_artist_names(artists: &[crate::core::plugin_api::ArtistRef]) -> Stri
     .join(", ")
 }
 
-pub fn millis_to_minutes(millis: u128) -> String {
-  let minutes = millis / 60000;
-  let seconds = (millis % 60000) / 1000;
-  let seconds_display = if seconds < 10 {
-    format!("0{}", seconds)
-  } else {
-    format!("{}", seconds)
-  };
-
-  if seconds == 60 {
-    format!("{}:00", minutes + 1)
-  } else {
-    format!("{}:{}", minutes, seconds_display)
-  }
-}
-
-pub fn display_track_progress(progress: u128, track_duration: Duration) -> String {
-  let duration = millis_to_minutes(track_duration.as_millis());
-  let progress_display = millis_to_minutes(progress);
-  let remaining = millis_to_minutes(track_duration.as_millis().saturating_sub(progress));
-
-  format!("{}/{} (-{})", progress_display, duration, remaining,)
-}
+// Frontend-neutral time formatting lives in `core/format.rs`; re-exported so
+// the many draw-fn callers keep their `util::` paths.
+pub use crate::core::format::{display_track_progress, millis_to_minutes};
 
 pub fn truncate_text(s: &str, max_chars: usize) -> String {
   if s.chars().count() <= max_chars {
@@ -186,26 +175,6 @@ mod tests {
     ];
     assert_eq!(join_artist_names(&artists), "Daft Punk, Pharrell");
     assert_eq!(join_artist_names(&[]), "");
-  }
-
-  #[test]
-  fn millis_to_minutes_test() {
-    assert_eq!(millis_to_minutes(0), "0:00");
-    assert_eq!(millis_to_minutes(1000), "0:01");
-    assert_eq!(millis_to_minutes(1500), "0:01");
-    assert_eq!(millis_to_minutes(1900), "0:01");
-    assert_eq!(millis_to_minutes(60 * 1000), "1:00");
-    assert_eq!(millis_to_minutes(60 * 1500), "1:30");
-  }
-
-  #[test]
-  fn display_track_progress_test() {
-    let two_minutes = Duration::from_millis(2 * 60 * 1000);
-    assert_eq!(display_track_progress(0, two_minutes), "0:00/2:00 (-2:00)");
-    assert_eq!(
-      display_track_progress(Duration::from_millis(60 * 1000).as_millis(), two_minutes),
-      "1:00/2:00 (-1:00)"
-    );
   }
 
   #[test]

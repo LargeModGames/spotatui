@@ -827,7 +827,15 @@ pub async fn start_ui(
   };
 
   loop {
-    let terminal_size = terminal.backend().size().ok();
+    let terminal_size =
+      terminal
+        .backend()
+        .size()
+        .ok()
+        .map(|size| crate::core::geometry::Viewport {
+          width: size.width,
+          height: size.height,
+        });
     let title_update = {
       let mut app = app.lock().await;
 
@@ -903,7 +911,7 @@ pub async fn start_ui(
       terminal.draw(|f| {
         use ratatui::{prelude::Style, widgets::Block};
         f.render_widget(
-          Block::default().style(Style::default().bg(app.user_config.theme.background)),
+          Block::default().style(Style::default().bg(app.user_config.theme.background.into())),
           f.area(),
         );
 
@@ -950,13 +958,12 @@ pub async fn start_ui(
         terminal.hide_cursor()?;
       }
 
-      let cursor_offset = if app.size.height
-        > crate::core::layout::small_terminal_height(&app.user_config.behavior)
-      {
-        2
-      } else {
-        1
-      };
+      let cursor_offset =
+        if app.size.height > crate::tui::layout::small_terminal_height(&app.user_config.behavior) {
+          2
+        } else {
+          1
+        };
 
       terminal.backend_mut().execute(MoveTo(
         cursor_offset + app.input_cursor_position - app.input_scroll_offset.get(),

@@ -2,6 +2,7 @@ use crate::core::app::{App, RouteId};
 use crate::core::plugin_api::{
   PluginCoverArtFit, PluginLength, PluginScreenContent, PluginWidget, PluginWidgetKind, PopupLine,
 };
+use crate::tui::theme::ThemeExt;
 use ratatui::{
   layout::{Alignment, Constraint, Layout, Rect},
   style::{Modifier, Style},
@@ -39,11 +40,11 @@ pub fn draw_plugin_screen(f: &mut Frame<'_>, app: &App) {
   let outer = Block::default()
     .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
-    .border_style(Style::default().fg(app.user_config.theme.active))
+    .border_style(Style::default().fg(app.user_config.theme.active.into()))
     .title(Span::styled(
       title,
       Style::default()
-        .fg(app.user_config.theme.header)
+        .fg(app.user_config.theme.header.into())
         .add_modifier(Modifier::BOLD),
     ));
   let inner = outer.inner(area);
@@ -53,7 +54,7 @@ pub fn draw_plugin_screen(f: &mut Frame<'_>, app: &App) {
     // Registered (or mistyped) screen with no content published yet.
     let placeholder = Paragraph::new(Line::from(Span::styled(
       format!("plugin screen '{name}' has no content yet"),
-      Style::default().fg(app.user_config.theme.hint),
+      Style::default().fg(app.user_config.theme.hint.into()),
     )));
     f.render_widget(placeholder, inner);
     return;
@@ -135,16 +136,16 @@ fn draw_widgets(f: &mut Frame<'_>, app: &App, content: &PluginScreenContent, are
           .collect();
         let mut block = Block::default()
           .borders(Borders::ALL)
-          .border_style(Style::default().fg(app.user_config.theme.inactive));
+          .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
         if let Some(title) = title {
           block = block.title(Span::styled(
             title.clone(),
-            Style::default().fg(app.user_config.theme.header),
+            Style::default().fg(app.user_config.theme.header.into()),
           ));
         }
         let list = List::new(list_items).block(block).highlight_style(
           Style::default()
-            .fg(app.user_config.theme.selected)
+            .fg(app.user_config.theme.selected.into())
             .add_modifier(Modifier::BOLD),
         );
         let mut state = ListState::default();
@@ -154,11 +155,11 @@ fn draw_widgets(f: &mut Frame<'_>, app: &App, content: &PluginScreenContent, are
       PluginWidgetKind::Gauge { ratio, label } => {
         let gauge = Gauge::default()
           .block(Block::default().borders(Borders::ALL))
-          .gauge_style(Style::default().fg(app.user_config.theme.playbar_progress))
+          .gauge_style(Style::default().fg(app.user_config.theme.playbar_progress.into()))
           .ratio(ratio.clamp(0.0, 1.0))
           .label(Span::styled(
             label.clone().unwrap_or_default(),
-            Style::default().fg(app.user_config.theme.playbar_progress_text),
+            Style::default().fg(app.user_config.theme.playbar_progress_text.into()),
           ));
         f.render_widget(gauge, chunk);
       }
@@ -175,7 +176,7 @@ fn draw_widgets(f: &mut Frame<'_>, app: &App, content: &PluginScreenContent, are
 /// top-left within the area it is given.
 #[cfg(feature = "cover-art")]
 fn draw_cover_art(f: &mut Frame<'_>, app: &App, area: Rect, fit: PluginCoverArtFit) {
-  use crate::core::layout::center_rect_within;
+  use crate::tui::layout::center_rect_within;
   use ratatui::widgets::Clear;
 
   if !app.cover_art.available() {
@@ -216,7 +217,7 @@ fn draw_cover_art_message(f: &mut Frame<'_>, app: &App, area: Rect, message: &st
     return;
   }
   let paragraph = Paragraph::new(message)
-    .style(Style::default().fg(app.user_config.theme.inactive))
+    .style(Style::default().fg(app.user_config.theme.inactive.into()))
     .alignment(Alignment::Center);
   f.render_widget(
     paragraph,
@@ -232,7 +233,7 @@ fn draw_cover_art_message(f: &mut Frame<'_>, app: &App, area: Rect, message: &st
 fn styled_line(pl: &PopupLine) -> Line<'static> {
   let mut style = Style::default();
   if let Some(fg) = pl.fg {
-    style = style.fg(fg);
+    style = style.fg(fg.into());
   }
   if pl.bold {
     style = style.add_modifier(Modifier::BOLD);
@@ -506,7 +507,7 @@ mod tests {
       })],
     };
 
-    let background = ratatui::style::Color::Rgb(10, 20, 30);
+    let background = crate::core::theme::Color::Rgb(10, 20, 30);
     let (_app, buffer) = render_with(content, 40, 20, |app| {
       app.user_config.theme.background = background;
       // 64x64 so the fitted image covers several cells whatever the detected

@@ -1,6 +1,6 @@
 use crate::core::app::App;
-use crate::core::layout::main_layout_margin;
 use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle};
+use crate::tui::layout::main_layout_margin;
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   style::{Color, Style},
@@ -42,8 +42,8 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
 
   let [info_area, visualizer_area] = analysis_areas(f.area(), margin);
 
-  let white = Style::default().fg(app.user_config.theme.text);
-  let gray = Style::default().fg(app.user_config.theme.inactive);
+  let white = Style::default().fg(app.user_config.theme.text.into());
+  let gray = Style::default().fg(app.user_config.theme.inactive.into());
   let tick_rate = app.user_config.behavior.animation_tick_rate_milliseconds;
   let tick_rate = normalize_tick_rate_milliseconds(tick_rate as i64);
   let visualizer_style = app.user_config.behavior.visualizer_style;
@@ -51,10 +51,10 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
   let info_block = Block::default()
     .title(Span::styled(
       format!("Audio Visualization ({})", visualizer_style.name()),
-      Style::default().fg(app.user_config.theme.inactive),
+      Style::default().fg(app.user_config.theme.inactive.into()),
     ))
     .borders(Borders::ALL)
-    .border_style(Style::default().fg(app.user_config.theme.inactive));
+    .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
 
   let bar_chart_title = &format!("Spectrum | {} FPS | Press q to exit", 1000 / tick_rate);
 
@@ -78,19 +78,25 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     let style_hint = "Press 'V' to cycle visualizer style";
 
     let texts = vec![Line::from(vec![
-      Span::styled(status_text, Style::default().fg(app.user_config.theme.text)),
+      Span::styled(
+        status_text,
+        Style::default().fg(app.user_config.theme.text.into()),
+      ),
       Span::raw("  "),
       Span::styled(
         peak_text,
-        Style::default().fg(app.user_config.theme.inactive),
+        Style::default().fg(app.user_config.theme.inactive.into()),
       ),
       Span::raw("  |  "),
-      Span::styled(style_hint, Style::default().fg(app.user_config.theme.hint)),
+      Span::styled(
+        style_hint,
+        Style::default().fg(app.user_config.theme.hint.into()),
+      ),
     ])];
 
     let p = Paragraph::new(texts)
       .block(info_block)
-      .style(Style::default().fg(app.user_config.theme.text));
+      .style(Style::default().fg(app.user_config.theme.text.into()));
     f.render_widget(p, info_area);
 
     // Calculate inner area for visualizer (within the block borders)
@@ -104,7 +110,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         f,
         &spectrum.bands,
         inner_area,
-        app.user_config.theme.analysis_bar,
+        app.user_config.theme.analysis_bar.into(),
       ),
     }
   } else {
@@ -124,13 +130,13 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
 
     let p = Paragraph::new(no_capture_text)
       .block(info_block)
-      .style(Style::default().fg(app.user_config.theme.text));
+      .style(Style::default().fg(app.user_config.theme.text.into()));
     f.render_widget(p, info_area);
 
     // Empty bar chart
     let empty_p = Paragraph::new("Waiting for audio input...")
       .block(bar_chart_block)
-      .style(Style::default().fg(app.user_config.theme.text));
+      .style(Style::default().fg(app.user_config.theme.text.into()));
     f.render_widget(empty_p, visualizer_area);
   }
 }

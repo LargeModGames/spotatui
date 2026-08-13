@@ -40,7 +40,7 @@ impl Default for App {
       state_path: None,
       saved_album_tracks_index: 0,
       recently_played: Default::default(),
-      size: Size::default(),
+      size: Viewport::default(),
       selected_album_simplified: None,
       selected_album_full: None,
       home_scroll: 0,
