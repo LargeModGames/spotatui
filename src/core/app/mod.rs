@@ -146,7 +146,7 @@ pub struct App {
   pub last_dispatched_volume: Option<u8>,
   pub instant_since_last_current_playback_poll: Instant,
   navigation_stack: Vec<Route>,
-  pub spectrum_data: Option<SpectrumData>,
+  pub spectrum_data: Option<crate::infra::audio::SpectrumData>,
   pub audio_capture_active: bool,
   pub home_scroll: u16,
   pub user_config: UserConfig,

@@ -1,10 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use super::cavacore::{treble_buffer_size, Cava, CavaBuilder, Channels, DEFAULT_NOISE_REDUCTION};
-
-/// Display bars produced before the first render tick reports the terminal
-/// width. Display bars are the mirrored stereo total (2x bars-per-channel).
-pub const DEFAULT_BANDS: usize = 12;
+use super::cavacore::{
+  max_bars_per_channel, Cava, CavaBuilder, Channels, DEFAULT_NOISE_REDUCTION, MAX_SAMPLE_RATE,
+};
 
 /// cavacore was written for 16-bit-scale samples (cava's own f32 input path
 /// multiplies by USHRT_MAX); cpal/PipeWire deliver f32 in [-1, 1], so scale up
@@ -24,8 +22,6 @@ pub struct SpectrumData {
   /// channel reversed on the left half (treble at the outer edge, bass at the
   /// center), right channel forward on the right half.
   pub bands: Vec<f32>,
-  /// Overall peak level (0.0-1.0)
-  pub peak: f32,
 }
 
 /// Audio analyzer wrapping the vendored cavacore engine: log-spaced per-bar
@@ -39,9 +35,6 @@ pub struct AudioAnalyzer {
   bars_per_channel: usize,
   /// Interleaved stereo 16-bit-scale samples awaiting the next `process()`.
   pending: Vec<f64>,
-  /// Newest samples one `execute` can consume (cavacore's sliding stereo
-  /// input window); `pending` is capped here so a stalled UI can't grow it.
-  max_pending: usize,
   /// Raw engine output: [left 0..bpc][right bpc..2bpc], each bass to treble.
   output: Box<[f64]>,
   spectrum: SpectrumData,
@@ -50,37 +43,37 @@ pub struct AudioAnalyzer {
 impl AudioAnalyzer {
   pub fn new(sample_rate: u32, display_bars: usize) -> Self {
     let sample_rate = clamp_sample_rate(sample_rate);
-    let bars_per_channel = clamp_bars_per_channel(sample_rate, display_bars / 2);
+    Self::with_plan(
+      sample_rate,
+      clamp_bars_per_channel(sample_rate, display_bars / 2),
+    )
+  }
+
+  /// Build the cavacore plan and the buffers it sizes. Both setters below go
+  /// through here, so a rebuild starts from exactly the same state a fresh
+  /// analyzer does - which is also what cava does on resize.
+  fn with_plan(sample_rate: u32, bars_per_channel: usize) -> Self {
+    let cava = build_cava(sample_rate, bars_per_channel);
+    let output = cava.make_output();
 
     Self {
-      cava: build_cava(sample_rate, bars_per_channel),
+      spectrum: SpectrumData {
+        bands: vec![0.0; output.len()],
+      },
+      pending: Vec::new(),
+      output,
+      cava,
       sample_rate,
       bars_per_channel,
-      pending: Vec::new(),
-      max_pending: treble_buffer_size(sample_rate) * 8 * 2,
-      output: vec![0.0; bars_per_channel * 2].into_boxed_slice(),
-      spectrum: SpectrumData {
-        bands: vec![0.0; bars_per_channel * 2],
-        peak: 0.0,
-      },
     }
   }
 
-  /// Rebuild the cavacore plan for a new display bar count (terminal resize or
-  /// style switch). State starts fresh, matching cava's own behavior on resize.
+  /// Rebuild for a new display bar count (terminal resize or style switch).
   pub fn set_bars(&mut self, display_bars: usize) {
     let bars_per_channel = clamp_bars_per_channel(self.sample_rate, display_bars / 2);
-    if bars_per_channel == self.bars_per_channel {
-      return;
+    if bars_per_channel != self.bars_per_channel {
+      *self = Self::with_plan(self.sample_rate, bars_per_channel);
     }
-
-    self.bars_per_channel = bars_per_channel;
-    self.cava = build_cava(self.sample_rate, bars_per_channel);
-    self.output = vec![0.0; bars_per_channel * 2].into_boxed_slice();
-    self.spectrum = SpectrumData {
-      bands: vec![0.0; bars_per_channel * 2],
-      peak: 0.0,
-    };
   }
 
   /// Adopt the rate the audio server actually negotiated. Only the PipeWire
@@ -88,32 +81,32 @@ impl AudioAnalyzer {
   #[allow(dead_code)]
   pub fn set_sample_rate(&mut self, sample_rate: u32) {
     let sample_rate = clamp_sample_rate(sample_rate);
-    if sample_rate == self.sample_rate {
-      return;
+    if sample_rate != self.sample_rate {
+      let bars_per_channel = clamp_bars_per_channel(sample_rate, self.bars_per_channel);
+      *self = Self::with_plan(sample_rate, bars_per_channel);
     }
-
-    self.sample_rate = sample_rate;
-    self.bars_per_channel = clamp_bars_per_channel(sample_rate, self.bars_per_channel);
-    self.max_pending = treble_buffer_size(sample_rate) * 8 * 2;
-    self.pending.clear();
-    self.cava = build_cava(sample_rate, self.bars_per_channel);
-    self.output = vec![0.0; self.bars_per_channel * 2].into_boxed_slice();
-    self.spectrum = SpectrumData {
-      bands: vec![0.0; self.bars_per_channel * 2],
-      peak: 0.0,
-    };
   }
 
-  /// Push interleaved stereo audio frames (left, right, left, right, ...)
-  pub fn push_samples(&mut self, samples: &[f32]) {
-    self
-      .pending
-      .extend(samples.iter().map(|&s| f64::from(s) * SAMPLE_SCALE));
+  /// Push interleaved capture frames. Owning the channel rule here keeps both
+  /// capture backends from restating it: channels 0/1 pass through to cava's
+  /// stereo pipeline, a mono device duplicates. Deinterleaving and the 16-bit
+  /// scaling happen in one pass into `pending`, so callers on the audio
+  /// thread need no temporary buffer.
+  pub fn push_frames(&mut self, data: &[f32], channels: usize) {
+    let channels = channels.max(1);
+    for frame in data.chunks_exact(channels) {
+      let left = frame[0];
+      let right = if channels > 1 { frame[1] } else { left };
+      self.pending.push(f64::from(left) * SAMPLE_SCALE);
+      self.pending.push(f64::from(right) * SAMPLE_SCALE);
+    }
 
-    // Keep only the newest samples, matching cavacore's own sliding window.
-    // Callers push whole frames, so the cap (an even number) stays aligned.
-    if self.pending.len() > self.max_pending {
-      let excess = self.pending.len() - self.max_pending;
+    // Keep only the newest samples, matching cavacore's own sliding window, so
+    // a stalled UI cannot grow the backlog. Whole frames in means the cap (an
+    // even number) stays channel-aligned.
+    let max_pending = self.cava.input_len();
+    if self.pending.len() > max_pending {
+      let excess = self.pending.len() - max_pending;
       self.pending.drain(..excess);
     }
   }
@@ -127,11 +120,6 @@ impl AudioAnalyzer {
     self.pending.clear();
 
     mirror_stereo_bands(&self.output, &mut self.spectrum.bands);
-    self.spectrum.peak = self
-      .spectrum
-      .bands
-      .iter()
-      .fold(0.0f32, |peak, &band| peak.max(band));
 
     self.spectrum.clone()
   }
@@ -153,12 +141,11 @@ fn mirror_stereo_bands(output: &[f64], bands: &mut [f32]) {
 /// so any admitted rate must keep Nyquist >= 2 or the builder's sanity check
 /// rejects the range and the expect below panics.
 fn clamp_sample_rate(sample_rate: u32) -> u32 {
-  sample_rate.clamp(4, 384_000)
+  sample_rate.clamp(4, MAX_SAMPLE_RATE)
 }
 
 fn clamp_bars_per_channel(sample_rate: u32, bars_per_channel: usize) -> usize {
-  let max_bars = treble_buffer_size(sample_rate) / 2 + 1;
-  bars_per_channel.clamp(1, max_bars)
+  bars_per_channel.clamp(1, max_bars_per_channel(sample_rate))
 }
 
 fn build_cava(sample_rate: u32, bars_per_channel: usize) -> Cava {
@@ -182,8 +169,17 @@ fn build_cava(sample_rate: u32, bars_per_channel: usize) -> Cava {
 /// Thread-safe wrapper for AudioAnalyzer
 pub type SharedAnalyzer = Arc<Mutex<AudioAnalyzer>>;
 
-pub fn create_shared_analyzer(sample_rate: u32) -> SharedAnalyzer {
-  Arc::new(Mutex::new(AudioAnalyzer::new(sample_rate, DEFAULT_BANDS)))
+pub fn create_shared_analyzer(sample_rate: u32, display_bars: usize) -> SharedAnalyzer {
+  Arc::new(Mutex::new(AudioAnalyzer::new(sample_rate, display_bars)))
+}
+
+/// Resize to `desired_bars` and read the next frame of spectrum data. Both
+/// capture backends share this so the "resize before you read" ordering is
+/// stated once.
+pub fn spectrum_for(analyzer: &SharedAnalyzer, desired_bars: usize) -> Option<SpectrumData> {
+  let mut analyzer = analyzer.lock().ok()?;
+  analyzer.set_bars(desired_bars);
+  Some(analyzer.process())
 }
 
 #[cfg(test)]
@@ -193,24 +189,43 @@ mod tests {
   #[test]
   fn push_scales_samples_to_16_bit_range() {
     let mut analyzer = AudioAnalyzer::new(48_000, 12);
-    analyzer.push_samples(&[1.0, -0.5]);
+    analyzer.push_frames(&[1.0, -0.5], 2);
     assert_eq!(analyzer.pending, vec![32_768.0, -16_384.0]);
+  }
+
+  #[test]
+  fn mono_capture_frames_are_duplicated_to_both_channels() {
+    let mut analyzer = AudioAnalyzer::new(48_000, 12);
+    analyzer.push_frames(&[1.0, -0.5], 1);
+    assert_eq!(
+      analyzer.pending,
+      vec![32_768.0, 32_768.0, -16_384.0, -16_384.0]
+    );
+  }
+
+  #[test]
+  fn extra_capture_channels_are_dropped_after_the_stereo_pair() {
+    let mut analyzer = AudioAnalyzer::new(48_000, 12);
+    // One 5.1 frame: only front left/right reach the engine.
+    analyzer.push_frames(&[1.0, -1.0, 0.5, 0.25, 0.125, 0.0625], 6);
+    assert_eq!(analyzer.pending, vec![32_768.0, -32_768.0]);
   }
 
   #[test]
   fn pending_backlog_keeps_the_newest_samples() {
     let mut analyzer = AudioAnalyzer::new(48_000, 12);
-    analyzer.push_samples(&vec![0.0; analyzer.max_pending]);
-    analyzer.push_samples(&[1.0, 1.0]);
+    let max_pending = analyzer.cava.input_len();
+    analyzer.push_frames(&vec![0.0; max_pending], 2);
+    analyzer.push_frames(&[1.0, 1.0], 2);
 
-    assert_eq!(analyzer.pending.len(), analyzer.max_pending);
+    assert_eq!(analyzer.pending.len(), max_pending);
     assert_eq!(analyzer.pending.last(), Some(&32_768.0));
   }
 
   #[test]
   fn process_drains_pending_and_reports_requested_bars() {
     let mut analyzer = AudioAnalyzer::new(48_000, 12);
-    analyzer.push_samples(&[0.25; 512]);
+    analyzer.push_frames(&[0.25; 512], 2);
 
     let spectrum = analyzer.process();
 
@@ -255,7 +270,7 @@ mod tests {
   #[test]
   fn sample_rate_change_rebuilds_without_panicking() {
     let mut analyzer = AudioAnalyzer::new(48_000, 12);
-    analyzer.push_samples(&[0.5; 256]);
+    analyzer.push_frames(&[0.5; 256], 2);
     analyzer.set_sample_rate(44_100);
 
     let spectrum = analyzer.process();

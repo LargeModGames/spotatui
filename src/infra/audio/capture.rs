@@ -1,4 +1,4 @@
-use super::analyzer::{create_shared_analyzer, SharedAnalyzer, SpectrumData};
+use super::analyzer::{create_shared_analyzer, spectrum_for, SharedAnalyzer, SpectrumData};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(not(target_os = "windows"))]
 use cpal::BufferSize;
@@ -14,9 +14,9 @@ pub struct AudioCaptureManager {
 }
 
 impl AudioCaptureManager {
-  /// Create a new audio capture manager
+  /// Create a new audio capture manager sized for `display_bars`
   /// Returns None if no suitable audio device is found
-  pub fn new() -> Option<Self> {
+  pub fn new(display_bars: usize) -> Option<Self> {
     let host = cpal::default_host();
 
     // Try to find a loopback/monitor device
@@ -31,7 +31,7 @@ impl AudioCaptureManager {
     // Get a compatible config that won't interfere with playback
     let config = Self::get_compatible_config(&device)?;
 
-    let analyzer = create_shared_analyzer(config.sample_rate);
+    let analyzer = create_shared_analyzer(config.sample_rate, display_bars);
     let active = Arc::new(AtomicBool::new(true));
 
     let stream = Self::build_stream(&device, &config, analyzer.clone(), active.clone())?;
@@ -55,12 +55,7 @@ impl AudioCaptureManager {
       return None;
     }
 
-    if let Ok(mut analyzer) = self.analyzer.lock() {
-      analyzer.set_bars(desired_bars);
-      Some(analyzer.process())
-    } else {
-      None
-    }
+    spectrum_for(&self.analyzer, desired_bars)
   }
 
   /// Check if audio capture is currently active
@@ -186,19 +181,8 @@ impl AudioCaptureManager {
     let active_clone = active.clone();
 
     let data_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-      // Interleaved stereo frames for the analyzer, matching cava's default
-      // stereo pipeline: channels 0/1 pass through, a mono device duplicates.
-      let stereo_samples: Vec<f32> = data
-        .chunks(channels)
-        .flat_map(|frame| {
-          let left = frame.first().copied().unwrap_or(0.0);
-          let right = frame.get(1).copied().unwrap_or(left);
-          [left, right]
-        })
-        .collect();
-
       if let Ok(mut analyzer) = analyzer.lock() {
-        analyzer.push_samples(&stereo_samples);
+        analyzer.push_frames(data, channels);
       }
     };
 

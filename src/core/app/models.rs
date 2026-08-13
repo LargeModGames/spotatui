@@ -64,13 +64,6 @@ pub struct TrackTable {
   pub scroll_offset: std::cell::Cell<usize>,
 }
 
-/// Spectrum data for local audio visualization
-#[derive(Clone, Default)]
-pub struct SpectrumData {
-  pub bands: Vec<f32>,
-  pub peak: f32,
-}
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PendingTrackSelection {
   Index(usize),

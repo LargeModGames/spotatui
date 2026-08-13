@@ -18,8 +18,10 @@
 //! - Dropped the `bounded-integer` and `thiserror` deps: `SampleRate` /
 //!   `NonZero*` parameter types became plain integers validated in
 //!   `sanity_check`, and `Error` implements `Display` by hand.
-//! - `treble_buffer_size(rate)` is exposed standalone so the analyzer can cap
-//!   its sample backlog to cavacore's sliding input window.
+//! - Engine bounds the integration must respect are exposed rather than
+//!   restated app-side: `MAX_SAMPLE_RATE` and `max_bars_per_channel(rate)` are
+//!   the values `sanity_check` enforces, and `Cava::input_len()` is the
+//!   sliding input window a caller caps its sample backlog to.
 //! - EXTENSION (not in C cava): `CavaBuilder::max_sens` caps the autosens gain
 //!   so near-silent input cannot be normalized up to full-scale bars; the
 //!   default (infinity) preserves upstream behavior.
@@ -56,7 +58,7 @@ use realfft::{num_complex::Complex, FftNum, RealFftPlanner, RealToComplex};
 mod builder;
 mod error;
 
-pub use builder::{treble_buffer_size, CavaBuilder, DEFAULT_NOISE_REDUCTION};
+pub use builder::{max_bars_per_channel, CavaBuilder, DEFAULT_NOISE_REDUCTION, MAX_SAMPLE_RATE};
 pub use error::Error;
 
 #[repr(u8)]
@@ -99,6 +101,13 @@ pub struct Cava {
 }
 
 impl Cava {
+  /// Length of the sliding input window one `execute` can consume, in
+  /// interleaved samples. Callers that buffer between calls cap their backlog
+  /// here instead of re-deriving it from the sample rate and channel count.
+  pub fn input_len(&self) -> usize {
+    self.input_buffer.len()
+  }
+
   pub fn make_output(&self) -> Box<[f64]> {
     let amount_channels = if self.right.is_some() { 2 } else { 1 };
     let total_amount_bars = self.bars_per_channel * amount_channels;

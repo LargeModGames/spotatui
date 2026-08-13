@@ -8,7 +8,7 @@ pub const DEFAULT_NOISE_REDUCTION: f64 = 0.77;
 
 /// The sample rate cap upstream encoded in its `SampleRate` bounded type;
 /// enforced by `sanity_check` instead (see the module-level divergence notes).
-const MAX_SAMPLE_RATE: u32 = 384_000;
+pub const MAX_SAMPLE_RATE: u32 = 384_000;
 
 #[derive(Debug, Clone)]
 pub struct CavaBuilder {
@@ -83,11 +83,12 @@ impl CavaBuilder {
       errors.push(Error::ZeroFreqStart);
     }
 
-    if self.bars_per_channel > treble_buffer_size / 2 + 1 {
+    let max_amount_bars = max_bars_from_treble_buffer(treble_buffer_size);
+    if self.bars_per_channel > max_amount_bars {
       errors.push(Error::TooHighAmountBars {
         amount_bars: self.bars_per_channel,
         sample_rate: self.sample_rate,
-        max_amount_bars: treble_buffer_size / 2 + 1,
+        max_amount_bars,
       });
     }
 
@@ -137,6 +138,17 @@ pub fn treble_buffer_size(sample_rate: u32) -> usize {
   };
 
   factor * 128
+}
+
+/// The most bars per channel the treble window can resolve at `sample_rate`.
+/// `sanity_check` rejects anything above this, so callers that must not see a
+/// build error clamp to it first.
+pub fn max_bars_per_channel(sample_rate: u32) -> usize {
+  max_bars_from_treble_buffer(treble_buffer_size(sample_rate))
+}
+
+fn max_bars_from_treble_buffer(treble_buffer_size: usize) -> usize {
+  treble_buffer_size / 2 + 1
 }
 
 impl Default for CavaBuilder {

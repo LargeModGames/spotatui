@@ -4,6 +4,7 @@ use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   style::{Color, Style},
+  symbols::bar,
   text::{Line, Span},
   widgets::{Block, Borders, Paragraph},
   Frame,
@@ -11,12 +12,35 @@ use ratatui::{
 
 use tui_bar_graph::{BarGraph, BarStyle, ColorMode};
 
+/// The analysis screen's two rows: the info strip and the visualizer block.
+fn analysis_areas(root: Rect, margin: u16) -> [Rect; 2] {
+  root.layout(&Layout::vertical([Constraint::Length(3), Constraint::Min(10)]).margin(margin))
+}
+
+/// The visualizer's surrounding block, borders only. `draw` styles and titles
+/// it; `visualizer_inner_width` needs it only to measure the border inset.
+fn visualizer_block<'a>() -> Block<'a> {
+  Block::default().borders(Borders::ALL)
+}
+
+/// Inner width of the visualizer block at the current terminal size. The
+/// runner picks the analyzer's bar count before a frame exists, so it derives
+/// the rect from `app.size` through here rather than re-deriving the margin
+/// and border inset itself.
+///
+/// This and `visualizer_bar_count` are only called behind the audio-viz
+/// feature gates; slim builds still compile (and test) them.
+#[allow(dead_code)]
+pub fn visualizer_inner_width(app: &App) -> u16 {
+  let root = Rect::new(0, 0, app.size.width, app.size.height);
+  let [_, visualizer_area] = analysis_areas(root, main_layout_margin(app));
+  visualizer_block().inner(visualizer_area).width
+}
+
 pub fn draw(f: &mut Frame<'_>, app: &App) {
   let margin = main_layout_margin(app);
 
-  let [info_area, visualizer_area] = f
-    .area()
-    .layout(&Layout::vertical([Constraint::Length(3), Constraint::Min(10)]).margin(margin));
+  let [info_area, visualizer_area] = analysis_areas(f.area(), margin);
 
   let white = Style::default().fg(app.user_config.theme.text);
   let gray = Style::default().fg(app.user_config.theme.inactive);
@@ -34,8 +58,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
 
   let bar_chart_title = &format!("Spectrum | {} FPS | Press q to exit", 1000 / tick_rate);
 
-  let bar_chart_block = Block::default()
-    .borders(Borders::ALL)
+  let bar_chart_block = visualizer_block()
     .style(white)
     .title(Span::styled(bar_chart_title, gray))
     .border_style(gray);
@@ -50,7 +73,8 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
       "[||] Paused"
     };
 
-    let peak_text = format!("Peak: {:.0}%", spectrum.peak * 100.0);
+    let peak = spectrum.bands.iter().copied().fold(0.0f32, f32::max);
+    let peak_text = format!("Peak: {:.0}%", peak * 100.0);
     let style_hint = "Press 'V' to cycle visualizer style";
 
     let texts = vec![Line::from(vec![
@@ -71,22 +95,17 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
 
     // Calculate inner area for visualizer (within the block borders)
     let inner_area = bar_chart_block.inner(visualizer_area);
+    f.render_widget(bar_chart_block, visualizer_area);
 
     // Render the appropriate visualizer based on user setting
     match visualizer_style {
-      VisualizerStyle::BarGraph => {
-        f.render_widget(bar_chart_block, visualizer_area);
-        render_bar_graph(f, &spectrum.bands, inner_area);
-      }
-      VisualizerStyle::Cava => {
-        f.render_widget(bar_chart_block, visualizer_area);
-        render_cava(
-          f,
-          &spectrum.bands,
-          inner_area,
-          app.user_config.theme.analysis_bar,
-        );
-      }
+      VisualizerStyle::BarGraph => render_bar_graph(f, &spectrum.bands, inner_area),
+      VisualizerStyle::Cava => render_cava(
+        f,
+        &spectrum.bands,
+        inner_area,
+        app.user_config.theme.analysis_bar,
+      ),
     }
   } else {
     // No audio capture available
@@ -125,18 +144,8 @@ fn render_bar_graph(f: &mut Frame<'_>, bands: &[f32], area: Rect) {
     return;
   }
 
-  // Bands normally arrive sized for Braille resolution (2 per cell, computed
-  // by the runner), each a real analyzer bar. When they don't match - the
-  // analyzer caps bar counts at what the sample rate supports (513 at
-  // 44.1/48 kHz, i.e. terminals wider than ~257 columns), or a style switch /
-  // resize lags one frame - stretch them across the full width instead of
-  // leaving the right side blank (the widget draws left-aligned).
   let target_width = (area.width as usize) * 2;
-  let data: Vec<f64> = if bands.len() == target_width {
-    bands.iter().map(|&v| f64::from(v)).collect()
-  } else {
-    interpolate_bands(bands, target_width)
-  };
+  let data = interpolate_bands(bands, target_width);
 
   let bar_graph = BarGraph::new(data)
     .with_gradient(colorgrad::preset::turbo())
@@ -147,8 +156,13 @@ fn render_bar_graph(f: &mut Frame<'_>, bands: &[f32], area: Rect) {
   f.render_widget(bar_graph, area);
 }
 
-/// Linearly interpolate band values onto `target_width` points (only used when
-/// the analyzer could not supply one real bar per Braille half-column).
+/// Linearly interpolate band values onto `target_width` points. Bands normally
+/// already arrive at Braille resolution (2 per cell, requested by the runner),
+/// in which case this is an exact copy. They fall short when the analyzer caps
+/// the count at what the sample rate supports (513 at 44.1/48 kHz, i.e.
+/// terminals wider than ~257 columns) or when a style switch or resize lags a
+/// frame; stretching keeps the right side from going blank, since the widget
+/// draws left-aligned.
 fn interpolate_bands(bands: &[f32], target_width: usize) -> Vec<f64> {
   if bands.is_empty() {
     return vec![0.0; target_width];
@@ -177,8 +191,19 @@ fn interpolate_bands(bands: &[f32], target_width: usize) -> Vec<f64> {
   result
 }
 
-/// Bar glyphs from empty to full block, indexed by filled eighths (0-8).
-const EIGHTH_GLYPHS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+/// Bar glyphs from empty to full block, indexed by filled eighths (0-8):
+/// ratatui's own nine-level bar set, with a blank for the empty cell.
+const EIGHTH_GLYPHS: [&str; 9] = [
+  bar::NINE_LEVELS.empty,
+  bar::NINE_LEVELS.one_eighth,
+  bar::NINE_LEVELS.one_quarter,
+  bar::NINE_LEVELS.three_eighths,
+  bar::NINE_LEVELS.half,
+  bar::NINE_LEVELS.five_eighths,
+  bar::NINE_LEVELS.three_quarters,
+  bar::NINE_LEVELS.seven_eighths,
+  bar::NINE_LEVELS.full,
+];
 
 /// Total filled eighths for a bar value in a column `rows` cells tall, with
 /// cava's idle floor of one eighth (the signature resting line). u32 math:
@@ -194,20 +219,47 @@ fn cell_eighths(total_eighths: u32, row: u16) -> u32 {
   total_eighths.saturating_sub(u32::from(row) * 8).min(8)
 }
 
-/// Bar width and spacing for the cava style. The bar count is capped (~40),
-/// so bars widen with the terminal to fill the area at roughly cava's 2:1
-/// bar-to-gap ratio; cava's own 2-wide/1-gap geometry is the floor, keeping
-/// dense fonts on the classic chunky-column look instead of pencil bars.
+/// Cap on the cava style's bar count: the classic cava look at a normal font.
+/// Past this the renderer widens bars to fill the terminal, so dense fonts get
+/// chunky columns instead of one pencil bar per 3 columns.
+#[allow(dead_code)]
+const MAX_CAVA_BARS: usize = 40;
+
+/// cava's own bar geometry, 2 columns of bar plus a 1-column gap. It is the
+/// floor for `cava_bar_layout`, and the divisor `visualizer_bar_count` uses to
+/// pick a count that fits.
+const CAVA_BAR_FOOTPRINT: u16 = 3;
+
+/// Bars the analyzer should produce for the visualizer block's `inner_width`.
+/// Each style has its own geometry; the analyzer clamps counts its sample rate
+/// cannot support, and renderers draw from `bands.len()`, so a stale count
+/// during a resize race only mis-sizes one frame.
+#[allow(dead_code)]
+pub fn visualizer_bar_count(style: VisualizerStyle, inner_width: u16) -> usize {
+  let inner_width = usize::from(inner_width);
+  match style {
+    // Braille has 2x horizontal resolution: one real bar per half-cell.
+    VisualizerStyle::BarGraph => (inner_width * 2).max(2),
+    // Below ~120 columns this degrades to exactly cava's auto rule.
+    VisualizerStyle::Cava => {
+      ((inner_width + 1) / usize::from(CAVA_BAR_FOOTPRINT)).clamp(2, MAX_CAVA_BARS)
+    }
+  }
+}
+
+/// Bar width and spacing for the cava style. The bar count is capped at
+/// `MAX_CAVA_BARS`, so bars widen with the terminal to fill the area at
+/// roughly cava's 2:1 bar-to-gap ratio, with `CAVA_BAR_FOOTPRINT` as the floor.
 fn cava_bar_layout(inner_width: u16, bars: u16) -> (u16, u16) {
   if bars == 0 {
-    return (2, 1);
+    return (CAVA_BAR_FOOTPRINT - 1, 1);
   }
   // u32 internals, footprint capped at the width: keeps the math (and the
   // renderer's bar_width + spacing sums) off u16 overflow at any input.
+  let floor = u32::from(CAVA_BAR_FOOTPRINT);
   let footprint = ((u32::from(inner_width) + 1) / u32::from(bars))
-    .max(3)
-    .min(u32::from(inner_width).max(3));
-  let spacing = ((footprint + 1) / 3).max(1);
+    .clamp(floor, u32::from(inner_width).max(floor));
+  let spacing = ((footprint + 1) / floor).max(1);
   ((footprint - spacing) as u16, spacing as u16)
 }
 
@@ -241,7 +293,7 @@ fn render_cava(f: &mut Frame<'_>, bands: &[f32], area: Rect, color: Color) {
       let glyph = EIGHTH_GLYPHS[filled as usize];
       let y = area.y + area.height - 1 - row;
       for dx in 0..bar_width {
-        buf[(x0 + dx, y)].set_char(glyph).set_style(style);
+        buf[(x0 + dx, y)].set_symbol(glyph).set_style(style);
       }
     }
   }
@@ -287,9 +339,44 @@ mod tests {
   #[test]
   fn cell_glyphs_build_bottom_up() {
     // 11 eighths in a 3-row column: full block, then three eighths, then air.
-    let glyphs: Vec<char> = (0..3)
+    let glyphs: Vec<&str> = (0..3)
       .map(|row| EIGHTH_GLYPHS[cell_eighths(11, row) as usize])
       .collect();
-    assert_eq!(glyphs, vec!['█', '▃', ' ']);
+    assert_eq!(glyphs, vec!["█", "▃", " "]);
+  }
+
+  #[test]
+  fn visualizer_bar_count_follows_each_styles_geometry() {
+    // BarGraph gets two Braille bars per cell.
+    assert_eq!(visualizer_bar_count(VisualizerStyle::BarGraph, 100), 200);
+
+    // Cava: one bar per 3 columns (bar width 2 + spacing 1).
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 80), 27);
+  }
+
+  #[test]
+  fn visualizer_bar_count_clamps_degenerate_widths() {
+    // Zero-width terminals still request a drawable minimum.
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 0), 2);
+    assert_eq!(visualizer_bar_count(VisualizerStyle::BarGraph, 0), 2);
+
+    // The bar cap holds on wide terminals and dense fonts.
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 4000), 40);
+    assert_eq!(visualizer_bar_count(VisualizerStyle::Cava, 216), 40);
+  }
+
+  #[test]
+  fn requested_bar_count_and_drawn_geometry_agree() {
+    // The two halves of the cava contract: the count the runner asks for must
+    // fit the width the renderer lays it out in, at every width.
+    for inner_width in [20u16, 40, 80, 119, 120, 216, 400] {
+      let bars = visualizer_bar_count(VisualizerStyle::Cava, inner_width) as u16;
+      let (bar_width, spacing) = cava_bar_layout(inner_width, bars);
+      let drawn = bars * (bar_width + spacing) - spacing;
+      assert!(
+        drawn <= inner_width,
+        "{bars} bars drawn as {drawn} columns overflow width {inner_width}"
+      );
+    }
   }
 }

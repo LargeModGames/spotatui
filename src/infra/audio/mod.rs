@@ -57,7 +57,6 @@ pub use analyzer::SpectrumData;
 #[allow(dead_code)]
 pub struct SpectrumData {
   pub bands: Vec<f32>,
-  pub peak: f32,
 }
 
 #[cfg(not(any(
@@ -73,7 +72,7 @@ pub struct AudioCaptureManager;
 )))]
 #[allow(dead_code)]
 impl AudioCaptureManager {
-  pub fn new() -> Option<Self> {
+  pub fn new(_display_bars: usize) -> Option<Self> {
     None
   }
 

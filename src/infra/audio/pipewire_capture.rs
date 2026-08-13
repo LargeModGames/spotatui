@@ -1,7 +1,7 @@
 // PipeWire-native audio capture for Linux
 // This provides direct access to PipeWire's audio graph for monitor capture
 
-use super::analyzer::{create_shared_analyzer, SharedAnalyzer, SpectrumData};
+use super::analyzer::{create_shared_analyzer, spectrum_for, SharedAnalyzer, SpectrumData};
 use pipewire as pw;
 use pw::spa::param::audio::AudioInfoRaw;
 use pw::spa::pod::Pod;
@@ -18,12 +18,12 @@ pub struct PipeWireCapture {
 }
 
 impl PipeWireCapture {
-  /// Create a new PipeWire audio capture manager
+  /// Create a new PipeWire audio capture manager sized for `display_bars`
   /// Returns None if PipeWire initialization fails
-  pub fn new() -> Option<Self> {
+  pub fn new(display_bars: usize) -> Option<Self> {
     // Built at the rate we request below; the param_changed callback swaps in
     // the rate PipeWire actually negotiates.
-    let analyzer = create_shared_analyzer(48000);
+    let analyzer = create_shared_analyzer(48000, display_bars);
     let active = Arc::new(AtomicBool::new(true));
 
     let analyzer_clone = analyzer.clone();
@@ -57,12 +57,7 @@ impl PipeWireCapture {
       return None;
     }
 
-    if let Ok(mut analyzer) = self.analyzer.lock() {
-      analyzer.set_bars(desired_bars);
-      Some(analyzer.process())
-    } else {
-      None
-    }
+    spectrum_for(&self.analyzer, desired_bars)
   }
 
   /// Check if audio capture is currently active
@@ -161,29 +156,16 @@ fn run_pipewire_capture(
         // Only process the valid portion of the buffer
         let valid_bytes = &samples_bytes[..n_bytes.min(samples_bytes.len())];
 
-        // Interleaved stereo frames for the analyzer, matching cava's default
-        // stereo pipeline (and the cpal backend): channels 0/1 pass through,
-        // a mono stream duplicates.
-        let sample_size = mem::size_of::<f32>();
-        let stereo_samples: Vec<f32> = valid_bytes
-          .chunks_exact(sample_size * n_channels)
-          .flat_map(|frame| {
-            let sample = |channel: usize| {
-              frame
-                .get(channel * sample_size..(channel + 1) * sample_size)
-                .and_then(|bytes| bytes.try_into().ok())
-                .map(f32::from_le_bytes)
-                .unwrap_or(0.0)
-            };
-            let left = sample(0);
-            let right = if n_channels > 1 { sample(1) } else { left };
-            [left, right]
-          })
+        // Decode the interleaved f32 stream; the analyzer owns the channel
+        // rule (0/1 through, mono duplicated) so it is stated in one place.
+        let samples: Vec<f32> = valid_bytes
+          .chunks_exact(mem::size_of::<f32>())
+          .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap_or([0; 4])))
           .collect();
 
-        if !stereo_samples.is_empty() {
+        if !samples.is_empty() {
           if let Ok(mut analyzer) = analyzer_clone.lock() {
-            analyzer.push_samples(&stereo_samples);
+            analyzer.push_frames(&samples, n_channels);
           }
         }
       }
