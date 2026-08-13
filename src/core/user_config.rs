@@ -190,15 +190,26 @@ impl StartupBehavior {
 }
 
 fn parse_key(key: String) -> Result<Key> {
-  fn get_single_char(string: &str) -> char {
-    match string.chars().next() {
-      Some(c) => c,
-      None => panic!(),
-    }
+  // "ctrl" with no dash and "ctrl-" with nothing after the dash are config
+  // typos; they must surface as config errors naming the binding, never a
+  // panic before the UI starts (#441).
+  fn modifier_char(key: &str, sections: &[&str]) -> Result<char> {
+    sections
+      .get(1)
+      .and_then(|section| section.chars().next())
+      .ok_or_else(|| {
+        anyhow!(
+          "The shortcut \"{}\" is missing its key, e.g. \"ctrl-a\"",
+          key
+        )
+      })
   }
 
   match key.len() {
-    1 => Ok(Key::Char(get_single_char(key.as_str()))),
+    1 => match key.chars().next() {
+      Some(c) => Ok(Key::Char(c)),
+      None => Err(anyhow!("The key binding is empty")),
+    },
     _ => {
       let sections: Vec<&str> = key.split('-').collect();
 
@@ -211,8 +222,8 @@ fn parse_key(key: String) -> Result<Key> {
       }
 
       match sections[0].to_lowercase().as_str() {
-        "ctrl" => Ok(Key::Ctrl(get_single_char(sections[1]))),
-        "alt" => Ok(Key::Alt(get_single_char(sections[1]))),
+        "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
+        "alt" => Ok(Key::Alt(modifier_char(&key, &sections)?)),
         "left" => Ok(Key::Left),
         "right" => Ok(Key::Right),
         "up" => Ok(Key::Up),
@@ -1837,6 +1848,7 @@ impl UserConfig {
       k.cover_art_view,
       k.add_item_to_queue,
       k.show_queue,
+      k.remove_from_queue,
       k.open_settings,
       k.save_settings,
       k.listening_party,
@@ -2411,6 +2423,21 @@ mod tests {
     assert_eq!(parse_key(String::from("f10")).unwrap(), Key::F10);
     assert_eq!(parse_key(String::from("f11")).unwrap(), Key::F11);
     assert_eq!(parse_key(String::from("f12")).unwrap(), Key::F12);
+  }
+
+  #[test]
+  fn malformed_modifier_bindings_error_instead_of_panicking() {
+    use super::parse_key;
+    // "ctrl"/"alt" without a key (with or without the dash) used to index or
+    // panic out of bounds during config load, aborting before the UI started.
+    for bad in ["ctrl", "ctrl-", "alt", "alt-"] {
+      let err = parse_key(bad.to_string()).unwrap_err();
+      assert!(
+        err.to_string().contains(bad),
+        "error for {bad:?} must name the binding: {err}"
+      );
+    }
+    assert!(parse_key(String::new()).is_err());
   }
 
   #[test]
@@ -3015,6 +3042,21 @@ dj_api_key: null
     entries.insert("my_cmd".to_string(), "q".to_string());
     config.load_plugin_commands(entries);
     assert!(!config.plugin_command_keys.contains_key(&Key::Char('q')));
+  }
+
+  #[test]
+  fn plugin_commands_remove_from_queue_collision_is_skipped() {
+    use super::UserConfig;
+    use crate::core::input::Key;
+    use std::collections::HashMap;
+
+    let mut config = UserConfig::new();
+    // 'x' is the default 'remove_from_queue' key; it was missing from the
+    // named-action collision list, so a plugin could shadow it silently.
+    let mut entries = HashMap::new();
+    entries.insert("my_cmd".to_string(), "x".to_string());
+    config.load_plugin_commands(entries);
+    assert!(!config.plugin_command_keys.contains_key(&Key::Char('x')));
   }
 
   #[test]

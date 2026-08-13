@@ -69,6 +69,7 @@ const STARTUP_ROUTE_SETTING_OPTIONS: &[&str] = &[
   "discover",
   "artists",
   "album_list",
+  "stats",
 ];
 
 const PLAYLIST_TRACK_SORT_SETTING_OPTIONS: &[&str] = &[
@@ -872,5 +873,22 @@ impl App {
     self.settings_saved_items = self.settings_items.clone();
     self.settings_unsaved_prompt_visible = false;
     self.settings_unsaved_prompt_save_selected = true;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn startup_screen_setting_cycle_offers_every_startup_route() {
+    // The Settings cycle list and RouteId::STARTUP_OPTIONS are coupled only
+    // by convention; a route added to one but not the other silently becomes
+    // unselectable in-app (#443, which is how Stats went missing).
+    let expected: Vec<&str> = RouteId::STARTUP_OPTIONS
+      .iter()
+      .map(|route| route.to_config_str())
+      .collect();
+    assert_eq!(STARTUP_ROUTE_SETTING_OPTIONS, expected.as_slice());
   }
 }
