@@ -9,7 +9,7 @@ This file is maintained as three near-identical copies: `CLAUDE.md`, `AGENTS.md`
 # Full build (native streaming + audio viz + Lua scripting + OS integrations)
 cargo run
 
-# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's five legs
+# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's six legs
 cargo run --no-default-features --features telemetry
 
 # With the free alternative sources (Local/Subsonic/Radio/YouTube). These are NOT
@@ -28,15 +28,16 @@ cargo test --no-default-features --features telemetry
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
 (`.github/workflows/ci.yml`, on `ubuntu-latest`) runs `check`, `test`, and `clippy`
-across a **five-leg** feature matrix:
+across a **six-leg** feature matrix:
 
 | Leg | Features |
 |-----|----------|
 | `default` | a plain `cargo test`: streaming + audio-viz-cpal + scripting + self-update + OS integrations |
 | `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz, all four sources) |
-| `mcp-only` | `telemetry,mcp-server` |
-| `ai-dj-only` | `telemetry,ai-dj` |
-| `slim` | `telemetry` |
+| `mcp-only` | `telemetry,tui,mcp-server` |
+| `ai-dj-only` | `telemetry,tui,ai-dj` |
+| `slim` | `telemetry,tui` |
+| `headless` | `telemetry` - the only leg without `tui` (an empty feature while `mod tui` is still ungated); once the GUI substrate migration gates the module, this leg turns `crate::tui` imports from core/infra/cli into compile errors |
 
 - `mcp-only` and `ai-dj-only` matter more than their size suggests: both enable
   `dj-core` **without** `streaming` (a combination nothing else covers), and each
