@@ -214,28 +214,7 @@ dispatch `StartParty` / `JoinParty` / `SetPartyControlMode` / `LeaveParty`;
 
 ### Adding a new screen
 
-Six places, not four:
-
-1. `RouteId` + `ActiveBlock` variants in `src/core/app/route.rs`.
-2. `src/tui/handlers/<screen>.rs` with `pub fn handler(key: Key, app: &mut App)`,
-   registered with **both** a `mod <screen>;` line and a `handle_block_events`
-   match arm in `handlers/mod.rs` - a file missing its `mod` line silently is not
-   compiled.
-3. A draw fn in `src/tui/ui/<screen>.rs`, wired into `ui::draw_route_content`
-   (content-pane screens) **or** the `terminal.draw` match in `tui/runner.rs`
-   (full-screen/overlay screens), which also needs an explicit no-op arm in
-   `draw_route_content`.
-4. An arm in `handlers::handle_escape`.
-5. `common_key_events::content_active_block_for_route` if right-arrow from the
-   sidebar should reach it.
-6. A row in `get_help_docs` (`src/tui/ui/help.rs`) for any new key.
-
-Any new typing surface must also be added to
-`runner.rs::key_reaches_handlers_before_back`, or the default back key `q` closes
-it mid-typing. Keep feature-gated screens' match arms ungated and `#[cfg]` only
-the body, so the exhaustive `ActiveBlock` match compiles in slim builds. New
-Spotify calls become `IoEvent` variants in `src/infra/network/mod.rs`, implemented
-in the matching `src/infra/network/<concern>.rs`.
+See `.claude/skills/add-tui-screen/SKILL.md` for the six-place checklist.
 
 ### Dispatching network calls
 
@@ -341,77 +320,14 @@ never config:
 
 ### Adding a feature-gated sidebar row
 
-`library_options()` (`src/core/app/library.rs`) composes the sidebar list at
-first use. Look entries up **by name**
-(`library_options().iter().position(...)`), never by index: the index of any row
-after a gated one depends on which features are built in.
+See `.claude/skills/add-tui-screen/SKILL.md`.
 
-### The DJ: lanes, guards, and the avoid-library filter
+### Domain-specific conventions
 
-The tool surface is defined once - `src/infra/dj/tools.rs::TOOLS` (8 tools). MCP
-publishes it verbatim; the in-TUI brain renders the same table into its prompt.
-
-- **Lanes**: `AskDj` / `DjTopUp` run on the service lane (a brain call can take
-  minutes; they touch only `App` and use `dispatch_without_spinner` - plain
-  `dispatch` would pin the global spinner for the whole call). `DjToolCall` /
-  `DjIndexLibrary` run on the serial lane because they need the real Spotify
-  client. `DjToolCall` additionally bypasses the auth gate so an unauthenticated
-  MCP caller gets a diagnosable error instead of a dropped oneshot;
-  `DjIndexLibrary` does not.
-- **Two staleness guards, both load-bearing**: `app.dj.generation` decides whether
-  a turn's results are still wanted (re-checked before every mutating tool call);
-  `dj.turn_seq` decides who may clear `dj.thinking` - without it an abandoned turn
-  clears its replacement's flag and the top-up fires a duplicate refill.
-- **The filter is two gates, both needed**: `resolve_suggestions` rejects on the
-  *name the model gave* before paying for a search; `reject_owned_tracks` rejects
-  on the *resolved track ID* afterwards (the only gate that sees `uri` entries).
-  Rejections go in `ResolveReport::in_library` - never `duplicates` (wrong words
-  for the user), never `unresolved` (tells the model a real track doesn't exist).
-- **The filter is OFF by default everywhere** (`behavior.dj_avoid_library:
-  false`). The in-TUI difference is *ownership*: once the listener toggles it on
-  (Ctrl+O), `agent::apply_policy` forces `exclude_owned` onto every
-  `queue_tracks` whether or not the model asked. Over MCP the agent decides per
-  call; `search_tracks` only *marks* results `owned`; `play_now` is never filtered.
-- **Where the crawl runs is a latency decision**: `search_tracks` never crawls
-  inline - it answers from Liked Songs, dispatches `IoEvent::DjIndexLibrary`, and
-  reports `ownership_complete: false` (seconds of pagination inside a tool call
-  would head-of-line-block the serial lane). `queue_tracks(exclude_owned)` is the
-  one caller that crawls inline via `dj_library_index`, and refuses the call
-  outright if the crawl fails: it was asked for a guarantee.
-- The taste brief is aggregates and names only - no timestamps, IDs, or identity.
-  That is a privacy property, not a token optimization.
-
-### MCP server (feature `mcp-server`)
-
-`spotatui mcp` is a stdio relay to the running TUI over loopback TCP: the TUI
-listens on 127.0.0.1 with a token published in a 0600
-`~/.config/spotatui/mcp.json`, gated on `behavior.mcp_enabled`. The relay
-reconnects per line because the two processes have independent lifetimes.
-`spotatui mcp` blocks - use `spotatui mcp status` to test. The protocol
-(`src/infra/mcp/protocol.rs`) is hand-rolled: keep MCP *protocol* errors (unknown
-tool, bad args) distinct from tool *execution* errors (`isError: true`) - clients
-feed only the second back to the model.
-
-### Lua plugins (feature `scripting`)
-
-Plugins never see `&mut App` or rspotify types: reads are cached serde snapshots
-from `src/core/plugin_api.rs`; writes are `ScriptEffect`s the engine drains while
-holding `&mut App`, each routed through the same `App` method the equivalent
-keybinding uses. Snapshot changes must be additive (`#[serde(default)]`, new keys
-only) - removing/renaming a key breaks installed plugins and requires bumping
-`API_VERSION` and updating `docs/scripting.md`. Validation lives in
-`scripting/api.rs`; a failing callback is disabled on one strike.
-
-### CLI subcommands
-
-Subcommands are assembled and dispatched in `src/runtime.rs::run()`, where
-**dispatch order encodes auth requirements**: `history`, `mcp`, and `plugin`
-return before config/auth load; playback commands require a Spotify session.
-Place new subcommands deliberately. stdout is protocol/output-only (`mcp` writes
-JSON-RPC, `history recap` writes HTML) - diagnostics go to stderr; never add a
-`println!` on a path a subcommand can reach. Self-update needs `User-Agent` +
-`Accept: application/octet-stream` on GitHub asset requests and must not re-exec
-during authentication (OAuth port deadlock).
+`src/infra/dj/CLAUDE.md` (DJ lanes/guards/avoid-library filter),
+`src/infra/mcp/CLAUDE.md` (MCP server), `src/infra/scripting/CLAUDE.md` (Lua
+plugins), and `src/cli/CLAUDE.md` (CLI subcommands) load automatically when
+working in those directories.
 
 ### Alternative sources (Local / Subsonic / Radio / YouTube)
 
