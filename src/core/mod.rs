@@ -1,8 +1,10 @@
 pub mod app;
+#[cfg(feature = "art-decode")]
+pub mod art;
 pub mod auth;
 pub mod banner;
 pub mod config;
-#[cfg(feature = "cover-art")]
+#[cfg(feature = "art-decode")]
 pub mod cover_theme;
 pub mod first_run;
 pub mod format;

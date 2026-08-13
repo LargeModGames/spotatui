@@ -13,12 +13,12 @@ const FILE_NAME: &str = "config.yml";
 pub const DEFAULT_TICK_RATE_MILLISECONDS: u64 = 250;
 pub const DEFAULT_ANIMATION_TICK_RATE_MILLISECONDS: u64 = 16;
 pub const MAX_TICK_RATE_MILLISECONDS: u64 = 999;
-#[cfg(feature = "cover-art")]
+#[cfg(feature = "art-decode")]
 pub const MIN_PLAYBAR_COVER_ART_SIZE_PERCENT: u16 = 25;
-#[cfg(feature = "cover-art")]
+#[cfg(feature = "art-decode")]
 pub const MAX_PLAYBAR_COVER_ART_SIZE_PERCENT: u16 = 200;
 
-#[cfg(feature = "cover-art")]
+#[cfg(feature = "art-decode")]
 pub fn clamp_playbar_cover_art_size_percent(value: u16) -> u16 {
   value.clamp(
     MIN_PLAYBAR_COVER_ART_SIZE_PERCENT,
@@ -26,6 +26,9 @@ pub fn clamp_playbar_cover_art_size_percent(value: u16) -> u16 {
   )
 }
 
+// Only the settings arm for the playbar size (a render-side setting) calls
+// this, so it follows `cover-art` while its `clamp` sibling stays with the
+// decode half for config loading.
 #[cfg(feature = "cover-art")]
 pub fn normalize_playbar_cover_art_size_percent(value: i64) -> u16 {
   value.clamp(
@@ -454,13 +457,13 @@ pub struct BehaviorConfigString {
   pub startup_behavior: Option<StartupBehavior>,
   pub disable_auto_update: Option<bool>,
   pub auto_update_delay: Option<String>,
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub draw_cover_art: Option<bool>,
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub draw_cover_art_forced: Option<bool>,
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub playbar_cover_art_size_percent: Option<u16>,
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub cover_art_theme: Option<bool>,
   #[cfg(feature = "mcp-server")]
   pub mcp_enabled: Option<bool>,
@@ -570,15 +573,15 @@ pub struct BehaviorConfig {
   pub startup_behavior: StartupBehavior,
   pub disable_auto_update: bool,
   pub auto_update_delay: String,
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub draw_cover_art: bool,
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub draw_cover_art_forced: bool,
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub playbar_cover_art_size_percent: u16,
   /// Recolor the UI accents from the current track's cover art, fading on
   /// track change. Off by default so a chosen preset stays untouched.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub cover_art_theme: bool,
   /// Whether to open the local MCP control socket so `spotatui mcp` (and through
   /// it Claude Code, Codex, or any MCP client) can drive playback.
@@ -1016,13 +1019,13 @@ impl UserConfig {
         startup_behavior: StartupBehavior::Continue,
         disable_auto_update: false,
         auto_update_delay: "0".to_string(),
-        #[cfg(feature = "cover-art")]
+        #[cfg(feature = "art-decode")]
         draw_cover_art: true,
-        #[cfg(feature = "cover-art")]
+        #[cfg(feature = "art-decode")]
         draw_cover_art_forced: false,
-        #[cfg(feature = "cover-art")]
+        #[cfg(feature = "art-decode")]
         playbar_cover_art_size_percent: 100,
-        #[cfg(feature = "cover-art")]
+        #[cfg(feature = "art-decode")]
         cover_art_theme: false,
         #[cfg(feature = "mcp-server")]
         mcp_enabled: false,
@@ -1462,21 +1465,21 @@ impl UserConfig {
       self.behavior.auto_update_delay = auto_update_delay;
     }
 
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     if let Some(draw_cover_art) = behavior_config.draw_cover_art {
       self.behavior.draw_cover_art = draw_cover_art;
     }
 
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     if let Some(draw_cover_art_forced) = behavior_config.draw_cover_art_forced {
       self.behavior.draw_cover_art_forced = draw_cover_art_forced;
     }
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     if let Some(playbar_cover_art_size_percent) = behavior_config.playbar_cover_art_size_percent {
       self.behavior.playbar_cover_art_size_percent =
         clamp_playbar_cover_art_size_percent(playbar_cover_art_size_percent);
     }
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     if let Some(cover_art_theme) = behavior_config.cover_art_theme {
       self.behavior.cover_art_theme = cover_art_theme;
     }
@@ -2049,13 +2052,13 @@ impl UserConfig {
       startup_behavior: Some(self.behavior.startup_behavior),
       disable_auto_update: Some(self.behavior.disable_auto_update),
       auto_update_delay: Some(self.behavior.auto_update_delay.clone()),
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       draw_cover_art: Some(self.behavior.draw_cover_art),
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       draw_cover_art_forced: Some(self.behavior.draw_cover_art_forced),
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       playbar_cover_art_size_percent: Some(self.behavior.playbar_cover_art_size_percent),
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       cover_art_theme: Some(self.behavior.cover_art_theme),
       #[cfg(feature = "mcp-server")]
       mcp_enabled: Some(self.behavior.mcp_enabled),
@@ -2285,7 +2288,7 @@ impl UserConfig {
   pub fn padded_playing_icon(&self) -> String {
     format!("{} ", self.behavior.playing_icon)
   }
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub fn do_draw_cover_art(&self, full_image_support: bool) -> bool {
     self.behavior.draw_cover_art && (self.behavior.draw_cover_art_forced || full_image_support)
   }
@@ -2294,7 +2297,7 @@ impl UserConfig {
   /// or the adaptive theme, which extracts its palette from the decoded image
   /// even when the pane itself is hidden (disabled, or a terminal without
   /// image support). Draw sites keep their own `do_draw_cover_art` gate.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   pub fn needs_cover_art(&self, full_image_support: bool) -> bool {
     self.do_draw_cover_art(full_image_support) || self.behavior.cover_art_theme
   }
@@ -2690,7 +2693,7 @@ mod tests {
     assert!(config.load_behaviorconfig(behavior).is_err());
   }
 
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   #[test]
   fn missing_playbar_cover_art_size_keeps_default() {
     use super::{BehaviorConfigString, UserConfig};
@@ -2702,7 +2705,7 @@ mod tests {
     assert_eq!(config.behavior.playbar_cover_art_size_percent, 100);
   }
 
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   #[test]
   fn playbar_cover_art_size_loads_from_yaml() {
     use super::{BehaviorConfigString, UserConfig};
@@ -2715,7 +2718,7 @@ mod tests {
     assert_eq!(config.behavior.playbar_cover_art_size_percent, 150);
   }
 
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   #[test]
   fn playbar_cover_art_size_clamps_out_of_range_values() {
     use super::{BehaviorConfigString, UserConfig};

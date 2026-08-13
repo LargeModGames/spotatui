@@ -8,15 +8,15 @@ impl App {
     let mut settings_error: Option<String> = None;
     // What is actually on screen right now, put back by the reconciliation at
     // the end so an adaptive-theme fade continues from it.
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     let cover_theme_live_before = self.user_config.theme;
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     let cover_art_theme_before = self.user_config.behavior.cover_art_theme;
     // Run the arms against the user's own colors rather than the live blend:
     // settings_items holds only the current category's rows, so a save from
     // another category rewrites no theme field at all, and analysis_bar has no
     // row in any category. Whatever survives the arms IS the new base theme.
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     {
       self.user_config.theme = self.user_theme();
     }
@@ -292,7 +292,7 @@ impl App {
             self.user_config.behavior.draw_cover_art = v;
           }
         }
-        #[cfg(feature = "cover-art")]
+        #[cfg(feature = "art-decode")]
         "behavior.cover_art_theme" => {
           if let SettingValue::Bool(v) = setting.value {
             self.user_config.behavior.cover_art_theme = v;
@@ -710,7 +710,7 @@ impl App {
         _ => {}
       }
     }
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     self.reconcile_cover_theme_after_settings(cover_theme_live_before, cover_art_theme_before);
     if let Some(message) = settings_error {
       self.set_status_message(message, 4);

@@ -162,13 +162,15 @@ fn playbar_layout_areas(app: &App, layout_chunk: Rect) -> PlaybarLayoutAreas {
 
     let (other, cover_art) = if app
       .user_config
-      .do_draw_cover_art(app.cover_art.full_image_support())
+      .do_draw_cover_art(crate::tui::cover_art::full_image_support())
     {
       let cover_layout = playbar_cover_layout(
         other,
         app.user_config.behavior.playbar_cover_art_size_percent,
       );
-      if let Some(rendered_size) = app.cover_art.size_for(cover_layout.image_area) {
+      if let Some(rendered_size) =
+        crate::tui::cover_art::size_for(cover_layout.image_area, &app.cover_art)
+      {
         let cover_layout = cover_layout.with_rendered_size(rendered_size);
         let (artist_area, controls_area, progress_area) = split_cover_playbar_rows(
           other,
@@ -721,7 +723,7 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
   if !app.cover_art.available() {
     // No image is loaded: show an explicit message for the current state rather
     // than a blank pane, so "no art" always reads as a deliberate outcome.
-    let message = crate::tui::cover_art::status_message(app.cover_art_status);
+    let message = crate::tui::cover_art::status_message(app.cover_art.status);
     let p = Paragraph::new(message)
       .style(Style::default().fg(app.user_config.theme.inactive.into()))
       .alignment(Alignment::Center);
@@ -756,13 +758,12 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
     image_bounds.width.saturating_sub(2),
     image_bounds.height.saturating_sub(2),
   );
-  let fitted_image_size = app
-    .cover_art
-    .fullscreen_size_for(available_image_size)
-    .unwrap_or(available_image_size);
+  let fitted_image_size =
+    crate::tui::cover_art::fullscreen_size_for(available_image_size, &app.cover_art)
+      .unwrap_or(available_image_size);
   let centered_area = center_rect_within(image_bounds, fitted_image_size);
 
-  app.cover_art.render_fullscreen(f, centered_area);
+  crate::tui::cover_art::render_fullscreen(f, centered_area, &app.cover_art);
 
   // Draw song info below the cover art
   if let Some(name) = track_name {
@@ -1114,7 +1115,7 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
   // a blank indent where the image belongs (Spotify's path does the same).
   #[cfg(feature = "cover-art")]
   if let Some(cover_art) = playbar_areas.cover_art {
-    app.cover_art.render(f, cover_art);
+    crate::tui::cover_art::render(f, cover_art, &app.cover_art);
   }
 }
 
@@ -1444,7 +1445,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
       #[cfg(feature = "cover-art")]
       if let Some(cover_art) = playbar_areas.cover_art {
-        app.cover_art.render(f, cover_art);
+        crate::tui::cover_art::render(f, cover_art, &app.cover_art);
       }
 
       drew_playbar = true;

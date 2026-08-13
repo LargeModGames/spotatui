@@ -283,8 +283,8 @@ pub enum IoEvent {
   /// track-change detector; handled off the `App` lock so the render loop never
   /// blocks on the download/decode. Source-agnostic and independent of Spotify
   /// auth.
-  #[cfg(feature = "cover-art")]
-  FetchCoverArt(crate::tui::cover_art::CoverArtRequest),
+  #[cfg(feature = "art-decode")]
+  FetchCoverArt(crate::core::art::CoverArtRequest),
   /// A DJ tool call that needs the live Spotify client, plus the channel to
   /// answer on.
   ///
@@ -445,7 +445,7 @@ impl Network {
   /// source dispatchers handle upstream (only reaching here as no-ops when their
   /// feature is disabled).
   fn event_bypasses_spotify_auth(io_event: &IoEvent) -> bool {
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
       return true;
     }
@@ -524,7 +524,7 @@ impl Network {
     if !Self::event_bypasses_spotify_auth(io_event) {
       return false;
     }
-    #[cfg(feature = "cover-art")]
+    #[cfg(feature = "art-decode")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
       return true;
     }
@@ -877,7 +877,7 @@ impl Network {
       IoEvent::GetLyrics(track, artists, duration) => {
         self.get_lyrics(track, artists, duration).await;
       }
-      #[cfg(feature = "cover-art")]
+      #[cfg(feature = "art-decode")]
       IoEvent::FetchCoverArt(request) => {
         self.fetch_cover_art(request).await;
       }

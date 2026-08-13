@@ -774,7 +774,7 @@ impl App {
               .to_string(),
             value: SettingValue::Bool(self.user_config.behavior.banner_gradient),
           },
-          #[cfg(feature = "cover-art")]
+          #[cfg(feature = "art-decode")]
           SettingItem {
             id: "behavior.cover_art_theme".to_string(),
             name: "Adaptive Theme".to_string(),

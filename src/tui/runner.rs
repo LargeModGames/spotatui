@@ -188,12 +188,12 @@ fn track_identity(snapshot: &crate::infra::media_metadata::PlaybackSnapshot) -> 
 /// art (Spotify album art, YouTube thumbnail, Subsonic getCoverArt) surfaces it
 /// as `snapshot.metadata.image_url`. `None` means the current track has no art
 /// to show (e.g. internet radio, or a Spotify item without images).
-#[cfg(feature = "cover-art")]
+#[cfg(feature = "art-decode")]
 fn cover_art_request_for(
   app: &App,
   snapshot: &crate::infra::media_metadata::PlaybackSnapshot,
-) -> Option<crate::tui::cover_art::CoverArtRequest> {
-  use crate::tui::cover_art::CoverArtRequest;
+) -> Option<crate::core::art::CoverArtRequest> {
+  use crate::core::art::CoverArtRequest;
 
   #[cfg(feature = "local-files")]
   if let Some(local) = app.local_playback.as_ref() {
@@ -212,6 +212,21 @@ fn cover_art_request_for(
     .image_url
     .clone()
     .map(CoverArtRequest::Url)
+}
+
+/// Whether the terminal renders real pixels. False until the renderer is
+/// initialized, and always false in a decode-only build (`art-decode` without
+/// `cover-art`), where art is fetched solely for the adaptive theme.
+#[cfg(feature = "art-decode")]
+fn cover_art_full_image_support() -> bool {
+  #[cfg(feature = "cover-art")]
+  {
+    crate::tui::cover_art::full_image_support()
+  }
+  #[cfg(not(feature = "cover-art"))]
+  {
+    false
+  }
 }
 
 fn playback_window_title(app: &App) -> String {
@@ -738,6 +753,10 @@ pub async fn start_ui(
   let _ = &mpris_manager;
 
   let mut terminal = ratatui::init();
+  // Probe the terminal's image protocol only now that the terminal is set up;
+  // `App` construction must not touch stdout.
+  #[cfg(feature = "cover-art")]
+  crate::tui::cover_art::init_renderer();
   execute!(stdout(), EnableMouseCapture)?;
   let keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
   let keyboard_enhancement_enabled = keyboard_enhancement_supported
@@ -780,7 +799,7 @@ pub async fn start_ui(
   let mut last_track_identity: Option<TrackIdentity> = None;
   // Cache key (URL / file URI) of the cover art last requested, so the per-tick
   // cover-art evaluation dispatches a fetch only when the resolved art changes.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   let mut last_cover_art_key: Option<String> = None;
   let mut is_first_render = true;
 
@@ -907,6 +926,11 @@ pub async fn start_ui(
         app.user_config.behavior.tick_rate_milliseconds
       };
       events.set_tick_rate(current_tick_rate);
+
+      // Drop protocol caches for art the store no longer holds; rebuilds are
+      // lazy, so this is a no-op whenever the art is unchanged.
+      #[cfg(feature = "cover-art")]
+      crate::tui::cover_art::sync(&app.cover_art);
 
       terminal.draw(|f| {
         use ratatui::{prelude::Style, widgets::Block};
@@ -1105,12 +1129,12 @@ pub async fn start_ui(
           // stuck or missing until restart. Comparing against
           // `last_cover_art_key` keeps this a no-op on quiet ticks and fires
           // exactly once whenever the resolved art actually changes.
-          #[cfg(feature = "cover-art")]
+          #[cfg(feature = "art-decode")]
           {
-            use crate::core::app::CoverArtStatus;
+            use crate::core::art::CoverArtStatus;
             let enabled = app
               .user_config
-              .needs_cover_art(app.cover_art.full_image_support());
+              .needs_cover_art(cover_art_full_image_support());
             let desired = if enabled {
               snapshot
                 .as_ref()
@@ -1125,7 +1149,7 @@ pub async fn start_ui(
                   last_cover_art_key = Some(request.key().to_string());
                   // Keep the previous image on screen until the new one
                   // resolves (smooth swap); the fetch runs off-lock.
-                  app.cover_art_status = CoverArtStatus::Loading;
+                  app.cover_art.status = CoverArtStatus::Loading;
                   app.dispatch(IoEvent::FetchCoverArt(request));
                 }
               }
@@ -1136,7 +1160,7 @@ pub async fn start_ui(
                 if last_cover_art_key.take().is_some() || app.cover_art.available() {
                   app.clear_cover_art();
                 }
-                app.cover_art_status = if enabled && snapshot.is_some() {
+                app.cover_art.status = if enabled && snapshot.is_some() {
                   CoverArtStatus::Unavailable
                 } else {
                   CoverArtStatus::NotStarted

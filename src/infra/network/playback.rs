@@ -84,8 +84,8 @@ pub trait PlaybackNetwork {
   async fn add_item_to_queue(&mut self, item: PlayableId<'static>);
   async fn get_queue(&mut self);
   /// Fetch, decode and store the current track's cover art (off the `App` lock).
-  #[cfg(feature = "cover-art")]
-  async fn fetch_cover_art(&mut self, request: crate::tui::cover_art::CoverArtRequest);
+  #[cfg(feature = "art-decode")]
+  async fn fetch_cover_art(&mut self, request: crate::core::art::CoverArtRequest);
 }
 
 fn trim_api_playback_uris(
@@ -1282,10 +1282,9 @@ impl PlaybackNetwork for Network {
   /// store the finished image and update the status. Cover art is non-essential,
   /// so a failure only logs and flips the status to `Failed` (never surfaces a
   /// blocking error).
-  #[cfg(feature = "cover-art")]
-  async fn fetch_cover_art(&mut self, request: crate::tui::cover_art::CoverArtRequest) {
-    use crate::core::app::CoverArtStatus;
-    use crate::tui::cover_art::{CoverArt, CoverArtRequest};
+  #[cfg(feature = "art-decode")]
+  async fn fetch_cover_art(&mut self, request: crate::core::art::CoverArtRequest) {
+    use crate::core::art::{fetch_and_decode, CoverArtRequest, CoverArtStatus};
 
     let key = request.key().to_string();
 
@@ -1296,14 +1295,14 @@ impl PlaybackNetwork for Network {
       if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
         return;
       }
-      if app.cover_art.get_url().as_deref() == Some(key.as_str()) {
-        app.cover_art_status = CoverArtStatus::Loaded;
+      if app.cover_art.key() == Some(key.as_str()) {
+        app.cover_art.status = CoverArtStatus::Loaded;
         return;
       }
     }
 
     let result = match request {
-      CoverArtRequest::Url(url) => CoverArt::fetch_and_decode(&url).await,
+      CoverArtRequest::Url(url) => fetch_and_decode(&url).await,
       #[cfg(feature = "local-files")]
       CoverArtRequest::LocalFile { path, .. } => {
         // Tag read + image decode are blocking; keep them off the async runtime.
@@ -1332,14 +1331,14 @@ impl PlaybackNetwork for Network {
     match result {
       Ok(img) => {
         app.store_cover_art(key, img, palette);
-        app.cover_art_status = CoverArtStatus::Loaded;
+        app.cover_art.status = CoverArtStatus::Loaded;
       }
       Err(err) => {
         log::warn!("cover art load failed: {err}");
         // Drop any stale art so the pane shows the "unavailable" placeholder
         // rather than the previous track's image.
         app.clear_cover_art();
-        app.cover_art_status = CoverArtStatus::Failed;
+        app.cover_art.status = CoverArtStatus::Failed;
       }
     }
   }
