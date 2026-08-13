@@ -32,11 +32,31 @@ old_pairs=$(parse "$old_content")
 new_pairs=$(parse "$(cat "$file")")
 
 fail=0
+
+# Reject malformed content outright instead of letting parse() drop it: after
+# comment stripping, every non-blank line must be `key = <digits>`.
+check_wellformed() { # $1 = label, $2 = content
+  local bad
+  bad=$(printf '%s\n' "$2" | sed 's/#.*//;s/\r//g' | awk 'NF' |
+    grep -vE '^[ \t]*[A-Za-z0-9_]+[ \t]*=[ \t]*[0-9]+[ \t]*$' || true)
+  if [ -n "$bad" ]; then
+    echo "FAIL: malformed line(s) in $1:"
+    printf '  %s\n' "$bad"
+    fail=1
+  fi
+}
+check_wellformed "$file" "$(cat "$file")"
+check_wellformed "$file at merge-base $merge_base" "$old_content"
+
 while read -r key old_value; do
   [ -z "$key" ] && continue
-  new_value=$(printf '%s\n' "$new_pairs" | awk -v k="$key" '$1 == k { print $2 }')
+  # tail -n 1 mirrors the Rust parser's last-wins on duplicate keys.
+  new_value=$(printf '%s\n' "$new_pairs" | awk -v k="$key" '$1 == k { print $2 }' | tail -n 1)
   if [ -z "$new_value" ]; then
     echo "FAIL: counter $key ($old_value at merge-base) was removed"
+    fail=1
+  elif ! [[ "$old_value" =~ ^[0-9]+$ && "$new_value" =~ ^[0-9]+$ ]]; then
+    echo "FAIL: non-numeric value for $key (merge-base: $old_value, current: $new_value)"
     fail=1
   elif [ "$key" = "test_attribute_total" ]; then
     if [ "$new_value" -lt "$old_value" ]; then
