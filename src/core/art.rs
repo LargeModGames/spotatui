@@ -14,6 +14,13 @@ use std::sync::OnceLock;
 /// decode needs it all in memory).
 const MAX_COVER_ART_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Cap on either decoded dimension. [`MAX_COVER_ART_BYTES`] bounds only the
+/// compressed body, and a tiny file can still declare enormous dimensions
+/// (`image`'s default `max_alloc` is best-effort, not strict), so the decoder
+/// gets strict width/height limits too. 4096 px is far beyond what any
+/// terminal cell grid can show.
+const MAX_COVER_ART_DIMENSION: u32 = 4096;
+
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// The process-wide cover-art HTTP client, so keep-alive connections to the
@@ -129,7 +136,20 @@ pub async fn fetch_and_decode(url: &str) -> anyhow::Result<image::DynamicImage> 
   }
   debug!("finished reading response: {} bytes", file.len());
 
-  image::load_from_memory(&file).map_err(|e| anyhow!(e))
+  decode_bounded(&file)
+}
+
+/// Decode a downloaded cover-art body with strict dimension limits, so a
+/// small compressed file cannot expand into an oversized decoded allocation.
+fn decode_bounded(bytes: &[u8]) -> anyhow::Result<image::DynamicImage> {
+  let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+    .with_guessed_format()
+    .map_err(|e| anyhow!(e))?;
+  let mut limits = image::Limits::default();
+  limits.max_image_width = Some(MAX_COVER_ART_DIMENSION);
+  limits.max_image_height = Some(MAX_COVER_ART_DIMENSION);
+  reader.limits(limits);
+  reader.decode().map_err(|e| anyhow!(e))
 }
 
 /// The decoded cover art for the current track, keyed by the request that
@@ -236,6 +256,28 @@ mod tests {
       .unwrap_err();
     assert!(err.to_string().contains("exceeded"), "got: {err}");
     let _ = server.join();
+  }
+
+  #[test]
+  fn cover_art_dimensions_beyond_the_limit_are_rejected() {
+    // A blank one-row PNG wider than the cap compresses to a tiny body, so it
+    // passes the byte cap and must be stopped by the decoder's limits.
+    let mut png = Vec::new();
+    image::DynamicImage::new_rgb8(MAX_COVER_ART_DIMENSION + 1, 1)
+      .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+      .unwrap();
+    assert!((png.len() as u64) < MAX_COVER_ART_BYTES);
+
+    assert!(decode_bounded(&png).is_err());
+    // The same pipeline still decodes an in-bounds image.
+    let mut ok_png = Vec::new();
+    image::DynamicImage::new_rgb8(2, 2)
+      .write_to(
+        &mut std::io::Cursor::new(&mut ok_png),
+        image::ImageFormat::Png,
+      )
+      .unwrap();
+    assert!(decode_bounded(&ok_png).is_ok());
   }
 
   #[test]
