@@ -17,7 +17,7 @@ use ratatui_image::{
   protocol::StatefulProtocol,
   Resize, StatefulImage,
 };
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// The message shown in place of the image when none is loaded, so "no art"
 /// always reads as a deliberate outcome rather than a blank pane. Shared by the
@@ -88,7 +88,7 @@ pub fn sync(store: &CoverArtStore) {
     return;
   };
   for surface in [&renderer.playbar, &renderer.fullscreen, &renderer.plugin] {
-    let mut lock = surface.lock().unwrap();
+    let mut lock = lock_surface(surface);
     let stale = lock
       .as_ref()
       .is_some_and(|surface| store.key() != Some(surface.key.as_str()));
@@ -157,6 +157,14 @@ struct Surface {
   protocol: StatefulProtocol,
 }
 
+/// Lock a surface's protocol cache, recovering a poisoned guard: the caches
+/// are pure derived state (rebuilt from the store at the next render), so a
+/// panic that unwound while a guard was held must not turn every later frame
+/// into a poison panic.
+fn lock_surface(surface: &Mutex<Option<Surface>>) -> MutexGuard<'_, Option<Surface>> {
+  surface.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 impl CoverArtRenderer {
   fn new(picker: Picker) -> Self {
     Self {
@@ -183,7 +191,7 @@ impl CoverArtRenderer {
     surface: &'a Mutex<Option<Surface>>,
     store: &CoverArtStore,
   ) -> MutexGuard<'a, Option<Surface>> {
-    let mut lock = surface.lock().unwrap();
+    let mut lock = lock_surface(surface);
     match store.key() {
       None => *lock = None,
       Some(key) => {

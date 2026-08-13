@@ -6,6 +6,31 @@
 
 use anyhow::anyhow;
 use log::{debug, info};
+use std::sync::OnceLock;
+
+/// Cap on a cover-art response body, checked against both the declared and
+/// the actual size. Real covers are a few hundred KiB; the cap only exists so
+/// a misbehaving server cannot make the app buffer an unbounded body (the
+/// decode needs it all in memory).
+const MAX_COVER_ART_BYTES: u64 = 16 * 1024 * 1024;
+
+static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// The process-wide cover-art HTTP client, so keep-alive connections to the
+/// art CDN are reused across track changes. Built fallibly *outside*
+/// `get_or_init` so a TLS setup failure surfaces as a fetch error instead of
+/// a panic; a lost build race just discards the extra client.
+fn client() -> anyhow::Result<&'static reqwest::Client> {
+  if let Some(client) = CLIENT.get() {
+    return Ok(client);
+  }
+  let client = reqwest::Client::builder()
+    .connect_timeout(std::time::Duration::from_secs(10))
+    .timeout(std::time::Duration::from_secs(30))
+    .build()
+    .map_err(|e| anyhow!(e))?;
+  Ok(CLIENT.get_or_init(|| client))
+}
 
 /// What to fetch for the current track's cover art. Built once per track change
 /// by the shared detector and handled off the `App` lock in the network layer.
@@ -65,40 +90,44 @@ pub enum CoverArtStatus {
 /// render loop — which locks the same mutex every frame — freezes for the
 /// whole CDN round-trip (#142).
 ///
-/// The reqwest client is built with explicit timeouts so a hung CDN cannot
-/// stall the fetch forever even off-lock (`reqwest::get` uses a default client
-/// with none).
+/// The shared client carries explicit timeouts so a hung CDN cannot stall the
+/// fetch forever even off-lock (`reqwest::get` uses a default client with
+/// none), and the body is read through a bounded loop: `content_length()` is
+/// only a hint and `bytes()` would buffer an arbitrarily large body, so the
+/// [`MAX_COVER_ART_BYTES`] cap is enforced on the declared size first and
+/// again while accumulating the actual bytes.
 pub async fn fetch_and_decode(url: &str) -> anyhow::Result<image::DynamicImage> {
   info!("getting new cover art image...");
 
-  let client = reqwest::Client::builder()
-    .connect_timeout(std::time::Duration::from_secs(10))
-    .timeout(std::time::Duration::from_secs(30))
-    .build()
-    .map_err(|e| anyhow!(e))?;
-
-  let res = client
+  let res = client()?
     .get(url)
     .send()
     .await
     .and_then(|r| r.error_for_status());
-
-  let file = match res {
-    Ok(res) => {
-      // Allocate Vec "file" with capacity if content_length is provided
-      let mut file = match res.content_length() {
-        Some(s) => Vec::with_capacity(s as usize),
-        None => Vec::new(),
-      };
-
-      let bytes = res.bytes().await?;
-      file.extend_from_slice(&bytes);
-
-      debug!("finished reading response: {} bytes", file.len());
-      file
-    }
+  let mut res = match res {
+    Ok(res) => res,
     Err(e) => return Err(anyhow!(e)),
   };
+
+  if let Some(declared) = res.content_length() {
+    if declared > MAX_COVER_ART_BYTES {
+      return Err(anyhow!(
+        "cover art response declares {declared} bytes (limit {MAX_COVER_ART_BYTES})"
+      ));
+    }
+  }
+
+  // The declared size only pre-allocates; the cap above bounds it.
+  let mut file = Vec::with_capacity(res.content_length().unwrap_or(0) as usize);
+  while let Some(chunk) = res.chunk().await.map_err(|e| anyhow!(e))? {
+    if (file.len() + chunk.len()) as u64 > MAX_COVER_ART_BYTES {
+      return Err(anyhow!(
+        "cover art response exceeded the {MAX_COVER_ART_BYTES}-byte limit"
+      ));
+    }
+    file.extend_from_slice(&chunk);
+  }
+  debug!("finished reading response: {} bytes", file.len());
 
   image::load_from_memory(&file).map_err(|e| anyhow!(e))
 }
@@ -152,6 +181,62 @@ impl CoverArtStore {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::io::{Read, Write};
+
+  /// Serve one hand-written HTTP response on a real loopback listener, so the
+  /// fetch path is exercised without any mock layer (house HTTP-test pattern).
+  fn one_shot_server(
+    response: impl FnOnce(&mut std::net::TcpStream) + Send + 'static,
+  ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      // Read (some of) the request so the client sees a well-formed exchange.
+      let mut buf = [0u8; 1024];
+      let _ = stream.read(&mut buf);
+      response(&mut stream);
+    });
+    (addr, handle)
+  }
+
+  #[tokio::test]
+  async fn oversized_declared_cover_art_body_is_rejected() {
+    let (addr, server) = one_shot_server(|stream| {
+      let _ = stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 999999999\r\nContent-Type: image/jpeg\r\n\r\n",
+      );
+    });
+
+    let err = fetch_and_decode(&format!("http://{addr}/art.jpg"))
+      .await
+      .unwrap_err();
+    assert!(err.to_string().contains("declares"), "got: {err}");
+    server.join().unwrap();
+  }
+
+  #[tokio::test]
+  async fn cover_art_body_exceeding_the_cap_is_rejected_mid_read() {
+    let (addr, server) = one_shot_server(|stream| {
+      // No Content-Length, close-delimited body: the declared-size check
+      // cannot fire, so the accumulation cap has to. Write errors are
+      // expected once the client bails mid-body.
+      let _ = stream
+        .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: image/jpeg\r\n\r\n");
+      let chunk = vec![0u8; 1024 * 1024];
+      for _ in 0..17 {
+        if stream.write_all(&chunk).is_err() {
+          break;
+        }
+      }
+    });
+
+    let err = fetch_and_decode(&format!("http://{addr}/art.jpg"))
+      .await
+      .unwrap_err();
+    assert!(err.to_string().contains("exceeded"), "got: {err}");
+    let _ = server.join();
+  }
 
   #[test]
   fn request_key_is_the_url() {
