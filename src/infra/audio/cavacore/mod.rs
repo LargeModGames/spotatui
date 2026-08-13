@@ -15,6 +15,12 @@
 //! - Input-order fix: upstream copied each new chunk into the sliding buffer
 //!   in forward order; C writes it time-reversed (newest sample at index 0),
 //!   which keeps the buffer free of chunk-boundary discontinuities.
+//! - Signed-comparison fix: the band-selection loop compared bar indices
+//!   against the cutoff bars `as usize`; the cutoffs are -1 sentinels when a
+//!   range has no bar, wrapping to usize::MAX. C compares signed ints.
+//! - Cutoff-adjustment guard: the non-monotonic-cutoff fixup reads index
+//!   n - 2 under an `n > 0` guard; at n == 1 that is an out-of-bounds read in
+//!   C and a panic here, so the guard is `n > 1` (a deliberate divergence).
 //! - Dropped the `bounded-integer` and `thiserror` deps: `SampleRate` /
 //!   `NonZero*` parameter types became plain integers validated in
 //!   `sanity_check`, and `Error` implements `Display` by hand.
@@ -214,18 +220,23 @@ impl Cava {
       let mut tmp_r = 0.;
 
       // add upp FFT values within bands
+      // PATCH(spotatui): compare in signed space like C. The cutoff bars are
+      // -1 sentinels when a range has no bar; upstream compared `n` against
+      // them `as usize`, so -1 wrapped to usize::MAX and every bar summed the
+      // bass FFT whenever no bass bar existed.
+      let bar = n as i32;
       for i in self.buffer_lower_cut_off[n] as usize..=self.buffer_upper_cut_off[n] as usize {
-        if n <= self.bass_cut_off_bar as usize {
+        if bar <= self.bass_cut_off_bar {
           tmp_l += self.left.out_bass[i].norm();
           if let Some(right) = &self.right {
             tmp_r += right.out_bass[i].norm();
           }
-        } else if (self.bass_cut_off_bar as usize..=self.treble_cut_off_bar as usize).contains(&n) {
+        } else if bar <= self.treble_cut_off_bar {
           tmp_l += self.left.out_mid[i].norm();
           if let Some(right) = &self.right {
             tmp_r += right.out_mid[i].norm();
           }
-        } else if (self.treble_cut_off_bar as usize) < n {
+        } else {
           tmp_l += self.left.out_treble[i].norm();
           if let Some(right) = &self.right {
             tmp_r += right.out_treble[i].norm();
@@ -382,7 +393,11 @@ impl CavaBuilder {
 
       cut_off_frequency[n] = self.freq_range.end as f64 * 10f64.powf(bar_distribution_coefficient);
 
-      if n > 0 {
+      // PATCH(spotatui): n > 1, not n > 0. The adjustment reads index n - 2,
+      // which at n == 1 is an out-of-bounds read in C and a usize-underflow
+      // panic here. Only reachable when bar 0 lands above the 100 Hz bass
+      // cutoff, which needs a freq range starting higher than the analyzer's.
+      if n > 1 {
         // what?
         let condition = cut_off_frequency[n - 1] >= cut_off_frequency[n]
           && cut_off_frequency[n - 1] > bass_cut_off;
