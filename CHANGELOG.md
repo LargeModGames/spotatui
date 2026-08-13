@@ -6,7 +6,7 @@
 
 - **Self-update now works on Linux ARM64**: the checksum verifier only knew four platforms, so `spotatui update` aborted with "unsupported platform" on aarch64 Linux (Raspberry Pi, ARM servers, Asahi) even though every release publishes `spotatui-linux-aarch64.tar.gz`. The platform table now covers all five published targets, with a test pinning it against the release workflow ([#440](https://github.com/LargeModGames/spotatui/issues/440)).
 
-- **A malformed keybinding no longer crashes spotatui at startup**: a binding like `ctrl-` or a bare `ctrl` in `config.yml` panicked during config load, before the UI existed. It is now a config error naming the offending shortcut, handled like every other invalid config value ([#441](https://github.com/LargeModGames/spotatui/issues/441)).
+- **A malformed keybinding no longer crashes spotatui at startup**: a binding like `ctrl-`, a bare `ctrl`, or a multi-key suffix like `ctrl-ab` in `config.yml` panicked (or was silently mis-read) during config load, before the UI existed. It is now a logged config warning naming the offending shortcut, that binding keeps its default, and the app starts normally, like every other invalid config value ([#441](https://github.com/LargeModGames/spotatui/issues/441)).
 
 - **The Stats screen can be chosen as the startup screen from Settings**: `startup_screen: "stats"` always worked when typed into `config.yml`, but the in-app Settings cycle never offered it. The cycle now matches the full startup-route list, and a test keeps the two from drifting again ([#443](https://github.com/LargeModGames/spotatui/issues/443)).
 

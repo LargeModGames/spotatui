@@ -194,15 +194,22 @@ fn parse_key(key: String) -> Result<Key> {
   // typos; they must surface as config errors naming the binding, never a
   // panic before the UI starts (#441).
   fn modifier_char(key: &str, sections: &[&str]) -> Result<char> {
-    sections
+    let mut chars = sections
       .get(1)
-      .and_then(|section| section.chars().next())
+      .map(|section| section.chars())
       .ok_or_else(|| {
         anyhow!(
           "The shortcut \"{}\" is missing its key, e.g. \"ctrl-a\"",
           key
         )
-      })
+      })?;
+    match (chars.next(), chars.next()) {
+      (Some(c), None) => Ok(c),
+      _ => Err(anyhow!(
+        "The shortcut \"{}\" must combine the modifier with exactly one key, e.g. \"ctrl-a\"",
+        key
+      )),
+    }
   }
 
   match key.len() {
@@ -1134,7 +1141,16 @@ impl UserConfig {
     macro_rules! to_keys {
       ($name: ident) => {
         if let Some(key_string) = keybindings.$name {
-          self.keys.$name = parse_key(key_string)?;
+          match parse_key(key_string) {
+            Ok(key) => self.keys.$name = key,
+            // One typo'd binding must not stop the app from launching:
+            // warn and keep that binding's default, like the rest of the
+            // config validation (#441).
+            Err(e) => log::warn!(
+              "[config] keybindings.{}: {e}; keeping the default",
+              stringify!($name)
+            ),
+          }
         }
       };
     }
@@ -2429,8 +2445,9 @@ mod tests {
   fn malformed_modifier_bindings_error_instead_of_panicking() {
     use super::parse_key;
     // "ctrl"/"alt" without a key (with or without the dash) used to index or
-    // panic out of bounds during config load, aborting before the UI started.
-    for bad in ["ctrl", "ctrl-", "alt", "alt-"] {
+    // panic out of bounds during config load, aborting before the UI started;
+    // multi-character suffixes were silently truncated to their first char.
+    for bad in ["ctrl", "ctrl-", "ctrl-ab", "alt", "alt-", "alt-ab"] {
       let err = parse_key(bad.to_string()).unwrap_err();
       assert!(
         err.to_string().contains(bad),
@@ -2438,6 +2455,25 @@ mod tests {
       );
     }
     assert!(parse_key(String::new()).is_err());
+  }
+
+  #[test]
+  fn a_malformed_keybinding_keeps_the_default_and_still_loads() {
+    use super::{KeyBindingsString, UserConfig};
+    use crate::core::input::Key;
+
+    let mut config = UserConfig::new();
+    let default_back = config.keys.back;
+    let bindings = KeyBindingsString {
+      back: Some("ctrl-".to_string()),
+      move_up: Some("w".to_string()),
+      ..KeyBindingsString::default()
+    };
+    // The bad binding is warned about and skipped; the load succeeds and the
+    // valid binding in the same section still applies.
+    config.load_keybindings(bindings).unwrap();
+    assert_eq!(config.keys.back, default_back);
+    assert_eq!(config.keys.move_up, Key::Char('w'));
   }
 
   #[test]
