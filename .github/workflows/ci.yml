@@ -41,7 +41,7 @@ jobs:
           # whenever a feature is added there, or the release build becomes the
           # first place a break shows up.
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
           # `mcp-server` and `ai-dj` are two front doors on the same `dj-core`
           # implementation, and each has to build without the other: the
           # field-level `#[cfg(feature = "ai-dj")]` on `DjState::setup` exists
@@ -49,11 +49,18 @@ jobs:
           # on, so only a single-door leg can catch one leaking into the other.
           # Both are slim, so they cost a fraction of the all-sources leg.
           - name: mcp-only
-            args: "--locked --no-default-features --features telemetry,mcp-server"
+            args: "--locked --no-default-features --features telemetry,tui,mcp-server"
           - name: ai-dj-only
-            args: "--locked --no-default-features --features telemetry,ai-dj"
+            args: "--locked --no-default-features --features telemetry,tui,ai-dj"
           # Slim build used for fast local iteration (matches CLAUDE.md).
           - name: slim
+            args: "--locked --no-default-features --features telemetry,tui"
+          # Headless: the only leg without `tui`. Identical to slim while
+          # `mod tui` is still ungated; once the GUI substrate migration gates
+          # the module, this leg turns any `crate::tui` import from
+          # core/infra/cli into a compile error, which is what keeps a second
+          # frontend from silently re-coupling to the terminal one.
+          - name: headless
             args: "--locked --no-default-features --features telemetry"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
@@ -85,13 +92,16 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
-            args: "--locked --no-default-features --features telemetry,mcp-server"
+            args: "--locked --no-default-features --features telemetry,tui,mcp-server"
           - name: ai-dj-only
-            args: "--locked --no-default-features --features telemetry,ai-dj"
+            args: "--locked --no-default-features --features telemetry,tui,ai-dj"
           - name: slim
+            args: "--locked --no-default-features --features telemetry,tui"
+          # See the check job for why the headless leg exists.
+          - name: headless
             args: "--locked --no-default-features --features telemetry"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
@@ -141,13 +151,16 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
-            args: "--locked --no-default-features --features telemetry,mcp-server"
+            args: "--locked --no-default-features --features telemetry,tui,mcp-server"
           - name: ai-dj-only
-            args: "--locked --no-default-features --features telemetry,ai-dj"
+            args: "--locked --no-default-features --features telemetry,tui,ai-dj"
           - name: slim
+            args: "--locked --no-default-features --features telemetry,tui"
+          # See the check job for why the headless leg exists.
+          - name: headless
             args: "--locked --no-default-features --features telemetry"
     env:
       RUSTFLAGS: "-C linker-features=-lld"

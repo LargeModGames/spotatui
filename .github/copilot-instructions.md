@@ -9,8 +9,8 @@ This file is maintained as three near-identical copies: `CLAUDE.md`, `AGENTS.md`
 # Full build (native streaming + audio viz + Lua scripting + OS integrations)
 cargo run
 
-# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's five legs
-cargo run --no-default-features --features telemetry
+# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's six legs
+cargo run --no-default-features --features telemetry,tui
 
 # With the free alternative sources (Local/Subsonic/Radio/YouTube). These are NOT
 # in `default`, so a plain `cargo run` is Spotify-only; use the `all-sources` alias
@@ -22,21 +22,22 @@ cargo run --features all-sources
 
 ```bash
 cargo fmt --all
-cargo clippy --no-default-features --features telemetry -- -D warnings
-cargo test --no-default-features --features telemetry
+cargo clippy --no-default-features --features telemetry,tui -- -D warnings
+cargo test --no-default-features --features telemetry,tui
 ```
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
 (`.github/workflows/ci.yml`, on `ubuntu-latest`) runs `check`, `test`, and `clippy`
-across a **five-leg** feature matrix:
+across a **six-leg** feature matrix:
 
 | Leg | Features |
 |-----|----------|
 | `default` | a plain `cargo test`: streaming + audio-viz-cpal + scripting + self-update + OS integrations |
 | `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz, all four sources) |
-| `mcp-only` | `telemetry,mcp-server` |
-| `ai-dj-only` | `telemetry,ai-dj` |
-| `slim` | `telemetry` |
+| `mcp-only` | `telemetry,tui,mcp-server` |
+| `ai-dj-only` | `telemetry,tui,ai-dj` |
+| `slim` | `telemetry,tui` |
+| `headless` | `telemetry` - the only leg without `tui` (an empty feature while `mod tui` is still ungated); once the GUI substrate migration gates the module, this leg turns `crate::tui` imports from core/infra/cli into compile errors |
 
 - `mcp-only` and `ai-dj-only` matter more than their size suggests: both enable
   `dj-core` **without** `streaming` (a combination nothing else covers), and each
@@ -58,9 +59,9 @@ across a **five-leg** feature matrix:
 ## Run a Single Test
 
 ```bash
-cargo test --no-default-features --features telemetry <test_name>
+cargo test --no-default-features --features telemetry,tui <test_name>
 # Example:
-cargo test --no-default-features --features telemetry global_shift_w_adds_current_track_from_anywhere
+cargo test --no-default-features --features telemetry,tui global_shift_w_adds_current_track_from_anywhere
 ```
 
 A filter that matches nothing still exits 0 - when running feature-gated tests in

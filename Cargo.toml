@@ -121,8 +121,14 @@ objc2 = { version = "0.6", optional = true }
 block2 = { version = "0.6", optional = true }
 
 [features]
-default = ["telemetry", "streaming", "audio-viz-cpal", "macos-media", "discord-rpc", "mpris", "self-update", "windows-media", "scripting"]
+default = ["telemetry", "streaming", "audio-viz-cpal", "macos-media", "discord-rpc", "mpris", "self-update", "windows-media", "scripting", "tui"]
 telemetry = []
+# The terminal frontend. In `default` and currently ungated (`mod tui` is always
+# compiled, ratatui/crossterm stay non-optional), so building without it changes
+# nothing yet. The headless CI leg omits it so that, once `mod tui` is
+# feature-gated as part of the GUI substrate migration, any `crate::tui` import
+# from core/infra/cli becomes a compile error there.
+tui = []
 self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
 streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf"]
 # Audio backend features
