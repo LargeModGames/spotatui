@@ -10,7 +10,7 @@ This file is maintained as three near-identical copies: `CLAUDE.md`, `AGENTS.md`
 cargo run
 
 # Slim build - no librespot/audio/scripting; fastest iteration, one of CI's six legs
-cargo run --no-default-features --features telemetry
+cargo run --no-default-features --features telemetry,tui
 
 # With the free alternative sources (Local/Subsonic/Radio/YouTube). These are NOT
 # in `default`, so a plain `cargo run` is Spotify-only; use the `all-sources` alias
@@ -22,8 +22,8 @@ cargo run --features all-sources
 
 ```bash
 cargo fmt --all
-cargo clippy --no-default-features --features telemetry -- -D warnings
-cargo test --no-default-features --features telemetry
+cargo clippy --no-default-features --features telemetry,tui -- -D warnings
+cargo test --no-default-features --features telemetry,tui
 ```
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
@@ -59,9 +59,9 @@ across a **six-leg** feature matrix:
 ## Run a Single Test
 
 ```bash
-cargo test --no-default-features --features telemetry <test_name>
+cargo test --no-default-features --features telemetry,tui <test_name>
 # Example:
-cargo test --no-default-features --features telemetry global_shift_w_adds_current_track_from_anywhere
+cargo test --no-default-features --features telemetry,tui global_shift_w_adds_current_track_from_anywhere
 ```
 
 A filter that matches nothing still exits 0 - when running feature-gated tests in
