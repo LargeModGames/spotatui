@@ -40,9 +40,6 @@
             pkgs.apple-sdk
             pkgs.portaudio
           ];
-        # Update alongside the [patch.crates-io] rev in Cargo.toml; the Nix build
-        # fails with a hash mismatch that reports the correct value otherwise.
-        librespotOutputHash = "sha256-vUBIP+e9HYq3PKilYbdRtJk4qJAT7Vjn0l1ALe5qNbA=";
       in
       {
         # Build dependencies for rust
@@ -54,15 +51,6 @@
 
             cargoLock = {
               lockFile = ./Cargo.lock;
-              outputHashes = {
-                "librespot-audio-0.8.0" = librespotOutputHash;
-                "librespot-connect-0.8.0" = librespotOutputHash;
-                "librespot-core-0.8.0" = librespotOutputHash;
-                "librespot-metadata-0.8.0" = librespotOutputHash;
-                "librespot-oauth-0.8.0" = librespotOutputHash;
-                "librespot-playback-0.8.0" = librespotOutputHash;
-                "librespot-protocol-0.8.0" = librespotOutputHash;
-              };
             };
             inherit nativeBuildInputs buildInputs;
             meta = with pkgs.lib; {
