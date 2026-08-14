@@ -16,6 +16,13 @@ pub use player::LocalPlayer;
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 mod analyzer;
 
+// Vendored cava DSP engine (see cavacore/mod.rs for provenance and the local
+// patches). Lint allowances instead of cleanups keep it diffable against
+// upstream: it carries items our integration never constructs.
+#[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+#[allow(dead_code, clippy::all)]
+mod cavacore;
+
 // Platform-specific capture backends
 #[cfg(all(feature = "audio-viz", target_os = "linux"))]
 mod pipewire_capture;
@@ -49,8 +56,7 @@ pub use analyzer::SpectrumData;
 #[derive(Clone, Default)]
 #[allow(dead_code)]
 pub struct SpectrumData {
-  pub bands: [f32; 12],
-  pub peak: f32,
+  pub bands: Vec<f32>,
 }
 
 #[cfg(not(any(
@@ -66,11 +72,11 @@ pub struct AudioCaptureManager;
 )))]
 #[allow(dead_code)]
 impl AudioCaptureManager {
-  pub fn new() -> Option<Self> {
+  pub fn new(_display_bars: usize) -> Option<Self> {
     None
   }
 
-  pub fn get_spectrum(&self) -> Option<SpectrumData> {
+  pub fn get_spectrum(&self, _desired_bars: usize) -> Option<SpectrumData> {
     None
   }
 

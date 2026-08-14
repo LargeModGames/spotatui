@@ -45,6 +45,14 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     return true;
   }
 
+  #[cfg(feature = "streaming")]
+  if let IoEvent::ReplayPublishedSpotifyQueueSlot = event {
+    if replay_published_spotify_slot(app).await {
+      log::info!("replayed published Spotify queue slot after native recovery");
+    }
+    return true;
+  }
+
   // Transport for the queue slot's own player (Pause / Seek / Volume / Next /
   // bare-resume). Only meaningful when a decoded queued track owns the sink;
   // compiles out entirely without a queueable decoded source.
@@ -1153,6 +1161,69 @@ mod tests {
       assert!(guard.queue_slot_desired_playing);
       assert_eq!(guard.native_is_playing, Some(true));
     }
+  }
+
+  /// Recovery must replay a playing queue slot through the play path. With no
+  /// player installed, that path reports the expected skip instead of silently
+  /// treating the slot as paused.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn replay_playing_spotify_slot_uses_play_path() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_slot_desired_playing = true;
+    }
+
+    assert!(!replay_published_spotify_slot(&app).await);
+    assert!(
+      app
+        .lock()
+        .await
+        .status_message
+        .as_deref()
+        .is_some_and(|message| message.contains("Native streaming isn't connected")),
+      "a playing slot should take the play path"
+    );
+  }
+
+  /// A paused queue slot must take the paused-load path. With no player, that
+  /// path is a quiet no-op and, importantly, never falls through to play.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn replay_paused_spotify_slot_does_not_use_play_path() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_slot_desired_playing = false;
+    }
+
+    assert!(!replay_published_spotify_slot(&app).await);
+    assert!(
+      app.lock().await.status_message.is_none(),
+      "a paused slot must not take the play path"
+    );
+  }
+
+  /// The recovery event is queue-owned even after an external-device handoff
+  /// has cleared the published slot. It must never fall through to the Spotify
+  /// Web API handler and accidentally reclaim playback.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn replay_event_is_consumed_after_external_handoff_clears_slot() {
+    let app = test_app();
+    assert!(
+      route_queue_event(&app, &IoEvent::ReplayPublishedSpotifyQueueSlot).await,
+      "the queue router must consume replay even when there is no slot left"
+    );
   }
 
   /// When the queue drains over a suspended shuffle session, the resume forwards

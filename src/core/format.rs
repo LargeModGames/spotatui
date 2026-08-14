@@ -104,9 +104,9 @@ impl Template {
   /// Render the template. `values` is indexed by the placeholder index assigned
   /// during [`parse`](Self::parse) (position in `allowed`).
   ///
-  /// Newlines / tabs in the rendered output are stripped — ratatui treats text
-  /// as text and would clip across rows, so this is the only real injection
-  /// surface.
+  /// Newlines / tabs in the rendered output are stripped — the terminal UI
+  /// treats text as text and would clip across rows, so this is the only real
+  /// injection surface.
   pub fn render(&self, values: &[&str]) -> String {
     let mut out = String::new();
     for seg in &self.segments {
@@ -135,6 +135,30 @@ fn utf8_len(b: u8) -> usize {
   } else {
     4
   }
+}
+
+pub fn millis_to_minutes(millis: u128) -> String {
+  let minutes = millis / 60000;
+  let seconds = (millis % 60000) / 1000;
+  let seconds_display = if seconds < 10 {
+    format!("0{}", seconds)
+  } else {
+    format!("{}", seconds)
+  };
+
+  if seconds == 60 {
+    format!("{}:00", minutes + 1)
+  } else {
+    format!("{}:{}", minutes, seconds_display)
+  }
+}
+
+pub fn display_track_progress(progress: u128, track_duration: std::time::Duration) -> String {
+  let duration = millis_to_minutes(track_duration.as_millis());
+  let progress_display = millis_to_minutes(progress);
+  let remaining = millis_to_minutes(track_duration.as_millis().saturating_sub(progress));
+
+  format!("{}/{} (-{})", progress_display, duration, remaining,)
 }
 
 #[cfg(test)]
@@ -188,5 +212,26 @@ mod tests {
   fn literal_only() {
     let t = Template::parse("just text", KEYS).unwrap();
     assert_eq!(t.render(&[]), "just text");
+  }
+
+  #[test]
+  fn millis_to_minutes_test() {
+    assert_eq!(millis_to_minutes(0), "0:00");
+    assert_eq!(millis_to_minutes(1000), "0:01");
+    assert_eq!(millis_to_minutes(1500), "0:01");
+    assert_eq!(millis_to_minutes(1900), "0:01");
+    assert_eq!(millis_to_minutes(60 * 1000), "1:00");
+    assert_eq!(millis_to_minutes(60 * 1500), "1:30");
+  }
+
+  #[test]
+  fn display_track_progress_test() {
+    use std::time::Duration;
+    let two_minutes = Duration::from_millis(2 * 60 * 1000);
+    assert_eq!(display_track_progress(0, two_minutes), "0:00/2:00 (-2:00)");
+    assert_eq!(
+      display_track_progress(Duration::from_millis(60 * 1000).as_millis(), two_minutes),
+      "1:00/2:00 (-1:00)"
+    );
   }
 }

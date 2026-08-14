@@ -1282,8 +1282,8 @@ impl Drop for StreamingPlayer {
   }
 }
 
-// Re-export PlayerEvent for use in other modules
-pub use librespot_playback::player::PlayerEvent;
+// Re-export player events and their disconnect reason for use in other modules.
+pub use librespot_playback::player::{PlayerEvent, SessionDisconnectReason};
 
 /// Returns true when a Spirc init failure should be retried with fresh OAuth
 /// credentials instead of cached ones.

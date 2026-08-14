@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use super::util::get_color;
+use crate::tui::theme::EmphasisExt;
 
 pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let current_route = app.get_current_route();
@@ -48,19 +49,22 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       let is_selected = app.discover_selected_index == 0;
       let prefix = if is_selected { "▸ " } else { "  " };
       let text_style = if is_selected {
-        Style::default().fg(app.user_config.theme.selected)
+        Style::default().fg(app.user_config.theme.selected.into())
       } else {
-        Style::default().fg(app.user_config.theme.text)
+        Style::default().fg(app.user_config.theme.text.into())
       };
       ListItem::new(Line::from(vec![
-        Span::styled(prefix, Style::default().fg(app.user_config.theme.selected)),
+        Span::styled(
+          prefix,
+          Style::default().fg(app.user_config.theme.selected.into()),
+        ),
         Span::styled(
           format!("{} Top Artists Mix", app.user_config.padded_liked_icon()),
           text_style,
         ),
         Span::styled(
           artists_mix_status,
-          Style::default().fg(app.user_config.theme.hint),
+          Style::default().fg(app.user_config.theme.hint.into()),
         ),
       ]))
     },
@@ -69,13 +73,16 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       let is_selected = app.discover_selected_index == 1;
       let prefix = if is_selected { "▸ " } else { "  " };
       let text_style = if is_selected {
-        Style::default().fg(app.user_config.theme.selected)
+        Style::default().fg(app.user_config.theme.selected.into())
       } else {
-        Style::default().fg(app.user_config.theme.text)
+        Style::default().fg(app.user_config.theme.text.into())
       };
       let time_range_label = format!(" ({})", app.discover_time_range.label());
       ListItem::new(Line::from(vec![
-        Span::styled(prefix, Style::default().fg(app.user_config.theme.selected)),
+        Span::styled(
+          prefix,
+          Style::default().fg(app.user_config.theme.selected.into()),
+        ),
         Span::styled(
           format!("{} Top Tracks", app.user_config.padded_liked_icon()),
           text_style,
@@ -83,14 +90,14 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         Span::styled(
           time_range_label,
           if is_selected {
-            Style::default().fg(app.user_config.theme.active)
+            Style::default().fg(app.user_config.theme.active.into())
           } else {
-            Style::default().fg(app.user_config.theme.inactive)
+            Style::default().fg(app.user_config.theme.inactive.into())
           },
         ),
         Span::styled(
           top_tracks_status,
-          Style::default().fg(app.user_config.theme.hint),
+          Style::default().fg(app.user_config.theme.hint.into()),
         ),
       ]))
     },
@@ -117,19 +124,34 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // Info panel at bottom - context-sensitive help
   let info_lines = vec![
     Line::from(vec![
-      Span::styled("↑/↓ ", Style::default().fg(app.user_config.theme.hint)),
-      Span::styled("Navigate", Style::default().fg(app.user_config.theme.text)),
-      Span::styled("   Enter ", Style::default().fg(app.user_config.theme.hint)),
-      Span::styled("Select", Style::default().fg(app.user_config.theme.text)),
+      Span::styled(
+        "↑/↓ ",
+        Style::default().fg(app.user_config.theme.hint.into()),
+      ),
+      Span::styled(
+        "Navigate",
+        Style::default().fg(app.user_config.theme.text.into()),
+      ),
+      Span::styled(
+        "   Enter ",
+        Style::default().fg(app.user_config.theme.hint.into()),
+      ),
+      Span::styled(
+        "Select",
+        Style::default().fg(app.user_config.theme.text.into()),
+      ),
       if app.discover_selected_index == 1 {
-        Span::styled("   [/] ", Style::default().fg(app.user_config.theme.hint))
+        Span::styled(
+          "   [/] ",
+          Style::default().fg(app.user_config.theme.hint.into()),
+        )
       } else {
         Span::styled("", Style::default())
       },
       if app.discover_selected_index == 1 {
         Span::styled(
           "Time range",
-          Style::default().fg(app.user_config.theme.text),
+          Style::default().fg(app.user_config.theme.text.into()),
         )
       } else {
         Span::styled("", Style::default())
@@ -139,32 +161,32 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     Line::from(vec![
       Span::styled(
         "Top Artists Mix: ",
-        Style::default().fg(app.user_config.theme.text),
+        Style::default().fg(app.user_config.theme.text.into()),
       ),
       Span::styled(
         "Shuffled tracks from your top 5 artists",
-        Style::default().fg(app.user_config.theme.hint),
+        Style::default().fg(app.user_config.theme.hint.into()),
       ),
     ]),
     Line::from(vec![
       Span::styled(
         "Top Tracks: ",
-        Style::default().fg(app.user_config.theme.text),
+        Style::default().fg(app.user_config.theme.text.into()),
       ),
       Span::styled(
         "Your most-listened songs",
-        Style::default().fg(app.user_config.theme.hint),
+        Style::default().fg(app.user_config.theme.hint.into()),
       ),
     ]),
     Line::from(""),
     Line::from(vec![
       Span::styled(
         format!("Time range: {} ", app.discover_time_range.label()),
-        Style::default().fg(app.user_config.theme.text),
+        Style::default().fg(app.user_config.theme.text.into()),
       ),
       Span::styled(
         "(4 weeks / 6 months / All time)",
-        Style::default().fg(app.user_config.theme.inactive),
+        Style::default().fg(app.user_config.theme.inactive.into()),
       ),
     ]),
   ];
@@ -175,9 +197,9 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .borders(Borders::ALL)
         .title(Span::styled(
           "Help",
-          Style::default().fg(app.user_config.theme.inactive),
+          Style::default().fg(app.user_config.theme.inactive.into()),
         ))
-        .border_style(Style::default().fg(app.user_config.theme.inactive)),
+        .border_style(Style::default().fg(app.user_config.theme.inactive.into())),
     )
     .wrap(Wrap { trim: true });
 

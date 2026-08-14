@@ -1,0 +1,23 @@
+# Golden fixture for the theme round-trip test in src/core/user_config.rs.
+# Exercises every on-disk color form the hand-rolled parser accepts: named
+# ANSI colors (the three not used here are asserted directly in the test)
+# and "r, g, b" triples. Do not reformat the values; the test asserts the
+# saved config reproduces them byte-identically.
+theme:
+  preset: "Custom"
+  active: "Reset"
+  banner: "Black"
+  error_border: "Red"
+  error_text: "LightRed"
+  hint: "Yellow"
+  hovered: "Magenta"
+  inactive: "DarkGray"
+  playbar_background: "Green"
+  playbar_progress: "Blue"
+  playbar_progress_text: "Cyan"
+  playbar_text: "Gray"
+  selected: "LightGreen"
+  text: "White"
+  background: "LightYellow"
+  header: "23, 43, 45"
+  highlighted_lyrics: "255, 145, 205"

@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use super::util::{get_color, hint_span, truncate_text};
+use crate::tui::theme::EmphasisExt;
 
 pub fn draw_friends(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let current_route = app.get_current_route();
@@ -63,41 +64,41 @@ fn draw_no_token_prompt(f: &mut Frame<'_>, app: &App, area: Rect) {
     Line::from(Span::styled(
       "Account Required",
       Style::default()
-        .fg(theme.banner)
+        .fg(theme.banner.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )),
     Line::default(),
     Line::from(Span::styled(
       "Friends require a spotatui web account to sync your",
-      Style::default().fg(theme.text),
+      Style::default().fg(theme.text.into()),
     )),
     Line::from(Span::styled(
       "listening data and connect with other users.",
-      Style::default().fg(theme.text),
+      Style::default().fg(theme.text.into()),
     )),
     Line::default(),
     Line::from(vec![
-      Span::styled("  Sign up at: ", Style::default().fg(theme.inactive)),
+      Span::styled("  Sign up at: ", Style::default().fg(theme.inactive.into())),
       Span::styled(
         "https://spotatui.com",
         Style::default()
-          .fg(theme.hint)
+          .fg(theme.hint.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
       ),
     ]),
     Line::default(),
     Line::from(Span::styled(
       "After signing up, copy your sync token from the dashboard",
-      Style::default().fg(theme.inactive),
+      Style::default().fg(theme.inactive.into()),
     )),
     Line::from(Span::styled(
       "and paste it into Settings → Behavior → sync_token",
-      Style::default().fg(theme.inactive),
+      Style::default().fg(theme.inactive.into()),
     )),
     Line::default(),
     Line::from(Span::styled(
       "Press Esc to go back",
-      Style::default().fg(theme.hint),
+      Style::default().fg(theme.hint.into()),
     )),
   ];
 
@@ -118,24 +119,24 @@ fn draw_friend_code_card(f: &mut Frame<'_>, app: &App, area: Rect) {
     Span::styled(
       " YOUR CODE  ",
       Style::default()
-        .fg(theme.inactive)
+        .fg(theme.inactive.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ),
     Span::styled(
       code_text,
       Style::default()
-        .fg(theme.hint)
+        .fg(theme.hint.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ),
     Span::raw("  "),
-    Span::styled(hint, Style::default().fg(theme.inactive)),
+    Span::styled(hint, Style::default().fg(theme.inactive.into())),
   ]);
 
   let card = Paragraph::new(line).block(
     Block::default()
       .borders(Borders::ALL)
       .border_type(BorderType::Rounded)
-      .border_style(Style::default().fg(theme.active)),
+      .border_style(Style::default().fg(theme.active.into())),
   );
 
   f.render_widget(card, area);
@@ -168,8 +169,11 @@ fn draw_friends_body(f: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
       "No friends online right now"
     };
-    let para = Paragraph::new(Span::styled(msg, Style::default().fg(theme.inactive)))
-      .alignment(ratatui::layout::Alignment::Center);
+    let para = Paragraph::new(Span::styled(
+      msg,
+      Style::default().fg(theme.inactive.into()),
+    ))
+    .alignment(ratatui::layout::Alignment::Center);
     // Center vertically a bit
     let [_, center, _] = list_area.layout(&Layout::vertical([
       Constraint::Percentage(30),
@@ -190,17 +194,17 @@ fn draw_filter_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
 
   let all_style = if app.friend_filter == FriendFilter::All {
     Style::default()
-      .fg(theme.selected)
+      .fg(theme.selected.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   } else {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
   let online_style = if app.friend_filter == FriendFilter::Online {
     Style::default()
-      .fg(theme.selected)
+      .fg(theme.selected.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   } else {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
 
   // Build search preview (inline: any unbound key types into the filter)
@@ -213,12 +217,12 @@ fn draw_filter_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
 
   let line = Line::from(vec![
     Span::styled(format!(" All ({}) ", all_count), all_style),
-    Span::styled(" │ ", Style::default().fg(theme.inactive)),
+    Span::styled(" │ ", Style::default().fg(theme.inactive.into())),
     Span::styled(format!(" Online ({}) ", online_count), online_style),
     Span::styled("    ", Style::default()),
-    Span::styled(search_hint, Style::default().fg(theme.inactive)),
+    Span::styled(search_hint, Style::default().fg(theme.inactive.into())),
     Span::styled("    ", Style::default()),
-    Span::styled("+ Add Friend", Style::default().fg(theme.active)),
+    Span::styled("+ Add Friend", Style::default().fg(theme.active.into())),
     Span::raw(" "),
   ]);
 
@@ -237,18 +241,18 @@ fn draw_friend_list(f: &mut Frame<'_>, app: &App, area: Rect, friends: &[&Friend
 
       // Online indicator
       let online_span = if friend.is_online {
-        Span::styled("● ", Style::default().fg(theme.active))
+        Span::styled("● ", Style::default().fg(theme.active.into()))
       } else {
-        Span::styled("○ ", Style::default().fg(theme.inactive))
+        Span::styled("○ ", Style::default().fg(theme.inactive.into()))
       };
 
       // Name
       let name_style = if is_selected {
         Style::default()
-          .fg(theme.selected)
+          .fg(theme.selected.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
-        Style::default().fg(theme.text)
+        Style::default().fg(theme.text.into())
       };
       let name_span = Span::styled(
         format!("{:<20}", truncate_text(&friend.name, 20)),
@@ -258,20 +262,26 @@ fn draw_friend_list(f: &mut Frame<'_>, app: &App, area: Rect, friends: &[&Friend
       // Now-playing or status
       let np_spans = if let Some(np) = &friend.now_playing {
         vec![
-          Span::styled("▶ ", Style::default().fg(theme.active)),
+          Span::styled("▶ ", Style::default().fg(theme.active.into())),
           Span::styled(
             truncate_text(&np.title, 28),
-            Style::default().fg(theme.hint),
+            Style::default().fg(theme.hint.into()),
           ),
           Span::styled(
             format!(" — {}", truncate_text(&np.artists, 20)),
-            Style::default().fg(theme.inactive),
+            Style::default().fg(theme.inactive.into()),
           ),
         ]
       } else if friend.is_online {
-        vec![Span::styled("idle", Style::default().fg(theme.inactive))]
+        vec![Span::styled(
+          "idle",
+          Style::default().fg(theme.inactive.into()),
+        )]
       } else {
-        vec![Span::styled("offline", Style::default().fg(theme.inactive))]
+        vec![Span::styled(
+          "offline",
+          Style::default().fg(theme.inactive.into()),
+        )]
       };
 
       let mut spans = vec![online_span, name_span, Span::raw("  ")];
@@ -291,7 +301,7 @@ fn draw_friend_list(f: &mut Frame<'_>, app: &App, area: Rect, friends: &[&Friend
   let list = List::new(items)
     .highlight_style(
       Style::default()
-        .fg(theme.selected)
+        .fg(theme.selected.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol("▶ ");
@@ -306,18 +316,21 @@ fn draw_help_bar(f: &mut Frame<'_>, app: &App, area: Rect) {
 
   let line = Line::from(vec![
     hint_span("↑/↓", theme),
-    Span::styled(" Navigate  ", Style::default().fg(theme.inactive)),
+    Span::styled(" Navigate  ", Style::default().fg(theme.inactive.into())),
     hint_span("c", theme),
-    Span::styled(" Copy code  ", Style::default().fg(theme.inactive)),
+    Span::styled(" Copy code  ", Style::default().fg(theme.inactive.into())),
     hint_span("a", theme),
-    Span::styled(" Add friend  ", Style::default().fg(theme.inactive)),
+    Span::styled(" Add friend  ", Style::default().fg(theme.inactive.into())),
     hint_span("u", theme),
-    Span::styled(" Unfollow  ", Style::default().fg(theme.inactive)),
+    Span::styled(" Unfollow  ", Style::default().fg(theme.inactive.into())),
     hint_span("Tab", theme),
-    Span::styled(" Filter  ", Style::default().fg(theme.inactive)),
-    Span::styled("type to search  ", Style::default().fg(theme.inactive)),
+    Span::styled(" Filter  ", Style::default().fg(theme.inactive.into())),
+    Span::styled(
+      "type to search  ",
+      Style::default().fg(theme.inactive.into()),
+    ),
     hint_span("Esc", theme),
-    Span::styled(" Back", Style::default().fg(theme.inactive)),
+    Span::styled(" Back", Style::default().fg(theme.inactive.into())),
   ]);
 
   f.render_widget(Paragraph::new(line), area);
@@ -340,11 +353,11 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
   let block = Block::default()
     .borders(Borders::ALL)
     .border_type(BorderType::Rounded)
-    .border_style(Style::default().fg(theme.active))
+    .border_style(Style::default().fg(theme.active.into()))
     .title(Span::styled(
       " Add Friend ",
       Style::default()
-        .fg(theme.active)
+        .fg(theme.active.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ));
 
@@ -360,28 +373,28 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
 
   // Tab row
   let code_style = if app.friend_add_mode == FriendAddMode::Code {
-    Style::default().fg(theme.selected).add_modifier(
+    Style::default().fg(theme.selected.into()).add_modifier(
       app
         .user_config
         .behavior
         .emphasis(Modifier::BOLD | Modifier::UNDERLINED),
     )
   } else {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
   let search_style = if app.friend_add_mode == FriendAddMode::Search {
-    Style::default().fg(theme.selected).add_modifier(
+    Style::default().fg(theme.selected.into()).add_modifier(
       app
         .user_config
         .behavior
         .emphasis(Modifier::BOLD | Modifier::UNDERLINED),
     )
   } else {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   };
   let tabs_line = Line::from(vec![
     Span::styled(" By Friend Code ", code_style),
-    Span::styled(" │ ", Style::default().fg(theme.inactive)),
+    Span::styled(" │ ", Style::default().fg(theme.inactive.into())),
     Span::styled(" Search by Name ", search_style),
   ]);
   f.render_widget(Paragraph::new(tabs_line), tabs_area);
@@ -394,11 +407,11 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
   // Footer hints
   let footer_line = Line::from(vec![
     hint_span("Tab", theme),
-    Span::styled(" Switch  ", Style::default().fg(theme.inactive)),
+    Span::styled(" Switch  ", Style::default().fg(theme.inactive.into())),
     hint_span("Enter", theme),
-    Span::styled(" Add  ", Style::default().fg(theme.inactive)),
+    Span::styled(" Add  ", Style::default().fg(theme.inactive.into())),
     hint_span("Esc", theme),
-    Span::styled(" Cancel", Style::default().fg(theme.inactive)),
+    Span::styled(" Cancel", Style::default().fg(theme.inactive.into())),
   ]);
   f.render_widget(Paragraph::new(footer_line), help_area);
 }
@@ -413,10 +426,10 @@ fn draw_add_by_code(f: &mut Frame<'_>, app: &App, area: Rect) {
     input.clone()
   };
   let style = if input.is_empty() {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   } else {
     Style::default()
-      .fg(theme.hint)
+      .fg(theme.hint.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   };
 
@@ -433,13 +446,13 @@ fn draw_add_by_code(f: &mut Frame<'_>, app: &App, area: Rect) {
       Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.active)),
+        .border_style(Style::default().fg(theme.active.into())),
     );
   f.render_widget(input_widget, input_row);
 
   let hint = Paragraph::new(Span::styled(
     "Type code then press Enter",
-    Style::default().fg(theme.inactive),
+    Style::default().fg(theme.inactive.into()),
   ))
   .alignment(ratatui::layout::Alignment::Center);
   f.render_widget(hint, hint_row);
@@ -461,15 +474,15 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
     search_str
   };
   let search_style = if app.friend_user_search_input.is_empty() {
-    Style::default().fg(theme.inactive)
+    Style::default().fg(theme.inactive.into())
   } else {
-    Style::default().fg(theme.text)
+    Style::default().fg(theme.text.into())
   };
   let search_widget = Paragraph::new(Span::styled(search_display, search_style)).block(
     Block::default()
       .borders(Borders::ALL)
       .border_type(BorderType::Rounded)
-      .border_style(Style::default().fg(theme.inactive)),
+      .border_style(Style::default().fg(theme.inactive.into())),
   );
   f.render_widget(search_widget, input_row);
 
@@ -481,8 +494,11 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
       "No users found"
     };
     f.render_widget(
-      Paragraph::new(Span::styled(msg, Style::default().fg(theme.inactive)))
-        .alignment(ratatui::layout::Alignment::Center),
+      Paragraph::new(Span::styled(
+        msg,
+        Style::default().fg(theme.inactive.into()),
+      ))
+      .alignment(ratatui::layout::Alignment::Center),
       results_area,
     );
     return;
@@ -497,14 +513,14 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
       let prefix = if is_sel { "▶ " } else { "  " };
       let style = if is_sel {
         Style::default()
-          .fg(theme.selected)
+          .fg(theme.selected.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
       } else {
-        Style::default().fg(theme.text)
+        Style::default().fg(theme.text.into())
       };
       let following_tag = if r.is_following { " [following]" } else { "" };
       ListItem::new(Line::from(vec![
-        Span::styled(prefix, Style::default().fg(theme.selected)),
+        Span::styled(prefix, Style::default().fg(theme.selected.into())),
         Span::styled(format!("{}{}", r.name, following_tag), style),
       ]))
     })
@@ -514,7 +530,7 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
   state.select(Some(app.friend_user_search_selected));
   let list = List::new(items).highlight_style(
     Style::default()
-      .fg(theme.selected)
+      .fg(theme.selected.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
   );
   f.render_stateful_widget(list, results_area, &mut state);

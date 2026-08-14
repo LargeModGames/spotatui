@@ -5,7 +5,7 @@
 //! edits do not churn every time volume, source, pane sizes, announcements, or
 //! radio stations change.
 
-use crate::core::{layout::MAX_PLAYBAR_ROWS, source::Source};
+use crate::core::{limits::MAX_PLAYBAR_ROWS, source::Source};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

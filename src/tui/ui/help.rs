@@ -247,6 +247,11 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("General"),
     ],
     vec![
+      String::from("Cycle visualizer style (in audio analysis)"),
+      String::from("V"),
+      String::from("General"),
+    ],
+    vec![
       String::from("Go to lyrics view"),
       key_bindings.lyrics_view.to_string(),
       String::from("General"),

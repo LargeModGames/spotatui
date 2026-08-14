@@ -32,7 +32,6 @@ clap_complete = "4.6"
 unicode-width = "0.2.2"
 backtrace = "0.3.76"
 crossterm = "0.29"
-tui-equalizer = "0.2.0-alpha"
 tui-bar-graph = "0.3.3"
 colorgrad = "0.8.0"
 tokio = { version = "1.52", features = ["full"] }
@@ -122,8 +121,14 @@ objc2 = { version = "0.6", optional = true }
 block2 = { version = "0.6", optional = true }
 
 [features]
-default = ["telemetry", "streaming", "audio-viz-cpal", "macos-media", "discord-rpc", "mpris", "self-update", "windows-media", "scripting"]
+default = ["telemetry", "streaming", "audio-viz-cpal", "macos-media", "discord-rpc", "mpris", "self-update", "windows-media", "scripting", "tui"]
 telemetry = []
+# The terminal frontend. In `default` and currently ungated (`mod tui` is always
+# compiled, ratatui/crossterm stay non-optional), so building without it changes
+# nothing yet. The headless CI leg omits it so that, once `mod tui` is
+# feature-gated as part of the GUI substrate migration, any `crate::tui` import
+# from core/infra/cli becomes a compile error there.
+tui = []
 self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
 streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf"]
 # Audio backend features
@@ -141,7 +146,12 @@ mpris = ["mpris-server"]  # MPRIS D-Bus integration (Linux only)
 macos-media = ["objc2-media-player", "objc2-foundation", "objc2-app-kit", "objc2", "block2", "streaming"]  # macOS Now Playing integration
 windows-media = ["smtc-tokio", "streaming"] # windows SMTC integration
 discord-rpc = ["discord-rich-presence"]
-cover-art = ["ratatui-image", "image"]
+# The frontend-agnostic decode half of cover art: fetch + `image`-decode into
+# the store frontends render from (also feeds the adaptive theme's palette
+# extraction). Not meant to be enabled by hand: `cover-art` layers the
+# terminal rendering on top and keeps its pre-split meaning for users and CI.
+art-decode = ["dep:image"]
+cover-art = ["tui", "art-decode", "dep:ratatui-image"]
 scripting = ["dep:mlua"]
 # Shared audio decode/output engine (rodio bundles symphonia). Pulled by any
 # source that plays decoded audio through the local sink (local files, Subsonic).
@@ -252,10 +262,10 @@ pkg-fmt = "zip"
 # as the `spotatui` branch advances. Note: crates.io publishes ignore [patch], so `cargo install`
 # users need the upstream release.
 [patch.crates-io]
-librespot-core     = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
-librespot-audio    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
-librespot-playback = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
-librespot-connect  = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
-librespot-oauth    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
-librespot-metadata = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
-librespot-protocol = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "514061e4df71f5827105611eab1b2b92a87c430a" }
+librespot-core     = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "f775c396ab3fc14d9331c7a018e18aba3749f8cf" }
+librespot-audio    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "f775c396ab3fc14d9331c7a018e18aba3749f8cf" }
+librespot-playback = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "f775c396ab3fc14d9331c7a018e18aba3749f8cf" }
+librespot-connect  = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "f775c396ab3fc14d9331c7a018e18aba3749f8cf" }
+librespot-oauth    = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "f775c396ab3fc14d9331c7a018e18aba3749f8cf" }
+librespot-metadata = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "f775c396ab3fc14d9331c7a018e18aba3749f8cf" }
+librespot-protocol = { git = "https://github.com/LargeModGames/spotatui-librespot", rev = "f775c396ab3fc14d9331c7a018e18aba3749f8cf" }

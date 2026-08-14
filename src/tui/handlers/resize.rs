@@ -1,5 +1,5 @@
 use crate::core::app::App;
-use crate::core::layout::MAX_PLAYBAR_ROWS;
+use crate::core::limits::MAX_PLAYBAR_ROWS;
 use crate::core::state::{PersistedRuntimeState, RuntimeState};
 
 const SIDEBAR_STEP: u8 = 5;

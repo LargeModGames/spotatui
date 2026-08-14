@@ -2,10 +2,10 @@ use super::{common_key_events, library, lyrics_view, playbar, playlist, settings
 use crate::core::app::{
   library_options, ActiveBlock, App, RouteId, SettingValue, SettingsCategory,
 };
-use crate::core::layout::{
+use crate::tui::event::Key;
+use crate::tui::layout::{
   compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
 };
-use crate::tui::event::Key;
 use crate::tui::ui::player::{playbar_control_at, playbar_progress_line};
 use crate::tui::ui::tables::table_scroll_offset;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -903,11 +903,11 @@ mod tests {
     AlbumTableContext, PlaylistFolderItem, RouteId, SelectedAlbum, SettingValue, SettingsCategory,
     TrackTableContext,
   };
+  use crate::core::geometry::Viewport;
   use crate::core::test_helpers::full_track;
   use crate::tui::ui::player::PlaybarControl;
   use chrono::{Duration, Utc};
   use crossterm::event::{KeyModifiers, MouseEvent};
-  use ratatui::layout::Size;
   use rspotify::model::context::{Actions, CurrentPlaybackContext};
   use rspotify::model::enums::{DeviceType, RepeatState};
   use rspotify::model::{
@@ -1094,7 +1094,7 @@ mod tests {
   #[test]
   fn scroll_over_playlists_changes_selection() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1120,7 +1120,7 @@ mod tests {
   #[test]
   fn click_search_input_focuses_input() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1148,7 +1148,7 @@ mod tests {
   #[test]
   fn click_settings_opens_settings_screen() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1174,7 +1174,7 @@ mod tests {
   #[test]
   fn click_main_layout_playbar_control_triggers_action() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1199,7 +1199,7 @@ mod tests {
   #[test]
   fn click_main_layout_playbar_progress_seeks() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1245,7 +1245,7 @@ mod tests {
   #[test]
   fn click_playbar_time_label_does_not_seek() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1268,7 +1268,7 @@ mod tests {
   #[test]
   fn drag_playbar_progress_seeks() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1301,7 +1301,7 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1342,7 +1342,7 @@ mod tests {
   #[test]
   fn click_lyrics_view_playbar_control_triggers_action() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1368,7 +1368,7 @@ mod tests {
   #[test]
   fn click_miniplayer_control_triggers_action_and_keeps_miniplayer_focus() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1394,7 +1394,7 @@ mod tests {
   #[test]
   fn fullscreen_view_playbar_area_uses_runtime_state_height() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1408,7 +1408,7 @@ mod tests {
   #[test]
   fn fullscreen_view_playbar_area_is_hidden_when_height_is_zero() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1420,7 +1420,7 @@ mod tests {
   #[test]
   fn click_hidden_lyrics_view_playbar_area_does_nothing() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1448,7 +1448,7 @@ mod tests {
   #[test]
   fn resized_playbar_control_click_still_maps_correctly() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1472,7 +1472,7 @@ mod tests {
   #[test]
   fn smaller_resized_playbar_control_click_still_maps_correctly() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1496,7 +1496,7 @@ mod tests {
   #[test]
   fn click_playbar_outside_controls_does_nothing() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1522,7 +1522,7 @@ mod tests {
   #[test]
   fn click_settings_tab_switches_category() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1563,7 +1563,7 @@ mod tests {
   #[test]
   fn scroll_in_settings_list_changes_selected_item() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1584,7 +1584,7 @@ mod tests {
   #[test]
   fn clicking_selected_bool_setting_toggles_value() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1628,7 +1628,7 @@ mod tests {
   #[test]
   fn keybinding_capture_can_be_cancelled_with_mouse_click() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1677,7 +1677,7 @@ mod tests {
   #[test]
   fn click_no_on_unsaved_prompt_discards_changes_and_exits() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1711,7 +1711,7 @@ mod tests {
   #[test]
   fn click_in_playlist_selects_row() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1738,7 +1738,7 @@ mod tests {
     // Rows: [+ Add Playlist, P0, P1, P2]. The last playlist (row 3) is only
     // reachable because the click count includes every rendered row.
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1762,7 +1762,7 @@ mod tests {
   fn double_click_add_row_opens_create_form() {
     // Row 0 is "+ Add Playlist"; clicking an already-selected row opens it.
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1785,7 +1785,7 @@ mod tests {
   #[test]
   fn click_in_saved_albums_selects_row() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1810,7 +1810,7 @@ mod tests {
   #[test]
   fn click_in_song_table_first_highlights_second_plays() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1846,7 +1846,7 @@ mod tests {
   #[test]
   fn scroll_over_saved_albums_changes_selection() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1944,7 +1944,7 @@ mod tests {
   #[test]
   fn click_outside_playlist_is_ignored() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1975,7 +1975,7 @@ mod tests {
   #[test]
   fn scroll_over_library_changes_selection() {
     let mut app = App::default();
-    app.size = Size {
+    app.size = Viewport {
       width: 160,
       height: 50,
     };

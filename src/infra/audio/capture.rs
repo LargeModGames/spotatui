@@ -1,4 +1,4 @@
-use super::analyzer::{create_shared_analyzer, SharedAnalyzer, SpectrumData};
+use super::analyzer::{create_shared_analyzer, spectrum_for, SharedAnalyzer, SpectrumData};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(not(target_os = "windows"))]
 use cpal::BufferSize;
@@ -14,9 +14,9 @@ pub struct AudioCaptureManager {
 }
 
 impl AudioCaptureManager {
-  /// Create a new audio capture manager
+  /// Create a new audio capture manager sized for `display_bars`
   /// Returns None if no suitable audio device is found
-  pub fn new() -> Option<Self> {
+  pub fn new(display_bars: usize) -> Option<Self> {
     let host = cpal::default_host();
 
     // Try to find a loopback/monitor device
@@ -31,7 +31,7 @@ impl AudioCaptureManager {
     // Get a compatible config that won't interfere with playback
     let config = Self::get_compatible_config(&device)?;
 
-    let analyzer = create_shared_analyzer();
+    let analyzer = create_shared_analyzer(config.sample_rate, display_bars);
     let active = Arc::new(AtomicBool::new(true));
 
     let stream = Self::build_stream(&device, &config, analyzer.clone(), active.clone())?;
@@ -48,17 +48,14 @@ impl AudioCaptureManager {
     })
   }
 
-  /// Get the current spectrum data
-  pub fn get_spectrum(&self) -> Option<SpectrumData> {
+  /// Get the current spectrum data, sized to `desired_bars` (the analyzer
+  /// rebuilds its plan when the count changes, and clamps unsupportable counts)
+  pub fn get_spectrum(&self, desired_bars: usize) -> Option<SpectrumData> {
     if !self.active.load(Ordering::Relaxed) {
       return None;
     }
 
-    if let Ok(mut analyzer) = self.analyzer.lock() {
-      Some(analyzer.process())
-    } else {
-      None
-    }
+    spectrum_for(&self.analyzer, desired_bars)
   }
 
   /// Check if audio capture is currently active
@@ -184,14 +181,8 @@ impl AudioCaptureManager {
     let active_clone = active.clone();
 
     let data_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-      // Convert to mono by averaging channels
-      let mono_samples: Vec<f32> = data
-        .chunks(channels)
-        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
-        .collect();
-
       if let Ok(mut analyzer) = analyzer.lock() {
-        analyzer.push_samples(&mono_samples);
+        analyzer.push_frames(data, channels);
       }
     };
 

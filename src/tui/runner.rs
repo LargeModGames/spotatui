@@ -188,12 +188,12 @@ fn track_identity(snapshot: &crate::infra::media_metadata::PlaybackSnapshot) -> 
 /// art (Spotify album art, YouTube thumbnail, Subsonic getCoverArt) surfaces it
 /// as `snapshot.metadata.image_url`. `None` means the current track has no art
 /// to show (e.g. internet radio, or a Spotify item without images).
-#[cfg(feature = "cover-art")]
+#[cfg(feature = "art-decode")]
 fn cover_art_request_for(
   app: &App,
   snapshot: &crate::infra::media_metadata::PlaybackSnapshot,
-) -> Option<crate::tui::cover_art::CoverArtRequest> {
-  use crate::tui::cover_art::CoverArtRequest;
+) -> Option<crate::core::art::CoverArtRequest> {
+  use crate::core::art::CoverArtRequest;
 
   #[cfg(feature = "local-files")]
   if let Some(local) = app.local_playback.as_ref() {
@@ -204,12 +204,29 @@ fn cover_art_request_for(
       path,
     });
   }
+  #[cfg(not(feature = "local-files"))]
+  let _ = app;
 
   snapshot
     .metadata
     .image_url
     .clone()
     .map(CoverArtRequest::Url)
+}
+
+/// Whether the terminal renders real pixels. False until the renderer is
+/// initialized, and always false in a decode-only build (`art-decode` without
+/// `cover-art`), where art is fetched solely for the adaptive theme.
+#[cfg(feature = "art-decode")]
+fn cover_art_full_image_support() -> bool {
+  #[cfg(feature = "cover-art")]
+  {
+    crate::tui::cover_art::full_image_support()
+  }
+  #[cfg(not(feature = "cover-art"))]
+  {
+    false
+  }
 }
 
 fn playback_window_title(app: &App) -> String {
@@ -736,6 +753,10 @@ pub async fn start_ui(
   let _ = &mpris_manager;
 
   let mut terminal = ratatui::init();
+  // Probe the terminal's image protocol only now that the terminal is set up;
+  // `App` construction must not touch stdout.
+  #[cfg(feature = "cover-art")]
+  crate::tui::cover_art::init_renderer();
   execute!(stdout(), EnableMouseCapture)?;
   let keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
   let keyboard_enhancement_enabled = keyboard_enhancement_supported
@@ -778,7 +799,7 @@ pub async fn start_ui(
   let mut last_track_identity: Option<TrackIdentity> = None;
   // Cache key (URL / file URI) of the cover art last requested, so the per-tick
   // cover-art evaluation dispatches a fetch only when the resolved art changes.
-  #[cfg(feature = "cover-art")]
+  #[cfg(feature = "art-decode")]
   let mut last_cover_art_key: Option<String> = None;
   let mut is_first_render = true;
 
@@ -825,7 +846,15 @@ pub async fn start_ui(
   };
 
   loop {
-    let terminal_size = terminal.backend().size().ok();
+    let terminal_size =
+      terminal
+        .backend()
+        .size()
+        .ok()
+        .map(|size| crate::core::geometry::Viewport {
+          width: size.width,
+          height: size.height,
+        });
     let title_update = {
       let mut app = app.lock().await;
 
@@ -889,7 +918,8 @@ pub async fn start_ui(
         || current_route.active_block == ActiveBlock::Analysis
         || (current_route.id == RouteId::LyricsView
           && app.lyrics_status == crate::core::app::LyricsStatus::Found)
-        || app.liked_song_animation_frame.is_some();
+        || app.liked_song_animation_frame.is_some()
+        || app.theme_fade_active();
       let current_tick_rate = if animation_active {
         app.user_config.behavior.animation_tick_rate_milliseconds
       } else {
@@ -897,10 +927,15 @@ pub async fn start_ui(
       };
       events.set_tick_rate(current_tick_rate);
 
+      // Drop protocol caches for art the store no longer holds; rebuilds are
+      // lazy, so this is a no-op whenever the art is unchanged.
+      #[cfg(feature = "cover-art")]
+      crate::tui::cover_art::sync(&app.cover_art);
+
       terminal.draw(|f| {
         use ratatui::{prelude::Style, widgets::Block};
         f.render_widget(
-          Block::default().style(Style::default().bg(app.user_config.theme.background)),
+          Block::default().style(Style::default().bg(app.user_config.theme.background.into())),
           f.area(),
         );
 
@@ -947,13 +982,12 @@ pub async fn start_ui(
         terminal.hide_cursor()?;
       }
 
-      let cursor_offset = if app.size.height
-        > crate::core::layout::small_terminal_height(&app.user_config.behavior)
-      {
-        2
-      } else {
-        1
-      };
+      let cursor_offset =
+        if app.size.height > crate::tui::layout::small_terminal_height(&app.user_config.behavior) {
+          2
+        } else {
+          1
+        };
 
       terminal.backend_mut().execute(MoveTo(
         cursor_offset + app.input_cursor_position - app.input_scroll_offset.get(),
@@ -1095,12 +1129,12 @@ pub async fn start_ui(
           // stuck or missing until restart. Comparing against
           // `last_cover_art_key` keeps this a no-op on quiet ticks and fires
           // exactly once whenever the resolved art actually changes.
-          #[cfg(feature = "cover-art")]
+          #[cfg(feature = "art-decode")]
           {
-            use crate::core::app::CoverArtStatus;
+            use crate::core::art::CoverArtStatus;
             let enabled = app
               .user_config
-              .do_draw_cover_art(app.cover_art.full_image_support());
+              .needs_cover_art(cover_art_full_image_support());
             let desired = if enabled {
               snapshot
                 .as_ref()
@@ -1115,7 +1149,7 @@ pub async fn start_ui(
                   last_cover_art_key = Some(request.key().to_string());
                   // Keep the previous image on screen until the new one
                   // resolves (smooth swap); the fetch runs off-lock.
-                  app.cover_art_status = CoverArtStatus::Loading;
+                  app.cover_art.status = CoverArtStatus::Loading;
                   app.dispatch(IoEvent::FetchCoverArt(request));
                 }
               }
@@ -1124,9 +1158,9 @@ pub async fn start_ui(
                 // No art to show (radio, art disabled, nothing playing): drop
                 // any stale image once, so the pane shows the placeholder.
                 if last_cover_art_key.take().is_some() || app.cover_art.available() {
-                  app.cover_art.clear();
+                  app.clear_cover_art();
                 }
-                app.cover_art_status = if enabled && snapshot.is_some() {
+                app.cover_art.status = if enabled && snapshot.is_some() {
                   CoverArtStatus::Unavailable
                 } else {
                   CoverArtStatus::NotStarted
@@ -1384,19 +1418,25 @@ pub async fn start_ui(
           let in_analysis_view = app.get_current_route().active_block == ActiveBlock::Analysis;
 
           if in_analysis_view {
+            let desired_bars = ui::audio_analysis::visualizer_bar_count(
+              app.user_config.behavior.visualizer_style,
+              ui::audio_analysis::visualizer_inner_width(&app),
+            );
+
             if audio_capture.is_none() {
-              audio_capture = audio::AudioCaptureManager::new();
+              // Built at the count we are about to ask for, so the first frame
+              // does not immediately throw the fresh cavacore plan away.
+              audio_capture = audio::AudioCaptureManager::new(desired_bars);
               app.audio_capture_active = audio_capture.is_some();
             }
 
             if let Some(ref capture) = audio_capture {
-              if let Some(spectrum) = capture.get_spectrum() {
-                app.spectrum_data = Some(app::SpectrumData {
-                  bands: spectrum.bands,
-                  peak: spectrum.peak,
-                });
-                app.audio_capture_active = capture.is_active();
+              if let Some(spectrum) = capture.get_spectrum(desired_bars) {
+                app.spectrum_data = Some(spectrum);
               }
+              // Kept outside the spectrum arm: a dead stream must drop the
+              // "Capturing audio" status instead of freezing it on.
+              app.audio_capture_active = capture.is_active();
             }
           } else if audio_capture.is_some() {
             audio_capture = None;

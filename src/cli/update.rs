@@ -72,8 +72,15 @@ pub fn check_for_update_silent() -> Option<UpdateInfo> {
 /// Returns the artifact prefix used in release asset names for the current platform.
 /// Mirrors the `artifact_prefix` matrix in `.github/workflows/cd.yml`.
 fn current_platform_prefix() -> Option<&'static str> {
-  match (std::env::consts::OS, std::env::consts::ARCH) {
+  platform_prefix(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// Maps (OS, arch) to the release artifact prefix published by cd.yml; must
+/// cover every target that workflow builds.
+fn platform_prefix(os: &str, arch: &str) -> Option<&'static str> {
+  match (os, arch) {
     ("linux", "x86_64") => Some("linux-x86_64"),
+    ("linux", "aarch64") => Some("linux-aarch64"),
     ("macos", "x86_64") => Some("macos-x86_64"),
     ("macos", "aarch64") => Some("macos-aarch64"),
     ("windows", "x86_64") => Some("windows-x86_64"),
@@ -311,4 +318,25 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::platform_prefix;
+
+  #[test]
+  fn every_published_release_target_resolves_a_checksum_prefix() {
+    // One row per cd.yml artifact_prefix; a target published without a row
+    // here makes self-update abort with "unsupported platform" (#440).
+    for (os, arch, prefix) in [
+      ("linux", "x86_64", "linux-x86_64"),
+      ("linux", "aarch64", "linux-aarch64"),
+      ("macos", "x86_64", "macos-x86_64"),
+      ("macos", "aarch64", "macos-aarch64"),
+      ("windows", "x86_64", "windows-x86_64"),
+    ] {
+      assert_eq!(platform_prefix(os, arch), Some(prefix), "{os}/{arch}");
+    }
+    assert_eq!(platform_prefix("linux", "arm"), None);
+  }
 }

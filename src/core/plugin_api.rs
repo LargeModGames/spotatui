@@ -25,7 +25,7 @@ pub struct PluginPopup {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PopupLine {
   pub text: String,
-  pub fg: Option<ratatui::style::Color>,
+  pub fg: Option<crate::core::theme::Color>,
   pub bold: bool,
   pub italic: bool,
 }
@@ -259,9 +259,10 @@ pub enum PluginLength {
 
 /// How a [`PluginWidgetKind::CoverArt`] image is scaled into its area.
 ///
-/// `Crop` (CSS `cover`) is deliberately not offered: `ratatui-image` documents
-/// that cropping overdraws characters over graphics and that some terminals
-/// misbehave when it does (Alacritty's sixel branch is named explicitly).
+/// `Crop` (CSS `cover`) is deliberately not offered: the terminal image
+/// renderer documents that cropping overdraws characters over graphics and
+/// that some terminals misbehave when it does (Alacritty's sixel branch is
+/// named explicitly).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PluginCoverArtFit {
   /// Fit inside the area, keeping the aspect ratio, never upscaling.

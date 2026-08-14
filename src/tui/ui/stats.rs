@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use super::util::{get_color, hint_span};
+use crate::tui::theme::EmphasisExt;
 
 pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let current_route = app.get_current_route();
@@ -44,10 +45,10 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .title(Span::styled("Stats", get_color(highlight_state, theme)))
         .border_style(get_color(highlight_state, theme)),
     )
-    .style(Style::default().fg(theme.text))
+    .style(Style::default().fg(theme.text.into()))
     .highlight_style(
       Style::default()
-        .fg(theme.active)
+        .fg(theme.active.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     );
   f.render_widget(tabs, tabs_area);
@@ -58,7 +59,7 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     summary_spans.push(Span::styled(
       format!("{}-day streak", streaks.current_days),
       Style::default()
-        .fg(theme.active)
+        .fg(theme.active.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     ));
     summary_spans.push(Span::styled(
@@ -67,13 +68,13 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         streaks.longest_days,
         format_duration(streaks.today_ms)
       ),
-      Style::default().fg(theme.text),
+      Style::default().fg(theme.text.into()),
     ));
   }
   if app.stats_loading {
     summary_spans.push(Span::styled(
       "  [Loading...]",
-      Style::default().fg(theme.hint),
+      Style::default().fg(theme.hint.into()),
     ));
   } else if let Some(stats) = &app.stats_data {
     summary_spans.push(Span::styled(
@@ -82,13 +83,13 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         stats.total_plays,
         format_duration(stats.total_time_ms)
       ),
-      Style::default().fg(theme.text),
+      Style::default().fg(theme.text.into()),
     ));
   }
   if summary_spans.is_empty() {
     summary_spans.push(Span::styled(
       "No listening history recorded yet. Play something!",
-      Style::default().fg(theme.hint),
+      Style::default().fg(theme.hint.into()),
     ));
   }
   let summary = Paragraph::new(Line::from(summary_spans)).block(
@@ -96,9 +97,9 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .borders(Borders::ALL)
       .title(Span::styled(
         period_label(app.stats_period),
-        Style::default().fg(theme.inactive),
+        Style::default().fg(theme.inactive.into()),
       ))
-      .border_style(Style::default().fg(theme.inactive)),
+      .border_style(Style::default().fg(theme.inactive.into())),
   );
   f.render_widget(summary, summary_area);
 
@@ -130,7 +131,7 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     artists_area,
     "Top Artists",
     top_artists,
-    Style::default().fg(theme.inactive),
+    Style::default().fg(theme.inactive.into()),
     None,
   );
   draw_ranked_panel(
@@ -139,7 +140,7 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     albums_area,
     "Top Albums",
     top_albums,
-    Style::default().fg(theme.inactive),
+    Style::default().fg(theme.inactive.into()),
     None,
   );
 
@@ -162,12 +163,15 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       Line::from(vec![
         Span::styled(
           format!("{}  ", entry.display),
-          Style::default().fg(theme.text),
+          Style::default().fg(theme.text.into()),
         ),
-        Span::styled("█".repeat(width.max(1)), Style::default().fg(theme.active)),
+        Span::styled(
+          "█".repeat(width.max(1)),
+          Style::default().fg(theme.active.into()),
+        ),
         Span::styled(
           format!(" {}", entry.detail),
-          Style::default().fg(theme.hint),
+          Style::default().fg(theme.hint.into()),
         ),
       ])
     })
@@ -175,7 +179,7 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   if day_lines.is_empty() {
     day_lines.push(Line::from(Span::styled(
       "No plays in this period yet.",
-      Style::default().fg(theme.hint),
+      Style::default().fg(theme.hint.into()),
     )));
   }
 
@@ -184,9 +188,9 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .borders(Borders::ALL)
       .title(Span::styled(
         "Last 10 Days",
-        Style::default().fg(theme.inactive),
+        Style::default().fg(theme.inactive.into()),
       ))
-      .border_style(Style::default().fg(theme.inactive)),
+      .border_style(Style::default().fg(theme.inactive.into())),
   );
   f.render_widget(days_panel, days_area);
 
@@ -195,7 +199,7 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
 fn draw_help_bar(f: &mut Frame<'_>, app: &App, area: Rect) {
   let theme = app.user_config.theme;
-  let label = |text: &'static str| Span::styled(text, Style::default().fg(theme.inactive));
+  let label = |text: &'static str| Span::styled(text, Style::default().fg(theme.inactive.into()));
 
   let line = Line::from(vec![
     hint_span("↑/↓", theme),
@@ -206,7 +210,9 @@ fn draw_help_bar(f: &mut Frame<'_>, app: &App, area: Rect) {
     label(" Change period  "),
     Span::styled(
       app.user_config.keys.generate_recap.to_string(),
-      Style::default().fg(theme.hint).add_modifier(Modifier::BOLD),
+      Style::default()
+        .fg(theme.hint.into())
+        .add_modifier(Modifier::BOLD),
     ),
     label(" Open share card  "),
     hint_span("←/Esc", theme),
@@ -223,11 +229,17 @@ fn ranked_list_items<'a>(entries: &'a [RankedEntry], app: &App) -> Vec<ListItem<
     .enumerate()
     .map(|(i, entry)| {
       ListItem::new(Line::from(vec![
-        Span::styled(format!("{:>2}. ", i + 1), Style::default().fg(theme.hint)),
-        Span::styled(entry.display.as_str(), Style::default().fg(theme.text)),
+        Span::styled(
+          format!("{:>2}. ", i + 1),
+          Style::default().fg(theme.hint.into()),
+        ),
+        Span::styled(
+          entry.display.as_str(),
+          Style::default().fg(theme.text.into()),
+        ),
         Span::styled(
           format!("  {}", entry.detail),
-          Style::default().fg(theme.hint),
+          Style::default().fg(theme.hint.into()),
         ),
       ]))
     })

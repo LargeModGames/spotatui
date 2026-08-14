@@ -1,9 +1,16 @@
 pub mod app;
+#[cfg(feature = "art-decode")]
+pub mod art;
 pub mod auth;
+pub mod banner;
 pub mod config;
+#[cfg(feature = "art-decode")]
+pub mod cover_theme;
 pub mod first_run;
 pub mod format;
-pub mod layout;
+pub mod geometry;
+pub mod input;
+pub mod limits;
 pub mod migrations;
 pub mod pagination;
 pub mod paths;
@@ -15,4 +22,5 @@ pub mod source;
 pub mod state;
 #[cfg(test)]
 pub mod test_helpers;
+pub mod theme;
 pub mod user_config;

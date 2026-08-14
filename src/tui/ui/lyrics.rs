@@ -1,5 +1,5 @@
 use crate::core::app::{active_lyric_index, App, LyricsStatus};
-use crate::core::layout::fullscreen_view_layout;
+use crate::tui::layout::fullscreen_view_layout;
 use ratatui::{
   layout::{Alignment, Rect},
   style::{Modifier, Style},
@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use super::player::draw_playbar;
+use crate::tui::theme::EmphasisExt;
 
 pub fn draw_lyrics_view(f: &mut Frame<'_>, app: &App) {
   let (content_area, playbar_area) = fullscreen_view_layout(&app.runtime_state, f.area());
@@ -39,7 +40,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   let block = Block::default()
     .borders(Borders::ALL)
     .title(title)
-    .style(Style::default().fg(theme.inactive));
+    .style(Style::default().fg(theme.inactive.into()));
   f.render_widget(block.clone(), area);
 
   let inner_area = block.inner(area);
@@ -88,12 +89,12 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
 
     let style = if line_idx == active_idx {
       Style::default()
-        .fg(theme.highlighted_lyrics)
+        .fg(theme.highlighted_lyrics.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
     } else if manual && line_idx == focus_idx {
-      Style::default().fg(theme.hovered)
+      Style::default().fg(theme.hovered.into())
     } else {
-      Style::default().fg(theme.inactive)
+      Style::default().fg(theme.inactive.into())
     };
 
     f.render_widget(
@@ -112,7 +113,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   if manual {
     f.render_widget(
       Paragraph::new("browsing · ↑/↓ scroll · Esc follow")
-        .style(Style::default().fg(theme.hint))
+        .style(Style::default().fg(theme.hint.into()))
         .alignment(Alignment::Center),
       Rect {
         y: inner_area.y + inner_area.height - 1,
@@ -136,7 +137,7 @@ fn draw_state_message(f: &mut Frame<'_>, app: &App, inner_area: Rect) {
   let primary_y = inner_area.y + inner_area.height.saturating_sub(1) / 2;
   f.render_widget(
     Paragraph::new(primary)
-      .style(Style::default().fg(theme.text))
+      .style(Style::default().fg(theme.text.into()))
       .alignment(Alignment::Center),
     Rect {
       y: primary_y,
@@ -148,7 +149,7 @@ fn draw_state_message(f: &mut Frame<'_>, app: &App, inner_area: Rect) {
   if secondary_y < inner_area.y + inner_area.height {
     f.render_widget(
       Paragraph::new(secondary)
-        .style(Style::default().fg(theme.inactive))
+        .style(Style::default().fg(theme.inactive.into()))
         .alignment(Alignment::Center),
       Rect {
         y: secondary_y,
@@ -267,7 +268,7 @@ mod tests {
       .style();
     assert_eq!(
       active_style.fg,
-      Some(app.user_config.theme.highlighted_lyrics),
+      Some(app.user_config.theme.highlighted_lyrics.into()),
       "nudged line should be the highlighted one"
     );
   }

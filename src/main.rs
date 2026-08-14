@@ -1,5 +1,7 @@
 mod cli;
 mod core;
+#[cfg(test)]
+mod gates;
 mod infra;
 mod runtime;
 mod tui;

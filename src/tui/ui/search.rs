@@ -1,5 +1,6 @@
 use crate::core::app::{ActiveBlock, App, InputContext, SearchResultBlock};
-use crate::core::layout::COMPACT_TOP_ROW_THRESHOLD;
+use crate::tui::layout::COMPACT_TOP_ROW_THRESHOLD;
+use crate::tui::theme::ThemeExt;
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   style::Style,
@@ -16,7 +17,7 @@ use super::util::{
 };
 
 /// Draws the search input, Help button and Settings button into pre-split
-/// areas (see `core::layout::split_input_help_and_settings`). Splitting is
+/// areas (see `tui::layout::split_input_help_and_settings`). Splitting is
 /// owned by `compute_main_layout` so mouse hit-testing always matches.
 pub fn draw_input_and_help_box(
   f: &mut Frame<'_>,
@@ -84,16 +85,19 @@ pub fn draw_input_and_help_box(
   };
 
   let block = Block::default()
-    .title(Span::styled("Help", Style::default().fg(help_content.0)))
+    .title(Span::styled(
+      "Help",
+      Style::default().fg(help_content.0.into()),
+    ))
     .borders(Borders::ALL)
     .border_type(BorderType::Rounded)
-    .border_style(Style::default().fg(help_content.0));
+    .border_style(Style::default().fg(help_content.0.into()));
 
   let lines = Text::from(help_content.1);
   let help = Paragraph::new(lines).block(block).style(
     Style::default()
-      .fg(help_content.0)
-      .bg(app.user_config.theme.background),
+      .fg(help_content.0.into())
+      .bg(app.user_config.theme.background.into()),
   );
   f.render_widget(help, help_area);
 
@@ -111,16 +115,16 @@ pub fn draw_input_and_help_box(
   let settings_block = Block::default()
     .title(Span::styled(
       "Settings",
-      Style::default().fg(settings_color),
+      Style::default().fg(settings_color.into()),
     ))
     .borders(Borders::ALL)
     .border_type(BorderType::Rounded)
-    .border_style(Style::default().fg(settings_color));
+    .border_style(Style::default().fg(settings_color.into()));
 
   let settings = Paragraph::new(settings_hint).block(settings_block).style(
     Style::default()
-      .fg(settings_color)
-      .bg(app.user_config.theme.background),
+      .fg(settings_color.into())
+      .bg(app.user_config.theme.background.into()),
   );
   f.render_widget(settings, settings_area);
 }
@@ -306,7 +310,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       let warning_text = "Cannot display Spotify created playlists. Try a more specific search to find user-created playlists.";
       let warning_paragraph = Paragraph::new(warning_text)
         .wrap(Wrap { trim: true })
-        .style(Style::default().fg(app.user_config.theme.hint))
+        .style(Style::default().fg(app.user_config.theme.hint.into()))
         .block(
           Block::default()
             .title(Span::styled(
