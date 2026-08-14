@@ -183,10 +183,12 @@ pipeline, escalating to full backend replacement with parked-request replay.
 Durable intent (recovery snapshot, parked `StartPlayback`, client-side shuffle
 session) lives in `src/core/app/native_{backend,recovery,shuffle}.rs`.
 
-- It rides a **pinned librespot fork** (`[patch.crates-io]` in Cargo.toml, one
-  immutable rev). The fork carries upstream backports *and* a fork-only
+- It rides our **maintained librespot fork**, published on crates.io as
+  `spotatui-librespot-*` and consumed through `package =` renames, so imports
+  stay `librespot_*`. The fork carries upstream backports *and* a fork-only
   `SessionDisconnectReason` API the app depends on - it cannot be swapped for
-  upstream 0.8. Update the Cargo.toml comment block when the rev moves.
+  upstream 0.8. All seven crates are `=`-pinned in lockstep; bump them together
+  when the fork publishes a new version.
 - Direct spirc `load` is the **primary** route for all native starts, context ones
   included - a `me/player/play` round trip would head-of-line-block the serial
   pump (#386). The Web API route (`start_native_context_via_api`) is a fallback
