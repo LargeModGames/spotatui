@@ -593,14 +593,16 @@ fn request_streaming_oauth_credentials() -> Result<Credentials> {
 
 /// Populate the reusable credential cache before the TUI enters raw mode.
 /// Deferred player initialization and recovery can then remain cache-only.
-pub fn ensure_streaming_credentials_cached() -> Result<()> {
+pub fn ensure_streaming_credentials_cached(
+  onboarding: &dyn crate::core::onboarding::Onboarding,
+) -> Result<()> {
   let cache_path = get_default_cache_path();
   if let Some(path) = cache_path.as_ref() {
     crate::core::paths::ensure_private_dir(path)?;
   }
   let cache = Cache::new(cache_path, None, None, None)?;
   if cache.credentials().is_none() {
-    println!("Streaming authentication required - opening browser...");
+    onboarding.info("Streaming authentication required - opening browser...");
     let credentials = request_streaming_oauth_credentials()?;
     cache.save_credentials(&credentials);
   }

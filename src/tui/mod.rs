@@ -1,8 +1,10 @@
 #[cfg(feature = "cover-art")]
 pub mod cover_art;
 pub mod event;
+pub mod first_run;
 pub mod handlers;
 pub mod layout;
+pub mod onboarding;
 pub mod runner;
 pub mod theme;
 pub mod ui;

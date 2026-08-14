@@ -12,6 +12,7 @@ pub mod geometry;
 pub mod input;
 pub mod limits;
 pub mod migrations;
+pub mod onboarding;
 pub mod pagination;
 pub mod paths;
 pub mod persisted_playback;

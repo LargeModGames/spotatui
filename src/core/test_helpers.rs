@@ -123,3 +123,51 @@ pub fn full_track(id: &str, name: &str) -> FullTrack {
     r#type: rspotify::model::Type::Track,
   }
 }
+
+/// Scripted [`Onboarding`] double: hands out canned prompt answers in order
+/// (each with the trailing newline `read_line` would produce) and records
+/// everything shown.
+pub struct ScriptedOnboarding {
+  answers: std::sync::Mutex<std::collections::VecDeque<String>>,
+  pub shown: std::sync::Mutex<Vec<String>>,
+}
+
+impl ScriptedOnboarding {
+  pub fn with_answers(answers: &[&str]) -> Self {
+    Self {
+      answers: std::sync::Mutex::new(answers.iter().map(|answer| format!("{answer}\n")).collect()),
+      shown: std::sync::Mutex::new(Vec::new()),
+    }
+  }
+
+  pub fn saw(&self, text: &str) -> bool {
+    self.shown.lock().unwrap().iter().any(|shown| shown == text)
+  }
+}
+
+impl crate::core::onboarding::Onboarding for ScriptedOnboarding {
+  fn info(&self, text: &str) {
+    self.shown.lock().unwrap().push(text.to_string());
+  }
+
+  fn progress(&self, text: &str) {
+    self.shown.lock().unwrap().push(text.to_string());
+  }
+
+  fn prompt_line(&self, prompt: &str) -> anyhow::Result<String> {
+    self.shown.lock().unwrap().push(prompt.to_string());
+    self
+      .answers
+      .lock()
+      .unwrap()
+      .pop_front()
+      .ok_or_else(|| anyhow::anyhow!("script ran out of answers for prompt {prompt:?}"))
+  }
+
+  fn pick_sources(
+    &self,
+    _options: &[crate::core::source::Source],
+  ) -> anyhow::Result<Option<Vec<crate::core::source::Source>>> {
+    Ok(None)
+  }
+}

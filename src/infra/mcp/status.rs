@@ -42,9 +42,10 @@ impl Check {
   }
 }
 
-/// Run every check and report. Returns the process exit code: `0` when the MCP
-/// setup is fully working, `1` otherwise.
-pub async fn run(as_json: bool) -> i32 {
+/// Run every check and render the report. Returns the rendered report (the
+/// caller prints it - this is library code, the CLI owns stdout) and the
+/// process exit code: `0` when the MCP setup is fully working, `1` otherwise.
+pub async fn run(as_json: bool) -> (String, i32) {
   let mut checks = Vec::new();
 
   // 1. Is the feature even compiled in? Reaching this code proves it is, which is
@@ -105,40 +106,49 @@ pub async fn run(as_json: bool) -> i32 {
 
   let ready = checks.iter().all(|check| check.ok);
 
-  if as_json {
-    let payload = json!({
-      "ready": ready,
-      "checks": checks.iter().map(|check| json!({
-        "name": check.label,
-        "ok": check.ok,
-        "detail": check.detail,
-      })).collect::<Vec<_>>(),
-      "register_command": "claude mcp add spotatui -- spotatui mcp",
-    });
-    println!(
-      "{}",
-      serde_json::to_string_pretty(&payload).unwrap_or_default()
-    );
+  let report = if as_json {
+    render_json(&checks, ready)
   } else {
-    for check in &checks {
-      println!(
+    render_text(&checks, ready)
+  };
+
+  (report, i32::from(!ready))
+}
+
+fn render_json(checks: &[Check], ready: bool) -> String {
+  let payload = json!({
+    "ready": ready,
+    "checks": checks.iter().map(|check| json!({
+      "name": check.label,
+      "ok": check.ok,
+      "detail": check.detail,
+    })).collect::<Vec<_>>(),
+    "register_command": "claude mcp add spotatui -- spotatui mcp",
+  });
+  serde_json::to_string_pretty(&payload).unwrap_or_default()
+}
+
+fn render_text(checks: &[Check], ready: bool) -> String {
+  let mut lines: Vec<String> = checks
+    .iter()
+    .map(|check| {
+      format!(
         "{} {:<14} {}",
         if check.ok { "ok  " } else { "FAIL" },
         check.label,
         check.detail
-      );
-    }
-    println!();
-    if ready {
-      println!("MCP is ready. Register it with your client, e.g.:");
-      println!("  claude mcp add spotatui -- spotatui mcp");
-    } else {
-      println!("MCP is not ready yet — see the failing check(s) above.");
-      println!("Full instructions: docs/mcp-setup.md");
-    }
+      )
+    })
+    .collect();
+  lines.push(String::new());
+  if ready {
+    lines.push("MCP is ready. Register it with your client, e.g.:".into());
+    lines.push("  claude mcp add spotatui -- spotatui mcp".into());
+  } else {
+    lines.push("MCP is not ready yet — see the failing check(s) above.".into());
+    lines.push("Full instructions: docs/mcp-setup.md".into());
   }
-
-  i32::from(!ready)
+  lines.join("\n")
 }
 
 /// Connect, authenticate, and ask the server which protocol it speaks.
@@ -205,6 +215,47 @@ pub(super) async fn probe_for_test(handshake: &Handshake) -> Result<String, Stri
 mod tests {
   use super::*;
   use tokio::net::TcpListener;
+
+  #[test]
+  fn text_report_ends_with_the_register_hint_when_ready() {
+    let checks = vec![Check::pass(
+      "binary",
+      "spotatui with the mcp-server feature",
+    )];
+    let report = render_text(&checks, true);
+    assert!(report.starts_with("ok   binary"), "{report}");
+    assert!(
+      report.ends_with(
+        "\n\nMCP is ready. Register it with your client, e.g.:\n  claude mcp add spotatui -- spotatui mcp"
+      ),
+      "{report}"
+    );
+  }
+
+  #[test]
+  fn text_report_points_at_the_failing_check_when_not_ready() {
+    let checks = vec![
+      Check::pass("binary", "x"),
+      Check::fail("control-file", "missing"),
+    ];
+    let report = render_text(&checks, false);
+    assert!(report.contains("FAIL control-file"), "{report}");
+    assert!(
+      report.ends_with("Full instructions: docs/mcp-setup.md"),
+      "{report}"
+    );
+  }
+
+  #[test]
+  fn json_report_carries_ready_and_every_check() {
+    let checks = vec![Check::fail("control-file", "missing")];
+    let report = render_json(&checks, false);
+    let value: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(value["ready"], false);
+    assert_eq!(value["checks"][0]["name"], "control-file");
+    assert_eq!(value["checks"][0]["ok"], false);
+    assert_eq!(value["checks"][0]["detail"], "missing");
+  }
 
   #[tokio::test]
   async fn probe_reports_the_protocol_when_the_server_answers() {

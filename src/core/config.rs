@@ -1,9 +1,10 @@
 use crate::core::banner::BANNER;
+use crate::core::onboarding::Onboarding;
 use anyhow::{anyhow, Context, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
   fs,
-  io::{stdin, Write},
+  io::Write,
   path::{Path, PathBuf},
 };
 
@@ -137,7 +138,7 @@ impl ClientConfig {
     Ok(())
   }
 
-  pub fn load_config(&mut self) -> Result<()> {
+  pub fn load_config(&mut self, onboarding: &dyn Onboarding) -> Result<()> {
     let paths = self.get_or_build_paths()?;
     if paths.config_file_path.exists() {
       let config_string = fs::read_to_string(&paths.config_file_path)?;
@@ -156,14 +157,14 @@ impl ClientConfig {
 
       Ok(())
     } else {
-      println!("{}", BANNER);
+      onboarding.info(BANNER);
 
-      println!(
+      onboarding.info(&format!(
         "Config will be saved to {}",
         paths.config_file_path.display()
-      );
+      ));
 
-      self.run_auth_setup_wizard()
+      self.run_auth_setup_wizard(onboarding)
     }
   }
 
@@ -171,8 +172,8 @@ impl ClientConfig {
     self.setup_version < AUTH_SETUP_VERSION
   }
 
-  pub fn reconfigure_auth(&mut self) -> Result<()> {
-    self.run_auth_setup_wizard()
+  pub fn reconfigure_auth(&mut self, onboarding: &dyn Onboarding) -> Result<()> {
+    self.run_auth_setup_wizard(onboarding)
   }
 
   /// Write `client.yml` with ncspot defaults but WITHOUT running the OAuth flow.
@@ -193,20 +194,22 @@ impl ClientConfig {
     self.save_config_file()
   }
 
-  fn run_auth_setup_wizard(&mut self) -> Result<()> {
-    println!("\nClient setup options:\n");
-    println!("  1) Use ncspot client ID (quick setup, may break if Spotify revokes shared access)");
-    println!("  2) Use ncspot client ID + your own fallback app ID (recommended for resilience)");
+  fn run_auth_setup_wizard(&mut self, onboarding: &dyn Onboarding) -> Result<()> {
+    onboarding.info("\nClient setup options:\n");
+    onboarding
+      .info("  1) Use ncspot client ID (quick setup, may break if Spotify revokes shared access)");
+    onboarding
+      .info("  2) Use ncspot client ID + your own fallback app ID (recommended for resilience)");
 
-    let setup_option = ClientConfig::get_setup_option()?;
+    let setup_option = ClientConfig::get_setup_option(onboarding)?;
 
     let (client_id, fallback_client_id) = match setup_option {
       1 => {
-        println!("\nUsing ncspot redirect URI: http://127.0.0.1:8989/login");
+        onboarding.info("\nUsing ncspot redirect URI: http://127.0.0.1:8989/login");
         (NCSPOT_CLIENT_ID.to_string(), None)
       }
       2 => {
-        println!("\nCreate your fallback Spotify app:\n");
+        onboarding.info("\nCreate your fallback Spotify app:\n");
         let instructions = [
           "Go to https://developer.spotify.com/dashboard/applications",
           "Click `Create app` and add your own name and description",
@@ -217,10 +220,10 @@ impl ClientConfig {
         ];
 
         for (number, item) in instructions.iter().enumerate() {
-          println!("  {}. {}", number + 1, item);
+          onboarding.info(&format!("  {}. {}", number + 1, item));
         }
 
-        let fallback = ClientConfig::get_client_key_from_input("Fallback Client ID")?;
+        let fallback = ClientConfig::get_client_key_from_input("Fallback Client ID", onboarding)?;
         (NCSPOT_CLIENT_ID.to_string(), Some(fallback))
       }
       _ => unreachable!(),
@@ -229,12 +232,10 @@ impl ClientConfig {
     let port = if setup_option == 1 {
       8989
     } else {
-      let mut port = String::new();
-      println!(
-        "\nEnter port of fallback redirect uri (default {}): ",
+      let port = onboarding.prompt_line(&format!(
+        "\nEnter port of fallback redirect uri (default {}): \n",
         DEFAULT_PORT
-      );
-      stdin().read_line(&mut port)?;
+      ))?;
       port.trim().parse::<u16>().unwrap_or(DEFAULT_PORT)
     };
 
@@ -256,19 +257,19 @@ impl ClientConfig {
     Ok(())
   }
 
-  fn get_client_key_from_input(type_label: &'static str) -> Result<String> {
-    let mut client_key = String::new();
+  fn get_client_key_from_input(
+    type_label: &'static str,
+    onboarding: &dyn Onboarding,
+  ) -> Result<String> {
     const MAX_RETRIES: u8 = 5;
     let mut num_retries = 0;
     loop {
-      println!("\nEnter your {}: ", type_label);
-      stdin().read_line(&mut client_key)?;
-      client_key = client_key.trim().to_string();
+      let input = onboarding.prompt_line(&format!("\nEnter your {}: \n", type_label))?;
+      let client_key = input.trim().to_string();
       match ClientConfig::validate_client_key(&client_key) {
         Ok(_) => return Ok(client_key),
         Err(error_string) => {
-          println!("{}", error_string);
-          client_key.clear();
+          onboarding.info(&error_string.to_string());
           num_retries += 1;
           if num_retries == MAX_RETRIES {
             return Err(Error::from(std::io::Error::other(format!(
@@ -281,21 +282,18 @@ impl ClientConfig {
     }
   }
 
-  fn get_setup_option() -> Result<u8> {
-    let mut input = String::new();
+  fn get_setup_option(onboarding: &dyn Onboarding) -> Result<u8> {
     const MAX_RETRIES: u8 = 5;
     let mut retries = 0;
 
     loop {
-      println!("\nChoose option (1 or 2): ");
-      stdin().read_line(&mut input)?;
+      let input = onboarding.prompt_line("\nChoose option (1 or 2): \n")?;
       let trimmed = input.trim();
 
       match trimmed.parse::<u8>() {
         Ok(1) | Ok(2) => return Ok(trimmed.parse::<u8>()?),
         _ => {
-          println!("Invalid choice. Please enter 1 or 2.");
-          input.clear();
+          onboarding.info("Invalid choice. Please enter 1 or 2.");
           retries += 1;
           if retries >= MAX_RETRIES {
             return Err(Error::from(std::io::Error::other(format!(
@@ -366,6 +364,31 @@ fn is_client_token_cache_file(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::test_helpers::ScriptedOnboarding;
+
+  #[test]
+  fn setup_option_accepts_a_valid_choice_after_garbage() {
+    let onboarding = ScriptedOnboarding::with_answers(&["x", "2"]);
+    assert_eq!(ClientConfig::get_setup_option(&onboarding).unwrap(), 2);
+    assert!(onboarding.saw("Invalid choice. Please enter 1 or 2."));
+  }
+
+  #[test]
+  fn setup_option_errors_after_max_retries() {
+    let onboarding = ScriptedOnboarding::with_answers(&["x", "0", "3", "", "yes"]);
+    assert!(ClientConfig::get_setup_option(&onboarding).is_err());
+  }
+
+  #[test]
+  fn client_key_prompt_rejects_bad_keys_until_a_valid_one() {
+    let valid = "0123456789abcdef0123456789abcdef";
+    let onboarding = ScriptedOnboarding::with_answers(&["tooshort", valid]);
+    assert_eq!(
+      ClientConfig::get_client_key_from_input("Fallback Client ID", &onboarding).unwrap(),
+      valid
+    );
+    assert!(onboarding.saw("\nEnter your Fallback Client ID: \n"));
+  }
 
   #[test]
   fn legacy_token_cache_migration_moves_base_and_client_token_files() {
