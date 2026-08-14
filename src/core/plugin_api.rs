@@ -765,7 +765,7 @@ pub fn search_results_snapshot(app: &App) -> SearchResults {
 
 /// Whether `app.lyrics`/`app.lyrics_status` describe the item playing *right now*.
 ///
-/// The runner's shared track-change detector runs **after** the script engine's
+/// The driver's shared track-change detector runs **after** the script engine's
 /// tick, so on the tick a track changes the lyrics state still belongs to the
 /// previous track. Without this check, `spotatui.get_lyrics` called from a
 /// `track_change` handler - the obvious place to call it - sees a terminal

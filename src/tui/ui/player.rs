@@ -656,6 +656,11 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
     }
   };
 
+  // While the playback position is stale (tick loop stopped), draw_playbar
+  // swaps the gauge label for a warning, so the geometry below would not
+  // match the rendered bar; no seeking then.
+  app.playback_position_ms()?;
+
   // Recreate the gauge label exactly as draw_playbar does so the computed line
   // `start` matches the rendered bar. The label reflects a pending seek if one is
   // in flight (see player.rs ~805), otherwise the current progress.
@@ -1381,7 +1386,13 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       let duration_std = std::time::Duration::from_millis(display_duration_ms);
       let perc = get_track_progress_percentage(progress_ms, duration_std);
 
-      let song_progress_label = display_track_progress(progress_ms, duration_std);
+      // The loud-failure guard: a frontend that stops driving the tick would
+      // otherwise freeze this label at its last value indefinitely.
+      let song_progress_label = if app.playback_position_ms().is_none() {
+        "position stale (tick loop stopped)".to_string()
+      } else {
+        display_track_progress(progress_ms, duration_std)
+      };
       let modifier = if app.user_config.behavior.enable_text_emphasis {
         Modifier::ITALIC | Modifier::BOLD
       } else {

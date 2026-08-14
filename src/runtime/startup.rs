@@ -92,7 +92,7 @@ fn update_macos_metadata(
   // while the native queue owns the sink: `local_playback` is then a *suspended*
   // context, so fall through to the snapshot path, which describes the queued
   // track actually playing. Mirrors the same filter on the MPRIS twin in
-  // `update_mpris_state` in the TUI runner.
+  // `update_mpris_state` in `core/driver/presence.rs`.
   #[cfg(feature = "local-files")]
   if let Some(local) = app
     .local_playback
@@ -1162,7 +1162,7 @@ async fn restore_playback_session(
       // Trust the persisted intent (`shuffle_on`) for the flag and restore the
       // backup as-is (the start path above did not re-shuffle because
       // `decoded_shuffle` is still off). When the two disagree — a toggle deferred
-      // at exit — the runner's `reconcile_decoded_shuffle` re-syncs the queue
+      // at exit — the driver's `reconcile_decoded_shuffle` re-syncs the queue
       // order to the flag on the next tick.
       if guard.local_playback.is_some() {
         guard.decoded_repeat = repeat;

@@ -110,6 +110,7 @@ impl Default for App {
         tracks: None,
       },
       song_progress_ms: 0,
+      last_tick_at: Instant::now(),
       seek_ms: None,
       #[cfg(feature = "streaming")]
       last_native_seek: None,

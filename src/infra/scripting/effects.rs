@@ -2,7 +2,7 @@ use crate::core::app::App;
 use crate::core::plugin_api::{self, PluginPopup};
 use crate::infra::network::IoEvent;
 
-/// An action queued by a plugin, drained by the runner while holding `&mut App`.
+/// An action queued by a plugin, drained by the driver while holding `&mut App`.
 ///
 /// Each variant routes through the same `App` methods as the equivalent keybinding,
 /// so native-streaming fast paths and throttling/coalescing are automatically honoured.

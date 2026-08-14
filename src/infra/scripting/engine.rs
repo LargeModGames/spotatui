@@ -24,7 +24,7 @@ use super::shared::{
 const DATA_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Minimum interval between throttled plugin-storage flushes (mirrors the
-/// runner's session-save cadence).
+/// driver's session-save cadence).
 const STORAGE_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// An in-flight plugin data request: dispatched, waiting for the domain's
@@ -131,7 +131,7 @@ impl ScriptEngine {
   /// never aborts the others. Returns the number of plugins loaded successfully.
   /// Cheap discovery-only mirror of [`Self::load_user_scripts`]: reports
   /// whether any loadable script exists (`init.lua`, `plugins/*.lua`, or
-  /// `plugins/<name>/{main,init}.lua`) so the runner can skip constructing
+  /// `plugins/<name>/{main,init}.lua`) so the driver can skip constructing
   /// the Lua VM (and its HTTP client) entirely when there is nothing to
   /// load. Keep the discovery rules in sync with `load_user_scripts`.
   pub fn has_user_scripts(config_dir: &Path) -> bool {
@@ -589,7 +589,7 @@ impl ScriptEngine {
     // App call, and so requests queued by callbacks below land in the next pass.
     let requests: Vec<DataRequest> = self.shared.data_requests.borrow_mut().drain(..).collect();
     for req in requests {
-      // Lyrics fetches are driven by the runner's track-change detector, not by
+      // Lyrics fetches are driven by the driver's track-change detector, not by
       // dispatch: deliver immediately when the current status is terminal AND
       // describes the item playing now, otherwise wait for the in-flight fetch
       // to bump the generation. The currency check matters because the detector

@@ -13,6 +13,8 @@ pub mod banner;
 pub mod config;
 #[cfg(feature = "art-decode")]
 pub mod cover_theme;
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod driver;
 pub mod first_run;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod format;
