@@ -154,7 +154,14 @@ pub struct App {
   pub artist: Option<Artist>,
   pub album_table_context: AlbumTableContext,
   pub saved_album_tracks_index: usize,
+  /// The live error recorded by [`App::handle_error`], or empty when there is
+  /// none. The `RouteId::Error` frame raised alongside it is a presentation
+  /// *hint*, not the state: a frontend may draw it full-screen, render this
+  /// string as a toast, or ignore it. Dismiss via [`App::clear_api_error`].
   pub api_error: String,
+  /// When the live `api_error` stops being current. Stamped by `handle_error`,
+  /// consumed by `App::expire_api_error` on the tick. `None` means none is live.
+  pub api_error_expires_at: Option<Instant>,
   pub current_playback_context: Option<CurrentPlaybackContext>,
   pub last_track_id: Option<String>,
   /// Set to true when a track ends naturally and stop_after_current_track is enabled.
@@ -521,6 +528,12 @@ pub struct App {
   pub state_save_due: Option<Instant>,
   /// Runtime-state patch waiting for the next debounced save.
   pub pending_state_save_patch: PersistedRuntimeState,
+  /// Whether the current run of state-save failures has already been reported.
+  /// A failed flush re-arms its own deadline, so the tick retries twice a
+  /// second; without this latch the report would re-fire at that rate and pin
+  /// the status bar into error mode, where `set_status_message` refuses to
+  /// overwrite it and every ordinary message is dropped for the rest of the run.
+  pub state_save_error_reported: bool,
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,

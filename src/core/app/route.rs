@@ -221,8 +221,43 @@ impl App {
     if self.navigation_stack.len() == 1 {
       None
     } else {
-      self.navigation_stack.pop()
+      let popped = self.navigation_stack.pop();
+      // Leaving the error screen dismisses the error. Done here rather than in
+      // a key handler so every back path clears it (the escape key, the
+      // configurable back key, a script's `Back`), and so a frontend with no
+      // back key at all is not the odd one out. Keyed on the frame that was
+      // POPPED, not on the new top: pressing `d` from the error page stacks the
+      // device picker over it, and coming back must still show the message.
+      if popped
+        .as_ref()
+        .is_some_and(|route| route.id == RouteId::Error)
+      {
+        self.clear_api_error();
+      }
+      popped
     }
+  }
+
+  /// Remove every frame still serving as the error screen.
+  ///
+  /// Matched on the id AND the block, not on the id alone. The search key
+  /// rewrites the error frame in place to `{ id: Error, active_block: Input }`
+  /// (it does not push), so an id-only match would delete a frame that is
+  /// holding live text-input focus and drop the user's next keystrokes into
+  /// the global bindings. Such a frame no longer draws the error screen, so
+  /// leaving it is harmless.
+  ///
+  /// Both `push_navigation_stack` and the frames below the top are covered:
+  /// pushes dedupe only against the top frame, so navigating away and failing
+  /// again buries a second error frame that would otherwise resurface later
+  /// rendering an unrelated message, or an empty one.
+  ///
+  /// Cannot empty the stack: the bottom frame is `DEFAULT_ROUTE` (Home) or a
+  /// `RouteId::STARTUP_OPTIONS` route, and `Error` is in neither.
+  pub(super) fn drop_error_routes(&mut self) {
+    self
+      .navigation_stack
+      .retain(|route| !(route.id == RouteId::Error && route.active_block == ActiveBlock::Error));
   }
 
   pub fn get_current_route(&self) -> &Route {

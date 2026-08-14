@@ -278,6 +278,37 @@ until they expire, so use the right one. TTLs are seconds, scaled by the user's
 `self.show_status_message(msg, ttl_secs).await`; be aware it bypasses the
 error-priority guard. Never write `app.status_message` directly.
 
+
+### Errors
+
+`App::handle_error(e)` records the message in `api_error`, stamps a 60s
+lifetime on it, and pushes `RouteId::Error`. That route is a *presentation
+hint*: the terminal frontend draws it full-screen, another frontend may render
+`api_error` as a toast and ignore the frame entirely. Four rules:
+
+- Dismiss with `app.clear_api_error()`, never by clearing the string or popping
+  the route by hand. It drops the message, its lifetime, and every frame still
+  showing it together - a cleared string under a surviving frame renders as an
+  error page with nothing on it. `pop_navigation_stack` already calls it when
+  the frame it pops is `Error`.
+- Nothing else clears `api_error`. `update_on_tick` retires it once the
+  lifetime passes, handing the text to the status bar only when the error frame
+  is the current screen, so a frontend with no dismissal gesture does not latch
+  the first failure forever. The CLI never ticks, so its latch is intact.
+- A non-empty `api_error` is the CLI's only failure signal for every subcommand
+  that reaches the bottom of `handle_matches` (`src/cli/handle.rs`; the two
+  `share-*` flags return early and bypass it). Moving a call site off
+  `handle_error` turns a failing CLI command into exit 0 unless that site is
+  provably unreachable from the CLI.
+- Demote a site to `set_error_status_message` only when all three hold: it
+  fires from the tick or a self-refreshing retry loop (so every retry restamps
+  the lifetime and the backstop can never win), it is provably unreachable as a
+  CLI exit signal, and the failed operation is bookkeeping rather than the thing
+  the user asked for. `flush_state_save` is the only site that qualifies today,
+  and it latches its report to once per failure run - repeating it at the retry
+  rate would hold `status_message_is_error` and silently drop every ordinary
+  status message for the rest of the session.
+
 ### Dialog state cleanup
 
 Close dialogs with the single call `app.clear_dialog_state()` (clears `dialog`,

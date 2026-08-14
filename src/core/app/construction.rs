@@ -62,6 +62,7 @@ impl Default for App {
       navigation_stack: vec![DEFAULT_ROUTE],
       small_search_limit: 4,
       api_error: String::new(),
+      api_error_expires_at: None,
       current_playback_context: None,
       last_track_id: None,
       pending_stop_after_track: false,
@@ -219,6 +220,7 @@ impl Default for App {
       is_volume_change_in_flight: false,
       state_save_due: None,
       pending_state_save_patch: PersistedRuntimeState::default(),
+      state_save_error_reported: false,
       pending_volume: None,
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]

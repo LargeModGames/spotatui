@@ -104,6 +104,10 @@ impl App {
       }
     }
 
+    // Must stay above the early returns further down this fn, or the backstop
+    // would silently stop running during playback.
+    self.expire_api_error();
+
     if let Some(frame) = self.liked_song_animation_frame {
       if frame > 0 {
         self.liked_song_animation_frame = Some(frame - 1);
@@ -307,6 +311,56 @@ mod tests {
 
     app.update_on_tick(Duration::from_millis(500));
     assert!(app.playback_position_ms().is_some());
+  }
+
+  #[test]
+  fn a_live_error_survives_a_tick() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.handle_error(anyhow!("boom"));
+
+    app.update_on_tick(Duration::from_millis(500));
+
+    assert_eq!(app.api_error, "boom");
+    assert_eq!(app.get_current_route().id, RouteId::Error);
+  }
+
+  #[test]
+  fn an_expired_error_is_retired_by_the_tick_and_handed_to_the_status_bar() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.handle_error(anyhow!("boom"));
+    app.api_error_expires_at = Some(Instant::now() - Duration::from_secs(1));
+
+    app.update_on_tick(Duration::from_millis(500));
+
+    assert!(app.api_error.is_empty());
+    assert!(app.api_error_expires_at.is_none());
+    assert_ne!(app.get_current_route().id, RouteId::Error);
+    assert_eq!(app.status_message.as_deref(), Some("boom"));
+    assert!(app.status_message_is_error);
+  }
+
+  // The load-bearing case for a frontend that never dismisses: a buried error
+  // frame must not survive the expiry, or it resurfaces later rendering an
+  // error page with nothing on it. It expires silently, because a toast about
+  // a minute-old failure on a screen the user already left is noise.
+  #[test]
+  fn expiring_an_error_removes_an_error_route_left_under_another_screen() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.handle_error(anyhow!("boom"));
+    app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+    app.api_error_expires_at = Some(Instant::now() - Duration::from_secs(1));
+
+    app.update_on_tick(Duration::from_millis(500));
+
+    assert!(app.api_error.is_empty());
+    assert_eq!(app.get_current_route().id, RouteId::SelectedDevice);
+    assert!(app.status_message.is_none());
+
+    app.pop_navigation_stack();
+    assert_eq!(app.get_current_route().id, RouteId::Home);
   }
 
   #[test]
