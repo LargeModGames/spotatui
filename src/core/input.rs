@@ -2,8 +2,9 @@
 //!
 //! `Key` is the domain vocabulary for keybindings: config parsing
 //! (`core/user_config.rs`), `App` state, and every handler speak this type.
-//! The conversion from crossterm's `KeyEvent` lives with the terminal
-//! frontend in `tui/event/key.rs`, so nothing here depends on a terminal.
+//! The conversion from the terminal backend's `KeyEvent` lives with the
+//! terminal frontend in `tui/event/key.rs`, so nothing here depends on a
+//! terminal.
 
 use std::fmt;
 

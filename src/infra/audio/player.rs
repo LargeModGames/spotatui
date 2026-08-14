@@ -212,7 +212,7 @@ fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
     .spawn(move || {
       match DeviceSinkBuilder::open_default_sink() {
         Ok(mut stream) => {
-          // rodio `eprintln!`s a drop warning for the `MixerDeviceSink` by
+          // rodio prints a drop warning for the `MixerDeviceSink` to stderr by
           // default (it has no `tracing` feature enabled here). Raw stderr
           // output corrupts the TUI, and the drop is deliberate anyway (device
           // handoff between sources tears the player down) — silence it.
@@ -327,16 +327,14 @@ mod tests {
 
     let player = LocalPlayer::new().expect("open default output device");
     let start = player.position();
-    eprintln!("position at start: {start:?}");
     player.play_file(&wav).expect("play wav");
 
     std::thread::sleep(Duration::from_millis(600));
     let after = player.position();
-    eprintln!("position after ~600ms: {after:?}");
 
     assert!(
       after >= Duration::from_millis(300),
-      "position should advance to roughly playback time, got {after:?}"
+      "position should advance to roughly playback time, got {after:?} (started at {start:?})"
     );
     assert!(
       after < Duration::from_secs(3),

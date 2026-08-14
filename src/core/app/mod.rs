@@ -671,7 +671,7 @@ impl App {
     if let Some(io_tx) = &self.io_tx {
       if let Err(e) = io_tx.send(action) {
         self.is_loading = false;
-        println!("Error from dispatch {}", e);
+        log::error!("Error from dispatch {}", e);
         // TODO: handle error
       };
     }

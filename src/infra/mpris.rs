@@ -102,7 +102,7 @@ impl MprisManager {
         {
           Ok(p) => p,
           Err(e) => {
-            eprintln!("Failed to build MPRIS player: {}", e);
+            log::error!("Failed to build MPRIS player: {}", e);
             return;
           }
         };
@@ -196,7 +196,7 @@ impl MprisManager {
               let metadata = builder.build();
 
               if let Err(e) = player.set_metadata(metadata).await {
-                eprintln!("MPRIS: Failed to set metadata: {}", e);
+                log::warn!("MPRIS: Failed to set metadata: {}", e);
               }
             }
 
@@ -207,7 +207,7 @@ impl MprisManager {
                 PlaybackStatus::Paused
               };
               if let Err(e) = player.set_playback_status(status).await {
-                eprintln!("MPRIS: Failed to set playback status: {}", e);
+                log::warn!("MPRIS: Failed to set playback status: {}", e);
               }
             }
             MprisCommand::Position(position_ms) => {
@@ -219,18 +219,18 @@ impl MprisManager {
               let time = Time::from_millis(position_ms as i64);
               player.set_position(time);
               if let Err(e) = player.seeked(time).await {
-                eprintln!("MPRIS: Failed to emit Seeked signal: {}", e);
+                log::warn!("MPRIS: Failed to emit Seeked signal: {}", e);
               }
             }
             MprisCommand::Volume(volume_percent) => {
               let volume = (volume_percent as f64) / 100.0;
               if let Err(e) = player.set_volume(volume).await {
-                eprintln!("MPRIS: Failed to set volume: {}", e);
+                log::warn!("MPRIS: Failed to set volume: {}", e);
               }
             }
             MprisCommand::Shuffle(shuffle) => {
               if let Err(e) = player.set_shuffle(shuffle).await {
-                eprintln!("MPRIS: Failed to set shuffle: {}", e);
+                log::warn!("MPRIS: Failed to set shuffle: {}", e);
               }
             }
             MprisCommand::LoopStatus(loop_status) => {
@@ -241,12 +241,12 @@ impl MprisManager {
                 LoopStatusEvent::Playlist => LoopStatus::Playlist,
               };
               if let Err(e) = player.set_loop_status(status).await {
-                eprintln!("MPRIS: Failed to set loop status: {}", e);
+                log::warn!("MPRIS: Failed to set loop status: {}", e);
               }
             }
             MprisCommand::Stopped => {
               if let Err(e) = player.set_playback_status(PlaybackStatus::Stopped).await {
-                eprintln!("MPRIS: Failed to set stopped status: {}", e);
+                log::warn!("MPRIS: Failed to set stopped status: {}", e);
               }
             }
           }

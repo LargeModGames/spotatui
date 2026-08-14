@@ -469,7 +469,7 @@ pub fn parse_theme_item(theme_item: &str) -> Result<Color> {
           b.trim().parse::<u8>()?,
         )
       } else {
-        println!("Unexpected color {}", theme_item);
+        log::warn!("Unexpected color {}", theme_item);
         Color::Black
       }
     }

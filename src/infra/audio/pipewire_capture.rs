@@ -32,7 +32,7 @@ impl PipeWireCapture {
     // PipeWire requires its own thread with a main loop
     let thread = thread::spawn(move || {
       if let Err(e) = run_pipewire_capture(analyzer_clone, active_clone) {
-        eprintln!("[audio-viz] PipeWire capture error: {:?}", e);
+        log::error!("[audio-viz] PipeWire capture error: {:?}", e);
       }
     });
 
@@ -203,8 +203,6 @@ fn run_pipewire_capture(
       | pw::stream::StreamFlags::RT_PROCESS,
     &mut params,
   )?;
-
-  // eprintln!("[audio-viz] PipeWire stream connected (sink monitor)");
 
   // Run the main loop - this blocks until quit is called
   mainloop.run();

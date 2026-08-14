@@ -129,7 +129,7 @@ fn update_macos_metadata(
   // while the native queue owns the sink: `local_playback` is then a *suspended*
   // context, so fall through to the snapshot path, which describes the queued
   // track actually playing. Mirrors the same filter on the MPRIS twin in
-  // `crate::tui::runner::update_mpris_state`.
+  // `update_mpris_state` in the TUI runner.
   #[cfg(feature = "local-files")]
   if let Some(local) = app
     .local_playback
@@ -925,7 +925,7 @@ fn describe_client_id_notice(notice: auth::ClientIdNotice) -> String {
 /// answer applies to whichever source(s) the user sets up. Non-interactive runs
 /// default to opt-out so telemetry is never enabled for a user we couldn't ask.
 fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
-  use crossterm::tty::IsTty;
+  use std::io::IsTerminal;
 
   let config_paths = match &user_config.path_to_config {
     Some(path) => path,
@@ -956,7 +956,7 @@ fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
     return Ok(());
   }
 
-  let interactive = io::stdin().is_tty() && io::stdout().is_tty();
+  let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
   let enable = if interactive {
     println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Global Song Counter");
@@ -1164,7 +1164,8 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     // `status` is the safe probe an agent (or a human) can run; bare `mcp` is the
     // server and blocks on stdin until the client closes it.
     if let Some(status_matches) = mcp_matches.subcommand_matches("status") {
-      let code = crate::infra::mcp::run_status(status_matches.get_flag("json")).await;
+      let (report, code) = crate::infra::mcp::run_status(status_matches.get_flag("json")).await;
+      println!("{report}");
       std::process::exit(code);
     }
     crate::infra::mcp::run_relay().await?;
@@ -1301,6 +1302,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     prompt_global_song_count_opt_in(&mut user_config)?;
   }
 
+  // The console implementation of the first-launch surface; core and infra
+  // only ever see the `Onboarding` trait. `Arc` so the blocking streaming
+  // credential task below can hold its own handle.
+  let onboarding: Arc<dyn crate::core::onboarding::Onboarding> =
+    Arc::new(crate::tui::onboarding::ConsoleOnboarding);
+
   let mut client_config = ClientConfig::new();
   // First-run source picker (interactive TUI only): lets the user pick a free
   // source and skip Spotify entirely. Must run before `load_config`, which would
@@ -1311,17 +1318,18 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       &mut user_config,
       &mut runtime_state,
       &mut client_config,
+      onboarding.as_ref(),
     )
     .await?;
   }
-  client_config.load_config()?;
+  client_config.load_config(onboarding.as_ref())?;
   info!("client authentication config loaded");
 
   let reconfigure_auth = matches.get_flag("reconfigure-auth");
 
   if reconfigure_auth {
     println!("\nReconfiguring client authentication...");
-    client_config.reconfigure_auth()?;
+    client_config.reconfigure_auth(onboarding.as_ref())?;
     println!("Client authentication setup updated.\n");
   } else if matches.subcommand_name().is_none() && client_config.needs_auth_setup_migration() {
     println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -1338,7 +1346,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     let run_migration = input.is_empty() || input == "y" || input == "yes";
 
     if run_migration {
-      client_config.reconfigure_auth()?;
+      client_config.reconfigure_auth(onboarding.as_ref())?;
       println!("Client authentication setup updated.\n");
     } else {
       client_config.mark_auth_setup_migrated()?;
@@ -1362,11 +1370,14 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
   let (authenticated, installed_update) = tokio::join!(
     async {
       if spotify_required {
-        auth::authenticate_with_fallback(&mut client_config, &config_paths)
+        auth::authenticate_with_fallback(&mut client_config, &config_paths, onboarding.as_ref())
           .await
           .map(Some)
       } else {
-        Ok(auth::try_load_spotify_silently(&mut client_config, &config_paths).await)
+        Ok(
+          auth::try_load_spotify_silently(&mut client_config, &config_paths, onboarding.as_ref())
+            .await,
+        )
       }
     },
     run_auto_update(&matches, &user_config)
@@ -1489,9 +1500,12 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
           // The OAuth flow spins up a blocking local callback server and waits on
           // the browser; keep it off the async reactor so it never ties up a
           // worker thread while the user completes sign-in.
-          let cached = tokio::task::spawn_blocking(player::ensure_streaming_credentials_cached)
-            .await
-            .unwrap_or_else(|e| Err(anyhow::anyhow!("credential caching task panicked: {e}")));
+          let onboarding_for_streaming = onboarding.clone();
+          let cached = tokio::task::spawn_blocking(move || {
+            player::ensure_streaming_credentials_cached(onboarding_for_streaming.as_ref())
+          })
+          .await
+          .unwrap_or_else(|e| Err(anyhow::anyhow!("credential caching task panicked: {e}")));
           if let Err(error) = cached {
             warn!("native streaming authentication unavailable: {error}");
             // Name the actual failure. The generic message left issue #414's

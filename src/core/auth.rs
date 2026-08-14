@@ -1,4 +1,5 @@
 use crate::core::config::{ClientConfig, ConfigPaths, NCSPOT_CLIENT_ID};
+use crate::core::onboarding::Onboarding;
 use crate::infra::redirect_uri::redirect_uri_web_server_async;
 use anyhow::{anyhow, Result};
 use log::{info, warn};
@@ -7,7 +8,7 @@ use rspotify::{
   {AuthCodePkceSpotify, Config, Credentials, OAuth, Token, TokenCallback},
 };
 use std::{
-  fs, io,
+  fs,
   path::{Path, PathBuf},
   sync::{Arc, OnceLock},
   time::{Duration, SystemTime},
@@ -310,6 +311,7 @@ async fn ensure_auth_token(
   token_cache_path: &PathBuf,
   auth_port: u16,
   interactive: bool,
+  onboarding: &dyn Onboarding,
 ) -> Result<Option<rspotify::model::PrivateUser>> {
   let mut needs_auth = match load_token_from_file(spotify, token_cache_path).await {
     Ok(true) => false,
@@ -389,18 +391,18 @@ async fn ensure_auth_token(
     info!("starting spotify authentication flow on port {}", auth_port);
     let auth_url = spotify.get_authorize_url(None)?;
 
-    println!("\nAttempting to open this URL in your browser:");
-    println!("{}\n", auth_url);
+    onboarding.info("\nAttempting to open this URL in your browser:");
+    onboarding.info(&format!("{}\n", auth_url));
 
     if let Err(e) = open::that(&auth_url) {
-      println!("Failed to open browser automatically: {}", e);
-      println!("Please manually open the URL above in your browser.");
+      onboarding.info(&format!("Failed to open browser automatically: {}", e));
+      onboarding.info("Please manually open the URL above in your browser.");
     }
 
-    println!(
+    onboarding.info(&format!(
       "Waiting for authorization callback on http://127.0.0.1:{}...\n",
       auth_port
-    );
+    ));
 
     // Async server, same as the in-TUI login path: the blocking variant used
     // to park a tokio worker thread in a std accept() loop with no timeout,
@@ -420,11 +422,12 @@ async fn ensure_auth_token(
       }
       Err(()) => {
         info!("redirect uri web server failed, using manual authentication");
-        println!("Starting webserver failed. Continuing with manual authentication");
-        println!("Please open this URL in your browser: {}", auth_url);
-        println!("Enter the URL you were redirected to: ");
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        onboarding.info("Starting webserver failed. Continuing with manual authentication");
+        onboarding.info(&format!(
+          "Please open this URL in your browser: {}",
+          auth_url
+        ));
+        let input = onboarding.prompt_line("Enter the URL you were redirected to: \n")?;
         if let Some(code) = spotify.parse_response_code(&input) {
           info!("authorization code received from manual input, requesting access token");
           spotify.request_token(&code).await?;
@@ -448,8 +451,9 @@ async fn ensure_auth_token(
 pub async fn authenticate_with_fallback(
   client_config: &mut ClientConfig,
   config_paths: &ConfigPaths,
+  onboarding: &dyn Onboarding,
 ) -> Result<AuthenticatedClient> {
-  authenticate_candidates(client_config, config_paths, true).await
+  authenticate_candidates(client_config, config_paths, true, onboarding).await
 }
 
 /// Best-effort silent Spotify load for a free-source launch: returns `Some` only
@@ -457,8 +461,9 @@ pub async fn authenticate_with_fallback(
 pub async fn try_load_spotify_silently(
   client_config: &mut ClientConfig,
   config_paths: &ConfigPaths,
+  onboarding: &dyn Onboarding,
 ) -> Option<AuthenticatedClient> {
-  authenticate_candidates(client_config, config_paths, false)
+  authenticate_candidates(client_config, config_paths, false, onboarding)
     .await
     .ok()
 }
@@ -507,6 +512,7 @@ async fn authenticate_candidates(
   client_config: &mut ClientConfig,
   config_paths: &ConfigPaths,
   interactive: bool,
+  onboarding: &dyn Onboarding,
 ) -> Result<AuthenticatedClient> {
   let mut client_candidates = vec![client_config.client_id.clone()];
   if let Some(fallback_id) = client_config.fallback_client_id.clone() {
@@ -533,8 +539,14 @@ async fn authenticate_candidates(
     let mut candidate =
       build_pkce_spotify_client(client_id, redirect_uri.clone(), token_cache_path.clone());
 
-    let auth_result =
-      ensure_auth_token(&mut candidate, &token_cache_path, auth_port, interactive).await;
+    let auth_result = ensure_auth_token(
+      &mut candidate,
+      &token_cache_path,
+      auth_port,
+      interactive,
+      onboarding,
+    )
+    .await;
 
     match auth_result {
       Ok(me) => {
