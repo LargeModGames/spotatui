@@ -1,5 +1,7 @@
 { pkgs ? import <nixpkgs> {} }:
-
+let
+  librespotOutputHash = "sha256-vUBIP+e9HYq3PKilYbdRtJk4qJAT7Vjn0l1ALe5qNbA=";
+in
   pkgs.rustPlatform.buildRustPackage rec {
     pname = "spotatui";
     version = "0.34.3";
@@ -8,6 +10,15 @@
 
   cargoLock = {
     lockFile = ./Cargo.lock;
+    outputHashes = {
+      "librespot-audio-0.8.0" = librespotOutputHash;
+      "librespot-connect-0.8.0" = librespotOutputHash;
+      "librespot-core-0.8.0" = librespotOutputHash;
+      "librespot-metadata-0.8.0" = librespotOutputHash;
+      "librespot-oauth-0.8.0" = librespotOutputHash;
+      "librespot-playback-0.8.0" = librespotOutputHash;
+      "librespot-protocol-0.8.0" = librespotOutputHash;
+    };
   };
 
   nativeBuildInputs = with pkgs; [
