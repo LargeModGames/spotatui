@@ -80,7 +80,7 @@ pub async fn run_cli() -> Result<()> {
       "zsh" => Shell::Zsh,
       "power-shell" => Shell::PowerShell,
       "elvish" => Shell::Elvish,
-      _ => return Err(anyhow!("no completions avaible for '{}'", s)),
+      _ => return Err(anyhow!("no completions available for '{}'", s)),
     };
     generate(shell, &mut clap_app, "spotatui", &mut io::stdout());
     return Ok(());

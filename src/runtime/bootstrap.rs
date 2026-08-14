@@ -135,7 +135,9 @@ pub(super) fn install_panic_hook() {
 
     if let Some(path) = panic_log_path.as_ref() {
       if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        // Owner-only like every other state-dir creation: a panic can be the
+        // first thing that ever creates the directory.
+        let _ = crate::core::paths::ensure_private_dir(parent);
       }
       if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)

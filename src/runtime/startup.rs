@@ -1445,7 +1445,7 @@ async fn handle_mpris_events(
         #[cfg(feature = "streaming")]
         if let Some(ref player) = current_player {
           if let Err(e) = player.set_shuffle(shuffle) {
-            eprintln!("MPRIS: Failed to set shuffle: {}", e);
+            log::warn!("MPRIS: Failed to set shuffle: {}", e);
           } else {
             mpris_manager.set_shuffle(shuffle);
             let mut app_lock = app.lock().await;
@@ -1484,7 +1484,7 @@ async fn handle_mpris_events(
         #[cfg(feature = "streaming")]
         if let Some(ref player) = current_player {
           if let Err(e) = player.set_repeat_mode(repeat_state) {
-            eprintln!("MPRIS: Failed to set repeat mode: {}", e);
+            log::warn!("MPRIS: Failed to set repeat mode: {}", e);
           } else {
             mpris_manager.set_loop_status(loop_status);
             let mut app_lock = app.lock().await;
