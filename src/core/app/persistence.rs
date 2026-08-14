@@ -321,14 +321,111 @@ impl App {
     if force || Instant::now() >= due {
       let patch = std::mem::take(&mut self.pending_state_save_patch);
       self.state_save_due = None;
-      if let Err(e) = self.save_runtime_state(&patch) {
-        self.pending_state_save_patch.merge_patch(&patch);
-        // Keep the save scheduled: with the deadline cleared the retained patch
-        // would never be retried (this fn returns early on a `None` deadline),
-        // and the forced shutdown flush would silently drop it.
-        self.state_save_due = Some(Instant::now() + Duration::from_millis(STATE_SAVE_DEBOUNCE_MS));
-        self.handle_error(anyhow!("Failed to save state: {}", e));
+      match self.save_runtime_state(&patch) {
+        Ok(()) => self.state_save_error_reported = false,
+        Err(e) => {
+          self.pending_state_save_patch.merge_patch(&patch);
+          // Keep the save scheduled: with the deadline cleared the retained patch
+          // would never be retried (this fn returns early on a `None` deadline),
+          // and the forced shutdown flush would silently drop it.
+          self.state_save_due =
+            Some(Instant::now() + Duration::from_millis(STATE_SAVE_DEBOUNCE_MS));
+          // Reported to the status bar, not as an error page: the tick calls
+          // this every frame and the retry above re-arms twice a second, so as
+          // a modal an unwritable state dir is an unusable app, and as an
+          // `api_error` it is one no frontend can clear because every retry
+          // restamps the lifetime. Latched to one report per failure run, or
+          // the same rate would pin the status bar into error mode and drop
+          // every ordinary message for the rest of the session.
+          if !self.state_save_error_reported {
+            self.state_save_error_reported = true;
+            self.set_error_status_message(format!("Failed to save state: {}", e), 8);
+          }
+        }
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::test_support::*;
+
+  /// An `App` whose state saves always fail: the save path's parent is a
+  /// regular file, so creating the directory for it cannot succeed on any
+  /// platform.
+  fn app_with_unwritable_state_path() -> (App, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+
+    let mut app = make_app_simple();
+    app.state_path = Some(blocker.join("state.yml"));
+    (app, dir)
+  }
+
+  fn schedule_a_save(app: &mut App) {
+    app.pending_state_save_patch = PersistedRuntimeState {
+      volume_percent: Some(42),
+      ..PersistedRuntimeState::default()
+    };
+    app.state_save_due = Some(Instant::now());
+  }
+
+  #[test]
+  fn a_failed_state_save_reports_to_the_status_bar_instead_of_the_error_page() {
+    let (mut app, _dir) = app_with_unwritable_state_path();
+    schedule_a_save(&mut app);
+
+    app.flush_state_save(false);
+
+    assert!(app
+      .status_message
+      .as_deref()
+      .is_some_and(|message| message.starts_with("Failed to save state")));
+    assert!(app.status_message_is_error);
+    // Not the modal: the tick retries twice a second, so an error page here
+    // is an app the user cannot escape.
+    assert!(app.api_error.is_empty());
+    assert_ne!(app.get_current_route().id, RouteId::Error);
+  }
+
+  // The regression the latch exists to prevent: an unlatched report re-fires
+  // at the tick's retry rate, and a live error message holds
+  // `status_message_is_error`, which makes `set_status_message` drop every
+  // ordinary message for the rest of the session.
+  //
+  // Asserted through a sentinel rather than by expiring the message and
+  // watching the bar recover: backdating `status_message_expires_at` opens the
+  // priority guard whether or not the latch is there, so that version of this
+  // test passes with the latch deleted. A second report would replace the
+  // sentinel, because an error always overwrites a live error.
+  #[test]
+  fn repeated_state_save_failures_report_only_once() {
+    let (mut app, _dir) = app_with_unwritable_state_path();
+    schedule_a_save(&mut app);
+    app.flush_state_save(false);
+    app.set_error_status_message("sentinel", 8);
+
+    // The retry the failed flush re-armed, as the tick would drive it.
+    app.state_save_due = Some(Instant::now());
+    app.flush_state_save(false);
+
+    assert_eq!(app.status_message.as_deref(), Some("sentinel"));
+  }
+
+  #[test]
+  fn a_successful_state_save_re_arms_the_failure_report() {
+    let (mut app, dir) = app_with_unwritable_state_path();
+    schedule_a_save(&mut app);
+    app.flush_state_save(false);
+    assert!(app.state_save_error_reported);
+
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.state_save_due = Some(Instant::now());
+    app.flush_state_save(false);
+
+    assert!(!app.state_save_error_reported);
   }
 }
