@@ -46,7 +46,9 @@ pub async fn handle_matches(
     }
   }
 
-  if let Some(d) = matches.get_one::<String>("device") {
+  // Only `playback` and `play` define `device`; a plain `get_one` panics
+  // under clap's debug assertions when `list`/`search` reach this shared path.
+  if let Some(d) = matches.try_get_one::<String>("device").ok().flatten() {
     cli.set_device(d.to_string()).await?;
   }
 

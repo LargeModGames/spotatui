@@ -8,7 +8,6 @@ use crate::core::{
 use crate::infra::player::{select_native, PlaybackBackend};
 use anyhow::anyhow;
 use chrono::TimeDelta;
-#[cfg(feature = "streaming")]
 use log::{info, warn};
 use reqwest::Method;
 #[cfg(feature = "streaming")]
@@ -416,10 +415,89 @@ fn spotify_payload_confirms_native_device(payload: &DevicePayload, native_device
     .any(|device| device.id.as_deref() == Some(native_device_id))
 }
 
-#[cfg(feature = "streaming")]
 fn is_no_active_device_error(e: &anyhow::Error) -> bool {
   let text = e.to_string().to_ascii_lowercase();
   text.contains("no_active_device") || text.contains("no active device")
+}
+
+/// Whether a native backend is positioned to claim a failed player command:
+/// an available player (`start_playback` activates it on `NO_ACTIVE_DEVICE`),
+/// or a backend/activation still materializing (the `suppressed_*` handlers
+/// classify on the original error).
+async fn native_can_claim_player_command(network: &Network) -> bool {
+  #[cfg(feature = "streaming")]
+  {
+    let app = network.app.lock().await;
+    app
+      .streaming_player
+      .as_ref()
+      .is_some_and(|p| p.is_available())
+      || app.native_backend_pending
+      || app.native_activation_pending
+  }
+  #[cfg(not(feature = "streaming"))]
+  {
+    let _ = network;
+    false
+  }
+}
+
+/// The saved device to retry a player command on, or `None` to surface the
+/// original error. Sending `device_id` with `me/player/*` both targets and
+/// activates the device, which a bare command cannot do — without it every
+/// command 404s once all devices are idle, the steady state of CLI mode
+/// (#464). Never retries while a native backend could claim the command.
+fn saved_device_retry(
+  error_is_no_active_device: bool,
+  saved_device_id: Option<&str>,
+  native_can_claim: bool,
+) -> Option<String> {
+  if !error_is_no_active_device || native_can_claim {
+    return None;
+  }
+  saved_device_id.map(str::to_string)
+}
+
+/// Run a player command against the Web API, retrying once on the saved
+/// device (`client_config.device_id`) when Spotify rejects the bare command
+/// with `NO_ACTIVE_DEVICE`. A failed retry surfaces the *original* error so
+/// downstream classification (native fallback, transient suppression) is
+/// unchanged.
+async fn player_command_with_saved_device_retry(
+  network: &Network,
+  method: Method,
+  path: &str,
+  query: &[(&str, String)],
+  body: Option<Value>,
+) -> anyhow::Result<Value> {
+  let result = network
+    .spotify_api_request_json(method.clone(), path, query, body.clone())
+    .await;
+  let Err(e) = result else {
+    return result;
+  };
+
+  let Some(device_id) = saved_device_retry(
+    is_no_active_device_error(&e),
+    network.client_config.device_id.as_deref(),
+    native_can_claim_player_command(network).await,
+  ) else {
+    return Err(e);
+  };
+
+  info!("{path}: no active device; retrying on the saved device {device_id}");
+  let mut query = query.to_vec();
+  query.push(("device_id", device_id));
+  match network
+    .spotify_api_request_json(method, path, &query, body)
+    .await
+  {
+    Ok(value) => Ok(value),
+    Err(retry_err) => {
+      warn!("saved-device retry failed: {retry_err}");
+      Err(e)
+    }
+  }
 }
 
 /// While a native backend is expected to materialize (recovery in flight, or
@@ -1635,9 +1713,8 @@ impl PlaybackNetwork for Network {
     }
 
     let body = api_playback_body(context_id.as_ref(), uris.as_deref(), offset);
-    let result = self
-      .spotify_api_request_json(Method::PUT, "me/player/play", &[], body)
-      .await;
+    let result =
+      player_command_with_saved_device_retry(self, Method::PUT, "me/player/play", &[], body).await;
 
     match result {
       Ok(_) => {
@@ -1921,8 +1998,7 @@ impl PlaybackNetwork for Network {
       return;
     }
 
-    match self
-      .spotify_api_request_json(Method::PUT, "me/player/pause", &[], None)
+    match player_command_with_saved_device_retry(self, Method::PUT, "me/player/pause", &[], None)
       .await
     {
       Ok(_) => {
@@ -1955,9 +2031,8 @@ impl PlaybackNetwork for Network {
       return;
     }
 
-    if let Err(e) = self
-      .spotify_api_request_json(Method::POST, "me/player/next", &[], None)
-      .await
+    if let Err(e) =
+      player_command_with_saved_device_retry(self, Method::POST, "me/player/next", &[], None).await
     {
       #[cfg(feature = "streaming")]
       if suppressed_transient_native_command_error(self, &e).await {
@@ -1981,9 +2056,9 @@ impl PlaybackNetwork for Network {
       return;
     }
 
-    if let Err(e) = self
-      .spotify_api_request_json(Method::POST, "me/player/previous", &[], None)
-      .await
+    if let Err(e) =
+      player_command_with_saved_device_retry(self, Method::POST, "me/player/previous", &[], None)
+        .await
     {
       #[cfg(feature = "streaming")]
       if suppressed_transient_native_command_error(self, &e).await {
@@ -2011,9 +2086,9 @@ impl PlaybackNetwork for Network {
     // First previous_track restarts the current track (if past Spotify's ~3s
     // threshold). After a short delay the second call actually skips to the
     // previous track, since the position is now back at 0.
-    if let Err(e) = self
-      .spotify_api_request_json(Method::POST, "me/player/previous", &[], None)
-      .await
+    if let Err(e) =
+      player_command_with_saved_device_retry(self, Method::POST, "me/player/previous", &[], None)
+        .await
     {
       #[cfg(feature = "streaming")]
       if suppressed_transient_native_command_error(self, &e).await {
@@ -2049,14 +2124,14 @@ impl PlaybackNetwork for Network {
       return;
     }
 
-    if let Err(e) = self
-      .spotify_api_request_json(
-        Method::PUT,
-        "me/player/seek",
-        &[("position_ms", position_ms.to_string())],
-        None,
-      )
-      .await
+    if let Err(e) = player_command_with_saved_device_retry(
+      self,
+      Method::PUT,
+      "me/player/seek",
+      &[("position_ms", position_ms.to_string())],
+      None,
+    )
+    .await
     {
       #[cfg(feature = "streaming")]
       if suppressed_transient_native_command_error(self, &e).await {
@@ -2083,14 +2158,14 @@ impl PlaybackNetwork for Network {
       return;
     }
 
-    match self
-      .spotify_api_request_json(
-        Method::PUT,
-        "me/player/shuffle",
-        &[("state", shuffle_state.to_string())],
-        None,
-      )
-      .await
+    match player_command_with_saved_device_retry(
+      self,
+      Method::PUT,
+      "me/player/shuffle",
+      &[("state", shuffle_state.to_string())],
+      None,
+    )
+    .await
     {
       Ok(_) => {
         let mut app = self.app.lock().await;
@@ -2126,14 +2201,14 @@ impl PlaybackNetwork for Network {
     }
 
     let repeat_state_param: &'static str = repeat_state.into();
-    match self
-      .spotify_api_request_json(
-        Method::PUT,
-        "me/player/repeat",
-        &[("state", repeat_state_param.to_string())],
-        None,
-      )
-      .await
+    match player_command_with_saved_device_retry(
+      self,
+      Method::PUT,
+      "me/player/repeat",
+      &[("state", repeat_state_param.to_string())],
+      None,
+    )
+    .await
     {
       Ok(_) => {
         let mut app = self.app.lock().await;
@@ -2179,14 +2254,14 @@ impl PlaybackNetwork for Network {
       return;
     }
 
-    match self
-      .spotify_api_request_json(
-        Method::PUT,
-        "me/player/volume",
-        &[("volume_percent", volume.to_string())],
-        None,
-      )
-      .await
+    match player_command_with_saved_device_retry(
+      self,
+      Method::PUT,
+      "me/player/volume",
+      &[("volume_percent", volume.to_string())],
+      None,
+    )
+    .await
     {
       Ok(_) => {
         let mut app = self.app.lock().await;
@@ -2625,6 +2700,35 @@ mod tests {
 
   fn playable_track(id: &str) -> PlayableId<'static> {
     PlayableId::Track(TrackId::from_id(id).unwrap().into_static())
+  }
+
+  #[test]
+  fn no_active_device_error_matches_spotify_404_payload() {
+    let e = anyhow!(
+      "{}",
+      r#"Spotify API 404 Not Found failed: {
+  "error" : {
+    "status" : 404,
+    "message" : "Player command failed: No active device found",
+    "reason" : "NO_ACTIVE_DEVICE"
+  }
+}"#
+    );
+    assert!(is_no_active_device_error(&e));
+    assert!(!is_no_active_device_error(&anyhow!(
+      "Spotify API 404 Not Found failed: Device not found"
+    )));
+  }
+
+  #[test]
+  fn saved_device_retry_needs_the_error_and_a_device_and_no_native_claim() {
+    assert_eq!(
+      saved_device_retry(true, Some("dev1"), false),
+      Some("dev1".to_string())
+    );
+    assert_eq!(saved_device_retry(true, Some("dev1"), true), None);
+    assert_eq!(saved_device_retry(true, None, false), None);
+    assert_eq!(saved_device_retry(false, Some("dev1"), false), None);
   }
 
   #[allow(deprecated)]
