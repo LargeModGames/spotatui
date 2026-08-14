@@ -57,6 +57,14 @@ const SEARCH_LIMIT: usize = 20;
 /// error beats no audio at all when 140 disappears someday).
 const FORMAT_SELECTOR: &str = "140/bestaudio[ext=m4a]/bestaudio";
 
+/// Extractor override for the download retry: YouTube's GVS PO-token
+/// enforcement 403s music-label content on the default player clients, while
+/// the embedded players still serve tokenless media URLs for any embeddable
+/// video — which label uploads are. Tried only after a default download
+/// fails, so healthy videos never pay for it; a non-embeddable gated video
+/// stays undownloadable without a real PO-token provider.
+const EMBEDDED_PLAYER_CLIENTS: &str = "youtube:player_client=web_embedded,tv_embedded";
+
 /// Cap on a search invocation. yt-dlp searches normally return in a few
 /// seconds; a hung process must not wedge the IoEvent pump forever.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(45);
@@ -211,28 +219,31 @@ impl YouTubeSource {
     let dest = dest
       .to_str()
       .ok_or_else(|| anyhow!("Non-UTF-8 tempfile path"))?;
+    let url = format!("https://www.youtube.com/watch?v={video_id}");
 
-    self
-      .run(
-        &[
-          "-f",
-          FORMAT_SELECTOR,
-          "--no-playlist",
-          // The NamedTempFile already exists (0 bytes); overwrite it.
-          "--force-overwrites",
-          // Write straight to dest instead of a .part file next to it.
-          "--no-part",
-          "--no-warnings",
-          "--no-progress",
-          "--quiet",
-          "-o",
-          dest,
-          &format!("https://www.youtube.com/watch?v={video_id}"),
-        ],
-        DOWNLOAD_TIMEOUT,
-      )
-      .await?;
-    Ok(())
+    match self
+      .run(&download_args(dest, &url, false), DOWNLOAD_TIMEOUT)
+      .await
+    {
+      Ok(_) => Ok(()),
+      Err(primary) => {
+        // Retry once through the embedded players (see
+        // [`EMBEDDED_PLAYER_CLIENTS`]). On a double failure surface the
+        // default path's error: it names the canonical problem (403, missing
+        // binary, dead network), where the fallback's is usually a less
+        // useful "format not available".
+        match self
+          .run(&download_args(dest, &url, true), DOWNLOAD_TIMEOUT)
+          .await
+        {
+          Ok(_) => Ok(()),
+          Err(fallback) => {
+            log::info!("youtube: embedded-client download fallback also failed: {fallback:#}");
+            Err(primary)
+          }
+        }
+      }
+    }
   }
 
   /// Run `yt-dlp` with `args`, returning stdout. Fails with the tail of
@@ -299,6 +310,31 @@ impl YouTubeSource {
     }
     Ok(stdout)
   }
+}
+
+/// Arguments for one download attempt; the retry differs from the first try
+/// only by the embedded-client extractor override.
+fn download_args<'a>(dest: &'a str, url: &'a str, embedded_fallback: bool) -> Vec<&'a str> {
+  let mut args: Vec<&str> = Vec::new();
+  if embedded_fallback {
+    args.extend_from_slice(&["--extractor-args", EMBEDDED_PLAYER_CLIENTS]);
+  }
+  args.extend_from_slice(&[
+    "-f",
+    FORMAT_SELECTOR,
+    "--no-playlist",
+    // The NamedTempFile already exists (0 bytes); overwrite it.
+    "--force-overwrites",
+    // Write straight to dest instead of a .part file next to it.
+    "--no-part",
+    "--no-warnings",
+    "--no-progress",
+    "--quiet",
+    "-o",
+    dest,
+    url,
+  ]);
+  args
 }
 
 impl Searcher for YouTubeSource {
@@ -467,6 +503,17 @@ mod tests {
       video_summary(Some(1_200_000_000)),
       "YouTube \u{2022} 1.2B views"
     );
+  }
+
+  #[test]
+  fn download_retry_only_prepends_the_embedded_client_override() {
+    let url = "https://www.youtube.com/watch?v=5NV6Rdv1a3I";
+    let first_try = download_args("dest.m4a", url, false);
+    let retry = download_args("dest.m4a", url, true);
+
+    assert!(!first_try.contains(&"--extractor-args"));
+    assert_eq!(retry[..2], ["--extractor-args", EMBEDDED_PLAYER_CLIENTS]);
+    assert_eq!(retry[2..], first_try[..], "everything else stays identical");
   }
 
   #[test]

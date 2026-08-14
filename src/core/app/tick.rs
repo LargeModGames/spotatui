@@ -1,6 +1,18 @@
 use super::*;
 
+/// Grace window after the last tick before playback-position reads go stale.
+const STALE_TICK_AFTER: Duration = Duration::from_secs(2);
+
 impl App {
+  /// Milliseconds into the current track, or `None` when no tick has run for
+  /// over [`STALE_TICK_AFTER`]. A frontend that stops driving
+  /// `core::driver::Driver::tick` (or never starts) would otherwise show a
+  /// silently frozen playbar; `None` is the loud version of that failure,
+  /// rendered as an explicit stall by the playbar.
+  pub fn playback_position_ms(&self) -> Option<u128> {
+    (self.last_tick_at.elapsed() <= STALE_TICK_AFTER).then_some(self.song_progress_ms)
+  }
+
   fn poll_current_playback(&mut self) {
     // No Spotify session (free-source launch): the poll would hit the auth gate
     // and re-flash a "connect Spotify" status message every interval. Free
@@ -36,6 +48,8 @@ impl App {
   }
 
   pub fn update_on_tick(&mut self, elapsed: Duration) {
+    self.last_tick_at = Instant::now();
+
     // Increment global animation tick (wraps after ~9.4 quintillion ticks, effectively never)
     self.animation_tick = self.animation_tick.wrapping_add(1);
 
@@ -269,6 +283,22 @@ mod tests {
     // Nothing dispatched: no per-tick "connect Spotify" auth-spam for free sources.
     assert!(rx.try_recv().is_err());
     assert!(!app.is_fetching_current_playback);
+  }
+
+  #[test]
+  fn playback_position_goes_stale_without_ticks_and_recovers_on_one() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.song_progress_ms = 1234;
+    assert_eq!(app.playback_position_ms(), Some(1234));
+
+    // A frontend that stops ticking: the position must read as stale rather
+    // than freeze at its last value.
+    app.last_tick_at = Instant::now() - Duration::from_secs(3);
+    assert_eq!(app.playback_position_ms(), None);
+
+    app.update_on_tick(Duration::from_millis(500));
+    assert!(app.playback_position_ms().is_some());
   }
 
   #[test]

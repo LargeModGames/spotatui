@@ -274,6 +274,10 @@ pub struct App {
   #[allow(dead_code)]
   pub small_search_limit: u32,
   pub song_progress_ms: u128,
+  /// When `update_on_tick` last ran. Every frontend must drive the tick (see
+  /// `core::driver`); `playback_position_ms` reports stale past 2s so one
+  /// that stops ticking shows a loud error instead of a frozen playbar.
+  pub last_tick_at: Instant,
   pub seek_ms: Option<u128>,
   /// Last time a native seek was actually sent to the player (for throttling)
   #[cfg(feature = "streaming")]
@@ -344,7 +348,7 @@ pub struct App {
   pub is_fetching_current_playback: bool,
   /// Expiry of the current Spotify access token, or `None` when there is no
   /// Spotify session (launched against a free source). The token-refresh poll
-  /// in the runner skips refreshing while this is `None`.
+  /// in the driver skips refreshing while this is `None`.
   pub spotify_token_expiry: Option<SystemTime>,
   /// Whether a Spotify session is available (token loaded at startup or added
   /// via in-TUI login). Gates the Spotify-only startup dispatches so a

@@ -1874,7 +1874,7 @@ mod data_read_tests {
     }
   }
 
-  /// The runner ticks the script engine *before* its track-change detector, so
+  /// The driver ticks the script engine *before* its track-change detector, so
   /// on the tick a track changes `lyrics_status` is still `Found` for the
   /// previous track. `get_lyrics` from a `track_change` handler must wait for
   /// the new lyrics rather than resolving with the old ones.

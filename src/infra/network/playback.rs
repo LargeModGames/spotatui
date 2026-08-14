@@ -967,7 +967,7 @@ impl PlaybackNetwork for Network {
     let mut app = self.app.lock().await;
 
     // Cover-art download (network + synchronous image decode) must NOT happen
-    // Cover art is fetched by the shared track-change detector (see `runner.rs`),
+    // Cover art is fetched by the shared track-change detector (see `core/driver/`),
     // which dispatches `IoEvent::FetchCoverArt` off the `App` lock for every
     // source. This handler no longer fetches art inline.
     match context {
@@ -1053,7 +1053,7 @@ impl PlaybackNetwork for Network {
 
                     // Lyrics (and cover art) are now driven by the shared
                     // track-change detector in the UI tick, which works for every
-                    // source — see `runner.rs`. No per-source dispatch here.
+                    // source — see `core/driver/`. No per-source dispatch here.
 
                     app.dispatch(IoEvent::CurrentUserSavedTracksContains(vec![
                       track_id_str.clone()
@@ -1115,7 +1115,7 @@ impl PlaybackNetwork for Network {
 
         if !stale_api_item_for_native {
           // Cover art (Spotify album/episode image) is fetched by the shared
-          // track-change detector in `runner.rs`, from the snapshot's image URL.
+          // track-change detector in `core/driver/`, from the snapshot's image URL.
           app.current_playback_context = Some(c);
         }
 

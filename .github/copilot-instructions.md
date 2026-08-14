@@ -81,7 +81,7 @@ units under `src/`:
 
 | Unit | Role |
 |------|------|
-| `core/` | Centralized state (`App`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
+| `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
 | `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
@@ -100,8 +100,15 @@ crossterm thread (tui/event/) → runner.rs loop (draws the frame, then reads on
 ```
 
 `tui/event/` is only the crossterm→`Key` plumbing; the event loop itself is
-`tui/runner.rs::start_ui`, which also owns Discord/MPRIS presence sync, the window
-title, and cover-art request scheduling. Mouse input enters via `handlers::mouse_handler`.
+`tui/runner.rs::start_ui`. Everything on a timer lives in `core/driver/`
+(`Driver::tick`): the playback tick + debounced flushes, OAuth refresh,
+Discord/MPRIS presence sync, the window title, lyrics + cover-art scheduling,
+native-queue and decoded-source auto-advance, and `last_session.yml`
+persistence. The runner draws frames, reads events, and calls `driver.tick`
+with a `TickEnv` carrying the frontend-geometry inputs (visualizer bar count,
+cover-art pixel support). A frontend that stops ticking is loud, not silent:
+`App::playback_position_ms()` reads stale after 2s and the playbar says so.
+Mouse input enters via `handlers::mouse_handler`.
 
 ### The IoEvent pump: source routing, two lanes, an auth gate
 
@@ -375,7 +382,10 @@ working in those directories.
   read one `PlaybackSnapshot` from `infra/media_metadata.rs`, which checks
   decoded sources first so the paused Spotify track is not published.
 - YouTube is unofficial-fragile by design: when it breaks, the fix is a newer
-  `yt-dlp`, not a spotatui release.
+  `yt-dlp`, not a spotatui release. One in-repo mitigation: a failed download
+  retries once through the embedded player clients (`web_embedded,tv_embedded`),
+  which PO-token enforcement leaves tokenless for embeddable videos - most
+  label uploads. A non-embeddable gated video still fails.
 
 ### Testing conventions
 
