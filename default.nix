@@ -1,6 +1,6 @@
 { pkgs ? import <nixpkgs> {} }:
 let
-  librespotOutputHash = "sha256-N/ImWrtEyhKyjvZd8zVCelKtsAV1kHoFHMwCoe5ddI0=";
+  librespotOutputHash = "sha256-vUBIP+e9HYq3PKilYbdRtJk4qJAT7Vjn0l1ALe5qNbA=";
 in
   pkgs.rustPlatform.buildRustPackage rec {
     pname = "spotatui";
