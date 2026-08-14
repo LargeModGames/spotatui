@@ -2,7 +2,7 @@
 //!
 //! These run on the **serial** IoEvent lane, which is where the real Spotify
 //! client lives. The service lane deliberately constructs its `Network` with
-//! `None` for the client (`runtime.rs`), so anything that has to resolve a track
+//! `None` for the client (`runtime/`), so anything that has to resolve a track
 //! name to a URI belongs here rather than there.
 
 use super::Network;

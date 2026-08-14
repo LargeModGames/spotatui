@@ -3,6 +3,10 @@ pub mod audio;
 pub mod discord_rpc;
 #[cfg(feature = "dj-core")]
 pub mod dj;
+// The collector half (spawned by the frontend launch) has no caller in a
+// headless build; the stats half still serves the CLI. Every tui-enabled CI
+// leg lints this module in full.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod history;
 #[cfg(feature = "local-files")]
 pub mod local;
