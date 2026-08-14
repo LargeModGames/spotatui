@@ -9,4 +9,4 @@ app_field_writes_in_tui_handlers = 786 # target 0
 ioevent_refs_in_tui = 130              # target 0
 synthetic_keys_in_mouse_handler = 15   # target 0 (13 production + 2 test sites)
 wildcard_arms_in_action_tree = 0       # target 0, must stay 0
-test_attribute_total = 1368            # floor: may only rise
+test_attribute_total = 1371            # floor: may only rise

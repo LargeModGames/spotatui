@@ -967,9 +967,9 @@ impl PlaybackNetwork for Network {
     let mut app = self.app.lock().await;
 
     // Cover-art download (network + synchronous image decode) must NOT happen
-    // Cover art is fetched by the shared track-change detector (see `core/driver/`),
-    // which dispatches `IoEvent::FetchCoverArt` off the `App` lock for every
-    // source. This handler no longer fetches art inline.
+    // in this handler: art is fetched by the shared track-change detector
+    // (see `core/driver/`), which dispatches `IoEvent::FetchCoverArt` off the
+    // `App` lock for every source.
     match context {
       #[allow(unused_mut)]
       Ok(Some(mut c)) => {

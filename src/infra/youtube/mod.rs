@@ -221,29 +221,11 @@ impl YouTubeSource {
       .ok_or_else(|| anyhow!("Non-UTF-8 tempfile path"))?;
     let url = format!("https://www.youtube.com/watch?v={video_id}");
 
-    match self
-      .run(&download_args(dest, &url, false), DOWNLOAD_TIMEOUT)
-      .await
-    {
-      Ok(_) => Ok(()),
-      Err(primary) => {
-        // Retry once through the embedded players (see
-        // [`EMBEDDED_PLAYER_CLIENTS`]). On a double failure surface the
-        // default path's error: it names the canonical problem (403, missing
-        // binary, dead network), where the fallback's is usually a less
-        // useful "format not available".
-        match self
-          .run(&download_args(dest, &url, true), DOWNLOAD_TIMEOUT)
-          .await
-        {
-          Ok(_) => Ok(()),
-          Err(fallback) => {
-            log::info!("youtube: embedded-client download fallback also failed: {fallback:#}");
-            Err(primary)
-          }
-        }
-      }
-    }
+    run_with_embedded_fallback(|embedded| {
+      let args = download_args(dest, &url, embedded);
+      async move { self.run(&args, DOWNLOAD_TIMEOUT).await.map(|_| ()) }
+    })
+    .await
   }
 
   /// Run `yt-dlp` with `args`, returning stdout. Fails with the tail of
@@ -309,6 +291,28 @@ impl YouTubeSource {
       );
     }
     Ok(stdout)
+  }
+}
+
+/// The download's attempt sequence: the default clients first, then one
+/// retry through the embedded players (see [`EMBEDDED_PLAYER_CLIENTS`]). On
+/// a double failure the *primary* error surfaces: it names the canonical
+/// problem (403, missing binary, dead network), where the fallback's usually
+/// degenerates to a less useful "format not available".
+async fn run_with_embedded_fallback<F, Fut>(mut attempt: F) -> Result<()>
+where
+  F: FnMut(bool) -> Fut,
+  Fut: std::future::Future<Output = Result<()>>,
+{
+  match attempt(false).await {
+    Ok(()) => Ok(()),
+    Err(primary) => match attempt(true).await {
+      Ok(()) => Ok(()),
+      Err(fallback) => {
+        log::info!("youtube: embedded-client download fallback also failed: {fallback:#}");
+        Err(primary)
+      }
+    },
   }
 }
 
@@ -514,6 +518,50 @@ mod tests {
     assert!(!first_try.contains(&"--extractor-args"));
     assert_eq!(retry[..2], ["--extractor-args", EMBEDDED_PLAYER_CLIENTS]);
     assert_eq!(retry[2..], first_try[..], "everything else stays identical");
+  }
+
+  #[tokio::test]
+  async fn download_fallback_never_runs_after_a_primary_success() {
+    let mut attempts = Vec::new();
+    run_with_embedded_fallback(|embedded| {
+      attempts.push(embedded);
+      async { Ok(()) }
+    })
+    .await
+    .unwrap();
+    assert_eq!(attempts, [false]);
+  }
+
+  #[tokio::test]
+  async fn download_retries_exactly_once_through_the_embedded_clients() {
+    let mut attempts = Vec::new();
+    run_with_embedded_fallback(|embedded| {
+      attempts.push(embedded);
+      async move {
+        if embedded {
+          Ok(())
+        } else {
+          Err(anyhow!("HTTP Error 403"))
+        }
+      }
+    })
+    .await
+    .unwrap();
+    assert_eq!(attempts, [false, true]);
+  }
+
+  #[tokio::test]
+  async fn double_download_failure_surfaces_the_primary_error() {
+    let err = run_with_embedded_fallback(|embedded| async move {
+      Err(anyhow!(if embedded {
+        "format not available"
+      } else {
+        "HTTP Error 403"
+      }))
+    })
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("403"), "got: {err}");
   }
 
   #[test]

@@ -220,7 +220,9 @@ impl Driver {
   }
 
   /// One tick. The frontend calls this at its tick rate with the `App` lock
-  /// held; everything slow (file I/O, network) is dispatched off-lock.
+  /// held; everything slow (file I/O, network) is dispatched off-lock. Must
+  /// run inside a Tokio runtime: session persistence goes through
+  /// `tokio::task::spawn_blocking`, which panics without one.
   pub fn tick(&mut self, app: &mut App, elapsed: Duration, env: TickEnv) {
     #[cfg(feature = "streaming")]
     if let Some(player) = app.streaming_player.clone() {

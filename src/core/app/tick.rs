@@ -3,6 +3,14 @@ use super::*;
 /// Grace window after the last tick before playback-position reads go stale.
 const STALE_TICK_AFTER: Duration = Duration::from_secs(2);
 
+// The window must cover at least two of the slowest allowed ticks, so one
+// missed frame can never read as stale. The tick rate is bounded on every
+// path (config load rejects out-of-range values, the settings screen clamps),
+// and this assertion keeps the two constants coupled if either ever moves.
+const _: () = assert!(
+  STALE_TICK_AFTER.as_millis() >= 2 * crate::core::user_config::MAX_TICK_RATE_MILLISECONDS as u128
+);
+
 impl App {
   /// Milliseconds into the current track, or `None` when no tick has run for
   /// over [`STALE_TICK_AFTER`]. A frontend that stops driving
