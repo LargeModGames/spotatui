@@ -10,6 +10,9 @@ version = "0.41.0"
 authors = ["LargeModGames <LargeModGames@gmail.com>"]
 edition = "2021"
 license = "MIT"
+# Two [[bin]] targets make a plain `cargo run` ambiguous; the console binary
+# stays the default.
+default-run = "spotatui"
 exclude = [
     ".github/demo.gif",
     ".github/workflows",
@@ -22,7 +25,7 @@ exclude = [
 
 [dependencies]
 rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest", "reqwest-rustls-tls"] }
-ratatui = { version = "0.30", features = ["crossterm", "layout-cache"], default-features = false }
+ratatui = { version = "0.30", features = ["crossterm", "layout-cache"], default-features = false, optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
@@ -31,9 +34,12 @@ clap = { version = "4.6", features = ["cargo"] }
 clap_complete = "4.6"
 unicode-width = "0.2.2"
 backtrace = "0.3.76"
-crossterm = "0.29"
-tui-bar-graph = "0.3.3"
-colorgrad = "0.8.0"
+crossterm = { version = "0.29", optional = true }
+tui-bar-graph = { version = "0.3.3", optional = true }
+# Optional because the headless build needs neither half of it: `tui` pulls it
+# for the banner gradient and visualizer, `art-decode` for the HSV math in
+# `core/cover_theme.rs`.
+colorgrad = { version = "0.8.0", optional = true }
 tokio = { version = "1.52", features = ["full"] }
 rand = "0.10.2"
 anyhow = "1.0.102"
@@ -129,12 +135,15 @@ block2 = { version = "0.6", optional = true }
 [features]
 default = ["telemetry", "streaming", "audio-viz-cpal", "macos-media", "discord-rpc", "mpris", "self-update", "windows-media", "scripting", "tui"]
 telemetry = []
-# The terminal frontend. In `default` and currently ungated (`mod tui` is always
-# compiled, ratatui/crossterm stay non-optional), so building without it changes
-# nothing yet. The headless CI leg omits it so that, once `mod tui` is
-# feature-gated as part of the GUI substrate migration, any `crate::tui` import
-# from core/infra/cli becomes a compile error there.
-tui = []
+# The terminal frontend: gates `mod tui` and owns the terminal-only crates.
+# The headless CI leg omits it, so any `crate::tui` import from core/infra/cli
+# is a compile error there - that is what keeps a second frontend from silently
+# re-coupling to the terminal one.
+tui = ["dep:ratatui", "dep:crossterm", "dep:tui-bar-graph", "dep:colorgrad"]
+# Reserved for the windowed frontend. Currently gates only the `spotatui-gui`
+# bin shim (which claims the binary name and the Windows console-attach
+# plumbing); the frontend itself has not landed yet.
+gui = []
 self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
 streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf"]
 # Audio backend features
@@ -156,7 +165,7 @@ discord-rpc = ["discord-rich-presence"]
 # the store frontends render from (also feeds the adaptive theme's palette
 # extraction). Not meant to be enabled by hand: `cover-art` layers the
 # terminal rendering on top and keeps its pre-split meaning for users and CI.
-art-decode = ["dep:image"]
+art-decode = ["dep:image", "dep:colorgrad"]
 cover-art = ["tui", "art-decode", "dep:ratatui-image"]
 scripting = ["dep:mlua"]
 # Shared audio decode/output engine (rodio bundles symphonia). Pulled by any
@@ -206,10 +215,25 @@ vergen = { version = ">=9.0.6, <9.1", default-features = false }
 [target.'cfg(target_env = "musl")'.dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }
 
+[lib]
+name = "spotatui"
+path = "src/lib.rs"
+
 [[bin]]
 bench = false
-path = "src/main.rs"
+path = "src/bin/spotatui.rs"
 name = "spotatui"
+
+# The windowed shim. A separate binary because `windows_subsystem` is a
+# crate-root attribute that cannot vary at runtime, and because flipping the
+# console binary would detach the stdout that `spotatui mcp` (JSON-RPC) and
+# `spotatui history recap` (HTML) treat as protocol. Never built unless `gui`
+# is enabled explicitly.
+[[bin]]
+bench = false
+path = "src/bin/spotatui-gui.rs"
+name = "spotatui-gui"
+required-features = ["gui"]
 
 [profile.release]
 codegen-units = 1  # Better optimization

@@ -94,7 +94,7 @@ main.lua and a README.md to edit and publish.",
     )
 }
 
-/// Entry point dispatched from `runtime.rs`. Resolves the config dir and runs the chosen action.
+/// Entry point dispatched from `runtime/`. Resolves the config dir and runs the chosen action.
 pub fn handle_plugin_command(matches: &ArgMatches) -> Result<()> {
   let config_dir = crate::core::user_config::default_app_config_dir()
     .context("could not determine the spotatui config directory (no home directory found)")?;

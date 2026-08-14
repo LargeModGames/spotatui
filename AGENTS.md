@@ -39,7 +39,7 @@ across a **six-leg** feature matrix:
 | `mcp-only` | `telemetry,tui,mcp-server` |
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
-| `headless` | `telemetry` - the only leg without `tui` (an empty feature while `mod tui` is still ungated); once the GUI substrate migration gates the module, this leg turns `crate::tui` imports from core/infra/cli into compile errors |
+| `headless` | `telemetry` - the only leg without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
 
 - `mcp-only` and `ai-dj-only` matter more than their size suggests: both enable
   `dj-core` **without** `streaming` (a combination nothing else covers), and each
@@ -75,7 +75,11 @@ the slim build, check the `N filtered out` count actually says your test ran.
 
 ## Architecture
 
-Five top-level units under `src/`:
+One cargo package: a `[lib]` (`src/lib.rs`, private modules, public API =
+`run_cli`) plus two `[[bin]]` shims in `src/bin/` - `spotatui` (console) and
+`spotatui-gui`, a placeholder behind the off-by-default `gui` feature that
+exists to own the crate-root `windows_subsystem` attribute. Five top-level
+units under `src/`:
 
 | Unit | Role |
 |------|------|
@@ -83,7 +87,7 @@ Five top-level units under `src/`:
 | `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
-| `runtime.rs` | Bootstrap (CLI dispatch, config/auth, migrations, backend init) **and** the IoEvent pump (`start_tokio`) |
+| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `startup.rs` (the UI-launch half, gated on `tui`) |
 
 ### Data flow
 
@@ -92,7 +96,7 @@ crossterm thread (tui/event/) → runner.rs loop (draws the frame, then reads on
   → runner::dispatch_key   - exit prompt, ActiveBlock::Input, the configurable back key
   → handlers::handle_app   - plugin popup modal → help filter → global keybindings
   → handle_block_events    - dispatches to the per-screen handler
-  → app.dispatch(IoEvent)  - hands async work to the pump in runtime.rs::start_tokio
+  → app.dispatch(IoEvent)  - hands async work to the pump in runtime/pump.rs
        → source routers by URI scheme, then infra/network/ (Spotify)
        → mutates App state; tui/ui/ re-renders from App on the next frame
 ```
@@ -103,7 +107,7 @@ title, and cover-art request scheduling. Mouse input enters via `handlers::mouse
 
 ### The IoEvent pump: source routing, two lanes, an auth gate
 
-`runtime.rs::start_tokio` drains IoEvents serially. Three structural gates, all
+`runtime/pump.rs::start_tokio` drains IoEvents serially. Three structural gates, all
 worth knowing before adding an event:
 
 - **Source routing**: non-Spotify playback is routed by URI scheme *before* the
@@ -308,10 +312,14 @@ never config:
 
 ### Feature flags
 
-- `default` = `telemetry, streaming, audio-viz-cpal, macos-media, windows-media,
-  mpris, discord-rpc, self-update, scripting`. Notably **not** in default:
-  `cover-art` (so a plain `cargo run` has no album art, though every shipped
-  binary enables it), the four sources, and the DJ features.
+- `default` = `telemetry, tui, streaming, audio-viz-cpal, macos-media,
+  windows-media, mpris, discord-rpc, self-update, scripting`. Notably **not**
+  in default: `cover-art` (so a plain `cargo run` has no album art, though
+  every shipped binary enables it), the four sources, and the DJ features.
+- `tui` gates `mod tui` and owns the terminal-only crates (ratatui, crossterm,
+  tui-bar-graph, colorgrad - the last also pulled by `art-decode` for the
+  adaptive-theme HSV math). `gui` is a reserved placeholder that only gates the
+  `spotatui-gui` bin shim.
 - Cover art is two features: `art-decode` is the frontend-agnostic decode half
   (`dep:image`, fills `core::art::CoverArtStore`, feeds the adaptive theme;
   never enabled by hand); `cover-art` layers the ratatui-image terminal

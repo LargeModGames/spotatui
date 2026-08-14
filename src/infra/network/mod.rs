@@ -44,6 +44,11 @@ use self::search::SearchNetwork;
 use self::user::UserNetwork;
 use self::utils::UtilsNetwork;
 
+// Most variants are constructed by TUI handlers, so a headless build counts
+// them as dead; every tui-enabled CI leg lints the enum in full. Never `cfg`
+// a variant out for this - a build leg missing a feature would then compile
+// clean while the feature is silently absent.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub enum IoEvent {
   GetCurrentPlayback,
   /// After a track transition (e.g., EndOfTrack), ensure we don't end up paused on the next item.
