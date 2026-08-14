@@ -16,12 +16,15 @@ jobs:
     if: |
       !contains(format('{0} {1} {2}', github.event.head_commit.message, github.event.pull_request.title, github.event.pull_request.body), '[skip ci]')
     steps:
+      # Debug output only. Read the payload from $GITHUB_EVENT_PATH instead of
+      # templating ${{ toJson(github.event) }} into the script: expression
+      # expansion happens before the shell runs, so attacker-controlled payload
+      # fields (PR title/body, commit message) could escape the heredoc and
+      # execute (CodeQL: actions/cache-poisoning/code-injection).
       - run: |
-          cat <<'MESSAGE'
-          github.event_name: ${{ toJson(github.event_name) }}
-          github.event:
-          ${{ toJson(github.event) }}
-          MESSAGE
+          echo "github.event_name: $GITHUB_EVENT_NAME"
+          echo "github.event:"
+          cat "$GITHUB_EVENT_PATH"
 
   check:
     name: Check (${{ matrix.name }})
