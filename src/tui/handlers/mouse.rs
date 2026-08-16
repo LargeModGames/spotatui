@@ -7,6 +7,7 @@ use crate::tui::layout::{
   compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
 };
 use crate::tui::ui::player::{playbar_control_at, playbar_progress_line};
+use crate::tui::ui::settings::{filtered_setting_indices, settings_layout};
 use crate::tui::ui::tables::table_scroll_offset;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -207,8 +208,7 @@ fn handle_help_mouse(mouse: MouseEvent, app: &mut App) {
 
 fn handle_settings_mouse(mouse: MouseEvent, app: &mut App) {
   if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-    app.load_settings_for_category();
-    app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+    app.open_settings_screen();
   }
 }
 
@@ -318,6 +318,21 @@ fn handle_settings_tabs_mouse(mouse: MouseEvent, tabs_area: Rect, app: &mut App)
 }
 
 fn handle_settings_list_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App) {
+  // Reaching for the list ends the query. Without this the synthesised Enter
+  // below would be spent confirming the filter instead of activating the row
+  // the click landed on, and a scroll would be swallowed as an unhandled
+  // filter-input key.
+  if app.settings_filter_editing
+    && matches!(
+      mouse.kind,
+      MouseEventKind::ScrollUp
+        | MouseEventKind::ScrollDown
+        | MouseEventKind::Down(MouseButton::Left)
+    )
+  {
+    app.apply_settings_filter();
+  }
+
   match mouse.kind {
     MouseEventKind::ScrollDown if !selected_setting_expects_key_capture(app) => {
       settings::handler(Key::Down, app);
@@ -342,10 +357,14 @@ fn selected_setting_expects_key_capture(app: &App) -> bool {
 }
 
 fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
-  let item_count = app.settings_items.len();
-  let Some(clicked_index) = settings_item_index_from_click(list_area, mouse_row, item_count) else {
+  // Rows are drawn from the filtered view, so a click resolves to a position in
+  // it before it means anything as an index into `settings_items`.
+  let visible = filtered_setting_indices(app);
+  let Some(clicked_row) = settings_item_index_from_click(list_area, mouse_row, visible.len())
+  else {
     return;
   };
+  let clicked_index = visible[clicked_row];
 
   if app.settings_edit_mode {
     let clicked_selected_item = clicked_index == app.settings_selected_index;
@@ -390,7 +409,7 @@ fn switch_settings_category_to(index: usize, app: &mut App) {
   let category = SettingsCategory::from_index(index);
   if app.settings_category != category || app.settings_items.is_empty() {
     app.settings_category = category;
-    app.load_settings_for_category();
+    settings::reload_category(app);
   }
 
   if app.settings_edit_mode {
@@ -810,14 +829,7 @@ fn settings_layout_areas(app: &App) -> Option<SettingsLayoutAreas> {
   }
 
   let root = Rect::new(0, 0, app.size.width, app.size.height);
-  let [tabs_area, list_area, _help_area] = root.layout(
-    &Layout::vertical([
-      Constraint::Length(3),
-      Constraint::Min(1),
-      Constraint::Length(3),
-    ])
-    .margin(2),
-  );
+  let [tabs_area, list_area, _help_area] = settings_layout(root);
 
   Some(SettingsLayoutAreas {
     tabs: tabs_area,
@@ -1003,6 +1015,23 @@ mod tests {
     app.settings_category = SettingsCategory::Behavior;
     app.load_settings_for_category();
     app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+  }
+
+  /// Settings, sized for the mouse tests, with `query` typed into the row
+  /// filter through the real key path and the input still open.
+  fn filtered_settings_app(query: &str) -> App {
+    let mut app = App::default();
+    app.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    open_settings(&mut app);
+
+    crate::tui::handlers::handle_app(app.user_config.keys.search, &mut app);
+    for character in query.chars() {
+      crate::tui::handlers::handle_app(Key::Char(character), &mut app);
+    }
+    app
   }
 
   #[allow(deprecated)]
@@ -1623,6 +1652,29 @@ mod tests {
       .expect("selected setting should stay boolean");
     assert_ne!(updated_value, initial_value);
     assert!(!app.settings_edit_mode);
+  }
+
+  #[test]
+  fn clicking_a_filtered_row_closes_the_filter_and_selects_the_row_that_was_drawn() {
+    // No Enter: the filter input is still open when the click lands.
+    let mut app = filtered_settings_app("sort");
+    let visible = filtered_setting_indices(&app);
+    assert!(visible.len() > 1, "expected several sort rows");
+
+    // Second drawn row, which is not the second row of `settings_items`.
+    let areas = settings_layout_areas(&app).expect("settings layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        areas.list.x + 2,
+        areas.list.y + 2,
+      ),
+      &mut app,
+    );
+
+    assert!(!app.settings_filter_editing);
+    assert_eq!(app.settings_selected_index, visible[1]);
+    assert_ne!(visible[1], 1);
   }
 
   #[test]

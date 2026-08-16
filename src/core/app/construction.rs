@@ -166,6 +166,8 @@ impl Default for App {
       settings_selected_index: 0,
       settings_edit_mode: false,
       settings_edit_buffer: String::new(),
+      settings_filter: String::new(),
+      settings_filter_editing: false,
       settings_unsaved_prompt_visible: false,
       settings_unsaved_prompt_save_selected: true,
       native_track_info: None,

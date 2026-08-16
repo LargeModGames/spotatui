@@ -44,31 +44,32 @@ pub fn ensure_help_menu_model(app: &mut App) {
   });
 }
 
-/// Split a formatted help row into spans so every filter-term match renders in
-/// the highlight style, making it obvious why the row survived the filter.
-/// `ranges` are the row's precomputed [`help_match_ranges`] from the model.
-fn highlighted_help_line<'a>(
-  row: &'a str,
+/// Split `text` into spans so every filter match renders in the highlight
+/// style, making it obvious why a row survived the filter. `ranges` are
+/// ascending, non-overlapping byte ranges (e.g. [`help_match_ranges`] from the
+/// help model, or a settings row's fuzzy-match ranges).
+pub(crate) fn highlighted_spans<'a>(
+  text: &'a str,
   ranges: &[(usize, usize)],
   base: Style,
   highlight: Style,
-) -> Line<'a> {
+) -> Vec<Span<'a>> {
   if ranges.is_empty() {
-    return Line::from(Span::styled(row, base));
+    return vec![Span::styled(text, base)];
   }
   let mut spans = Vec::with_capacity(ranges.len() * 2 + 1);
   let mut cursor = 0;
   for &(start, end) in ranges {
     if cursor < start {
-      spans.push(Span::styled(&row[cursor..start], base));
+      spans.push(Span::styled(&text[cursor..start], base));
     }
-    spans.push(Span::styled(&row[start..end], highlight));
+    spans.push(Span::styled(&text[start..end], highlight));
     cursor = end;
   }
-  if cursor < row.len() {
-    spans.push(Span::styled(&row[cursor..], base));
+  if cursor < text.len() {
+    spans.push(Span::styled(&text[cursor..], base));
   }
-  Line::from(spans)
+  spans
 }
 
 fn build_help_rows(app: &App, total_width: usize) -> (String, Vec<String>) {
@@ -151,12 +152,12 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
       .iter()
       .zip(&model.match_ranges[start..end])
       .map(|(item, ranges)| {
-        Row::new([highlighted_help_line(
+        Row::new([Line::from(highlighted_spans(
           item,
           ranges,
           help_menu_style,
           highlight_style,
-        )])
+        ))])
         .style(help_menu_style)
       })
       .collect()

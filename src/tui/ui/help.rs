@@ -232,6 +232,11 @@ pub fn get_help_docs(app: &App) -> Vec<Vec<String>> {
       String::from("Help menu"),
     ],
     vec![
+      String::from("Filter settings rows"),
+      key_bindings.search.to_string(),
+      String::from("Settings"),
+    ],
+    vec![
       String::from("Pause/Resume playback"),
       key_bindings.toggle_playback.to_string(),
       String::from("General"),

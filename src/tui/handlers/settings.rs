@@ -1,6 +1,10 @@
 use crate::core::app::{App, SettingValue, SettingsCategory};
 use crate::tui::event::Key;
-use crate::tui::handlers::common_key_events::{down_event, left_event, right_event, up_event};
+use crate::tui::handlers::common_key_events::{
+  down_event, left_event, on_down_press_handler, on_up_press_handler, right_event, up_event,
+};
+use crate::tui::handlers::filter_input::{self, FilterEdit};
+use crate::tui::ui::settings::{filtered_setting_indices, selected_setting_position};
 
 pub fn handler(key: Key, app: &mut App) {
   if app.settings_unsaved_prompt_visible {
@@ -10,6 +14,8 @@ pub fn handler(key: Key, app: &mut App) {
 
   if app.settings_edit_mode {
     handle_edit_mode(key, app);
+  } else if app.settings_filter_editing {
+    handle_filter_input(key, app);
   } else {
     handle_navigation(key, app);
   }
@@ -17,6 +23,10 @@ pub fn handler(key: Key, app: &mut App) {
 
 fn handle_navigation(key: Key, app: &mut App) {
   match key {
+    // Start filtering. Checked first so the binding wins even if the user has
+    // pointed `search` at a key another arm below would claim.
+    key if key == app.user_config.keys.search => app.begin_settings_filter(),
+
     // Category switching with left/right (only when not in edit mode)
     key if left_event(key, &app.user_config.keys) => switch_category_left(app),
     key if right_event(key, &app.user_config.keys) => switch_category_right(app),
@@ -33,6 +43,10 @@ fn handle_navigation(key: Key, app: &mut App) {
       let _ = save_settings(app);
     }
 
+    // An applied filter is dropped before Esc means "leave the screen", so a
+    // narrowed list is never mistaken for the whole of it.
+    Key::Esc if !app.settings_filter.is_empty() => app.clear_settings_filter(),
+
     // Exit settings
     Key::Esc => request_exit_settings(app),
     key if key == app.user_config.keys.back => {
@@ -40,6 +54,35 @@ fn handle_navigation(key: Key, app: &mut App) {
     }
     _ => {}
   }
+}
+
+fn handle_filter_input(key: Key, app: &mut App) {
+  match filter_input::apply(key, &mut app.settings_filter) {
+    FilterEdit::Cancel => app.clear_settings_filter(),
+    FilterEdit::Confirm => {
+      if app.settings_filter.split_whitespace().next().is_none() {
+        app.clear_settings_filter();
+      } else {
+        app.apply_settings_filter();
+      }
+    }
+    FilterEdit::Changed => snap_selection_to_filter(app),
+    FilterEdit::Ignored => {}
+  }
+}
+
+/// Move the highlight onto the best remaining match. The ranking changes with
+/// every keystroke, so a selection left where it was would drift off the list.
+fn snap_selection_to_filter(app: &mut App) {
+  app.settings_selected_index = filtered_setting_indices(app).first().copied().unwrap_or(0);
+}
+
+/// Rebuild the current category's rows and put the highlight back on a row the
+/// filter still shows. The filter deliberately survives a category switch, so
+/// one query can be walked across tabs.
+pub(super) fn reload_category(app: &mut App) {
+  app.load_settings_for_category();
+  snap_selection_to_filter(app);
 }
 
 fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
@@ -85,6 +128,7 @@ fn close_settings(app: &mut App) {
   app.settings_unsaved_prompt_save_selected = true;
   app.settings_edit_mode = false;
   app.settings_edit_buffer.clear();
+  app.clear_settings_filter();
   app.pop_navigation_stack();
 }
 
@@ -359,35 +403,46 @@ fn switch_category_left(app: &mut App) {
     current_index - 1
   };
   app.settings_category = SettingsCategory::from_index(new_index);
-  app.settings_selected_index = 0;
-  app.load_settings_for_category();
+  reload_category(app);
 }
 
 fn switch_category_right(app: &mut App) {
   let current_index = app.settings_category.index();
   let new_index = (current_index + 1) % SettingsCategory::all().len();
   app.settings_category = SettingsCategory::from_index(new_index);
-  app.settings_selected_index = 0;
-  app.load_settings_for_category();
+  reload_category(app);
+}
+
+/// Step the highlight through the rows the filter shows, in the order they are
+/// drawn, wrapping at both ends.
+fn step_selection(app: &mut App, forward: bool) {
+  let visible = filtered_setting_indices(app);
+  let position = selected_setting_position(app);
+  let next = if forward {
+    on_down_press_handler(&visible, position)
+  } else {
+    on_up_press_handler(&visible, position)
+  };
+  if let Some(index) = visible.get(next) {
+    app.settings_selected_index = *index;
+  }
 }
 
 fn select_next_item(app: &mut App) {
-  if !app.settings_items.is_empty() {
-    app.settings_selected_index = (app.settings_selected_index + 1) % app.settings_items.len();
-  }
+  step_selection(app, true);
 }
 
 fn select_previous_item(app: &mut App) {
-  if !app.settings_items.is_empty() {
-    if app.settings_selected_index == 0 {
-      app.settings_selected_index = app.settings_items.len() - 1;
-    } else {
-      app.settings_selected_index -= 1;
-    }
-  }
+  step_selection(app, false);
 }
 
 fn enter_edit_mode(app: &mut App) {
+  // A filter that matches nothing leaves no row under the highlight, so Enter
+  // must not edit whatever index the selection happened to keep.
+  if selected_setting_position(app).is_none() {
+    return;
+  }
+
   if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
     // For booleans, toggle directly without entering edit mode
     if let SettingValue::Bool(v) = setting.value {
@@ -516,12 +571,29 @@ fn save_settings(app: &mut App) -> bool {
 mod tests {
   use super::*;
   use crate::core::app::{ActiveBlock, RouteId};
+  use crate::tui::handlers::handle_app;
 
   fn open_settings(app: &mut App) -> RouteId {
     let previous_route = app.get_current_route().id.clone();
-    app.load_settings_for_category();
-    app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+    app.open_settings_screen();
     previous_route
+  }
+
+  /// Open the filter through the global key path, then type it, so the tests
+  /// also cover the routing that keeps global bindings off the query.
+  fn type_filter(app: &mut App, query: &str) {
+    handle_app(app.user_config.keys.search, app);
+    for character in query.chars() {
+      handle_app(Key::Char(character), app);
+    }
+  }
+
+  fn setting_index(app: &App, id: &str) -> usize {
+    app
+      .settings_items
+      .iter()
+      .position(|setting| setting.id == id)
+      .unwrap_or_else(|| panic!("expected a {id} setting"))
   }
 
   fn first_bool_setting_index(app: &App) -> usize {
@@ -605,5 +677,126 @@ mod tests {
 
     assert!(!app.settings_unsaved_prompt_visible);
     assert_eq!(app.get_current_route().id, previous_route);
+  }
+
+  #[test]
+  fn the_search_key_opens_the_row_filter_and_captures_global_keys() {
+    let mut app = App::default();
+    open_settings(&mut app);
+
+    // Left to the global bindings, `d` would open devices and `q` would quit.
+    type_filter(&mut app, "dq");
+
+    assert_eq!(app.get_current_route().id, RouteId::Settings);
+    assert!(app.settings_filter_editing);
+    assert_eq!(app.settings_filter, "dq");
+  }
+
+  #[test]
+  fn the_filter_uses_the_configured_search_binding() {
+    let mut app = App::default();
+    app.user_config.keys.search = Key::Char('f');
+    open_settings(&mut app);
+
+    handle_app(Key::Char('f'), &mut app);
+
+    assert!(app.settings_filter_editing);
+    assert!(app.settings_filter.is_empty());
+  }
+
+  #[test]
+  fn selection_walks_only_the_rows_the_filter_left() {
+    let mut app = App::default();
+    open_settings(&mut app);
+    type_filter(&mut app, "sort");
+    handler(Key::Enter, &mut app);
+
+    let visible = filtered_setting_indices(&app);
+    assert!(visible.len() > 1, "expected several sort rows");
+    assert_eq!(app.settings_selected_index, visible[0]);
+
+    handler(Key::Down, &mut app);
+    assert_eq!(app.settings_selected_index, visible[1]);
+
+    handler(Key::Up, &mut app);
+    assert_eq!(app.settings_selected_index, visible[0]);
+
+    // Wrapping off the top lands on the last visible row, never a hidden one.
+    handler(Key::Up, &mut app);
+    assert_eq!(
+      app.settings_selected_index,
+      *visible.last().expect("visible rows")
+    );
+  }
+
+  #[test]
+  fn enter_edits_the_row_the_filter_selected() {
+    let mut app = App::default();
+    open_settings(&mut app);
+    type_filter(&mut app, "loading indicator");
+    handler(Key::Enter, &mut app);
+
+    let index = setting_index(&app, "behavior.show_loading_indicator");
+    assert_eq!(app.settings_selected_index, index);
+    let before = app.settings_items[index].value.clone();
+
+    handler(Key::Enter, &mut app);
+
+    assert_ne!(app.settings_items[index].value, before);
+  }
+
+  #[test]
+  fn a_filter_that_matches_nothing_leaves_no_row_to_edit() {
+    let mut app = App::default();
+    open_settings(&mut app);
+    let before = app.settings_items.clone();
+
+    type_filter(&mut app, "zzzzzzzz");
+    assert!(filtered_setting_indices(&app).is_empty());
+
+    handler(Key::Enter, &mut app); // applies the filter
+    handler(Key::Enter, &mut app); // would toggle a row, if one were selected
+
+    assert_eq!(app.settings_items, before);
+  }
+
+  #[test]
+  fn the_filter_survives_a_category_switch() {
+    let mut app = App::default();
+    open_settings(&mut app);
+    type_filter(&mut app, "icon");
+    handler(Key::Enter, &mut app);
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(app.settings_category, SettingsCategory::Icons);
+    assert_eq!(app.settings_filter, "icon");
+    let visible = filtered_setting_indices(&app);
+    assert!(!visible.is_empty());
+    assert_eq!(app.settings_selected_index, visible[0]);
+  }
+
+  #[test]
+  fn escape_drops_the_filter_before_it_leaves_the_screen() {
+    let mut app = App::default();
+    let previous_route = open_settings(&mut app);
+    type_filter(&mut app, "volume");
+    handler(Key::Enter, &mut app);
+    assert_eq!(app.settings_filter, "volume");
+
+    handler(Key::Esc, &mut app);
+    assert!(app.settings_filter.is_empty());
+    assert_eq!(app.get_current_route().id, RouteId::Settings);
+
+    handler(Key::Esc, &mut app);
+    assert_eq!(app.get_current_route().id, previous_route);
+
+    // The back key leaves in one step and still drops the filter with it.
+    open_settings(&mut app);
+    type_filter(&mut app, "volume");
+    handler(Key::Enter, &mut app);
+    handler(app.user_config.keys.back, &mut app);
+    assert_eq!(app.get_current_route().id, previous_route);
+    assert!(app.settings_filter.is_empty());
   }
 }
