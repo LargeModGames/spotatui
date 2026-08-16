@@ -1673,6 +1673,8 @@ mod tests {
     );
 
     assert!(!app.settings_filter_editing);
+    // Applying is not clearing: the rows stay filtered after the click.
+    assert_eq!(app.settings_filter, "sort");
     assert_eq!(app.settings_selected_index, visible[1]);
     assert_ne!(visible[1], 1);
   }
