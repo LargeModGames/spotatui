@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Fuzzy filter for the Settings screen**: Press the search key (`/` by default) in Settings to filter the rows instead of scrolling for one. The query is a fuzzy subsequence, so its characters only have to appear in order: `volinc` finds **Volume Increment** and `skms` finds **Seek Duration (ms)**. Rows match on their name and on their `config.yml` key, and are ranked best-first with the matched characters highlighted, so every row the filter leaves shows why it is there. `Enter` applies the filter, `Esc` clears it before it means "leave Settings", and the filter survives `←`/`→` so one query can be walked across tabs. It reuses the Help menu's filter input, so the editing keys (`Ctrl+W`, `Ctrl+U`, `Backspace`) are the same on both screens ([#469](https://github.com/LargeModGames/spotatui/issues/469)).
+
 ### Fixed
 
 - **Self-update now works on Linux ARM64**: the checksum verifier only knew four platforms, so `spotatui update` aborted with "unsupported platform" on aarch64 Linux (Raspberry Pi, ARM servers, Asahi) even though every release publishes `spotatui-linux-aarch64.tar.gz`. The platform table now covers all five published targets, with a test pinning it against the release workflow ([#440](https://github.com/LargeModGames/spotatui/issues/440)).

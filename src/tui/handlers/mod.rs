@@ -16,6 +16,7 @@ mod discover;
 mod empty;
 mod episode_table;
 mod error_screen;
+mod filter_input;
 mod friends;
 mod help_menu;
 mod home;
@@ -67,11 +68,6 @@ fn key_matches_open_settings_binding(key: Key, binding: Key) -> bool {
 #[cfg(not(target_os = "macos"))]
 fn key_matches_open_settings_binding(key: Key, binding: Key) -> bool {
   key == binding
-}
-
-fn open_settings(app: &mut App) {
-  app.load_settings_for_category();
-  app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
 }
 
 /// The `radio:` URI scheme shared across handlers. The canonical parser in
@@ -135,8 +131,14 @@ pub fn handle_app(key: Key, app: &mut App) {
     return;
   }
 
+  // Settings has the same inline modal inputs: an open edit, the unsaved-changes
+  // prompt, and the row filter. Each needs the raw key before global bindings
+  // claim it, and the search binding is what opens the filter in the first place.
   if app.get_current_route().active_block == ActiveBlock::Settings
-    && (app.settings_unsaved_prompt_visible || app.settings_edit_mode)
+    && (app.settings_unsaved_prompt_visible
+      || app.settings_edit_mode
+      || app.settings_filter_editing
+      || key == app.user_config.keys.search)
   {
     settings::handler(key, app);
     return;
@@ -172,7 +174,7 @@ pub fn handle_app(key: Key, app: &mut App) {
   }
 
   if app.maybe_activate_open_settings_fallback(key) {
-    open_settings(app);
+    app.open_settings_screen();
     if app.pending_keybinding_persist.is_some() {
       app.push_navigation_stack(
         RouteId::Dialog,
@@ -186,7 +188,7 @@ pub fn handle_app(key: Key, app: &mut App) {
   if key_matches_open_settings_binding(key, app.user_config.keys.open_settings)
     || key_matches_open_settings_binding(key, effective_open_settings)
   {
-    open_settings(app);
+    app.open_settings_screen();
     return;
   }
 

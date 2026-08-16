@@ -5,6 +5,14 @@ help menu, press the search key (`/` by default) to filter rows by key,
 description, or context; matching text is highlighted in the visible rows.
 Press `Enter` to apply the filter and `Esc` to clear it.
 
+The same search key filters the Settings screen, so you can jump to a setting
+instead of scrolling for it. The query is fuzzy: its characters only have to
+appear in order, so `volinc` finds **Volume Increment** and `skms` finds
+**Seek Duration (ms)**. Rows are matched on their name and on their
+`config.yml` key, and ranked best-first with the matched characters
+highlighted. The filter applies to the tab you are on and survives `←`/`→`, so
+one query can be walked across tabs.
+
 ## Default Keybindings
 
 | Key         | Action                    |

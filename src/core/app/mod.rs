@@ -389,6 +389,11 @@ pub struct App {
   pub settings_selected_index: usize,
   pub settings_edit_mode: bool,
   pub settings_edit_buffer: String,
+  /// Fuzzy filter over the current category's rows. Survives a tab switch, so
+  /// one query can be walked across categories.
+  pub settings_filter: String,
+  /// Whether typed keys are currently editing [`Self::settings_filter`].
+  pub settings_filter_editing: bool,
   pub settings_unsaved_prompt_visible: bool,
   pub settings_unsaved_prompt_save_selected: bool,
   /// Immediate track info from native player for instant UI updates

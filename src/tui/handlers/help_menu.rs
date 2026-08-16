@@ -1,4 +1,5 @@
 use super::common_key_events;
+use super::filter_input::{self, FilterEdit};
 use crate::{
   core::app::{ActiveBlock, App, RouteId},
   tui::{event::Key, ui::help::get_filtered_help_docs},
@@ -53,9 +54,9 @@ fn begin_filter(app: &mut App) {
 }
 
 fn handle_filter_input(key: Key, app: &mut App) {
-  match key {
-    Key::Esc => clear_filter(app),
-    Key::Enter => {
+  match filter_input::apply(key, &mut app.help_filter) {
+    FilterEdit::Cancel => clear_filter(app),
+    FilterEdit::Confirm => {
       if app.help_filter.split_whitespace().next().is_none() {
         clear_filter(app);
       } else {
@@ -63,33 +64,8 @@ fn handle_filter_input(key: Key, app: &mut App) {
         reset_page(app);
       }
     }
-    Key::Backspace | Key::Ctrl('h') => {
-      app.help_filter.pop();
-      refresh_filtered_rows(app);
-    }
-    Key::Ctrl('u') | Key::Ctrl('l') => {
-      app.help_filter.clear();
-      refresh_filtered_rows(app);
-    }
-    Key::Ctrl('w') => {
-      while app.help_filter.ends_with(char::is_whitespace) {
-        app.help_filter.pop();
-      }
-      while app
-        .help_filter
-        .chars()
-        .next_back()
-        .is_some_and(|c| !c.is_whitespace())
-      {
-        app.help_filter.pop();
-      }
-      refresh_filtered_rows(app);
-    }
-    Key::Char(c) => {
-      app.help_filter.push(c);
-      refresh_filtered_rows(app);
-    }
-    _ => {}
+    FilterEdit::Changed => refresh_filtered_rows(app),
+    FilterEdit::Ignored => {}
   }
 }
 

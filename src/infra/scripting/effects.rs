@@ -80,10 +80,7 @@ fn apply_navigate(app: &mut App, target: &str) {
       app.dispatch(IoEvent::GetQueue);
       app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
     }
-    "settings" => {
-      app.load_settings_for_category();
-      app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
-    }
+    "settings" => app.open_settings_screen(),
     "devices" => {
       // Mirrors the manage_devices keybinding: open the Source & Device picker,
       // focus per active source, and only fetch devices under Spotify.
