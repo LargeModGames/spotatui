@@ -5783,9 +5783,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-audio"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "907dfd5a229ad94bf77953270aa630beb0b05c02756c5851e5c80a938aee73de"
+checksum = "f3abf3a3ed288f7edb7a7561158397f325dc952c505720cbc09974a114f413cd"
 dependencies = [
  "aes",
  "bytes",
@@ -5803,9 +5803,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-connect"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6ac3a8eacf659cbb460476afe3d9ced421f7b1584609e18eecf3092d7d3f48b"
+checksum = "9825cd239c1fbe611b59d6eccab009441a263611ea38872d5a2f621e3db4fd04"
 dependencies = [
  "futures-util",
  "log",
@@ -5823,9 +5823,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-core"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e77186290aafc55be221355bbf2c6566a209e4f5c7ab01fd03a8ecfc7d2d3159"
+checksum = "c7b1b7550de2ba49d7be015afd064f496701d8ef10bc24223f45bf67f5e27f01"
 dependencies = [
  "aes",
  "base64",
@@ -5880,9 +5880,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-metadata"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02195470768bb7bd1ddeb55212a9c90ba9e6bdf6a6b3695adfdb8ece10c39e89"
+checksum = "7c5081b9a14cfda058c3e1650808e5ce4858fd13f251964281168320a96003c9"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5898,9 +5898,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-oauth"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da63cf261d9d5484500529930aac3b38a2d53b750a4eb7119b252f4804013705"
+checksum = "ca334a374e498a8e0e7f49443b9ff8e775f6e97689295781e08298da80f0a0cf"
 dependencies = [
  "log",
  "oauth2",
@@ -5912,9 +5912,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-playback"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d693d7b98c13782eb7e7b412f9e9d09a78c341b779c401c71587ff24e90e31ac"
+checksum = "374afcd5df561ef0b0323d006dcabb5e51043bb6db79927160bc1a188071a6be"
 dependencies = [
  "alsa 0.10.0",
  "cpal 0.16.0",
@@ -5945,9 +5945,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-protocol"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1b6c5821d142db9057c00410b2333bb8f96178bf609a5435bcc507dc450cd46"
+checksum = "8d05ca4e1305e6f621be834d49e75c84a2837ff8ff94206fe7d7536533de6eb8"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
