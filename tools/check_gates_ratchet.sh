@@ -5,15 +5,18 @@
 #
 # Compares the working tree's tools/gates.count against the version at the
 # merge-base of <base-ref> and HEAD. Coupling counters may only fall or hold;
-# test_attribute_total (the floor) may only rise or hold. The src/gates.rs
-# test already pins the file to the measured values, so together the two
-# checks mean a PR can neither drift from reality nor move a baseline the
-# wrong way. A missing file at the merge-base is the documented bootstrap:
+# the adoption counters listed in RISE_ONLY may only rise or hold. The
+# src/gates.rs test already pins the file to the measured values, so together
+# the two checks mean a PR can neither drift from reality nor move a baseline
+# the wrong way. A missing file at the merge-base is the documented bootstrap:
 # the check passes with a note.
 set -euo pipefail
 
 base_ref=${1:?usage: check_gates_ratchet.sh <base-ref>}
 file=tools/gates.count
+# Counters that measure adoption rather than coupling: the test total and the
+# shared-Action uses in production handler code.
+RISE_ONLY=" test_attribute_total action_refs_in_tui_handlers "
 
 merge_base=$(git merge-base "$base_ref" HEAD)
 
@@ -58,9 +61,9 @@ while read -r key old_value; do
   elif ! [[ "$old_value" =~ ^[0-9]+$ && "$new_value" =~ ^[0-9]+$ ]]; then
     echo "FAIL: non-numeric value for $key (merge-base: $old_value, current: $new_value)"
     fail=1
-  elif [ "$key" = "test_attribute_total" ]; then
+  elif [[ "$RISE_ONLY" == *" $key "* ]]; then
     if [ "$new_value" -lt "$old_value" ]; then
-      echo "FAIL: $key fell from $old_value (merge-base) to $new_value; the test floor may only rise"
+      echo "FAIL: $key fell from $old_value (merge-base) to $new_value; adoption counters may only rise"
       fail=1
     fi
   elif [ "$new_value" -gt "$old_value" ]; then

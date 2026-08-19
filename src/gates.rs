@@ -4,12 +4,19 @@
 //! field writes in handlers, raw `IoEvent` dispatch from the TUI, mouse
 //! handling that synthesizes keystrokes, wildcard arms in the action tree).
 //!
-//! `tools/gates.count` holds the measured baselines. Each counter may only
-//! move toward its target: lower the baseline in the same PR that improves
-//! it, and never raise one. `test_attribute_total` is a floor instead, so a
-//! refactor cannot silently delete a test module's worth of tests. (These
-//! are text counts over `src/`, so the floor catches deletions, not a
-//! module that still compiles under a stale feature gate but stops running.)
+//! `tools/gates.count` holds the measured baselines, and the test below pins
+//! every counter to its baseline exactly, so a PR that moves a number must
+//! also move the file. The direction is enforced by
+//! `tools/check_gates_ratchet.sh` against the merge base: coupling counters
+//! may only fall, while the two adoption counters may only rise.
+//! `test_attribute_total` is the first adoption counter, so a refactor cannot
+//! silently delete a test module's worth of tests (it is a text count over
+//! `src/`, so it catches deletions, not a module that still compiles under a
+//! stale feature gate but stops running). `action_refs_in_tui_handlers` is
+//! the second: shared `Action::` uses in production handler code, which must
+//! rise with every handler conversion. Without it a conversion could replace
+//! field writes with arbitrary `App` method calls and never adopt the shared
+//! vocabulary.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -110,6 +117,30 @@ fn count_app_field_writes(source: &str) -> usize {
   count
 }
 
+/// Counts shared `Action::` uses in the production half of one handler file:
+/// the text before its first `#[cfg(test)]` (every handler keeps its tests in
+/// one tail module). The match is word-bounded, so `PlaybackAction::` and
+/// similar do not count.
+fn count_production_action_refs(source: &str) -> usize {
+  let production = match source.find(concat!("#[", "cfg(test)]")) {
+    Some(idx) => &source[..idx],
+    None => source,
+  };
+  let bytes = production.as_bytes();
+  let needle = "Action::";
+  let mut count = 0;
+  let mut search_from = 0;
+  while let Some(found) = production[search_from..].find(needle) {
+    let start = search_from + found;
+    search_from = start + needle.len();
+    if start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+      continue; // part of a longer identifier, e.g. `PlaybackAction::`
+    }
+    count += 1;
+  }
+  count
+}
+
 fn load_baselines() -> BTreeMap<String, usize> {
   let path = repo_root().join("tools").join("gates.count");
   let text = read_source(&path);
@@ -141,6 +172,10 @@ fn ratchet_counters_match_the_checked_in_baselines() {
     .iter()
     .map(|path| count_app_field_writes(&read_source(path)))
     .sum();
+  let action_refs: usize = handler_files
+    .iter()
+    .map(|path| count_production_action_refs(&read_source(path)))
+    .sum();
 
   // Needles that would otherwise count their own literal in this file are
   // assembled with concat! (this file lives under the `src/` scan).
@@ -161,9 +196,10 @@ fn ratchet_counters_match_the_checked_in_baselines() {
     .map(|path| read_source(path).matches("crate::tui").count())
     .sum();
 
-  // (name, measured value, is_floor). Ratchets must match their baseline
-  // exactly; the floor may only rise.
-  let measured: [(&str, usize, bool); 6] = [
+  // (name, measured value, rises). Every counter must match its baseline
+  // exactly; `rises` only selects the message, since the direction itself is
+  // enforced against the merge base by tools/check_gates_ratchet.sh.
+  let measured: [(&str, usize, bool); 7] = [
     ("crate_tui_refs_outside_tui", crate_tui_refs, false),
     ("app_field_writes_in_tui_handlers", app_field_writes, false),
     (
@@ -181,40 +217,42 @@ fn ratchet_counters_match_the_checked_in_baselines() {
       count_occurrences(&["src/core/action"], &[], "_ =>"),
       false,
     ),
+    ("action_refs_in_tui_handlers", action_refs, true),
     ("test_attribute_total", test_attribute_total, true),
   ];
 
   let mut baselines = load_baselines();
   let mut report = String::new();
-  for (name, actual, is_floor) in measured {
+  for (name, actual, rises) in measured {
     let Some(baseline) = baselines.remove(name) else {
       report.push_str(&format!(
-        "{name}: missing from tools/gates.count (measured {actual})\n"
+        "{name}: missing from tools/gates.count (measured {actual})
+"
       ));
       continue;
     };
-    if is_floor {
-      if actual < baseline {
-        report.push_str(&format!(
-          "{name}: fell from {baseline} to {actual}; tests were deleted, restore them or \
-           lower the floor deliberately\n"
-        ));
-      }
-    } else if actual > baseline {
-      report.push_str(&format!(
-        "{name}: rose from {baseline} to {actual}; this PR reintroduces coupling the \
-         ratchet exists to burn down, fix the code instead of the baseline\n"
-      ));
-    } else if actual < baseline {
-      report.push_str(&format!(
-        "{name}: improved from {baseline} to {actual}; lower the baseline in \
-         tools/gates.count in this same PR\n"
-      ));
+    if actual == baseline {
+      continue;
     }
+    let hint = match (rises, actual > baseline) {
+      (true, true) => "raise the baseline in tools/gates.count in this same PR",
+      (true, false) => {
+        "the merge-base check refuses a lower value, restore what was removed or lower it          deliberately"
+      }
+      (false, true) => {
+        "this PR reintroduces coupling the ratchet exists to burn down, fix the code instead          of the baseline"
+      }
+      (false, false) => "improved, lower the baseline in tools/gates.count in this same PR",
+    };
+    report.push_str(&format!(
+      "{name}: {baseline} -> {actual}; {hint}
+"
+    ));
   }
   for (name, baseline) in baselines {
     report.push_str(&format!(
-      "{name} = {baseline}: unknown counter in tools/gates.count, remove or fix the name\n"
+      "{name} = {baseline}: unknown counter in tools/gates.count, remove or fix the name
+"
     ));
   }
   assert!(report.is_empty(), "\nratchet violations:\n{report}");
@@ -238,4 +276,22 @@ fn field_write_matcher_ignores_comparisons_guards_calls_and_other_idents() {
              let s = app.y << 2;\n\
              wrapped_app.x = 1;\n";
   assert_eq!(count_app_field_writes(src), 0);
+}
+
+#[test]
+fn action_ref_matcher_is_word_bounded_and_stops_at_the_test_module() {
+  let src = concat!(
+    "app.apply(Action::Play);
+",
+    "let x = PlaybackAction::Pause;
+",
+    "app.apply(Action::Next)?;
+",
+    "#[",
+    "cfg(test)]
+",
+    "mod tests { fn t() { app.apply(Action::Play); } }
+",
+  );
+  assert_eq!(count_production_action_refs(src), 2);
 }

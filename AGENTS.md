@@ -58,9 +58,11 @@ across a **six-leg** feature matrix:
 - The `all-sources` leg must stay in sync with `cd.yml`'s Linux release row
   (macOS releases ship a smaller set - no decoded sources).
 - A pull_request-only `Gates ratchet` job diffs `tools/gates.count` against the
-  merge-base (`tools/check_gates_ratchet.sh`): coupling counters may only fall
-  and `test_attribute_total` may only rise. Lower a baseline in the same PR
-  that improves it; never raise one.
+  merge-base (`tools/check_gates_ratchet.sh`): coupling counters may only fall;
+  the two adoption counters (`test_attribute_total`,
+  `action_refs_in_tui_handlers`) may only rise. `src/gates.rs` pins every value
+  exactly, so move the baseline in the same PR that moves the number, in the
+  ratchet's direction only.
 
 ## Run a Single Test
 
