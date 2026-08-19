@@ -280,7 +280,7 @@ impl App {
       }
       ActiveBlock::AlbumList => {
         if let Some(albums) = self.library.saved_albums.get_results(None) {
-          if let Some(selected_album) = albums.items.get(self.album_list_index) {
+          if let Some(selected_album) = albums.items.get(self.view.album_list_index) {
             if let Some(id) = selected_album.album.id.as_deref() {
               self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id.to_string()));
             }
@@ -391,7 +391,7 @@ impl App {
         if let Some(artists) = self.library.saved_artists.get_results(None) {
           if let Some(id) = artists
             .items
-            .get(self.artists_list_index)
+            .get(self.view.artists_list_index)
             .and_then(|selected_artist| selected_artist.id.as_deref())
           {
             self.dispatch(IoEvent::UserUnfollowArtists(vec![id.to_string()]));
@@ -490,7 +490,7 @@ impl App {
           .library
           .saved_shows
           .get_results(None)
-          .and_then(|shows| shows.items.get(self.shows_list_index))
+          .and_then(|shows| shows.items.get(self.view.shows_list_index))
           .and_then(|selected_show| selected_show.id.as_deref())
         {
           self.dispatch(IoEvent::CurrentUserSavedShowDelete(id.to_string()));

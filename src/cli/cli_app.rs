@@ -121,12 +121,10 @@ impl CliApp {
   // spt ... -d ... (specify device to control)
   pub async fn set_device(&mut self, name: String) -> Result<()> {
     // Change the device if specified by user
-    let mut app = self.net.app.lock().await;
-    let mut device_index = 0;
+    let app = self.net.app.lock().await;
     if let Some(dp) = &app.devices {
-      for (i, d) in dp.devices.iter().enumerate() {
+      for d in &dp.devices {
         if d.name == name {
-          device_index = i;
           // Save the id of the device
           if let Some(id) = d.id.clone() {
             self
@@ -141,7 +139,6 @@ impl CliApp {
       // Error out if no device is available
       return Err(anyhow!("no device available"));
     }
-    app.selected_device_index = Some(device_index);
     Ok(())
   }
 

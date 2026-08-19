@@ -107,6 +107,7 @@ mod shuffle_repeat;
 mod status;
 mod tick;
 mod transport;
+mod view;
 mod volume;
 
 #[cfg(test)]
@@ -133,6 +134,7 @@ pub use scrollable_pages::*;
 pub use seek::*;
 pub use settings_schema::*;
 pub use status::*;
+pub use view::*;
 
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
@@ -146,14 +148,17 @@ pub struct App {
   navigation_stack: Vec<Route>,
   pub spectrum_data: Option<crate::infra::audio::SpectrumData>,
   pub audio_capture_active: bool,
-  pub home_scroll: u16,
+  /// Presentation state of the terminal frontend (cursors, scroll offsets, edit
+  /// buffers, focus, popups, terminal geometry). See [`ViewState`]: handlers and
+  /// draw functions write it freely; nothing outside `tui/` and these `App`
+  /// methods should.
+  pub view: ViewState,
   pub user_config: UserConfig,
   pub runtime_state: RuntimeState,
   pub state_path: Option<PathBuf>,
   pub artists: Vec<crate::core::plugin_api::ArtistInfo>,
   pub artist: Option<Artist>,
   pub album_table_context: AlbumTableContext,
-  pub saved_album_tracks_index: usize,
   /// The live error recorded by [`App::handle_error`], or empty when there is
   /// none. The `RouteId::Error` frame raised alongside it is a presentation
   /// *hint*, not the state: a frontend may draw it full-screen, render this
@@ -170,7 +175,6 @@ pub struct App {
   pub pending_stop_after_track: bool,
   pub devices: Option<DevicePayload>,
   pub queue: Option<QueueState>,
-  pub queue_selected_index: usize,
   /// The native cross-source playback queue (FIFO). Unlike [`Self::queue`]
   /// (a read-only mirror of Spotify's Web-API queue), this is owned by the app
   /// and holds tracks from any source.
@@ -228,18 +232,6 @@ pub struct App {
   /// generation counter that invalidates in-flight background work.
   #[cfg(feature = "dj-core")]
   pub dj: crate::infra::dj::DjState,
-  // Inputs:
-  // input is the string for input;
-  // input_idx is the index of the cursor in terms of character;
-  // input_cursor_position is the sum of the width of characters preceding the cursor.
-  // Reason for this complication is due to non-ASCII characters, they may
-  // take more than 1 bytes to store and more than 1 character width to display.
-  pub input: Vec<char>,
-  pub input_idx: usize,
-  pub input_cursor_position: u16,
-  pub input_context: InputContext,
-  /// Horizontal scroll offset for the input box, computed during rendering.
-  pub input_scroll_offset: Cell<u16>,
   pub liked_song_ids_set: HashSet<String>,
   /// Liked-state lookups pending for the detached contains worker, as bare
   /// base62 track ids (deduped). The `CurrentUserSavedTracksContains` handler
@@ -274,10 +266,6 @@ pub struct App {
   pub search_results: SearchResult,
   pub selected_album_simplified: Option<SelectedAlbum>,
   pub selected_album_full: Option<SelectedFullAlbum>,
-  pub selected_device_index: Option<usize>,
-  pub selected_playlist_index: Option<usize>,
-  pub active_playlist_index: Option<usize>,
-  pub size: Viewport,
   #[allow(dead_code)]
   pub small_search_limit: u32,
   pub song_progress_ms: u128,
@@ -305,23 +293,18 @@ pub struct App {
   pub selected_show_simplified: Option<SelectedShow>,
   pub selected_show_full: Option<SelectedFullShow>,
   pub user: Option<UserInfo>,
-  pub album_list_index: usize,
-  pub artists_list_index: usize,
   /// Folders (one per subdirectory of the configured music dir) shown by the
-  /// Local Files browser, and the cursor within that list.
+  /// Local Files browser. Its cursor is `view.local_playlists_index`.
   pub local_playlists: Vec<PlaylistInfo>,
-  pub local_playlists_index: usize,
-  /// The user's Subsonic server playlists shown by the Subsonic browser, and the
-  /// cursor within that list. Populated by `GetSubsonicPlaylists` dispatch.
+  /// The user's Subsonic server playlists shown by the Subsonic browser.
+  /// Populated by `GetSubsonicPlaylists` dispatch.
   pub subsonic_playlists: Vec<PlaylistInfo>,
-  pub subsonic_playlists_index: usize,
   /// The user's configured internet-radio stations (as playable rows, uri
-  /// `radio:<url>`) shown by the sidebar when the Radio source is active, and
-  /// the cursor within that list. Populated by `GetRadioStations` dispatch.
+  /// `radio:<url>`) shown by the sidebar when the Radio source is active.
+  /// Populated by `GetRadioStations` dispatch.
   /// Unconditional (domain type) because the sidebar match arms key on the
   /// unconditional `Source::Radio` variant even in the slim build.
   pub radio_stations: Vec<TrackInfo>,
-  pub radio_stations_index: usize,
   /// The user's local YouTube playlists (from `youtube_playlists.yml`), shown
   /// by the sidebar when the YouTube source is active. Unconditional for the
   /// same slim-build reason as [`radio_stations`](Self::radio_stations).
@@ -332,24 +315,7 @@ pub struct App {
   /// The source the UI is currently scoped to (sidebar, search, capability
   /// gating). Browse-scope only — never changes playback routing.
   pub active_source: Source,
-  /// Cursor within the Source panel of the `d` picker (index into [`Source::ALL`]).
-  pub source_list_index: usize,
-  /// Which panel of the `d` picker currently has focus.
-  pub source_device_focus: SourceFocus,
   pub clipboard: Option<Clipboard>,
-  pub shows_list_index: usize,
-  pub episode_list_index: usize,
-  pub help_docs_size: u32,
-  pub help_menu_page: u32,
-  pub help_menu_max_lines: u32,
-  pub help_menu_offset: u32,
-  /// Text filter applied to the rows in the Help menu.
-  pub help_filter: String,
-  /// Whether typed keys are currently editing [`Self::help_filter`].
-  pub help_filter_editing: bool,
-  /// Formatted Help rows for the current width/keys/filter; `None` until the
-  /// Help menu is first prepared for rendering.
-  pub help_menu_model: Option<HelpMenuModel>,
   pub is_loading: bool,
   io_tx: Option<Sender<IoEvent>>,
   pub is_fetching_current_playback: bool,
@@ -362,10 +328,7 @@ pub struct App {
   /// free-source launch doesn't spam "connect Spotify" messages.
   pub spotify_connected: bool,
   pub auth_refresh_in_progress: bool,
-  pub dialog: Option<String>,
-  pub confirm: bool,
   pub pending_keybinding_persist: Option<PendingKeybindingPersist>,
-  pub terminal_input_caps: TerminalInputCapabilities,
   pub keybinding_runtime: KeybindingRuntimeState,
 
   pub active_announcement: Option<Announcement>,
@@ -375,27 +338,14 @@ pub struct App {
   /// Title/artist pair whose lyrics response is currently desired. Detached
   /// service responses must match this before mutating visible state.
   pub desired_lyrics_identity: Option<(String, String)>,
-  /// Scroll/browse state for the lyrics view.
-  pub lyrics_view: LyricsViewState,
   /// Whether the current `lyrics` carry real LRC timestamps rather than
   /// synthesized evenly-spaced ones derived from plain lyrics.
   pub lyrics_synced: bool,
   pub global_song_count: Option<u64>,
   pub global_song_count_failed: bool,
   // Settings screen state
-  pub settings_category: SettingsCategory,
   pub settings_items: Vec<SettingItem>,
   pub settings_saved_items: Vec<SettingItem>,
-  pub settings_selected_index: usize,
-  pub settings_edit_mode: bool,
-  pub settings_edit_buffer: String,
-  /// Fuzzy filter over the current category's rows. Survives a tab switch, so
-  /// one query can be walked across categories.
-  pub settings_filter: String,
-  /// Whether typed keys are currently editing [`Self::settings_filter`].
-  pub settings_filter_editing: bool,
-  pub settings_unsaved_prompt_visible: bool,
-  pub settings_unsaved_prompt_save_selected: bool,
   /// Immediate track info from native player for instant UI updates
   pub native_track_info: Option<NativeTrackInfo>,
   /// Whether native streaming is active (disables API-based progress calculation)
@@ -428,44 +378,27 @@ pub struct App {
   /// Whether a native device activation is still in progress
   #[allow(dead_code)]
   pub native_activation_pending: bool,
-  /// Selected index in the Discover view
-  pub discover_selected_index: usize,
   /// Top tracks from the user for Discover feature
   pub discover_top_tracks: Vec<TrackInfo>,
   /// Top Artists Mix tracks for Discover feature
   pub discover_artists_mix: Vec<TrackInfo>,
-  /// Time range for Top Tracks
-  pub discover_time_range: DiscoverTimeRange,
   /// Whether we're currently loading discover data
   pub discover_loading: bool,
   /// Period shown on the Stats screen
   pub stats_period: RecapPeriod,
   /// Whether we're currently loading stats data
   pub stats_loading: bool,
-  /// Selected index in the Stats screen's Top Tracks list
-  pub stats_selected_track: usize,
   /// Aggregated listening stats for the Stats screen
   pub stats_data: Option<StatsData>,
   /// Cached listening streak summary (Home strip + Stats screen)
   pub listening_streaks: Option<StreakSummary>,
   /// Pending monthly recap popup (path + listen count)
   pub recap_prompt: Option<RecapPromptState>,
-  // Sort menu state
-  /// Whether the sort menu popup is visible
-  pub sort_menu_visible: bool,
-  /// Currently selected sort option in the menu
-  pub sort_menu_selected: usize,
-  /// Current sort context (what we're sorting)
-  pub sort_context: Option<SortContext>,
   /// Current sort state per context
   pub playlist_sort: SortState,
   pub album_sort: SortState,
   pub artist_sort: SortState,
   pub recently_played_sort: SortState,
-  /// Animation frame counter for the "Liked" heart flash effect (0-10)
-  pub liked_song_animation_frame: Option<u8>,
-  /// Global animation tick counter, incremented every tick.
-  pub animation_tick: u64,
   /// Last time the listening party host broadcast playback state.
   pub last_party_sync_at: Instant,
   /// Ephemeral status message shown in the playbar
@@ -478,21 +411,11 @@ pub struct App {
   pub party_status: PartyStatus,
   /// Active listening party session data
   pub party_session: Option<PartySession>,
-  /// Input buffer for the party join code
-  pub party_input: Vec<char>,
-  /// Cursor position in party code input
-  pub party_input_idx: usize,
-  /// Input buffer for the required party guest name
-  pub party_join_name: Vec<char>,
   /// Pending track table selection to apply when new page loads
   pub pending_track_table_selection: Option<PendingTrackSelection>,
   /// Maps visible track table rows to source playlist item positions.
   /// Used to remove a single selected playlist occurrence safely.
   pub playlist_track_positions: Option<Vec<usize>>,
-  /// Selected playlist index in the add-to-playlist picker dialog
-  pub playlist_picker_selected_index: usize,
-  /// Folder ID the add-to-playlist picker dialog is viewing (0 = root)
-  pub playlist_picker_folder_id: usize,
   /// Pending track to add in add-to-playlist dialog flow
   pub pending_playlist_track_add: Option<PendingPlaylistTrackAdd>,
   /// Pending track removal info in remove-from-playlist confirmation flow
@@ -619,39 +542,14 @@ pub struct App {
   pub friends_loading: bool,
   /// Own friend code fetched from spotatui.com
   pub friend_code: Option<String>,
-  /// Cursor position in the friends list
-  pub friend_selected_index: usize,
-  /// Active filter (All / Online)
-  pub friend_filter: FriendFilter,
-  /// Inline search / filter input on the Friends screen
-  pub friend_search_input: Vec<char>,
-  /// Whether the "Add Friend" overlay dialog is open
-  pub friend_add_dialog_visible: bool,
-  /// Which tab is active inside the add-friend dialog
-  pub friend_add_mode: FriendAddMode,
-  /// Input buffer for the "add by friend code" text field
-  pub friend_add_input: Vec<char>,
-  /// Input buffer for the "search by username" text field in the add dialog
-  pub friend_user_search_input: Vec<char>,
   /// Results from searching users by name
   pub friend_user_search_results: Vec<FriendSearchResult>,
-  /// Selected row in the user-search results list
-  pub friend_user_search_selected: usize,
   /// Timestamp of the last time friends were refreshed (for periodic polling)
   pub last_friends_refresh_at: Instant,
 
   // Create Playlist form state
-  pub create_playlist_name: Vec<char>,
-  pub create_playlist_name_idx: usize,
-  pub create_playlist_name_cursor: u16,
-  pub create_playlist_stage: CreatePlaylistStage,
   pub create_playlist_tracks: Vec<TrackInfo>,
   pub create_playlist_search_results: Vec<TrackInfo>,
-  pub create_playlist_search_input: Vec<char>,
-  pub create_playlist_search_idx: usize,
-  pub create_playlist_search_cursor: u16,
-  pub create_playlist_selected_result: usize,
-  pub create_playlist_focus: CreatePlaylistFocus,
   /// Commands queued by keybindings for the scripting engine to run.
   pub pending_plugin_commands: Vec<String>,
   /// Per-domain write counters driving async plugin data reads (see
@@ -665,14 +563,10 @@ pub struct App {
   /// Keys pressed while a plugin screen was focused: `(screen_name, key_string)`,
   /// drained by the script engine after each key event.
   pub pending_plugin_screen_keys: Vec<(String, String)>,
-  /// Vertical scroll for the focused plugin screen.
-  pub plugin_screen_scroll: u16,
   /// Per-plugin playbar segments, keyed by plugin name (BTreeMap for deterministic order).
   pub plugin_playbar_segments: std::collections::BTreeMap<String, String>,
   /// Currently displayed plugin popup, if any.
   pub plugin_popup: Option<crate::core::plugin_api::PluginPopup>,
-  /// Scroll offset for the plugin popup.
-  pub plugin_popup_scroll: u16,
   /// Where this run's log file is being written, resolved once here so draw
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,

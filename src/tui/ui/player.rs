@@ -1419,7 +1419,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       f.render_widget(song_progress, progress_area);
 
       // Draw "Like" animation (heart burst) if active
-      if let Some(frame) = app.liked_song_animation_frame {
+      if let Some(frame) = app.view.liked_song_animation_frame {
         let total_frames = app.user_config.behavior.like_animation_frames.max(1);
         let progress = (total_frames.saturating_sub(frame)) as f64;
         let y_base = 20.0 + progress * 5.0; // Rise up
@@ -1584,7 +1584,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   f.render_widget(instructions, instructions_area);
 
   // --- Source panel ---
-  let source_focused = app.source_device_focus == SourceFocus::Source;
+  let source_focused = app.view.source_device_focus == SourceFocus::Source;
   let source_border = if source_focused {
     app.user_config.theme.active
   } else {
@@ -1617,7 +1617,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   // Only the focused panel shows the moving cursor; the active source is always
   // marked with `●` regardless of focus.
   if source_focused {
-    source_state.select(Some(app.source_list_index));
+    source_state.select(Some(app.view.source_list_index));
   }
   let source_list = List::new(source_items)
     .block(
@@ -1646,7 +1646,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   // Dimmed under any non-Spotify source (Local, Subsonic): device transfer is a
   // Spotify Connect feature.
   let non_spotify_active = app.active_source != Source::Spotify;
-  let devices_focused = app.source_device_focus == SourceFocus::Devices && !non_spotify_active;
+  let devices_focused = app.view.source_device_focus == SourceFocus::Devices && !non_spotify_active;
   let devices_color = if devices_focused {
     app.user_config.theme.active
   } else {
@@ -1675,7 +1675,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
 
   let mut state = ListState::default();
   if devices_focused {
-    state.select(app.selected_device_index);
+    state.select(app.view.selected_device_index);
   }
   let device_list = List::new(items)
     .block(

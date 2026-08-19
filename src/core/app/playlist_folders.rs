@@ -125,7 +125,7 @@ impl App {
   /// Get the currently selected playlist id in the visible playlist list.
   #[allow(dead_code)]
   pub fn get_selected_playlist_id(&self) -> Option<String> {
-    let selected_index = self.selected_playlist_index?;
+    let selected_index = self.view.selected_playlist_index?;
     // Row 0 is the "+ Add Playlist" entry; display items start at row 1.
     let display_index = selected_index.checked_sub(1)?;
     match self.get_playlist_display_item_at(display_index) {
@@ -280,13 +280,13 @@ mod tests {
     });
 
     // Row 3 is the second raw page item, not the off-by-one neighbor.
-    app.selected_playlist_index = Some(3);
+    app.view.selected_playlist_index = Some(3);
     assert_eq!(
       app.get_selected_playlist_id().as_deref(),
       Some("00000000000000000000a1")
     );
     // Row 2 is the first raw page item.
-    app.selected_playlist_index = Some(2);
+    app.view.selected_playlist_index = Some(2);
     assert_eq!(
       app.get_selected_playlist_id().as_deref(),
       Some("00000000000000000000a0")

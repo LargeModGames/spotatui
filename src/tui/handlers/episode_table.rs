@@ -11,34 +11,38 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       if let Some(episodes) = &mut app.library.show_episodes.get_results(None) {
-        let next_index =
-          common_key_events::on_down_press_handler(&episodes.items, Some(app.episode_list_index));
-        app.episode_list_index = next_index;
+        let next_index = common_key_events::on_down_press_handler(
+          &episodes.items,
+          Some(app.view.episode_list_index),
+        );
+        app.view.episode_list_index = next_index;
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       if let Some(episodes) = &mut app.library.show_episodes.get_results(None) {
-        let next_index =
-          common_key_events::on_up_press_handler(&episodes.items, Some(app.episode_list_index));
-        app.episode_list_index = next_index;
+        let next_index = common_key_events::on_up_press_handler(
+          &episodes.items,
+          Some(app.view.episode_list_index),
+        );
+        app.view.episode_list_index = next_index;
       }
     }
     k if common_key_events::high_event(k) => {
       if let Some(_episodes) = app.library.show_episodes.get_results(None) {
         let next_index = common_key_events::on_high_press_handler();
-        app.episode_list_index = next_index;
+        app.view.episode_list_index = next_index;
       }
     }
     k if common_key_events::middle_event(k) => {
       if let Some(episodes) = app.library.show_episodes.get_results(None) {
         let next_index = common_key_events::on_middle_press_handler(&episodes.items);
-        app.episode_list_index = next_index;
+        app.view.episode_list_index = next_index;
       }
     }
     k if common_key_events::low_event(k) => {
       if let Some(episodes) = app.library.show_episodes.get_results(None) {
         let next_index = common_key_events::on_low_press_handler(&episodes.items);
-        app.episode_list_index = next_index;
+        app.view.episode_list_index = next_index;
       }
     }
     Key::Enter => {
@@ -60,7 +64,7 @@ pub fn handler(key: Key, app: &mut App) {
 fn jump_to_end(app: &mut App) {
   if let Some(episodes) = app.library.show_episodes.get_results(None) {
     let last_idx = episodes.items.len() - 1;
-    app.episode_list_index = last_idx;
+    app.view.episode_list_index = last_idx;
   }
 }
 
@@ -73,7 +77,7 @@ fn on_enter(app: &mut App) {
     let mut selected_offset = None;
     for (row_index, episode) in episodes.items.iter().enumerate() {
       if let Some(uri) = episode.uri.clone() {
-        if row_index == app.episode_list_index {
+        if row_index == app.view.episode_list_index {
           selected_offset = Some(episode_ids.len());
         }
         episode_ids.push(uri);
@@ -116,7 +120,7 @@ fn handle_unfollow_event(app: &mut App) {
 }
 
 fn jump_to_start(app: &mut App) {
-  app.episode_list_index = 0;
+  app.view.episode_list_index = 0;
 }
 
 fn toggle_sort_by_date(app: &mut App) {
@@ -124,7 +128,7 @@ fn toggle_sort_by_date(app: &mut App) {
   let selected_id = match app.library.show_episodes.get_results(None) {
     Some(episodes) => episodes
       .items
-      .get(app.episode_list_index)
+      .get(app.view.episode_list_index)
       .map(|e| e.id.clone()),
     None => None,
   };
@@ -135,9 +139,9 @@ fn toggle_sort_by_date(app: &mut App) {
 
   if let Some(id) = selected_id {
     if let Some(episodes) = app.library.show_episodes.get_results(None) {
-      app.episode_list_index = episodes.items.iter().position(|e| e.id == id).unwrap_or(0);
+      app.view.episode_list_index = episodes.items.iter().position(|e| e.id == id).unwrap_or(0);
     }
   } else {
-    app.episode_list_index = 0;
+    app.view.episode_list_index = 0;
   }
 }

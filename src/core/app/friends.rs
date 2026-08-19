@@ -50,16 +50,16 @@ pub enum FriendAddMode {
 
 impl App {
   pub fn clear_friend_add_dialog_state(&mut self) {
-    self.friend_add_dialog_visible = false;
-    self.friend_add_mode = FriendAddMode::Code;
-    self.friend_add_input.clear();
-    self.friend_user_search_input.clear();
+    self.view.friend_add_dialog_visible = false;
+    self.view.friend_add_mode = FriendAddMode::Code;
+    self.view.friend_add_input.clear();
+    self.view.friend_user_search_input.clear();
     self.friend_user_search_results.clear();
-    self.friend_user_search_selected = 0;
+    self.view.friend_user_search_selected = 0;
   }
 
   pub fn open_friend_add_dialog(&mut self) {
     self.clear_friend_add_dialog_state();
-    self.friend_add_dialog_visible = true;
+    self.view.friend_add_dialog_visible = true;
   }
 }

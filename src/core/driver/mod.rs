@@ -292,7 +292,7 @@ impl Driver {
       let identity = snapshot.as_ref().map(track_identity);
       if identity != self.last_track_identity {
         self.last_track_identity = identity;
-        app.lyrics_view.reset();
+        app.view.lyrics_view.reset();
         match snapshot.as_ref() {
           Some(snapshot) => {
             use crate::infra::media_metadata::PlaybackItemKind;

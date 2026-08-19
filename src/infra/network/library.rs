@@ -685,7 +685,7 @@ async fn finish_playlists_fetch(
   let current_selection = (
     app.get_selected_playlist_id(),
     app.current_playlist_folder_id,
-    app.selected_playlist_index,
+    app.view.selected_playlist_index,
   );
   let preferred = if current_selection == page_one_selection {
     original_selection
@@ -735,7 +735,7 @@ impl LibraryNetwork for Network {
       (
         app.get_selected_playlist_id(),
         app.current_playlist_folder_id,
-        app.selected_playlist_index,
+        app.view.selected_playlist_index,
       )
     };
 
@@ -817,7 +817,7 @@ impl LibraryNetwork for Network {
       let page_one_selection = (
         app.get_selected_playlist_id(),
         app.current_playlist_folder_id,
-        app.selected_playlist_index,
+        app.view.selected_playlist_index,
       );
       (
         app.playlist_refresh_generation,
@@ -1569,7 +1569,10 @@ mod tests {
 
     // Sorted display view is [A, B, P0, P1]; P1 is display index 3, which maps
     // to sidebar row 4 (row 0 is the leading "+ Add Playlist" entry).
-    let idx = app.selected_playlist_index.expect("selection restored");
+    let idx = app
+      .view
+      .selected_playlist_index
+      .expect("selection restored");
     assert_eq!(idx, 4);
     assert!(matches!(
       app.get_playlist_display_item_at(idx - 1),
@@ -1713,7 +1716,7 @@ fn reconcile_playlist_selection(
 ) {
   if app.playlist_folder_items.is_empty() {
     app.current_playlist_folder_id = 0;
-    app.selected_playlist_index = None;
+    app.view.selected_playlist_index = None;
     return;
   }
 
@@ -1747,7 +1750,7 @@ fn reconcile_playlist_selection(
 
     if let Some(display_idx) = visible_playlist_index {
       // Sidebar rows are offset by the leading "+ Add Playlist" row.
-      app.selected_playlist_index = Some(display_idx + 1);
+      app.view.selected_playlist_index = Some(display_idx + 1);
       return;
     }
 
@@ -1779,7 +1782,7 @@ fn reconcile_playlist_selection(
         });
       if let Some(idx) = display_idx {
         // Sidebar rows are offset by the leading "+ Add Playlist" row.
-        app.selected_playlist_index = Some(idx + 1);
+        app.view.selected_playlist_index = Some(idx + 1);
         return;
       }
     }
@@ -1791,7 +1794,7 @@ fn reconcile_playlist_selection(
   if visible_count == 0 {
     app.current_playlist_folder_id = 0;
     let root_count = app.get_playlist_display_count();
-    app.selected_playlist_index = if root_count == 0 {
+    app.view.selected_playlist_index = if root_count == 0 {
       None
     } else {
       Some(preferred_selected_index.unwrap_or(0).min(root_count))
@@ -1799,7 +1802,7 @@ fn reconcile_playlist_selection(
     return;
   }
 
-  app.selected_playlist_index = Some(preferred_selected_index.unwrap_or(0).min(visible_count));
+  app.view.selected_playlist_index = Some(preferred_selected_index.unwrap_or(0).min(visible_count));
 }
 
 #[cfg(feature = "streaming")]

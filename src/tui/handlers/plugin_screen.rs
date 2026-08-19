@@ -17,10 +17,10 @@ pub fn handler(key: Key, app: &mut App) {
     }
     // Scroll affordance for paragraph-heavy screens; not forwarded.
     Key::PageUp => {
-      app.plugin_screen_scroll = app.plugin_screen_scroll.saturating_sub(5);
+      app.view.plugin_screen_scroll = app.view.plugin_screen_scroll.saturating_sub(5);
     }
     Key::PageDown => {
-      app.plugin_screen_scroll = app.plugin_screen_scroll.saturating_add(5);
+      app.view.plugin_screen_scroll = app.view.plugin_screen_scroll.saturating_add(5);
     }
     _ => {
       let key_string = plugin_key_string(key);

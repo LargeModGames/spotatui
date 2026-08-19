@@ -24,7 +24,7 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   ]));
 
   // Build discover options with status indicators
-  let artists_mix_status = if app.discover_loading && app.discover_selected_index == 0 {
+  let artists_mix_status = if app.discover_loading && app.view.discover_selected_index == 0 {
     " [Loading...]".to_string()
   } else if !app.discover_artists_mix.is_empty() {
     format!(" [{} tracks]", app.discover_artists_mix.len())
@@ -32,7 +32,7 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     String::new()
   };
 
-  let top_tracks_status = if app.discover_loading && app.discover_selected_index == 1 {
+  let top_tracks_status = if app.discover_loading && app.view.discover_selected_index == 1 {
     " [Loading...]".to_string()
   } else if !app.discover_top_tracks.is_empty() {
     format!(" [{} tracks]", app.discover_top_tracks.len())
@@ -41,12 +41,12 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   };
 
   let mut state = ListState::default();
-  state.select(Some(app.discover_selected_index));
+  state.select(Some(app.view.discover_selected_index));
 
   let list_items: Vec<ListItem> = vec![
     // Top Artists Mix
     {
-      let is_selected = app.discover_selected_index == 0;
+      let is_selected = app.view.discover_selected_index == 0;
       let prefix = if is_selected { "▸ " } else { "  " };
       let text_style = if is_selected {
         Style::default().fg(app.user_config.theme.selected.into())
@@ -70,14 +70,14 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     },
     // Top Tracks with time range
     {
-      let is_selected = app.discover_selected_index == 1;
+      let is_selected = app.view.discover_selected_index == 1;
       let prefix = if is_selected { "▸ " } else { "  " };
       let text_style = if is_selected {
         Style::default().fg(app.user_config.theme.selected.into())
       } else {
         Style::default().fg(app.user_config.theme.text.into())
       };
-      let time_range_label = format!(" ({})", app.discover_time_range.label());
+      let time_range_label = format!(" ({})", app.view.discover_time_range.label());
       ListItem::new(Line::from(vec![
         Span::styled(
           prefix,
@@ -140,7 +140,7 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         "Select",
         Style::default().fg(app.user_config.theme.text.into()),
       ),
-      if app.discover_selected_index == 1 {
+      if app.view.discover_selected_index == 1 {
         Span::styled(
           "   [/] ",
           Style::default().fg(app.user_config.theme.hint.into()),
@@ -148,7 +148,7 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       } else {
         Span::styled("", Style::default())
       },
-      if app.discover_selected_index == 1 {
+      if app.view.discover_selected_index == 1 {
         Span::styled(
           "Time range",
           Style::default().fg(app.user_config.theme.text.into()),
@@ -181,7 +181,7 @@ pub fn draw_discover(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     Line::from(""),
     Line::from(vec![
       Span::styled(
-        format!("Time range: {} ", app.discover_time_range.label()),
+        format!("Time range: {} ", app.view.discover_time_range.label()),
         Style::default().fg(app.user_config.theme.text.into()),
       ),
       Span::styled(

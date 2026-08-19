@@ -21,8 +21,8 @@ pub fn handler(key: Key, app: &mut App) {
 }
 
 fn handle_disconnected_menu(key: Key, app: &mut App) {
-  if app.party_input.is_empty()
-    && app.party_join_name.is_empty()
+  if app.view.party_input.is_empty()
+    && app.view.party_join_name.is_empty()
     && !app.party_status.eq(&PartyStatus::Connecting)
   {
     match key {
@@ -34,9 +34,9 @@ fn handle_disconnected_menu(key: Key, app: &mut App) {
       }
       Key::Char('2') | Key::Char('j') | Key::Char('J') => {
         // Switch to "Enter code" view (one space so the code-entry UI is shown).
-        app.party_input = vec![' '];
-        app.party_input_idx = 0;
-        app.party_join_name.clear();
+        app.view.party_input = vec![' '];
+        app.view.party_input_idx = 0;
+        app.view.party_join_name.clear();
       }
       Key::Enter => {
         app.dispatch(IoEvent::StartParty(ControlMode::HostOnly));
@@ -59,44 +59,46 @@ fn normalized_guest_name(guest_name: &[char]) -> String {
 fn handle_code_input(key: Key, app: &mut App) {
   match key {
     Key::Esc => {
-      app.party_input.clear();
-      app.party_input_idx = 0;
-      app.party_join_name.clear();
+      app.view.party_input.clear();
+      app.view.party_input_idx = 0;
+      app.view.party_join_name.clear();
     }
     Key::Enter => {
       let code: String = app
+        .view
         .party_input
         .iter()
         .filter(|c| c.is_alphanumeric())
         .map(|c| c.to_ascii_uppercase())
         .collect();
-      let name = normalized_guest_name(&app.party_join_name);
+      let name = normalized_guest_name(&app.view.party_join_name);
       if code.len() == PARTY_CODE_LEN && !name.is_empty() {
         app.dispatch(IoEvent::JoinParty { code, name });
-        app.party_input.clear();
-        app.party_input_idx = 0;
-        app.party_join_name.clear();
+        app.view.party_input.clear();
+        app.view.party_input_idx = 0;
+        app.view.party_join_name.clear();
       }
     }
     Key::Backspace => {
-      if !app.party_join_name.is_empty() {
-        app.party_join_name.pop();
-      } else if app.party_input_idx > 0 {
-        app.party_input_idx -= 1;
-        app.party_input.remove(app.party_input_idx);
+      if !app.view.party_join_name.is_empty() {
+        app.view.party_join_name.pop();
+      } else if app.view.party_input_idx > 0 {
+        app.view.party_input_idx -= 1;
+        app.view.party_input.remove(app.view.party_input_idx);
       }
     }
     Key::Char(c) => {
-      if c.is_alphanumeric() && code_alphanumeric_len(&app.party_input) < PARTY_CODE_LEN {
+      if c.is_alphanumeric() && code_alphanumeric_len(&app.view.party_input) < PARTY_CODE_LEN {
         app
+          .view
           .party_input
-          .insert(app.party_input_idx, c.to_ascii_uppercase());
-        app.party_input_idx += 1;
-      } else if code_alphanumeric_len(&app.party_input) == PARTY_CODE_LEN
+          .insert(app.view.party_input_idx, c.to_ascii_uppercase());
+        app.view.party_input_idx += 1;
+      } else if code_alphanumeric_len(&app.view.party_input) == PARTY_CODE_LEN
         && (c.is_ascii_graphic() || c == ' ')
-        && app.party_join_name.len() < PARTY_NAME_MAX_LEN
+        && app.view.party_join_name.len() < PARTY_NAME_MAX_LEN
       {
-        app.party_join_name.push(c);
+        app.view.party_join_name.push(c);
       }
     }
     _ => {}

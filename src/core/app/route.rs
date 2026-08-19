@@ -198,6 +198,27 @@ pub enum SourceFocus {
 }
 
 impl App {
+  /// Open the combined Source & Device picker. The picker opens immediately so
+  /// it is reachable offline or when Local is the active source. Initial focus
+  /// is the Source panel unless Spotify is active (devices are Spotify Connect
+  /// only), and only Spotify needs a `me/player/devices` fetch: an
+  /// unauthenticated or offline session must not surface a spurious error.
+  pub(crate) fn open_source_device_picker(&mut self) {
+    self.view.source_list_index = Source::ALL
+      .iter()
+      .position(|s| *s == self.active_source)
+      .unwrap_or(0);
+    self.view.source_device_focus = if self.active_source == Source::Spotify {
+      SourceFocus::Devices
+    } else {
+      SourceFocus::Source
+    };
+    self.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+    if self.active_source == Source::Spotify {
+      self.dispatch(IoEvent::GetDevices);
+    }
+  }
+
   // The navigation_stack actually only controls the large block to the right of `library` and
   // `playlists`
   pub fn push_navigation_stack(&mut self, next_route_id: RouteId, next_active_block: ActiveBlock) {

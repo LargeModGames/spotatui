@@ -22,7 +22,7 @@ pub(crate) fn total_display_count(app: &App) -> usize {
 
 /// Local Files: open the highlighted folder's tracks in the shared track table.
 fn open_local_folder(app: &mut App) {
-  let Some(idx) = app.selected_playlist_index else {
+  let Some(idx) = app.view.selected_playlist_index else {
     return;
   };
   if let Some(folder) = app.local_playlists.get(idx) {
@@ -38,7 +38,7 @@ fn open_local_folder(app: &mut App) {
 /// Subsonic: open the highlighted server playlist's tracks in the shared track
 /// table.
 fn open_subsonic_folder(app: &mut App) {
-  let Some(idx) = app.selected_playlist_index else {
+  let Some(idx) = app.view.selected_playlist_index else {
     return;
   };
   if let Some(playlist) = app.subsonic_playlists.get(idx) {
@@ -55,7 +55,7 @@ fn open_subsonic_folder(app: &mut App) {
 /// track table, or the create-playlist form on the trailing "+ New Playlist"
 /// entry.
 fn open_youtube_playlist(app: &mut App) {
-  let Some(idx) = app.selected_playlist_index else {
+  let Some(idx) = app.view.selected_playlist_index else {
     return;
   };
   if idx == app.youtube_playlists.len() {
@@ -78,7 +78,7 @@ fn open_youtube_playlist(app: &mut App) {
 /// not a container — there is no track list to drill into — so Enter starts the
 /// stream instead of opening the track table.
 fn play_radio_station(app: &mut App) {
-  let Some(idx) = app.selected_playlist_index else {
+  let Some(idx) = app.view.selected_playlist_index else {
     return;
   };
   if let Some(uri) = app.radio_stations.get(idx).and_then(|s| s.uri.clone()) {
@@ -87,7 +87,7 @@ fn play_radio_station(app: &mut App) {
 }
 
 fn remove_radio_station(app: &mut App) {
-  let Some(idx) = app.selected_playlist_index else {
+  let Some(idx) = app.view.selected_playlist_index else {
     app.set_status_message("No radio station selected".to_string(), 4);
     return;
   };
@@ -115,7 +115,7 @@ fn remove_radio_station(app: &mut App) {
     Ok(Some(removed)) => {
       if !config_owned {
         app.radio_stations.remove(idx);
-        app.selected_playlist_index = if app.radio_stations.is_empty() {
+        app.view.selected_playlist_index = if app.radio_stations.is_empty() {
           None
         } else {
           Some(idx.min(app.radio_stations.len() - 1))
@@ -143,19 +143,19 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       let count = total_display_count(app);
       if count > 0 {
-        let current = app.selected_playlist_index.unwrap_or(0);
-        app.selected_playlist_index = Some((current + 1) % count);
+        let current = app.view.selected_playlist_index.unwrap_or(0);
+        app.view.selected_playlist_index = Some((current + 1) % count);
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       let count = total_display_count(app);
       if count > 0 {
-        let current = app.selected_playlist_index.unwrap_or(0);
-        app.selected_playlist_index = Some(if current == 0 { count - 1 } else { current - 1 });
+        let current = app.view.selected_playlist_index.unwrap_or(0);
+        app.view.selected_playlist_index = Some(if current == 0 { count - 1 } else { current - 1 });
       }
     }
     k if common_key_events::high_event(k) && total_display_count(app) > 0 => {
-      app.selected_playlist_index = Some(0);
+      app.view.selected_playlist_index = Some(0);
     }
     k if common_key_events::middle_event(k) => {
       let count = total_display_count(app);
@@ -165,13 +165,13 @@ pub fn handler(key: Key, app: &mut App) {
         } else {
           count / 2
         };
-        app.selected_playlist_index = Some(next_index);
+        app.view.selected_playlist_index = Some(next_index);
       }
     }
     k if common_key_events::low_event(k) => {
       let count = total_display_count(app);
       if count > 0 {
-        app.selected_playlist_index = Some(count - 1);
+        app.view.selected_playlist_index = Some(count - 1);
       }
     }
     Key::Enter if app.active_source == Source::Local => {
@@ -192,11 +192,12 @@ pub fn handler(key: Key, app: &mut App) {
     // Deleting a local YouTube playlist: same confirm dialog UX as Spotify.
     Key::Char('D') if app.active_source == Source::YouTube => {
       if let Some(playlist) = app
+        .view
         .selected_playlist_index
         .and_then(|idx| app.youtube_playlists.get(idx))
       {
-        app.dialog = Some(playlist.name.clone());
-        app.confirm = false;
+        app.view.dialog = Some(playlist.name.clone());
+        app.view.confirm = false;
         app.push_navigation_stack(
           RouteId::Dialog,
           ActiveBlock::Dialog(DialogContext::YouTubePlaylistWindow),
@@ -204,7 +205,7 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     Key::Enter => {
-      if let Some(selected_idx) = app.selected_playlist_index {
+      if let Some(selected_idx) = app.view.selected_playlist_index {
         if selected_idx == 0 {
           // "+ Add Playlist" is the leading row (row 0).
           app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
@@ -215,7 +216,7 @@ pub fn handler(key: Key, app: &mut App) {
               app.current_playlist_folder_id = folder.target_id;
               // Land on the first item below the leading "+ Add Playlist" row.
               let has_items = app.get_playlist_display_count() > 0;
-              app.selected_playlist_index = Some(if has_items { 1 } else { 0 });
+              app.view.selected_playlist_index = Some(if has_items { 1 } else { 0 });
             }
             PlaylistFolderItem::Playlist { index, .. } => {
               // Open the playlist tracks: navigates immediately with the
@@ -223,7 +224,7 @@ pub fn handler(key: Key, app: &mut App) {
               let index = *index;
               if let Some(id_str) = app.all_playlists.get(index).and_then(|p| p.id.clone()) {
                 if let Ok(playlist_id) = PlaylistId::from_id(id_str.as_str()) {
-                  app.active_playlist_index = Some(index);
+                  app.view.active_playlist_index = Some(index);
                   app.open_playlist_tracks(
                     playlist_id.into_static(),
                     TrackTableContext::MyPlaylists,
@@ -234,7 +235,7 @@ pub fn handler(key: Key, app: &mut App) {
             PlaylistFolderItem::CommunityPin => {
               if let Ok(playlist_id) = PlaylistId::from_id(crate::core::app::COMMUNITY_PLAYLIST_ID)
               {
-                app.active_playlist_index = None;
+                app.view.active_playlist_index = None;
                 app.open_playlist_tracks(playlist_id.into_static(), TrackTableContext::MyPlaylists);
               }
             }
@@ -244,15 +245,15 @@ pub fn handler(key: Key, app: &mut App) {
     }
     // Deleting playlists is a Spotify-only (PlaylistWriter) action.
     Key::Char('D') if app.active_source == Source::Spotify => {
-      if let Some(selected_idx) = app.selected_playlist_index {
+      if let Some(selected_idx) = app.view.selected_playlist_index {
         if let Some(PlaylistFolderItem::Playlist { index, .. }) = selected_idx
           .checked_sub(1)
           .and_then(|i| app.get_playlist_display_item_at(i))
         {
           if let Some(playlist) = app.all_playlists.get(*index) {
             let selected_playlist = &playlist.name;
-            app.dialog = Some(selected_playlist.clone());
-            app.confirm = false;
+            app.view.dialog = Some(selected_playlist.clone());
+            app.view.confirm = false;
 
             app.push_navigation_stack(
               RouteId::Dialog,
@@ -311,7 +312,7 @@ mod tests {
       index: 0,
       current_id: 0,
     }];
-    app.selected_playlist_index = Some(1);
+    app.view.selected_playlist_index = Some(1);
 
     handler(Key::Enter, &mut app);
 
@@ -340,7 +341,7 @@ mod tests {
       index: 0,
       current_id: 0,
     }];
-    app.selected_playlist_index = Some(1);
+    app.view.selected_playlist_index = Some(1);
 
     handler(Key::Enter, &mut app);
 
@@ -365,7 +366,7 @@ mod tests {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     // Row 0 is always the "+ Add Playlist" entry.
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     handler(Key::Enter, &mut app);
 
@@ -380,13 +381,13 @@ mod tests {
     // No real playlists: the pin is the only display item, at sidebar row 1
     // (row 0 is "+ Add Playlist").
     assert!(app.community_pin_visible());
-    app.selected_playlist_index = Some(1);
+    app.view.selected_playlist_index = Some(1);
 
     handler(Key::Enter, &mut app);
 
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
     // The pin is not a real sidebar selection.
-    assert_eq!(app.active_playlist_index, None);
+    assert_eq!(app.view.active_playlist_index, None);
     match rx.recv().unwrap() {
       IoEvent::GetPlaylistItems(id, 0) => {
         assert_eq!(id, crate::core::app::COMMUNITY_PLAYLIST_ID)
@@ -401,13 +402,13 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert!(app.community_pin_visible());
     // Sidebar row 1 is the pin (row 0 is "+ Add Playlist").
-    app.selected_playlist_index = Some(1);
+    app.view.selected_playlist_index = Some(1);
     let route_before = app.get_current_route().id.clone();
 
     handler(Key::Char('D'), &mut app);
 
     assert_eq!(app.get_current_route().id, route_before);
-    assert!(app.dialog.is_none());
+    assert!(app.view.dialog.is_none());
     assert!(rx.try_recv().is_err());
   }
 
@@ -428,7 +429,7 @@ mod tests {
       public: None,
       image_url: None,
     }];
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     handler(Key::Enter, &mut app);
 
@@ -492,7 +493,7 @@ mod tests {
         image_url: None,
       },
     ];
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     handler(Key::Char('D'), &mut app);
 
@@ -503,7 +504,7 @@ mod tests {
     );
     assert_eq!(app.radio_stations.len(), 1);
     assert_eq!(app.radio_stations[0].name, "Secret Agent");
-    assert_eq!(app.selected_playlist_index, Some(0));
+    assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message.as_deref(),
       Some("Removed saved radio station: Groove Salad")
@@ -529,13 +530,13 @@ mod tests {
       "Configured Groove",
       "https://ice1.somafm.com/groovesalad-128-mp3",
     )];
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     handler(Key::Char('D'), &mut app);
 
     assert!(app.runtime_state.radio_stations.is_empty());
     assert_eq!(app.radio_stations.len(), 1);
-    assert_eq!(app.selected_playlist_index, Some(0));
+    assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message.as_deref(),
       Some("Radio station is configured in config.yml: Configured Groove")
@@ -565,14 +566,14 @@ mod tests {
       "Configured Groove",
       "https://ice1.somafm.com/groovesalad-128-mp3",
     )];
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     handler(Key::Char('D'), &mut app);
 
     assert!(app.runtime_state.radio_stations.is_empty());
     assert_eq!(app.radio_stations.len(), 1);
     assert_eq!(app.radio_stations[0].name, "Configured Groove");
-    assert_eq!(app.selected_playlist_index, Some(0));
+    assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message.as_deref(),
       Some("Removed saved radio station: Runtime Duplicate")

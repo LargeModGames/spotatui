@@ -42,9 +42,7 @@ mod sort_menu;
 mod stats;
 mod track_table;
 
-use crate::core::app::{
-  ActiveBlock, App, ArtistBlock, InputContext, RouteId, SearchResultBlock, SourceFocus,
-};
+use crate::core::app::{ActiveBlock, App, ArtistBlock, InputContext, RouteId, SearchResultBlock};
 use crate::core::source::Source;
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
@@ -90,8 +88,8 @@ fn should_route_friends_before_globals(key: Key, app: &App) -> bool {
     return false;
   }
 
-  app.friend_add_dialog_visible
-    || !app.friend_search_input.is_empty()
+  app.view.friend_add_dialog_visible
+    || !app.view.friend_search_input.is_empty()
     || matches!(
       key,
       Key::Char('a') | Key::Char('c') | Key::Char('u') | Key::Tab
@@ -104,10 +102,10 @@ pub fn handle_app(key: Key, app: &mut App) {
     match key {
       Key::Esc | Key::Char('q') => {
         app.plugin_popup = None;
-        app.plugin_popup_scroll = 0;
+        app.view.plugin_popup_scroll = 0;
       }
       k if common_key_events::up_event(k, &app.user_config.keys) => {
-        app.plugin_popup_scroll = app.plugin_popup_scroll.saturating_sub(1);
+        app.view.plugin_popup_scroll = app.view.plugin_popup_scroll.saturating_sub(1);
       }
       k if common_key_events::down_event(k, &app.user_config.keys) => {
         let max_scroll = app
@@ -115,7 +113,11 @@ pub fn handle_app(key: Key, app: &mut App) {
           .as_ref()
           .map(|p| p.lines.len().saturating_sub(1) as u16)
           .unwrap_or(0);
-        app.plugin_popup_scroll = app.plugin_popup_scroll.saturating_add(1).min(max_scroll);
+        app.view.plugin_popup_scroll = app
+          .view
+          .plugin_popup_scroll
+          .saturating_add(1)
+          .min(max_scroll);
       }
       _ => {} // swallow all other keys
     }
@@ -125,7 +127,7 @@ pub fn handle_app(key: Key, app: &mut App) {
   // Help filtering is an inline modal input. Give it priority over global
   // bindings so queries can contain keys such as d, n, p, q, or ?.
   if app.get_current_route().active_block == ActiveBlock::HelpMenu
-    && (app.help_filter_editing || key == app.user_config.keys.search)
+    && (app.view.help_filter_editing || key == app.user_config.keys.search)
   {
     help_menu::handler(key, app);
     return;
@@ -135,9 +137,9 @@ pub fn handle_app(key: Key, app: &mut App) {
   // prompt, and the row filter. Each needs the raw key before global bindings
   // claim it, and the search binding is what opens the filter in the first place.
   if app.get_current_route().active_block == ActiveBlock::Settings
-    && (app.settings_unsaved_prompt_visible
-      || app.settings_edit_mode
-      || app.settings_filter_editing
+    && (app.view.settings_unsaved_prompt_visible
+      || app.view.settings_edit_mode
+      || app.view.settings_filter_editing
       || key == app.user_config.keys.search)
   {
     settings::handler(key, app);
@@ -234,24 +236,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       ai_dj::open_picker(app);
     }
     _ if key == app.user_config.keys.manage_devices => {
-      // Open the combined Source & Device picker immediately so it is reachable
-      // even offline / when Local is the active source. Initial focus is the
-      // Source panel under Local (devices are Spotify Connect only), else Devices.
-      app.source_list_index = Source::ALL
-        .iter()
-        .position(|s| *s == app.active_source)
-        .unwrap_or(0);
-      app.source_device_focus = if app.active_source == Source::Spotify {
-        SourceFocus::Devices
-      } else {
-        SourceFocus::Source
-      };
-      app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
-      // Only Spotify needs a `me/player/devices` fetch; skip it under Local so an
-      // unauthenticated/offline session doesn't surface a spurious error.
-      if app.active_source == Source::Spotify {
-        app.dispatch(IoEvent::GetDevices);
-      }
+      app.open_source_device_picker();
     }
     _ if key == app.user_config.keys.decrease_volume => {
       app.decrease_volume();
@@ -296,17 +281,17 @@ pub fn handle_app(key: Key, app: &mut App) {
       if app.get_current_route().active_block == ActiveBlock::TrackTable
         && app.is_playlist_track_table_context() =>
     {
-      app.input.clear();
-      app.input_idx = 0;
-      app.input_cursor_position = 0;
-      app.input_context = InputContext::PlaylistTrackSearch;
+      app.view.input.clear();
+      app.view.input_idx = 0;
+      app.view.input_cursor_position = 0;
+      app.view.input_context = InputContext::PlaylistTrackSearch;
       app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
     }
     _ if key == app.user_config.keys.search => {
       // Search is gated on the active source's capability (no `Searcher` impl
       // for Local Files), so it's a no-op with a hint there.
       if app.active_source.supports_search() {
-        app.input_context = InputContext::GlobalSearch;
+        app.view.input_context = InputContext::GlobalSearch;
         app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
       } else {
         app.set_status_message(
@@ -609,7 +594,7 @@ fn handle_escape(app: &mut App) {
       app.clear_dialog_state();
     }
     ActiveBlock::HelpMenu => {
-      if app.help_filter_editing || !app.help_filter.is_empty() {
+      if app.view.help_filter_editing || !app.view.help_filter.is_empty() {
         help_menu::clear_filter(app);
       } else {
         app.pop_navigation_stack();
@@ -623,8 +608,8 @@ fn handle_escape(app: &mut App) {
     }
     ActiveBlock::LyricsView => {
       // Esc first leaves lyrics browsing mode; a second Esc closes the view.
-      if app.lyrics_view.manual_index.is_some() {
-        app.lyrics_view.manual_index = None;
+      if app.view.lyrics_view.manual_index.is_some() {
+        app.view.lyrics_view.manual_index = None;
       } else {
         app.pop_navigation_stack();
       }
@@ -643,8 +628,8 @@ fn handle_escape(app: &mut App) {
     ActiveBlock::ExitPrompt => {}
     // Sort menu closes on escape
     ActiveBlock::SortMenu => {
-      app.sort_menu_visible = false;
-      app.sort_context = None;
+      app.view.sort_menu_visible = false;
+      app.view.sort_context = None;
       app.set_current_route_state(Some(ActiveBlock::Empty), None);
     }
     ActiveBlock::CreatePlaylistForm => {
@@ -808,7 +793,7 @@ mod tests {
 
     handle_app(Key::Char('W'), &mut app);
 
-    assert_eq!(app.input, vec!['W']);
+    assert_eq!(app.view.input, vec!['W']);
     assert!(app.status_message.is_none());
   }
 
@@ -853,7 +838,7 @@ mod tests {
         volume_percent: Some(42),
       }],
     });
-    app.selected_device_index = Some(0);
+    app.view.selected_device_index = Some(0);
     app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
 
     handle_app(Key::Enter, &mut app);
@@ -923,7 +908,7 @@ mod tests {
     handle_app(Key::Char('F'), &mut app);
 
     // In input mode, 'F' should be added to the input buffer
-    assert_eq!(app.input, vec!['F']);
+    assert_eq!(app.view.input, vec!['F']);
   }
 
   #[test]
@@ -955,7 +940,7 @@ mod tests {
 
     handle_app(Key::Char('a'), &mut app);
 
-    assert!(app.friend_add_dialog_visible);
+    assert!(app.view.friend_add_dialog_visible);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Friends);
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
   }
@@ -972,19 +957,19 @@ mod tests {
       app.status_message.as_deref(),
       Some("Clipboard not available")
     );
-    assert!(!app.friend_add_dialog_visible);
+    assert!(!app.view.friend_add_dialog_visible);
   }
 
   #[test]
   fn friends_search_buffer_keeps_globally_bound_characters_local() {
     let mut app = friends_app();
-    app.friend_search_input = vec!['j'];
+    app.view.friend_search_input = vec!['j'];
 
     handle_app(Key::Char('a'), &mut app);
     handle_app(Key::Char('c'), &mut app);
 
-    assert_eq!(app.friend_search_input, vec!['j', 'a', 'c']);
-    assert!(!app.friend_add_dialog_visible);
+    assert_eq!(app.view.friend_search_input, vec!['j', 'a', 'c']);
+    assert!(!app.view.friend_add_dialog_visible);
     assert!(app.status_message.is_none());
   }
 
@@ -1000,8 +985,8 @@ mod tests {
       IoEvent::NextTrack => {}
       _ => panic!("unexpected event"),
     }
-    assert!(app.friend_search_input.is_empty());
-    assert!(!app.friend_add_dialog_visible);
+    assert!(app.view.friend_search_input.is_empty());
+    assert!(!app.view.friend_add_dialog_visible);
   }
 
   #[test]
@@ -1011,8 +996,8 @@ mod tests {
 
     handle_app(Key::Char('c'), &mut app);
 
-    assert!(app.friend_add_dialog_visible);
-    assert_eq!(app.friend_add_input, vec!['c']);
+    assert!(app.view.friend_add_dialog_visible);
+    assert_eq!(app.view.friend_add_input, vec!['c']);
     assert!(app.status_message.is_none());
   }
 
@@ -1028,7 +1013,7 @@ mod tests {
 
     handle_app(Key::Ctrl('f'), &mut app);
 
-    assert_eq!(app.input_context, InputContext::PlaylistTrackSearch);
+    assert_eq!(app.view.input_context, InputContext::PlaylistTrackSearch);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Input);
   }
 
@@ -1044,7 +1029,7 @@ mod tests {
 
     handle_app(app.user_config.keys.search, &mut app);
 
-    assert_eq!(app.input_context, InputContext::GlobalSearch);
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Input);
   }
 
@@ -1056,7 +1041,7 @@ mod tests {
 
     handle_app(app.user_config.keys.search, &mut app);
 
-    assert_eq!(app.input_context, InputContext::GlobalSearch);
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Input);
   }
 

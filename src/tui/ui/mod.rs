@@ -151,7 +151,7 @@ mod tests {
 
   fn render(width: u16, height: u16) -> (App, Buffer) {
     let mut app = App::default();
-    app.size = Viewport { width, height };
+    app.view.size = Viewport { width, height };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| draw_main_layout(f, &app)).unwrap();
@@ -213,7 +213,7 @@ mod tests {
   #[test]
   fn stats_route_renders_period_tabs() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };

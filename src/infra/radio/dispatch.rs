@@ -128,7 +128,6 @@ async fn load_radio_stations(app: &Arc<Mutex<App>>) {
   .collect();
   let empty = stations.is_empty();
   guard.radio_stations = stations;
-  guard.radio_stations_index = 0;
   if empty {
     guard.set_status_message(
       "No radio stations configured or saved; search to add some".to_string(),

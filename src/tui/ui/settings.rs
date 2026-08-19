@@ -39,7 +39,7 @@ pub type FilteredSetting = (usize, Vec<(usize, usize)>);
 /// Rows that survive the active filter, best match first. With no filter this
 /// is every row in schema order.
 pub fn filtered_settings(app: &App) -> Vec<FilteredSetting> {
-  let query = app.settings_filter.trim();
+  let query = app.view.settings_filter.trim();
   if query.is_empty() {
     return (0..app.settings_items.len())
       .map(|index| (index, Vec::new()))
@@ -73,7 +73,7 @@ pub fn filtered_setting_indices(app: &App) -> Vec<usize> {
 pub fn selected_setting_position(app: &App) -> Option<usize> {
   filtered_setting_indices(app)
     .iter()
-    .position(|index| *index == app.settings_selected_index)
+    .position(|index| *index == app.view.settings_selected_index)
 }
 
 /// Best score for one row plus the name ranges it matched, or `None` when the
@@ -119,7 +119,7 @@ pub fn draw_settings(f: &mut Frame<'_>, app: &App) {
   draw_settings_list(f, app, list_area);
   draw_settings_help(f, app, help_area);
 
-  if app.settings_unsaved_prompt_visible {
+  if app.view.settings_unsaved_prompt_visible {
     draw_unsaved_changes_prompt(f, app);
   }
 }
@@ -130,7 +130,7 @@ fn draw_category_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
     .map(|cat| Line::from(cat.name()))
     .collect();
 
-  let selected = app.settings_category.index();
+  let selected = app.view.settings_category.index();
 
   let tabs = Tabs::new(titles)
     .select(selected)
@@ -155,8 +155,8 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
     .iter()
     .map(|(i, name_ranges)| {
       let setting = &app.settings_items[*i];
-      let is_selected = *i == app.settings_selected_index;
-      let is_editing = is_selected && app.settings_edit_mode;
+      let is_selected = *i == app.view.settings_selected_index;
+      let is_editing = is_selected && app.view.settings_edit_mode;
 
       // Format the value display
       let value_str = if is_editing {
@@ -172,7 +172,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
           }
           _ => {
             // Show edit buffer with cursor
-            format!("{}▏", app.settings_edit_buffer)
+            format!("{}▏", app.view.settings_edit_buffer)
           }
         }
       } else {
@@ -233,13 +233,13 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
     })
     .collect();
 
-  let filtering = !app.settings_filter.trim().is_empty();
+  let filtering = !app.view.settings_filter.trim().is_empty();
   let count = if filtering {
     format!("{} of {}", visible.len(), app.settings_items.len())
   } else {
     format!("{} items", app.settings_items.len())
   };
-  let title = format!("{} Settings ({count})", app.settings_category.name());
+  let title = format!("{} Settings ({count})", app.view.settings_category.name());
 
   // Only the filter can empty a loaded category, so the placeholder stays
   // scoped to it rather than claiming a filter that is not there.
@@ -250,7 +250,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
     vec![ListItem::new(Line::styled(
       format!(
         "No {} settings match the filter (←/→ to try another tab)",
-        app.settings_category.name()
+        app.view.settings_category.name()
       ),
       Style::default().fg(app.user_config.theme.inactive.into()),
     ))]
@@ -285,22 +285,22 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
   state.select(
     visible
       .iter()
-      .position(|(index, _)| *index == app.settings_selected_index),
+      .position(|(index, _)| *index == app.view.settings_selected_index),
   );
 
   f.render_stateful_widget(list, area, &mut state);
 }
 
 fn format_terminal_input_caps(app: &App) -> String {
-  let enhancement = if app.terminal_input_caps.keyboard_enhancement_enabled {
+  let enhancement = if app.view.terminal_input_caps.keyboard_enhancement_enabled {
     "enh:on"
-  } else if app.terminal_input_caps.keyboard_enhancement_supported {
+  } else if app.view.terminal_input_caps.keyboard_enhancement_supported {
     "enh:available"
   } else {
     "enh:off"
   };
 
-  let ctrl_comma = match app.terminal_input_caps.ctrl_punct_reliable {
+  let ctrl_comma = match app.view.terminal_input_caps.ctrl_punct_reliable {
     crate::core::app::CapabilityState::Yes => "ctrl+,=ok",
     crate::core::app::CapabilityState::No => "ctrl+,=degraded",
     crate::core::app::CapabilityState::Unknown => "ctrl+,=unknown",
@@ -310,10 +310,10 @@ fn format_terminal_input_caps(app: &App) -> String {
 }
 
 fn draw_settings_help(f: &mut Frame<'_>, app: &App, area: Rect) {
-  let controls_line = if app.settings_filter_editing {
+  let controls_line = if app.view.settings_filter_editing {
     "Type to filter | Ctrl+W: Delete word | Ctrl+U: Clear | Enter: Apply | Esc: Cancel"
-  } else if app.settings_edit_mode {
-    match app.settings_items.get(app.settings_selected_index) {
+  } else if app.view.settings_edit_mode {
+    match app.settings_items.get(app.view.settings_selected_index) {
       Some(setting) => match &setting.value {
         SettingValue::Bool(_) => "Space/Enter: Toggle | ←/→: Toggle | Esc: Cancel",
         SettingValue::Number(_) => {
@@ -338,12 +338,12 @@ fn draw_settings_help(f: &mut Frame<'_>, app: &App, area: Rect) {
   };
   // The filter query takes the second row while it exists, like the Help
   // menu's filter line; the terminal-caps line comes back once it is cleared.
-  let second_line = if app.settings_filter_editing {
-    format!("Filter: {}▏", app.settings_filter)
-  } else if app.settings_filter.is_empty() {
+  let second_line = if app.view.settings_filter_editing {
+    format!("Filter: {}▏", app.view.settings_filter)
+  } else if app.view.settings_filter.is_empty() {
     format_terminal_input_caps(app)
   } else {
-    format!("Filter: {} (Esc: clear)", app.settings_filter)
+    format!("Filter: {} (Esc: clear)", app.view.settings_filter)
   };
   let help_text = format!("{}\n{}", controls_line, second_line);
 
@@ -403,7 +403,7 @@ fn draw_unsaved_changes_prompt(f: &mut Frame<'_>, app: &App) {
     &Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).horizontal_margin(3),
   );
 
-  let yes_selected = app.settings_unsaved_prompt_save_selected;
+  let yes_selected = app.view.settings_unsaved_prompt_save_selected;
   let yes = Paragraph::new("[ Yes ]")
     .alignment(Alignment::Center)
     .style(Style::default().fg(if yes_selected {
@@ -438,17 +438,17 @@ mod tests {
 
   fn filtered_app(filter: &str, editing: bool) -> App {
     let mut app = App::default();
-    app.size = crate::core::geometry::Viewport {
+    app.view.size = crate::core::geometry::Viewport {
       width: WIDTH,
       height: HEIGHT,
     };
     app.load_settings_for_category();
-    app.settings_filter = filter.to_string();
-    app.settings_filter_editing = editing;
+    app.view.settings_filter = filter.to_string();
+    app.view.settings_filter_editing = editing;
     // The handler snaps the highlight onto the best match after every
     // keystroke; without it these renders would show a state the user cannot
     // actually reach.
-    app.settings_selected_index = filtered_setting_indices(&app).first().copied().unwrap_or(0);
+    app.view.settings_selected_index = filtered_setting_indices(&app).first().copied().unwrap_or(0);
     app
   }
 

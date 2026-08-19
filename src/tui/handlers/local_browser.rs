@@ -12,28 +12,30 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      app.local_playlists_index = common_key_events::on_down_press_handler(
+      app.view.local_playlists_index = common_key_events::on_down_press_handler(
         &app.local_playlists,
-        Some(app.local_playlists_index),
+        Some(app.view.local_playlists_index),
       );
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      app.local_playlists_index = common_key_events::on_up_press_handler(
+      app.view.local_playlists_index = common_key_events::on_up_press_handler(
         &app.local_playlists,
-        Some(app.local_playlists_index),
+        Some(app.view.local_playlists_index),
       );
     }
     k if common_key_events::high_event(k) => {
-      app.local_playlists_index = common_key_events::on_high_press_handler();
+      app.view.local_playlists_index = common_key_events::on_high_press_handler();
     }
     k if common_key_events::middle_event(k) => {
-      app.local_playlists_index = common_key_events::on_middle_press_handler(&app.local_playlists);
+      app.view.local_playlists_index =
+        common_key_events::on_middle_press_handler(&app.local_playlists);
     }
     k if common_key_events::low_event(k) => {
-      app.local_playlists_index = common_key_events::on_low_press_handler(&app.local_playlists);
+      app.view.local_playlists_index =
+        common_key_events::on_low_press_handler(&app.local_playlists);
     }
     Key::Enter => {
-      if let Some(folder) = app.local_playlists.get(app.local_playlists_index) {
+      if let Some(folder) = app.local_playlists.get(app.view.local_playlists_index) {
         let uri = folder.uri.clone();
         // Reset the shared track table and mark it local so selecting a row
         // dispatches a `file://` play; the fetch fills in the rows.

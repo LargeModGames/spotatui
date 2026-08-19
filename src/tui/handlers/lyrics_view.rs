@@ -6,7 +6,7 @@ use std::time::Instant;
 pub fn handler(key: Key, app: &mut App) {
   match key {
     Key::Char('f') => {
-      app.lyrics_view.manual_index = None;
+      app.view.lyrics_view.manual_index = None;
     }
     k if k == app.user_config.keys.back => {
       app.pop_navigation_stack();
@@ -36,12 +36,13 @@ pub(super) fn scroll_by(app: &mut App, delta: i64) {
     return;
   }
   let from = app
+    .view
     .lyrics_view
     .manual_index
     .unwrap_or_else(|| active_lyric_index(lyrics, app.lyric_progress_ms()));
   let target = (from as i64 + delta).clamp(0, lyrics.len() as i64 - 1) as usize;
-  app.lyrics_view.manual_index = Some(target);
-  app.lyrics_view.last_manual_input = Some(Instant::now());
+  app.view.lyrics_view.manual_index = Some(target);
+  app.view.lyrics_view.last_manual_input = Some(Instant::now());
 }
 
 /// Shift lyric timing relative to playback, for correcting misaligned LRC
@@ -50,7 +51,7 @@ fn nudge_timing(app: &mut App, delta_ms: i64) {
   if app.lyrics_status != LyricsStatus::Found {
     return;
   }
-  app.lyrics_view.timing_offset_ms += delta_ms;
+  app.view.lyrics_view.timing_offset_ms += delta_ms;
 }
 
 fn jump_to(app: &mut App, index: usize) {
@@ -63,6 +64,6 @@ fn jump_to(app: &mut App, index: usize) {
   if lyrics.is_empty() {
     return;
   }
-  app.lyrics_view.manual_index = Some(index.min(lyrics.len() - 1));
-  app.lyrics_view.last_manual_input = Some(Instant::now());
+  app.view.lyrics_view.manual_index = Some(index.min(lyrics.len() - 1));
+  app.view.lyrics_view.last_manual_input = Some(Instant::now());
 }

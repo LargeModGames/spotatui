@@ -123,7 +123,7 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     "Top Tracks",
     top_tracks,
     get_color(highlight_state, theme),
-    Some(app.stats_selected_track),
+    Some(app.view.stats_selected_track),
   );
   draw_ranked_panel(
     f,

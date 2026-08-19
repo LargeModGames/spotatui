@@ -71,8 +71,7 @@ pub(super) const NAV_TARGETS: &[&str] = &[
 /// Replicate the matching keybinding for each nav target. Unknown targets are
 /// rejected at the API layer, so the fallback arm is unreachable in practice.
 fn apply_navigate(app: &mut App, target: &str) {
-  use crate::core::app::{ActiveBlock, RouteId, SourceFocus};
-  use crate::core::source::Source;
+  use crate::core::app::{ActiveBlock, RouteId};
 
   match target {
     "home" => app.push_navigation_stack(RouteId::Home, ActiveBlock::Empty),
@@ -81,23 +80,7 @@ fn apply_navigate(app: &mut App, target: &str) {
       app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
     }
     "settings" => app.open_settings_screen(),
-    "devices" => {
-      // Mirrors the manage_devices keybinding: open the Source & Device picker,
-      // focus per active source, and only fetch devices under Spotify.
-      app.source_list_index = Source::ALL
-        .iter()
-        .position(|s| *s == app.active_source)
-        .unwrap_or(0);
-      app.source_device_focus = if app.active_source == Source::Spotify {
-        SourceFocus::Devices
-      } else {
-        SourceFocus::Source
-      };
-      app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
-      if app.active_source == Source::Spotify {
-        app.dispatch(IoEvent::GetDevices);
-      }
-    }
+    "devices" => app.open_source_device_picker(),
     "help" => app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu),
     "lyrics" => app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView),
     // The network handler pushes the route once the data arrives, exactly like
@@ -165,7 +148,7 @@ pub(super) fn apply_effects(effects: Vec<ScriptEffect>, app: &mut App) {
       },
       ScriptEffect::ShowPopup(popup) => {
         app.plugin_popup = Some(popup);
-        app.plugin_popup_scroll = 0;
+        app.view.plugin_popup_scroll = 0;
       }
       ScriptEffect::Dispatch(event) => app.dispatch(event),
       ScriptEffect::CycleRepeat => app.repeat(),
@@ -181,7 +164,7 @@ pub(super) fn apply_effects(effects: Vec<ScriptEffect>, app: &mut App) {
         if app.get_current_route().id != RouteId::PluginScreen(name.clone()) {
           app.push_navigation_stack(RouteId::PluginScreen(name), ActiveBlock::PluginScreen);
         }
-        app.plugin_screen_scroll = 0;
+        app.view.plugin_screen_scroll = 0;
       }
       ScriptEffect::CloseScreen(name) => {
         use crate::core::app::RouteId;

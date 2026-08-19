@@ -568,7 +568,7 @@ async fn load_local_playlists(app: &Arc<Mutex<App>>) {
     Ok(Ok(playlists)) => {
       let mut app = app.lock().await;
       app.local_playlists = playlists;
-      app.local_playlists_index = 0;
+      app.view.local_playlists_index = 0;
     }
     Ok(Err(e)) => set_error(app, format!("Cannot scan music folder: {e}")).await,
     Err(e) => set_error(app, format!("Local folder scan failed: {e}")).await,

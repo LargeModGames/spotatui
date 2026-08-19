@@ -27,7 +27,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
     if !app.lyrics_synced {
       notes.push("timing estimated".to_string());
     }
-    let offset_ms = app.lyrics_view.timing_offset_ms;
+    let offset_ms = app.view.lyrics_view.timing_offset_ms;
     if offset_ms != 0 {
       notes.push(format!("offset {:+.1}s", offset_ms as f64 / 1000.0));
     }
@@ -61,7 +61,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   }
 
   // Reserve the bottom row for the browsing hint while in manual mode.
-  let manual = app.lyrics_view.manual_index.is_some();
+  let manual = app.view.lyrics_view.manual_index.is_some();
   let mut lyric_area = inner_area;
   if manual && lyric_area.height > 1 {
     lyric_area.height -= 1;
@@ -69,6 +69,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
 
   let active_idx = active_lyric_index(lyrics, app.lyric_progress_ms());
   let focus_idx = app
+    .view
     .lyrics_view
     .manual_index
     .unwrap_or(active_idx)
@@ -79,7 +80,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   // of snapping (line spacing stays intact because every line shares the same
   // rounding offset).
   let target_row = i64::from(lyric_area.y) + i64::from(lyric_area.height / 2);
-  let scroll_offset = app.lyrics_view.scroll_pos;
+  let scroll_offset = app.view.lyrics_view.scroll_pos;
 
   for (line_idx, (_, text)) in lyrics.iter().enumerate() {
     let y = target_row + (line_idx as f64 - scroll_offset).round() as i64;
@@ -176,7 +177,7 @@ mod tests {
     app.lyrics_status = LyricsStatus::Found;
     app.lyrics_synced = true;
     app.song_progress_ms = 11_000;
-    app.lyrics_view.scroll_pos = 1.0;
+    app.view.lyrics_view.scroll_pos = 1.0;
     app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView);
     app
   }
@@ -228,7 +229,7 @@ mod tests {
   fn fractional_scroll_shifts_the_whole_column() {
     let mut app = app_with_lyrics();
     let before = row_of(&render(&app), "second line").expect("active line row");
-    app.lyrics_view.scroll_pos = 1.6;
+    app.view.lyrics_view.scroll_pos = 1.6;
     let buffer = render(&app);
     let after = row_of(&buffer, "second line").expect("active line row");
     assert_eq!(after, before - 1, "column should glide up mid-animation");
@@ -252,7 +253,7 @@ mod tests {
   fn title_shows_timing_offset_and_it_shifts_the_active_line() {
     let mut app = app_with_lyrics();
     // progress 11s + 9.5s nudge = 20.5s, past the third line's timestamp.
-    app.lyrics_view.timing_offset_ms = 9_500;
+    app.view.lyrics_view.timing_offset_ms = 9_500;
     let buffer = render(&app);
     let text = buffer_text(&buffer);
     assert!(
@@ -276,7 +277,7 @@ mod tests {
   #[test]
   fn renders_browsing_hint_in_manual_mode() {
     let mut app = app_with_lyrics();
-    app.lyrics_view.manual_index = Some(2);
+    app.view.lyrics_view.manual_index = Some(2);
     let text = buffer_text(&render(&app));
     assert!(text.contains("browsing"), "missing browsing hint:\n{text}");
     assert!(text.contains("third line"), "missing browsed line:\n{text}");

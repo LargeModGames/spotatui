@@ -710,7 +710,7 @@ mod tests {
 
   fn app_with(lines: Vec<DjLine>, width: u16, height: u16) -> App {
     let mut app = App::default();
-    app.size = Viewport { width, height };
+    app.view.size = Viewport { width, height };
     app.dj.transcript = lines;
     app.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
     app

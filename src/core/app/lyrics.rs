@@ -98,7 +98,8 @@ impl App {
   /// Playback progress adjusted by the user's lyric timing nudge, for
   /// matching against lyric timestamps.
   pub fn lyric_progress_ms(&self) -> u128 {
-    let adjusted = self.song_progress_ms as i128 + i128::from(self.lyrics_view.timing_offset_ms);
+    let adjusted =
+      self.song_progress_ms as i128 + i128::from(self.view.lyrics_view.timing_offset_ms);
     adjusted.max(0) as u128
   }
 
@@ -113,20 +114,21 @@ impl App {
     if lyrics.is_empty() {
       return;
     }
-    if self.lyrics_view.manual_index.is_some()
+    if self.view.lyrics_view.manual_index.is_some()
       && self
+        .view
         .lyrics_view
         .last_manual_input
         .is_some_and(|at| at.elapsed() >= BROWSE_RESNAP_AFTER)
     {
-      self.lyrics_view.manual_index = None;
+      self.view.lyrics_view.manual_index = None;
     }
     let active = active_lyric_index(lyrics, self.lyric_progress_ms());
-    let target = self.lyrics_view.manual_index.unwrap_or(active) as f64;
+    let target = self.view.lyrics_view.manual_index.unwrap_or(active) as f64;
     if self.get_current_route().id == RouteId::LyricsView {
-      self.lyrics_view.ease_toward(target, elapsed);
+      self.view.lyrics_view.ease_toward(target, elapsed);
     } else {
-      self.lyrics_view.snap_to(target);
+      self.view.lyrics_view.snap_to(target);
     }
   }
 }
@@ -168,19 +170,19 @@ mod tests {
     let mut app = App::default();
     app.lyrics = Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]);
     app.lyrics_status = LyricsStatus::Found;
-    app.lyrics_view.manual_index = Some(1);
-    app.lyrics_view.last_manual_input = Instant::now().checked_sub(Duration::from_secs(9));
+    app.view.lyrics_view.manual_index = Some(1);
+    app.view.lyrics_view.last_manual_input = Instant::now().checked_sub(Duration::from_secs(9));
     app.advance_lyrics_scroll(Duration::from_millis(16));
-    assert_eq!(app.lyrics_view.manual_index, None);
+    assert_eq!(app.view.lyrics_view.manual_index, None);
   }
 
   #[test]
   fn lyric_progress_applies_offset_and_clamps_at_zero() {
     let mut app = App::default();
     app.song_progress_ms = 10_000;
-    app.lyrics_view.timing_offset_ms = 2_500;
+    app.view.lyrics_view.timing_offset_ms = 2_500;
     assert_eq!(app.lyric_progress_ms(), 12_500);
-    app.lyrics_view.timing_offset_ms = -15_000;
+    app.view.lyrics_view.timing_offset_ms = -15_000;
     assert_eq!(app.lyric_progress_ms(), 0);
   }
 
@@ -189,9 +191,9 @@ mod tests {
     let mut app = App::default();
     app.lyrics = Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]);
     app.lyrics_status = LyricsStatus::Found;
-    app.lyrics_view.manual_index = Some(1);
-    app.lyrics_view.last_manual_input = Some(Instant::now());
+    app.view.lyrics_view.manual_index = Some(1);
+    app.view.lyrics_view.last_manual_input = Some(Instant::now());
     app.advance_lyrics_scroll(Duration::from_millis(16));
-    assert_eq!(app.lyrics_view.manual_index, Some(1));
+    assert_eq!(app.view.lyrics_view.manual_index, Some(1));
   }
 }

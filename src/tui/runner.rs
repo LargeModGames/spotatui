@@ -56,9 +56,9 @@ fn back_key_clears_playlist_filter(app: &mut App, active_block: ActiveBlock) -> 
 /// confirmed filter rather than close Help.
 fn help_menu_captures_key_before_back(app: &App, key: Key) -> bool {
   app.get_current_route().active_block == ActiveBlock::HelpMenu
-    && (app.help_filter_editing
+    && (app.view.help_filter_editing
       || key == app.user_config.keys.search
-      || (key == Key::Esc && !app.help_filter.is_empty()))
+      || (key == Key::Esc && !app.view.help_filter.is_empty()))
 }
 
 /// The DJ screen is a typing surface, exactly like `ActiveBlock::Input`, and the
@@ -201,7 +201,7 @@ mod tests {
   fn help_filter_captures_back_key_while_editing() {
     let mut app = app();
     app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
-    app.help_filter_editing = true;
+    app.view.help_filter_editing = true;
 
     assert!(key_reaches_handlers_before_back(
       &app,
@@ -213,7 +213,7 @@ mod tests {
   fn confirmed_help_filter_captures_escape_but_not_normal_back_key() {
     let mut app = app();
     app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
-    app.help_filter = "volume".to_string();
+    app.view.help_filter = "volume".to_string();
 
     assert!(key_reaches_handlers_before_back(&app, Key::Esc));
     assert!(!key_reaches_handlers_before_back(
@@ -348,9 +348,9 @@ pub async fn start_ui(
   }
   {
     let mut app = app.lock().await;
-    app.terminal_input_caps.keyboard_enhancement_supported = keyboard_enhancement_supported;
-    app.terminal_input_caps.keyboard_enhancement_enabled = keyboard_enhancement_enabled;
-    app.terminal_input_caps.ctrl_punct_reliable = app::CapabilityState::Unknown;
+    app.view.terminal_input_caps.keyboard_enhancement_supported = keyboard_enhancement_supported;
+    app.view.terminal_input_caps.keyboard_enhancement_enabled = keyboard_enhancement_enabled;
+    app.view.terminal_input_caps.ctrl_punct_reliable = app::CapabilityState::Unknown;
   }
 
   let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
@@ -371,13 +371,12 @@ pub async fn start_ui(
       let mut app = app.lock().await;
 
       if let Some(size) = terminal_size {
-        if is_first_render || app.size != size {
-          app.help_menu_max_lines = 0;
-          app.help_menu_offset = 0;
-          app.help_menu_page = 0;
-          app.size = size;
+        if is_first_render || app.view.size != size {
+          app.view.help_menu_offset = 0;
+          app.view.help_menu_page = 0;
+          app.view.size = size;
 
-          let potential_limit = max((app.size.height as i32) - 13, 0) as u32;
+          let potential_limit = max((size.height as i32) - 13, 0) as u32;
           let max_limit = min(potential_limit, 50);
           let large_search_limit = min((f32::from(size.height) / 1.4) as u32, max_limit);
           let small_search_limit = min((f32::from(size.height) / 2.85) as u32, max_limit / 2);
@@ -387,11 +386,7 @@ pub async fn start_ui(
             small_search_limit,
           ));
 
-          app.help_menu_max_lines = if app.size.height > 8 {
-            (app.size.height as u32) - 8
-          } else {
-            0
-          };
+          app.view.help_menu_max_lines = (size.height as u32).saturating_sub(8);
         }
       };
 
@@ -411,7 +406,7 @@ pub async fn start_ui(
         || current_route.active_block == ActiveBlock::Analysis
         || (current_route.id == RouteId::LyricsView
           && app.lyrics_status == crate::core::app::LyricsStatus::Found)
-        || app.liked_song_animation_frame.is_some()
+        || app.view.liked_song_animation_frame.is_some()
         || app.theme_fade_active();
       let current_tick_rate = if animation_active {
         app.user_config.behavior.animation_tick_rate_milliseconds
@@ -475,15 +470,10 @@ pub async fn start_ui(
         terminal.hide_cursor()?;
       }
 
-      let cursor_offset =
-        if app.size.height > crate::tui::layout::small_terminal_height(&app.user_config.behavior) {
-          2
-        } else {
-          1
-        };
+      let cursor_offset = crate::tui::layout::main_layout_margin(&app) + 1;
 
       terminal.backend_mut().execute(MoveTo(
-        cursor_offset + app.input_cursor_position - app.input_scroll_offset.get(),
+        cursor_offset + app.view.input_cursor_position - app.view.input_scroll_offset.get(),
         cursor_offset,
       ))?;
 
@@ -552,7 +542,7 @@ pub async fn start_ui(
       driver.dispatch_startup(&mut app);
       // The formatted Help row count is frontend presentation, so it stays
       // out of the driver's startup dispatch.
-      app.help_docs_size = ui::help::get_help_docs(&app).len() as u32;
+      app.view.help_docs_size = ui::help::get_help_docs(&app).len() as u32;
 
       is_first_render = false;
     }

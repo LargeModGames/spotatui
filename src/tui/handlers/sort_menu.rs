@@ -10,7 +10,7 @@ use rspotify::prelude::Id;
 
 /// Handle input when the sort menu is active
 pub fn handler(key: Key, app: &mut App) {
-  let available_fields = match app.sort_context {
+  let available_fields = match app.view.sort_context {
     Some(ctx) => ctx.available_fields(),
     None => {
       // No context, close menu
@@ -24,21 +24,21 @@ pub fn handler(key: Key, app: &mut App) {
       close_sort_menu(app);
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      if app.sort_menu_selected > 0 {
-        app.sort_menu_selected -= 1;
+      if app.view.sort_menu_selected > 0 {
+        app.view.sort_menu_selected -= 1;
       } else {
-        app.sort_menu_selected = available_fields.len().saturating_sub(1);
+        app.view.sort_menu_selected = available_fields.len().saturating_sub(1);
       }
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      if app.sort_menu_selected < available_fields.len().saturating_sub(1) {
-        app.sort_menu_selected += 1;
+      if app.view.sort_menu_selected < available_fields.len().saturating_sub(1) {
+        app.view.sort_menu_selected += 1;
       } else {
-        app.sort_menu_selected = 0;
+        app.view.sort_menu_selected = 0;
       }
     }
     Key::Enter => {
-      if let Some(field) = available_fields.get(app.sort_menu_selected) {
+      if let Some(field) = available_fields.get(app.view.sort_menu_selected) {
         apply_sort(app, *field);
       }
       close_sort_menu(app);
@@ -52,7 +52,7 @@ pub fn handler(key: Key, app: &mut App) {
             apply_sort(app, *field);
             // Toggle order if uppercase
             if c.is_ascii_uppercase() {
-              if let Some(ctx) = app.sort_context {
+              if let Some(ctx) = app.view.sort_context {
                 let sort_state = get_sort_state_mut(app, ctx);
                 sort_state.order = sort_state.order.toggle();
               }
@@ -69,9 +69,9 @@ pub fn handler(key: Key, app: &mut App) {
 
 /// Open the sort menu for a given context
 pub fn open_sort_menu(app: &mut App, context: SortContext) {
-  app.sort_context = Some(context);
-  app.sort_menu_visible = true;
-  app.sort_menu_selected = 0;
+  app.view.sort_context = Some(context);
+  app.view.sort_menu_visible = true;
+  app.view.sort_menu_selected = 0;
 
   // Find current sort field in the available fields to highlight it
   let current_field = match context {
@@ -84,7 +84,7 @@ pub fn open_sort_menu(app: &mut App, context: SortContext) {
   let available = context.available_fields();
   for (i, field) in available.iter().enumerate() {
     if *field == current_field {
-      app.sort_menu_selected = i;
+      app.view.sort_menu_selected = i;
       break;
     }
   }
@@ -93,13 +93,13 @@ pub fn open_sort_menu(app: &mut App, context: SortContext) {
 }
 
 fn close_sort_menu(app: &mut App) {
-  app.sort_menu_visible = false;
-  app.sort_context = None;
+  app.view.sort_menu_visible = false;
+  app.view.sort_context = None;
   app.set_current_route_state(Some(ActiveBlock::Empty), None);
 }
 
 fn apply_sort(app: &mut App, field: SortField) {
-  if let Some(ctx) = app.sort_context {
+  if let Some(ctx) = app.view.sort_context {
     let sort_state = get_sort_state_mut(app, ctx);
     sort_state.apply_field(field);
 
@@ -200,10 +200,10 @@ mod tests {
       .unwrap()
       .into_static();
     app.all_playlists = vec![sidebar_playlist];
-    app.active_playlist_index = Some(0);
+    app.view.active_playlist_index = Some(0);
     app.track_table.context = Some(TrackTableContext::PlaylistSearch);
     app.playlist_track_table_id = Some(search_playlist_id.clone());
-    app.sort_context = Some(SortContext::PlaylistTracks);
+    app.view.sort_context = Some(SortContext::PlaylistTracks);
 
     apply_sort(&mut app, SortField::Name);
 

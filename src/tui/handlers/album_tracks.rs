@@ -13,9 +13,9 @@ pub fn handler(key: Key, app: &mut App) {
         if let Some(selected_album) = &app.selected_album_full {
           let next_index = common_key_events::on_down_press_handler(
             &selected_album.album.tracks,
-            Some(app.saved_album_tracks_index),
+            Some(app.view.saved_album_tracks_index),
           );
-          app.saved_album_tracks_index = next_index;
+          app.view.saved_album_tracks_index = next_index;
         };
       }
       AlbumTableContext::Simplified => {
@@ -33,9 +33,9 @@ pub fn handler(key: Key, app: &mut App) {
         if let Some(selected_album) = &app.selected_album_full {
           let next_index = common_key_events::on_up_press_handler(
             &selected_album.album.tracks,
-            Some(app.saved_album_tracks_index),
+            Some(app.view.saved_album_tracks_index),
           );
-          app.saved_album_tracks_index = next_index;
+          app.view.saved_album_tracks_index = next_index;
         };
       }
       AlbumTableContext::Simplified => {
@@ -59,7 +59,7 @@ pub fn handler(key: Key, app: &mut App) {
           app.dispatch(IoEvent::StartPlayback(
             selected_album.album.uri.clone(),
             None,
-            Some(app.saved_album_tracks_index),
+            Some(app.view.saved_album_tracks_index),
           ));
         };
       }
@@ -79,10 +79,12 @@ pub fn handler(key: Key, app: &mut App) {
     }
     _ if key == app.user_config.keys.add_item_to_queue => {
       let track = match app.album_table_context {
-        AlbumTableContext::Full => app
-          .selected_album_full
-          .as_ref()
-          .and_then(|a| a.album.tracks.get(app.saved_album_tracks_index).cloned()),
+        AlbumTableContext::Full => app.selected_album_full.as_ref().and_then(|a| {
+          a.album
+            .tracks
+            .get(app.view.saved_album_tracks_index)
+            .cloned()
+        }),
         AlbumTableContext::Simplified => app
           .selected_album_simplified
           .as_ref()
@@ -100,7 +102,7 @@ fn handle_high_event(app: &mut App) {
   match app.album_table_context {
     AlbumTableContext::Full => {
       let next_index = common_key_events::on_high_press_handler();
-      app.saved_album_tracks_index = next_index;
+      app.view.saved_album_tracks_index = next_index;
     }
     AlbumTableContext::Simplified => {
       if let Some(selected_album_simplified) = &mut app.selected_album_simplified {
@@ -116,7 +118,7 @@ fn handle_middle_event(app: &mut App) {
     AlbumTableContext::Full => {
       if let Some(selected_album) = &app.selected_album_full {
         let next_index = common_key_events::on_middle_press_handler(&selected_album.album.tracks);
-        app.saved_album_tracks_index = next_index;
+        app.view.saved_album_tracks_index = next_index;
       };
     }
     AlbumTableContext::Simplified => {
@@ -134,7 +136,7 @@ fn handle_low_event(app: &mut App) {
     AlbumTableContext::Full => {
       if let Some(selected_album) = &app.selected_album_full {
         let next_index = common_key_events::on_low_press_handler(&selected_album.album.tracks);
-        app.saved_album_tracks_index = next_index;
+        app.view.saved_album_tracks_index = next_index;
       };
     }
     AlbumTableContext::Simplified => {
@@ -154,7 +156,7 @@ fn handle_recommended_tracks(app: &mut App) {
         if let Some(track) = selected_album
           .album
           .tracks
-          .get(app.saved_album_tracks_index)
+          .get(app.view.saved_album_tracks_index)
         {
           if let Some(id) = &track.id {
             app.recommendations_context = Some(RecommendationsContext::Song);
@@ -189,7 +191,7 @@ fn handle_save_event(app: &mut App) {
         if let Some(selected_track) = selected_album
           .album
           .tracks
-          .get(app.saved_album_tracks_index)
+          .get(app.view.saved_album_tracks_index)
         {
           if let Some(track_id_str) = &selected_track.id {
             app.dispatch(IoEvent::ToggleSaveTrack(track_id_str.clone()));

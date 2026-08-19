@@ -292,7 +292,7 @@ pub fn draw_local_browser(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     title,
     &items,
     highlight_state,
-    Some(app.local_playlists_index),
+    Some(app.view.local_playlists_index),
   );
 }
 
@@ -316,7 +316,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let (offset, visible) = visible_window(
       app,
       layout_chunk,
-      app.artists_list_index,
+      app.view.artists_list_index,
       &saved_artists.items,
     );
     let items = visible
@@ -333,7 +333,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       layout_chunk,
       ("Artists", &header),
       &items,
-      app.artists_list_index,
+      app.view.artists_list_index,
       offset,
       highlight_state,
     )
@@ -344,7 +344,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       layout_chunk,
       ("Artists", &header),
       &[],
-      app.artists_list_index,
+      app.view.artists_list_index,
       0,
       highlight_state,
     )
@@ -363,8 +363,12 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 
   if let Some(saved_shows) = app.library.saved_shows.get_results(None) {
-    let (offset, visible) =
-      visible_window(app, layout_chunk, app.shows_list_index, &saved_shows.items);
+    let (offset, visible) = visible_window(
+      app,
+      layout_chunk,
+      app.view.shows_list_index,
+      &saved_shows.items,
+    );
     let items = visible
       .iter()
       .map(|show| podcast_table_item(show, &columns))
@@ -376,7 +380,7 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       layout_chunk,
       ("Podcasts", &header),
       &items,
-      app.shows_list_index,
+      app.view.shows_list_index,
       offset,
       highlight_state,
     )
@@ -424,7 +428,7 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       let (offset, visible) = visible_window(
         app,
         layout_chunk,
-        app.saved_album_tracks_index,
+        app.view.saved_album_tracks_index,
         &selected_album.album.tracks,
       );
       AlbumUi {
@@ -437,7 +441,7 @@ pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           selected_album.album.name,
           join_artist_names(&selected_album.album.artists)
         ),
-        selected_index: app.saved_album_tracks_index,
+        selected_index: app.view.saved_album_tracks_index,
         offset,
       }
     }),
@@ -561,7 +565,7 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::AlbumList,
   );
 
-  let selected_song_index = app.album_list_index;
+  let selected_song_index = app.view.album_list_index;
 
   if let Some(saved_albums) = app.library.saved_albums.get_results(None) {
     let (offset, visible) =
@@ -596,8 +600,12 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 
   if let Some(episodes) = app.library.show_episodes.get_results(None) {
-    let (offset, visible) =
-      visible_window(app, layout_chunk, app.episode_list_index, &episodes.items);
+    let (offset, visible) = visible_window(
+      app,
+      layout_chunk,
+      app.view.episode_list_index,
+      &episodes.items,
+    );
     let items = visible
       .iter()
       .map(|episode| episode_table_item(episode, &columns, app))
@@ -630,7 +638,7 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       layout_chunk,
       (&title, &header),
       &items,
-      app.episode_list_index,
+      app.view.episode_list_index,
       offset,
       highlight_state,
     );
