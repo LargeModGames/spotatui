@@ -129,11 +129,11 @@ fn count_app_field_writes(source: &str) -> usize {
 
 /// Counts writes into `App::view`: `<receiver>.view.<field>` (optionally a
 /// deeper chain) followed on the same line by an assignment operator. Measured
-/// over every file outside `src/tui/` and `src/core/app/`, tests included like
-/// the handler write counter: a producer that resets or clamps a cursor after
-/// it replaces a list, and the test that pins that behavior. Each one is a
-/// place where the TUI's presentation state leaks into shared code; the end
-/// state is a producer-side revision the frontend reacts to.
+/// over every file outside `src/tui/` and `src/core/app/` (and this file),
+/// tests included like the handler write counter: a producer that resets or
+/// clamps a cursor after it replaces a list, and the test that pins that
+/// behavior. Each one is a place where the TUI's presentation state leaks into
+/// shared code; the end state is a producer-side revision the frontend reacts to.
 fn count_view_field_writes(source: &str) -> usize {
   let bytes = source.as_bytes();
   // A field access has a receiver directly before the dot; a `.view.` that

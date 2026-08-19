@@ -203,7 +203,7 @@ impl App {
   /// is the Source panel unless Spotify is active (devices are Spotify Connect
   /// only), and only Spotify needs a `me/player/devices` fetch: an
   /// unauthenticated or offline session must not surface a spurious error.
-  pub fn open_source_device_picker(&mut self) {
+  pub(crate) fn open_source_device_picker(&mut self) {
     self.view.source_list_index = Source::ALL
       .iter()
       .position(|s| *s == self.active_source)
