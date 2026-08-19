@@ -174,7 +174,16 @@ impl App {
     self.native_device_id = Some(device_id.clone());
     self.is_streaming_active = true;
     self.native_activation_pending = false;
-    self.native_is_playing = Some(false);
+    // Only the polled "no active playback" answer reaches this, and that answer
+    // is structurally wrong while a queued Spotify track plays: the queue starts
+    // it with a direct `player.load`, which never enters Spirc's Connect state,
+    // so the Web API reports the device idle over audible playback. Clearing the
+    // play state here drew a paused playbar over that audio, and re-cleared it
+    // on every poll after the user pressed play. The player's own events own
+    // this field while the queue slot holds the sink.
+    if !self.queue_now_is_spotify() {
+      self.native_is_playing = Some(false);
+    }
 
     if self
       .current_playback_context
@@ -300,5 +309,44 @@ mod tests {
     app.last_device_activation = Some(Instant::now() - Duration::from_secs(6));
 
     assert!(!app.has_fresh_native_activity());
+  }
+
+  /// The polled "device is idle" answer is the only caller, and it cannot see a
+  /// queued Spotify track: the queue starts it with a direct `player.load`, so
+  /// the Web API reports the device idle over audible playback. Believing it
+  /// drew a paused playbar over that audio, and re-drew it every poll after the
+  /// user pressed play.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn marking_the_device_available_keeps_the_queue_slots_play_state() {
+    use crate::core::app::test_support::queue_track;
+    use crate::infra::queue::QueueNowPlaying;
+
+    let mut app = App {
+      native_is_playing: Some(true),
+      queue_now: Some(QueueNowPlaying::Spotify {
+        track: queue_track(Some("spotify:track:queued"), "Queued"),
+      }),
+      ..Default::default()
+    };
+
+    app.mark_native_streaming_device_available("device".to_string(), "spotatui".to_string(), 70);
+
+    assert_eq!(app.native_is_playing, Some(true));
+    assert!(app.is_streaming_active);
+  }
+
+  /// With no queue slot the API's idle answer is trustworthy again.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn marking_the_device_available_clears_the_play_state_without_a_queue_slot() {
+    let mut app = App {
+      native_is_playing: Some(true),
+      ..Default::default()
+    };
+
+    app.mark_native_streaming_device_available("device".to_string(), "spotatui".to_string(), 70);
+
+    assert_eq!(app.native_is_playing, Some(false));
   }
 }

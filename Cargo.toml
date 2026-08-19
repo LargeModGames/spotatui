@@ -83,16 +83,17 @@ rodio = { version = "0.22", optional = true }
 # Streaming dependencies: our maintained librespot fork, published on crates.io
 # as spotatui-librespot-* (upstream 0.8.0 + CDN 530 fallback for silent playback,
 # dealer reconnect/session-loss recovery, OAuth callback listener hardening,
-# previous-on-first-track restarting instead of stopping (#366), and a fork-only
-# session disconnect-reason API the app depends on - upstream 0.8 cannot be
-# substituted). The `package =` rename keeps `librespot_*` imports and
+# previous-on-first-track restarting instead of stopping (#366), Spirc ignoring
+# play-request ids of direct `Player::load`s so a queued track's end cannot stop
+# the next one, and a fork-only session disconnect-reason API the app depends
+# on - upstream 0.8 cannot be substituted). The `package =` rename keeps `librespot_*` imports and
 # `librespot-*/feature` refs unchanged; `=`-pinned so all seven crates upgrade in
 # lockstep. See SPOTATUI_FORK.md in the fork repo for the carried patches.
-librespot-core = { version = "=0.8.2", package = "spotatui-librespot-core", optional = true }
-librespot-connect = { version = "=0.8.2", package = "spotatui-librespot-connect", optional = true }
-librespot-oauth = { version = "=0.8.2", package = "spotatui-librespot-oauth", optional = true }
-librespot-metadata = { version = "=0.8.2", package = "spotatui-librespot-metadata", optional = true }
-librespot-protocol = { version = "=0.8.2", package = "spotatui-librespot-protocol", optional = true, default-features = false }
+librespot-core = { version = "=0.8.3", package = "spotatui-librespot-core", optional = true }
+librespot-connect = { version = "=0.8.3", package = "spotatui-librespot-connect", optional = true }
+librespot-oauth = { version = "=0.8.3", package = "spotatui-librespot-oauth", optional = true }
+librespot-metadata = { version = "=0.8.3", package = "spotatui-librespot-metadata", optional = true }
+librespot-protocol = { version = "=0.8.3", package = "spotatui-librespot-protocol", optional = true, default-features = false }
 protobuf = { version = "3.7", optional = true }
 futures = "0.3.32"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
@@ -102,18 +103,18 @@ keepawake = "0.6"
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
 arboard = { version = "3.4", features = ["wayland-data-control"] }
 pipewire = { version = "0.10", optional = true }
-librespot-playback = { version = "=0.8.2", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["alsa-backend"] }
+librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["alsa-backend"] }
 
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
 arboard = { version = "3.4", features = ["wayland-data-control"] }
-librespot-playback = { version = "=0.8.2", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
+librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = "3.4"
 # On Windows we default to rodio for audio output.
 # Without this, librespot-playback falls back to the `pipe` sink which writes raw audio bytes
 # to stdout (breaking the TUI and producing no audible output).
-librespot-playback = { version = "=0.8.2", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
+librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
 smtc-tokio = { version = "0.1.0", optional = true }
 
 # MPRIS D-Bus support (Linux only)
@@ -126,7 +127,7 @@ mpris-server = { version = "0.10", optional = true }
 # causing SIGSEGV crashes. See Issue #9 and #20.
 [target.'cfg(target_os = "macos")'.dependencies]
 arboard = "3.4"
-librespot-playback = { version = "=0.8.2", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["portaudio-backend"] }
+librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["portaudio-backend"] }
 objc2-media-player = { version = "0.3", optional = true }
 objc2-foundation = { version = "0.3", optional = true }
 objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["NSImage"] }

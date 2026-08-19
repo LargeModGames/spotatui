@@ -1904,11 +1904,16 @@ impl PlaybackNetwork for Network {
     let (player, snapshot) = {
       let mut app = self.app.lock().await;
       if app.pending_start_playback.is_some() {
+        warn!("native restore {generation} skipped: a parked StartPlayback owns the replay");
         return;
       }
       // A stale RestoreNativePlayback (e.g. queued before a handoff cleared
       // the snapshot) must not escalate into a reselecting recovery (#437).
       if app.native_playback_restore_generation() != Some(generation) {
+        warn!(
+          "native restore {generation} skipped: snapshot generation is now {:?}",
+          app.native_playback_restore_generation()
+        );
         return;
       }
       let Some(player) = app
@@ -1917,10 +1922,12 @@ impl PlaybackNetwork for Network {
         .filter(|player| player.is_connected())
         .cloned()
       else {
+        warn!("native restore {generation} skipped: no connected player; forcing recovery");
         app.force_native_streaming_recovery(true);
         return;
       };
       let Some(snapshot) = app.begin_native_playback_restore(generation) else {
+        warn!("native restore {generation} skipped: the snapshot moved on mid-restore");
         return;
       };
       app.native_load_watchdog = Some(Instant::now());
@@ -1929,6 +1936,9 @@ impl PlaybackNetwork for Network {
     };
 
     let Some(request) = native_restore_load_request(&snapshot) else {
+      warn!(
+        "native restore {generation} skipped: the snapshot carries no loadable context or uris"
+      );
       let mut app = self.app.lock().await;
       if app.native_playback_restore_generation() == Some(generation) {
         app.native_restore_pending = None;
@@ -2498,6 +2508,8 @@ impl PlaybackNetwork for Network {
     #[cfg(feature = "streaming")]
     let native_active = is_native_streaming_active_for_playback(self).await;
     #[cfg(feature = "streaming")]
+    info!("continuation for {previous_track_id}: handling, native_active={native_active}");
+    #[cfg(feature = "streaming")]
     if native_active {
       let (transition_advanced, raw_next, raw_list_exhausted) = {
         let app = self.app.lock().await;
@@ -2525,6 +2537,7 @@ impl PlaybackNetwork for Network {
         // the progress watchdog does not read the silence as a stall and
         // rebuild the backend, and so a later recovery cannot replay the
         // final track.
+        info!("continuation for {previous_track_id}: raw uri list exhausted; staying stopped");
         self.app.lock().await.set_native_playback_intent(false);
         return;
       }
@@ -2585,8 +2598,18 @@ impl PlaybackNetwork for Network {
             "continuation for {previous_track_id}: resuming the already-selected next item"
           );
           self.start_playback(None, None, None).await;
+        } else {
+          warn!(
+            "continuation for {previous_track_id}: paused with no current item; nothing to resume"
+          );
         }
+      } else {
+        info!("continuation for {previous_track_id}: the API already reports playback running");
       }
+    } else {
+      warn!(
+        "continuation for {previous_track_id}: no playback context from the API; nothing to resume"
+      );
     }
   }
 

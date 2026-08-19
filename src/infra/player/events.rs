@@ -9,7 +9,7 @@ use crate::infra::player::{
   get_default_cache_path, PlayerEvent, SessionDisconnectReason, StreamingConfig,
   StreamingConnectionState, StreamingPlayer,
 };
-use log::info;
+use log::{info, warn};
 use std::sync::{
   atomic::{AtomicBool, AtomicU64, Ordering},
   Arc,
@@ -98,6 +98,28 @@ pub fn spawn_streaming_recovery_handler(ctx: StreamingRecoveryContext) {
   });
 }
 
+/// Compact recovery-snapshot summary for the log: enough to tell which restore
+/// branch should have run and with what track/position, without dumping a whole
+/// context's URI list.
+fn recovery_snapshot_summary(app: &App) -> String {
+  match app.native_playback_recovery.as_ref() {
+    None => "snapshot=none".to_string(),
+    Some(s) => format!(
+      "snapshot gen={} current={:?} loading={:?} pos={} dur={:?} playing={} ctx={:?} uris={} offset={:?} attempts={}",
+      s.generation,
+      s.current_track_uri,
+      s.loading_track_uri,
+      s.position_ms,
+      s.track_duration_ms,
+      s.desired_playing,
+      s.context_uri,
+      s.uris.as_ref().map_or(0, |uris| uris.len()),
+      s.offset,
+      s.recovery_attempts,
+    ),
+  }
+}
+
 /// Intent ORs across coalesced transport-drop requests, but a handoff
 /// (`restore_playback == false`) stickily vetoes restore/reselect: restoring
 /// over the user's handoff would steal playback back (#437).
@@ -125,20 +147,36 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       // pending window is over, so replay anything parked against it.
       let mut app = ctx.app.lock().await;
       app.native_backend_pending = false;
+      info!(
+        "recovery over a live player: reselect={} continue_after={:?} {}",
+        request.reselect_device,
+        request.continue_after_track,
+        recovery_snapshot_summary(&app)
+      );
       if app.pending_start_playback.is_some() {
+        info!("recovery route: replay parked StartPlayback");
         app.replay_pending_start_playback();
       } else if let Some(previous_track_id) = request.continue_after_track {
         if app.native_transition_has_advanced(&previous_track_id) {
           if let Some(generation) = app.native_playback_restore_generation() {
+            info!("recovery route: RestoreNativePlayback({generation}) (transition advanced)");
             app.dispatch(IoEvent::RestoreNativePlayback(generation));
+          } else {
+            warn!("recovery route: none - transition advanced but the snapshot is gone");
           }
         } else {
+          info!("recovery route: EnsurePlaybackContinues({previous_track_id})");
           app.dispatch(IoEvent::EnsurePlaybackContinues(previous_track_id));
         }
       } else if request.reselect_device {
         if let Some(generation) = app.native_playback_restore_generation() {
+          info!("recovery route: RestoreNativePlayback({generation}) (reselect)");
           app.dispatch(IoEvent::RestoreNativePlayback(generation));
+        } else {
+          warn!("recovery route: none - reselect requested but the snapshot is gone");
         }
+      } else {
+        info!("recovery route: none - no restore intent on the request");
       }
       continue;
     }
@@ -200,6 +238,14 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         // replay event if another device became active during the rebuild.
         let replay_queue_slot = app.pending_start_playback.is_none()
           && should_replay_published_queue_slot(&request, app.queue_now_is_spotify());
+        info!(
+          "recovery rebuilt the backend: restore={} reselect={} continue_after={:?} replay_queue_slot={} {}",
+          request.restore_playback,
+          request.reselect_device,
+          request.continue_after_track,
+          replay_queue_slot,
+          recovery_snapshot_summary(&app)
+        );
         if recovery_needs_native_selection(&request, replay_queue_slot) {
           app.dispatch(IoEvent::AutoSelectStreamingDevice(
             ctx.client_config.streaming_device_name.clone(),
@@ -210,25 +256,33 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         // A new explicit playback request wins over restoring older intent.
         // Both paths are queued after device selection on the serial IoEvent pump.
         if app.pending_start_playback.is_some() {
+          info!("recovery route: replay parked StartPlayback");
           app.replay_pending_start_playback();
         } else if replay_queue_slot {
           // The published queue slot outranks snapshot restore: its direct
           // load was discarded with the replaced player, and for a queue
           // playing over an idle app there is no snapshot whose TrackChanged
           // would trigger the reload guard.
+          info!("recovery route: ReplayPublishedSpotifyQueueSlot");
           app.dispatch(IoEvent::ReplayPublishedSpotifyQueueSlot);
         } else if let Some(previous_track_id) = request.continue_after_track {
           if app.native_transition_has_advanced(&previous_track_id) {
             if let Some(generation) = app.native_playback_restore_generation() {
+              info!("recovery route: RestoreNativePlayback({generation}) (transition advanced)");
               app.dispatch(IoEvent::RestoreNativePlayback(generation));
+            } else {
+              warn!("recovery route: none - transition advanced but the snapshot is gone");
             }
           } else {
+            info!("recovery route: EnsurePlaybackContinues({previous_track_id})");
             app.dispatch(IoEvent::EnsurePlaybackContinues(previous_track_id));
           }
         } else if request.reselect_device {
           if let Some(generation) = app.native_playback_restore_generation() {
+            info!("recovery route: RestoreNativePlayback({generation}) (reselect)");
             app.dispatch(IoEvent::RestoreNativePlayback(generation));
           } else {
+            warn!("recovery route: none - reselect requested but the snapshot is gone");
             app.set_status_message("Native streaming recovered.", 6);
           }
         } else if request.restore_playback {
@@ -1219,6 +1273,11 @@ fn spawn_end_of_track_continuation(
       .await
       .unwrap_or(false)
     {
+      warn!(
+        "end-of-track continuation for {} abandoned: no stable connection within {}s",
+        previous_track_id,
+        END_OF_TRACK_RECONNECT_TIMEOUT.as_secs()
+      );
       return;
     }
 
