@@ -72,7 +72,7 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let banner_text = if app.user_config.behavior.banner_gradient {
     Text::from(build_banner_gradient_lines(
       &app.user_config.theme,
-      app.animation_tick,
+      app.view.animation_tick,
     ))
   } else {
     Text::styled(
@@ -147,7 +147,7 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // one row), so slice out the visible window ourselves instead of using
   // Paragraph::scroll, which re-composes every line above the offset each
   // frame. Only the visible cached lines get re-spanned (borrow_line).
-  let scroll = usize::from(app.home_scroll);
+  let scroll = usize::from(app.view.home_scroll);
   let height = usize::from(changelog_area.height);
   let prefix_len = changelog_lines.len();
   let mut visible: Vec<Line> = Vec::with_capacity(height);
@@ -518,7 +518,7 @@ mod tests {
       "changelog area should have content"
     );
 
-    app.home_scroll = 3;
+    app.view.home_scroll = 3;
     let rows_scrolled = rendered_rows(&app);
     for y in 9..35 {
       assert_eq!(
@@ -564,7 +564,7 @@ mod tests {
   #[test]
   fn home_changelog_scroll_past_end_renders_blank() {
     let mut app = App::default();
-    app.home_scroll = u16::MAX;
+    app.view.home_scroll = u16::MAX;
     let rows = rendered_rows(&app);
     for (y, row) in rows.iter().enumerate().take(38).skip(9) {
       assert!(

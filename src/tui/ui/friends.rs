@@ -48,7 +48,7 @@ pub fn draw_friends(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   draw_help_bar(f, app, help_area);
 
   // Add-friend overlay rendered on top
-  if app.friend_add_dialog_visible {
+  if app.view.friend_add_dialog_visible {
     draw_add_friend_dialog(f, app, layout_chunk);
   }
 }
@@ -160,7 +160,7 @@ fn draw_friends_body(f: &mut Frame<'_>, app: &App, area: Rect) {
   let filtered = filtered_friends(app);
 
   if filtered.is_empty() {
-    let msg = if !app.friend_search_input.is_empty() {
+    let msg = if !app.view.friend_search_input.is_empty() {
       "No friends match your search"
     } else if app.friends_loading {
       "Loading friends..."
@@ -192,14 +192,14 @@ fn draw_filter_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
   let online_count = app.friends.iter().filter(|f| f.is_online).count();
   let all_count = app.friends.len();
 
-  let all_style = if app.friend_filter == FriendFilter::All {
+  let all_style = if app.view.friend_filter == FriendFilter::All {
     Style::default()
       .fg(theme.selected.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
   } else {
     Style::default().fg(theme.inactive.into())
   };
-  let online_style = if app.friend_filter == FriendFilter::Online {
+  let online_style = if app.view.friend_filter == FriendFilter::Online {
     Style::default()
       .fg(theme.selected.into())
       .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
@@ -208,7 +208,7 @@ fn draw_filter_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
   };
 
   // Build search preview (inline: any unbound key types into the filter)
-  let search_str: String = app.friend_search_input.iter().collect();
+  let search_str: String = app.view.friend_search_input.iter().collect();
   let search_hint = if search_str.is_empty() {
     "search…".to_string()
   } else {
@@ -237,7 +237,7 @@ fn draw_friend_list(f: &mut Frame<'_>, app: &App, area: Rect, friends: &[&Friend
     .iter()
     .enumerate()
     .map(|(i, friend)| {
-      let is_selected = i == app.friend_selected_index;
+      let is_selected = i == app.view.friend_selected_index;
 
       // Online indicator
       let online_span = if friend.is_online {
@@ -294,6 +294,7 @@ fn draw_friend_list(f: &mut Frame<'_>, app: &App, area: Rect, friends: &[&Friend
   let mut state = ListState::default();
   state.select(Some(
     app
+      .view
       .friend_selected_index
       .min(friends.len().saturating_sub(1)),
   ));
@@ -372,7 +373,7 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
   ]));
 
   // Tab row
-  let code_style = if app.friend_add_mode == FriendAddMode::Code {
+  let code_style = if app.view.friend_add_mode == FriendAddMode::Code {
     Style::default().fg(theme.selected.into()).add_modifier(
       app
         .user_config
@@ -382,7 +383,7 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
   } else {
     Style::default().fg(theme.inactive.into())
   };
-  let search_style = if app.friend_add_mode == FriendAddMode::Search {
+  let search_style = if app.view.friend_add_mode == FriendAddMode::Search {
     Style::default().fg(theme.selected.into()).add_modifier(
       app
         .user_config
@@ -399,7 +400,7 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
   ]);
   f.render_widget(Paragraph::new(tabs_line), tabs_area);
 
-  match app.friend_add_mode {
+  match app.view.friend_add_mode {
     FriendAddMode::Code => draw_add_by_code(f, app, content_area),
     FriendAddMode::Search => draw_add_by_search(f, app, content_area),
   }
@@ -419,7 +420,7 @@ fn draw_add_friend_dialog(f: &mut Frame<'_>, app: &App, parent: Rect) {
 fn draw_add_by_code(f: &mut Frame<'_>, app: &App, area: Rect) {
   let theme = app.user_config.theme;
 
-  let input: String = app.friend_add_input.iter().collect();
+  let input: String = app.view.friend_add_input.iter().collect();
   let display = if input.is_empty() {
     "Enter friend code...".to_string()
   } else {
@@ -467,13 +468,13 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
   ]));
 
   // Search input field
-  let search_str: String = app.friend_user_search_input.iter().collect();
+  let search_str: String = app.view.friend_user_search_input.iter().collect();
   let search_display = if search_str.is_empty() {
     "Type a username or code...".to_string()
   } else {
     search_str
   };
-  let search_style = if app.friend_user_search_input.is_empty() {
+  let search_style = if app.view.friend_user_search_input.is_empty() {
     Style::default().fg(theme.inactive.into())
   } else {
     Style::default().fg(theme.text.into())
@@ -488,7 +489,7 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
 
   // Results list
   if app.friend_user_search_results.is_empty() {
-    let msg = if app.friend_user_search_input.is_empty() {
+    let msg = if app.view.friend_user_search_input.is_empty() {
       ""
     } else {
       "No users found"
@@ -509,7 +510,7 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
     .iter()
     .enumerate()
     .map(|(i, r)| {
-      let is_sel = i == app.friend_user_search_selected;
+      let is_sel = i == app.view.friend_user_search_selected;
       let prefix = if is_sel { "▶ " } else { "  " };
       let style = if is_sel {
         Style::default()
@@ -527,7 +528,7 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
     .collect();
 
   let mut state = ListState::default();
-  state.select(Some(app.friend_user_search_selected));
+  state.select(Some(app.view.friend_user_search_selected));
   let list = List::new(items).highlight_style(
     Style::default()
       .fg(theme.selected.into())
@@ -540,14 +541,14 @@ fn draw_add_by_search(f: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Return the subset of friends that pass the active filter and search query.
 pub fn filtered_friends(app: &App) -> Vec<&FriendEntry> {
-  let search_str: String = app.friend_search_input.iter().collect();
+  let search_str: String = app.view.friend_search_input.iter().collect();
   let q = search_str.to_lowercase();
 
   app
     .friends
     .iter()
     .filter(|f| {
-      let passes_filter = match app.friend_filter {
+      let passes_filter = match app.view.friend_filter {
         FriendFilter::All => true,
         FriendFilter::Online => f.is_online,
       };

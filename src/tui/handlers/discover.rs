@@ -11,43 +11,43 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      let next_index = if app.discover_selected_index >= DISCOVER_OPTIONS_COUNT - 1 {
+      let next_index = if app.view.discover_selected_index >= DISCOVER_OPTIONS_COUNT - 1 {
         0
       } else {
-        app.discover_selected_index + 1
+        app.view.discover_selected_index + 1
       };
-      app.discover_selected_index = next_index;
+      app.view.discover_selected_index = next_index;
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      let next_index = if app.discover_selected_index == 0 {
+      let next_index = if app.view.discover_selected_index == 0 {
         DISCOVER_OPTIONS_COUNT - 1
       } else {
-        app.discover_selected_index - 1
+        app.view.discover_selected_index - 1
       };
-      app.discover_selected_index = next_index;
+      app.view.discover_selected_index = next_index;
     }
     // Left/Right to cycle time range (for Top Tracks)
     k if common_key_events::right_event(k, &app.user_config.keys)
-      && app.discover_selected_index == 1 =>
+      && app.view.discover_selected_index == 1 =>
     {
       // Only cycle time range when Top Tracks is selected
-      app.discover_time_range = app.discover_time_range.next();
+      app.view.discover_time_range = app.view.discover_time_range.next();
       // Clear cache so it refetches with new time range
       app.discover_top_tracks.clear();
     }
-    Key::Char('[') if app.discover_selected_index == 1 => {
-      app.discover_time_range = app.discover_time_range.prev();
+    Key::Char('[') if app.view.discover_selected_index == 1 => {
+      app.view.discover_time_range = app.view.discover_time_range.prev();
       app.discover_top_tracks.clear();
     }
-    Key::Char(']') if app.discover_selected_index == 1 => {
-      app.discover_time_range = app.discover_time_range.next();
+    Key::Char(']') if app.view.discover_selected_index == 1 => {
+      app.view.discover_time_range = app.view.discover_time_range.next();
       app.discover_top_tracks.clear();
     }
     Key::Enter => {
       if app.discover_loading {
         return; // Don't process Enter while loading
       }
-      match app.discover_selected_index {
+      match app.view.discover_selected_index {
         0 => {
           // Top Artists Mix
           if app.discover_artists_mix.is_empty() {
@@ -63,7 +63,7 @@ pub fn handler(key: Key, app: &mut App) {
         1 => {
           // Top Tracks - always refetch if empty or if we want fresh data
           if app.discover_top_tracks.is_empty() {
-            app.dispatch(IoEvent::GetUserTopTracks(app.discover_time_range));
+            app.dispatch(IoEvent::GetUserTopTracks(app.view.discover_time_range));
           } else {
             // Tracks already loaded, show them
             app.track_table.tracks = app.discover_top_tracks.clone();
@@ -77,7 +77,7 @@ pub fn handler(key: Key, app: &mut App) {
     }
     _ if key == app.user_config.keys.add_item_to_queue => {
       // Add the first track from the selected discover list to the queue.
-      let track = match app.discover_selected_index {
+      let track = match app.view.discover_selected_index {
         0 => app.discover_artists_mix.first().cloned(),
         1 => app.discover_top_tracks.first().cloned(),
         _ => None,

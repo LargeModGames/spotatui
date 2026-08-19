@@ -22,9 +22,9 @@ use crate::tui::theme::{EmphasisExt, ThemeExt};
 /// truncation) on every redraw while Help is open.
 pub fn ensure_help_menu_model(app: &mut App) {
   // Mirrors draw_help_menu's layout: a margin of 2 on each side of the frame.
-  let total_width = (app.size.width as usize).saturating_sub(4);
-  let stale = app.help_menu_model.as_ref().is_none_or(|m| {
-    m.width != total_width || m.keys != app.user_config.keys || m.filter != app.help_filter
+  let total_width = (app.view.size.width as usize).saturating_sub(4);
+  let stale = app.view.help_menu_model.as_ref().is_none_or(|m| {
+    m.width != total_width || m.keys != app.user_config.keys || m.filter != app.view.help_filter
   });
   if !stale {
     return;
@@ -32,12 +32,12 @@ pub fn ensure_help_menu_model(app: &mut App) {
   let (header, rows) = build_help_rows(app, total_width);
   let match_ranges = rows
     .iter()
-    .map(|row| help_match_ranges(row, &app.help_filter))
+    .map(|row| help_match_ranges(row, &app.view.help_filter))
     .collect();
-  app.help_menu_model = Some(HelpMenuModel {
+  app.view.help_menu_model = Some(HelpMenuModel {
     width: total_width,
     keys: app.user_config.keys.clone(),
-    filter: app.help_filter.clone(),
+    filter: app.view.help_filter.clone(),
     header,
     rows,
     match_ranges,
@@ -126,22 +126,22 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
 
   // The runner (and tests) call `ensure_help_menu_model` before drawing;
   // rendering itself never rebuilds the model, only reads it.
-  let Some(model) = app.help_menu_model.as_ref() else {
+  let Some(model) = app.view.help_menu_model.as_ref() else {
     return;
   };
 
   let help_menu_style = app.user_config.theme.base_style();
   let header = &model.header;
-  let start = (app.help_menu_offset as usize).min(model.rows.len());
+  let start = (app.view.help_menu_offset as usize).min(model.rows.len());
   // Two border rows plus the table header leave this many data rows. This is
   // also the value used by the runner for page-size calculations.
   let visible_count = table_area.height.saturating_sub(3) as usize;
   let end = start.saturating_add(visible_count).min(model.rows.len());
   let help_docs = &model.rows[start..end];
 
-  let rows: Vec<Row<'_>> = if model.rows.is_empty() && !app.help_filter.is_empty() {
+  let rows: Vec<Row<'_>> = if model.rows.is_empty() && !app.view.help_filter.is_empty() {
     vec![
-      Row::new([format!("No help rows match '{}'", app.help_filter)])
+      Row::new([format!("No help rows match '{}'", app.view.help_filter)])
         .style(Style::default().fg(app.user_config.theme.inactive.into())),
     ]
   } else {
@@ -176,20 +176,20 @@ pub fn draw_help_menu(f: &mut Frame<'_>, app: &App) {
   f.render_widget(help_menu, table_area);
 
   let theme = app.user_config.theme;
-  let filter_line = if app.help_filter_editing {
+  let filter_line = if app.view.help_filter_editing {
     Line::from(vec![
       Span::styled("Filter: ", Style::default().fg(theme.active.into())),
-      Span::styled(app.help_filter.clone(), help_menu_style),
+      Span::styled(app.view.help_filter.as_str(), help_menu_style),
       Span::styled("▏", Style::default().fg(theme.active.into())),
       Span::styled(
         "  <Enter>: apply  <Esc>: cancel search",
         Style::default().fg(theme.inactive.into()),
       ),
     ])
-  } else if !app.help_filter.is_empty() {
+  } else if !app.view.help_filter.is_empty() {
     Line::from(vec![
       Span::styled(
-        format!("matches for '{}'", app.help_filter),
+        format!("matches for '{}'", app.view.help_filter),
         Style::default().fg(theme.active.into()),
       ),
       Span::styled(
@@ -221,7 +221,7 @@ mod help_menu_tests {
   use ratatui::{backend::TestBackend, Terminal};
 
   fn rendered_help(app: &mut App) -> String {
-    app.size = crate::core::geometry::Viewport {
+    app.view.size = crate::core::geometry::Viewport {
       width: 100,
       height: 30,
     };
@@ -243,8 +243,8 @@ mod help_menu_tests {
   #[test]
   fn help_menu_renders_only_filtered_rows_and_live_prompt() {
     let mut app = App::default();
-    app.help_filter = "volume".to_string();
-    app.help_filter_editing = true;
+    app.view.help_filter = "volume".to_string();
+    app.view.help_filter_editing = true;
 
     let rendered = rendered_help(&mut app);
 
@@ -266,8 +266,8 @@ mod help_menu_tests {
   #[test]
   fn help_menu_highlights_matched_text_in_filtered_rows() {
     let mut app = App::default();
-    app.help_filter = "volume".to_string();
-    app.size = crate::core::geometry::Viewport {
+    app.view.help_filter = "volume".to_string();
+    app.view.size = crate::core::geometry::Viewport {
       width: 100,
       height: 30,
     };
@@ -309,8 +309,8 @@ mod help_menu_tests {
   #[test]
   fn help_menu_renders_no_matches_and_clamps_a_stale_offset() {
     let mut app = App::default();
-    app.help_filter = "not-a-real-help-row".to_string();
-    app.help_menu_offset = u32::MAX;
+    app.view.help_filter = "not-a-real-help-row".to_string();
+    app.view.help_menu_offset = u32::MAX;
 
     let rendered = rendered_help(&mut app);
 
@@ -533,7 +533,7 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
   let selected = if len == 0 {
     None
   } else {
-    Some(app.queue_selected_index.min(len.saturating_sub(1)))
+    Some(app.view.queue_selected_index.min(len.saturating_sub(1)))
   };
   state.select(selected);
   let list = List::new(items)
@@ -632,7 +632,7 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
     DialogContext::PlaylistWindow
     | DialogContext::PlaylistSearch
     | DialogContext::YouTubePlaylistWindow => {
-      if let Some(playlist) = app.dialog.as_ref() {
+      if let Some(playlist) = app.view.dialog.as_ref() {
         let text = vec![
           Line::from(Span::raw("Are you sure you want to delete the playlist: ")),
           Line::from(Span::styled(
@@ -734,7 +734,7 @@ fn draw_confirmation_dialog(
     .split(vchunks[1]);
 
   let ok = Paragraph::new(Span::raw("Ok"))
-    .style(Style::default().fg(if app.confirm {
+    .style(Style::default().fg(if app.view.confirm {
       app.user_config.theme.hovered.into()
     } else {
       app.user_config.theme.inactive.into()
@@ -743,7 +743,7 @@ fn draw_confirmation_dialog(
   f.render_widget(ok, hchunks[0]);
 
   let cancel = Paragraph::new(Span::raw("Cancel"))
-    .style(Style::default().fg(if app.confirm {
+    .style(Style::default().fg(if app.view.confirm {
       app.user_config.theme.inactive.into()
     } else {
       app.user_config.theme.hovered.into()
@@ -839,6 +839,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       })
       .collect();
     let selected = app
+      .view
       .playlist_picker_selected_index
       .min(picker_rows.len() - 1);
     list_state.select(Some(selected));
@@ -1051,11 +1052,11 @@ pub fn draw_exit_prompt(f: &mut Frame<'_>, app: &App) {
 
 /// Draw the sort menu popup overlay
 pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
-  if !app.sort_menu_visible {
+  if !app.view.sort_menu_visible {
     return;
   }
 
-  let context = match app.sort_context {
+  let context = match app.view.sort_context {
     Some(ctx) => ctx,
     None => return,
   };
@@ -1098,7 +1099,7 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
       };
       let text = format!("{}{}{}", field.display_name(), shortcut, indicator);
 
-      let style = if i == app.sort_menu_selected {
+      let style = if i == app.view.sort_menu_selected {
         Style::default()
           .fg(app.user_config.theme.active.into())
           .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD))
@@ -1142,7 +1143,7 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
     );
 
   let mut state = ListState::default();
-  state.select(Some(app.sort_menu_selected));
+  state.select(Some(app.view.sort_menu_selected));
 
   f.render_stateful_widget(list, rect, &mut state);
 }
@@ -1170,14 +1171,18 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
 
   match &app.party_status {
     PartyStatus::Disconnected | PartyStatus::Connecting => {
-      if !app.party_input.is_empty() || app.party_input_idx > 0 || !app.party_join_name.is_empty() {
+      if !app.view.party_input.is_empty()
+        || app.view.party_input_idx > 0
+        || !app.view.party_join_name.is_empty()
+      {
         let code_str: String = app
+          .view
           .party_input
           .iter()
           .filter(|c| c.is_alphanumeric())
           .map(|c| c.to_ascii_uppercase())
           .collect();
-        let name_str: String = app.party_join_name.iter().collect();
+        let name_str: String = app.view.party_join_name.iter().collect();
         let trimmed_name = name_str.trim();
         lines.push(Line::from(Span::styled(
           "Enter 6-character party code:",
@@ -1396,7 +1401,7 @@ pub fn draw_plugin_popup(f: &mut Frame<'_>, app: &App) {
 
   let paragraph = Paragraph::new(ratatui_lines)
     .block(block)
-    .scroll((app.plugin_popup_scroll, 0));
+    .scroll((app.view.plugin_popup_scroll, 0));
 
   f.render_widget(paragraph, rect);
 }

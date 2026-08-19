@@ -160,7 +160,7 @@ impl App {
       }
     }
 
-    self.settings_items = match self.settings_category {
+    self.settings_items = match self.view.settings_category {
       SettingsCategory::Behavior => vec![
         SettingItem {
           id: "behavior.seek_milliseconds".to_string(),
@@ -869,10 +869,10 @@ impl App {
         ]
       }
     };
-    self.settings_selected_index = 0;
+    self.view.settings_selected_index = 0;
     self.settings_saved_items = self.settings_items.clone();
-    self.settings_unsaved_prompt_visible = false;
-    self.settings_unsaved_prompt_save_selected = true;
+    self.view.settings_unsaved_prompt_visible = false;
+    self.view.settings_unsaved_prompt_save_selected = true;
   }
 
   /// Enter the Settings screen on a fresh, unfiltered view of the current
@@ -886,19 +886,19 @@ impl App {
 
   /// Open the settings row filter on a fresh, empty query.
   pub fn begin_settings_filter(&mut self) {
-    self.settings_filter.clear();
-    self.settings_filter_editing = true;
+    self.view.settings_filter.clear();
+    self.view.settings_filter_editing = true;
   }
 
   /// Stop typing into the settings row filter, leaving it applied.
   pub fn apply_settings_filter(&mut self) {
-    self.settings_filter_editing = false;
+    self.view.settings_filter_editing = false;
   }
 
   /// Drop the settings row filter entirely.
   pub fn clear_settings_filter(&mut self) {
-    self.settings_filter.clear();
-    self.settings_filter_editing = false;
+    self.view.settings_filter.clear();
+    self.view.settings_filter_editing = false;
   }
 }
 

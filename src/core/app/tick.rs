@@ -59,7 +59,7 @@ impl App {
     self.last_tick_at = Instant::now();
 
     // Increment global animation tick (wraps after ~9.4 quintillion ticks, effectively never)
-    self.animation_tick = self.animation_tick.wrapping_add(1);
+    self.view.animation_tick = self.view.animation_tick.wrapping_add(1);
 
     // Advance an adaptive-theme fade. Real elapsed time, not tick count, so
     // the fade speed is independent of the configured tick rates.
@@ -108,11 +108,11 @@ impl App {
     // would silently stop running during playback.
     self.expire_api_error();
 
-    if let Some(frame) = self.liked_song_animation_frame {
+    if let Some(frame) = self.view.liked_song_animation_frame {
       if frame > 0 {
-        self.liked_song_animation_frame = Some(frame - 1);
+        self.view.liked_song_animation_frame = Some(frame - 1);
       } else {
-        self.liked_song_animation_frame = None;
+        self.view.liked_song_animation_frame = None;
       }
     }
 

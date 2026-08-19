@@ -10,16 +10,18 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       if let Some(stats) = &app.stats_data {
-        app.stats_selected_track = common_key_events::on_down_press_handler(
+        app.view.stats_selected_track = common_key_events::on_down_press_handler(
           &stats.top_tracks,
-          Some(app.stats_selected_track),
+          Some(app.view.stats_selected_track),
         );
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       if let Some(stats) = &app.stats_data {
-        app.stats_selected_track =
-          common_key_events::on_up_press_handler(&stats.top_tracks, Some(app.stats_selected_track));
+        app.view.stats_selected_track = common_key_events::on_up_press_handler(
+          &stats.top_tracks,
+          Some(app.view.stats_selected_track),
+        );
       }
     }
     Key::Char('[') => cycle_period(app, app.stats_period.prev()),
@@ -28,7 +30,7 @@ pub fn handler(key: Key, app: &mut App) {
       let uri = app.stats_data.as_ref().and_then(|stats| {
         stats
           .top_tracks
-          .get(app.stats_selected_track)
+          .get(app.view.stats_selected_track)
           .and_then(|entry| entry.uri.clone())
       });
       match uri {
@@ -53,7 +55,7 @@ pub fn handler(key: Key, app: &mut App) {
 fn cycle_period(app: &mut App, period: crate::infra::history::RecapPeriod) {
   app.stats_period = period;
   app.stats_data = None;
-  app.stats_selected_track = 0;
+  app.view.stats_selected_track = 0;
   app.stats_loading = true;
   app.dispatch(IoEvent::LoadListeningStats(period));
 }

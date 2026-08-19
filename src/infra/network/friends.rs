@@ -249,8 +249,8 @@ pub async fn handle_get_friends(network: &mut Network) {
       let len = friends.len();
       app.friends = friends;
       app.friends_loading = false;
-      if app.friend_selected_index >= len && len > 0 {
-        app.friend_selected_index = len - 1;
+      if app.view.friend_selected_index >= len && len > 0 {
+        app.view.friend_selected_index = len - 1;
       }
       info!("friends: loaded {} friends", len);
     }
@@ -330,18 +330,18 @@ pub async fn handle_search_friend_users(network: &mut Network, query: String) {
   match fetch_user_search(&token, &query).await {
     Ok(results) => {
       let mut app = network.app.lock().await;
-      let current_query: String = app.friend_user_search_input.iter().collect();
+      let current_query: String = app.view.friend_user_search_input.iter().collect();
       if current_query == query {
         app.friend_user_search_results = results;
-        app.friend_user_search_selected = 0;
+        app.view.friend_user_search_selected = 0;
       }
     }
     Err(e) => {
       let mut app = network.app.lock().await;
-      let current_query: String = app.friend_user_search_input.iter().collect();
+      let current_query: String = app.view.friend_user_search_input.iter().collect();
       if current_query == query {
         app.friend_user_search_results.clear();
-        app.friend_user_search_selected = 0;
+        app.view.friend_user_search_selected = 0;
       }
       warn!("friends: user search failed: {}", e);
     }

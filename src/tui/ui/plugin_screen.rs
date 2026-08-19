@@ -121,7 +121,11 @@ fn draw_widgets(f: &mut Frame<'_>, app: &App, content: &PluginScreenContent, are
     match &widget.kind {
       PluginWidgetKind::Paragraph { lines, scroll } => {
         let text: Vec<Line> = lines.iter().map(styled_line).collect();
-        let offset = if *scroll { app.plugin_screen_scroll } else { 0 };
+        let offset = if *scroll {
+          app.view.plugin_screen_scroll
+        } else {
+          0
+        };
         let paragraph = Paragraph::new(text).scroll((offset, 0));
         f.render_widget(paragraph, chunk);
       }
@@ -385,7 +389,7 @@ mod tests {
     scroll: u16,
   ) -> ratatui::buffer::Buffer {
     render_with(content, width, height, |app| {
-      app.plugin_screen_scroll = scroll;
+      app.view.plugin_screen_scroll = scroll;
     })
     .1
   }

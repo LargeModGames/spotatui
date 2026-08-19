@@ -11,60 +11,68 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub fn handler(key: Key, app: &mut App) {
   match key {
     Key::Ctrl('k') => {
-      app.input.drain(app.input_idx..app.input.len());
+      app
+        .view
+        .input
+        .drain(app.view.input_idx..app.view.input.len());
     }
     Key::Ctrl('u') => {
-      app.input.drain(..app.input_idx);
-      app.input_idx = 0;
-      app.input_cursor_position = 0;
+      app.view.input.drain(..app.view.input_idx);
+      app.view.input_idx = 0;
+      app.view.input_cursor_position = 0;
     }
     Key::Ctrl('l') => {
-      app.input = vec![];
-      app.input_idx = 0;
-      app.input_cursor_position = 0;
+      app.view.input = vec![];
+      app.view.input_idx = 0;
+      app.view.input_cursor_position = 0;
     }
     Key::Ctrl('w') => {
-      if app.input_cursor_position == 0 {
+      if app.view.input_cursor_position == 0 {
         return;
       }
-      let word_end = match app.input[..app.input_idx].iter().rposition(|&x| x != ' ') {
+      let word_end = match app.view.input[..app.view.input_idx]
+        .iter()
+        .rposition(|&x| x != ' ')
+      {
         Some(index) => index + 1,
         None => 0,
       };
-      let word_start = match app.input[..word_end].iter().rposition(|&x| x == ' ') {
+      let word_start = match app.view.input[..word_end].iter().rposition(|&x| x == ' ') {
         Some(index) => index + 1,
         None => 0,
       };
-      let deleted: String = app.input[word_start..app.input_idx].iter().collect();
+      let deleted: String = app.view.input[word_start..app.view.input_idx]
+        .iter()
+        .collect();
       let deleted_len: u16 = UnicodeWidthStr::width(deleted.as_str()).try_into().unwrap();
-      app.input.drain(word_start..app.input_idx);
-      app.input_idx = word_start;
-      app.input_cursor_position -= deleted_len;
+      app.view.input.drain(word_start..app.view.input_idx);
+      app.view.input_idx = word_start;
+      app.view.input_cursor_position -= deleted_len;
     }
     Key::End | Key::Ctrl('e') => {
-      app.input_idx = app.input.len();
-      let input_string: String = app.input.iter().collect();
-      app.input_cursor_position = UnicodeWidthStr::width(input_string.as_str())
+      app.view.input_idx = app.view.input.len();
+      let input_string: String = app.view.input.iter().collect();
+      app.view.input_cursor_position = UnicodeWidthStr::width(input_string.as_str())
         .try_into()
         .unwrap();
     }
     Key::Home | Key::Ctrl('a') => {
-      app.input_idx = 0;
-      app.input_cursor_position = 0;
+      app.view.input_idx = 0;
+      app.view.input_cursor_position = 0;
     }
-    Key::Left | Key::Ctrl('b') if !app.input.is_empty() && app.input_idx > 0 => {
-      let last_c = app.input[app.input_idx - 1];
-      app.input_idx -= 1;
-      app.input_cursor_position -= compute_character_width(last_c);
+    Key::Left | Key::Ctrl('b') if !app.view.input.is_empty() && app.view.input_idx > 0 => {
+      let last_c = app.view.input[app.view.input_idx - 1];
+      app.view.input_idx -= 1;
+      app.view.input_cursor_position -= compute_character_width(last_c);
     }
-    Key::Right | Key::Ctrl('f') if app.input_idx < app.input.len() => {
-      let next_c = app.input[app.input_idx];
-      app.input_idx += 1;
-      app.input_cursor_position += compute_character_width(next_c);
+    Key::Right | Key::Ctrl('f') if app.view.input_idx < app.view.input.len() => {
+      let next_c = app.view.input[app.view.input_idx];
+      app.view.input_idx += 1;
+      app.view.input_cursor_position += compute_character_width(next_c);
     }
-    Key::Esc => match app.input_context {
+    Key::Esc => match app.view.input_context {
       InputContext::PlaylistTrackSearch => {
-        app.input_context = InputContext::GlobalSearch;
+        app.view.input_context = InputContext::GlobalSearch;
         app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
       }
       InputContext::GlobalSearch => {
@@ -72,29 +80,31 @@ pub fn handler(key: Key, app: &mut App) {
       }
     },
     Key::Enter => {
-      let input_str: String = app.input.iter().collect();
+      let input_str: String = app.view.input.iter().collect();
 
       process_input(app, input_str);
     }
     Key::Char(c) => {
-      app.input.insert(app.input_idx, c);
-      app.input_idx += 1;
-      app.input_cursor_position += compute_character_width(c);
+      app.view.input.insert(app.view.input_idx, c);
+      app.view.input_idx += 1;
+      app.view.input_cursor_position += compute_character_width(c);
     }
-    Key::Backspace | Key::Ctrl('h') if !app.input.is_empty() && app.input_idx > 0 => {
-      let last_c = app.input.remove(app.input_idx - 1);
-      app.input_idx -= 1;
-      app.input_cursor_position -= compute_character_width(last_c);
+    Key::Backspace | Key::Ctrl('h') if !app.view.input.is_empty() && app.view.input_idx > 0 => {
+      let last_c = app.view.input.remove(app.view.input_idx - 1);
+      app.view.input_idx -= 1;
+      app.view.input_cursor_position -= compute_character_width(last_c);
     }
-    Key::Delete | Key::Ctrl('d') if !app.input.is_empty() && app.input_idx < app.input.len() => {
-      app.input.remove(app.input_idx);
+    Key::Delete | Key::Ctrl('d')
+      if !app.view.input.is_empty() && app.view.input_idx < app.view.input.len() =>
+    {
+      app.view.input.remove(app.view.input_idx);
     }
     _ => {}
   }
 }
 
 fn process_input(app: &mut App, input: String) {
-  if app.input_context == InputContext::PlaylistTrackSearch {
+  if app.view.input_context == InputContext::PlaylistTrackSearch {
     process_playlist_track_search(app, input);
     return;
   }
@@ -105,7 +115,7 @@ fn process_input(app: &mut App, input: String) {
   }
 
   // On searching for a track, clear the playlist selection
-  app.selected_playlist_index = Some(0);
+  app.view.selected_playlist_index = Some(0);
 
   if attempt_process_uri(app, &input, "https://open.spotify.com/", "/")
     || attempt_process_uri(app, &input, "spotify:", ":")
@@ -136,7 +146,7 @@ fn process_input(app: &mut App, input: String) {
 
 fn process_playlist_track_search(app: &mut App, input: String) {
   let query = input.trim().to_string();
-  app.input_context = InputContext::GlobalSearch;
+  app.view.input_context = InputContext::GlobalSearch;
   app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
 
   if query.is_empty() {
@@ -234,84 +244,84 @@ mod tests {
   fn test_input_handler_clear_input_on_ctrl_l() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My text");
+    app.view.input = str_to_vec_char("My text");
 
     handler(Key::Ctrl('l'), &mut app);
 
-    assert_eq!(app.input, str_to_vec_char(""));
+    assert_eq!(app.view.input, str_to_vec_char(""));
   }
 
   #[test]
   fn test_input_handler_ctrl_u() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My text");
+    app.view.input = str_to_vec_char("My text");
 
     handler(Key::Ctrl('u'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("My text"));
+    assert_eq!(app.view.input, str_to_vec_char("My text"));
 
-    app.input_cursor_position = 3;
-    app.input_idx = 3;
+    app.view.input_cursor_position = 3;
+    app.view.input_idx = 3;
     handler(Key::Ctrl('u'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("text"));
+    assert_eq!(app.view.input, str_to_vec_char("text"));
   }
 
   #[test]
   fn test_input_handler_ctrl_k() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My text");
+    app.view.input = str_to_vec_char("My text");
 
     handler(Key::Ctrl('k'), &mut app);
-    assert_eq!(app.input, str_to_vec_char(""));
+    assert_eq!(app.view.input, str_to_vec_char(""));
 
-    app.input = str_to_vec_char("My text");
-    app.input_cursor_position = 2;
-    app.input_idx = 2;
+    app.view.input = str_to_vec_char("My text");
+    app.view.input_cursor_position = 2;
+    app.view.input_idx = 2;
     handler(Key::Ctrl('k'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("My"));
+    assert_eq!(app.view.input, str_to_vec_char("My"));
 
     handler(Key::Ctrl('k'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("My"));
+    assert_eq!(app.view.input, str_to_vec_char("My"));
   }
 
   #[test]
   fn test_input_handler_ctrl_w() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My text");
+    app.view.input = str_to_vec_char("My text");
 
     handler(Key::Ctrl('w'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("My text"));
+    assert_eq!(app.view.input, str_to_vec_char("My text"));
 
-    app.input_cursor_position = 3;
-    app.input_idx = 3;
+    app.view.input_cursor_position = 3;
+    app.view.input_idx = 3;
     handler(Key::Ctrl('w'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("text"));
-    assert_eq!(app.input_cursor_position, 0);
-    assert_eq!(app.input_idx, 0);
+    assert_eq!(app.view.input, str_to_vec_char("text"));
+    assert_eq!(app.view.input_cursor_position, 0);
+    assert_eq!(app.view.input_idx, 0);
 
-    app.input = str_to_vec_char("    ");
-    app.input_cursor_position = 3;
-    app.input_idx = 3;
+    app.view.input = str_to_vec_char("    ");
+    app.view.input_cursor_position = 3;
+    app.view.input_idx = 3;
     handler(Key::Ctrl('w'), &mut app);
-    assert_eq!(app.input, str_to_vec_char(" "));
-    assert_eq!(app.input_cursor_position, 0);
-    assert_eq!(app.input_idx, 0);
-    app.input_cursor_position = 1;
-    app.input_idx = 1;
+    assert_eq!(app.view.input, str_to_vec_char(" "));
+    assert_eq!(app.view.input_cursor_position, 0);
+    assert_eq!(app.view.input_idx, 0);
+    app.view.input_cursor_position = 1;
+    app.view.input_idx = 1;
     handler(Key::Ctrl('w'), &mut app);
-    assert_eq!(app.input, str_to_vec_char(""));
-    assert_eq!(app.input_cursor_position, 0);
-    assert_eq!(app.input_idx, 0);
+    assert_eq!(app.view.input, str_to_vec_char(""));
+    assert_eq!(app.view.input_cursor_position, 0);
+    assert_eq!(app.view.input_idx, 0);
 
-    app.input = str_to_vec_char("Hello there  ");
-    app.input_cursor_position = 13;
-    app.input_idx = 13;
+    app.view.input = str_to_vec_char("Hello there  ");
+    app.view.input_cursor_position = 13;
+    app.view.input_idx = 13;
     handler(Key::Ctrl('w'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("Hello "));
-    assert_eq!(app.input_cursor_position, 6);
-    assert_eq!(app.input_idx, 6);
+    assert_eq!(app.view.input, str_to_vec_char("Hello "));
+    assert_eq!(app.view.input_cursor_position, 6);
+    assert_eq!(app.view.input_idx, 6);
   }
 
   #[test]
@@ -328,14 +338,14 @@ mod tests {
   #[test]
   fn playlist_search_esc_returns_focus_to_track_table() {
     let mut app = App::default();
-    app.input_context = InputContext::PlaylistTrackSearch;
+    app.view.input_context = InputContext::PlaylistTrackSearch;
 
     handler(Key::Esc, &mut app);
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::TrackTable);
     assert_eq!(current_route.hovered_block, ActiveBlock::TrackTable);
-    assert_eq!(app.input_context, InputContext::GlobalSearch);
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
   }
 
   #[test]
@@ -352,10 +362,10 @@ mod tests {
 
     app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
     app.playlist_track_table_id = Some(playlist_id.clone());
-    app.input_context = InputContext::PlaylistTrackSearch;
-    app.input = str_to_vec_char("queen rock");
-    app.input_idx = app.input.len();
-    app.input_cursor_position = app.input.len() as u16;
+    app.view.input_context = InputContext::PlaylistTrackSearch;
+    app.view.input = str_to_vec_char("queen rock");
+    app.view.input_idx = app.view.input.len();
+    app.view.input_cursor_position = app.view.input.len() as u16;
 
     handler(Key::Enter, &mut app);
 
@@ -366,7 +376,7 @@ mod tests {
       }
       _ => panic!("unexpected event"),
     }
-    assert_eq!(app.input_context, InputContext::GlobalSearch);
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
     assert_eq!(
       app.get_current_route().active_block,
       ActiveBlock::TrackTable
@@ -395,7 +405,7 @@ mod tests {
 
     app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
     app.playlist_track_table_id = Some(playlist_id);
-    app.input_context = InputContext::PlaylistTrackSearch;
+    app.view.input_context = InputContext::PlaylistTrackSearch;
     app.active_playlist_track_filter = Some("old".to_string());
 
     handler(Key::Enter, &mut app);
@@ -416,9 +426,9 @@ mod tests {
     // Already on the Search route with focus in the input box. This is the case
     // that previously left focus trapped in the search box on submit (#191).
     app.push_navigation_stack(RouteId::Search, ActiveBlock::Input);
-    app.input = str_to_vec_char("daft punk");
-    app.input_idx = app.input.len();
-    app.input_cursor_position = app.input.len() as u16;
+    app.view.input = str_to_vec_char("daft punk");
+    app.view.input_idx = app.view.input.len();
+    app.view.input_cursor_position = app.view.input.len() as u16;
 
     handler(Key::Enter, &mut app);
 
@@ -436,120 +446,120 @@ mod tests {
   fn test_input_handler_on_enter_text() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My tex");
-    app.input_cursor_position = app.input.len().try_into().unwrap();
-    app.input_idx = app.input.len();
+    app.view.input = str_to_vec_char("My tex");
+    app.view.input_cursor_position = app.view.input.len().try_into().unwrap();
+    app.view.input_idx = app.view.input.len();
 
     handler(Key::Char('t'), &mut app);
 
-    assert_eq!(app.input, str_to_vec_char("My text"));
+    assert_eq!(app.view.input, str_to_vec_char("My text"));
   }
 
   #[test]
   fn test_input_handler_backspace() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My text");
-    app.input_cursor_position = app.input.len().try_into().unwrap();
-    app.input_idx = app.input.len();
+    app.view.input = str_to_vec_char("My text");
+    app.view.input_cursor_position = app.view.input.len().try_into().unwrap();
+    app.view.input_idx = app.view.input.len();
 
     handler(Key::Backspace, &mut app);
-    assert_eq!(app.input, str_to_vec_char("My tex"));
+    assert_eq!(app.view.input, str_to_vec_char("My tex"));
 
     // Test that backspace deletes from the cursor position
-    app.input_idx = 2;
-    app.input_cursor_position = 2;
+    app.view.input_idx = 2;
+    app.view.input_cursor_position = 2;
 
     handler(Key::Backspace, &mut app);
-    assert_eq!(app.input, str_to_vec_char("M tex"));
+    assert_eq!(app.view.input, str_to_vec_char("M tex"));
 
-    app.input_idx = 1;
-    app.input_cursor_position = 1;
+    app.view.input_idx = 1;
+    app.view.input_cursor_position = 1;
 
     handler(Key::Ctrl('h'), &mut app);
-    assert_eq!(app.input, str_to_vec_char(" tex"));
+    assert_eq!(app.view.input, str_to_vec_char(" tex"));
   }
 
   #[test]
   fn test_input_handler_delete() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My text");
-    app.input_idx = 3;
-    app.input_cursor_position = 3;
+    app.view.input = str_to_vec_char("My text");
+    app.view.input_idx = 3;
+    app.view.input_cursor_position = 3;
 
     handler(Key::Delete, &mut app);
-    assert_eq!(app.input, str_to_vec_char("My ext"));
+    assert_eq!(app.view.input, str_to_vec_char("My ext"));
 
-    app.input = str_to_vec_char("ラスト");
-    app.input_idx = 1;
-    app.input_cursor_position = 1;
+    app.view.input = str_to_vec_char("ラスト");
+    app.view.input_idx = 1;
+    app.view.input_cursor_position = 1;
 
     handler(Key::Delete, &mut app);
-    assert_eq!(app.input, str_to_vec_char("ラト"));
+    assert_eq!(app.view.input, str_to_vec_char("ラト"));
 
-    app.input = str_to_vec_char("Rust");
-    app.input_idx = 2;
-    app.input_cursor_position = 2;
+    app.view.input = str_to_vec_char("Rust");
+    app.view.input_idx = 2;
+    app.view.input_cursor_position = 2;
 
     handler(Key::Ctrl('d'), &mut app);
-    assert_eq!(app.input, str_to_vec_char("Rut"));
+    assert_eq!(app.view.input, str_to_vec_char("Rut"));
   }
 
   #[test]
   fn test_input_handler_left_event() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("My text");
-    let input_len = app.input.len().try_into().unwrap();
-    app.input_idx = app.input.len();
-    app.input_cursor_position = input_len;
+    app.view.input = str_to_vec_char("My text");
+    let input_len = app.view.input.len().try_into().unwrap();
+    app.view.input_idx = app.view.input.len();
+    app.view.input_cursor_position = input_len;
 
     handler(Key::Left, &mut app);
-    assert_eq!(app.input_cursor_position, input_len - 1);
+    assert_eq!(app.view.input_cursor_position, input_len - 1);
     handler(Key::Left, &mut app);
-    assert_eq!(app.input_cursor_position, input_len - 2);
+    assert_eq!(app.view.input_cursor_position, input_len - 2);
     handler(Key::Left, &mut app);
-    assert_eq!(app.input_cursor_position, input_len - 3);
+    assert_eq!(app.view.input_cursor_position, input_len - 3);
     handler(Key::Ctrl('b'), &mut app);
-    assert_eq!(app.input_cursor_position, input_len - 4);
+    assert_eq!(app.view.input_cursor_position, input_len - 4);
     handler(Key::Ctrl('b'), &mut app);
-    assert_eq!(app.input_cursor_position, input_len - 5);
+    assert_eq!(app.view.input_cursor_position, input_len - 5);
 
     // Pretend to smash the left event to test the we have no out-of-bounds crash
     for _ in 0..20 {
       handler(Key::Left, &mut app);
     }
 
-    assert_eq!(app.input_cursor_position, 0);
+    assert_eq!(app.view.input_cursor_position, 0);
   }
 
   #[test]
   fn test_input_handler_on_enter_text_non_english_char() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("ыа");
-    app.input_cursor_position = app.input.len().try_into().unwrap();
-    app.input_idx = app.input.len();
+    app.view.input = str_to_vec_char("ыа");
+    app.view.input_cursor_position = app.view.input.len().try_into().unwrap();
+    app.view.input_idx = app.view.input.len();
 
     handler(Key::Char('ы'), &mut app);
 
-    assert_eq!(app.input, str_to_vec_char("ыаы"));
+    assert_eq!(app.view.input, str_to_vec_char("ыаы"));
   }
 
   #[test]
   fn test_input_handler_on_enter_text_wide_char() {
     let mut app = App::default();
 
-    app.input = str_to_vec_char("你");
-    app.input_cursor_position = 2; // 你 is 2 char wide
-    app.input_idx = 1; // 1 char
+    app.view.input = str_to_vec_char("你");
+    app.view.input_cursor_position = 2; // 你 is 2 char wide
+    app.view.input_idx = 1; // 1 char
 
     handler(Key::Char('好'), &mut app);
 
-    assert_eq!(app.input, str_to_vec_char("你好"));
-    assert_eq!(app.input_idx, 2);
-    assert_eq!(app.input_cursor_position, 4);
+    assert_eq!(app.view.input, str_to_vec_char("你好"));
+    assert_eq!(app.view.input_idx, 2);
+    assert_eq!(app.view.input_cursor_position, 4);
   }
 
   mod test_uri_parsing {

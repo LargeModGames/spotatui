@@ -453,8 +453,8 @@ fn add_station_to_sidebar(app: &mut App, mut station: TrackInfo, name: String, u
   station.name = name;
   station.uri = Some(uri);
   app.radio_stations.push(station);
-  if app.selected_playlist_index.is_none() {
-    app.selected_playlist_index = Some(0);
+  if app.view.selected_playlist_index.is_none() {
+    app.view.selected_playlist_index = Some(0);
   }
 }
 
@@ -672,8 +672,8 @@ pub fn handler(key: Key, app: &mut App) {
         ) {
           if let Some(selected_playlist) = playlists.items.get(selected_index) {
             let selected_playlist = selected_playlist.name.clone();
-            app.dialog = Some(selected_playlist);
-            app.confirm = false;
+            app.view.dialog = Some(selected_playlist);
+            app.view.confirm = false;
 
             app.push_navigation_stack(
               RouteId::Dialog,
@@ -941,6 +941,6 @@ mod tests {
 
     // Out-of-range index: the dialog is not opened (no-op), matching sibling
     // `.get()`-guarded handlers elsewhere in this file.
-    assert!(app.dialog.is_none());
+    assert!(app.view.dialog.is_none());
   }
 }

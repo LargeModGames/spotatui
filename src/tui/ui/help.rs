@@ -4,7 +4,7 @@ use crate::core::app::App;
 /// Whitespace-separated terms are ANDed and matching is case-insensitive unless
 /// a term contains an uppercase ASCII character.
 pub fn get_filtered_help_docs(app: &App) -> Vec<Vec<String>> {
-  filter_help_docs(get_help_docs(app), &app.help_filter)
+  filter_help_docs(get_help_docs(app), &app.view.help_filter)
 }
 
 fn filter_help_docs(rows: Vec<Vec<String>>, filter: &str) -> Vec<Vec<String>> {

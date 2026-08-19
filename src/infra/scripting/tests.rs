@@ -1196,7 +1196,7 @@ mod popup_effect_tests {
   #[test]
   fn applying_show_popup_sets_app_popup_and_resets_scroll() {
     let (mut app, _rx) = make_app();
-    app.plugin_popup_scroll = 5;
+    app.view.plugin_popup_scroll = 5;
     let engine = ScriptEngine::new().unwrap();
     let popup = PluginPopup {
       title: "Test".to_string(),
@@ -1214,7 +1214,7 @@ mod popup_effect_tests {
       .push(ScriptEffect::ShowPopup(popup.clone()));
     engine.drain_effects(&mut app);
     assert_eq!(app.plugin_popup, Some(popup));
-    assert_eq!(app.plugin_popup_scroll, 0);
+    assert_eq!(app.view.plugin_popup_scroll, 0);
   }
 }
 

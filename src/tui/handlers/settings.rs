@@ -7,14 +7,14 @@ use crate::tui::handlers::filter_input::{self, FilterEdit};
 use crate::tui::ui::settings::{filtered_setting_indices, selected_setting_position};
 
 pub fn handler(key: Key, app: &mut App) {
-  if app.settings_unsaved_prompt_visible {
+  if app.view.settings_unsaved_prompt_visible {
     handle_unsaved_changes_prompt(key, app);
     return;
   }
 
-  if app.settings_edit_mode {
+  if app.view.settings_edit_mode {
     handle_edit_mode(key, app);
-  } else if app.settings_filter_editing {
+  } else if app.view.settings_filter_editing {
     handle_filter_input(key, app);
   } else {
     handle_navigation(key, app);
@@ -45,7 +45,7 @@ fn handle_navigation(key: Key, app: &mut App) {
 
     // An applied filter is dropped before Esc means "leave the screen", so a
     // narrowed list is never mistaken for the whole of it.
-    Key::Esc if !app.settings_filter.is_empty() => app.clear_settings_filter(),
+    Key::Esc if !app.view.settings_filter.is_empty() => app.clear_settings_filter(),
 
     // Exit settings
     Key::Esc => request_exit_settings(app),
@@ -57,10 +57,10 @@ fn handle_navigation(key: Key, app: &mut App) {
 }
 
 fn handle_filter_input(key: Key, app: &mut App) {
-  match filter_input::apply(key, &mut app.settings_filter) {
+  match filter_input::apply(key, &mut app.view.settings_filter) {
     FilterEdit::Cancel => app.clear_settings_filter(),
     FilterEdit::Confirm => {
-      if app.settings_filter.split_whitespace().next().is_none() {
+      if app.view.settings_filter.split_whitespace().next().is_none() {
         app.clear_settings_filter();
       } else {
         app.apply_settings_filter();
@@ -74,7 +74,7 @@ fn handle_filter_input(key: Key, app: &mut App) {
 /// Move the highlight onto the best remaining match. The ranking changes with
 /// every keystroke, so a selection left where it was would drift off the list.
 fn snap_selection_to_filter(app: &mut App) {
-  app.settings_selected_index = filtered_setting_indices(app).first().copied().unwrap_or(0);
+  app.view.settings_selected_index = filtered_setting_indices(app).first().copied().unwrap_or(0);
 }
 
 /// Rebuild the current category's rows and put the highlight back on a row the
@@ -94,7 +94,7 @@ fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
       close_settings(app);
     }
     Key::Enter => {
-      if app.settings_unsaved_prompt_save_selected {
+      if app.view.settings_unsaved_prompt_save_selected {
         if save_settings(app) {
           close_settings(app);
         }
@@ -103,7 +103,8 @@ fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
       }
     }
     key if left_event(key, &app.user_config.keys) || right_event(key, &app.user_config.keys) => {
-      app.settings_unsaved_prompt_save_selected = !app.settings_unsaved_prompt_save_selected;
+      app.view.settings_unsaved_prompt_save_selected =
+        !app.view.settings_unsaved_prompt_save_selected;
     }
     key if key == app.user_config.keys.back => {
       close_settings(app);
@@ -114,20 +115,20 @@ fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
 
 fn request_exit_settings(app: &mut App) {
   if has_unsaved_settings_changes(app) {
-    app.settings_unsaved_prompt_visible = true;
-    app.settings_unsaved_prompt_save_selected = true;
-    app.settings_edit_mode = false;
-    app.settings_edit_buffer.clear();
+    app.view.settings_unsaved_prompt_visible = true;
+    app.view.settings_unsaved_prompt_save_selected = true;
+    app.view.settings_edit_mode = false;
+    app.view.settings_edit_buffer.clear();
   } else {
     close_settings(app);
   }
 }
 
 fn close_settings(app: &mut App) {
-  app.settings_unsaved_prompt_visible = false;
-  app.settings_unsaved_prompt_save_selected = true;
-  app.settings_edit_mode = false;
-  app.settings_edit_buffer.clear();
+  app.view.settings_unsaved_prompt_visible = false;
+  app.view.settings_unsaved_prompt_save_selected = true;
+  app.view.settings_edit_mode = false;
+  app.view.settings_edit_buffer.clear();
   app.clear_settings_filter();
   app.pop_navigation_stack();
 }
@@ -137,7 +138,7 @@ fn has_unsaved_settings_changes(app: &App) -> bool {
 }
 
 fn handle_edit_mode(key: Key, app: &mut App) {
-  if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
+  if let Some(setting) = app.settings_items.get(app.view.settings_selected_index) {
     match &setting.value {
       SettingValue::Bool(_) => handle_bool_edit(key, app),
       SettingValue::Number(_) => handle_number_edit(key, app),
@@ -153,19 +154,19 @@ fn handle_bool_edit(key: Key, app: &mut App) {
   match key {
     Key::Enter | Key::Char(' ') => {
       // Toggle the boolean value
-      if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
         if let SettingValue::Bool(v) = setting.value {
           setting.value = SettingValue::Bool(!v);
         }
       }
-      app.settings_edit_mode = false;
+      app.view.settings_edit_mode = false;
     }
     Key::Esc => {
-      app.settings_edit_mode = false;
+      app.view.settings_edit_mode = false;
     }
     key if left_event(key, &app.user_config.keys) || right_event(key, &app.user_config.keys) => {
       // Toggle on left/right as well for better UX
-      if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
         if let SettingValue::Bool(v) = setting.value {
           setting.value = SettingValue::Bool(!v);
         }
@@ -179,41 +180,41 @@ fn handle_number_edit(key: Key, app: &mut App) {
   match key {
     Key::Enter => {
       // Parse and apply the edited number
-      if let Ok(num) = app.settings_edit_buffer.parse::<i64>() {
-        if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Ok(num) = app.view.settings_edit_buffer.parse::<i64>() {
+        if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
           setting.value = SettingValue::Number(num);
         }
       }
-      app.settings_edit_mode = false;
-      app.settings_edit_buffer.clear();
+      app.view.settings_edit_mode = false;
+      app.view.settings_edit_buffer.clear();
     }
     Key::Esc => {
-      app.settings_edit_mode = false;
-      app.settings_edit_buffer.clear();
+      app.view.settings_edit_mode = false;
+      app.view.settings_edit_buffer.clear();
     }
     Key::Char(c) if c.is_ascii_digit() || c == '-' => {
-      app.settings_edit_buffer.push(c);
+      app.view.settings_edit_buffer.push(c);
     }
     Key::Backspace => {
-      app.settings_edit_buffer.pop();
+      app.view.settings_edit_buffer.pop();
     }
     key if up_event(key, &app.user_config.keys) => {
       // Increment value
-      if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
         if let SettingValue::Number(v) = setting.value {
           let new_val = v + 1;
           setting.value = SettingValue::Number(new_val);
-          app.settings_edit_buffer = new_val.to_string();
+          app.view.settings_edit_buffer = new_val.to_string();
         }
       }
     }
     key if down_event(key, &app.user_config.keys) => {
       // Decrement value
-      if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
         if let SettingValue::Number(v) = setting.value {
           let new_val = v - 1;
           setting.value = SettingValue::Number(new_val);
-          app.settings_edit_buffer = new_val.to_string();
+          app.view.settings_edit_buffer = new_val.to_string();
         }
       }
     }
@@ -225,8 +226,8 @@ fn handle_string_edit(key: Key, app: &mut App) {
   match key {
     Key::Enter => {
       // Apply the edited string
-      if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
-        let new_value = app.settings_edit_buffer.clone();
+      if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
+        let new_value = app.view.settings_edit_buffer.clone();
 
         #[cfg(feature = "self-update")]
         if setting.id == "behavior.auto_update_delay" {
@@ -259,18 +260,18 @@ fn handle_string_edit(key: Key, app: &mut App) {
           }
         }
       }
-      app.settings_edit_mode = false;
-      app.settings_edit_buffer.clear();
+      app.view.settings_edit_mode = false;
+      app.view.settings_edit_buffer.clear();
     }
     Key::Esc => {
-      app.settings_edit_mode = false;
-      app.settings_edit_buffer.clear();
+      app.view.settings_edit_mode = false;
+      app.view.settings_edit_buffer.clear();
     }
     Key::Char(c) => {
-      app.settings_edit_buffer.push(c);
+      app.view.settings_edit_buffer.push(c);
     }
     Key::Backspace => {
-      app.settings_edit_buffer.pop();
+      app.view.settings_edit_buffer.pop();
     }
     _ => {}
   }
@@ -311,8 +312,8 @@ fn handle_key_edit(key: Key, app: &mut App) {
   match key {
     // Escape cancels the key binding edit
     Key::Esc => {
-      app.settings_edit_mode = false;
-      app.settings_edit_buffer.clear();
+      app.view.settings_edit_mode = false;
+      app.view.settings_edit_buffer.clear();
     }
     // Ignore standalone modifier key presses (e.g. pressing Shift alone)
     Key::Unknown => {}
@@ -322,13 +323,13 @@ fn handle_key_edit(key: Key, app: &mut App) {
       if let Err(e) = crate::core::user_config::check_reserved_keys_public(key) {
         // Show error but don't apply the reserved key
         app.handle_error(anyhow::anyhow!("{}", e));
-        app.settings_edit_mode = false;
-        app.settings_edit_buffer.clear();
+        app.view.settings_edit_mode = false;
+        app.view.settings_edit_buffer.clear();
         return;
       }
 
       // Check for keybinding conflicts
-      if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
+      if let Some(setting) = app.settings_items.get(app.view.settings_selected_index) {
         if let Some(conflict_name) = check_keybinding_conflict(app, key, &setting.id) {
           // Show error and don't apply the conflicting key
           let key_display = key_to_config_string(&key);
@@ -337,8 +338,8 @@ fn handle_key_edit(key: Key, app: &mut App) {
             key_display,
             conflict_name
           ));
-          app.settings_edit_mode = false;
-          app.settings_edit_buffer.clear();
+          app.view.settings_edit_mode = false;
+          app.view.settings_edit_buffer.clear();
           return;
         }
       }
@@ -347,12 +348,12 @@ fn handle_key_edit(key: Key, app: &mut App) {
       let key_string = key_to_config_string(&key);
 
       // Apply the new keybinding
-      if let Some(setting) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
         setting.value = SettingValue::Key(key_string);
       }
 
-      app.settings_edit_mode = false;
-      app.settings_edit_buffer.clear();
+      app.view.settings_edit_mode = false;
+      app.view.settings_edit_buffer.clear();
     }
   }
 }
@@ -396,20 +397,20 @@ fn key_to_config_string(key: &Key) -> String {
 }
 
 fn switch_category_left(app: &mut App) {
-  let current_index = app.settings_category.index();
+  let current_index = app.view.settings_category.index();
   let new_index = if current_index == 0 {
     SettingsCategory::all().len() - 1
   } else {
     current_index - 1
   };
-  app.settings_category = SettingsCategory::from_index(new_index);
+  app.view.settings_category = SettingsCategory::from_index(new_index);
   reload_category(app);
 }
 
 fn switch_category_right(app: &mut App) {
-  let current_index = app.settings_category.index();
+  let current_index = app.view.settings_category.index();
   let new_index = (current_index + 1) % SettingsCategory::all().len();
-  app.settings_category = SettingsCategory::from_index(new_index);
+  app.view.settings_category = SettingsCategory::from_index(new_index);
   reload_category(app);
 }
 
@@ -424,7 +425,7 @@ fn step_selection(app: &mut App, forward: bool) {
     on_up_press_handler(&visible, position)
   };
   if let Some(index) = visible.get(next) {
-    app.settings_selected_index = *index;
+    app.view.settings_selected_index = *index;
   }
 }
 
@@ -443,11 +444,11 @@ fn enter_edit_mode(app: &mut App) {
     return;
   }
 
-  if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
+  if let Some(setting) = app.settings_items.get(app.view.settings_selected_index) {
     // For booleans, toggle directly without entering edit mode
     if let SettingValue::Bool(v) = setting.value {
       // Need to get mutable reference
-      if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting_mut) = app.settings_items.get_mut(app.view.settings_selected_index) {
         setting_mut.value = SettingValue::Bool(!v);
       }
       return;
@@ -458,7 +459,7 @@ fn enter_edit_mode(app: &mut App) {
       use crate::core::user_config::ThemePreset;
       let current = ThemePreset::from_name(preset_name);
       let next = current.next();
-      if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting_mut) = app.settings_items.get_mut(app.view.settings_selected_index) {
         setting_mut.value = SettingValue::Preset(next.name().to_string());
       }
       let preview_theme = match next {
@@ -473,7 +474,7 @@ fn enter_edit_mode(app: &mut App) {
     // For cycle values, advance to next option directly
     if let SettingValue::Cycle(ref current, options) = setting.value {
       let next = cycle_next(current, options);
-      if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
+      if let Some(setting_mut) = app.settings_items.get_mut(app.view.settings_selected_index) {
         if let SettingValue::Cycle(ref mut cur, _) = setting_mut.value {
           *cur = next;
         }
@@ -482,9 +483,9 @@ fn enter_edit_mode(app: &mut App) {
     }
 
     // For other types, enter edit mode
-    app.settings_edit_mode = true;
+    app.view.settings_edit_mode = true;
     // Pre-populate the edit buffer with current value
-    app.settings_edit_buffer = match &setting.value {
+    app.view.settings_edit_buffer = match &setting.value {
       SettingValue::Number(v) => v.to_string(),
       SettingValue::String(v) => v.clone(),
       SettingValue::Key(v) => v.clone(),
@@ -504,7 +505,7 @@ fn handle_preset_edit(key: Key, app: &mut App) {
   use crate::core::user_config::ThemePreset;
 
   fn cycle(app: &mut App, forward: bool) {
-    if let Some(setting) = app.settings_items.get(app.settings_selected_index) {
+    if let Some(setting) = app.settings_items.get(app.view.settings_selected_index) {
       if let SettingValue::Preset(ref preset_name) = setting.value {
         let current = ThemePreset::from_name(preset_name);
         let next = if forward {
@@ -512,7 +513,7 @@ fn handle_preset_edit(key: Key, app: &mut App) {
         } else {
           current.prev()
         };
-        if let Some(setting_mut) = app.settings_items.get_mut(app.settings_selected_index) {
+        if let Some(setting_mut) = app.settings_items.get_mut(app.view.settings_selected_index) {
           setting_mut.value = SettingValue::Preset(next.name().to_string());
         }
         // Update theme item values when cycling through presets so that
@@ -530,10 +531,10 @@ fn handle_preset_edit(key: Key, app: &mut App) {
   match key {
     Key::Enter | Key::Char(' ') => {
       cycle(app, true);
-      app.settings_edit_mode = false;
+      app.view.settings_edit_mode = false;
     }
     Key::Esc => {
-      app.settings_edit_mode = false;
+      app.view.settings_edit_mode = false;
     }
     key if right_event(key, &app.user_config.keys) => cycle(app, true),
     key if left_event(key, &app.user_config.keys) => cycle(app, false),
@@ -607,10 +608,10 @@ mod tests {
   #[test]
   fn cycling_preset_to_terminal_turns_banner_gradient_setting_off() {
     let mut app = App::default();
-    app.settings_category = SettingsCategory::Theme;
+    app.view.settings_category = SettingsCategory::Theme;
     open_settings(&mut app);
 
-    app.settings_selected_index = app
+    app.view.settings_selected_index = app
       .settings_items
       .iter()
       .position(|s| s.id == "theme.preset")
@@ -647,7 +648,7 @@ mod tests {
     handler(Key::Esc, &mut app);
 
     assert_eq!(app.get_current_route().id, previous_route);
-    assert!(!app.settings_unsaved_prompt_visible);
+    assert!(!app.view.settings_unsaved_prompt_visible);
   }
 
   #[test]
@@ -655,11 +656,11 @@ mod tests {
     let mut app = App::default();
     open_settings(&mut app);
 
-    app.settings_selected_index = first_bool_setting_index(&app);
+    app.view.settings_selected_index = first_bool_setting_index(&app);
     handler(Key::Enter, &mut app);
     handler(Key::Esc, &mut app);
 
-    assert!(app.settings_unsaved_prompt_visible);
+    assert!(app.view.settings_unsaved_prompt_visible);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Settings);
   }
 
@@ -668,14 +669,14 @@ mod tests {
     let mut app = App::default();
     let previous_route = open_settings(&mut app);
 
-    app.settings_selected_index = first_bool_setting_index(&app);
+    app.view.settings_selected_index = first_bool_setting_index(&app);
     handler(Key::Enter, &mut app);
     handler(Key::Esc, &mut app);
-    assert!(app.settings_unsaved_prompt_visible);
+    assert!(app.view.settings_unsaved_prompt_visible);
 
     handler(Key::Char('n'), &mut app);
 
-    assert!(!app.settings_unsaved_prompt_visible);
+    assert!(!app.view.settings_unsaved_prompt_visible);
     assert_eq!(app.get_current_route().id, previous_route);
   }
 
@@ -688,8 +689,8 @@ mod tests {
     type_filter(&mut app, "dq");
 
     assert_eq!(app.get_current_route().id, RouteId::Settings);
-    assert!(app.settings_filter_editing);
-    assert_eq!(app.settings_filter, "dq");
+    assert!(app.view.settings_filter_editing);
+    assert_eq!(app.view.settings_filter, "dq");
   }
 
   #[test]
@@ -700,8 +701,8 @@ mod tests {
 
     handle_app(Key::Char('f'), &mut app);
 
-    assert!(app.settings_filter_editing);
-    assert!(app.settings_filter.is_empty());
+    assert!(app.view.settings_filter_editing);
+    assert!(app.view.settings_filter.is_empty());
   }
 
   #[test]
@@ -713,18 +714,18 @@ mod tests {
 
     let visible = filtered_setting_indices(&app);
     assert!(visible.len() > 1, "expected several sort rows");
-    assert_eq!(app.settings_selected_index, visible[0]);
+    assert_eq!(app.view.settings_selected_index, visible[0]);
 
     handler(Key::Down, &mut app);
-    assert_eq!(app.settings_selected_index, visible[1]);
+    assert_eq!(app.view.settings_selected_index, visible[1]);
 
     handler(Key::Up, &mut app);
-    assert_eq!(app.settings_selected_index, visible[0]);
+    assert_eq!(app.view.settings_selected_index, visible[0]);
 
     // Wrapping off the top lands on the last visible row, never a hidden one.
     handler(Key::Up, &mut app);
     assert_eq!(
-      app.settings_selected_index,
+      app.view.settings_selected_index,
       *visible.last().expect("visible rows")
     );
   }
@@ -737,7 +738,7 @@ mod tests {
     handler(Key::Enter, &mut app);
 
     let index = setting_index(&app, "behavior.show_loading_indicator");
-    assert_eq!(app.settings_selected_index, index);
+    assert_eq!(app.view.settings_selected_index, index);
     let before = app.settings_items[index].value.clone();
 
     handler(Key::Enter, &mut app);
@@ -769,11 +770,11 @@ mod tests {
 
     handler(Key::Right, &mut app);
 
-    assert_eq!(app.settings_category, SettingsCategory::Icons);
-    assert_eq!(app.settings_filter, "icon");
+    assert_eq!(app.view.settings_category, SettingsCategory::Icons);
+    assert_eq!(app.view.settings_filter, "icon");
     let visible = filtered_setting_indices(&app);
     assert!(!visible.is_empty());
-    assert_eq!(app.settings_selected_index, visible[0]);
+    assert_eq!(app.view.settings_selected_index, visible[0]);
   }
 
   #[test]
@@ -782,10 +783,10 @@ mod tests {
     let previous_route = open_settings(&mut app);
     type_filter(&mut app, "volume");
     handler(Key::Enter, &mut app);
-    assert_eq!(app.settings_filter, "volume");
+    assert_eq!(app.view.settings_filter, "volume");
 
     handler(Key::Esc, &mut app);
-    assert!(app.settings_filter.is_empty());
+    assert!(app.view.settings_filter.is_empty());
     assert_eq!(app.get_current_route().id, RouteId::Settings);
 
     handler(Key::Esc, &mut app);
@@ -797,6 +798,6 @@ mod tests {
     handler(Key::Enter, &mut app);
     handler(app.user_config.keys.back, &mut app);
     assert_eq!(app.get_current_route().id, previous_route);
-    assert!(app.settings_filter.is_empty());
+    assert!(app.view.settings_filter.is_empty());
   }
 }

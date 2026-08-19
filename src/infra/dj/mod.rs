@@ -262,9 +262,9 @@ pub struct DjState {
   pub turn_kind: TurnKind,
   /// The backend/model picker, when it is open. `None` = closed.
   ///
-  /// DJ-local rather than `app.dialog`: a `DialogContext::DjSetup` variant would
+  /// DJ-local rather than `app.view.dialog`: a `DialogContext::DjSetup` variant would
   /// force `#[cfg(feature = "ai-dj")]` arms into `draw_dialog`'s exhaustive match,
-  /// `handle_escape` and `mouse.rs`, and `app.dialog` is an `Option<String>` that
+  /// `handle_escape` and `mouse.rs`, and `app.view.dialog` is an `Option<String>` that
   /// could not carry a two-step cursor anyway.
   ///
   /// Gated one level finer than the struct around it (`dj-core`), which is safe

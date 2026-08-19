@@ -264,7 +264,7 @@ fn handle_playbar_mouse(
 }
 
 fn handle_settings_screen_mouse(mouse: MouseEvent, app: &mut App) {
-  if app.settings_unsaved_prompt_visible {
+  if app.view.settings_unsaved_prompt_visible {
     handle_unsaved_settings_prompt_mouse(mouse, app);
     return;
   }
@@ -322,7 +322,7 @@ fn handle_settings_list_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App)
   // below would be spent confirming the filter instead of activating the row
   // the click landed on, and a scroll would be swallowed as an unhandled
   // filter-input key.
-  if app.settings_filter_editing
+  if app.view.settings_filter_editing
     && matches!(
       mouse.kind,
       MouseEventKind::ScrollUp
@@ -348,10 +348,10 @@ fn handle_settings_list_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App)
 }
 
 fn selected_setting_expects_key_capture(app: &App) -> bool {
-  app.settings_edit_mode
+  app.view.settings_edit_mode
     && app
       .settings_items
-      .get(app.settings_selected_index)
+      .get(app.view.settings_selected_index)
       .map(|setting| matches!(setting.value, SettingValue::Key(_)))
       .unwrap_or(false)
 }
@@ -366,8 +366,8 @@ fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
   };
   let clicked_index = visible[clicked_row];
 
-  if app.settings_edit_mode {
-    let clicked_selected_item = clicked_index == app.settings_selected_index;
+  if app.view.settings_edit_mode {
+    let clicked_selected_item = clicked_index == app.view.settings_selected_index;
     if clicked_selected_item {
       if selected_setting_expects_key_capture(app) {
         settings::handler(Key::Esc, app);
@@ -375,22 +375,22 @@ fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
         settings::handler(Key::Enter, app);
       }
     } else {
-      app.settings_selected_index = clicked_index;
-      app.settings_edit_mode = false;
-      app.settings_edit_buffer.clear();
+      app.view.settings_selected_index = clicked_index;
+      app.view.settings_edit_mode = false;
+      app.view.settings_edit_buffer.clear();
     }
     return;
   }
 
-  let was_selected = app.settings_selected_index == clicked_index;
-  app.settings_selected_index = clicked_index;
+  let was_selected = app.view.settings_selected_index == clicked_index;
+  app.view.settings_selected_index = clicked_index;
   if was_selected {
     settings::handler(Key::Enter, app);
   }
 }
 
 fn switch_settings_category_left(app: &mut App) {
-  let current_index = app.settings_category.index();
+  let current_index = app.view.settings_category.index();
   let new_index = if current_index == 0 {
     SettingsCategory::all().len() - 1
   } else {
@@ -400,21 +400,21 @@ fn switch_settings_category_left(app: &mut App) {
 }
 
 fn switch_settings_category_right(app: &mut App) {
-  let current_index = app.settings_category.index();
+  let current_index = app.view.settings_category.index();
   let new_index = (current_index + 1) % SettingsCategory::all().len();
   switch_settings_category_to(new_index, app);
 }
 
 fn switch_settings_category_to(index: usize, app: &mut App) {
   let category = SettingsCategory::from_index(index);
-  if app.settings_category != category || app.settings_items.is_empty() {
-    app.settings_category = category;
+  if app.view.settings_category != category || app.settings_items.is_empty() {
+    app.view.settings_category = category;
     settings::reload_category(app);
   }
 
-  if app.settings_edit_mode {
-    app.settings_edit_mode = false;
-    app.settings_edit_buffer.clear();
+  if app.view.settings_edit_mode {
+    app.view.settings_edit_mode = false;
+    app.view.settings_edit_buffer.clear();
   }
 }
 
@@ -460,7 +460,7 @@ fn focus_playbar(block: ActiveBlock, app: &mut App) {
 }
 
 fn focus_input(app: &mut App) {
-  app.input_context = crate::core::app::InputContext::GlobalSearch;
+  app.view.input_context = crate::core::app::InputContext::GlobalSearch;
   app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
 }
 
@@ -468,11 +468,11 @@ fn set_input_cursor_from_column(input_area: Rect, mouse_column: u16, app: &mut A
   let inner_start = input_area.x.saturating_add(1);
   let target_col = mouse_column
     .saturating_sub(inner_start)
-    .saturating_add(app.input_scroll_offset.get()) as usize;
+    .saturating_add(app.view.input_scroll_offset.get()) as usize;
 
   let mut width = 0usize;
   let mut idx = 0usize;
-  for (i, ch) in app.input.iter().enumerate() {
+  for (i, ch) in app.view.input.iter().enumerate() {
     let ch_width = UnicodeWidthChar::width(*ch).unwrap_or(1);
     if width + ch_width > target_col {
       idx = i;
@@ -482,8 +482,8 @@ fn set_input_cursor_from_column(input_area: Rect, mouse_column: u16, app: &mut A
     idx = i + 1;
   }
 
-  app.input_idx = idx;
-  app.input_cursor_position = width as u16;
+  app.view.input_idx = idx;
+  app.view.input_cursor_position = width as u16;
 }
 
 fn select_clicked_library_item(mouse_row: u16, list_area: Rect, app: &mut App) {
@@ -513,6 +513,7 @@ fn select_clicked_playlist(mouse_row: u16, list_area: Rect, app: &mut App) {
   }
 
   let selected_index = app
+    .view
     .selected_playlist_index
     .unwrap_or(0)
     .min(item_count.saturating_sub(1));
@@ -523,8 +524,8 @@ fn select_clicked_playlist(mouse_row: u16, list_area: Rect, app: &mut App) {
     return;
   };
 
-  let was_selected = app.selected_playlist_index == Some(clicked_index);
-  app.selected_playlist_index = Some(clicked_index);
+  let was_selected = app.view.selected_playlist_index == Some(clicked_index);
+  app.view.selected_playlist_index = Some(clicked_index);
 
   // Open the selected item when clicking it again.
   if was_selected {
@@ -618,10 +619,10 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
 
 fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
   match active_block {
-    ActiveBlock::AlbumList => app.album_list_index,
+    ActiveBlock::AlbumList => app.view.album_list_index,
     ActiveBlock::TrackTable => app.track_table.selected_index,
     ActiveBlock::AlbumTracks => match app.album_table_context {
-      crate::core::app::AlbumTableContext::Full => app.saved_album_tracks_index,
+      crate::core::app::AlbumTableContext::Full => app.view.saved_album_tracks_index,
       crate::core::app::AlbumTableContext::Simplified => app
         .selected_album_simplified
         .as_ref()
@@ -629,19 +630,19 @@ fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
         .unwrap_or(0),
     },
     ActiveBlock::RecentlyPlayed => app.recently_played.index,
-    ActiveBlock::Artists => app.artists_list_index,
-    ActiveBlock::Podcasts => app.shows_list_index,
-    ActiveBlock::EpisodeTable => app.episode_list_index,
+    ActiveBlock::Artists => app.view.artists_list_index,
+    ActiveBlock::Podcasts => app.view.shows_list_index,
+    ActiveBlock::EpisodeTable => app.view.episode_list_index,
     _ => 0,
   }
 }
 
 fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app: &mut App) {
   match active_block {
-    ActiveBlock::AlbumList => app.album_list_index = index,
+    ActiveBlock::AlbumList => app.view.album_list_index = index,
     ActiveBlock::TrackTable => app.track_table.selected_index = index,
     ActiveBlock::AlbumTracks => match app.album_table_context {
-      crate::core::app::AlbumTableContext::Full => app.saved_album_tracks_index = index,
+      crate::core::app::AlbumTableContext::Full => app.view.saved_album_tracks_index = index,
       crate::core::app::AlbumTableContext::Simplified => {
         if let Some(album) = &mut app.selected_album_simplified {
           album.selected_index = index;
@@ -649,9 +650,9 @@ fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app
       }
     },
     ActiveBlock::RecentlyPlayed => app.recently_played.index = index,
-    ActiveBlock::Artists => app.artists_list_index = index,
-    ActiveBlock::Podcasts => app.shows_list_index = index,
-    ActiveBlock::EpisodeTable => app.episode_list_index = index,
+    ActiveBlock::Artists => app.view.artists_list_index = index,
+    ActiveBlock::Podcasts => app.view.shows_list_index = index,
+    ActiveBlock::EpisodeTable => app.view.episode_list_index = index,
     _ => {}
   }
 }
@@ -824,11 +825,11 @@ struct SettingsUnsavedPromptAreas {
 }
 
 fn settings_layout_areas(app: &App) -> Option<SettingsLayoutAreas> {
-  if app.size.width == 0 || app.size.height == 0 {
+  if app.view.size.width == 0 || app.view.size.height == 0 {
     return None;
   }
 
-  let root = Rect::new(0, 0, app.size.width, app.size.height);
+  let root = Rect::new(0, 0, app.view.size.width, app.view.size.height);
   let [tabs_area, list_area, _help_area] = settings_layout(root);
 
   Some(SettingsLayoutAreas {
@@ -838,11 +839,11 @@ fn settings_layout_areas(app: &App) -> Option<SettingsLayoutAreas> {
 }
 
 fn settings_unsaved_prompt_areas(app: &App) -> Option<SettingsUnsavedPromptAreas> {
-  if app.size.width == 0 || app.size.height == 0 {
+  if app.view.size.width == 0 || app.view.size.height == 0 {
     return None;
   }
 
-  let bounds = Rect::new(0, 0, app.size.width, app.size.height);
+  let bounds = Rect::new(0, 0, app.view.size.width, app.view.size.height);
   let width = std::cmp::min(
     bounds.width.saturating_sub(4),
     SETTINGS_UNSAVED_PROMPT_WIDTH,
@@ -876,25 +877,25 @@ fn settings_unsaved_prompt_areas(app: &App) -> Option<SettingsUnsavedPromptAreas
 }
 
 fn fullscreen_view_playbar_area(app: &App) -> Option<Rect> {
-  if app.size.width == 0 || app.size.height == 0 {
+  if app.view.size.width == 0 || app.view.size.height == 0 {
     return None;
   }
 
-  let root = Rect::new(0, 0, app.size.width, app.size.height);
+  let root = Rect::new(0, 0, app.view.size.width, app.view.size.height);
   let (_, playbar_area) = fullscreen_view_layout(&app.runtime_state, root);
   playbar_area
 }
 
 fn miniplayer_view_playbar_area(app: &App) -> Option<Rect> {
-  if app.size.width == 0 || app.size.height == 0 {
+  if app.view.size.width == 0 || app.view.size.height == 0 {
     return None;
   }
 
   Some(miniplayer_playbar_area(Rect::new(
     0,
     0,
-    app.size.width,
-    app.size.height,
+    app.view.size.width,
+    app.view.size.height,
   )))
 }
 
@@ -1012,7 +1013,7 @@ mod tests {
   }
 
   fn open_settings(app: &mut App) {
-    app.settings_category = SettingsCategory::Behavior;
+    app.view.settings_category = SettingsCategory::Behavior;
     app.load_settings_for_category();
     app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
   }
@@ -1021,7 +1022,7 @@ mod tests {
   /// filter through the real key path and the input still open.
   fn filtered_settings_app(query: &str) -> App {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1123,23 +1124,23 @@ mod tests {
   #[test]
   fn scroll_over_playlists_changes_selection() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     with_playlist_items(&mut app);
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.playlists.x + 1;
     let y = areas.playlists.y + 1;
 
     handler(mouse_event(MouseEventKind::ScrollDown, x, y), &mut app);
-    assert_eq!(app.selected_playlist_index, Some(1));
+    assert_eq!(app.view.selected_playlist_index, Some(1));
 
     handler(mouse_event(MouseEventKind::ScrollUp, x, y), &mut app);
-    assert_eq!(app.selected_playlist_index, Some(0));
+    assert_eq!(app.view.selected_playlist_index, Some(0));
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::MyPlaylists);
@@ -1149,13 +1150,13 @@ mod tests {
   #[test]
   fn click_search_input_focuses_input() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
-    app.input = "hello".chars().collect();
-    app.input_idx = 0;
-    app.input_cursor_position = 0;
+    app.view.input = "hello".chars().collect();
+    app.view.input_idx = 0;
+    app.view.input_cursor_position = 0;
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let input = areas.input.expect("input area");
@@ -1177,7 +1178,7 @@ mod tests {
   #[test]
   fn click_settings_opens_settings_screen() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1203,7 +1204,7 @@ mod tests {
   #[test]
   fn click_main_layout_playbar_control_triggers_action() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1228,7 +1229,7 @@ mod tests {
   #[test]
   fn click_main_layout_playbar_progress_seeks() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1274,7 +1275,7 @@ mod tests {
   #[test]
   fn click_playbar_time_label_does_not_seek() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1297,7 +1298,7 @@ mod tests {
   #[test]
   fn drag_playbar_progress_seeks() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1330,7 +1331,7 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1371,7 +1372,7 @@ mod tests {
   #[test]
   fn click_lyrics_view_playbar_control_triggers_action() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1397,14 +1398,15 @@ mod tests {
   #[test]
   fn click_miniplayer_control_triggers_action_and_keeps_miniplayer_focus() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     app.push_navigation_stack(RouteId::MiniPlayer, ActiveBlock::MiniPlayer);
     with_playbar_context(&mut app);
 
-    let playbar_area = miniplayer_playbar_area(Rect::new(0, 0, app.size.width, app.size.height));
+    let playbar_area =
+      miniplayer_playbar_area(Rect::new(0, 0, app.view.size.width, app.view.size.height));
     let (x, y) = find_playbar_control_click(&app, playbar_area, PlaybarControl::PlayPause);
     assert!(!app.is_loading);
 
@@ -1423,7 +1425,7 @@ mod tests {
   #[test]
   fn fullscreen_view_playbar_area_uses_runtime_state_height() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1437,7 +1439,7 @@ mod tests {
   #[test]
   fn fullscreen_view_playbar_area_is_hidden_when_height_is_zero() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1449,7 +1451,7 @@ mod tests {
   #[test]
   fn click_hidden_lyrics_view_playbar_area_does_nothing() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1477,7 +1479,7 @@ mod tests {
   #[test]
   fn resized_playbar_control_click_still_maps_correctly() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1501,7 +1503,7 @@ mod tests {
   #[test]
   fn smaller_resized_playbar_control_click_still_maps_correctly() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1525,7 +1527,7 @@ mod tests {
   #[test]
   fn click_playbar_outside_controls_does_nothing() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1551,7 +1553,7 @@ mod tests {
   #[test]
   fn click_settings_tab_switches_category() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1584,15 +1586,15 @@ mod tests {
       &mut app,
     );
 
-    assert_eq!(app.settings_category, SettingsCategory::Theme);
-    assert_eq!(app.settings_selected_index, 0);
+    assert_eq!(app.view.settings_category, SettingsCategory::Theme);
+    assert_eq!(app.view.settings_selected_index, 0);
     assert!(!app.settings_items.is_empty());
   }
 
   #[test]
   fn scroll_in_settings_list_changes_selected_item() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1602,18 +1604,18 @@ mod tests {
     let x = areas.list.x + 2;
     let y = areas.list.y + 2;
 
-    assert_eq!(app.settings_selected_index, 0);
+    assert_eq!(app.view.settings_selected_index, 0);
     handler(mouse_event(MouseEventKind::ScrollDown, x, y), &mut app);
-    assert_eq!(app.settings_selected_index, 1);
+    assert_eq!(app.view.settings_selected_index, 1);
 
     handler(mouse_event(MouseEventKind::ScrollUp, x, y), &mut app);
-    assert_eq!(app.settings_selected_index, 0);
+    assert_eq!(app.view.settings_selected_index, 0);
   }
 
   #[test]
   fn clicking_selected_bool_setting_toggles_value() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1624,7 +1626,7 @@ mod tests {
       .iter()
       .position(|setting| matches!(setting.value, SettingValue::Bool(_)))
       .expect("expected a boolean setting");
-    app.settings_selected_index = bool_index;
+    app.view.settings_selected_index = bool_index;
 
     let initial_value = app
       .settings_items
@@ -1651,7 +1653,7 @@ mod tests {
       })
       .expect("selected setting should stay boolean");
     assert_ne!(updated_value, initial_value);
-    assert!(!app.settings_edit_mode);
+    assert!(!app.view.settings_edit_mode);
   }
 
   #[test]
@@ -1672,24 +1674,24 @@ mod tests {
       &mut app,
     );
 
-    assert!(!app.settings_filter_editing);
+    assert!(!app.view.settings_filter_editing);
     // Applying is not clearing: the rows stay filtered after the click.
-    assert_eq!(app.settings_filter, "sort");
-    assert_eq!(app.settings_selected_index, visible[1]);
+    assert_eq!(app.view.settings_filter, "sort");
+    assert_eq!(app.view.settings_selected_index, visible[1]);
     assert_ne!(visible[1], 1);
   }
 
   #[test]
   fn keybinding_capture_can_be_cancelled_with_mouse_click() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     open_settings(&mut app);
-    app.settings_category = SettingsCategory::Keybindings;
+    app.view.settings_category = SettingsCategory::Keybindings;
     app.load_settings_for_category();
-    app.settings_selected_index = 0;
+    app.view.settings_selected_index = 0;
 
     let original_value = app
       .settings_items
@@ -1708,7 +1710,7 @@ mod tests {
       mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
       &mut app,
     );
-    assert!(app.settings_edit_mode);
+    assert!(app.view.settings_edit_mode);
 
     handler(
       mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
@@ -1724,14 +1726,14 @@ mod tests {
       })
       .expect("first keybinding should still be a key setting");
 
-    assert!(!app.settings_edit_mode);
+    assert!(!app.view.settings_edit_mode);
     assert_eq!(current_value, original_value);
   }
 
   #[test]
   fn click_no_on_unsaved_prompt_discards_changes_and_exits() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1742,11 +1744,11 @@ mod tests {
       .iter()
       .position(|setting| matches!(setting.value, SettingValue::Bool(_)))
       .expect("expected a boolean setting");
-    app.settings_selected_index = bool_index;
+    app.view.settings_selected_index = bool_index;
     settings::handler(Key::Enter, &mut app);
 
     settings::handler(Key::Esc, &mut app);
-    assert!(app.settings_unsaved_prompt_visible);
+    assert!(app.view.settings_unsaved_prompt_visible);
 
     let prompt_areas = settings_unsaved_prompt_areas(&app).expect("unsaved prompt areas");
     handler(
@@ -1758,20 +1760,20 @@ mod tests {
       &mut app,
     );
 
-    assert!(!app.settings_unsaved_prompt_visible);
+    assert!(!app.view.settings_unsaved_prompt_visible);
     assert_ne!(app.get_current_route().active_block, ActiveBlock::Settings);
   }
 
   #[test]
   fn click_in_playlist_selects_row() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     with_playlist_items(&mut app);
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.playlists.x + 1;
@@ -1782,7 +1784,7 @@ mod tests {
       &mut app,
     );
 
-    assert_eq!(app.selected_playlist_index, Some(1));
+    assert_eq!(app.view.selected_playlist_index, Some(1));
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::MyPlaylists);
   }
@@ -1792,13 +1794,13 @@ mod tests {
     // Rows: [+ Add Playlist, P0, P1, P2]. The last playlist (row 3) is only
     // reachable because the click count includes every rendered row.
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     with_playlist_items(&mut app);
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.playlists.x + 1;
@@ -1809,20 +1811,20 @@ mod tests {
       &mut app,
     );
 
-    assert_eq!(app.selected_playlist_index, Some(3));
+    assert_eq!(app.view.selected_playlist_index, Some(3));
   }
 
   #[test]
   fn double_click_add_row_opens_create_form() {
     // Row 0 is "+ Add Playlist"; clicking an already-selected row opens it.
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
     with_playlist_items(&mut app);
-    app.selected_playlist_index = Some(0);
+    app.view.selected_playlist_index = Some(0);
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.playlists.x + 1;
@@ -1839,13 +1841,13 @@ mod tests {
   #[test]
   fn click_in_saved_albums_selects_row() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
     with_saved_albums(&mut app, 3);
-    app.album_list_index = 0;
+    app.view.album_list_index = 0;
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.content.x + 1;
@@ -1856,7 +1858,7 @@ mod tests {
       &mut app,
     );
 
-    assert_eq!(app.album_list_index, 1);
+    assert_eq!(app.view.album_list_index, 1);
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::AlbumList);
   }
@@ -1864,7 +1866,7 @@ mod tests {
   #[test]
   fn click_in_song_table_first_highlights_second_plays() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
@@ -1900,23 +1902,23 @@ mod tests {
   #[test]
   fn scroll_over_saved_albums_changes_selection() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
     with_saved_albums(&mut app, 3);
-    app.album_list_index = 0;
+    app.view.album_list_index = 0;
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.content.x + 1;
     let y = areas.content.y + 2;
 
     handler(mouse_event(MouseEventKind::ScrollDown, x, y), &mut app);
-    assert_eq!(app.album_list_index, 1);
+    assert_eq!(app.view.album_list_index, 1);
 
     handler(mouse_event(MouseEventKind::ScrollUp, x, y), &mut app);
-    assert_eq!(app.album_list_index, 0);
+    assert_eq!(app.view.album_list_index, 0);
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::AlbumList);
@@ -1925,12 +1927,12 @@ mod tests {
   #[test]
   fn content_table_selection_helpers_cover_supported_blocks() {
     let mut app = App::default();
-    app.album_list_index = 2;
-    app.saved_album_tracks_index = 3;
+    app.view.album_list_index = 2;
+    app.view.saved_album_tracks_index = 3;
     app.recently_played.index = 4;
-    app.artists_list_index = 5;
-    app.shows_list_index = 6;
-    app.episode_list_index = 7;
+    app.view.artists_list_index = 5;
+    app.view.shows_list_index = 6;
+    app.view.episode_list_index = 7;
 
     assert_eq!(
       content_table_selected_index(ActiveBlock::AlbumList, &app),
@@ -1958,12 +1960,12 @@ mod tests {
     set_content_table_selected_index(ActiveBlock::Podcasts, 12, &mut app);
     set_content_table_selected_index(ActiveBlock::EpisodeTable, 13, &mut app);
 
-    assert_eq!(app.album_list_index, 8);
-    assert_eq!(app.saved_album_tracks_index, 9);
+    assert_eq!(app.view.album_list_index, 8);
+    assert_eq!(app.view.saved_album_tracks_index, 9);
     assert_eq!(app.recently_played.index, 10);
-    assert_eq!(app.artists_list_index, 11);
-    assert_eq!(app.shows_list_index, 12);
-    assert_eq!(app.episode_list_index, 13);
+    assert_eq!(app.view.artists_list_index, 11);
+    assert_eq!(app.view.shows_list_index, 12);
+    assert_eq!(app.view.episode_list_index, 13);
   }
 
   #[test]
@@ -1998,19 +2000,19 @@ mod tests {
   #[test]
   fn click_outside_playlist_is_ignored() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };
     with_playlist_items(&mut app);
-    app.selected_playlist_index = Some(1);
+    app.view.selected_playlist_index = Some(1);
 
     handler(
       mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0),
       &mut app,
     );
 
-    assert_eq!(app.selected_playlist_index, Some(1));
+    assert_eq!(app.view.selected_playlist_index, Some(1));
   }
 
   #[test]
@@ -2029,7 +2031,7 @@ mod tests {
   #[test]
   fn scroll_over_library_changes_selection() {
     let mut app = App::default();
-    app.size = Viewport {
+    app.view.size = Viewport {
       width: 160,
       height: 50,
     };

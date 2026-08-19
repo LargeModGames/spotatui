@@ -20,7 +20,7 @@ pub fn draw_create_playlist_form(f: &mut Frame<'_>, app: &App) {
   let area = centered_rect(f.area(), 80, 80);
   f.render_widget(Clear, area);
 
-  match app.create_playlist_stage {
+  match app.view.create_playlist_stage {
     CreatePlaylistStage::Name => draw_name_stage(f, app, area),
     CreatePlaylistStage::AddTracks => draw_add_tracks_stage(f, app, area),
   }
@@ -54,7 +54,7 @@ fn draw_name_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
   let label = Paragraph::new("Playlist name:").style(theme.base_style());
   f.render_widget(label, inner[0]);
 
-  let name_text: String = app.create_playlist_name.iter().collect();
+  let name_text: String = app.view.create_playlist_name.iter().collect();
   let input = Paragraph::new(name_text).style(theme.base_style()).block(
     Block::default()
       .borders(Borders::ALL)
@@ -62,7 +62,7 @@ fn draw_name_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
   );
   f.render_widget(input, inner[1]);
   f.set_cursor_position((
-    inner[1].x + 1 + app.create_playlist_name_cursor,
+    inner[1].x + 1 + app.view.create_playlist_name_cursor,
     inner[1].y + 1,
   ));
 
@@ -73,7 +73,7 @@ fn draw_name_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
   let theme = &app.user_config.theme;
-  let name: String = app.create_playlist_name.iter().collect();
+  let name: String = app.view.create_playlist_name.iter().collect();
   let title = format!(
     "Add Tracks to \"{}\" (Enter=create, Tab=switch panel, Esc=cancel)",
     name
@@ -98,8 +98,8 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .split(area);
 
   // Search input
-  let search_text: String = app.create_playlist_search_input.iter().collect();
-  let search_border_style = if app.create_playlist_focus == CreatePlaylistFocus::SearchInput {
+  let search_text: String = app.view.create_playlist_search_input.iter().collect();
+  let search_border_style = if app.view.create_playlist_focus == CreatePlaylistFocus::SearchInput {
     Style::default().fg(theme.active.into())
   } else {
     Style::default().fg(theme.inactive.into())
@@ -114,9 +114,9 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
       .border_style(search_border_style),
   );
   f.render_widget(search_input, inner[0]);
-  if app.create_playlist_focus == CreatePlaylistFocus::SearchInput {
+  if app.view.create_playlist_focus == CreatePlaylistFocus::SearchInput {
     f.set_cursor_position((
-      inner[0].x + 1 + app.create_playlist_search_cursor,
+      inner[0].x + 1 + app.view.create_playlist_search_cursor,
       inner[0].y + 1,
     ));
   }
@@ -128,7 +128,8 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .split(inner[1]);
 
   // Left: search results
-  let results_border_style = if app.create_playlist_focus == CreatePlaylistFocus::SearchResults {
+  let results_border_style = if app.view.create_playlist_focus == CreatePlaylistFocus::SearchResults
+  {
     Style::default().fg(theme.active.into())
   } else {
     Style::default().fg(theme.inactive.into())
@@ -143,10 +144,10 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .collect();
 
   let mut results_state = ListState::default();
-  if app.create_playlist_focus == CreatePlaylistFocus::SearchResults
+  if app.view.create_playlist_focus == CreatePlaylistFocus::SearchResults
     && !app.create_playlist_search_results.is_empty()
   {
-    results_state.select(Some(app.create_playlist_selected_result));
+    results_state.select(Some(app.view.create_playlist_selected_result));
   }
 
   let results_list = List::new(result_items)
@@ -168,7 +169,7 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
   f.render_stateful_widget(results_list, panels[0], &mut results_state);
 
   // Right: added tracks
-  let added_border_style = if app.create_playlist_focus == CreatePlaylistFocus::AddedTracks {
+  let added_border_style = if app.view.create_playlist_focus == CreatePlaylistFocus::AddedTracks {
     Style::default().fg(theme.active.into())
   } else {
     Style::default().fg(theme.inactive.into())
@@ -184,10 +185,10 @@ fn draw_add_tracks_stage(f: &mut Frame<'_>, app: &App, area: Rect) {
     .collect();
 
   let mut added_state = ListState::default();
-  if app.create_playlist_focus == CreatePlaylistFocus::AddedTracks
+  if app.view.create_playlist_focus == CreatePlaylistFocus::AddedTracks
     && !app.create_playlist_tracks.is_empty()
   {
-    added_state.select(Some(app.create_playlist_selected_result));
+    added_state.select(Some(app.view.create_playlist_selected_result));
   }
 
   let added_tracks_title = format!(

@@ -145,10 +145,11 @@ worth knowing before adding an event:
 
 ### The `core/app/` module folder
 
-`App` was one 10,920-line file; it is now 33 files. The struct stays **flat** - all
-~237 fields declared once in `src/core/app/mod.rs` (26 of them feature-gated) -
-and its ~210 methods are split across 32 sibling modules by concern, each with its
-own `impl App` block. The boundaries are organizational, not architectural.
+`App` was one 10,920-line file; it is now 34 files. The struct stays **flat** - all
+~168 fields declared once in `src/core/app/mod.rs` (26 of them feature-gated), plus
+the 70 presentation fields grouped in `App.view` - and its ~210 methods are split
+across 33 sibling modules by concern, each with its own `impl App` block. The
+boundaries are organizational, not architectural.
 
 Rules when working in here:
 
@@ -166,6 +167,14 @@ Rules when working in here:
   in every build: `#[cfg(any(...))] { … } #[cfg(not(any(...)))] { false }` inside
   one ungated `fn` (see `queue_owns_playback`), so callers never need their own `#[cfg]`.
 - New `impl App` methods go to the concern module that owns that state, not `mod.rs`.
+- **Presentation state lives in `App.view: ViewState`** (`core/app/view.rs`): cursor
+  and selection indices, scroll offsets, edit buffers, focus, popup flags, the help
+  pager, the terminal viewport. Handlers and draw functions write `app.view.<field>`
+  freely and the handler-write ratchet skips those chains. A producer outside `tui/`
+  and `core/app/` (a network or source handler, a script effect, the CLI) that
+  resets or clamps a cursor is counted by `view_writes_outside_tui`, which may only
+  fall. A new field goes in `view` only if it is presentation state; a pending
+  operation, or anything a second frontend would also need, stays on `App`.
 - `dispatch` pins the global loading spinner; long work with its own progress
   surface uses `dispatch_without_spinner`.
 

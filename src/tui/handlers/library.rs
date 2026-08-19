@@ -122,8 +122,8 @@ fn open_local_source(app: &mut App) {
   )) {
     log::warn!("[source] failed to persist active_source: {e}");
   }
-  app.selected_playlist_index = Some(0);
-  app.local_playlists_index = 0;
+  app.view.selected_playlist_index = Some(0);
+  app.view.local_playlists_index = 0;
   app.dispatch(IoEvent::GetLocalPlaylists);
   app.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
 }

@@ -22,7 +22,7 @@ pub fn handler(key: Key, app: &mut App) {
 fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogContext) {
   match key {
     Key::Enter => {
-      if app.confirm {
+      if app.view.confirm {
         match dialog_context {
           DialogContext::PlaylistWindow => handle_playlist_dialog(app),
           DialogContext::PlaylistSearch => handle_playlist_search_dialog(app),
@@ -46,8 +46,12 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
       }
       close_dialog(app);
     }
-    k if common_key_events::right_event(k, &app.user_config.keys) => app.confirm = !app.confirm,
-    k if common_key_events::left_event(k, &app.user_config.keys) => app.confirm = !app.confirm,
+    k if common_key_events::right_event(k, &app.user_config.keys) => {
+      app.view.confirm = !app.view.confirm
+    }
+    k if common_key_events::left_event(k, &app.user_config.keys) => {
+      app.view.confirm = !app.view.confirm
+    }
     _ => {}
   }
 }
@@ -61,28 +65,31 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
     k if common_key_events::down_event(k, &app.user_config.keys) && row_count > 0 => {
       let next = common_key_events::on_down_press_handler(
         &picker_rows,
-        Some(app.playlist_picker_selected_index),
+        Some(app.view.playlist_picker_selected_index),
       );
-      app.playlist_picker_selected_index = next;
+      app.view.playlist_picker_selected_index = next;
     }
     k if common_key_events::up_event(k, &app.user_config.keys) && row_count > 0 => {
       let next = common_key_events::on_up_press_handler(
         &picker_rows,
-        Some(app.playlist_picker_selected_index),
+        Some(app.view.playlist_picker_selected_index),
       );
-      app.playlist_picker_selected_index = next;
+      app.view.playlist_picker_selected_index = next;
     }
     k if common_key_events::high_event(k) && row_count > 0 => {
-      app.playlist_picker_selected_index = common_key_events::on_high_press_handler();
+      app.view.playlist_picker_selected_index = common_key_events::on_high_press_handler();
     }
     k if common_key_events::middle_event(k) && row_count > 0 => {
-      app.playlist_picker_selected_index = common_key_events::on_middle_press_handler(&picker_rows);
+      app.view.playlist_picker_selected_index =
+        common_key_events::on_middle_press_handler(&picker_rows);
     }
     k if common_key_events::low_event(k) && row_count > 0 => {
-      app.playlist_picker_selected_index = common_key_events::on_low_press_handler(&picker_rows);
+      app.view.playlist_picker_selected_index =
+        common_key_events::on_low_press_handler(&picker_rows);
     }
     Key::Enter => {
       let selected = app
+        .view
         .playlist_picker_selected_index
         .min(row_count.saturating_sub(1));
       match picker_rows.get(selected) {
@@ -90,8 +97,8 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
         // same semantics as Enter in the sidebar (handlers/playlist.rs).
         Some(PlaylistPickerRow::Folder(folder)) => {
           let target_id = folder.target_id;
-          app.playlist_picker_folder_id = target_id;
-          app.playlist_picker_selected_index = 0;
+          app.view.playlist_picker_folder_id = target_id;
+          app.view.playlist_picker_selected_index = 0;
         }
         Some(PlaylistPickerRow::Playlist(playlist)) => {
           let playlist_id = playlist.id.clone();
@@ -133,6 +140,7 @@ fn handle_playlist_search_dialog(app: &mut App) {
 /// Confirmed deletion of the sidebar-selected local YouTube playlist.
 fn handle_youtube_playlist_dialog(app: &mut App) {
   let uri = app
+    .view
     .selected_playlist_index
     .and_then(|idx| app.youtube_playlists.get(idx))
     .map(|playlist| playlist.uri.clone());
@@ -183,13 +191,13 @@ mod tests {
       RouteId::Dialog,
       ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
     );
-    app.confirm = false;
+    app.view.confirm = false;
 
     handler(Key::Char('l'), &mut app);
-    assert!(app.confirm);
+    assert!(app.view.confirm);
 
     handler(Key::Char('h'), &mut app);
-    assert!(!app.confirm);
+    assert!(!app.view.confirm);
   }
 
   #[test]
@@ -219,7 +227,7 @@ mod tests {
       RouteId::Dialog,
       ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker),
     );
-    app.playlist_picker_selected_index = 0;
+    app.view.playlist_picker_selected_index = 0;
 
     handler(Key::Enter, &mut app);
 
@@ -275,8 +283,8 @@ mod tests {
 
     // Enter on the folder descends, keeps the dialog open, dispatches nothing.
     handler(Key::Enter, &mut app);
-    assert_eq!(app.playlist_picker_folder_id, 1);
-    assert_eq!(app.playlist_picker_selected_index, 0);
+    assert_eq!(app.view.playlist_picker_folder_id, 1);
+    assert_eq!(app.view.playlist_picker_selected_index, 0);
     assert!(matches!(
       app.get_current_route().active_block,
       ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
@@ -285,7 +293,7 @@ mod tests {
 
     // Inside the folder: back row + the owned playlist. Enter adds the track.
     assert_eq!(app.playlist_picker_items().len(), 2);
-    app.playlist_picker_selected_index = 1;
+    app.view.playlist_picker_selected_index = 1;
     handler(Key::Enter, &mut app);
     match rx.recv().unwrap() {
       IoEvent::AddTrackToPlaylist(playlist_id, track_id) => {

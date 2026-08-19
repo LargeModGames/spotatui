@@ -359,7 +359,7 @@ mod tests {
       assert_ne!(app.user_config.theme.analysis_bar, user.analysis_bar);
 
       // Settings -> Theme, save without changing anything.
-      app.settings_category = crate::core::app::SettingsCategory::Theme;
+      app.view.settings_category = crate::core::app::SettingsCategory::Theme;
       app.load_settings_for_category();
       app.apply_settings_changes();
       assert_eq!(app.user_theme().analysis_bar, user.analysis_bar);

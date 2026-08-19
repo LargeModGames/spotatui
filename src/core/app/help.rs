@@ -17,14 +17,14 @@ pub struct HelpMenuModel {
 
 impl App {
   pub fn calculate_help_menu_offset(&mut self) {
-    if self.help_menu_max_lines == 0 || self.help_docs_size == 0 {
-      self.help_menu_page = 0;
-      self.help_menu_offset = 0;
+    if self.view.help_menu_max_lines == 0 || self.view.help_docs_size == 0 {
+      self.view.help_menu_page = 0;
+      self.view.help_menu_offset = 0;
       return;
     }
 
-    let last_page = self.help_docs_size.saturating_sub(1) / self.help_menu_max_lines;
-    self.help_menu_page = self.help_menu_page.min(last_page);
-    self.help_menu_offset = self.help_menu_page * self.help_menu_max_lines;
+    let last_page = self.view.help_docs_size.saturating_sub(1) / self.view.help_menu_max_lines;
+    self.view.help_menu_page = self.view.help_menu_page.min(last_page);
+    self.view.help_menu_offset = self.view.help_menu_page * self.view.help_menu_max_lines;
   }
 }

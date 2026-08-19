@@ -46,19 +46,19 @@ pub fn draw_input_and_help_box(
     BorderType::Rounded
   };
 
-  let input_string: String = app.input.iter().collect();
+  let input_string: String = app.view.input.iter().collect();
   let lines = Text::from(input_string.clone());
   // Compute horizontal scroll so the cursor stays visible within the input box.
   // inner width = total width - 2 (for left and right borders)
   let inner_width = input_area.width.saturating_sub(2);
-  let scroll_offset = if inner_width > 0 && app.input_cursor_position >= inner_width {
-    app.input_cursor_position - inner_width + 1
+  let scroll_offset = if inner_width > 0 && app.view.input_cursor_position >= inner_width {
+    app.view.input_cursor_position - inner_width + 1
   } else {
     0
   };
-  app.input_scroll_offset.set(scroll_offset);
+  app.view.input_scroll_offset.set(scroll_offset);
 
-  let input_title = match app.input_context {
+  let input_title = match app.view.input_context {
     InputContext::PlaylistTrackSearch => "Search Playlist",
     InputContext::GlobalSearch => "Search",
   };

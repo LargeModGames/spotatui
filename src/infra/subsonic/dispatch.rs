@@ -192,7 +192,6 @@ async fn load_subsonic_playlists(app: &Arc<Mutex<App>>) {
     Ok(playlists) => {
       let mut app = app.lock().await;
       app.subsonic_playlists = playlists;
-      app.subsonic_playlists_index = 0;
     }
     Err(e) => set_error(app, format!("Cannot load Subsonic playlists: {e}")).await,
   }

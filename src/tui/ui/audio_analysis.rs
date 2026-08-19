@@ -25,14 +25,14 @@ fn visualizer_block<'a>() -> Block<'a> {
 
 /// Inner width of the visualizer block at the current terminal size. The
 /// runner picks the analyzer's bar count before a frame exists, so it derives
-/// the rect from `app.size` through here rather than re-deriving the margin
+/// the rect from `app.view.size` through here rather than re-deriving the margin
 /// and border inset itself.
 ///
 /// This and `visualizer_bar_count` are only called behind the audio-viz
 /// feature gates; slim builds still compile (and test) them.
 #[allow(dead_code)]
 pub fn visualizer_inner_width(app: &App) -> u16 {
-  let root = Rect::new(0, 0, app.size.width, app.size.height);
+  let root = Rect::new(0, 0, app.view.size.width, app.view.size.height);
   let [_, visualizer_area] = analysis_areas(root, main_layout_margin(app));
   visualizer_block().inner(visualizer_area).width
 }

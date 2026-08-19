@@ -129,10 +129,11 @@ impl UserNetwork for Network {
           }
         }
 
-        app.selected_device_index = if result.devices.is_empty() {
+        app.view.selected_device_index = if result.devices.is_empty() {
           None
         } else {
           app
+            .view
             .selected_device_index
             .filter(|index| *index < result.devices.len())
             .or(Some(0))

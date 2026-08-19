@@ -70,14 +70,14 @@ impl App {
     }
 
     if key == Key::Ctrl(',') {
-      self.terminal_input_caps.ctrl_punct_reliable = CapabilityState::Yes;
+      self.view.terminal_input_caps.ctrl_punct_reliable = CapabilityState::Yes;
       self.keybinding_runtime.effective_open_settings = None;
       self.keybinding_runtime.fallback_reason = None;
       return false;
     }
 
     if key == Key::Char(',') && self.allow_plain_comma_open_settings_fallback() {
-      self.terminal_input_caps.ctrl_punct_reliable = CapabilityState::No;
+      self.view.terminal_input_caps.ctrl_punct_reliable = CapabilityState::No;
       self.keybinding_runtime.effective_open_settings = Some(Key::Alt(','));
       self.keybinding_runtime.fallback_reason = Some(KeyFallbackReason::CtrlCommaNotReported);
 
@@ -94,7 +94,7 @@ impl App {
         self.pending_keybinding_persist = Some(PendingKeybindingPersist {
           open_settings_key: Key::Alt(','),
         });
-        self.confirm = false;
+        self.view.confirm = false;
       }
 
       return true;

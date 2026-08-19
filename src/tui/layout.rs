@@ -29,7 +29,7 @@ pub fn small_terminal_height(behavior: &BehaviorConfig) -> u16 {
 }
 
 pub fn main_layout_margin(app: &App) -> u16 {
-  if app.size.height > small_terminal_height(&app.user_config.behavior) {
+  if app.view.size.height > small_terminal_height(&app.user_config.behavior) {
     1
   } else {
     0
@@ -37,16 +37,16 @@ pub fn main_layout_margin(app: &App) -> u16 {
 }
 
 pub fn is_wide_layout(app: &App) -> bool {
-  app.size.width >= small_terminal_width(&app.user_config.behavior)
+  app.view.size.width >= small_terminal_width(&app.user_config.behavior)
     && !app.user_config.behavior.enforce_wide_search_bar
 }
 
 pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
-  if app.size.width == 0 || app.size.height == 0 {
+  if app.view.size.width == 0 || app.view.size.height == 0 {
     return None;
   }
 
-  let root = Rect::new(0, 0, app.size.width, app.size.height);
+  let root = Rect::new(0, 0, app.view.size.width, app.view.size.height);
   let margin = main_layout_margin(app);
   let wide_layout = is_wide_layout(app);
   let behavior = &app.user_config.behavior;

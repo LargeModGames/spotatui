@@ -2,7 +2,8 @@
 //! form of TUI/core coupling that must reach zero before a second frontend
 //! can share the core (`crate::tui` imports outside `tui/`, direct `App`
 //! field writes in handlers, raw `IoEvent` dispatch from the TUI, mouse
-//! handling that synthesizes keystrokes, wildcard arms in the action tree).
+//! handling that synthesizes keystrokes, wildcard arms in the action tree,
+//! producers outside the TUI that write its `App::view` presentation state).
 //!
 //! `tools/gates.count` holds the measured baselines, and the test below pins
 //! every counter to its baseline exactly, so a PR that moves a number must
@@ -61,84 +62,107 @@ fn count_occurrences(dirs: &[&str], files: &[&str], needle: &str) -> usize {
     .sum()
 }
 
-/// Counts direct `App` field writes: `app.<field>` (optionally a deeper
-/// `.field` chain) followed on the same line by `=` or a compound assignment
-/// operator. Comparisons (`==`), match guards (`=>`), method calls, and
-/// indexed writes do not count. This is the exact matcher the
-/// `app_field_writes_in_tui_handlers` baseline was measured with.
-fn count_app_field_writes(source: &str) -> usize {
+fn is_ident_byte(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// True when the byte before `pos` continues an identifier, so a needle found
+/// at `pos` is the tail of a longer name (`wrapped_app.`, `PlaybackAction::`).
+fn preceded_by_ident(source: &str, pos: usize) -> bool {
+  pos > 0 && is_ident_byte(source.as_bytes()[pos - 1])
+}
+
+/// Walks the `field(.field)*` chain that starts at `chain_start` and reports
+/// whether an assignment operator follows it on the same line. False when no
+/// field name starts there. Comparisons (`==`), match guards (`=>`), method
+/// calls, and indexed writes are not writes. This is the exact matcher the
+/// write baselines were measured with.
+fn chain_is_written(source: &str, chain_start: usize) -> bool {
   let bytes = source.as_bytes();
-  let mut count = 0;
-  let mut search_from = 0;
-  while let Some(found) = source[search_from..].find("app.") {
-    let start = search_from + found;
-    search_from = start + "app.".len();
-    if start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
-      continue; // part of a longer identifier, e.g. `wrapped_app.`
-    }
-    // Walk the `field(.field)*` chain after `app.`.
-    let chain_start = start + "app.".len();
-    let mut pos = chain_start;
-    loop {
-      let ident_start = pos;
-      while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-        pos += 1;
-      }
-      if pos == ident_start {
-        break;
-      }
-      if pos < bytes.len() && bytes[pos] == b'.' {
-        pos += 1;
-        continue;
-      }
-      break;
-    }
-    if pos == chain_start {
-      continue; // `app.` with no field name after it
-    }
-    // Only same-line spacing may separate the chain from the operator.
-    while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
+  let mut pos = chain_start;
+  loop {
+    let ident_start = pos;
+    while pos < bytes.len() && is_ident_byte(bytes[pos]) {
       pos += 1;
     }
-    let is_write = match bytes.get(pos) {
-      Some(b'+' | b'-' | b'*' | b'/' | b'%' | b'|' | b'&' | b'^') => {
-        bytes.get(pos + 1) == Some(&b'=')
-      }
-      Some(shift @ (b'<' | b'>')) => {
-        bytes.get(pos + 1) == Some(shift) && bytes.get(pos + 2) == Some(&b'=')
-      }
-      Some(b'=') => !matches!(bytes.get(pos + 1), Some(b'=') | Some(b'>')),
-      _ => false,
-    };
-    if is_write {
-      count += 1;
+    if pos == ident_start {
+      break;
     }
+    if pos < bytes.len() && bytes[pos] == b'.' {
+      pos += 1;
+      continue;
+    }
+    break;
   }
-  count
+  if pos == chain_start {
+    return false; // no field name after the prefix
+  }
+  // Only same-line spacing may separate the chain from the operator.
+  while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
+    pos += 1;
+  }
+  match bytes.get(pos) {
+    Some(b'+' | b'-' | b'*' | b'/' | b'%' | b'|' | b'&' | b'^') => {
+      bytes.get(pos + 1) == Some(&b'=')
+    }
+    Some(shift @ (b'<' | b'>')) => {
+      bytes.get(pos + 1) == Some(shift) && bytes.get(pos + 2) == Some(&b'=')
+    }
+    Some(b'=') => !matches!(bytes.get(pos + 1), Some(b'=') | Some(b'>')),
+    _ => false,
+  }
+}
+
+/// Counts direct `App` field writes: `app.<field>` (optionally a deeper
+/// `.field` chain) followed on the same line by `=` or a compound assignment
+/// operator. Chains into `app.view` (the TUI's own presentation state, see
+/// `core::app::ViewState`) are not coupling and do not count.
+fn count_app_field_writes(source: &str) -> usize {
+  source
+    .match_indices("app.")
+    .filter(|&(start, _)| !preceded_by_ident(source, start))
+    .map(|(start, needle)| start + needle.len())
+    .filter(|&chain_start| !source[chain_start..].starts_with("view."))
+    .filter(|&chain_start| chain_is_written(source, chain_start))
+    .count()
+}
+
+/// Counts writes into `App::view`: `<receiver>.view.<field>` (optionally a
+/// deeper chain) followed on the same line by an assignment operator. Measured
+/// over every file outside `src/tui/` and `src/core/app/`, tests included like
+/// the handler write counter: a producer that resets or clamps a cursor after
+/// it replaces a list, and the test that pins that behavior. Each one is a
+/// place where the TUI's presentation state leaks into shared code; the end
+/// state is a producer-side revision the frontend reacts to.
+fn count_view_field_writes(source: &str) -> usize {
+  let bytes = source.as_bytes();
+  // A field access has a receiver directly before the dot; a `.view.` that
+  // opens a string literal or a line is not one.
+  let has_receiver = |start: usize| {
+    start > 0 && (is_ident_byte(bytes[start - 1]) || matches!(bytes[start - 1], b')' | b']'))
+  };
+  source
+    .match_indices(".view.")
+    .filter(|&(start, _)| has_receiver(start))
+    .filter(|&(start, needle)| chain_is_written(source, start + needle.len()))
+    .count()
 }
 
 /// Counts shared `Action::` uses in the production half of one handler file:
-/// the text before its first `#[cfg(test)]` (every handler keeps its tests in
-/// one tail module). The match is word-bounded, so `PlaybackAction::` and
-/// similar do not count.
+/// the text before its first test-gated item (every handler keeps its tests in
+/// one tail module, gated by `#[cfg(test)]` or `#[cfg(all(test, …))]`). The
+/// match is word-bounded, so `PlaybackAction::` and similar do not count.
 fn count_production_action_refs(source: &str) -> usize {
-  let production = match source.find(concat!("#[", "cfg(test)]")) {
-    Some(idx) => &source[..idx],
-    None => source,
-  };
-  let bytes = production.as_bytes();
-  let needle = "Action::";
-  let mut count = 0;
-  let mut search_from = 0;
-  while let Some(found) = production[search_from..].find(needle) {
-    let start = search_from + found;
-    search_from = start + needle.len();
-    if start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
-      continue; // part of a longer identifier, e.g. `PlaybackAction::`
-    }
-    count += 1;
-  }
-  count
+  let tests_start = ["#[cfg(test)]", "#[cfg(all(test"]
+    .iter()
+    .filter_map(|gate| source.find(gate))
+    .min()
+    .unwrap_or(source.len());
+  let production = &source[..tests_start];
+  production
+    .match_indices("Action::")
+    .filter(|&(start, _)| !preceded_by_ident(production, start))
+    .count()
 }
 
 fn load_baselines() -> BTreeMap<String, usize> {
@@ -168,14 +192,16 @@ fn ratchet_counters_match_the_checked_in_baselines() {
 
   let mut handler_files = Vec::new();
   collect_rs_files(&root.join("src/tui/handlers"), &mut handler_files);
-  let app_field_writes: usize = handler_files
-    .iter()
-    .map(|path| count_app_field_writes(&read_source(path)))
-    .sum();
-  let action_refs: usize = handler_files
-    .iter()
-    .map(|path| count_production_action_refs(&read_source(path)))
-    .sum();
+  let (app_field_writes, action_refs) =
+    handler_files
+      .iter()
+      .fold((0usize, 0usize), |(writes, refs), path| {
+        let source = read_source(path);
+        (
+          writes + count_app_field_writes(&source),
+          refs + count_production_action_refs(&source),
+        )
+      });
 
   // Needles that would otherwise count their own literal in this file are
   // assembled with concat! (this file lives under the `src/` scan).
@@ -191,68 +217,67 @@ fn ratchet_counters_match_the_checked_in_baselines() {
   let tui_dir = root.join("src").join("tui");
   let gates_file = root.join("src").join("gates.rs");
   non_tui_files.retain(|path| !path.starts_with(&tui_dir) && *path != gates_file);
-  let crate_tui_refs: usize = non_tui_files
-    .iter()
-    .map(|path| read_source(path).matches("crate::tui").count())
-    .sum();
+  // The view-write scan also skips `src/core/app/` (whose methods are `App`'s
+  // own presentation helpers): it counts every producer that still writes a
+  // TUI cursor.
+  let app_dir = root.join("src").join("core").join("app");
+  let (crate_tui_refs, view_writes) =
+    non_tui_files
+      .iter()
+      .fold((0usize, 0usize), |(refs, writes), path| {
+        let source = read_source(path);
+        let view_writes = if path.starts_with(&app_dir) {
+          0
+        } else {
+          count_view_field_writes(&source)
+        };
+        (
+          refs + source.matches("crate::tui").count(),
+          writes + view_writes,
+        )
+      });
 
-  // (name, measured value, rises). Every counter must match its baseline
-  // exactly; `rises` only selects the message, since the direction itself is
-  // enforced against the merge base by tools/check_gates_ratchet.sh.
-  let measured: [(&str, usize, bool); 7] = [
-    ("crate_tui_refs_outside_tui", crate_tui_refs, false),
-    ("app_field_writes_in_tui_handlers", app_field_writes, false),
+  // (name, measured value). Every counter must match its baseline exactly;
+  // the direction a baseline may move is enforced against the merge base by
+  // tools/check_gates_ratchet.sh.
+  let measured: [(&str, usize); 8] = [
+    ("crate_tui_refs_outside_tui", crate_tui_refs),
+    ("app_field_writes_in_tui_handlers", app_field_writes),
     (
       "ioevent_refs_in_tui",
       count_occurrences(&["src/tui"], &[], "IoEvent::"),
-      false,
     ),
     (
       "synthetic_keys_in_mouse_handler",
       count_occurrences(&[], &["src/tui/handlers/mouse.rs"], "handler(Key::"),
-      false,
     ),
     (
       "wildcard_arms_in_action_tree",
       count_occurrences(&["src/core/action"], &[], "_ =>"),
-      false,
     ),
-    ("action_refs_in_tui_handlers", action_refs, true),
-    ("test_attribute_total", test_attribute_total, true),
+    ("view_writes_outside_tui", view_writes),
+    ("action_refs_in_tui_handlers", action_refs),
+    ("test_attribute_total", test_attribute_total),
   ];
 
   let mut baselines = load_baselines();
   let mut report = String::new();
-  for (name, actual, rises) in measured {
-    let Some(baseline) = baselines.remove(name) else {
-      report.push_str(&format!(
-        "{name}: missing from tools/gates.count (measured {actual})
-"
-      ));
-      continue;
-    };
-    if actual == baseline {
-      continue;
+  for (name, actual) in measured {
+    match baselines.remove(name) {
+      None => report.push_str(&format!(
+        "{name}: missing from tools/gates.count (measured {actual})\n"
+      )),
+      Some(baseline) if baseline != actual => report.push_str(&format!(
+        "{name}: baseline {baseline}, measured {actual}; move the baseline in \
+         tools/gates.count in this same PR (tools/check_gates_ratchet.sh enforces \
+         the direction it may move)\n"
+      )),
+      Some(_) => {}
     }
-    let hint = match (rises, actual > baseline) {
-      (true, true) => "raise the baseline in tools/gates.count in this same PR",
-      (true, false) => {
-        "the merge-base check refuses a lower value, restore what was removed or lower it          deliberately"
-      }
-      (false, true) => {
-        "this PR reintroduces coupling the ratchet exists to burn down, fix the code instead          of the baseline"
-      }
-      (false, false) => "improved, lower the baseline in tools/gates.count in this same PR",
-    };
-    report.push_str(&format!(
-      "{name}: {baseline} -> {actual}; {hint}
-"
-    ));
   }
   for (name, baseline) in baselines {
     report.push_str(&format!(
-      "{name} = {baseline}: unknown counter in tools/gates.count, remove or fix the name
-"
+      "{name} = {baseline}: unknown counter in tools/gates.count, remove or fix the name\n"
     ));
   }
   assert!(report.is_empty(), "\nratchet violations:\n{report}");
@@ -279,19 +304,32 @@ fn field_write_matcher_ignores_comparisons_guards_calls_and_other_idents() {
 }
 
 #[test]
+fn field_write_matcher_skips_view_chains() {
+  let src = "app.view.x = 1;\napp.view.a.b += 2;\napp.y = 3;\napp.viewer = 4;\n";
+  assert_eq!(count_app_field_writes(src), 2);
+}
+
+#[test]
+fn view_write_matcher_needs_a_receiver_and_an_assignment() {
+  let src = "app.view.x = 1;\n\
+             guard.view.a.b += 2;\n\
+             if app.view.x == 1 {}\n\
+             app.view.list.push(1);\n\
+             let s = \".view.x = 1\";\n\
+             foo(app.view.x);\n";
+  assert_eq!(count_view_field_writes(src), 2);
+}
+
+#[test]
 fn action_ref_matcher_is_word_bounded_and_stops_at_the_test_module() {
-  let src = concat!(
-    "app.apply(Action::Play);
-",
-    "let x = PlaybackAction::Pause;
-",
-    "app.apply(Action::Next)?;
-",
-    "#[",
-    "cfg(test)]
-",
-    "mod tests { fn t() { app.apply(Action::Play); } }
-",
-  );
+  let src = "app.apply(Action::Play);\n\
+             let x = PlaybackAction::Pause;\n\
+             app.apply(Action::Next)?;\n\
+             #[cfg(test)]\n\
+             mod tests { fn t() { app.apply(Action::Play); } }\n";
   assert_eq!(count_production_action_refs(src), 2);
+  let gated = "app.apply(Action::Play);\n\
+               #[cfg(all(test, feature = \"x\"))]\n\
+               mod tests { fn t() { app.apply(Action::Play); } }\n";
+  assert_eq!(count_production_action_refs(gated), 1);
 }

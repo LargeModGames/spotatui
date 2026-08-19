@@ -133,7 +133,7 @@ impl App {
   pub fn clear_playlist_track_filter(&mut self) {
     self.active_playlist_track_filter = None;
     self.pending_playlist_track_search = None;
-    self.input_context = InputContext::GlobalSearch;
+    self.view.input_context = InputContext::GlobalSearch;
     if self.playlist_track_pages.pages.is_empty() {
       self.track_table.tracks.clear();
       self.track_table.selected_index = 0;

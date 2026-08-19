@@ -58,7 +58,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Local Files",
       &items,
       highlight_state,
-      app.selected_playlist_index,
+      app.view.selected_playlist_index,
     );
     return;
   }
@@ -82,7 +82,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Subsonic",
       &items,
       highlight_state,
-      app.selected_playlist_index,
+      app.view.selected_playlist_index,
     );
     return;
   }
@@ -106,7 +106,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Radio Stations",
       &items,
       highlight_state,
-      app.selected_playlist_index,
+      app.view.selected_playlist_index,
     );
     return;
   }
@@ -128,7 +128,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "YouTube Playlists",
       &items,
       highlight_state,
-      app.selected_playlist_index,
+      app.view.selected_playlist_index,
     );
     return;
   }
@@ -180,7 +180,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     "Playlists",
     &display_list,
     highlight_state,
-    app.selected_playlist_index,
+    app.view.selected_playlist_index,
   );
 }
 
