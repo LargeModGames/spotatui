@@ -74,7 +74,6 @@ impl App {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::test_support::*;
 
   // These live here rather than in `core/action/tests.rs` because they must
   // seed the scroll fields to a nonzero value first, and `core/app/` is the
