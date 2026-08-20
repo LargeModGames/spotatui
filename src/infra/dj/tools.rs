@@ -12,8 +12,8 @@
 //! hit rates when the tools are rendered into model context.
 
 use super::{brief, DjSuggestion, MAX_BATCH};
+use crate::core::action::Action;
 use crate::core::app::App;
-use crate::infra::network::IoEvent;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -456,15 +456,18 @@ pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Optio
     DjToolCall::GetQueue => Some(queue_outcome(app).await),
     DjToolCall::SkipTrack => {
       let mut app = app.lock().await;
-      app.dispatch(IoEvent::NextTrack);
+      // Through the shared vocabulary, so `App::next_track`'s ownership routing
+      // (queue slot, decoded sources, suspend-to-queue, native shuffle
+      // bookkeeping) applies; the old raw `IoEvent::NextTrack` dispatch missed
+      // the App-side branches.
+      app.apply(Action::NextTrack);
       Some(ToolOutcome::ok("Skipped to the next track"))
     }
     DjToolCall::SetDjVibe { vibe } => {
       let mut app = app.lock().await;
-      // A new standing direction invalidates any refill already in flight for
-      // the old one.
-      app.dj.bump_generation();
-      app.dj.vibe = vibe.clone();
+      // The apply arm bumps the DJ generation exactly once (the adopt-one-bump
+      // rule in the turn loop depends on that count).
+      app.apply(Action::SetDjVibe(vibe.clone()));
       Some(ToolOutcome::ok(match vibe.as_deref() {
         Some(vibe) => format!("DJ vibe set to: {vibe}. {}", vibe_effect(&app)),
         None => "DJ vibe cleared".to_string(),

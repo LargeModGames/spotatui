@@ -3,12 +3,12 @@ use std::rc::Rc;
 use mlua::{Lua, LuaSerdeExt, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::core::action::{Action, NavTarget, RepeatSetting};
 use crate::core::app::PluginDataKind;
 use crate::core::plugin_api::{self, PluginPopup, PopupLine};
+use crate::core::theme::ThemeField;
 use crate::core::user_config::parse_theme_item;
-use crate::infra::network::IoEvent;
 
-use super::effects::ScriptEffect;
 use super::events::VALID_EVENT_NAMES;
 use super::shared::{
   DataRequest, HttpResponseData, HttpResult, NewTimer, ScriptShared, COMMANDS_KEY,
@@ -106,16 +106,16 @@ pub(super) fn install_api(
     tbl.set("devices", devices)?;
   }
 
-  // Actions: queue effects.
-  install_action(lua, &tbl, shared, "play", || ScriptEffect::Play)?;
-  install_action(lua, &tbl, shared, "pause", || ScriptEffect::Pause)?;
-  install_action(lua, &tbl, shared, "next", || ScriptEffect::Next)?;
-  install_action(lua, &tbl, shared, "previous", || ScriptEffect::Previous)?;
+  // Actions: queue for the engine's next drain into `App::apply`.
+  install_action(lua, &tbl, shared, "play", || Action::Play)?;
+  install_action(lua, &tbl, shared, "pause", || Action::Pause)?;
+  install_action(lua, &tbl, shared, "next", || Action::NextTrack)?;
+  install_action(lua, &tbl, shared, "previous", || Action::PreviousTrack)?;
 
   {
     let shared = shared.clone();
     let seek = lua.create_function(move |_, ms: u32| {
-      shared.effects.borrow_mut().push(ScriptEffect::Seek(ms));
+      shared.effects.borrow_mut().push(Action::SeekTo(ms));
       Ok(())
     })?;
     tbl.set("seek", seek)?;
@@ -125,10 +125,7 @@ pub(super) fn install_api(
     let shared = shared.clone();
     let set_volume = lua.create_function(move |_, pct: i64| {
       let clamped = pct.clamp(0, 100) as u8;
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::SetVolume(clamped));
+      shared.effects.borrow_mut().push(Action::SetVolume(clamped));
       Ok(())
     })?;
     tbl.set("set_volume", set_volume)?;
@@ -137,10 +134,7 @@ pub(super) fn install_api(
   {
     let shared = shared.clone();
     let shuffle = lua.create_function(move |_, on: bool| {
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::SetShuffle(on));
+      shared.effects.borrow_mut().push(Action::SetShuffle(on));
       Ok(())
     })?;
     tbl.set("shuffle", shuffle)?;
@@ -149,10 +143,7 @@ pub(super) fn install_api(
   {
     let shared = shared.clone();
     let search = lua.create_function(move |_, query: String| {
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::Search(query));
+      shared.effects.borrow_mut().push(Action::Search(query));
       Ok(())
     })?;
     tbl.set("search", search)?;
@@ -164,7 +155,7 @@ pub(super) fn install_api(
       shared
         .effects
         .borrow_mut()
-        .push(ScriptEffect::Notify(msg, ttl.unwrap_or(4)));
+        .push(Action::Notify(msg, ttl.unwrap_or(4)));
       Ok(())
     })?;
     tbl.set("notify", notify)?;
@@ -283,7 +274,7 @@ pub(super) fn install_api(
       shared
         .effects
         .borrow_mut()
-        .push(ScriptEffect::SetPlaybarSegment { plugin, text });
+        .push(Action::SetPlaybarSegment { plugin, text });
       Ok(())
     })?;
     tbl.set("set_playbar", set_playbar)?;
@@ -297,7 +288,7 @@ pub(super) fn install_api(
       shared
         .effects
         .borrow_mut()
-        .push(ScriptEffect::ShowPopup(PluginPopup { title, lines }));
+        .push(Action::ShowPopup(PluginPopup { title, lines }));
       Ok(())
     })?;
     tbl.set("popup", popup)?;
@@ -307,46 +298,22 @@ pub(super) fn install_api(
   {
     let shared = shared.clone();
     let set_theme = lua.create_function(move |_, tbl: mlua::Table| {
-      let mut pairs: Vec<(String, crate::core::theme::Color)> = Vec::new();
+      let mut pairs: Vec<(ThemeField, crate::core::theme::Color)> = Vec::new();
       for pair in tbl.pairs::<String, String>() {
         let (field, color_str) = pair?;
-        // Validate field name
-        const VALID_FIELDS: &[&str] = &[
-          "active",
-          "banner",
-          "error_border",
-          "error_text",
-          "hint",
-          "hovered",
-          "inactive",
-          "playbar_background",
-          "playbar_progress",
-          "playbar_progress_text",
-          "playbar_text",
-          "selected",
-          "text",
-          "background",
-          "header",
-          "highlighted_lyrics",
-          "analysis_bar",
-          "analysis_bar_text",
-        ];
-        if !VALID_FIELDS.contains(&field.as_str()) {
+        let Some(theme_field) = ThemeField::from_name(&field) else {
           return Err(mlua::Error::RuntimeError(format!(
             "spotatui.set_theme: unknown theme field '{field}'"
           )));
-        }
+        };
         let color = parse_theme_item(&color_str).map_err(|e| {
           mlua::Error::RuntimeError(format!(
             "spotatui.set_theme: invalid color for field '{field}': {e}"
           ))
         })?;
-        pairs.push((field, color));
+        pairs.push((theme_field, color));
       }
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::SetTheme(pairs));
+      shared.effects.borrow_mut().push(Action::SetTheme(pairs));
       Ok(())
     })?;
     tbl.set("set_theme", set_theme)?;
@@ -433,53 +400,55 @@ pub(super) fn install_api(
     tbl.set("search_results", search_results)?;
   }
 
-  // Transport / library actions routed through whitelisted IoEvents.
+  // Transport / library actions.
   {
     let shared = shared.clone();
     let set_repeat = lua.create_function(move |_, mode: String| {
-      let state = match mode.as_str() {
-        "off" => rspotify::model::RepeatState::Off,
-        "track" => rspotify::model::RepeatState::Track,
-        "context" => rspotify::model::RepeatState::Context,
+      let setting = match mode.as_str() {
+        "off" => RepeatSetting::Off,
+        "track" => RepeatSetting::Track,
+        "context" => RepeatSetting::Context,
         other => {
           return Err(mlua::Error::RuntimeError(format!(
             "spotatui.set_repeat: expected \"off\", \"track\" or \"context\", got '{other}'"
           )));
         }
       };
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::Dispatch(IoEvent::Repeat(state)));
+      shared.effects.borrow_mut().push(Action::SetRepeat(setting));
       Ok(())
     })?;
     tbl.set("set_repeat", set_repeat)?;
   }
 
-  install_action(lua, &tbl, shared, "cycle_repeat", || {
-    ScriptEffect::CycleRepeat
-  })?;
+  install_action(lua, &tbl, shared, "cycle_repeat", || Action::CycleRepeat)?;
 
   install_string_action(lua, &tbl, shared, "transfer_playback", |device_id| {
-    // `false`: a plugin-initiated transfer must not overwrite the user's saved
-    // device preference (only the interactive device picker persists).
-    ScriptEffect::Dispatch(IoEvent::TransferPlaybackToDevice(device_id, false))
+    // `persist: false`: a plugin-initiated transfer must not overwrite the
+    // user's saved device preference (only the interactive device picker
+    // persists).
+    Action::TransferPlayback {
+      device_id,
+      persist: false,
+    }
   })?;
 
   // spotatui.play_uri(uri): tracks/episodes play as a uri list, containers as context.
   {
     let shared = shared.clone();
     let play_uri = lua.create_function(move |_, uri: String| {
-      let effect = if uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:") {
-        ScriptEffect::Dispatch(IoEvent::StartPlayback(None, Some(vec![uri]), None))
+      let action = if uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:") {
+        Action::PlayUris {
+          uris: vec![uri],
+          offset: None,
+        }
       } else if is_context_uri(&uri) {
-        ScriptEffect::Dispatch(IoEvent::StartPlayback(Some(uri), None, None))
+        Action::PlayContext { uri, offset: None }
       } else {
         return Err(mlua::Error::RuntimeError(format!(
           "spotatui.play_uri: expected a spotify:track/episode/album/playlist/artist/show uri, got '{uri}'"
         )));
       };
-      shared.effects.borrow_mut().push(effect);
+      shared.effects.borrow_mut().push(action);
       Ok(())
     })?;
     tbl.set("play_uri", play_uri)?;
@@ -498,19 +467,13 @@ pub(super) fn install_api(
       shared
         .effects
         .borrow_mut()
-        .push(ScriptEffect::Dispatch(IoEvent::StartPlayback(
-          Some(uri),
-          None,
-          offset,
-        )));
+        .push(Action::PlayContext { uri, offset });
       Ok(())
     })?;
     tbl.set("play_context", play_context)?;
   }
 
-  install_string_action(lua, &tbl, shared, "add_to_queue", |uri| {
-    ScriptEffect::Dispatch(IoEvent::AddItemToQueue(uri))
-  })?;
+  install_string_action(lua, &tbl, shared, "add_to_queue", Action::AddToQueue)?;
 
   // spotatui.create_playlist(name, uris?)
   {
@@ -528,12 +491,10 @@ pub(super) fn install_api(
             track_ids.push(uri?);
           }
         }
-        shared
-          .effects
-          .borrow_mut()
-          .push(ScriptEffect::Dispatch(IoEvent::CreateNewPlaylist(
-            name, track_ids,
-          )));
+        shared.effects.borrow_mut().push(Action::CreatePlaylist {
+          name,
+          track_uris: track_ids,
+        });
         Ok(())
       })?;
     tbl.set("create_playlist", create_playlist)?;
@@ -549,9 +510,7 @@ pub(super) fn install_api(
         shared
           .effects
           .borrow_mut()
-          .push(ScriptEffect::Dispatch(IoEvent::AddTrackToPlaylist(
-            playlist, track,
-          )));
+          .push(Action::AddTrackToPlaylist { playlist, track });
         Ok(())
       })?;
     tbl.set("playlist_add_track", playlist_add_track)?;
@@ -569,51 +528,40 @@ pub(super) fn install_api(
             "spotatui.playlist_remove_track: position must be a non-negative (0-based) integer, got {position}"
           ))
         })?;
-        shared.effects.borrow_mut().push(ScriptEffect::Dispatch(
-          IoEvent::RemoveTrackFromPlaylistAtPosition(playlist, track, position),
-        ));
+        shared
+          .effects
+          .borrow_mut()
+          .push(Action::RemoveTrackFromPlaylist {
+            playlist,
+            track,
+            position,
+          });
         Ok(())
       })?;
     tbl.set("playlist_remove_track", playlist_remove_track)?;
   }
 
-  install_string_action(lua, &tbl, shared, "follow_playlist", |playlist| {
-    // The network handler ignores the owner-id parameter; "unknown" mirrors the
-    // fallback the built-in follow flow uses.
-    ScriptEffect::Dispatch(IoEvent::UserFollowPlaylist(
-      "unknown".to_string(),
-      playlist,
-      None,
-    ))
-  })?;
+  install_string_action(lua, &tbl, shared, "follow_playlist", Action::FollowPlaylist)?;
   install_string_action(
     lua,
     &tbl,
     shared,
     "unfollow_playlist",
-    ScriptEffect::UnfollowPlaylist,
+    Action::UnfollowPlaylist,
   )?;
-  install_string_action(lua, &tbl, shared, "toggle_save_track", |uri| {
-    ScriptEffect::Dispatch(IoEvent::ToggleSaveTrack(uri))
-  })?;
-  install_string_action(lua, &tbl, shared, "save_album", |id| {
-    ScriptEffect::Dispatch(IoEvent::CurrentUserSavedAlbumAdd(id))
-  })?;
-  install_string_action(lua, &tbl, shared, "unsave_album", |id| {
-    ScriptEffect::Dispatch(IoEvent::CurrentUserSavedAlbumDelete(id))
-  })?;
-  install_string_action(lua, &tbl, shared, "save_show", |id| {
-    ScriptEffect::Dispatch(IoEvent::CurrentUserSavedShowAdd(id))
-  })?;
-  install_string_action(lua, &tbl, shared, "unsave_show", |id| {
-    ScriptEffect::Dispatch(IoEvent::CurrentUserSavedShowDelete(id))
-  })?;
-  install_string_action(lua, &tbl, shared, "follow_artist", |id| {
-    ScriptEffect::Dispatch(IoEvent::UserFollowArtists(vec![id]))
-  })?;
-  install_string_action(lua, &tbl, shared, "unfollow_artist", |id| {
-    ScriptEffect::Dispatch(IoEvent::UserUnfollowArtists(vec![id]))
-  })?;
+  install_string_action(
+    lua,
+    &tbl,
+    shared,
+    "toggle_save_track",
+    Action::ToggleSaveTrack,
+  )?;
+  install_string_action(lua, &tbl, shared, "save_album", Action::SaveAlbum)?;
+  install_string_action(lua, &tbl, shared, "unsave_album", Action::UnsaveAlbum)?;
+  install_string_action(lua, &tbl, shared, "save_show", Action::SaveShow)?;
+  install_string_action(lua, &tbl, shared, "unsave_show", Action::UnsaveShow)?;
+  install_string_action(lua, &tbl, shared, "follow_artist", Action::FollowArtist)?;
+  install_string_action(lua, &tbl, shared, "unfollow_artist", Action::UnfollowArtist)?;
 
   // Timers. Fired from the engine's tick pass, so the effective resolution is
   // the UI tick rate (behavior.tick_rate_milliseconds).
@@ -643,22 +591,23 @@ pub(super) fn install_api(
   {
     let shared = shared.clone();
     let navigate = lua.create_function(move |_, target: String| {
-      if !super::effects::NAV_TARGETS.contains(&target.as_str()) {
+      let Some(nav_target) = NavTarget::from_name(&target) else {
+        let valid: Vec<&str> = NavTarget::ALL.iter().map(|t| t.name()).collect();
         return Err(mlua::Error::RuntimeError(format!(
           "spotatui.navigate: unknown target '{target}'; valid targets: {}",
-          super::effects::NAV_TARGETS.join(", ")
+          valid.join(", ")
         )));
-      }
+      };
       shared
         .effects
         .borrow_mut()
-        .push(ScriptEffect::Navigate(target));
+        .push(Action::Navigate(nav_target));
       Ok(())
     })?;
     tbl.set("navigate", navigate)?;
   }
 
-  install_action(lua, &tbl, shared, "back", || ScriptEffect::Back)?;
+  install_action(lua, &tbl, shared, "back", || Action::Back)?;
 
   {
     let shared = shared.clone();
@@ -717,13 +666,10 @@ pub(super) fn install_api(
     let set_screen = lua.create_function(move |_, (name, widgets): (String, mlua::Table)| {
       let title = verify_screen_owner(&lua_inner, &shared, "spotatui.set_screen", &name)?;
       let widgets = parse_screen_widgets(widgets)?;
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::SetScreenContent {
-          name,
-          content: plugin_api::PluginScreenContent { title, widgets },
-        });
+      shared.effects.borrow_mut().push(Action::SetScreenContent {
+        name,
+        content: plugin_api::PluginScreenContent { title, widgets },
+      });
       Ok(())
     })?;
     tbl.set("set_screen", set_screen)?;
@@ -734,10 +680,7 @@ pub(super) fn install_api(
     let shared = shared.clone();
     let show_screen = lua.create_function(move |_, name: String| {
       verify_screen_owner(&lua_inner, &shared, "spotatui.show_screen", &name)?;
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::ShowScreen(name));
+      shared.effects.borrow_mut().push(Action::ShowScreen(name));
       Ok(())
     })?;
     tbl.set("show_screen", show_screen)?;
@@ -748,10 +691,7 @@ pub(super) fn install_api(
     let shared = shared.clone();
     let close_screen = lua.create_function(move |_, name: String| {
       verify_screen_owner(&lua_inner, &shared, "spotatui.close_screen", &name)?;
-      shared
-        .effects
-        .borrow_mut()
-        .push(ScriptEffect::CloseScreen(name));
+      shared.effects.borrow_mut().push(Action::CloseScreen(name));
       Ok(())
     })?;
     tbl.set("close_screen", close_screen)?;
@@ -941,7 +881,7 @@ fn install_string_action(
   tbl: &mlua::Table,
   shared: &Rc<ScriptShared>,
   name: &'static str,
-  make: fn(String) -> ScriptEffect,
+  make: fn(String) -> Action,
 ) -> mlua::Result<()> {
   let shared = shared.clone();
   let f = lua.create_function(move |_, value: String| {
@@ -1337,13 +1277,13 @@ fn parse_styled_lines(fn_name: &str, val: mlua::Value) -> mlua::Result<Vec<Popup
   }
 }
 
-/// Install a no-argument action that pushes a fixed effect.
+/// Install a no-argument action that pushes a fixed action.
 pub(super) fn install_action(
   lua: &Lua,
   tbl: &mlua::Table,
   shared: &Rc<ScriptShared>,
   name: &str,
-  make: fn() -> ScriptEffect,
+  make: fn() -> Action,
 ) -> mlua::Result<()> {
   let shared = shared.clone();
   let f = lua.create_function(move |_, ()| {

@@ -85,7 +85,7 @@ units under `src/`:
 
 | Unit | Role |
 |------|------|
-| `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
+| `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), the shared action vocabulary (`action/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
 | `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
@@ -258,6 +258,30 @@ from `src/infra/network/requests.rs` (pacing, 401 cooldown, payload
 normalization). rspotify supplies OAuth/PKCE, id types, and models only. Spotify
 401s are deliberately tolerated (consecutive-failure threshold, forced-refresh
 cooldown) - don't "fix" that by escalating on first failure.
+
+### The shared Action vocabulary
+
+`src/core/action/` holds `Action` (one enum of frontend-neutral state
+changes), `App::apply` (the single write path, in `core/action/apply.rs`),
+and `ActionOutcome`. Producers that are not the network layer's own result
+handling mutate `App` via `app.apply(Action::…)`: the Lua scripting engine
+drains its queued actions into it, the mutating DJ/MCP tools call it
+directly, and TUI handlers adopt it as the conversion sub-PRs land
+(`action_refs_in_tui_handlers` may only rise). Rules:
+
+- No rspotify type and no raw `IoEvent` payload in `Action` - payloads are
+  strings, scalars, and `core::plugin_api` snapshot types. Address by
+  identity (URIs, ids, names), never by list ordinal.
+- Every arm delegates to the same ownership-aware `App` method the
+  equivalent keybinding uses. Playback starts go through
+  `App::start_playback_uris` / `start_playback_context` - never a
+  hand-built `IoEvent::StartPlayback` in an arm.
+- No wildcard match arm anywhere under `src/core/action/`:
+  `wildcard_arms_in_action_tree` is pinned at 0 by a raw text scan that
+  includes tests, comments, and string literals. Write catch-all test arms
+  as `_other =>`.
+- `Action` derives serde (the future frontend wire shape); a payload type
+  added to it must stay serde-derivable.
 
 ### Paginated results
 

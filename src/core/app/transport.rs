@@ -346,6 +346,22 @@ impl App {
     self.dispatch(IoEvent::NextTrack);
   }
 
+  /// Start playback of an explicit list of playable URIs, optionally from an
+  /// offset into that list. The single place the shared action vocabulary
+  /// builds a URI-list `StartPlayback`; ownership routing happens in the
+  /// pump's source routers, exactly as for the equivalent keybinding.
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  pub(crate) fn start_playback_uris(&mut self, uris: Vec<String>, offset: Option<usize>) {
+    self.dispatch(IoEvent::StartPlayback(None, Some(uris), offset));
+  }
+
+  /// Start playback of a Spotify context URI, optionally from a 0-based track
+  /// offset. The context twin of [`Self::start_playback_uris`].
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  pub(crate) fn start_playback_context(&mut self, context_uri: String, offset: Option<usize>) {
+    self.dispatch(IoEvent::StartPlayback(Some(context_uri), None, offset));
+  }
+
   pub fn copy_song_url(&mut self) {
     info!("copying song url to clipboard");
     let clipboard = match &mut self.clipboard {

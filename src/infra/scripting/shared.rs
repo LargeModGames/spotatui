@@ -2,12 +2,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use crate::core::action::Action;
 use crate::core::app::PluginDataKind;
 use crate::core::plugin_api::{
   ConfigSnapshot, DeviceInfo, PlaybackState, PlaylistInfo, QueueSnapshot, SearchResults,
 };
-
-use super::effects::ScriptEffect;
 
 /// Registry key for the table mapping event name -> array of `{ plugin, callback }`.
 pub(super) const HANDLERS_KEY: &str = "spotatui.handlers";
@@ -80,7 +79,8 @@ pub(crate) struct ScriptShared {
   /// Playback snapshot, refreshed by the runner before callbacks run.
   pub(crate) playback: RefCell<Option<PlaybackState>>,
   pub(super) devices: RefCell<Vec<DeviceInfo>>,
-  pub(crate) effects: RefCell<Vec<ScriptEffect>>,
+  /// Actions queued by Lua calls, drained through `App::apply` by the engine.
+  pub(crate) effects: RefCell<Vec<Action>>,
   /// Plugin name currently being loaded, so `spotatui.on` can tag its callbacks.
   pub(super) current_plugin: RefCell<String>,
   /// Single token counter shared by HTTP requests, data requests and timers.
