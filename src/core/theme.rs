@@ -7,10 +7,16 @@
 //! byte-identical across this move.
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 /// A color in the terminal's color model. Named variants follow the 16 ANSI
 /// palette entries; `Reset` is the frontend's default foreground/background.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// The serde derives are the *wire* representation for the shared action
+/// vocabulary (`core/action`) and future frontend codegen. They are unrelated
+/// to the on-disk `config.yml` format, which stays hand-parsed by
+/// [`parse_theme_item`] / [`color_to_string`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Color {
   Reset,
   Black,
@@ -82,6 +88,140 @@ impl Default for Theme {
       background: Color::Reset,
       header: Color::Reset,
       highlighted_lyrics: Color::Rgb(0, 200, 200), // LightCyan equivalent
+    }
+  }
+}
+
+/// A [`Theme`] field addressed by name, one variant per struct field.
+///
+/// This is the single source of truth coupling the runtime theme-override
+/// surface (Lua `spotatui.set_theme`, `Action::SetTheme`) to the struct:
+/// a new variant without a struct field breaks [`Theme::set`]'s exhaustive
+/// match, and a new `Theme` field breaks the full destructuring at the top
+/// of `set`, so either half added alone is a compile error where the old
+/// parallel string whitelists silently dropped the write on a typo.
+#[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeField {
+  Active,
+  Banner,
+  ErrorBorder,
+  ErrorText,
+  Hint,
+  Hovered,
+  Inactive,
+  PlaybarBackground,
+  PlaybarProgress,
+  PlaybarProgressText,
+  PlaybarText,
+  Selected,
+  Text,
+  Background,
+  Header,
+  HighlightedLyrics,
+  AnalysisBar,
+  AnalysisBarText,
+}
+
+#[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+impl ThemeField {
+  /// Every field, in the order the Lua API has always advertised them.
+  pub const ALL: [ThemeField; 18] = [
+    ThemeField::Active,
+    ThemeField::Banner,
+    ThemeField::ErrorBorder,
+    ThemeField::ErrorText,
+    ThemeField::Hint,
+    ThemeField::Hovered,
+    ThemeField::Inactive,
+    ThemeField::PlaybarBackground,
+    ThemeField::PlaybarProgress,
+    ThemeField::PlaybarProgressText,
+    ThemeField::PlaybarText,
+    ThemeField::Selected,
+    ThemeField::Text,
+    ThemeField::Background,
+    ThemeField::Header,
+    ThemeField::HighlightedLyrics,
+    ThemeField::AnalysisBar,
+    ThemeField::AnalysisBarText,
+  ];
+
+  /// The snake_case field name as it appears in `config.yml` and the Lua API.
+  pub fn name(self) -> &'static str {
+    match self {
+      ThemeField::Active => "active",
+      ThemeField::Banner => "banner",
+      ThemeField::ErrorBorder => "error_border",
+      ThemeField::ErrorText => "error_text",
+      ThemeField::Hint => "hint",
+      ThemeField::Hovered => "hovered",
+      ThemeField::Inactive => "inactive",
+      ThemeField::PlaybarBackground => "playbar_background",
+      ThemeField::PlaybarProgress => "playbar_progress",
+      ThemeField::PlaybarProgressText => "playbar_progress_text",
+      ThemeField::PlaybarText => "playbar_text",
+      ThemeField::Selected => "selected",
+      ThemeField::Text => "text",
+      ThemeField::Background => "background",
+      ThemeField::Header => "header",
+      ThemeField::HighlightedLyrics => "highlighted_lyrics",
+      ThemeField::AnalysisBar => "analysis_bar",
+      ThemeField::AnalysisBarText => "analysis_bar_text",
+    }
+  }
+
+  /// Look up a field by its snake_case name; `None` for unknown names.
+  pub fn from_name(name: &str) -> Option<ThemeField> {
+    ThemeField::ALL.into_iter().find(|f| f.name() == name)
+  }
+}
+
+impl Theme {
+  /// Set one field by [`ThemeField`], the runtime-override write path.
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  pub fn set(&mut self, field: ThemeField, color: Color) {
+    // Full destructuring, no rest pattern: a new `Theme` field fails to
+    // compile here until this function (and so the variant list) is updated.
+    let Theme {
+      analysis_bar: _,
+      analysis_bar_text: _,
+      active: _,
+      banner: _,
+      error_border: _,
+      error_text: _,
+      hint: _,
+      hovered: _,
+      inactive: _,
+      playbar_background: _,
+      playbar_progress: _,
+      playbar_progress_text: _,
+      playbar_text: _,
+      selected: _,
+      text: _,
+      background: _,
+      header: _,
+      highlighted_lyrics: _,
+    } = *self;
+    match field {
+      ThemeField::Active => self.active = color,
+      ThemeField::Banner => self.banner = color,
+      ThemeField::ErrorBorder => self.error_border = color,
+      ThemeField::ErrorText => self.error_text = color,
+      ThemeField::Hint => self.hint = color,
+      ThemeField::Hovered => self.hovered = color,
+      ThemeField::Inactive => self.inactive = color,
+      ThemeField::PlaybarBackground => self.playbar_background = color,
+      ThemeField::PlaybarProgress => self.playbar_progress = color,
+      ThemeField::PlaybarProgressText => self.playbar_progress_text = color,
+      ThemeField::PlaybarText => self.playbar_text = color,
+      ThemeField::Selected => self.selected = color,
+      ThemeField::Text => self.text = color,
+      ThemeField::Background => self.background = color,
+      ThemeField::Header => self.header = color,
+      ThemeField::HighlightedLyrics => self.highlighted_lyrics = color,
+      ThemeField::AnalysisBar => self.analysis_bar = color,
+      ThemeField::AnalysisBarText => self.analysis_bar_text = color,
     }
   }
 }

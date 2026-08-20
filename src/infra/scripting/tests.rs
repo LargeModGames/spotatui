@@ -1,6 +1,6 @@
+use crate::core::action::Action;
 use crate::core::plugin_api::{ArtistRef, PlaybackState, TrackInfo};
 
-use super::effects::ScriptEffect;
 use super::engine::ScriptEngine;
 use super::events::{diff_events, ScriptEvent};
 use super::shared::HttpResponseData;
@@ -38,14 +38,14 @@ fn playback(track: Option<TrackInfo>, is_playing: bool, progress_ms: u64) -> Pla
   }
 }
 
-/// Take all currently-queued effects out of the shared buffer.
-/// (`ScriptEffect` is not `PartialEq` because `IoEvent` isn't, so tests pattern-match.)
-fn drain(engine: &ScriptEngine) -> Vec<ScriptEffect> {
+/// Take all currently-queued actions out of the shared buffer.
+/// (Assertions pattern-match, the style this suite has always used.)
+fn drain(engine: &ScriptEngine) -> Vec<Action> {
   engine.shared.effects.borrow_mut().drain(..).collect()
 }
 
-/// Assert a single effect was queued and return it.
-fn one(engine: &ScriptEngine) -> ScriptEffect {
+/// Assert a single action was queued and return it.
+fn one(engine: &ScriptEngine) -> Action {
   let mut effects = drain(engine);
   assert_eq!(effects.len(), 1, "expected exactly one effect");
   effects.pop().unwrap()
@@ -71,7 +71,7 @@ fn track_change_handler_queues_notify() {
   engine.emit(ScriptEvent::TrackChange);
 
   match one(&engine) {
-    ScriptEffect::Notify(msg, ttl) => {
+    Action::Notify(msg, ttl) => {
       assert_eq!(msg, "now: Song A");
       assert_eq!(ttl, 5);
     }
@@ -97,18 +97,18 @@ fn erroring_handler_is_disabled_after_one_strike() {
   // One error notify (from the bad handler) plus the healthy notify.
   assert_eq!(first.len(), 2);
   match &first[0] {
-    ScriptEffect::NotifyError(m, 6) => assert!(m.contains("error in on_start")),
+    Action::NotifyError(m, 6) => assert!(m.contains("error in on_start")),
     _ => panic!("expected error notify first"),
   }
   match &first[1] {
-    ScriptEffect::Notify(m, 1) => assert_eq!(m, "healthy"),
+    Action::Notify(m, 1) => assert_eq!(m, "healthy"),
     _ => panic!("expected healthy notify second"),
   }
 
   // Second emit: bad handler removed, only the healthy one fires (no new error).
   engine.emit(ScriptEvent::Start);
   match one(&engine) {
-    ScriptEffect::Notify(m, 1) => assert_eq!(m, "healthy"),
+    Action::Notify(m, 1) => assert_eq!(m, "healthy"),
     _ => panic!("expected only the healthy notify"),
   }
 }
@@ -160,7 +160,7 @@ fn require_api_rejects_non_positive_version() {
 
 // --- action functions queue the right effect ---
 
-fn run_action(src: &str) -> ScriptEffect {
+fn run_action(src: &str) -> Action {
   let mut engine = ScriptEngine::new().unwrap();
   engine.load_source("test", src).unwrap();
   one(&engine)
@@ -168,28 +168,31 @@ fn run_action(src: &str) -> ScriptEffect {
 
 #[test]
 fn action_play_queues_play() {
-  matches!(run_action("spotatui.play()"), ScriptEffect::Play);
+  assert!(matches!(run_action("spotatui.play()"), Action::Play));
 }
 
 #[test]
 fn action_pause_queues_pause() {
-  matches!(run_action("spotatui.pause()"), ScriptEffect::Pause);
+  assert!(matches!(run_action("spotatui.pause()"), Action::Pause));
 }
 
 #[test]
 fn action_next_queues_next() {
-  matches!(run_action("spotatui.next()"), ScriptEffect::Next);
+  assert!(matches!(run_action("spotatui.next()"), Action::NextTrack));
 }
 
 #[test]
 fn action_previous_queues_previous() {
-  matches!(run_action("spotatui.previous()"), ScriptEffect::Previous);
+  assert!(matches!(
+    run_action("spotatui.previous()"),
+    Action::PreviousTrack
+  ));
 }
 
 #[test]
 fn action_seek_queues_seek() {
   match run_action("spotatui.seek(12345)") {
-    ScriptEffect::Seek(ms) => assert_eq!(ms, 12345),
+    Action::SeekTo(ms) => assert_eq!(ms, 12345),
     other => panic!("unexpected effect: {:?}", std::mem::discriminant(&other)),
   }
 }
@@ -197,11 +200,11 @@ fn action_seek_queues_seek() {
 #[test]
 fn action_set_volume_clamps_above_100() {
   match run_action("spotatui.set_volume(250)") {
-    ScriptEffect::SetVolume(v) => assert_eq!(v, 100),
+    Action::SetVolume(v) => assert_eq!(v, 100),
     other => panic!("unexpected effect: {:?}", std::mem::discriminant(&other)),
   }
   match run_action("spotatui.set_volume(-10)") {
-    ScriptEffect::SetVolume(v) => assert_eq!(v, 0),
+    Action::SetVolume(v) => assert_eq!(v, 0),
     other => panic!("unexpected effect: {:?}", std::mem::discriminant(&other)),
   }
 }
@@ -209,11 +212,11 @@ fn action_set_volume_clamps_above_100() {
 #[test]
 fn action_shuffle_queues_set_shuffle() {
   match run_action("spotatui.shuffle(true)") {
-    ScriptEffect::SetShuffle(on) => assert!(on),
+    Action::SetShuffle(on) => assert!(on),
     other => panic!("unexpected effect: {:?}", std::mem::discriminant(&other)),
   }
   match run_action("spotatui.shuffle(false)") {
-    ScriptEffect::SetShuffle(on) => assert!(!on),
+    Action::SetShuffle(on) => assert!(!on),
     other => panic!("unexpected effect: {:?}", std::mem::discriminant(&other)),
   }
 }
@@ -221,7 +224,7 @@ fn action_shuffle_queues_set_shuffle() {
 #[test]
 fn action_search_queues_search_effect() {
   match run_action(r#"spotatui.search("daft punk")"#) {
-    ScriptEffect::Search(q) => assert_eq!(q, "daft punk"),
+    Action::Search(q) => assert_eq!(q, "daft punk"),
     _ => panic!("expected a Search effect"),
   }
 }
@@ -229,7 +232,7 @@ fn action_search_queues_search_effect() {
 #[test]
 fn action_notify_default_ttl_is_4() {
   match run_action(r#"spotatui.notify("hi")"#) {
-    ScriptEffect::Notify(m, ttl) => {
+    Action::Notify(m, ttl) => {
       assert_eq!(m, "hi");
       assert_eq!(ttl, 4);
     }
@@ -276,7 +279,7 @@ mod http_tests {
       .unwrap();
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Song:true:2"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "Song:true:2"),
       _ => panic!("expected json round-trip notify"),
     }
   }
@@ -297,7 +300,7 @@ mod http_tests {
       .unwrap();
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "false"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "false"),
       _ => panic!("expected pcall failure notify"),
     }
   }
@@ -318,7 +321,7 @@ mod http_tests {
       .unwrap();
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "false"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "false"),
       _ => panic!("expected pcall failure notify"),
     }
   }
@@ -338,7 +341,7 @@ mod http_tests {
       .unwrap();
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "false:true"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "false:true"),
       _ => panic!("expected null sentinel notify"),
     }
   }
@@ -363,7 +366,7 @@ mod http_tests {
       engine.drain_http_callbacks_for_test();
 
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "hello"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "hello"),
         _ => panic!("expected http success notify"),
       }
     });
@@ -411,7 +414,7 @@ mod http_tests {
     }
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "200:from server"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "200:from server"),
       _ => panic!("expected spawned http response notify"),
     }
     server.await.unwrap();
@@ -437,7 +440,7 @@ mod http_tests {
       engine.drain_http_callbacks_for_test();
 
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "201:created"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "201:created"),
         _ => panic!("expected http post success notify"),
       }
     });
@@ -463,7 +466,7 @@ mod http_tests {
       engine.drain_http_callbacks_for_test();
 
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "dns failed"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "dns failed"),
         _ => panic!("expected http error notify"),
       }
     });
@@ -484,7 +487,7 @@ mod http_tests {
       engine.inject_http_result(1, Ok(response(200, "first")));
       engine.drain_http_callbacks_for_test();
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "first"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "first"),
         _ => panic!("expected first callback notify"),
       }
 
@@ -512,14 +515,14 @@ mod http_tests {
       engine.inject_http_result(1, Ok(response(200, "one")));
       engine.drain_http_callbacks_for_test();
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "a:one"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "a:one"),
         _ => panic!("expected first callback notify"),
       }
 
       engine.inject_http_result(2, Ok(response(200, "two")));
       engine.drain_http_callbacks_for_test();
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "b:two"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "b:two"),
         _ => panic!("expected second callback notify"),
       }
     });
@@ -541,7 +544,7 @@ mod http_tests {
       engine.drain_http_callbacks_for_test();
 
       match one(engine) {
-        ScriptEffect::SetPlaybarSegment { plugin, text } => {
+        Action::SetPlaybarSegment { plugin, text } => {
           assert_eq!(plugin, "lyrics_plugin");
           assert_eq!(text.as_deref(), Some("lyrics ready"));
         }
@@ -566,7 +569,7 @@ mod http_tests {
       engine.drain_http_callbacks_for_test();
 
       match one(engine) {
-        ScriptEffect::NotifyError(msg, 6) => {
+        Action::NotifyError(msg, 6) => {
           assert!(msg.contains("bad_fetcher"));
           assert!(msg.contains("error in http callback"));
           assert!(msg.contains("callback boom"));
@@ -579,7 +582,7 @@ mod http_tests {
         .load_source("healthy", r#"spotatui.notify("still alive", 1)"#)
         .unwrap();
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "still alive"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "still alive"),
         _ => panic!("expected engine to keep running"),
       }
     });
@@ -629,7 +632,7 @@ mod http_tests {
       engine.drain_http_callbacks_for_test();
 
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "true"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "true"),
         _ => panic!("expected ok=true notify"),
       }
     });
@@ -651,7 +654,7 @@ mod http_tests {
       engine.drain_http_callbacks_for_test();
 
       match one(engine) {
-        ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "false:true"),
+        Action::Notify(msg, 1) => assert_eq!(msg, "false:true"),
         _ => panic!("expected ok=false notify"),
       }
     });
@@ -727,7 +730,7 @@ mod drain_tests {
     }
   }
 
-  fn push_effect(engine: &ScriptEngine, effect: ScriptEffect) {
+  fn push_effect(engine: &ScriptEngine, effect: Action) {
     engine.shared.effects.borrow_mut().push(effect);
   }
 
@@ -737,7 +740,7 @@ mod drain_tests {
     app.current_playback_context = Some(make_context(true, false));
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::Pause);
+    push_effect(&engine, Action::Pause);
     engine.drain_effects(&mut app);
 
     match rx.try_recv() {
@@ -752,7 +755,7 @@ mod drain_tests {
     app.current_playback_context = Some(make_context(false, false));
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::Pause);
+    push_effect(&engine, Action::Pause);
     engine.drain_effects(&mut app);
 
     assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
@@ -764,7 +767,7 @@ mod drain_tests {
     app.current_playback_context = Some(make_context(false, false));
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::Play);
+    push_effect(&engine, Action::Play);
     engine.drain_effects(&mut app);
 
     match rx.try_recv() {
@@ -781,7 +784,7 @@ mod drain_tests {
     app.current_playback_context = Some(make_context(true, false));
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::Play);
+    push_effect(&engine, Action::Play);
     engine.drain_effects(&mut app);
 
     assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
@@ -793,7 +796,7 @@ mod drain_tests {
     app.current_playback_context = Some(make_context(false, false));
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::SetShuffle(true));
+    push_effect(&engine, Action::SetShuffle(true));
     engine.drain_effects(&mut app);
 
     match rx.try_recv() {
@@ -808,7 +811,7 @@ mod drain_tests {
     app.current_playback_context = Some(make_context(false, false));
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::SetShuffle(false));
+    push_effect(&engine, Action::SetShuffle(false));
     engine.drain_effects(&mut app);
 
     assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
@@ -819,7 +822,7 @@ mod drain_tests {
     let (mut app, _rx) = make_app();
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::SetVolume(80));
+    push_effect(&engine, Action::SetVolume(80));
     engine.drain_effects(&mut app);
 
     assert_eq!(app.pending_volume, Some(80));
@@ -831,7 +834,7 @@ mod drain_tests {
     app.current_playback_context = Some(make_context_with_track(true));
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(&engine, ScriptEffect::Seek(30_000));
+    push_effect(&engine, Action::SeekTo(30_000));
     engine.drain_effects(&mut app);
 
     match rx.try_recv() {
@@ -847,7 +850,7 @@ mod drain_tests {
     let engine = ScriptEngine::new().unwrap();
     push_effect(
       &engine,
-      ScriptEffect::NotifyError("plugin crashed".to_string(), 6),
+      Action::NotifyError("plugin crashed".to_string(), 6),
     );
     engine.drain_effects(&mut app);
 
@@ -860,11 +863,8 @@ mod drain_tests {
     let (mut app, _rx) = make_app();
 
     let engine = ScriptEngine::new().unwrap();
-    push_effect(
-      &engine,
-      ScriptEffect::NotifyError("error msg".to_string(), 6),
-    );
-    push_effect(&engine, ScriptEffect::Notify("normal msg".to_string(), 4));
+    push_effect(&engine, Action::NotifyError("error msg".to_string(), 6));
+    push_effect(&engine, Action::Notify("normal msg".to_string(), 4));
     engine.drain_effects(&mut app);
 
     assert_eq!(app.status_message.as_deref(), Some("error msg"));
@@ -1011,7 +1011,7 @@ fn set_playbar_queues_segment_with_current_plugin() {
     .load_source("myplugin", r#"spotatui.set_playbar("hello world")"#)
     .unwrap();
   match one(&engine) {
-    ScriptEffect::SetPlaybarSegment { plugin, text } => {
+    Action::SetPlaybarSegment { plugin, text } => {
       assert_eq!(plugin, "myplugin");
       assert_eq!(text, Some("hello world".to_string()));
     }
@@ -1026,7 +1026,7 @@ fn set_playbar_nil_queues_clear() {
     .load_source("myplugin", r#"spotatui.set_playbar(nil)"#)
     .unwrap();
   match one(&engine) {
-    ScriptEffect::SetPlaybarSegment { plugin, text } => {
+    Action::SetPlaybarSegment { plugin, text } => {
       assert_eq!(plugin, "myplugin");
       assert!(text.is_none());
     }
@@ -1057,7 +1057,7 @@ mod playbar_effect_tests {
       .shared
       .effects
       .borrow_mut()
-      .push(ScriptEffect::SetPlaybarSegment {
+      .push(Action::SetPlaybarSegment {
         plugin: "myplugin".to_string(),
         text: Some("seg text".to_string()),
       });
@@ -1082,7 +1082,7 @@ mod playbar_effect_tests {
       .shared
       .effects
       .borrow_mut()
-      .push(ScriptEffect::SetPlaybarSegment {
+      .push(Action::SetPlaybarSegment {
         plugin: "myplugin".to_string(),
         text: None,
       });
@@ -1100,7 +1100,7 @@ fn popup_plain_string_lines_work() {
     .load_source("test", r#"spotatui.popup("My Title", "single line")"#)
     .unwrap();
   match one(&engine) {
-    ScriptEffect::ShowPopup(p) => {
+    Action::ShowPopup(p) => {
       assert_eq!(p.title, "My Title");
       assert_eq!(p.lines.len(), 1);
       assert_eq!(p.lines[0].text, "single line");
@@ -1119,7 +1119,7 @@ fn popup_array_of_strings() {
     .load_source("test", r#"spotatui.popup("T", {"line 1", "line 2"})"#)
     .unwrap();
   match one(&engine) {
-    ScriptEffect::ShowPopup(p) => {
+    Action::ShowPopup(p) => {
       assert_eq!(p.lines.len(), 2);
       assert_eq!(p.lines[0].text, "line 1");
       assert_eq!(p.lines[1].text, "line 2");
@@ -1138,7 +1138,7 @@ fn popup_styled_table_lines() {
     )
     .unwrap();
   match one(&engine) {
-    ScriptEffect::ShowPopup(p) => {
+    Action::ShowPopup(p) => {
       assert_eq!(p.lines.len(), 1);
       assert_eq!(p.lines[0].text, "bold red");
       assert_eq!(p.lines[0].fg, Some(crate::core::theme::Color::Red));
@@ -1211,7 +1211,7 @@ mod popup_effect_tests {
       .shared
       .effects
       .borrow_mut()
-      .push(ScriptEffect::ShowPopup(popup.clone()));
+      .push(Action::ShowPopup(popup.clone()));
     engine.drain_effects(&mut app);
     assert_eq!(app.plugin_popup, Some(popup));
     assert_eq!(app.view.plugin_popup_scroll, 0);
@@ -1230,9 +1230,9 @@ fn set_theme_valid_field_queues_effect() {
     )
     .unwrap();
   match one(&engine) {
-    ScriptEffect::SetTheme(pairs) => {
+    Action::SetTheme(pairs) => {
       assert_eq!(pairs.len(), 1);
-      assert_eq!(pairs[0].0, "playbar_text");
+      assert_eq!(pairs[0].0, crate::core::theme::ThemeField::PlaybarText);
       assert_eq!(pairs[0].1, crate::core::theme::Color::Magenta);
     }
     other => panic!("unexpected: {:?}", std::mem::discriminant(&other)),
@@ -1283,8 +1283,8 @@ mod theme_effect_tests {
       .shared
       .effects
       .borrow_mut()
-      .push(ScriptEffect::SetTheme(vec![(
-        "playbar_text".to_string(),
+      .push(Action::SetTheme(vec![(
+        crate::core::theme::ThemeField::PlaybarText,
         crate::core::theme::Color::Magenta,
       )]));
     engine.drain_effects(&mut app);
@@ -1379,10 +1379,10 @@ fn diff_queue_change() {
 #[cfg(test)]
 mod action_tests {
   use super::*;
+  use crate::core::action::RepeatSetting;
   use crate::core::app::{App, UserInfo};
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
-  use rspotify::model::RepeatState;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
@@ -1395,13 +1395,13 @@ mod action_tests {
   #[test]
   fn set_repeat_maps_all_modes() {
     for (mode, expected) in [
-      ("off", RepeatState::Off),
-      ("track", RepeatState::Track),
-      ("context", RepeatState::Context),
+      ("off", RepeatSetting::Off),
+      ("track", RepeatSetting::Track),
+      ("context", RepeatSetting::Context),
     ] {
       match run_action(&format!(r#"spotatui.set_repeat("{mode}")"#)) {
-        ScriptEffect::Dispatch(IoEvent::Repeat(state)) => assert_eq!(state, expected),
-        _ => panic!("expected Dispatch(Repeat) for mode '{mode}'"),
+        Action::SetRepeat(setting) => assert_eq!(setting, expected),
+        _ => panic!("expected SetRepeat for mode '{mode}'"),
       }
     }
   }
@@ -1418,27 +1418,27 @@ mod action_tests {
   fn cycle_repeat_queues_cycle_effect() {
     assert!(matches!(
       run_action("spotatui.cycle_repeat()"),
-      ScriptEffect::CycleRepeat
+      Action::CycleRepeat
     ));
   }
 
   #[test]
   fn play_uri_track_uses_uri_list() {
     match run_action(r#"spotatui.play_uri("spotify:track:abc123")"#) {
-      ScriptEffect::Dispatch(IoEvent::StartPlayback(None, Some(uris), None)) => {
+      Action::PlayUris { uris, offset: None } => {
         assert_eq!(uris, vec!["spotify:track:abc123".to_string()]);
       }
-      _ => panic!("expected StartPlayback with uri list"),
+      _ => panic!("expected PlayUris"),
     }
   }
 
   #[test]
   fn play_uri_album_uses_context() {
     match run_action(r#"spotatui.play_uri("spotify:album:abc123")"#) {
-      ScriptEffect::Dispatch(IoEvent::StartPlayback(Some(ctx), None, None)) => {
-        assert_eq!(ctx, "spotify:album:abc123");
+      Action::PlayContext { uri, offset: None } => {
+        assert_eq!(uri, "spotify:album:abc123");
       }
-      _ => panic!("expected StartPlayback with context"),
+      _ => panic!("expected PlayContext"),
     }
   }
 
@@ -1453,11 +1453,14 @@ mod action_tests {
   #[test]
   fn play_context_carries_offset() {
     match run_action(r#"spotatui.play_context("spotify:playlist:p1", 5)"#) {
-      ScriptEffect::Dispatch(IoEvent::StartPlayback(Some(ctx), None, Some(offset))) => {
-        assert_eq!(ctx, "spotify:playlist:p1");
+      Action::PlayContext {
+        uri,
+        offset: Some(offset),
+      } => {
+        assert_eq!(uri, "spotify:playlist:p1");
         assert_eq!(offset, 5);
       }
-      _ => panic!("expected StartPlayback with context + offset"),
+      _ => panic!("expected PlayContext with offset"),
     }
   }
 
@@ -1472,21 +1475,21 @@ mod action_tests {
   #[test]
   fn add_to_queue_queues_dispatch() {
     match run_action(r#"spotatui.add_to_queue("spotify:track:t1")"#) {
-      ScriptEffect::Dispatch(IoEvent::AddItemToQueue(uri)) => {
+      Action::AddToQueue(uri) => {
         assert_eq!(uri, "spotify:track:t1");
       }
-      _ => panic!("expected AddItemToQueue dispatch"),
+      _ => panic!("expected AddToQueue"),
     }
   }
 
   #[test]
   fn create_playlist_with_uris() {
     match run_action(r#"spotatui.create_playlist("Mix", {"spotify:track:a", "spotify:track:b"})"#) {
-      ScriptEffect::Dispatch(IoEvent::CreateNewPlaylist(name, uris)) => {
+      Action::CreatePlaylist { name, track_uris } => {
         assert_eq!(name, "Mix");
-        assert_eq!(uris.len(), 2);
+        assert_eq!(track_uris.len(), 2);
       }
-      _ => panic!("expected CreateNewPlaylist dispatch"),
+      _ => panic!("expected CreatePlaylist"),
     }
   }
 
@@ -1501,12 +1504,16 @@ mod action_tests {
   #[test]
   fn playlist_remove_track_requires_position() {
     match run_action(r#"spotatui.playlist_remove_track("p1", "t1", 0)"#) {
-      ScriptEffect::Dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(p, t, pos)) => {
-        assert_eq!(p, "p1");
-        assert_eq!(t, "t1");
-        assert_eq!(pos, 0);
+      Action::RemoveTrackFromPlaylist {
+        playlist,
+        track,
+        position,
+      } => {
+        assert_eq!(playlist, "p1");
+        assert_eq!(track, "t1");
+        assert_eq!(position, 0);
       }
-      _ => panic!("expected RemoveTrackFromPlaylistAtPosition dispatch"),
+      _ => panic!("expected RemoveTrackFromPlaylist"),
     }
 
     let mut engine = ScriptEngine::new().unwrap();
@@ -1521,11 +1528,11 @@ mod action_tests {
   #[test]
   fn transfer_playback_does_not_persist_device() {
     match run_action(r#"spotatui.transfer_playback("dev-1")"#) {
-      ScriptEffect::Dispatch(IoEvent::TransferPlaybackToDevice(id, persist)) => {
-        assert_eq!(id, "dev-1");
+      Action::TransferPlayback { device_id, persist } => {
+        assert_eq!(device_id, "dev-1");
         assert!(!persist);
       }
-      _ => panic!("expected TransferPlaybackToDevice dispatch"),
+      _ => panic!("expected TransferPlayback"),
     }
   }
 
@@ -1533,41 +1540,41 @@ mod action_tests {
   fn follow_and_save_actions_map_to_events() {
     assert!(matches!(
       run_action(r#"spotatui.toggle_save_track("spotify:track:t1")"#),
-      ScriptEffect::Dispatch(IoEvent::ToggleSaveTrack(_))
+      Action::ToggleSaveTrack(_)
     ));
     assert!(matches!(
       run_action(r#"spotatui.save_album("a1")"#),
-      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedAlbumAdd(_))
+      Action::SaveAlbum(_)
     ));
     assert!(matches!(
       run_action(r#"spotatui.unsave_album("a1")"#),
-      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedAlbumDelete(_))
+      Action::UnsaveAlbum(_)
     ));
     assert!(matches!(
       run_action(r#"spotatui.save_show("s1")"#),
-      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedShowAdd(_))
+      Action::SaveShow(_)
     ));
     assert!(matches!(
       run_action(r#"spotatui.unsave_show("s1")"#),
-      ScriptEffect::Dispatch(IoEvent::CurrentUserSavedShowDelete(_))
+      Action::UnsaveShow(_)
     ));
     match run_action(r#"spotatui.follow_artist("ar1")"#) {
-      ScriptEffect::Dispatch(IoEvent::UserFollowArtists(ids)) => {
-        assert_eq!(ids, vec!["ar1".to_string()]);
+      Action::FollowArtist(id) => {
+        assert_eq!(id, "ar1");
       }
-      _ => panic!("expected UserFollowArtists dispatch"),
+      _ => panic!("expected FollowArtist"),
     }
     assert!(matches!(
       run_action(r#"spotatui.unfollow_artist("ar1")"#),
-      ScriptEffect::Dispatch(IoEvent::UserUnfollowArtists(_))
+      Action::UnfollowArtist(_)
     ));
     assert!(matches!(
       run_action(r#"spotatui.follow_playlist("p1")"#),
-      ScriptEffect::Dispatch(IoEvent::UserFollowPlaylist(_, _, None))
+      Action::FollowPlaylist(_)
     ));
     assert!(matches!(
       run_action(r#"spotatui.unfollow_playlist("p1")"#),
-      ScriptEffect::UnfollowPlaylist(_)
+      Action::UnfollowPlaylist(_)
     ));
   }
 
@@ -1580,16 +1587,14 @@ mod action_tests {
   }
 
   #[test]
-  fn drain_dispatch_sends_io_event() {
+  fn drain_add_to_queue_sends_io_event() {
     let (mut app, rx) = make_app();
     let engine = ScriptEngine::new().unwrap();
     engine
       .shared
       .effects
       .borrow_mut()
-      .push(ScriptEffect::Dispatch(IoEvent::AddItemToQueue(
-        "spotify:track:t1".to_string(),
-      )));
+      .push(Action::AddToQueue("spotify:track:t1".to_string()));
     engine.drain_effects(&mut app);
 
     match rx.try_recv() {
@@ -1611,7 +1616,7 @@ mod action_tests {
       .shared
       .effects
       .borrow_mut()
-      .push(ScriptEffect::UnfollowPlaylist("p1".to_string()));
+      .push(Action::UnfollowPlaylist("p1".to_string()));
     engine.drain_effects(&mut app);
 
     match rx.try_recv() {
@@ -1631,7 +1636,7 @@ mod action_tests {
       .shared
       .effects
       .borrow_mut()
-      .push(ScriptEffect::UnfollowPlaylist("p1".to_string()));
+      .push(Action::UnfollowPlaylist("p1".to_string()));
     engine.drain_effects(&mut app);
 
     assert!(rx.try_recv().is_err(), "no IoEvent expected");
@@ -1703,7 +1708,7 @@ mod data_read_tests {
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(500));
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "ok: 1:Jams"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "ok: 1:Jams"),
       _ => panic!("expected data callback notify"),
     }
   }
@@ -1721,7 +1726,7 @@ mod data_read_tests {
     // Never bump; jump past the deadline.
     engine.process_data_requests_for_test(&mut app, now + Duration::from_secs(16));
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "err: request timed out"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "err: request timed out"),
       _ => panic!("expected timeout notify"),
     }
   }
@@ -1743,7 +1748,7 @@ mod data_read_tests {
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
 
     match one(&engine) {
-      ScriptEffect::NotifyError(msg, 6) => {
+      Action::NotifyError(msg, 6) => {
         assert!(msg.contains("bad_reader"));
         assert!(msg.contains("data boom"));
       }
@@ -1780,7 +1785,7 @@ mod data_read_tests {
     let messages: Vec<String> = effects
       .into_iter()
       .filter_map(|e| match e {
-        ScriptEffect::Notify(m, _) => Some(m),
+        Action::Notify(m, _) => Some(m),
         _ => None,
       })
       .collect();
@@ -1839,7 +1844,7 @@ mod data_read_tests {
       "lyrics must not dispatch an IoEvent"
     );
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "found:hello lyrics:1500"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "found:hello lyrics:1500"),
       _ => panic!("expected immediate lyrics notify"),
     }
   }
@@ -1869,7 +1874,7 @@ mod data_read_tests {
     app.plugin_data_generations.bump(PluginDataKind::Lyrics);
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "not_found"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "not_found"),
       _ => panic!("expected pending lyrics notify"),
     }
   }
@@ -1931,7 +1936,7 @@ mod data_read_tests {
     app.plugin_data_generations.bump(PluginDataKind::Lyrics);
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "lyrics for B"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "lyrics for B"),
       _ => panic!("expected B's lyrics"),
     }
   }
@@ -1966,7 +1971,7 @@ mod data_read_tests {
 
     engine.process_data_requests_for_test(&mut app, Instant::now());
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "lyrics for A"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "lyrics for A"),
       _ => panic!("expected immediate delivery"),
     }
   }
@@ -2003,7 +2008,7 @@ mod data_read_tests {
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Now Playing:1:track"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "Now Playing:1:track"),
       _ => panic!("expected queue notify"),
     }
   }
@@ -2022,7 +2027,7 @@ mod data_read_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "n=0"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "n=0"),
       _ => panic!("expected empty cached read"),
     }
 
@@ -2036,7 +2041,7 @@ mod data_read_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "n=0"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "n=0"),
       _ => panic!("expected stale cached read before bump"),
     }
 
@@ -2050,7 +2055,7 @@ mod data_read_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "n=1"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "n=1"),
       _ => panic!("expected refreshed cached read"),
     }
   }
@@ -2079,7 +2084,7 @@ mod timer_tests {
 
     engine.process_timers_for_test(now + Duration::from_millis(150));
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "fired"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "fired"),
       _ => panic!("expected timeout notify"),
     }
 
@@ -2144,7 +2149,7 @@ mod timer_tests {
     engine.process_timers_for_test(now);
     engine.process_timers_for_test(now + Duration::from_millis(150));
     match one(&engine) {
-      ScriptEffect::NotifyError(msg, 6) => {
+      Action::NotifyError(msg, 6) => {
         assert!(msg.contains("bad_timer"));
         assert!(msg.contains("interval boom"));
       }
@@ -2177,7 +2182,7 @@ mod timer_tests {
     engine.process_timers_for_test(now); // arms next pass
     engine.process_timers_for_test(now + Duration::from_millis(100));
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "deferred"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "deferred"),
       _ => panic!("expected deferred timer notify"),
     }
   }
@@ -2205,7 +2210,7 @@ mod timer_tests {
     assert!(drain(&engine).is_empty(), "nested armed, not yet due");
     engine.process_timers_for_test(now + Duration::from_millis(100));
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nested"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "nested"),
       _ => panic!("expected nested timer notify"),
     }
   }
@@ -2258,7 +2263,7 @@ fn write_file(path: &Path, contents: &str) {
 /// True if any queued effect is a successful Notify carrying `needle`.
 fn has_notify(engine: &ScriptEngine, needle: &str) -> bool {
   drain(engine).into_iter().any(|e| match e {
-    ScriptEffect::Notify(msg, _) => msg.contains(needle),
+    Action::Notify(msg, _) => msg.contains(needle),
     _ => false,
   })
 }
@@ -2375,7 +2380,7 @@ fn directory_named_with_lua_extension_loads_once_without_error() {
   assert!(
     !effects
       .iter()
-      .any(|e| matches!(e, ScriptEffect::NotifyError(_, _))),
+      .any(|e| matches!(e, Action::NotifyError(_, _))),
     "a .lua-named directory must not produce a load error"
   );
   std::fs::remove_dir_all(&cfg).unwrap();
@@ -2426,7 +2431,7 @@ mod storage_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "42:b"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "42:b"),
       _ => panic!("expected storage round-trip notify"),
     }
     std::fs::remove_dir_all(&cfg).unwrap();
@@ -2455,7 +2460,7 @@ mod storage_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Nightcall"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "Nightcall"),
       _ => panic!("expected persisted value notify"),
     }
     std::fs::remove_dir_all(&cfg).unwrap();
@@ -2476,7 +2481,7 @@ mod storage_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nil:0"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "nil:0"),
       _ => panic!("expected nil-delete notify"),
     }
     std::fs::remove_dir_all(&cfg).unwrap();
@@ -2499,7 +2504,7 @@ mod storage_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "1:two"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "1:two"),
       _ => panic!("expected remove/keys notify"),
     }
     std::fs::remove_dir_all(&cfg).unwrap();
@@ -2536,7 +2541,7 @@ mod storage_tests {
       .load_source("b", r#"spotatui.notify(spotatui.storage_get("who"), 1)"#)
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "plugin b"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "plugin b"),
       _ => panic!("expected isolated namespace notify"),
     }
     std::fs::remove_dir_all(&cfg).unwrap();
@@ -2555,7 +2560,7 @@ mod storage_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nil"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "nil"),
       _ => panic!("expected empty-after-corruption notify"),
     }
     std::fs::remove_dir_all(&cfg).unwrap();
@@ -2689,7 +2694,7 @@ mod state_event_tests {
       .load_source("reader", r#"spotatui.notify(spotatui.current_route(), 1)"#)
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "settings"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "settings"),
       _ => panic!("expected current_route notify"),
     }
   }
@@ -3281,7 +3286,7 @@ mod config_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "Magenta:12345"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "Magenta:12345"),
       _ => panic!("expected config notify"),
     }
   }
@@ -3320,7 +3325,7 @@ mod config_tests {
       .unwrap();
 
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "true:42:12:64:radio"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "true:42:12:64:radio"),
       _ => panic!("expected runtime-backed config notify"),
     }
     assert_eq!(app.user_config.behavior.sidebar_width_percent, Some(20));
@@ -3345,7 +3350,7 @@ mod config_tests {
       )
       .unwrap();
     match one(&engine) {
-      ScriptEffect::Notify(msg, 1) => assert_eq!(msg, "nil:nil"),
+      Action::Notify(msg, 1) => assert_eq!(msg, "nil:nil"),
       _ => panic!("expected secrets-excluded notify"),
     }
   }

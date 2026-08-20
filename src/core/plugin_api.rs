@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 pub const API_VERSION: u32 = 6;
 
 /// A popup dialog produced by a plugin.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginPopup {
   pub title: String,
   pub lines: Vec<PopupLine>,
 }
 
 /// A single line in a [`PluginPopup`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PopupLine {
   pub text: String,
   pub fg: Option<crate::core::theme::Color>,
@@ -243,14 +243,14 @@ pub struct SearchResults {
 /// Retained content of a plugin custom screen. Screens are retained-mode by
 /// design: draw runs with `&App` only (the engine is unreachable there), so
 /// plugins publish content via effects and the renderer just reads it.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct PluginScreenContent {
   pub title: String,
   pub widgets: Vec<PluginWidget>,
 }
 
 /// A size along one axis: an absolute cell count, or a percentage of the parent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginLength {
   Cells(u16),
   /// 1..=100 (validated at the API layer).
@@ -263,7 +263,7 @@ pub enum PluginLength {
 /// renderer documents that cropping overdraws characters over graphics and
 /// that some terminals misbehave when it does (Alacritty's sixel branch is
 /// named explicitly).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PluginCoverArtFit {
   /// Fit inside the area, keeping the aspect ratio, never upscaling.
   #[default]
@@ -277,7 +277,7 @@ pub enum PluginCoverArtFit {
 /// `width`/`height` are per-axis size hints; only the one matching the parent
 /// container's axis is used (the top level is an implicit vertical stack).
 /// `None` means "share the remaining space evenly".
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginWidget {
   pub kind: PluginWidgetKind,
   pub width: Option<PluginLength>,
@@ -297,7 +297,7 @@ impl PluginWidget {
 
 /// The content of a [`PluginWidget`]. `Row`/`Column` are pure layout containers:
 /// they draw no border and no title, they only split their area.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PluginWidgetKind {
   Paragraph {
     lines: Vec<PopupLine>,

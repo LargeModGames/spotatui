@@ -6,6 +6,8 @@
 //! name to a URI belongs here rather than there.
 
 use super::Network;
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+use crate::core::action::{Action, ActionOutcome};
 use crate::core::plugin_api::TrackInfo;
 use crate::infra::dj::resolve::{self, ResolveReport};
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
@@ -257,7 +259,10 @@ impl Network {
     let summary = report.summary();
     let accepted = {
       let mut app = self.app.lock().await;
-      app.extend_native_queue_from_dj(std::mem::take(&mut report.resolved))
+      match app.apply(Action::QueueTracks(std::mem::take(&mut report.resolved))) {
+        ActionOutcome::Queued { accepted } => accepted,
+        ActionOutcome::Applied => 0,
+      }
     };
     // After the block, not inside it: the network layer's helper takes the lock
     // itself. "DJ:", not "MCP:", because this handler serves both front doors and
@@ -345,11 +350,10 @@ impl Network {
 
   async fn dj_start_playback(&self, uri: &str) {
     let mut app = self.app.lock().await;
-    app.dispatch(IoEvent::StartPlayback(
-      None,
-      Some(vec![uri.to_string()]),
-      Some(0),
-    ));
+    app.apply(Action::PlayUris {
+      uris: vec![uri.to_string()],
+      offset: Some(0),
+    });
   }
 
   /// Whether the listener already has each of these search results.
