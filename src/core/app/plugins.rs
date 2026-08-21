@@ -59,6 +59,12 @@ impl App {
     self.view.plugin_popup_scroll = 0;
   }
 
+  /// Dismiss the plugin popup and reset its scroll.
+  pub(crate) fn close_plugin_popup(&mut self) {
+    self.plugin_popup = None;
+    self.view.plugin_popup_scroll = 0;
+  }
+
   /// Navigate to a registered plugin screen, resetting its scroll. A no-op
   /// push when the screen is already the current route (the scroll still
   /// resets, matching the historic behavior).
@@ -94,6 +100,22 @@ mod tests {
       app.plugin_popup.as_ref().map(|p| p.title.as_str()),
       Some("Hi")
     );
+    assert_eq!(app.view.plugin_popup_scroll, 0);
+  }
+
+  #[test]
+  fn close_plugin_popup_clears_the_popup_and_resets_the_scroll() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.show_plugin_popup(crate::core::plugin_api::PluginPopup {
+      title: "Hi".to_string(),
+      lines: Vec::new(),
+    });
+    app.view.plugin_popup_scroll = 5;
+
+    app.close_plugin_popup();
+
+    assert!(app.plugin_popup.is_none());
     assert_eq!(app.view.plugin_popup_scroll, 0);
   }
 

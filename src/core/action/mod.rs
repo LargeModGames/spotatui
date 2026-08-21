@@ -49,14 +49,32 @@ pub enum Action {
   Play,
   /// Pause playback if it is playing (intent, not a toggle).
   Pause,
+  /// Toggle play/pause, matching the toggle-playback key (and MPRIS
+  /// PlayPause) exactly.
+  TogglePlayback,
   NextTrack,
   PreviousTrack,
+  /// Always go to the previous track (or restart the current queue slot),
+  /// skipping the ">= 3s restarts the current track" rule of
+  /// [`Action::PreviousTrack`].
+  ForcePreviousTrack,
   /// Seek to an absolute position in the current track, in milliseconds.
   SeekTo(u32),
+  /// Seek forwards by the user's configured seek step.
+  SeekForward,
+  /// Seek backwards by the user's configured seek step.
+  SeekBackward,
   /// Set the volume to an absolute percentage (0-100).
   SetVolume(u8),
+  /// Raise the volume by the user's configured increment.
+  VolumeUp,
+  /// Lower the volume by the user's configured increment.
+  VolumeDown,
   /// Ensure shuffle matches the given state (intent, not a toggle).
   SetShuffle(bool),
+  /// Toggle shuffle, matching the shuffle key exactly (source-gated: decoded
+  /// queues reorder in place, radio and the native queue slot no-op).
+  ToggleShuffle,
   /// Cycle repeat off, then context, then track, matching the repeat key.
   CycleRepeat,
   /// Set repeat to an absolute mode. Mirrors the historic Lua `set_repeat`:
@@ -120,6 +138,19 @@ pub enum Action {
   Navigate(NavTarget),
   /// Pop the navigation stack (same as the back key).
   Back,
+  /// Open the album page of the item that is playing now; resolved from the
+  /// current playback context at apply time (episodes open their show).
+  JumpToAlbum,
+  /// Open the album list of the first artist of the track that is playing
+  /// now; resolved from the current playback context at apply time.
+  JumpToArtist,
+  /// Open the context (album/artist/playlist) that playback runs in;
+  /// resolved from the current playback context at apply time.
+  JumpToContext,
+  /// Generate a listening recap. The period is resolved at apply time: the
+  /// selected period on the Stats screen when that screen is current, 30
+  /// days anywhere else.
+  GenerateRecap,
   /// Set or clear a playbar segment for a plugin (keyed by plugin name).
   SetPlaybarSegment {
     plugin: String,
@@ -127,6 +158,8 @@ pub enum Action {
   },
   /// Show a plugin popup dialog.
   ShowPopup(PluginPopup),
+  /// Dismiss the plugin popup, if one is shown.
+  ClosePopup,
   /// Apply theme color overrides at runtime.
   SetTheme(Vec<(ThemeField, Color)>),
   /// Publish (retained) content for a registered plugin screen.

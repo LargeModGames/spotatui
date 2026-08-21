@@ -158,6 +158,9 @@ fn run_pipewire_capture(
 
         // Decode the interleaved f32 stream; the analyzer owns the channel
         // rule (0/1 through, mono duplicated) so it is stated in one place.
+        // The `as_chunks` rewrite clippy 1.98 suggests must be verified on a
+        // Linux build (this module never compiles elsewhere), so it waits.
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         let samples: Vec<f32> = valid_bytes
           .chunks_exact(mem::size_of::<f32>())
           .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap_or([0; 4])))

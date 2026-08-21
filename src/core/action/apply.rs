@@ -26,10 +26,16 @@ impl App {
           self.toggle_playback();
         }
       }
+      Action::TogglePlayback => self.toggle_playback(),
       Action::NextTrack => self.next_track(),
       Action::PreviousTrack => self.previous_track(),
+      Action::ForcePreviousTrack => self.force_previous_track(),
       Action::SeekTo(ms) => self.seek_to(ms),
+      Action::SeekForward => self.seek_forwards(),
+      Action::SeekBackward => self.seek_backwards(),
       Action::SetVolume(v) => self.set_volume_percent(v),
+      Action::VolumeUp => self.increase_volume(),
+      Action::VolumeDown => self.decrease_volume(),
       Action::SetShuffle(desired) => {
         let current = plugin_api::playback_state(self)
           .map(|p| p.shuffle)
@@ -38,6 +44,7 @@ impl App {
           self.shuffle();
         }
       }
+      Action::ToggleShuffle => self.shuffle(),
       Action::CycleRepeat => self.repeat(),
       Action::SetRepeat(setting) => {
         use rspotify::model::RepeatState;
@@ -106,6 +113,10 @@ impl App {
       Action::Back => {
         self.pop_navigation_stack();
       }
+      Action::JumpToAlbum => self.jump_to_album(),
+      Action::JumpToArtist => self.jump_to_artist_album(),
+      Action::JumpToContext => self.jump_to_context(),
+      Action::GenerateRecap => self.generate_recap(),
       Action::SetPlaybarSegment { plugin, text } => match text {
         Some(t) => {
           self.plugin_playbar_segments.insert(plugin, t);
@@ -115,6 +126,7 @@ impl App {
         }
       },
       Action::ShowPopup(popup) => self.show_plugin_popup(popup),
+      Action::ClosePopup => self.close_plugin_popup(),
       Action::SetTheme(pairs) => {
         for (field, color) in pairs {
           self.user_config.theme.set(field, color);
@@ -179,6 +191,8 @@ fn apply_navigate(app: &mut App, target: NavTarget) {
     }
     NavTarget::Settings => app.open_settings_screen(),
     NavTarget::Devices => app.open_source_device_picker(),
+    // The help KEY also clears the help filter first (`help_menu::open`); that
+    // reset needs the TUI's filtered-docs count, so it cannot live here.
     NavTarget::Help => app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu),
     NavTarget::Lyrics => app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView),
     // The network handler pushes the route once the data arrives, exactly like

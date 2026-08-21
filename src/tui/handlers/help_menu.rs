@@ -1,7 +1,8 @@
 use super::common_key_events;
 use super::filter_input::{self, FilterEdit};
 use crate::{
-  core::app::{ActiveBlock, App, RouteId},
+  core::action::{Action, NavTarget},
+  core::app::App,
   tui::{event::Key, ui::help::get_filtered_help_docs},
 };
 
@@ -13,7 +14,7 @@ enum Direction {
 
 pub(super) fn open(app: &mut App) {
   clear_filter(app);
-  app.push_navigation_stack(RouteId::HelpMenu, ActiveBlock::HelpMenu);
+  app.apply(Action::Navigate(NavTarget::Help));
 }
 
 pub(super) fn clear_filter(app: &mut App) {
@@ -94,6 +95,7 @@ fn move_page(direction: Direction, app: &mut App) {
 mod tests {
   use super::*;
   use crate::{
+    core::app::{ActiveBlock, RouteId},
     core::source::Source,
     tui::{handlers::handle_app, ui::help::get_help_docs},
   };

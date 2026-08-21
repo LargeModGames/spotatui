@@ -345,7 +345,7 @@ impl ScriptEngine {
     if app.pending_plugin_screen_keys.is_empty() {
       return;
     }
-    let keys: Vec<(String, String)> = app.pending_plugin_screen_keys.drain(..).collect();
+    let keys: Vec<(String, String)> = std::mem::take(&mut app.pending_plugin_screen_keys);
     for (screen, key) in keys {
       self.call_screen_callback(&screen, "on_key", Some(key));
     }
@@ -495,7 +495,7 @@ impl ScriptEngine {
       return;
     }
     self.refresh_caches(app);
-    let names: Vec<String> = app.pending_plugin_commands.drain(..).collect();
+    let names: Vec<String> = std::mem::take(&mut app.pending_plugin_commands);
     let commands: mlua::Table = match self.lua.named_registry_value(COMMANDS_KEY) {
       Ok(t) => t,
       Err(_) => {

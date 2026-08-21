@@ -256,9 +256,10 @@ mod tests {
     assert_eq!(app.get_current_route().id, RouteId::Home);
   }
 
-  // The search key rewrites the error frame in place instead of pushing, so
-  // the frame can be holding text-input focus. Deleting it there would drop
-  // the user's next keystrokes into the global bindings.
+  // A mouse click on the search input rewrites the error frame in place
+  // instead of pushing, so the frame can be holding text-input focus.
+  // Deleting it there would drop the user's next keystrokes into the global
+  // bindings.
   #[test]
   fn clearing_an_error_leaves_a_frame_repurposed_as_a_search_input_alone() {
     let mut app = make_app_simple();
