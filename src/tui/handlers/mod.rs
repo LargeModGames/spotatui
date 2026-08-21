@@ -42,12 +42,10 @@ mod sort_menu;
 mod stats;
 mod track_table;
 
+use crate::core::action::{Action, NavTarget};
 use crate::core::app::{ActiveBlock, App, ArtistBlock, InputContext, RouteId, SearchResultBlock};
 use crate::core::source::Source;
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::model::{context::CurrentPlaybackContext, PlayableItem};
-use rspotify::prelude::Id;
 
 pub use input::handler as input_handler;
 pub use mouse::handler as mouse_handler;
@@ -101,8 +99,7 @@ pub fn handle_app(key: Key, app: &mut App) {
   if app.plugin_popup.is_some() {
     match key {
       Key::Esc | Key::Char('q') => {
-        app.plugin_popup = None;
-        app.view.plugin_popup_scroll = 0;
+        app.apply(Action::ClosePopup);
       }
       k if common_key_events::up_event(k, &app.user_config.keys) => {
         app.view.plugin_popup_scroll = app.view.plugin_popup_scroll.saturating_sub(1);
@@ -204,13 +201,13 @@ pub fn handle_app(key: Key, app: &mut App) {
       }
     }
     _ if key == app.user_config.keys.jump_to_album => {
-      handle_jump_to_album(app);
+      app.apply(Action::JumpToAlbum);
     }
     _ if key == app.user_config.keys.jump_to_artist_album => {
-      handle_jump_to_artist_album(app);
+      app.apply(Action::JumpToArtist);
     }
     _ if key == app.user_config.keys.jump_to_context => {
-      handle_jump_to_context(app);
+      app.apply(Action::JumpToContext);
     }
     // Reachable from anywhere, including sources whose sidebar has no Library
     // panel (only Spotify draws one), which is why a global binding exists at all
@@ -236,46 +233,45 @@ pub fn handle_app(key: Key, app: &mut App) {
       ai_dj::open_picker(app);
     }
     _ if key == app.user_config.keys.manage_devices => {
-      app.open_source_device_picker();
+      app.apply(Action::Navigate(NavTarget::Devices));
     }
     _ if key == app.user_config.keys.decrease_volume => {
-      app.decrease_volume();
+      app.apply(Action::VolumeDown);
     }
     _ if key == app.user_config.keys.increase_volume => {
-      app.increase_volume();
+      app.apply(Action::VolumeUp);
     }
     // Press space to toggle playback
     _ if key == app.user_config.keys.toggle_playback => {
-      app.toggle_playback();
+      app.apply(Action::TogglePlayback);
     }
     _ if key == app.user_config.keys.seek_backwards => {
-      app.seek_backwards();
+      app.apply(Action::SeekBackward);
     }
     _ if key == app.user_config.keys.seek_forwards => {
-      app.seek_forwards();
+      app.apply(Action::SeekForward);
     }
     _ if key == app.user_config.keys.next_track => {
-      app.next_track();
+      app.apply(Action::NextTrack);
     }
     _ if key == app.user_config.keys.previous_track => {
-      app.previous_track();
+      app.apply(Action::PreviousTrack);
     }
     _ if key == app.user_config.keys.force_previous_track => {
-      app.force_previous_track();
+      app.apply(Action::ForcePreviousTrack);
     }
     _ if key == app.user_config.keys.help => {
       help_menu::open(app);
     }
     _ if key == app.user_config.keys.show_queue => {
-      app.dispatch(IoEvent::GetQueue);
-      app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
+      app.apply(Action::Navigate(NavTarget::Queue));
     }
 
     _ if key == app.user_config.keys.shuffle => {
-      app.shuffle();
+      app.apply(Action::ToggleShuffle);
     }
     _ if key == app.user_config.keys.repeat => {
-      app.repeat();
+      app.apply(Action::CycleRepeat);
     }
     Key::Ctrl('f')
       if app.get_current_route().active_block == ActiveBlock::TrackTable
@@ -291,6 +287,13 @@ pub fn handle_app(key: Key, app: &mut App) {
       // Search is gated on the active source's capability (no `Searcher` impl
       // for Local Files), so it's a no-op with a hint there.
       if app.active_source.supports_search() {
+        // Never rewrite the error frame in place to `{Error, Input}`: push
+        // dedupes on the top frame's id, so a surviving Error frame makes
+        // every later error silently fail to render. Dismiss the error and
+        // open search on the screen below.
+        if app.get_current_route().id == RouteId::Error {
+          app.clear_api_error();
+        }
         app.view.input_context = InputContext::GlobalSearch;
         app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
       } else {
@@ -314,16 +317,16 @@ pub fn handle_app(key: Key, app: &mut App) {
       app.copy_album_url();
     }
     _ if key == app.user_config.keys.audio_analysis => {
-      app.get_audio_analysis();
+      app.apply(Action::Navigate(NavTarget::Analysis));
     }
     _ if key == app.user_config.keys.lyrics_view => {
-      app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView);
+      app.apply(Action::Navigate(NavTarget::Lyrics));
     }
     _ if key == app.user_config.keys.miniplayer_view => {
       if is_input_mode(app) {
         handle_block_events(key, app);
       } else {
-        toggle_miniplayer(app);
+        app.apply(Action::Navigate(NavTarget::MiniPlayer));
       }
     }
     #[cfg(feature = "cover-art")]
@@ -331,7 +334,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       app.push_navigation_stack(RouteId::CoverArtView, ActiveBlock::CoverArtView);
     }
     _ if key == app.user_config.keys.listening_party => {
-      app.push_navigation_stack(RouteId::Party, ActiveBlock::Party);
+      app.apply(Action::Navigate(NavTarget::Party));
     }
     _ if key == app.user_config.keys.like_track => {
       if is_input_mode(app) {
@@ -363,8 +366,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       if is_input_mode(app) {
         handle_block_events(key, app);
       } else {
-        let period = recap_period_for_current_route(app);
-        app.dispatch(IoEvent::GenerateRecap(period));
+        app.apply(Action::GenerateRecap);
       }
     }
     // Resize sidebar: { decreases, } increases width
@@ -653,91 +655,13 @@ fn handle_escape(app: &mut App) {
   }
 }
 
-fn toggle_miniplayer(app: &mut App) {
-  if app.get_current_route().id == RouteId::MiniPlayer {
-    app.pop_navigation_stack();
-  } else {
-    app.push_navigation_stack(RouteId::MiniPlayer, ActiveBlock::MiniPlayer);
-  }
-}
-
-fn handle_jump_to_context(app: &mut App) {
-  if let Some(current_playback_context) = &app.current_playback_context {
-    if let Some(play_context) = current_playback_context.context.clone() {
-      match play_context._type {
-        rspotify::model::enums::Type::Album => handle_jump_to_album(app),
-        rspotify::model::enums::Type::Artist => handle_jump_to_artist_album(app),
-        rspotify::model::enums::Type::Playlist => {
-          if let Some(playlist_id) = crate::infra::network::ids::playlist_id(&play_context.uri) {
-            app.open_playlist_tracks(
-              playlist_id,
-              crate::core::app::TrackTableContext::MyPlaylists,
-            );
-          }
-        }
-        _ => {}
-      }
-    }
-  }
-}
-
-fn handle_jump_to_album(app: &mut App) {
-  if let Some(CurrentPlaybackContext {
-    item: Some(item), ..
-  }) = app.current_playback_context.to_owned()
-  {
-    match item {
-      PlayableItem::Track(track) => {
-        app.dispatch(IoEvent::GetAlbumTracks(Box::new(track.album)));
-      }
-      PlayableItem::Episode(episode) => {
-        app.dispatch(IoEvent::GetShowEpisodes(Box::new(
-          crate::core::plugin_api::ShowInfo::from(&episode.show),
-        )));
-      }
-      _ => {}
-    };
-  }
-}
-
-// NOTE: this only finds the first artist of the song and jumps to their albums
-fn handle_jump_to_artist_album(app: &mut App) {
-  if let Some(CurrentPlaybackContext {
-    item: Some(item), ..
-  }) = app.current_playback_context.to_owned()
-  {
-    match item {
-      PlayableItem::Track(track) => {
-        if let Some(artist) = track.artists.first() {
-          if let Some(artist_id) = &artist.id {
-            app.get_artist(artist_id.id().to_string(), artist.name.clone());
-          }
-        }
-      }
-      PlayableItem::Episode(_episode) => {
-        // Do nothing for episode (yet!)
-      }
-      _ => {}
-    }
-  };
-}
-
-/// The recap period the `generate_recap` key should use: the selected period
-/// on the Stats screen, 30 days anywhere else.
-fn recap_period_for_current_route(app: &App) -> crate::infra::history::RecapPeriod {
-  if app.get_current_route().active_block == ActiveBlock::Stats {
-    app.stats_period
-  } else {
-    crate::infra::history::RecapPeriod::ThirtyDays
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::TrackTableContext;
   use crate::core::test_helpers::full_track;
   use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
   use chrono::Utc;
   use rspotify::model::{
     context::{Actions, CurrentPlaybackContext},
@@ -746,6 +670,7 @@ mod tests {
     idtypes::PlaylistId,
     CurrentlyPlayingType, Device, PlayableItem,
   };
+  use rspotify::prelude::Id;
   use std::{
     sync::mpsc::{channel, TryRecvError},
     time::SystemTime,
@@ -758,19 +683,26 @@ mod tests {
   }
 
   #[test]
-  fn recap_period_follows_stats_screen_selection() {
+  fn search_key_on_the_error_page_dismisses_the_error_first() {
     let mut app = App::default();
-    app.stats_period = crate::infra::history::RecapPeriod::Year;
-    assert_eq!(
-      recap_period_for_current_route(&app),
-      crate::infra::history::RecapPeriod::ThirtyDays
+    app.handle_error(anyhow::anyhow!("boom"));
+    assert_eq!(app.get_current_route().id, RouteId::Error);
+
+    handle_app(app.user_config.keys.search, &mut app);
+
+    let route = app.get_current_route();
+    assert_ne!(route.id, RouteId::Error, "the error frame must not survive");
+    assert_eq!(route.active_block, ActiveBlock::Input);
+    assert!(
+      app.api_error.is_empty(),
+      "the dismissal drops the message with the frame"
     );
 
-    app.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
-    assert_eq!(
-      recap_period_for_current_route(&app),
-      crate::infra::history::RecapPeriod::Year
-    );
+    // A later error must still render: the dismissal above is what keeps the
+    // navigation stack free of a deduping `{Error, ...}` frame.
+    handle_app(Key::Esc, &mut app);
+    app.handle_error(anyhow::anyhow!("again"));
+    assert_eq!(app.get_current_route().id, RouteId::Error);
   }
 
   #[test]

@@ -261,12 +261,13 @@ impl App {
 
   /// Remove every frame still serving as the error screen.
   ///
-  /// Matched on the id AND the block, not on the id alone. The search key
-  /// rewrites the error frame in place to `{ id: Error, active_block: Input }`
-  /// (it does not push), so an id-only match would delete a frame that is
-  /// holding live text-input focus and drop the user's next keystrokes into
-  /// the global bindings. Such a frame no longer draws the error screen, so
-  /// leaving it is harmless.
+  /// Matched on the id AND the block, not on the id alone. A mouse click on
+  /// the search input rewrites the error frame in place to `{ id: Error,
+  /// active_block: Input }` (it does not push; the search key instead
+  /// dismisses the error first), so an id-only match would delete a frame
+  /// that is holding live text-input focus and drop the user's next
+  /// keystrokes into the global bindings. Such a frame no longer draws the
+  /// error screen, so leaving it is harmless.
   ///
   /// Both `push_navigation_stack` and the frames below the top are covered:
   /// pushes dedupe only against the top frame, so navigating away and failing
@@ -313,5 +314,88 @@ impl App {
       self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
     }
     // Spectrum data will be updated by the audio capture system on each tick
+  }
+
+  /// Open the album page of the item that is playing now (episodes open
+  /// their show). A no-op without a playback context.
+  pub(crate) fn jump_to_album(&mut self) {
+    // Build the event under the borrow so only the payload is cloned, never
+    // the whole playback context.
+    let event = match self
+      .current_playback_context
+      .as_ref()
+      .and_then(|playback| playback.item.as_ref())
+    {
+      Some(PlayableItem::Track(track)) => {
+        Some(IoEvent::GetAlbumTracks(Box::new(track.album.clone())))
+      }
+      Some(PlayableItem::Episode(episode)) => Some(IoEvent::GetShowEpisodes(Box::new(
+        crate::core::plugin_api::ShowInfo::from(&episode.show),
+      ))),
+      _ => None,
+    };
+    if let Some(event) = event {
+      self.dispatch(event);
+    }
+  }
+
+  // NOTE: this only finds the first artist of the song and jumps to their albums
+  pub(crate) fn jump_to_artist_album(&mut self) {
+    let artist = match self
+      .current_playback_context
+      .as_ref()
+      .and_then(|playback| playback.item.as_ref())
+    {
+      Some(PlayableItem::Track(track)) => track.artists.first().and_then(|artist| {
+        artist
+          .id
+          .as_ref()
+          .map(|id| (id.id().to_string(), artist.name.clone()))
+      }),
+      // Episodes have no artist page to jump to (yet!)
+      _ => None,
+    };
+    if let Some((artist_id, artist_name)) = artist {
+      self.get_artist(artist_id, artist_name);
+    }
+  }
+
+  /// Open the context (album/artist/playlist) that playback runs in. A no-op
+  /// without a playback context.
+  pub(crate) fn jump_to_context(&mut self) {
+    let Some((context_type, playlist)) = self
+      .current_playback_context
+      .as_ref()
+      .and_then(|playback| playback.context.as_ref())
+      .map(|context| {
+        (
+          context._type.clone(),
+          crate::infra::network::ids::playlist_id(&context.uri),
+        )
+      })
+    else {
+      return;
+    };
+    match context_type {
+      rspotify::model::enums::Type::Album => self.jump_to_album(),
+      rspotify::model::enums::Type::Artist => self.jump_to_artist_album(),
+      rspotify::model::enums::Type::Playlist => {
+        if let Some(playlist_id) = playlist {
+          self.open_playlist_tracks(playlist_id, TrackTableContext::MyPlaylists);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /// Generate a listening recap: the selected period on the Stats screen
+  /// when that screen is current, 30 days anywhere else.
+  pub(crate) fn generate_recap(&mut self) {
+    let period = if self.get_current_route().active_block == ActiveBlock::Stats {
+      self.stats_period
+    } else {
+      RecapPeriod::ThirtyDays
+    };
+    self.dispatch(IoEvent::GenerateRecap(period));
   }
 }

@@ -56,13 +56,18 @@ fn playback_context(
 #[allow(deprecated)]
 fn playback_context_with_track(is_playing: bool) -> rspotify::model::CurrentPlaybackContext {
   use crate::core::test_helpers::full_track;
+  use rspotify::model::idtypes::ArtistId;
   use rspotify::model::PlayableItem;
   let mut ctx = playback_context(is_playing, false);
   ctx.progress = Some(chrono::Duration::milliseconds(0));
-  ctx.item = Some(PlayableItem::Track(full_track(
-    "4uLU6hMCjMI75M1A2tKUQC",
-    "Test Song",
-  )));
+  let mut track = full_track("4uLU6hMCjMI75M1A2tKUQC", "Test Song");
+  // `full_track` leaves the artist id unset; the jump-to-artist arm needs one.
+  track.artists[0].id = Some(
+    ArtistId::from_id("0OdUWJ0sBjDrqHygGUXeCF")
+      .unwrap()
+      .into_static(),
+  );
+  ctx.item = Some(PlayableItem::Track(track));
   ctx.currently_playing_type = rspotify::model::CurrentlyPlayingType::Track;
   ctx
 }
@@ -186,6 +191,165 @@ fn set_repeat_dispatches_the_absolute_repeat_state() {
     match rx.try_recv() {
       Ok(IoEvent::Repeat(state)) => assert_eq!(state, expected),
       _other => panic!("expected Repeat (IoEvent is not Debug)"),
+    }
+  }
+}
+
+#[test]
+fn toggle_playback_pauses_when_playing_and_starts_when_paused() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context(true, false));
+
+  app.apply(Action::TogglePlayback);
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+
+  app.current_playback_context = Some(playback_context(false, false));
+  app.apply(Action::TogglePlayback);
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::StartPlayback(None, None, None))
+  ));
+}
+
+#[test]
+fn force_previous_track_dispatches_the_force_event() {
+  let (mut app, rx) = app_with_channel();
+  app.song_progress_ms = 20_000;
+
+  app.apply(Action::ForcePreviousTrack);
+
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::ForcePreviousTrack)));
+  assert_eq!(app.song_progress_ms, 0, "a forced previous restarts at 0");
+}
+
+#[test]
+fn seek_actions_move_by_the_configured_step() {
+  // Start one step in, so forward lands at `2 * step + 1_000` and backward
+  // lands at `1_000`.
+  for (action, forward) in [(Action::SeekForward, true), (Action::SeekBackward, false)] {
+    let (mut app, _rx) = app_with_channel();
+    app.current_playback_context = Some(playback_context_with_track(true));
+    let step = app.user_config.behavior.seek_milliseconds as u128;
+    app.song_progress_ms = step + 1_000;
+
+    app.apply(action);
+
+    let expected = if forward { 2 * step + 1_000 } else { 1_000 };
+    assert_eq!(app.song_progress_ms, expected);
+  }
+}
+
+#[test]
+fn volume_actions_dispatch_the_stepped_volume() {
+  for (action, up) in [(Action::VolumeUp, true), (Action::VolumeDown, false)] {
+    let (mut app, rx) = app_with_channel();
+    app.current_playback_context = Some(playback_context(true, false));
+
+    app.apply(action);
+
+    let increment = app.user_config.behavior.volume_increment;
+    let expected = if up { 50 + increment } else { 50 - increment };
+    match rx.try_recv() {
+      Ok(IoEvent::ChangeVolume(v)) => assert_eq!(v, expected),
+      _other => panic!("expected ChangeVolume (IoEvent is not Debug)"),
+    }
+  }
+}
+
+#[test]
+fn toggle_shuffle_flips_the_spotify_shuffle_state() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context(true, false));
+
+  app.apply(Action::ToggleShuffle);
+
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::Shuffle(true))));
+}
+
+// --- jump-to navigation ---
+
+#[test]
+fn jump_to_album_opens_the_current_tracks_album() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context_with_track(false));
+
+  app.apply(Action::JumpToAlbum);
+
+  match rx.try_recv() {
+    Ok(IoEvent::GetAlbumTracks(album)) => assert_eq!(album.name, "Test Album"),
+    _other => panic!("expected GetAlbumTracks (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn jump_to_album_without_playback_is_a_noop() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::JumpToAlbum);
+
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn jump_to_artist_opens_the_first_artists_albums() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context_with_track(false));
+
+  app.apply(Action::JumpToArtist);
+
+  match rx.try_recv() {
+    Ok(IoEvent::GetArtist(id, name, _country)) => {
+      assert_eq!(id, "0OdUWJ0sBjDrqHygGUXeCF");
+      assert_eq!(name, "Test Artist");
+    }
+    _other => panic!("expected GetArtist (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn jump_to_context_opens_the_playlist_context() {
+  use rspotify::model::{context::Context, enums::Type};
+  let (mut app, rx) = app_with_channel();
+  let mut ctx = playback_context_with_track(true);
+  ctx.context = Some(Context {
+    uri: "spotify:playlist:37i9dQZF1DX4WYpdgoIcn6".to_string(),
+    href: String::new(),
+    external_urls: std::collections::HashMap::new(),
+    _type: Type::Playlist,
+  });
+  app.current_playback_context = Some(ctx);
+
+  app.apply(Action::JumpToContext);
+
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  match rx.try_recv() {
+    Ok(IoEvent::GetPlaylistItems(id, _offset)) => {
+      assert_eq!(id, "37i9dQZF1DX4WYpdgoIcn6");
+    }
+    _other => panic!("expected GetPlaylistItems (IoEvent is not Debug)"),
+  }
+}
+
+// --- recap ---
+
+#[test]
+fn generate_recap_resolves_the_period_from_the_current_route() {
+  use crate::core::app::ActiveBlock;
+  use crate::infra::history::RecapPeriod;
+  // The stats selection is set in both cases, so the off-Stats case proves
+  // the selection is ignored anywhere else.
+  for (on_stats_screen, expected) in [(false, RecapPeriod::ThirtyDays), (true, RecapPeriod::Year)] {
+    let (mut app, rx) = app_with_channel();
+    app.stats_period = RecapPeriod::Year;
+    if on_stats_screen {
+      app.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
+    }
+
+    app.apply(Action::GenerateRecap);
+
+    match rx.try_recv() {
+      Ok(IoEvent::GenerateRecap(period)) => assert_eq!(period, expected),
+      _other => panic!("expected GenerateRecap (IoEvent is not Debug)"),
     }
   }
 }
@@ -608,6 +772,21 @@ fn show_popup_sets_the_popup() {
     app.plugin_popup.as_ref().map(|p| p.title.as_str()),
     Some("Hi")
   );
+}
+
+#[test]
+fn close_popup_clears_the_popup() {
+  // The paired scroll reset is pinned by `core/app/plugins.rs` tests, which
+  // can seed the scroll field first.
+  let (mut app, _rx) = app_with_channel();
+  app.show_plugin_popup(crate::core::plugin_api::PluginPopup {
+    title: "Hi".to_string(),
+    lines: Vec::new(),
+  });
+
+  app.apply(Action::ClosePopup);
+
+  assert!(app.plugin_popup.is_none());
 }
 
 /// Reverse accessor for the loop test below, exhaustive over `ThemeField`
