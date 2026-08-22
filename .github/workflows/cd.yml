@@ -155,19 +155,25 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v7
 
-      - name: Extract version
-        id: version
-        # cargo-deb writes a prerelease as 0.42.0~rc1, so the .deb link must use
-        # the same tilde form.
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          echo "version=${v/-/\~}" >> "$GITHUB_OUTPUT"
-
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Resolve .deb file names
+        id: deb
+        # cargo-deb names the package from Cargo.toml, not from the tag, so the
+        # download links must use the file names that were built.
+        run: |
+          for arch in amd64 arm64; do
+            f=$(find artifacts -maxdepth 1 -type f -name "spotatui_*_${arch}.deb" -print -quit)
+            if [ -z "$f" ]; then
+              echo "No ${arch} .deb found in artifacts/" >&2
+              exit 1
+            fi
+            echo "${arch}=$(basename "$f")" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
@@ -181,8 +187,8 @@ jobs:
             - **Windows 10/11 (64-bit)** → [Download spotatui-windows-x86_64.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-windows-x86_64.zip)
             - **Linux (Ubuntu, Arch, Fedora, etc.)** → [Download spotatui-linux-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-linux-x86_64.tar.gz)
             - **Linux ARM64 (Raspberry Pi 4/5, ARM servers)** → [Download spotatui-linux-aarch64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-linux-aarch64.tar.gz)
-            - **Debian/Ubuntu (amd64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui_${{ steps.version.outputs.version }}-1_amd64.deb)
-            - **Debian/Ubuntu (arm64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui_${{ steps.version.outputs.version }}-1_arm64.deb)
+            - **Debian/Ubuntu (amd64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.deb.outputs.amd64 }})
+            - **Debian/Ubuntu (arm64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.deb.outputs.arm64 }})
             - **macOS with Intel CPU** → [Download spotatui-macos-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-macos-x86_64.tar.gz)
             - **macOS with Apple Silicon (M1/M2/M3)** → [Download spotatui-macos-aarch64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-macos-aarch64.tar.gz)
 
