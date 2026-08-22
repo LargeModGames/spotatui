@@ -154,30 +154,6 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Read release notes from changelog
-        id: changelog
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        shell: bash
-        run: |
-          RELEASE_NOTES=$(awk -v version="$GITHUB_REF_NAME" '
-            index($0, "## [" version "]") == 1 { in_section = 1; next }
-            in_section && /^## \[/ { exit }
-            in_section { print }
-          ' CHANGELOG.md)
-
-          if [ -z "$RELEASE_NOTES" ]; then
-            echo "No CHANGELOG.md section found for ${GITHUB_REF_NAME}" >&2
-            exit 1
-          fi
-
-          {
-            echo "notes<<EOF"
-            echo "$RELEASE_NOTES"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -185,22 +161,36 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Resolve .deb file names
+        id: deb
+        # cargo-deb names the package from Cargo.toml, not from the tag, so the
+        # download links must use the file names that were built.
+        run: |
+          for arch in amd64 arm64; do
+            f=$(find artifacts -maxdepth 1 -type f -name "spotatui_*_${arch}.deb" -print -quit)
+            if [ -z "$f" ]; then
+              echo "No ${arch} .deb found in artifacts/" >&2
+              exit 1
+            fi
+            echo "${arch}=$(basename "$f")" >> "$GITHUB_OUTPUT"
+          done
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
-          generate_release_notes: false
+          generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            ${{ steps.changelog.outputs.notes }}
-
             ## Downloads
 
-            - On **Windows 10/11 (64-bit)** → `spotatui-windows-x86_64.zip`
-            - On **Linux (Ubuntu, Arch, Fedora, etc.)** → `spotatui-linux-x86_64.tar.gz`
-            - On **Linux ARM64 (Raspberry Pi 4/5, ARM servers)** → `spotatui-linux-aarch64.tar.gz`
-            - On **macOS with Intel CPU** → `spotatui-macos-x86_64.tar.gz`
-            - On **macOS with Apple Silicon (M1/M2/M3)** → `spotatui-macos-aarch64.tar.gz`
+            - **Windows 10/11 (64-bit)** → [Download spotatui-windows-x86_64.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-windows-x86_64.zip)
+            - **Linux (Ubuntu, Arch, Fedora, etc.)** → [Download spotatui-linux-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-linux-x86_64.tar.gz)
+            - **Linux ARM64 (Raspberry Pi 4/5, ARM servers)** → [Download spotatui-linux-aarch64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-linux-aarch64.tar.gz)
+            - **Debian/Ubuntu (amd64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.deb.outputs.amd64 }})
+            - **Debian/Ubuntu (arm64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.deb.outputs.arm64 }})
+            - **macOS with Intel CPU** → [Download spotatui-macos-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-macos-x86_64.tar.gz)
+            - **macOS with Apple Silicon (M1/M2/M3)** → [Download spotatui-macos-aarch64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-macos-aarch64.tar.gz)
 
             Or just run the one-line installer: `curl -fsSL https://spotatui.com/install.sh | bash` (macOS/Linux) or `irm https://spotatui.com/install.ps1 | iex` (Windows).
 
