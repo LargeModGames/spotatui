@@ -230,8 +230,14 @@ impl AgentCliBrain {
       }
     }
 
-    let mut child = command.spawn().with_context(|| {
-      format!("could not run `{program}`. Is it installed and on PATH? (behavior.dj_agent_command)")
+    // The OS error and the cwd go in the message: `spawn` fails with the same
+    // ENOENT for a missing binary and for a cwd it cannot enter (#478), and the
+    // transcript shows only the top of the error chain.
+    let mut child = command.spawn().map_err(|e| {
+      anyhow!(
+        "could not run `{program}` from `{}` ({e}). Is it installed and on PATH? (behavior.dj_agent_command)",
+        self.cwd.display()
+      )
     })?;
 
     let stdin = match self.prompt_via {

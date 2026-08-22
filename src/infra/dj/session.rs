@@ -22,6 +22,7 @@ use crate::core::app::App;
 use crate::core::user_config::BehaviorConfig;
 use crate::infra::history::RecapPeriod;
 use anyhow::{anyhow, Result};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -38,10 +39,57 @@ pub const API_KEY_ENV: &str = "SPOTATUI_DJ_API_KEY";
 /// **Not** the user's current directory. Coding agents read `CLAUDE.md` /
 /// `AGENTS.md` and project files from their working directory, so an agent
 /// launched inside a repository answers with that repository on its mind.
-fn agent_scratch_dir() -> std::path::PathBuf {
-  crate::core::user_config::default_app_config_dir()
-    .unwrap_or_else(std::env::temp_dir)
-    .join("dj-scratch")
+///
+/// Resolved once per process, so every step of every turn runs from the same
+/// directory and the fallback is reported once. The config dir is preferred; a
+/// private subdirectory of the OS temp dir is the fallback (#478: a build
+/// sandbox sets `HOME` to a path that cannot be created, and `spawn` with a
+/// missing cwd fails with an ENOENT that looks like a missing binary).
+fn agent_scratch_dir() -> PathBuf {
+  static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+  DIR
+    .get_or_init(|| {
+      scratch_dir_from(
+        crate::core::user_config::default_app_config_dir().map(|dir| dir.join("dj-scratch")),
+        &std::env::temp_dir(),
+      )
+    })
+    .clone()
+}
+
+/// [`agent_scratch_dir`] with the candidates passed in rather than read.
+///
+/// Candidates, in order: the config scratch dir, then `<temp>/dj-scratch`. A
+/// relative temp dir is skipped, as `paths.rs` skips a relative XDG value: it
+/// would resolve against the process cwd, the one place an agent must not run.
+/// A candidate counts only when it can be created *and* read, so a leftover
+/// directory the process cannot enter is skipped too. When nothing qualifies,
+/// the first candidate is returned and `spawn` reports the cwd it could not
+/// enter.
+fn scratch_dir_from(preferred: Option<PathBuf>, temp: &Path) -> PathBuf {
+  let fallback = temp.is_absolute().then(|| temp.join("dj-scratch"));
+  let candidates: Vec<PathBuf> = preferred.into_iter().chain(fallback).collect();
+  for (index, dir) in candidates.iter().enumerate() {
+    if usable_dir(dir) {
+      if index > 0 {
+        log::warn!(
+          "DJ: could not use the scratch dir {}; running agent CLIs from {}",
+          candidates[0].display(),
+          dir.display()
+        );
+      }
+      return dir.clone();
+    }
+  }
+  log::warn!("DJ: no usable scratch dir among {candidates:?}; agent CLIs will not start");
+  candidates
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| temp.join("dj-scratch"))
+}
+
+fn usable_dir(dir: &Path) -> bool {
+  std::fs::create_dir_all(dir).is_ok() && std::fs::read_dir(dir).is_ok()
 }
 
 /// The API-key precedence rule: the env var wins, the config field is the
@@ -609,5 +657,26 @@ mod tests {
     let cwd = std::env::current_dir().unwrap();
     assert_ne!(scratch, cwd);
     assert!(scratch.ends_with("dj-scratch"));
+  }
+
+  #[test]
+  fn the_config_scratch_dir_is_used_when_it_can_be_created() {
+    let temp = tempfile::tempdir().unwrap();
+    let preferred = temp.path().join("config").join("dj-scratch");
+    let chosen = scratch_dir_from(Some(preferred.clone()), temp.path());
+    assert_eq!(chosen, preferred);
+    assert!(chosen.is_dir(), "it is created, not only named");
+  }
+
+  #[test]
+  fn an_uncreatable_config_dir_falls_back_to_a_private_temp_subdir() {
+    // #478: a build sandbox sets HOME to a path that cannot be created. The
+    // agent must still get a directory of its own, never the shared temp root.
+    let temp = tempfile::tempdir().unwrap();
+    let blocker = temp.path().join("not-a-dir");
+    std::fs::write(&blocker, b"").unwrap();
+    let chosen = scratch_dir_from(Some(blocker.join("dj-scratch")), temp.path());
+    assert_eq!(chosen, temp.path().join("dj-scratch"));
+    assert!(chosen.is_dir());
   }
 }
