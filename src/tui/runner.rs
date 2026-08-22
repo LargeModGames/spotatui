@@ -86,6 +86,20 @@ fn key_reaches_handlers_before_back(app: &App, key: Key) -> bool {
   help_menu_captures_key_before_back(app, key)
 }
 
+/// Where the terminal cursor goes in this frame: inside the search box while
+/// the input block is focused, `None` (hidden) on every other screen. The
+/// frame applies it through `Frame::set_cursor_position`.
+fn frame_cursor_position(app: &App, active_block: ActiveBlock) -> Option<(u16, u16)> {
+  if active_block != ActiveBlock::Input {
+    return None;
+  }
+  let cursor_offset = crate::tui::layout::main_layout_margin(app) + 1;
+  Some((
+    cursor_offset + app.view.input_cursor_position - app.view.input_scroll_offset.get(),
+    cursor_offset,
+  ))
+}
+
 /// One keypress, from the runner's event loop. Returns `true` when the user asked
 /// to quit and the loop must break.
 ///
@@ -195,6 +209,33 @@ mod tests {
   // `help_menu_captures_key_before_back` directly. On the Help route the two agree,
   // but only the outer one fails when Help stops being wired into the gate at all,
   // which is the way this protection would realistically be lost.
+  #[test]
+  fn input_frame_places_the_cursor_after_the_visible_prefix() {
+    let mut app = app();
+    app.view.input_cursor_position = 7;
+    app.view.input_scroll_offset.set(2);
+    let offset = crate::tui::layout::main_layout_margin(&app) + 1;
+
+    assert_eq!(
+      frame_cursor_position(&app, ActiveBlock::Input),
+      Some((offset + 5, offset))
+    );
+  }
+
+  #[test]
+  fn non_input_frames_leave_the_cursor_hidden() {
+    let mut app = app();
+    app.view.input_cursor_position = 7;
+
+    for block in [
+      ActiveBlock::Home,
+      ActiveBlock::TrackTable,
+      ActiveBlock::Library,
+    ] {
+      assert_eq!(frame_cursor_position(&app, block), None);
+    }
+  }
+
   #[test]
   fn help_filter_captures_back_key_while_editing() {
     let mut app = app();
@@ -474,12 +515,8 @@ pub async fn start_ui(
         // none does. The old post-draw hide/show pair ran on every animation
         // frame (16 ms on Home), and the alternating toggle reset the
         // terminal's blink phase each frame, so the cursor strobed.
-        if current_route.active_block == ActiveBlock::Input {
-          let cursor_offset = crate::tui::layout::main_layout_margin(&app) + 1;
-          f.set_cursor_position((
-            cursor_offset + app.view.input_cursor_position - app.view.input_scroll_offset.get(),
-            cursor_offset,
-          ));
+        if let Some(position) = frame_cursor_position(&app, current_route.active_block) {
+          f.set_cursor_position(position);
         }
       })?;
 

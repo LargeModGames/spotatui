@@ -95,7 +95,7 @@ impl App {
   /// Moved verbatim from the terminal DJ handler; reached through
   /// `Action::OpenLibrary(LibraryTarget::AiDj)`.
   #[cfg(feature = "ai-dj")]
-  pub(crate) fn open_ai_dj_screen(&mut self) {
+  pub(super) fn open_ai_dj_screen(&mut self) {
     // Pushed only when the DJ is not already the current route, for the reason
     // `open_picker` documents: a second `RouteId::AiDj` on the stack turns the Esc
     // that should leave the DJ into one that lands back on it. Reachable with the

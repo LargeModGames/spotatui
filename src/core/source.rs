@@ -129,6 +129,14 @@ mod tests {
   use super::*;
 
   #[test]
+  fn serde_tokens_match_the_config_tokens() {
+    for source in Source::ALL {
+      let wire = serde_json::to_string(&source).unwrap();
+      assert_eq!(wire, format!("\"{}\"", source.to_config_str()));
+    }
+  }
+
+  #[test]
   fn spotify_supports_all_capabilities() {
     assert!(Source::Spotify.supports_search());
     assert!(Source::Spotify.supports_library());

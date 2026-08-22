@@ -174,8 +174,13 @@ fn play_random_song(app: &mut App) {
 
         // The no-id degenerate case (unreachable through normal navigation,
         // since the table only opens with an id set) is skipped rather than
-        // dispatched as a bare resume with a random offset.
+        // dispatched as a bare resume with a random offset. An empty playlist
+        // reports a total of 0, and `random_range(0..0)` panics, so that is
+        // skipped too.
         if let (Some(uri), Some(val)) = (context_id, track_json) {
+          if val == 0 {
+            return;
+          }
           app.apply(Action::PlayContext {
             uri,
             offset: Some(rand::random_range(0..val as usize)),
@@ -646,6 +651,34 @@ mod tests {
       other => panic!("unexpected event: {:?}", event_name(&other)),
     }
     assert!(app.native_queue.is_empty());
+  }
+
+  #[test]
+  fn random_play_on_an_empty_playlist_does_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    // Seeded through App methods, not field writes: the handler write counter
+    // scans this whole file. The open dispatches the first page fetch.
+    app.open_playlist_tracks(
+      PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+        .unwrap()
+        .into_static(),
+      TrackTableContext::MyPlaylists,
+    );
+    assert!(rx.try_recv().is_ok(), "the open fetched its first page");
+    app.playlist_track_pages.upsert_page_by_offset(Paged {
+      items: vec![],
+      limit: 50,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 0,
+    });
+
+    // `random_range(0..0)` panics; the guard must skip the start instead.
+    handler(Key::Char('S'), &mut app);
+
+    assert!(rx.try_recv().is_err(), "an empty playlist starts nothing");
   }
 
   #[test]
