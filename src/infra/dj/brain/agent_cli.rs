@@ -230,8 +230,14 @@ impl AgentCliBrain {
       }
     }
 
-    let mut child = command.spawn().with_context(|| {
-      format!("could not run `{program}`. Is it installed and on PATH? (behavior.dj_agent_command)")
+    // The OS error and the cwd go in the message: `spawn` fails with the same
+    // ENOENT for a missing binary and for a cwd it cannot enter (#478), and the
+    // transcript shows only the top of the error chain.
+    let mut child = command.spawn().map_err(|e| {
+      anyhow!(
+        "could not run `{program}` from `{}` ({e}). Is it installed and on PATH? (behavior.dj_agent_command)",
+        self.cwd.display()
+      )
     })?;
 
     let stdin = match self.prompt_via {
@@ -586,6 +592,16 @@ esac"#,
     .unwrap_err()
     .to_string();
     assert!(err.contains("Is it installed"), "{err}");
+    // The cwd and the OS error are part of the diagnostic (#478): a cwd that
+    // cannot be entered fails `spawn` with the same ENOENT as a missing binary.
+    // The OS error sits in the parentheses after the cwd; its wording is the
+    // platform's, so only the structure is pinned everywhere.
+    assert!(
+      err.contains(&format!("from `{}` (", scratch().display())),
+      "{err}"
+    );
+    #[cfg(unix)]
+    assert!(err.contains("No such file or directory"), "{err}");
   }
 
   #[test]

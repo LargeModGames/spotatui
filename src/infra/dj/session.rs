@@ -22,6 +22,7 @@ use crate::core::app::App;
 use crate::core::user_config::BehaviorConfig;
 use crate::infra::history::RecapPeriod;
 use anyhow::{anyhow, Result};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -38,10 +39,99 @@ pub const API_KEY_ENV: &str = "SPOTATUI_DJ_API_KEY";
 /// **Not** the user's current directory. Coding agents read `CLAUDE.md` /
 /// `AGENTS.md` and project files from their working directory, so an agent
 /// launched inside a repository answers with that repository on its mind.
-fn agent_scratch_dir() -> std::path::PathBuf {
-  crate::core::user_config::default_app_config_dir()
-    .unwrap_or_else(std::env::temp_dir)
-    .join("dj-scratch")
+///
+/// Resolved once per process, so every step of every turn runs from the same
+/// directory and the fallback is reported once. The config dir is preferred; a
+/// private subdirectory of the OS temp dir is the fallback (#478: a build
+/// sandbox sets `HOME` to a path that cannot be created, and `spawn` with a
+/// missing cwd fails with an ENOENT that looks like a missing binary).
+fn agent_scratch_dir() -> PathBuf {
+  static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+  DIR
+    .get_or_init(|| {
+      scratch_dir_from(
+        crate::core::user_config::default_app_config_dir().map(|dir| dir.join("dj-scratch")),
+        &std::env::temp_dir(),
+      )
+    })
+    .clone()
+}
+
+/// [`agent_scratch_dir`] with the inputs passed in rather than read.
+///
+/// The config scratch dir is used when it can be created, entered, and written.
+/// Otherwise a fresh, uniquely named directory is made under `temp`. Never a
+/// fixed name there: a shared temp root lets another local user plant that name
+/// (or a symlink to a directory of theirs) and so choose the agent's working
+/// directory, instruction files included. A relative temp dir is skipped, as
+/// `paths.rs` skips a relative XDG value: it would resolve against the process
+/// cwd, the one place an agent must not run. When nothing qualifies, the
+/// preferred path is returned and `spawn` reports the cwd it could not enter.
+fn scratch_dir_from(preferred: Option<PathBuf>, temp: &Path) -> PathBuf {
+  if let Some(dir) = preferred.as_ref().filter(|dir| usable_dir(dir)) {
+    return dir.clone();
+  }
+  match temp.is_absolute().then(|| fresh_temp_dir(temp)).flatten() {
+    Some(dir) => {
+      log::warn!(
+        "DJ: could not use the scratch dir {preferred:?}; running agent CLIs from {}",
+        dir.display()
+      );
+      dir
+    }
+    None => {
+      log::warn!(
+        "DJ: no usable scratch dir (config {preferred:?}, temp {}); agent CLIs will not start",
+        temp.display()
+      );
+      preferred.unwrap_or_else(|| temp.join("dj-scratch"))
+    }
+  }
+}
+
+/// Whether `Command::current_dir` can enter `dir` and the agent can write in it.
+///
+/// `create_dir_all` alone is not enough: it succeeds on a directory that already
+/// exists without search permission, and `spawn` then fails on the `chdir` with
+/// the same misleading error as a missing cwd. Creating and removing a file
+/// inside needs search and write on the directory, which is what the agent
+/// needs too.
+fn usable_dir(dir: &Path) -> bool {
+  if std::fs::create_dir_all(dir).is_err() {
+    return false;
+  }
+  let probe = dir.join(format!(".probe-{}", std::process::id()));
+  let written = std::fs::write(&probe, b"").is_ok();
+  let _ = std::fs::remove_file(&probe);
+  written
+}
+
+/// A new, uniquely named, owner-only directory under `temp`, or `None` when
+/// none could be made. A non-recursive create refuses an existing entry, a
+/// symlink included, so the result is always one this process made. It is not
+/// removed on exit: temp is the one location the platform clears on its own,
+/// and the per-process log file already relies on that.
+fn fresh_temp_dir(temp: &Path) -> Option<PathBuf> {
+  // Owner-only from the start, whatever the umask: the agent's working
+  // directory must not be readable or writable by other local users.
+  #[cfg(unix)]
+  let builder = {
+    use std::os::unix::fs::DirBuilderExt;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder
+  };
+  #[cfg(not(unix))]
+  let builder = std::fs::DirBuilder::new();
+  let pid = std::process::id();
+  (0..8).find_map(|attempt| {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|since| since.subsec_nanos())
+      .unwrap_or(0);
+    let dir = temp.join(format!("spotatui-dj-scratch-{pid}-{nanos}-{attempt}"));
+    builder.create(&dir).ok().map(|()| dir)
+  })
 }
 
 /// The API-key precedence rule: the env var wins, the config field is the
@@ -609,5 +699,55 @@ mod tests {
     let cwd = std::env::current_dir().unwrap();
     assert_ne!(scratch, cwd);
     assert!(scratch.ends_with("dj-scratch"));
+  }
+
+  #[test]
+  fn the_config_scratch_dir_is_used_when_it_can_be_created() {
+    let temp = tempfile::tempdir().unwrap();
+    let preferred = temp.path().join("config").join("dj-scratch");
+    let chosen = scratch_dir_from(Some(preferred.clone()), temp.path());
+    assert_eq!(chosen, preferred);
+    assert!(chosen.is_dir(), "it is created, not only named");
+  }
+
+  #[test]
+  fn an_uncreatable_config_dir_falls_back_to_a_fresh_private_temp_dir() {
+    // #478: a build sandbox sets HOME to a path that cannot be created. The
+    // agent must still get a directory of its own, never the shared temp root.
+    let temp = tempfile::tempdir().unwrap();
+    let blocker = temp.path().join("not-a-dir");
+    std::fs::write(&blocker, b"").unwrap();
+    let chosen = scratch_dir_from(Some(blocker.join("dj-scratch")), temp.path());
+    assert!(chosen.is_dir(), "{}", chosen.display());
+    assert_eq!(chosen.parent(), Some(temp.path()), "{}", chosen.display());
+    // Fresh every time: never a fixed name another local user can plant.
+    let again = scratch_dir_from(Some(blocker.join("dj-scratch")), temp.path());
+    assert_ne!(again, chosen);
+    // And private: group and others get nothing, whatever the umask.
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let mode = std::fs::metadata(&chosen).unwrap().permissions().mode();
+      assert_eq!(mode & 0o077, 0, "mode {mode:o}");
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_config_dir_without_search_permission_is_not_used() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let preferred = temp.path().join("dj-scratch");
+    std::fs::create_dir(&preferred).unwrap();
+    // Read and write, no search: `create_dir_all` is content, `chdir` is not.
+    std::fs::set_permissions(&preferred, std::fs::Permissions::from_mode(0o600)).unwrap();
+    if std::fs::write(preferred.join("probe"), b"").is_ok() {
+      // A privileged user ignores mode bits; there is nothing to test here.
+      return;
+    }
+    let chosen = scratch_dir_from(Some(preferred.clone()), temp.path());
+    std::fs::set_permissions(&preferred, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_ne!(chosen, preferred);
+    assert!(chosen.is_dir(), "{}", chosen.display());
   }
 }
