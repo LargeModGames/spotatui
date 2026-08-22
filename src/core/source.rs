@@ -133,6 +133,7 @@ mod tests {
     for source in Source::ALL {
       let wire = serde_json::to_string(&source).unwrap();
       assert_eq!(wire, format!("\"{}\"", source.to_config_str()));
+      assert_eq!(serde_json::from_str::<Source>(&wire).unwrap(), source);
     }
   }
 
