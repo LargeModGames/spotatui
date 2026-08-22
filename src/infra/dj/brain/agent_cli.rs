@@ -592,6 +592,13 @@ esac"#,
     .unwrap_err()
     .to_string();
     assert!(err.contains("Is it installed"), "{err}");
+    // The cwd and the OS error are part of the diagnostic (#478): a cwd that
+    // cannot be entered fails `spawn` with the same ENOENT as a missing binary.
+    assert!(err.contains(&scratch().display().to_string()), "{err}");
+    assert!(
+      err.contains("No such file") || err.contains("not found"),
+      "{err}"
+    );
   }
 
   #[test]
