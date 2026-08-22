@@ -139,11 +139,10 @@ jobs:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
       - uses: actions/checkout@master
-      - uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
-          profile: minimal
-          override: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
           components: llvm-tools-preview
       - run: |
           sudo apt-get update
