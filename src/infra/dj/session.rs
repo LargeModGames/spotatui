@@ -106,12 +106,20 @@ fn usable_dir(dir: &Path) -> bool {
   written
 }
 
-/// A new, uniquely named directory under `temp`, or `None` when none could be
-/// made. `create_dir` (not `create_dir_all`) refuses an existing entry, a
+/// A new, uniquely named, owner-only directory under `temp`, or `None` when
+/// none could be made. A non-recursive create refuses an existing entry, a
 /// symlink included, so the result is always one this process made. It is not
 /// removed on exit: temp is the one location the platform clears on its own,
 /// and the per-process log file already relies on that.
 fn fresh_temp_dir(temp: &Path) -> Option<PathBuf> {
+  let mut builder = std::fs::DirBuilder::new();
+  #[cfg(unix)]
+  {
+    // Owner-only from the start, whatever the umask: the agent's working
+    // directory must not be readable or writable by other local users.
+    use std::os::unix::fs::DirBuilderExt;
+    builder.mode(0o700);
+  }
   let pid = std::process::id();
   (0..8).find_map(|attempt| {
     let nanos = std::time::SystemTime::now()
@@ -119,7 +127,7 @@ fn fresh_temp_dir(temp: &Path) -> Option<PathBuf> {
       .map(|since| since.subsec_nanos())
       .unwrap_or(0);
     let dir = temp.join(format!("spotatui-dj-scratch-{pid}-{nanos}-{attempt}"));
-    std::fs::create_dir(&dir).ok().map(|()| dir)
+    builder.create(&dir).ok().map(|()| dir)
   })
 }
 
@@ -712,6 +720,13 @@ mod tests {
     // Fresh every time: never a fixed name another local user can plant.
     let again = scratch_dir_from(Some(blocker.join("dj-scratch")), temp.path());
     assert_ne!(again, chosen);
+    // And private: group and others get nothing, whatever the umask.
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let mode = std::fs::metadata(&chosen).unwrap().permissions().mode();
+      assert_eq!(mode & 0o077, 0, "mode {mode:o}");
+    }
   }
 
   #[cfg(unix)]
