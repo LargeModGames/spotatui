@@ -154,6 +154,70 @@ impl App {
     self.track_table.context = Some(TrackTableContext::SavedTracks);
   }
 
+  /// Open a library sidebar section: the whole Enter consequence of a
+  /// library row (fetches, route pushes, bookkeeping), moved verbatim from
+  /// the library handler so every frontend fires the same sequence through
+  /// `Action::OpenLibrary`.
+  pub fn open_library_section(&mut self, target: crate::core::action::LibraryTarget) {
+    use crate::core::action::LibraryTarget;
+    match target {
+      LibraryTarget::Discover => {
+        self.push_navigation_stack(RouteId::Discover, ActiveBlock::Discover);
+      }
+      // The row pushes the route immediately; only the global navigate
+      // binding defers the push to the network result.
+      LibraryTarget::RecentlyPlayed => {
+        self.dispatch(IoEvent::GetRecentlyPlayed);
+        self.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
+      }
+      LibraryTarget::Friends => {
+        self.push_navigation_stack(RouteId::Friends, ActiveBlock::Friends);
+        // Load friend code + friends list on first open (or if empty)
+        if self.friend_code.is_none() {
+          self.dispatch(IoEvent::GetFriendCode);
+        }
+        if self.friends.is_empty() && !self.friends_loading {
+          self.dispatch(IoEvent::GetFriends);
+        }
+        self.last_friends_refresh_at = std::time::Instant::now();
+      }
+      LibraryTarget::Stats => {
+        self.stats_loading = true;
+        self.dispatch(IoEvent::LoadListeningStats(self.stats_period));
+        self.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
+      }
+      LibraryTarget::LikedSongs => {
+        self.reset_saved_tracks_view();
+        self.dispatch(IoEvent::GetCurrentSavedTracks(None));
+        self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+      }
+      LibraryTarget::Albums => {
+        self.dispatch(IoEvent::GetCurrentUserSavedAlbums(None));
+        self.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
+      }
+      LibraryTarget::Artists => {
+        self.dispatch(IoEvent::GetFollowedArtists(None));
+        self.push_navigation_stack(RouteId::Artists, ActiveBlock::Artists);
+      }
+      LibraryTarget::Podcasts => {
+        self.dispatch(IoEvent::GetCurrentUserSavedShows(None));
+        self.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
+      }
+      // The row cannot be selected in builds without `local-files`, so the
+      // arm is a no-op there.
+      LibraryTarget::LocalFiles => {
+        #[cfg(feature = "local-files")]
+        self.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
+      }
+      // The row cannot be selected in builds without `ai-dj`, so the arm is
+      // a no-op there.
+      LibraryTarget::AiDj => {
+        #[cfg(feature = "ai-dj")]
+        self.open_ai_dj_screen();
+      }
+    }
+  }
+
   pub fn next_missing_saved_tracks_offset(&self, page_index: usize) -> Option<u32> {
     let saved_tracks_page = self.library.saved_tracks.get_results(Some(page_index))?;
     saved_tracks_page.next.as_ref()?;

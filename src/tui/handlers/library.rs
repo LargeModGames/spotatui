@@ -1,8 +1,8 @@
 use super::common_key_events;
-use crate::core::app::{library_options, ActiveBlock, App, RouteId};
+use crate::core::action::{Action, LibraryTarget};
+use crate::core::app::{library_options, App};
 #[cfg(feature = "local-files")]
 use crate::core::source::Source;
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -37,101 +37,46 @@ pub fn handler(key: Key, app: &mut App) {
     // `library` should probably be an array of structs with enums rather than just using indexes
     // like this
     Key::Enter => {
-      // Every feature-gated row is matched by NAME, before the positional arms
-      // below, because its index depends on which features are built in: with
-      // `local-files` off, "AI DJ" sits where "Local Files" sits without it. The
-      // positional arms cover only the rows that are always present.
-      #[cfg(feature = "ai-dj")]
-      if Some(app.library.selected_index) == library_options().iter().position(|o| *o == "AI DJ") {
-        super::ai_dj::open(app);
+      // Every row is resolved by NAME (through `LibraryTarget`), never by
+      // position: feature-gated rows shift the indices of everything after
+      // them, so a positional match silently remaps when features change.
+      let Some(name) = library_options().get(app.library.selected_index).copied() else {
         return;
-      }
+      };
+      let Some(target) = LibraryTarget::from_name(name) else {
+        return;
+      };
+
       #[cfg(feature = "local-files")]
-      if Some(app.library.selected_index)
-        == library_options().iter().position(|o| *o == "Local Files")
-      {
+      if target == LibraryTarget::LocalFiles {
         open_local_source(app);
         return;
       }
-      match app.library.selected_index {
-        // Discover
-        0 => {
-          app.push_navigation_stack(RouteId::Discover, ActiveBlock::Discover);
-        }
-        // Recently Played
-        1 => {
-          app.dispatch(IoEvent::GetRecentlyPlayed);
-          app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
-        }
-        // Friends
-        2 => {
-          app.push_navigation_stack(RouteId::Friends, ActiveBlock::Friends);
-          // Load friend code + friends list on first open (or if empty)
-          if app.friend_code.is_none() {
-            app.dispatch(IoEvent::GetFriendCode);
-          }
-          if app.friends.is_empty() && !app.friends_loading {
-            app.dispatch(IoEvent::GetFriends);
-          }
-          app.last_friends_refresh_at = std::time::Instant::now();
-        }
-        // Stats
-        3 => {
-          app.stats_loading = true;
-          app.dispatch(IoEvent::LoadListeningStats(app.stats_period));
-          app.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
-        }
-        // Liked Songs
-        4 => {
-          app.reset_saved_tracks_view();
-          app.dispatch(IoEvent::GetCurrentSavedTracks(None));
-          app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-        }
-        // Albums
-        5 => {
-          app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None));
-          app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
-        }
-        // Artists
-        6 => {
-          app.dispatch(IoEvent::GetFollowedArtists(None));
-          app.push_navigation_stack(RouteId::Artists, ActiveBlock::Artists);
-        }
-        // Podcasts
-        7 => {
-          app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
-          app.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
-        }
-        // This is required because Rust can't tell if this pattern is exhaustive
-        _ => {}
-      }
+      app.apply(Action::OpenLibrary(target));
     }
     _ => (),
   };
 }
 
 /// Doubles as the "switch to Local source" shortcut: it flips the active source
-/// so the sidebar re-scopes to local folders, then opens the browser.
+/// so the sidebar re-scopes to local folders, then opens the browser. The
+/// sidebar cursor resets are presentation state and stay in the TUI.
 #[cfg(feature = "local-files")]
 fn open_local_source(app: &mut App) {
-  app.active_source = Source::Local;
-  // Mirror the persisted value so the selection survives restarts.
-  app.runtime_state.active_source = Source::Local;
-  if let Err(e) = app.save_runtime_state(&crate::core::state::PersistedRuntimeState::active_source(
-    app.runtime_state.active_source,
-  )) {
-    log::warn!("[source] failed to persist active_source: {e}");
-  }
+  use crate::infra::network::IoEvent;
   app.view.selected_playlist_index = Some(0);
   app.view.local_playlists_index = 0;
+  app.apply(Action::SelectSource(Source::Local));
   app.dispatch(IoEvent::GetLocalPlaylists);
-  app.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
+  app.apply(Action::OpenLibrary(LibraryTarget::LocalFiles));
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::app::RouteId;
   use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
@@ -168,5 +113,26 @@ mod tests {
       rx.try_recv(),
       Ok(IoEvent::GetCurrentSavedTracks(None))
     ));
+  }
+
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn enter_on_local_files_switches_source_and_opens_the_browser() {
+    let index = library_options()
+      .iter()
+      .position(|o| *o == "Local Files")
+      .unwrap();
+    let (mut app, rx) = app_with_selection(index);
+    // The source switch persists; without a seeded path it would write the
+    // developer's real state.yml.
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    handler(Key::Enter, &mut app);
+    assert_eq!(app.active_source, Source::Local);
+    assert_eq!(app.runtime_state.active_source, Source::Local);
+    assert_eq!(app.get_current_route().id, RouteId::LocalBrowser);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetLocalPlaylists)));
+    assert_eq!(app.view.selected_playlist_index, Some(0));
+    assert_eq!(app.view.local_playlists_index, 0);
   }
 }

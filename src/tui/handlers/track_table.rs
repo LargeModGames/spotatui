@@ -1,9 +1,6 @@
 use super::common_key_events;
-use crate::core::app::{
-  ActiveBlock, App, DialogContext, PendingPlaylistTrackRemoval, PendingTrackSelection,
-  RecommendationsContext, RouteId, TrackTable, TrackTableContext,
-};
-use crate::infra::network::IoEvent;
+use crate::core::action::{Action, ListTarget};
+use crate::core::app::{App, PendingTrackSelection, TrackTable, TrackTableContext};
 use crate::tui::event::Key;
 use rspotify::prelude::Id;
 
@@ -26,7 +23,7 @@ pub fn handler(key: Key, app: &mut App) {
           Some(TrackTableContext::MyPlaylists) | Some(TrackTableContext::PlaylistSearch) => {
             if app.current_playlist_has_more_tracks() {
               app.pending_track_table_selection = Some(PendingTrackSelection::Index(tracks_len));
-              app.get_playlist_tracks_next();
+              app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
               return;
             }
             app.track_table.selected_index = 0;
@@ -38,7 +35,7 @@ pub fn handler(key: Key, app: &mut App) {
           Some(TrackTableContext::SavedTracks) => {
             if app.current_saved_tracks_has_more_tracks() {
               app.pending_track_table_selection = Some(PendingTrackSelection::Index(tracks_len));
-              app.get_current_user_saved_tracks_next();
+              app.apply(Action::LoadMore(ListTarget::SavedTracks));
               return;
             }
             app.track_table.selected_index = 0;
@@ -85,13 +82,12 @@ pub fn handler(key: Key, app: &mut App) {
       if let Some(context) = &app.track_table.context {
         match context {
           TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch => {
-            if app.current_playlist_has_more_tracks() {
-              app.get_playlist_tracks_next();
-            }
+            // Self-guarding: a no-op when there is no next page.
+            app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
           }
           TrackTableContext::RecommendedTracks => {}
           TrackTableContext::SavedTracks => {
-            app.get_current_user_saved_tracks_next();
+            app.apply(Action::LoadMore(ListTarget::SavedTracks));
           }
           TrackTableContext::AlbumSearch => {}
           TrackTableContext::DiscoverPlaylist => {}
@@ -122,8 +118,12 @@ pub fn handler(key: Key, app: &mut App) {
         }
       };
     }
-    Key::Char('w') => open_add_to_playlist_dialog(app),
-    Key::Char('x') => open_remove_from_playlist_dialog(app),
+    Key::Char('w') => {
+      app.apply(Action::OpenAddTrackDialog);
+    }
+    Key::Char('x') => {
+      app.apply(Action::OpenRemoveTrackDialog);
+    }
     Key::Char('q') if app.is_playlist_track_filter_active() => {
       app.clear_playlist_track_filter();
     }
@@ -144,107 +144,27 @@ pub fn handler(key: Key, app: &mut App) {
   }
 }
 
-fn open_add_to_playlist_dialog(app: &mut App) {
-  let track = match app.track_table.tracks.get(app.track_table.selected_index) {
-    Some(track) => track,
-    None => return,
+fn handle_save_track_event(app: &mut App) {
+  if let Some(track) = app.track_table.tracks.get(app.track_table.selected_index) {
+    if let Some(playable_id) = track.uri.clone() {
+      app.apply(Action::ToggleSaveTrack(playable_id));
+    }
   };
-
-  let track_id = track.id.clone();
-  let track_name = track.name.clone();
-  app.begin_add_track_to_playlist_flow(track_id, track_name);
 }
 
-fn open_remove_from_playlist_dialog(app: &mut App) {
-  // Local YouTube playlist: same confirm dialog, routed (by the
-  // `youtube:playlist:` prefix in the pending target) to the local file edit
-  // instead of the Spotify API. No snapshot position — removal is by video id.
-  if app.track_table.context == Some(TrackTableContext::YouTubePlaylist) {
-    let Some(playlist_uri) = app.youtube_open_playlist.clone() else {
-      app.set_status_message("No YouTube playlist is open".to_string(), 4);
-      return;
-    };
-    let playlist_name = app
-      .youtube_playlists
-      .iter()
-      .find(|p| p.uri == playlist_uri)
-      .map(|p| p.name.clone())
-      .unwrap_or_else(|| "YouTube playlist".to_string());
-    let Some(track) = app.track_table.tracks.get(app.track_table.selected_index) else {
-      return;
-    };
-    let Some(track_id) = track.id.clone() else {
-      app.set_status_message("Track cannot be edited in playlist".to_string(), 4);
-      return;
-    };
-    let track_name = track.name.clone();
-    app.clear_dialog_state();
-    app.pending_playlist_track_removal = Some(PendingPlaylistTrackRemoval {
-      playlist_id: playlist_uri,
-      playlist_name,
-      track_id,
-      track_name,
-      position: 0, // unused for local YouTube playlists
-    });
-    app.push_navigation_stack(
-      RouteId::Dialog,
-      ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
-    );
-    return;
-  }
-
-  let playlist_context = match current_playlist_target_for_track_table_context(app) {
-    Some(context) => context,
-    None => {
-      app.set_status_message(
-        "Remove only works in selected playlist views".to_string(),
-        4,
-      );
-      return;
-    }
-  };
-
-  let track = match app.track_table.tracks.get(app.track_table.selected_index) {
-    Some(track) => track,
-    None => return,
-  };
-
-  let track_id = match track.id.clone() {
-    Some(id) => id,
-    None => {
-      app.set_status_message("Track cannot be edited in playlist".to_string(), 4);
-      return;
-    }
-  };
-  let track_name = track.name.clone();
-
-  let position = match app
-    .playlist_track_positions
-    .as_ref()
-    .and_then(|positions| positions.get(app.track_table.selected_index))
-    .copied()
+fn handle_recommended_tracks(app: &mut App) {
+  if let Some(track) = app
+    .track_table
+    .tracks
+    .get(app.track_table.selected_index)
+    .cloned()
   {
-    Some(position) => position,
-    None => {
-      app.set_status_message("Cannot resolve track position for removal".to_string(), 4);
-      return;
-    }
+    app.apply(Action::RecommendFromTrack(track));
   };
-
-  app.clear_dialog_state();
-  app.pending_playlist_track_removal = Some(PendingPlaylistTrackRemoval {
-    playlist_id: playlist_context.0,
-    playlist_name: playlist_context.1,
-    track_id,
-    track_name,
-    position,
-  });
-  app.push_navigation_stack(
-    RouteId::Dialog,
-    ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
-  );
 }
 
+/// Play a random track from the table's context. Offsets are computed here so
+/// `apply` stays deterministic.
 fn play_random_song(app: &mut App) {
   if let Some(context) = &app.track_table.context {
     match context {
@@ -252,12 +172,14 @@ fn play_random_song(app: &mut App) {
         let context_id = current_playlist_context_id(app);
         let track_json = current_playlist_total_tracks(app);
 
-        if let Some(val) = track_json {
-          app.dispatch(IoEvent::StartPlayback(
-            context_id,
-            None,
-            Some(rand::random_range(0..val as usize)),
-          ));
+        // The no-id degenerate case (unreachable through normal navigation,
+        // since the table only opens with an id set) is skipped rather than
+        // dispatched as a bare resume with a random offset.
+        if let (Some(uri), Some(val)) = (context_id, track_json) {
+          app.apply(Action::PlayContext {
+            uri,
+            offset: Some(rand::random_range(0..val as usize)),
+          });
         }
       }
       TrackTableContext::RecommendedTracks => {}
@@ -270,11 +192,10 @@ fn play_random_song(app: &mut App) {
           .collect();
         if !playable_ids.is_empty() {
           let rand_idx = rand::random_range(0..playable_ids.len());
-          app.dispatch(IoEvent::StartPlayback(
-            None,
-            Some(playable_ids),
-            Some(rand_idx),
-          ))
+          app.apply(Action::PlayUris {
+            uris: playable_ids,
+            offset: Some(rand_idx),
+          });
         }
       }
       TrackTableContext::AlbumSearch => {}
@@ -289,15 +210,19 @@ fn play_random_song(app: &mut App) {
         }
         if !playable_ids.is_empty() {
           let rand_idx = rand::random_range(0..playable_ids.len());
-          app.dispatch(IoEvent::StartPlayback(
-            None,
-            Some(playable_ids),
-            Some(rand_idx),
-          ));
+          app.apply(Action::PlayUris {
+            uris: playable_ids,
+            offset: Some(rand_idx),
+          });
         }
       }
       TrackTableContext::LocalPlaylist | TrackTableContext::SubsonicPlaylist => {
         // Single-file playback: play one random track from the folder/playlist.
+        // Wire shape changed with the Action conversion: this used to send the
+        // track in the context slot (`StartPlayback(Some(uri), None, None)`).
+        // A one-item URI list is equivalent: the local, Subsonic and YouTube
+        // routers start a one-track queue at offset 0 for both shapes, and the
+        // queue router clears its slot on both.
         let playable_ids: Vec<String> = app
           .track_table
           .tracks
@@ -306,11 +231,10 @@ fn play_random_song(app: &mut App) {
           .collect();
         if !playable_ids.is_empty() {
           let rand_idx = rand::random_range(0..playable_ids.len());
-          app.dispatch(IoEvent::StartPlayback(
-            Some(playable_ids[rand_idx].clone()),
-            None,
-            None,
-          ));
+          app.apply(Action::PlayUris {
+            uris: vec![playable_ids[rand_idx].clone()],
+            offset: None,
+          });
         }
       }
       TrackTableContext::YouTubePlaylist => {
@@ -324,41 +248,13 @@ fn play_random_song(app: &mut App) {
           .collect();
         if !playable_ids.is_empty() {
           let rand_idx = rand::random_range(0..playable_ids.len());
-          app.dispatch(IoEvent::StartPlayback(
-            None,
-            Some(playable_ids),
-            Some(rand_idx),
-          ));
+          app.apply(Action::PlayUris {
+            uris: playable_ids,
+            offset: Some(rand_idx),
+          });
         }
       }
     }
-  };
-}
-
-fn handle_save_track_event(app: &mut App) {
-  let (selected_index, tracks) = (&app.track_table.selected_index, &app.track_table.tracks);
-  if let Some(track) = tracks.get(*selected_index) {
-    if let Some(playable_id) = track.uri.clone() {
-      app.dispatch(IoEvent::ToggleSaveTrack(playable_id));
-    }
-  };
-}
-
-fn handle_recommended_tracks(app: &mut App) {
-  let (selected_index, tracks) = (&app.track_table.selected_index, &app.track_table.tracks);
-  if let Some(track) = tracks.get(*selected_index) {
-    let first_track = track.clone();
-    // NOTE: preserves a pre-existing bug. The previous code fed the track's
-    // full URI ("spotify:track:...") as the seed, which `TrackId::from_id`
-    // rejects, so the whole seed_tracks list collapses to `None` and the
-    // recommendation request goes out unseeded. `TrackInfo::uri` reproduces
-    // that exact URI string; switching to `track.id` (base62) would change
-    // behavior. Fix the seeding separately with its own verification.
-    let track_id_list = track.uri.clone().map(|uri| vec![uri]);
-
-    app.recommendations_context = Some(RecommendationsContext::Song);
-    app.recommendations_seed = first_track.name.clone();
-    app.get_recommendations_for_seed(None, track_id_list, Some(first_track));
   };
 }
 
@@ -386,19 +282,29 @@ fn on_enter(app: &mut App) {
           // If we have a track ID, play it directly within the context
           // This ensures the selected track plays first, even with shuffle on
           if let Some(playable_id) = track_playable_id {
-            app.dispatch(IoEvent::StartPlayback(
-              context_id,
-              Some(vec![playable_id]),
-              Some(0), // Play the first (and only) track in the URIs list
-            ));
-          } else {
+            if let Some(context_uri) = context_id {
+              app.apply(Action::PlayTrackInContext {
+                context: context_uri,
+                track: playable_id,
+              });
+            } else {
+              // Degenerate no-id case: the same context-less event this
+              // path has always sent.
+              app.apply(Action::PlayUris {
+                uris: vec![playable_id],
+                offset: Some(0), // Play the first (and only) track in the URIs list
+              });
+            }
+          } else if let Some(context_uri) = context_id {
             // Fallback to context playback with offset
-            app.dispatch(IoEvent::StartPlayback(
-              context_id,
-              None,
-              app.selected_playlist_track_position(),
-            ));
+            app.apply(Action::PlayContext {
+              uri: context_uri,
+              offset: app.selected_playlist_track_position(),
+            });
           }
+          // The no-id, no-uri degenerate case (unreachable through normal
+          // navigation) is skipped rather than dispatched as a bare resume
+          // with an offset.
         };
       }
       TrackTableContext::RecommendedTracks => {
@@ -415,20 +321,18 @@ fn on_enter(app: &mut App) {
         }
 
         if !playable_ids.is_empty() {
-          app.dispatch(IoEvent::StartPlayback(
-            None,
-            Some(playable_ids),
-            Some(selected_offset.unwrap_or(0)),
-          ));
+          app.apply(Action::PlayUris {
+            uris: playable_ids,
+            offset: Some(selected_offset.unwrap_or(0)),
+          });
         }
       }
       TrackTableContext::SavedTracks => {
         if let Some((all_playable_ids, absolute_offset)) = saved_tracks_playback_request(app) {
-          app.dispatch(IoEvent::StartPlayback(
-            None,
-            Some(all_playable_ids),
-            Some(absolute_offset),
-          ));
+          app.apply(Action::PlayUris {
+            uris: all_playable_ids,
+            offset: Some(absolute_offset),
+          });
         }
       }
       TrackTableContext::AlbumSearch => {}
@@ -447,11 +351,10 @@ fn on_enter(app: &mut App) {
         }
 
         if !playable_ids.is_empty() {
-          app.dispatch(IoEvent::StartPlayback(
-            None,
-            Some(playable_ids),
-            Some(selected_offset.unwrap_or(0)),
-          ));
+          app.apply(Action::PlayUris {
+            uris: playable_ids,
+            offset: Some(selected_offset.unwrap_or(0)),
+          });
         }
       }
       TrackTableContext::LocalPlaylist
@@ -465,11 +368,10 @@ fn on_enter(app: &mut App) {
         if !uris.is_empty() {
           // `selected_index` is into the full track list; the filter above keeps
           // every track (each carries a uri), so the index lines up.
-          app.dispatch(IoEvent::StartPlayback(
-            None,
-            Some(uris),
-            Some(*selected_index),
-          ));
+          app.apply(Action::PlayUris {
+            uris,
+            offset: Some(*selected_index),
+          });
         }
       }
     }
@@ -498,40 +400,6 @@ fn on_queue(app: &mut App) {
 
 fn jump_to_start(app: &mut App) {
   app.track_table.selected_index = 0;
-}
-
-/// The active playlist's base62 id (from the playlist track-table context).
-fn current_playlist_id_static(app: &App) -> Option<String> {
-  app
-    .current_playlist_track_table_id()
-    .map(|id| id.id().to_string())
-}
-
-fn current_playlist_target_for_track_table_context(app: &App) -> Option<(String, String)> {
-  let playlist_id = current_playlist_id_static(app)?;
-  let playlist_name = playlist_name_for_id(app, &playlist_id)?;
-  Some((playlist_id, playlist_name))
-}
-
-fn playlist_name_for_id(app: &App, playlist_id: &str) -> Option<String> {
-  app
-    .all_playlists
-    .iter()
-    .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
-    .map(|playlist| playlist.name.clone())
-    .or_else(|| {
-      app
-        .search_results
-        .playlists
-        .as_ref()
-        .and_then(|playlists| {
-          playlists
-            .items
-            .iter()
-            .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
-        })
-        .map(|playlist| playlist.name.clone())
-    })
 }
 
 /// The active playlist's `spotify:playlist:` context URI, for `StartPlayback`.
@@ -566,6 +434,7 @@ mod tests {
   use crate::core::plugin_api::{PlayableInfo, TrackInfo};
   use crate::core::test_helpers::full_track;
   use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
   use chrono::Utc;
   use rspotify::model::{idtypes::PlaylistId, page::Page, track::SavedTrack};
   use std::sync::mpsc::channel;
@@ -904,6 +773,35 @@ mod tests {
       IoEvent::GetCurrentSavedTracks(Some(offset)) => assert_eq!(offset, 2),
       other => panic!("unexpected event: {:?}", event_name(&other)),
     }
+  }
+
+  #[test]
+  fn next_page_on_saved_tracks_dispatches_without_moving_the_cursor() {
+    let (mut app, rx) = app_with_saved_tracks();
+    let page = saved_tracks_page(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      true,
+    );
+    // Seeded through App methods and a key press, not field writes: the
+    // handler write counter scans this whole file, tests included.
+    app.library.saved_tracks.upsert_page_by_offset(page);
+    app.set_saved_tracks_to_table_continuous();
+    handler(Key::Down, &mut app);
+    assert_eq!(app.track_table.selected_index, 1);
+    assert!(rx.try_recv().is_err(), "a mid-list Down fetches nothing");
+
+    handler(Key::Ctrl('d'), &mut app);
+
+    // next_page fetches but does NOT set pending selection: the cursor
+    // clamps into the loaded rows instead of following into the new page
+    // (that follow is the down-at-last-row path's behavior).
+    assert_eq!(app.pending_track_table_selection, None);
+    match rx.recv().unwrap() {
+      IoEvent::GetCurrentSavedTracks(Some(offset)) => assert_eq!(offset, 2),
+      other => panic!("unexpected event: {:?}", event_name(&other)),
+    }
+    assert_eq!(app.track_table.selected_index, 1);
   }
 
   #[test]

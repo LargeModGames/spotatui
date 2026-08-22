@@ -184,6 +184,136 @@ impl App {
     );
   }
 
+  /// Resolve the track table's current selection and open the
+  /// add-to-playlist picker for it. Silent no-op when no row is selected,
+  /// exactly like the `w` key that has always driven it.
+  pub fn begin_add_track_to_playlist_flow_from_selection(&mut self) {
+    let Some(track) = self.track_table.tracks.get(self.track_table.selected_index) else {
+      return;
+    };
+    let track_id = track.id.clone();
+    let track_name = track.name.clone();
+    self.begin_add_track_to_playlist_flow(track_id, track_name);
+  }
+
+  /// Stage a remove-track-from-playlist confirmation for the track table's
+  /// current selection and push the confirm dialog. Body moved verbatim
+  /// from the track-table handler's `open_remove_from_playlist_dialog`.
+  pub fn begin_remove_track_from_playlist_flow(&mut self) {
+    // Local YouTube playlist: same confirm dialog, routed (by the
+    // `youtube:playlist:` prefix in the pending target) to the local file edit
+    // instead of the Spotify API. No snapshot position — removal is by video id.
+    if self.track_table.context == Some(TrackTableContext::YouTubePlaylist) {
+      let Some(playlist_uri) = self.youtube_open_playlist.clone() else {
+        self.set_status_message("No YouTube playlist is open".to_string(), 4);
+        return;
+      };
+      let playlist_name = self
+        .youtube_playlists
+        .iter()
+        .find(|p| p.uri == playlist_uri)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "YouTube playlist".to_string());
+      let Some(track) = self.track_table.tracks.get(self.track_table.selected_index) else {
+        return;
+      };
+      let Some(track_id) = track.id.clone() else {
+        self.set_status_message("Track cannot be edited in playlist".to_string(), 4);
+        return;
+      };
+      let track_name = track.name.clone();
+      self.clear_dialog_state();
+      self.pending_playlist_track_removal = Some(PendingPlaylistTrackRemoval {
+        playlist_id: playlist_uri,
+        playlist_name,
+        track_id,
+        track_name,
+        position: 0, // unused for local YouTube playlists
+      });
+      self.push_navigation_stack(
+        RouteId::Dialog,
+        ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
+      );
+      return;
+    }
+
+    let playlist_context = match self.current_playlist_removal_target() {
+      Some(context) => context,
+      None => {
+        self.set_status_message(
+          "Remove only works in selected playlist views".to_string(),
+          4,
+        );
+        return;
+      }
+    };
+
+    let track = match self.track_table.tracks.get(self.track_table.selected_index) {
+      Some(track) => track,
+      None => return,
+    };
+
+    let track_id = match track.id.clone() {
+      Some(id) => id,
+      None => {
+        self.set_status_message("Track cannot be edited in playlist".to_string(), 4);
+        return;
+      }
+    };
+    let track_name = track.name.clone();
+
+    let position = match self
+      .playlist_track_positions
+      .as_ref()
+      .and_then(|positions| positions.get(self.track_table.selected_index))
+      .copied()
+    {
+      Some(position) => position,
+      None => {
+        self.set_status_message("Cannot resolve track position for removal".to_string(), 4);
+        return;
+      }
+    };
+
+    self.clear_dialog_state();
+    self.pending_playlist_track_removal = Some(PendingPlaylistTrackRemoval {
+      playlist_id: playlist_context.0,
+      playlist_name: playlist_context.1,
+      track_id,
+      track_name,
+      position,
+    });
+    self.push_navigation_stack(
+      RouteId::Dialog,
+      ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm),
+    );
+  }
+
+  /// The active playlist's (base62 id, name) pair for the removal flow.
+  fn current_playlist_removal_target(&self) -> Option<(String, String)> {
+    let playlist_id = self.current_playlist_track_table_id()?;
+    let playlist_id = playlist_id.id().to_string();
+    let playlist_name = self
+      .all_playlists
+      .iter()
+      .find(|playlist| playlist.id.as_deref() == Some(playlist_id.as_str()))
+      .map(|playlist| playlist.name.clone())
+      .or_else(|| {
+        self
+          .search_results
+          .playlists
+          .as_ref()
+          .and_then(|playlists| {
+            playlists
+              .items
+              .iter()
+              .find(|playlist| playlist.id.as_deref() == Some(playlist_id.as_str()))
+          })
+          .map(|playlist| playlist.name.clone())
+      })?;
+    Some((playlist_id, playlist_name))
+  }
+
   pub fn user_follow_playlist(&mut self) {
     info!("following playlist");
     if let SearchResult {

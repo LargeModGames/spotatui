@@ -219,6 +219,20 @@ impl App {
     }
   }
 
+  /// Switch the active browse source and mirror + persist the choice so the
+  /// selection survives restarts. Browse scope only: never interrupts
+  /// playback (routing goes by URI scheme). Sidebar data loading and any
+  /// view resets stay with the caller.
+  pub fn set_active_source(&mut self, source: Source) {
+    self.active_source = source;
+    self.runtime_state.active_source = source;
+    if let Err(e) = self.save_runtime_state(
+      &crate::core::state::PersistedRuntimeState::active_source(self.runtime_state.active_source),
+    ) {
+      log::warn!("[source] failed to persist active_source: {e}");
+    }
+  }
+
   // The navigation_stack actually only controls the large block to the right of `library` and
   // `playlists`
   pub fn push_navigation_stack(&mut self, next_route_id: RouteId, next_active_block: ActiveBlock) {

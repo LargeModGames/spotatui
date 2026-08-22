@@ -9,6 +9,7 @@
 //!   CJK or emoji prompt keeps its caret in the right place.
 
 use super::common_key_events;
+use crate::core::action::{Action, LibraryTarget};
 use crate::core::app::{ActiveBlock, App, RouteId};
 use crate::infra::dj::setup::{DjSetup, DjSetupChoice, DjSetupStep};
 use crate::infra::dj::{AskDjRequest, DjLine, TurnKind, MAX_BATCH};
@@ -266,36 +267,11 @@ pub fn toggle_auto_queue(app: &mut App) {
 }
 
 /// Open the DJ screen, warming the library index if the filter is already on.
-///
-/// Every entry point goes through here so the crawl is never left to the resolve
-/// step. `behavior.dj_avoid_library: true` seeds the toggle without going through
-/// `toggle_fresh_only`, so without this the first turn of such a session would
-/// crawl inline on the serial IoEvent lane — head-of-line blocking every other
-/// event behind a few seconds of pagination.
+/// The whole consequence lives on `App` (`open_ai_dj_screen`) and is reached
+/// through the shared `Action::OpenLibrary(LibraryTarget::AiDj)` vocabulary,
+/// so every entry point (key, library row) fires the same sequence.
 pub fn open(app: &mut App) {
-  // Pushed only when the DJ is not already the current route, for the reason
-  // `open_picker` documents: a second `RouteId::AiDj` on the stack turns the Esc
-  // that should leave the DJ into one that lands back on it. Reachable with the
-  // DJ already open because focus can be elsewhere — Left to the sidebar, then
-  // the open key or the sidebar's own "AI DJ" row — which is also why focus is
-  // restored rather than left where it was.
-  if app.get_current_route().id == RouteId::AiDj {
-    app.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
-  } else {
-    app.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
-  }
-  // Asked once, on the first visit, and only here because `open` is the single
-  // funnel every entry point goes through. Not in `first_run.rs`: that runs before
-  // the TUI, gated on the absence of client.yml, and would interrogate every user
-  // about coding agents even if they never open the DJ.
-  //
-  // An already-open picker is rebuilt rather than resumed. That state means the user
-  // left the screen by a route the picker's own Esc never saw (a mouse click on the
-  // sidebar), so its rows were detected against a session that has moved on.
-  if app.dj.setup.is_some() || !app.user_config.behavior.dj_is_configured() {
-    open_setup(app);
-  }
-  request_library_index(app);
+  app.apply(Action::OpenLibrary(LibraryTarget::AiDj));
 }
 
 /// Show the picker, whether or not the DJ screen is already open.
@@ -314,7 +290,7 @@ pub fn open_picker(app: &mut App) {
   } else {
     app.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
   }
-  request_library_index(app);
+  app.request_dj_library_index();
   open_setup(app);
 }
 
@@ -549,13 +525,6 @@ fn commit(app: &mut App) {
   persist_dj_setup(app, &message);
 }
 
-/// Kick off the crawl unless it has already run or is running.
-fn request_library_index(app: &mut App) {
-  if app.dj.avoid_library && app.dj.library.is_none() && !app.dj.library_indexing {
-    app.dispatch(IoEvent::DjIndexLibrary);
-  }
-}
-
 /// Toggle "only tracks I do not already have".
 ///
 /// Switching it on kicks off the playlist crawl straight away rather than waiting
@@ -566,7 +535,7 @@ pub fn toggle_fresh_only(app: &mut App) {
   app.dj.avoid_library = !app.dj.avoid_library;
   if app.dj.avoid_library {
     app.set_status_message("DJ: only tracks you don't already have", 4);
-    request_library_index(app);
+    app.request_dj_library_index();
   } else {
     app.set_status_message("DJ: recommending from everything", 4);
   }

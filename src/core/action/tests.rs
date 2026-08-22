@@ -979,3 +979,817 @@ mod dj_actions {
     assert_eq!(app.dj.vibe, None);
   }
 }
+
+// --- pagination, open family, source-routed search, library rows, dialogs ---
+
+use super::{LibraryTarget, ListTarget, OpenTarget};
+use crate::core::app::{ActiveBlock, DialogContext, PendingTrackSelection, RecommendationsContext};
+use crate::core::pagination::Paged;
+use crate::core::plugin_api::{PlaylistInfo, TrackInfo};
+use crate::core::source::Source;
+use crate::core::test_helpers::{full_track, playlist_info};
+
+fn track(id: &str, name: &str) -> TrackInfo {
+  TrackInfo::from(&full_track(id, name))
+}
+
+fn track_page(offset: u32, ids: &[&str], has_next: bool) -> Paged<TrackInfo> {
+  Paged {
+    items: ids
+      .iter()
+      .enumerate()
+      .map(|(i, id)| track(id, &format!("Track {offset}-{i}")))
+      .collect(),
+    offset,
+    limit: ids.len() as u32,
+    total: 4,
+    next: has_next.then(|| "https://example.com/next".to_string()),
+    previous: None,
+  }
+}
+
+/// The playlist track table's page type carries snapshot positions.
+fn playlist_items_page(has_next: bool) -> Paged<(u32, crate::core::plugin_api::PlayableInfo)> {
+  Paged {
+    items: vec![(
+      0,
+      crate::core::plugin_api::PlayableInfo::Track(track("0000000000000000000001", "T1")),
+    )],
+    offset: 0,
+    limit: 1,
+    total: 4,
+    next: has_next.then(|| "https://example.com/next".to_string()),
+    previous: None,
+  }
+}
+
+// --- LoadMore ---
+
+#[test]
+fn load_more_playlist_tracks_dispatches_the_next_page_fetch() {
+  let (mut app, rx) = app_with_channel();
+  app.playlist_track_table_id = Some(
+    rspotify::model::idtypes::PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static(),
+  );
+  let page = playlist_items_page(true);
+  app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
+  app.playlist_tracks = Some(page.clone());
+  app.playlist_track_pages.upsert_page_by_offset(page);
+
+  app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
+
+  match rx.try_recv() {
+    Ok(IoEvent::GetPlaylistItems(id, offset)) => {
+      assert_eq!(id, "37i9dQZF1DX4WYpdgoIcn6");
+      assert_eq!(offset, 1);
+    }
+    _other => panic!("expected GetPlaylistItems"),
+  }
+}
+
+#[test]
+fn load_more_playlist_tracks_is_a_noop_under_an_active_filter() {
+  let (mut app, rx) = app_with_channel();
+  app.playlist_track_table_id = Some(
+    rspotify::model::idtypes::PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static(),
+  );
+  let page = playlist_items_page(true);
+  app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
+  app.playlist_tracks = Some(page.clone());
+  app.playlist_track_pages.upsert_page_by_offset(page);
+  app.active_playlist_track_filter = Some("query".to_string());
+
+  app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
+
+  assert!(rx.try_recv().is_err(), "filtered playlists never paginate");
+}
+
+#[test]
+fn load_more_saved_tracks_fetches_the_missing_continuous_page() {
+  let (mut app, rx) = app_with_channel();
+  let page = track_page(
+    0,
+    &["0000000000000000000001", "0000000000000000000002"],
+    true,
+  );
+  app.library.saved_tracks.upsert_page_by_offset(page);
+
+  app.apply(Action::LoadMore(ListTarget::SavedTracks));
+
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetCurrentSavedTracks(Some(2)))
+  ));
+}
+
+#[test]
+fn load_more_saved_tracks_is_a_noop_at_the_end_of_the_list() {
+  let (mut app, rx) = app_with_channel();
+  let page = track_page(0, &["0000000000000000000001"], false);
+  app.library.saved_tracks.upsert_page_by_offset(page);
+
+  app.apply(Action::LoadMore(ListTarget::SavedTracks));
+
+  assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn load_more_does_not_touch_pending_track_table_selection() {
+  let (mut app, rx) = app_with_channel();
+  let page = track_page(0, &["0000000000000000000001"], false);
+  app.library.saved_tracks.upsert_page_by_offset(page);
+  app.pending_track_table_selection = Some(PendingTrackSelection::Index(9));
+
+  app.apply(Action::LoadMore(ListTarget::SavedTracks));
+
+  assert_eq!(
+    app.pending_track_table_selection,
+    Some(PendingTrackSelection::Index(9)),
+    "the cursor-follow side effect belongs to the caller, not to LoadMore"
+  );
+  assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn load_more_saved_tracks_does_not_refetch_an_in_flight_page() {
+  let (mut app, rx) = app_with_channel();
+  let page = track_page(
+    0,
+    &["0000000000000000000001", "0000000000000000000002"],
+    true,
+  );
+  app.library.saved_tracks.upsert_page_by_offset(page);
+
+  app.apply(Action::LoadMore(ListTarget::SavedTracks));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetCurrentSavedTracks(Some(2)))
+  ));
+
+  // The fetch marked offset 2 as in flight; a second apply must not
+  // re-dispatch it (the prefetch dedupe the arm inherits).
+  app.apply(Action::LoadMore(ListTarget::SavedTracks));
+  assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn load_more_playlist_tracks_does_not_refetch_an_in_flight_page() {
+  let (mut app, rx) = app_with_channel();
+  app.playlist_track_table_id = Some(
+    rspotify::model::idtypes::PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static(),
+  );
+  app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
+  let page = playlist_items_page(true);
+  app.playlist_tracks = Some(page.clone());
+  app.playlist_track_pages.upsert_page_by_offset(page);
+
+  app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetPlaylistItems(_, 1))));
+
+  app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
+  assert!(
+    rx.try_recv().is_err(),
+    "the in-flight page is not refetched"
+  );
+}
+
+// --- Open family ---
+
+#[test]
+fn open_album_dispatches_get_album() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::Album(
+    "5gzLOflH95LkKYE6XSXE9k".to_string(),
+  )));
+
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetAlbum(id)) if id == "5gzLOflH95LkKYE6XSXE9k"
+  ));
+}
+
+#[test]
+fn open_artist_resolves_the_country_and_dispatches_get_artist() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::Artist {
+    id: "2ye2Wgw4gimLv2eAKyk1NB".to_string(),
+    name: String::new(),
+  }));
+
+  match rx.try_recv() {
+    Ok(IoEvent::GetArtist(id, name, country)) => {
+      assert_eq!(id, "2ye2Wgw4gimLv2eAKyk1NB");
+      assert_eq!(name, "");
+      assert_eq!(country, None, "no user loaded, so no market");
+    }
+    _other => panic!("expected GetArtist"),
+  }
+}
+
+#[test]
+fn open_track_album_dispatches_get_album_for_track() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::TrackAlbum(
+    "10igKaIKsSB6ZnWxPxPvKO".to_string(),
+  )));
+
+  assert!(
+    matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetAlbumForTrack(id)) if id == "10igKaIKsSB6ZnWxPxPvKO"
+    ),
+    "the track id rides through unchanged"
+  );
+}
+
+#[test]
+fn open_show_dispatches_get_show() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::Show(
+    "3aNsrV6lkzmcU1w8u8kA7N".to_string(),
+  )));
+
+  assert!(
+    matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetShow(id)) if id == "3aNsrV6lkzmcU1w8u8kA7N"
+    ),
+    "the show id rides through unchanged"
+  );
+}
+
+#[test]
+fn open_playlist_opens_the_track_table_in_the_playlists_context() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::Playlist {
+    id: "37i9dQZF1DX4WYpdgoIcn6".to_string(),
+    from_search: false,
+  }));
+
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::MyPlaylists)
+  );
+  assert_eq!(
+    app.pending_playlist_open.as_deref(),
+    Some("37i9dQZF1DX4WYpdgoIcn6")
+  );
+  match rx.try_recv() {
+    Ok(IoEvent::GetPlaylistItems(id, offset)) => {
+      assert_eq!(id, "37i9dQZF1DX4WYpdgoIcn6");
+      assert_eq!(offset, 0);
+    }
+    _other => panic!("expected GetPlaylistItems"),
+  }
+}
+
+#[test]
+fn open_playlist_from_search_uses_the_search_context() {
+  let (mut app, _rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::Playlist {
+    id: "37i9dQZF1DX4WYpdgoIcn6".to_string(),
+    from_search: true,
+  }));
+
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::PlaylistSearch)
+  );
+}
+
+#[test]
+fn open_playlist_with_an_unparseable_id_is_a_silent_noop() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::Playlist {
+    id: "not a base62 id!".to_string(),
+    from_search: false,
+  }));
+
+  assert!(
+    rx.try_recv().is_err(),
+    "the opening paths drop bad ids silently"
+  );
+  assert_eq!(app.get_current_route().id, RouteId::Home);
+}
+
+#[test]
+fn open_playlist_twice_while_pending_open_fetches_only_once() {
+  let (mut app, rx) = app_with_channel();
+
+  let target = OpenTarget::Playlist {
+    id: "37i9dQZF1DX4WYpdgoIcn6".to_string(),
+    from_search: false,
+  };
+  app.apply(Action::Open(target.clone()));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetPlaylistItems(_, 0))));
+
+  // Same open already in flight: no second fetch, only the screen shown.
+  app.apply(Action::Open(target));
+  assert!(rx.try_recv().is_err());
+}
+
+// --- SearchActiveSource (Action::Search stays Spotify-only) ---
+
+#[test]
+fn search_active_source_routes_by_the_active_source() {
+  let (mut app, rx) = app_with_channel();
+  let query = "coltrane".to_string();
+
+  app.active_source = Source::Subsonic;
+  app.apply(Action::SearchActiveSource(query.clone()));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetSubsonicSearchResults(q)) if q == "coltrane"
+  ));
+
+  app.active_source = Source::Radio;
+  app.apply(Action::SearchActiveSource(query.clone()));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetRadioSearchResults(q)) if q == "coltrane"
+  ));
+
+  app.active_source = Source::YouTube;
+  app.apply(Action::SearchActiveSource(query.clone()));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetYouTubeSearchResults(q)) if q == "coltrane"
+  ));
+
+  app.active_source = Source::Spotify;
+  app.apply(Action::SearchActiveSource(query.clone()));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetSearchResults(q, _)) if q == "coltrane"
+  ));
+
+  // Local falls into the Spotify branch, matching the search input's
+  // if-chain, which has no Local branch.
+  app.active_source = Source::Local;
+  app.apply(Action::SearchActiveSource(query));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetSearchResults(_, None))
+  ));
+}
+
+#[test]
+fn search_active_source_resolves_a_loaded_users_country() {
+  let (mut app, rx) = app_with_channel();
+  app.user = Some(crate::core::app::UserInfo {
+    id: "user1".to_string(),
+    display_name: None,
+    country: Some("US".to_string()),
+  });
+  app.active_source = Source::Spotify;
+
+  app.apply(Action::SearchActiveSource("coltrane".to_string()));
+
+  assert!(
+    matches!(rx.try_recv(), Ok(IoEvent::GetSearchResults(_, Some(_)))),
+    "the loaded user's market rides along"
+  );
+}
+
+#[test]
+fn search_stays_on_the_spotify_catalog_when_browsing_other_sources() {
+  let (mut app, rx) = app_with_channel();
+  app.active_source = Source::YouTube;
+
+  app.apply(Action::Search("daft punk".to_string()));
+
+  // Lua spotatui.search contracted the Web API search; browsing scope does
+  // not reroute it (only SearchActiveSource does).
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetSearchResults(q, None)) if q == "daft punk"
+  ));
+}
+
+#[test]
+fn search_playlist_tracks_records_the_pending_search_and_dispatches() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::SearchPlaylistTracks {
+    playlist_id: "37i9dQZF1DX4WYpdgoIcn6".to_string(),
+    query: "queen rock".to_string(),
+  });
+
+  assert_eq!(
+    app.pending_playlist_track_search.as_deref(),
+    Some("queen rock")
+  );
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Searching playlist for \"queen rock\"...")
+  );
+  match rx.try_recv() {
+    Ok(IoEvent::SearchPlaylistTracks(id, query)) => {
+      assert_eq!(id, "37i9dQZF1DX4WYpdgoIcn6");
+      assert_eq!(query, "queen rock");
+    }
+    _other => panic!("expected SearchPlaylistTracks"),
+  }
+}
+
+// --- playback starts ---
+
+#[test]
+fn play_track_in_context_dispatches_the_combined_start() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::PlayTrackInContext {
+    context: "spotify:playlist:p1".to_string(),
+    track: "spotify:track:t1".to_string(),
+  });
+
+  match rx.try_recv() {
+    Ok(IoEvent::StartPlayback(context, uris, offset)) => {
+      assert_eq!(context.as_deref(), Some("spotify:playlist:p1"));
+      assert_eq!(uris, Some(vec!["spotify:track:t1".to_string()]));
+      assert_eq!(offset, Some(0));
+    }
+    _other => panic!("expected StartPlayback"),
+  }
+}
+
+#[test]
+fn recommend_from_track_sets_song_context_and_keeps_the_unseeded_request() {
+  let (mut app, rx) = app_with_channel();
+  let seed = track("4uLU6hMCjMI75M1A2tKUQC", "Song A");
+
+  app.apply(Action::RecommendFromTrack(seed.clone()));
+
+  assert_eq!(
+    app.recommendations_context,
+    Some(RecommendationsContext::Song)
+  );
+  assert_eq!(app.recommendations_seed, "Song A");
+  match rx.try_recv() {
+    Ok(IoEvent::GetRecommendationsForSeed(seed_artists, seed_tracks, first_track, country)) => {
+      assert!(seed_artists.is_none());
+      // Preserved historic bug: the full URI is fed as the seed and the
+      // request goes out unseeded. Fixing it is a separate verified change.
+      assert_eq!(seed_tracks, Some(vec![seed.uri.clone().unwrap()]));
+      assert_eq!(
+        (*first_track).as_ref().map(|t| t.name.as_str()),
+        Some("Song A")
+      );
+      assert_eq!(country, None);
+    }
+    _other => panic!("expected GetRecommendationsForSeed"),
+  }
+}
+
+#[test]
+fn recommend_from_track_without_a_uri_still_carries_the_context_row() {
+  let (mut app, rx) = app_with_channel();
+  let mut seed = track("4uLU6hMCjMI75M1A2tKUQC", "Local Song");
+  seed.uri = None;
+
+  app.apply(Action::RecommendFromTrack(seed));
+
+  assert_eq!(
+    app.recommendations_context,
+    Some(RecommendationsContext::Song)
+  );
+  assert_eq!(app.recommendations_seed, "Local Song");
+  match rx.try_recv() {
+    Ok(IoEvent::GetRecommendationsForSeed(seed_artists, seed_tracks, first_track, _)) => {
+      assert!(seed_artists.is_none());
+      assert!(seed_tracks.is_none(), "no uri means no seed list");
+      assert_eq!(
+        (*first_track).as_ref().map(|t| t.name.as_str()),
+        Some("Local Song")
+      );
+    }
+    _other => panic!("expected GetRecommendationsForSeed"),
+  }
+}
+
+// --- dialogs ---
+
+#[test]
+fn open_add_track_dialog_without_a_selection_is_a_noop() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenAddTrackDialog);
+
+  assert!(rx.try_recv().is_err());
+  assert!(app.pending_playlist_track_add.is_none());
+}
+
+#[test]
+fn open_add_track_dialog_stages_the_selected_row_for_the_picker() {
+  let (mut app, rx) = app_with_channel();
+  app.active_source = Source::YouTube;
+  app.youtube_playlists = vec![PlaylistInfo {
+    uri: "youtube:playlist:y1".to_string(),
+    ..playlist_info("y1", "Local List", "owner", false)
+  }];
+  app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
+  app.track_table.selected_index = 0;
+
+  app.apply(Action::OpenAddTrackDialog);
+
+  assert_eq!(
+    app.get_current_route().active_block,
+    ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+  );
+  let pending = app
+    .pending_playlist_track_add
+    .as_ref()
+    .expect("staged for the picker");
+  assert_eq!(pending.track_name, "Track 1");
+  assert!(
+    rx.try_recv().is_err(),
+    "the YouTube path fetches nothing when playlists exist"
+  );
+}
+
+#[test]
+fn open_add_track_dialog_without_destinations_requests_them() {
+  let (mut app, rx) = app_with_channel();
+  app.active_source = Source::Spotify;
+  app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
+  app.track_table.selected_index = 0;
+
+  app.apply(Action::OpenAddTrackDialog);
+
+  // No user profile and no playlists loaded yet: the flow fetches both
+  // first and tells the user to retry.
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetUser)));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetPlaylists)));
+  assert!(app.pending_playlist_track_add.is_none());
+}
+
+#[test]
+fn open_remove_track_dialog_stages_the_spotify_removal_with_position() {
+  let (mut app, rx) = app_with_channel();
+  app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
+  app.playlist_track_table_id = Some(
+    rspotify::model::idtypes::PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static(),
+  );
+  app.all_playlists = vec![playlist_info(
+    "37i9dQZF1DX4WYpdgoIcn6",
+    "My List",
+    "owner",
+    false,
+  )];
+  app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
+  app.track_table.selected_index = 0;
+  app.playlist_track_positions = Some(vec![7]);
+
+  app.apply(Action::OpenRemoveTrackDialog);
+
+  let pending = app
+    .pending_playlist_track_removal
+    .as_ref()
+    .expect("staged removal");
+  assert_eq!(pending.playlist_name, "My List");
+  assert_eq!(pending.track_id, "0000000000000000000001");
+  assert_eq!(pending.position, 7);
+  assert_eq!(
+    app.get_current_route().active_block,
+    ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm)
+  );
+  assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn open_remove_track_dialog_without_a_position_reports_an_error() {
+  let (mut app, rx) = app_with_channel();
+  app.track_table.context = Some(crate::core::app::TrackTableContext::MyPlaylists);
+  app.playlist_track_table_id = Some(
+    rspotify::model::idtypes::PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static(),
+  );
+  app.all_playlists = vec![playlist_info(
+    "37i9dQZF1DX4WYpdgoIcn6",
+    "My List",
+    "owner",
+    false,
+  )];
+  app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
+  app.track_table.selected_index = 0;
+
+  app.apply(Action::OpenRemoveTrackDialog);
+
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Cannot resolve track position for removal"),
+  );
+  assert!(app.pending_playlist_track_removal.is_none());
+  assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn open_remove_track_dialog_youtube_routes_the_local_edit() {
+  let (mut app, rx) = app_with_channel();
+  app.track_table.context = Some(crate::core::app::TrackTableContext::YouTubePlaylist);
+  app.youtube_open_playlist = Some("youtube:playlist:y1".to_string());
+  app.youtube_playlists = vec![PlaylistInfo {
+    uri: "youtube:playlist:y1".to_string(),
+    ..playlist_info("y1", "Local List", "owner", false)
+  }];
+  app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
+  app.track_table.selected_index = 0;
+
+  app.apply(Action::OpenRemoveTrackDialog);
+
+  let pending = app
+    .pending_playlist_track_removal
+    .as_ref()
+    .expect("staged local edit");
+  assert_eq!(pending.playlist_id, "youtube:playlist:y1");
+  assert_eq!(pending.position, 0, "unused for local YouTube playlists");
+  assert_eq!(
+    app.get_current_route().active_block,
+    ActiveBlock::Dialog(DialogContext::RemoveTrackFromPlaylistConfirm)
+  );
+  assert!(rx.try_recv().is_err());
+}
+
+// --- library sections ---
+
+#[test]
+fn open_library_stats_marks_loading_dispatches_and_pushes() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenLibrary(LibraryTarget::Stats));
+
+  assert!(app.stats_loading);
+  assert_eq!(app.get_current_route().id, RouteId::Stats);
+  let expected_period = app.stats_period;
+  assert!(
+    matches!(
+      rx.try_recv(),
+      Ok(IoEvent::LoadListeningStats(period)) if period == expected_period
+    ),
+    "the selected stats period rides along"
+  );
+}
+
+#[test]
+fn open_library_recently_played_pushes_before_the_data_arrives() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenLibrary(LibraryTarget::RecentlyPlayed));
+
+  // The row pushes immediately; only the global navigate binding defers
+  // the push to the network result.
+  assert_eq!(app.get_current_route().id, RouteId::RecentlyPlayed);
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetRecentlyPlayed)));
+}
+
+#[test]
+fn open_library_friends_first_open_fetches_code_and_list() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenLibrary(LibraryTarget::Friends));
+
+  assert_eq!(app.get_current_route().id, RouteId::Friends);
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetFriendCode)));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetFriends)));
+}
+
+#[test]
+fn open_library_friends_skips_fetched_state_on_reopen() {
+  let (mut app, rx) = app_with_channel();
+  app.friend_code = Some("code".to_string());
+  app.friends_loading = true;
+
+  app.apply(Action::OpenLibrary(LibraryTarget::Friends));
+
+  assert_eq!(app.get_current_route().id, RouteId::Friends);
+  assert!(
+    rx.try_recv().is_err(),
+    "nothing refetches once loaded/loading"
+  );
+}
+
+#[test]
+fn open_library_rows_push_their_routes_and_fetch() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenLibrary(LibraryTarget::Discover));
+  assert_eq!(app.get_current_route().id, RouteId::Discover);
+  assert!(rx.try_recv().is_err());
+
+  app.apply(Action::OpenLibrary(LibraryTarget::Albums));
+  assert_eq!(app.get_current_route().id, RouteId::AlbumList);
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetCurrentUserSavedAlbums(None))
+  ));
+
+  app.apply(Action::OpenLibrary(LibraryTarget::Artists));
+  assert_eq!(app.get_current_route().id, RouteId::Artists);
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetFollowedArtists(None))
+  ));
+
+  app.apply(Action::OpenLibrary(LibraryTarget::Podcasts));
+  assert_eq!(app.get_current_route().id, RouteId::Podcasts);
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetCurrentUserSavedShows(None))
+  ));
+}
+
+#[cfg(all(test, feature = "local-files"))]
+#[test]
+fn open_library_local_files_pushes_the_browser_route() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenLibrary(LibraryTarget::LocalFiles));
+
+  assert_eq!(app.get_current_route().id, RouteId::LocalBrowser);
+  assert!(rx.try_recv().is_err());
+}
+
+#[cfg(all(test, feature = "ai-dj"))]
+#[test]
+fn open_library_ai_dj_opens_the_screen_through_app() {
+  let (mut app, _rx) = app_with_channel();
+
+  app.apply(Action::OpenLibrary(LibraryTarget::AiDj));
+
+  assert_eq!(app.get_current_route().id, RouteId::AiDj);
+}
+
+#[test]
+fn open_library_liked_songs_resets_the_cache_and_fetches() {
+  let (mut app, rx) = app_with_channel();
+  let page = track_page(0, &["0000000000000000000001"], false);
+  app.library.saved_tracks.upsert_page_by_offset(page);
+
+  app.apply(Action::OpenLibrary(LibraryTarget::LikedSongs));
+
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  assert!(app.library.saved_tracks.pages.is_empty(), "cache reset");
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetCurrentSavedTracks(None))
+  ));
+}
+
+#[test]
+fn library_target_names_round_trip_and_cover_every_sidebar_row() {
+  for target in LibraryTarget::ALL {
+    assert_eq!(LibraryTarget::from_name(target.name()), Some(target));
+  }
+  // Every sidebar label resolves to a DISTINCT target: this is the
+  // load-bearing invariant (name() must equal the library_options()
+  // strings, or the handler's name resolution remaps rows).
+  let options = crate::core::app::library_options();
+  let mut resolved = Vec::new();
+  for label in options {
+    let target = LibraryTarget::from_name(label)
+      .unwrap_or_else(|| panic!("sidebar row {label} has no LibraryTarget"));
+    assert!(!resolved.contains(&target), "duplicate label {label}");
+    resolved.push(target);
+  }
+  assert_eq!(LibraryTarget::from_name("no such row"), None);
+}
+
+// --- SelectSource ---
+
+#[test]
+fn select_source_flips_scope_mirrors_runtime_state_and_persists() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+
+  app.apply(Action::SelectSource(Source::Local));
+
+  assert_eq!(app.active_source, Source::Local);
+  assert_eq!(app.runtime_state.active_source, Source::Local);
+  let written = std::fs::read_to_string(dir.path().join("state.yml")).unwrap();
+  assert!(
+    written.contains("active_source") && written.contains("Local"),
+    "sparse patch persisted the choice"
+  );
+  assert!(
+    rx.try_recv().is_err(),
+    "sidebar loading stays with the caller"
+  );
+}

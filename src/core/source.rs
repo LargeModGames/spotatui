@@ -23,6 +23,7 @@
 
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, PlaylistInfo, SearchResults, TrackInfo};
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 /// The source the UI is currently scoped to — which catalog the sidebar, search
 /// and capability gating reflect.
@@ -35,7 +36,11 @@ use anyhow::Result;
 /// build (including the slim `telemetry`-only CI build) so handlers and UI code
 /// never need `#[cfg]`. Only the per-source *data loading* is gated behind that
 /// source's feature (`local-files`, `subsonic`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+///
+/// The serde derives are the action-vocabulary wire shape; the derived unit-
+/// variant strings coincide with the `to_config_str()` tokens, while the
+/// `state.yml` persistence keeps its own lenient hand-written helpers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum Source {
   #[default]
   Spotify,

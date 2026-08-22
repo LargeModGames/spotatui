@@ -274,8 +274,9 @@ directly, and TUI handlers adopt it as the conversion sub-PRs land
   identity (URIs, ids, names), never by list ordinal.
 - Every arm delegates to the same ownership-aware `App` method the
   equivalent keybinding uses. Playback starts go through
-  `App::start_playback_uris` / `start_playback_context` - never a
-  hand-built `IoEvent::StartPlayback` in an arm.
+  `App::start_playback_uris` / `start_playback_context` /
+  `start_playback_track_in_context` - never a hand-built
+  `IoEvent::StartPlayback` in an arm.
 - No wildcard match arm anywhere under `src/core/action/`:
   `wildcard_arms_in_action_tree` is pinned at 0 by a raw text scan that
   includes tests, comments, and string literals. Write catch-all test arms

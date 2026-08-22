@@ -57,6 +57,9 @@ impl App {
       }
       Action::PlayUris { uris, offset } => self.start_playback_uris(uris, offset),
       Action::PlayContext { uri, offset } => self.start_playback_context(uri, offset),
+      Action::PlayTrackInContext { context, track } => {
+        self.start_playback_track_in_context(context, track);
+      }
       Action::TransferPlayback { device_id, persist } => {
         self.dispatch(IoEvent::TransferPlaybackToDevice(device_id, persist));
       }
@@ -64,6 +67,28 @@ impl App {
       Action::Search(query) => {
         let country = self.get_user_country();
         self.dispatch(IoEvent::GetSearchResults(query, country));
+      }
+      Action::SearchActiveSource(query) => match self.active_source {
+        crate::core::source::Source::Subsonic => {
+          self.dispatch(IoEvent::GetSubsonicSearchResults(query));
+        }
+        crate::core::source::Source::Radio => {
+          self.dispatch(IoEvent::GetRadioSearchResults(query));
+        }
+        crate::core::source::Source::YouTube => {
+          self.dispatch(IoEvent::GetYouTubeSearchResults(query));
+        }
+        // Spotify and Local both land on the Web API search, exactly like
+        // the search input's if-chain (which has no Local branch).
+        crate::core::source::Source::Spotify | crate::core::source::Source::Local => {
+          let country = self.get_user_country();
+          self.dispatch(IoEvent::GetSearchResults(query, country));
+        }
+      },
+      Action::SearchPlaylistTracks { playlist_id, query } => {
+        self.pending_playlist_track_search = Some(query.clone());
+        self.set_status_message(format!("Searching playlist for \"{query}\"..."), 60);
+        self.dispatch(IoEvent::SearchPlaylistTracks(playlist_id, query));
       }
       Action::CreatePlaylist { name, track_uris } => {
         self.dispatch(IoEvent::CreateNewPlaylist(name, track_uris));
@@ -113,10 +138,38 @@ impl App {
       Action::Back => {
         self.pop_navigation_stack();
       }
+      Action::LoadMore(target) => match target {
+        super::ListTarget::PlaylistTracks => self.get_playlist_tracks_next(),
+        super::ListTarget::SavedTracks => self.get_current_user_saved_tracks_next(),
+      },
+      Action::Open(target) => match target {
+        super::OpenTarget::Album(id) => self.dispatch(IoEvent::GetAlbum(id)),
+        super::OpenTarget::Artist { id, name } => self.get_artist(id, name),
+        super::OpenTarget::Playlist { id, from_search } => {
+          // Same silent no-op on an unparseable id as today's opening paths.
+          if let Some(playlist_id) = crate::infra::network::ids::playlist_id(&id) {
+            let context = if from_search {
+              crate::core::app::TrackTableContext::PlaylistSearch
+            } else {
+              crate::core::app::TrackTableContext::MyPlaylists
+            };
+            self.open_playlist_tracks(playlist_id, context);
+          }
+        }
+        super::OpenTarget::Show(id) => self.dispatch(IoEvent::GetShow(id)),
+        super::OpenTarget::TrackAlbum(track_id) => {
+          self.dispatch(IoEvent::GetAlbumForTrack(track_id));
+        }
+      },
+      Action::OpenLibrary(target) => self.open_library_section(target),
+      Action::SelectSource(source) => self.set_active_source(source),
+      Action::OpenAddTrackDialog => self.begin_add_track_to_playlist_flow_from_selection(),
+      Action::OpenRemoveTrackDialog => self.begin_remove_track_from_playlist_flow(),
       Action::JumpToAlbum => self.jump_to_album(),
       Action::JumpToArtist => self.jump_to_artist_album(),
       Action::JumpToContext => self.jump_to_context(),
       Action::GenerateRecap => self.generate_recap(),
+      Action::RecommendFromTrack(track) => self.load_recommendations_for_track(track),
       Action::SetPlaybarSegment { plugin, text } => match text {
         Some(t) => {
           self.plugin_playbar_segments.insert(plugin, t);

@@ -64,4 +64,21 @@ impl App {
     let user_country = self.get_user_country();
     self.dispatch(IoEvent::GetRecommendationsForTrackId(id, user_country));
   }
+
+  /// Seed the track-radio recommendations flow from one track: set the Song
+  /// context, record the seed label, and fetch recommendations for it.
+  ///
+  /// NOTE: preserves a pre-existing bug. The historic handler fed the
+  /// track's full URI ("spotify:track:...") as the seed, which
+  /// `TrackId::from_id` rejects, so the whole seed_tracks list collapses to
+  /// `None` and the recommendation request goes out unseeded.
+  /// `TrackInfo::uri` reproduces that exact URI string; switching to
+  /// `track.id` (base62) would change behavior. Fix the seeding separately
+  /// with its own verification.
+  pub fn load_recommendations_for_track(&mut self, track: TrackInfo) {
+    let seed_tracks = track.uri.clone().map(|uri| vec![uri]);
+    self.recommendations_context = Some(RecommendationsContext::Song);
+    self.recommendations_seed = track.name.clone();
+    self.get_recommendations_for_seed(None, seed_tracks, Some(track));
+  }
 }
