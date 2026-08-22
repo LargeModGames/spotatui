@@ -1,7 +1,7 @@
 extern crate unicode_width;
 
+use crate::core::action::{Action, OpenTarget};
 use crate::core::app::{ActiveBlock, App, InputContext, RouteId};
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use rspotify::prelude::Id;
 use std::convert::TryInto;
@@ -123,17 +123,9 @@ fn process_input(app: &mut App, input: String) {
     return;
   }
 
-  // Default fallback behavior: treat the input as a raw search phrase, routed to
-  // the active source's catalog.
-  if app.active_source == crate::core::source::Source::Subsonic {
-    app.dispatch(IoEvent::GetSubsonicSearchResults(input));
-  } else if app.active_source == crate::core::source::Source::Radio {
-    app.dispatch(IoEvent::GetRadioSearchResults(input));
-  } else if app.active_source == crate::core::source::Source::YouTube {
-    app.dispatch(IoEvent::GetYouTubeSearchResults(input));
-  } else {
-    app.dispatch(IoEvent::GetSearchResults(input, app.get_user_country()));
-  }
+  // Default fallback behavior: treat the input as a raw search phrase, routed
+  // to the active source's catalog.
+  app.apply(Action::SearchActiveSource(input));
   app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
   // push_navigation_stack is a no-op when the Search route is already on top, which
   // otherwise leaves focus trapped in the input box. Force focus onto the results so
@@ -155,12 +147,10 @@ fn process_playlist_track_search(app: &mut App, input: String) {
   }
 
   if let Some(playlist_id) = app.current_playlist_track_table_id() {
-    app.pending_playlist_track_search = Some(query.clone());
-    app.set_status_message(format!("Searching playlist for \"{query}\"..."), 60);
-    app.dispatch(IoEvent::SearchPlaylistTracks(
-      playlist_id.id().to_string(),
+    app.apply(Action::SearchPlaylistTracks {
+      playlist_id: playlist_id.id().to_string(),
       query,
-    ));
+    });
   }
 }
 
@@ -180,36 +170,37 @@ fn spotify_resource_id(base: &str, uri: &str, sep: &str, resource_type: &str) ->
 fn attempt_process_uri(app: &mut App, input: &str, base: &str, sep: &str) -> bool {
   let (album_id, matched) = spotify_resource_id(base, input, sep, "album");
   if matched {
-    app.dispatch(IoEvent::GetAlbum(album_id));
+    app.apply(Action::Open(OpenTarget::Album(album_id)));
     return true;
   }
 
   let (artist_id, matched) = spotify_resource_id(base, input, sep, "artist");
   if matched {
-    app.get_artist(artist_id, "".to_string());
+    app.apply(Action::Open(OpenTarget::Artist {
+      id: artist_id,
+      name: String::new(),
+    }));
     return true;
   }
 
   let (track_id, matched) = spotify_resource_id(base, input, sep, "track");
   if matched {
-    app.dispatch(IoEvent::GetAlbumForTrack(track_id));
+    app.apply(Action::Open(OpenTarget::TrackAlbum(track_id)));
     return true;
   }
 
   let (playlist_id, matched) = spotify_resource_id(base, input, sep, "playlist");
   if matched {
-    if let Some(playlist_id) = crate::infra::network::ids::playlist_id(&playlist_id) {
-      app.open_playlist_tracks(
-        playlist_id,
-        crate::core::app::TrackTableContext::MyPlaylists,
-      );
-    }
+    app.apply(Action::Open(OpenTarget::Playlist {
+      id: playlist_id,
+      from_search: false,
+    }));
     return true;
   }
 
   let (show_id, matched) = spotify_resource_id(base, input, sep, "show");
   if matched {
-    app.dispatch(IoEvent::GetShow(show_id));
+    app.apply(Action::Open(OpenTarget::Show(show_id)));
     return true;
   }
 
@@ -226,6 +217,7 @@ fn compute_character_width(character: char) -> u16 {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::infra::network::IoEvent;
   use rspotify::model::idtypes::PlaylistId;
   use rspotify::prelude::Id;
 

@@ -32,6 +32,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::plugin_api::{PluginPopup, PluginScreenContent, TrackInfo};
+use crate::core::source::Source;
 use crate::core::theme::{Color, ThemeField};
 
 mod apply;
@@ -93,6 +94,14 @@ pub enum Action {
     uri: String,
     offset: Option<usize>,
   },
+  /// Play one track URI as the first track inside a Spotify context URI:
+  /// the playlist Enter-start that keeps the selected track first even with
+  /// shuffle on (the network layer deliberately does not trim the uri list
+  /// when a context is present).
+  PlayTrackInContext {
+    context: String,
+    track: String,
+  },
   /// Transfer playback to a Connect device. `persist` records the device as
   /// the user's saved preference; producers other than the interactive
   /// device picker pass `false`.
@@ -102,8 +111,22 @@ pub enum Action {
   },
   /// Add one playable URI (track or episode) to the queue.
   AddToQueue(String),
-  /// Run a search; the user country is resolved at apply time.
+  /// Run a search against the Spotify catalog; the user country is resolved
+  /// at apply time. Deliberately source-blind: existing producers (Lua
+  /// `spotatui.search`) contracted the Web API search, so browsing scope
+  /// does not reroute it. The terminal search box uses
+  /// [`Action::SearchActiveSource`] instead.
   Search(String),
+  /// Run a search against the active browse source's catalog; falls back to
+  /// the Spotify catalog when the active source has no own search (the
+  /// Local-files scope behaves this way too).
+  SearchActiveSource(String),
+  /// Search one playlist's tracks; apply records the pending search and
+  /// announces it, exactly like the playlist filter input does today.
+  SearchPlaylistTracks {
+    playlist_id: String,
+    query: String,
+  },
   CreatePlaylist {
     name: String,
     track_uris: Vec<String>,
@@ -138,6 +161,25 @@ pub enum Action {
   Navigate(NavTarget),
   /// Pop the navigation stack (same as the back key).
   Back,
+  /// Fetch the next page of a paginated list surface - the shared "hit the
+  /// end of the list" consequence that GUI infinite scroll also fires.
+  /// Self-guarding: a no-op when no next page exists.
+  LoadMore(ListTarget),
+  /// Open a resource page (album/artist/show/playlist) by id. Never starts
+  /// playback; Open and Play stay disjoint.
+  Open(OpenTarget),
+  /// Open a library sidebar section and fetch its data, mirroring the
+  /// library row's Enter consequence exactly.
+  OpenLibrary(LibraryTarget),
+  /// Switch the active browse source (and persist the choice). Browse scope
+  /// only: never interrupts playback.
+  SelectSource(Source),
+  /// Open the add-to-playlist picker for the track table's current
+  /// selection; resolved from the selection at apply time.
+  OpenAddTrackDialog,
+  /// Stage a remove-track-from-playlist confirmation for the track table's
+  /// current selection; resolved from the selection at apply time.
+  OpenRemoveTrackDialog,
   /// Open the album page of the item that is playing now; resolved from the
   /// current playback context at apply time (episodes open their show).
   JumpToAlbum,
@@ -151,6 +193,10 @@ pub enum Action {
   /// selected period on the Stats screen when that screen is current, 30
   /// days anywhere else.
   GenerateRecap,
+  /// Seed the track-radio recommendations flow from one track. The full
+  /// snapshot rides along because the results table prepends it as the
+  /// context row.
+  RecommendFromTrack(TrackInfo),
   /// Set or clear a playbar segment for a plugin (keyed by plugin name).
   SetPlaybarSegment {
     plugin: String,
@@ -250,5 +296,91 @@ impl NavTarget {
   /// Look up a target by name; `None` for unknown names.
   pub fn from_name(name: &str) -> Option<NavTarget> {
     NavTarget::ALL.into_iter().find(|t| t.name() == name)
+  }
+}
+
+/// A paginated list surface [`Action::LoadMore`] can advance. Grows
+/// additively as later screens adopt continuous pagination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ListTarget {
+  /// The open playlist's track table (MyPlaylists / PlaylistSearch).
+  PlaylistTracks,
+  /// The liked-songs (saved tracks) table.
+  SavedTracks,
+}
+
+/// A resource deep-link [`Action::Open`] can address, by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpenTarget {
+  /// Open an album page.
+  Album(String),
+  /// Open an artist page. The display name rides along because
+  /// `App::get_artist` seeds the header with it before data arrives.
+  Artist { id: String, name: String },
+  /// Open a playlist's track table. `from_search` selects the table context
+  /// the producer uses (search results vs the user's playlists), matching
+  /// what each opening path has always passed.
+  Playlist { id: String, from_search: bool },
+  /// Open a podcast show's episode list.
+  Show(String),
+  /// Open the album containing this track.
+  TrackAlbum(String),
+}
+
+/// Library sidebar sections reachable through [`Action::OpenLibrary`].
+/// Deliberately NOT advertised through the Lua `navigate()` API (unlike
+/// [`NavTarget`]): adding rows there would expand the published plugin
+/// surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LibraryTarget {
+  Discover,
+  RecentlyPlayed,
+  Friends,
+  Stats,
+  LikedSongs,
+  Albums,
+  Artists,
+  Podcasts,
+  /// Row only present under `local-files`; a no-op without it.
+  LocalFiles,
+  /// Row only present under `ai-dj`; a no-op without it.
+  AiDj,
+}
+
+impl LibraryTarget {
+  /// Every target, in the stable subset order of `library_options()`
+  /// (feature-gated rows are appended there and matched by name).
+  pub const ALL: [LibraryTarget; 10] = [
+    LibraryTarget::Discover,
+    LibraryTarget::RecentlyPlayed,
+    LibraryTarget::Friends,
+    LibraryTarget::Stats,
+    LibraryTarget::LikedSongs,
+    LibraryTarget::Albums,
+    LibraryTarget::Artists,
+    LibraryTarget::Podcasts,
+    LibraryTarget::LocalFiles,
+    LibraryTarget::AiDj,
+  ];
+
+  /// The exact `library_options()` sidebar label for this target.
+  pub fn name(self) -> &'static str {
+    match self {
+      LibraryTarget::Discover => "Discover",
+      LibraryTarget::RecentlyPlayed => "Recently Played",
+      LibraryTarget::Friends => "Friends",
+      LibraryTarget::Stats => "Stats",
+      LibraryTarget::LikedSongs => "Liked Songs",
+      LibraryTarget::Albums => "Albums",
+      LibraryTarget::Artists => "Artists",
+      LibraryTarget::Podcasts => "Podcasts",
+      LibraryTarget::LocalFiles => "Local Files",
+      LibraryTarget::AiDj => "AI DJ",
+    }
+  }
+
+  /// Look up a target by sidebar label; `None` for unknown names.
+  pub fn from_name(name: &str) -> Option<LibraryTarget> {
+    LibraryTarget::ALL.into_iter().find(|t| t.name() == name)
   }
 }

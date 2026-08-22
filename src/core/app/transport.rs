@@ -362,6 +362,19 @@ impl App {
     self.dispatch(IoEvent::StartPlayback(Some(context_uri), None, offset));
   }
 
+  /// Start playback of one track URI as the first track inside a Spotify
+  /// context URI. The third start shape beside the two twins above: the
+  /// network layer deliberately does not trim the uri list when a context is
+  /// present, which is what keeps the selected track first under shuffle.
+  #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
+  pub(crate) fn start_playback_track_in_context(&mut self, context_uri: String, track_uri: String) {
+    self.dispatch(IoEvent::StartPlayback(
+      Some(context_uri),
+      Some(vec![track_uri]),
+      Some(0),
+    ));
+  }
+
   pub fn copy_song_url(&mut self) {
     info!("copying song url to clipboard");
     let clipboard = match &mut self.clipboard {
