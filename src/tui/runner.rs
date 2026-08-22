@@ -7,14 +7,12 @@ use crate::tui::handlers;
 use crate::tui::ui;
 use anyhow::{anyhow, Result};
 use crossterm::{
-  cursor::MoveTo,
   event::{
     DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
   },
   execute,
   terminal::{supports_keyboard_enhancement, SetTitle},
-  ExecutableCommand,
 };
 use log::info;
 use ratatui::backend::Backend;
@@ -420,6 +418,14 @@ pub async fn start_ui(
       #[cfg(feature = "cover-art")]
       crate::tui::cover_art::sync(&app.cover_art);
 
+      // The cursor must be invisible while the frame diff is written. Ratatui
+      // applies the diff first and shows or hides the cursor afterwards, so a
+      // cursor left visible by the previous frame travels over every freshly
+      // written cell run and shows up as a strobing block inside the animated
+      // banner. Hide it here; the draw closure below re-shows it at the input
+      // position after the write.
+      terminal.hide_cursor()?;
+
       terminal.draw(|f| {
         use ratatui::{prelude::Style, widgets::Block};
         f.render_widget(
@@ -462,20 +468,20 @@ pub async fn start_ui(
 
         // Plugin popup overlays every screen.
         ui::draw_plugin_popup(f, &app);
+
+        // Cursor management lives inside the frame: ratatui shows and moves the
+        // terminal cursor when a widget requests a position and hides it when
+        // none does. The old post-draw hide/show pair ran on every animation
+        // frame (16 ms on Home), and the alternating toggle reset the
+        // terminal's blink phase each frame, so the cursor strobed.
+        if current_route.active_block == ActiveBlock::Input {
+          let cursor_offset = crate::tui::layout::main_layout_margin(&app) + 1;
+          f.set_cursor_position((
+            cursor_offset + app.view.input_cursor_position - app.view.input_scroll_offset.get(),
+            cursor_offset,
+          ));
+        }
       })?;
-
-      if current_route.active_block == ActiveBlock::Input {
-        terminal.show_cursor()?;
-      } else {
-        terminal.hide_cursor()?;
-      }
-
-      let cursor_offset = crate::tui::layout::main_layout_margin(&app) + 1;
-
-      terminal.backend_mut().execute(MoveTo(
-        cursor_offset + app.view.input_cursor_position - app.view.input_scroll_offset.get(),
-        cursor_offset,
-      ))?;
 
       driver.next_window_title(&app)
     };
