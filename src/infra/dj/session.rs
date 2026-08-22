@@ -112,14 +112,17 @@ fn usable_dir(dir: &Path) -> bool {
 /// removed on exit: temp is the one location the platform clears on its own,
 /// and the per-process log file already relies on that.
 fn fresh_temp_dir(temp: &Path) -> Option<PathBuf> {
-  let mut builder = std::fs::DirBuilder::new();
+  // Owner-only from the start, whatever the umask: the agent's working
+  // directory must not be readable or writable by other local users.
   #[cfg(unix)]
-  {
-    // Owner-only from the start, whatever the umask: the agent's working
-    // directory must not be readable or writable by other local users.
+  let builder = {
     use std::os::unix::fs::DirBuilderExt;
+    let mut builder = std::fs::DirBuilder::new();
     builder.mode(0o700);
-  }
+    builder
+  };
+  #[cfg(not(unix))]
+  let builder = std::fs::DirBuilder::new();
   let pid = std::process::id();
   (0..8).find_map(|attempt| {
     let nanos = std::time::SystemTime::now()
