@@ -1,0 +1,15 @@
+# Codecov settings. Both statuses are informational: they report on the pull
+# request but never fail it. Flip `informational` to false once the baseline
+# is stable and a coverage floor is wanted.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, files"
+  require_changes: true

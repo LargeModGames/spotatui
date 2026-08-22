@@ -125,6 +125,40 @@ jobs:
           command: test
           args: ${{ matrix.args }}
 
+  # Line coverage for Codecov. One leg only: the all-sources feature set, so
+  # the report covers every subsystem that ships in the Linux release. Keep the
+  # feature list identical to the all-sources row above. The coverage build
+  # uses its own instrumentation flags, so it does not share the test job's
+  # cache. Fork pull requests have no secret and upload tokenless. A failed
+  # upload never turns the job red: coverage is a report, not a gate.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: prepare
+    env:
+      RUSTFLAGS: "-C linker-features=-lld"
+    steps:
+      - uses: actions/checkout@master
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+          components: llvm-tools-preview
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run tests with coverage
+        run: cargo llvm-cov --locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube --lcov --output-path lcov.info
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
