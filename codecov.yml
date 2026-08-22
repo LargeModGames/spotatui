@@ -1,8 +1,12 @@
-# Codecov settings. Both statuses are informational: they report on the pull
-# request but never fail it. Flip `informational` to false once the baseline
-# is stable and a coverage floor is wanted.
-coverage:
-  status:
+# Codecov settings, modelled on ratatui's codecov.yml.
+# Both statuses are informational: they report on the pull request but never
+# fail it. Flip `informational` to false once the baseline is stable and a
+# coverage floor is wanted.
+coverage: # https://docs.codecov.com/docs/codecovyml-reference#coverage
+  precision: 1 # e.g. 89.1%
+  round: down
+  range: 85..100 # https://docs.codecov.com/docs/coverage-configuration#section-range
+  status: # https://docs.codecov.com/docs/commit-status
     project:
       default:
         informational: true
@@ -10,6 +14,6 @@ coverage:
       default:
         informational: true
 
-comment:
-  layout: "condensed_header, diff, files"
+comment: # https://docs.codecov.com/docs/pull-request-comments
+  # make the comments less noisy
   require_changes: true
