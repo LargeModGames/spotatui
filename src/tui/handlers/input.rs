@@ -170,7 +170,10 @@ fn spotify_resource_id(base: &str, uri: &str, sep: &str, resource_type: &str) ->
 fn attempt_process_uri(app: &mut App, input: &str, base: &str, sep: &str) -> bool {
   let (album_id, matched) = spotify_resource_id(base, input, sep, "album");
   if matched {
-    app.apply(Action::Open(OpenTarget::Album(album_id)));
+    app.apply(Action::Open(OpenTarget::Album {
+      id: album_id,
+      from_search: false,
+    }));
     return true;
   }
 

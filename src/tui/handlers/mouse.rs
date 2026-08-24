@@ -1,4 +1,5 @@
 use super::{common_key_events, library, lyrics_view, playbar, playlist, settings};
+use crate::core::action::{Action, NavTarget};
 use crate::core::app::{
   library_options, ActiveBlock, App, RouteId, SettingValue, SettingsCategory,
 };
@@ -120,11 +121,11 @@ fn handle_library_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App) {
   match mouse.kind {
     MouseEventKind::ScrollDown => {
       focus_library(app);
-      library::handler(Key::Down, app);
+      library::select_next(app);
     }
     MouseEventKind::ScrollUp => {
       focus_library(app);
-      library::handler(Key::Up, app);
+      library::select_previous(app);
     }
     MouseEventKind::Down(MouseButton::Left) => {
       focus_library(app);
@@ -138,11 +139,11 @@ fn handle_playlist_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App) {
   match mouse.kind {
     MouseEventKind::ScrollDown => {
       focus_playlists(app);
-      playlist::handler(Key::Down, app);
+      playlist::select_next(app);
     }
     MouseEventKind::ScrollUp => {
       focus_playlists(app);
-      playlist::handler(Key::Up, app);
+      playlist::select_previous(app);
     }
     MouseEventKind::Down(MouseButton::Left) => {
       focus_playlists(app);
@@ -208,7 +209,7 @@ fn handle_help_mouse(mouse: MouseEvent, app: &mut App) {
 
 fn handle_settings_mouse(mouse: MouseEvent, app: &mut App) {
   if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-    app.open_settings_screen();
+    app.apply(Action::Navigate(NavTarget::Settings));
   }
 }
 
@@ -246,7 +247,7 @@ fn handle_playbar_mouse(
       if let Some(line) = playbar_progress_line(app, playbar_area) {
         if line.contains(mouse.column, mouse.row) {
           focus_playbar(focus_block, app);
-          app.seek_to(line.position_at(mouse.column));
+          app.apply(Action::SeekTo(line.position_at(mouse.column)));
         }
       }
     }
@@ -255,7 +256,7 @@ fn handle_playbar_mouse(
       if let Some(line) = playbar_progress_line(app, playbar_area) {
         if line.on_row(mouse.row) {
           focus_playbar(focus_block, app);
-          app.seek_to(line.position_at(mouse.column));
+          app.apply(Action::SeekTo(line.position_at(mouse.column)));
         }
       }
     }
@@ -293,12 +294,12 @@ fn handle_unsaved_settings_prompt_mouse(mouse: MouseEvent, app: &mut App) {
   };
 
   if rect_contains(areas.yes, mouse.column, mouse.row) {
-    settings::handler(Key::Char('y'), app);
+    settings::save_and_close(app);
     return;
   }
 
   if rect_contains(areas.no, mouse.column, mouse.row) {
-    settings::handler(Key::Char('n'), app);
+    settings::close_settings(app);
   }
 }
 
@@ -318,7 +319,7 @@ fn handle_settings_tabs_mouse(mouse: MouseEvent, tabs_area: Rect, app: &mut App)
 }
 
 fn handle_settings_list_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App) {
-  // Reaching for the list ends the query. Without this the synthesised Enter
+  // Reaching for the list ends the query. Without this the row activation
   // below would be spent confirming the filter instead of activating the row
   // the click landed on, and a scroll would be swallowed as an unhandled
   // filter-input key.
@@ -335,10 +336,10 @@ fn handle_settings_list_mouse(mouse: MouseEvent, list_area: Rect, app: &mut App)
 
   match mouse.kind {
     MouseEventKind::ScrollDown if !selected_setting_expects_key_capture(app) => {
-      settings::handler(Key::Down, app);
+      settings::step_list(app, true);
     }
     MouseEventKind::ScrollUp if !selected_setting_expects_key_capture(app) => {
-      settings::handler(Key::Up, app);
+      settings::step_list(app, false);
     }
     MouseEventKind::Down(MouseButton::Left) => {
       select_clicked_setting(mouse.row, list_area, app);
@@ -370,9 +371,9 @@ fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
     let clicked_selected_item = clicked_index == app.view.settings_selected_index;
     if clicked_selected_item {
       if selected_setting_expects_key_capture(app) {
-        settings::handler(Key::Esc, app);
+        settings::cancel_edit(app);
       } else {
-        settings::handler(Key::Enter, app);
+        settings::confirm_edit(app);
       }
     } else {
       app.view.settings_selected_index = clicked_index;
@@ -385,7 +386,7 @@ fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
   let was_selected = app.view.settings_selected_index == clicked_index;
   app.view.settings_selected_index = clicked_index;
   if was_selected {
-    settings::handler(Key::Enter, app);
+    settings::enter_edit_mode(app);
   }
 }
 
@@ -460,6 +461,10 @@ fn focus_playbar(block: ActiveBlock, app: &mut App) {
 }
 
 fn focus_input(app: &mut App) {
+  // Same rule as the search key: never rewrite the error frame in place.
+  if app.get_current_route().id == RouteId::Error {
+    app.clear_api_error();
+  }
   app.view.input_context = crate::core::app::InputContext::GlobalSearch;
   app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
 }
@@ -500,7 +505,7 @@ fn select_clicked_library_item(mouse_row: u16, list_area: Rect, app: &mut App) {
   app.library.selected_index = clicked_index;
 
   if was_selected {
-    library::handler(Key::Enter, app);
+    library::activate_selected(app);
   }
 }
 
@@ -529,7 +534,7 @@ fn select_clicked_playlist(mouse_row: u16, list_area: Rect, app: &mut App) {
 
   // Open the selected item when clicking it again.
   if was_selected {
-    playlist::handler(Key::Enter, app);
+    playlist::activate_selected(app);
   }
 }
 
@@ -1745,9 +1750,9 @@ mod tests {
       .position(|setting| matches!(setting.value, SettingValue::Bool(_)))
       .expect("expected a boolean setting");
     app.view.settings_selected_index = bool_index;
-    settings::handler(Key::Enter, &mut app);
+    crate::tui::handlers::handle_app(Key::Enter, &mut app);
 
-    settings::handler(Key::Esc, &mut app);
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
     assert!(app.view.settings_unsaved_prompt_visible);
 
     let prompt_areas = settings_unsaved_prompt_areas(&app).expect("unsaved prompt areas");
@@ -2050,6 +2055,122 @@ mod tests {
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::Library);
+  }
+
+  #[test]
+  fn double_click_on_a_library_row_opens_its_section() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+    let stats_index = library_options()
+      .iter()
+      .position(|option| *option == "Stats")
+      .expect("a Stats row");
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let x = areas.library.x + 1;
+    let y = areas.library.y + 1 + stats_index as u16;
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+    assert_eq!(app.library.selected_index, stats_index);
+    assert_eq!(
+      app.get_current_route().id,
+      RouteId::Home,
+      "the first click only moves the highlight"
+    );
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+    assert_eq!(app.get_current_route().id, RouteId::Stats);
+  }
+
+  #[test]
+  fn click_on_the_search_input_from_the_error_page_is_ignored() {
+    // The error screen is not mouse-interactive, so the click never reaches `focus_input`.
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.handle_error(anyhow::anyhow!("boom"));
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let input = areas.input.expect("input area");
+
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        input.x + 2,
+        input.y + 1,
+      ),
+      &mut app,
+    );
+
+    let route = app.get_current_route();
+    assert_eq!(route.id, RouteId::Error);
+    assert_eq!(route.active_block, ActiveBlock::Error);
+  }
+
+  #[test]
+  fn focus_input_dismisses_a_live_error_before_taking_focus() {
+    let mut app = App::default();
+    app.handle_error(anyhow::anyhow!("boom"));
+
+    focus_input(&mut app);
+
+    assert!(app.api_error.is_empty());
+    let route = app.get_current_route();
+    assert_ne!(route.id, RouteId::Error);
+    assert_eq!(route.active_block, ActiveBlock::Input);
+  }
+
+  fn number_value(app: &App, index: usize) -> i64 {
+    match app.settings_items.get(index).map(|setting| &setting.value) {
+      Some(SettingValue::Number(value)) => *value,
+      _ => panic!("expected a number setting"),
+    }
+  }
+
+  #[test]
+  fn scrolling_while_editing_a_number_setting_steps_its_value() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    open_settings(&mut app);
+    let number_index = app
+      .settings_items
+      .iter()
+      .position(|setting| matches!(setting.value, SettingValue::Number(_)))
+      .expect("expected a number setting");
+    app.view.settings_selected_index = number_index;
+    let initial = number_value(&app, number_index);
+
+    let areas = settings_layout_areas(&app).expect("settings layout areas");
+    let x = areas.list.x + 2;
+    let y = areas.list.y + 1 + number_index as u16;
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
+      &mut app,
+    );
+    assert!(app.view.settings_edit_mode);
+
+    handler(mouse_event(MouseEventKind::ScrollDown, x, y), &mut app);
+
+    assert_eq!(number_value(&app, number_index), initial - 1);
+    assert_eq!(app.view.settings_edit_buffer, (initial - 1).to_string());
+    assert!(
+      app.view.settings_edit_mode,
+      "the wheel steps the value; it does not leave the edit"
+    );
   }
 
   #[test]

@@ -31,6 +31,24 @@ pub fn low_event(key: Key) -> bool {
   matches!(key, Key::Char('L'))
 }
 
+/// Rows without a URI are skipped, so the offset is recomputed over the kept rows.
+pub fn uri_playback_request(
+  uris: impl Iterator<Item = Option<String>>,
+  selected_index: usize,
+) -> (Vec<String>, Option<usize>) {
+  let mut kept = Vec::with_capacity(uris.size_hint().0);
+  let mut offset = None;
+  for (row_index, uri) in uris.enumerate() {
+    if let Some(uri) = uri {
+      if row_index == selected_index {
+        offset = Some(kept.len());
+      }
+      kept.push(uri);
+    }
+  }
+  (kept, offset)
+}
+
 pub fn on_down_press_handler<T>(selection_data: &[T], selection_index: Option<usize>) -> usize {
   match selection_index {
     Some(selection_index) => {
@@ -180,6 +198,26 @@ mod tests {
     let data: Vec<&str> = vec![];
     let next_index = on_low_press_handler(&data);
     assert_eq!(next_index, 0);
+  }
+
+  #[test]
+  fn uri_playback_request_skips_uri_less_rows_and_remaps_the_offset() {
+    let rows = [Some("spotify:track:one"), None, Some("spotify:track:three")];
+
+    let (uris, offset) = uri_playback_request(rows.iter().map(|uri| uri.map(str::to_string)), 2);
+
+    assert_eq!(uris, vec!["spotify:track:one", "spotify:track:three"]);
+    assert_eq!(offset, Some(1), "the skipped row must not shift the offset");
+  }
+
+  #[test]
+  fn uri_playback_request_leaves_the_offset_unset_for_a_uri_less_selection() {
+    let rows = [Some("spotify:track:one"), None];
+
+    let (uris, offset) = uri_playback_request(rows.iter().map(|uri| uri.map(str::to_string)), 1);
+
+    assert_eq!(uris, vec!["spotify:track:one"]);
+    assert_eq!(offset, None);
   }
 
   #[test]

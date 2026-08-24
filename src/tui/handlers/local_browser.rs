@@ -1,6 +1,5 @@
 use super::common_key_events;
-use crate::core::app::{ActiveBlock, App, RouteId, TrackTableContext};
-use crate::infra::network::IoEvent;
+use crate::core::app::App;
 use crate::tui::event::Key;
 
 /// Handler for the Local Files folder browser: a list of folders (one per
@@ -35,16 +34,11 @@ pub fn handler(key: Key, app: &mut App) {
         common_key_events::on_low_press_handler(&app.local_playlists);
     }
     Key::Enter => {
-      if let Some(folder) = app.local_playlists.get(app.view.local_playlists_index) {
-        let uri = folder.uri.clone();
-        // Reset the shared track table and mark it local so selecting a row
-        // dispatches a `file://` play; the fetch fills in the rows.
-        app.track_table.tracks = Vec::new();
-        app.track_table.selected_index = 0;
-        app.track_table.context = Some(TrackTableContext::LocalPlaylist);
-        app.dispatch(IoEvent::GetLocalTracks(uri));
-        app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-      }
+      let uri = app
+        .local_playlists
+        .get(app.view.local_playlists_index)
+        .map(|folder| folder.uri.clone());
+      super::playlist::open_source_playlist(app, uri);
     }
     _ => {}
   }

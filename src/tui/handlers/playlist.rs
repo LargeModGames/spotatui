@@ -1,10 +1,9 @@
 use super::common_key_events;
+use crate::core::action::{Action, OpenTarget};
 use crate::core::app::{ActiveBlock, RouteId};
-use crate::core::app::{App, DialogContext, PlaylistFolderItem, TrackTableContext};
+use crate::core::app::{App, DialogContext, PlaylistFolderItem};
 use crate::core::source::Source;
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::model::idtypes::PlaylistId;
 
 /// Total rows in the sidebar Playlists panel. For Spotify this is the leading
 /// "+ Add Playlist" row + playlists/folders; for Local it is the folder count
@@ -20,35 +19,32 @@ pub(crate) fn total_display_count(app: &App) -> usize {
   }
 }
 
+/// Open a non-Spotify playlist's tracks in the shared track table.
+pub(super) fn open_source_playlist(app: &mut App, uri: Option<String>) {
+  if let Some(uri) = uri {
+    app.apply(Action::Open(OpenTarget::SourcePlaylist(uri)));
+  }
+}
+
 /// Local Files: open the highlighted folder's tracks in the shared track table.
 fn open_local_folder(app: &mut App) {
-  let Some(idx) = app.view.selected_playlist_index else {
-    return;
-  };
-  if let Some(folder) = app.local_playlists.get(idx) {
-    let uri = folder.uri.clone();
-    app.track_table.tracks = Vec::new();
-    app.track_table.selected_index = 0;
-    app.track_table.context = Some(TrackTableContext::LocalPlaylist);
-    app.dispatch(IoEvent::GetLocalTracks(uri));
-    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-  }
+  let uri = app
+    .view
+    .selected_playlist_index
+    .and_then(|idx| app.local_playlists.get(idx))
+    .map(|folder| folder.uri.clone());
+  open_source_playlist(app, uri);
 }
 
 /// Subsonic: open the highlighted server playlist's tracks in the shared track
 /// table.
 fn open_subsonic_folder(app: &mut App) {
-  let Some(idx) = app.view.selected_playlist_index else {
-    return;
-  };
-  if let Some(playlist) = app.subsonic_playlists.get(idx) {
-    let uri = playlist.uri.clone();
-    app.track_table.tracks = Vec::new();
-    app.track_table.selected_index = 0;
-    app.track_table.context = Some(TrackTableContext::SubsonicPlaylist);
-    app.dispatch(IoEvent::GetSubsonicTracks(uri));
-    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-  }
+  let uri = app
+    .view
+    .selected_playlist_index
+    .and_then(|idx| app.subsonic_playlists.get(idx))
+    .map(|playlist| playlist.uri.clone());
+  open_source_playlist(app, uri);
 }
 
 /// YouTube: open the highlighted local playlist's saved videos in the shared
@@ -64,14 +60,11 @@ fn open_youtube_playlist(app: &mut App) {
     app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
     return;
   }
-  if let Some(playlist) = app.youtube_playlists.get(idx) {
-    let uri = playlist.uri.clone();
-    app.track_table.tracks = Vec::new();
-    app.track_table.selected_index = 0;
-    app.track_table.context = Some(TrackTableContext::YouTubePlaylist);
-    app.dispatch(IoEvent::GetYouTubeTracks(uri));
-    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-  }
+  let uri = app
+    .youtube_playlists
+    .get(idx)
+    .map(|playlist| playlist.uri.clone());
+  open_source_playlist(app, uri);
 }
 
 /// Internet Radio: play the highlighted station directly. A station is a leaf,
@@ -81,8 +74,13 @@ fn play_radio_station(app: &mut App) {
   let Some(idx) = app.view.selected_playlist_index else {
     return;
   };
-  if let Some(uri) = app.radio_stations.get(idx).and_then(|s| s.uri.clone()) {
-    app.dispatch(IoEvent::StartPlayback(Some(uri), None, None));
+  let uri = app.radio_stations.get(idx).and_then(|s| s.uri.clone());
+  if let Some(uri) = uri {
+    // A one-item URI list: the radio router starts the station for both shapes.
+    app.apply(Action::PlayUris {
+      uris: vec![uri],
+      offset: None,
+    });
   }
 }
 
@@ -91,48 +89,26 @@ fn remove_radio_station(app: &mut App) {
     app.set_status_message("No radio station selected".to_string(), 4);
     return;
   };
-  let Some(station) = app.radio_stations.get(idx).cloned() else {
-    app.set_status_message("No radio station selected".to_string(), 4);
-    return;
-  };
-  let Some(url) = station.uri.as_deref().and_then(super::radio_stream_url) else {
-    app.set_status_message("Radio station has no stream URL".to_string(), 4);
-    return;
-  };
-  let config_owned = app.is_config_owned_radio_station_url(url);
-  if app.is_configured_radio_station_url(url) {
-    app.set_status_message(
-      format!(
-        "Radio station is configured in config.yml: {}",
-        station.name
-      ),
-      4,
-    );
-    return;
-  }
-
-  match app.remove_radio_station_by_url(url) {
-    Ok(Some(removed)) => {
-      if !config_owned {
-        app.radio_stations.remove(idx);
-        app.view.selected_playlist_index = if app.radio_stations.is_empty() {
-          None
-        } else {
-          Some(idx.min(app.radio_stations.len() - 1))
-        };
+  let uri = match app.radio_stations.get(idx) {
+    None => {
+      app.set_status_message("No radio station selected".to_string(), 4);
+      return;
+    }
+    Some(station) => match station.uri.clone() {
+      None => {
+        app.set_status_message("Radio station has no stream URL".to_string(), 4);
+        return;
       }
-      app.set_status_message(format!("Removed saved radio station: {}", removed.name), 4);
-    }
-    Ok(None) => {
-      app.set_status_message(
-        format!("Radio station is not favorited: {}", station.name),
-        4,
-      );
-    }
-    Err(error) => {
-      app.set_error_status_message(format!("Could not remove radio station: {error}"), 6);
-    }
-  }
+      Some(uri) => uri,
+    },
+  };
+  app.apply(Action::RemoveRadioStation(uri));
+  // The clamp is a no-op for every outcome that leaves the list untouched.
+  app.view.selected_playlist_index = if app.radio_stations.is_empty() {
+    None
+  } else {
+    Some(idx.min(app.radio_stations.len() - 1))
+  };
 }
 
 pub fn handler(key: Key, app: &mut App) {
@@ -140,20 +116,8 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::right_event(k, &app.user_config.keys) => {
       common_key_events::handle_right_event(app)
     }
-    k if common_key_events::down_event(k, &app.user_config.keys) => {
-      let count = total_display_count(app);
-      if count > 0 {
-        let current = app.view.selected_playlist_index.unwrap_or(0);
-        app.view.selected_playlist_index = Some((current + 1) % count);
-      }
-    }
-    k if common_key_events::up_event(k, &app.user_config.keys) => {
-      let count = total_display_count(app);
-      if count > 0 {
-        let current = app.view.selected_playlist_index.unwrap_or(0);
-        app.view.selected_playlist_index = Some(if current == 0 { count - 1 } else { current - 1 });
-      }
-    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => select_next(app),
+    k if common_key_events::up_event(k, &app.user_config.keys) => select_previous(app),
     k if common_key_events::high_event(k) && total_display_count(app) > 0 => {
       app.view.selected_playlist_index = Some(0);
     }
@@ -174,20 +138,9 @@ pub fn handler(key: Key, app: &mut App) {
         app.view.selected_playlist_index = Some(count - 1);
       }
     }
-    Key::Enter if app.active_source == Source::Local => {
-      open_local_folder(app);
-    }
-    Key::Enter if app.active_source == Source::Subsonic => {
-      open_subsonic_folder(app);
-    }
-    Key::Enter if app.active_source == Source::Radio => {
-      play_radio_station(app);
-    }
+    Key::Enter => activate_selected(app),
     Key::Char('D') if app.active_source == Source::Radio => {
       remove_radio_station(app);
-    }
-    Key::Enter if app.active_source == Source::YouTube => {
-      open_youtube_playlist(app);
     }
     // Deleting a local YouTube playlist: same confirm dialog UX as Spotify.
     Key::Char('D') if app.active_source == Source::YouTube => {
@@ -202,45 +155,6 @@ pub fn handler(key: Key, app: &mut App) {
           RouteId::Dialog,
           ActiveBlock::Dialog(DialogContext::YouTubePlaylistWindow),
         );
-      }
-    }
-    Key::Enter => {
-      if let Some(selected_idx) = app.view.selected_playlist_index {
-        if selected_idx == 0 {
-          // "+ Add Playlist" is the leading row (row 0).
-          app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
-        } else if let Some(item) = app.get_playlist_display_item_at(selected_idx - 1) {
-          match item {
-            PlaylistFolderItem::Folder(folder) => {
-              // Navigate into/out of folder
-              app.current_playlist_folder_id = folder.target_id;
-              // Land on the first item below the leading "+ Add Playlist" row.
-              let has_items = app.get_playlist_display_count() > 0;
-              app.view.selected_playlist_index = Some(if has_items { 1 } else { 0 });
-            }
-            PlaylistFolderItem::Playlist { index, .. } => {
-              // Open the playlist tracks: navigates immediately with the
-              // cleared table as the loading state (see open_playlist_tracks).
-              let index = *index;
-              if let Some(id_str) = app.all_playlists.get(index).and_then(|p| p.id.clone()) {
-                if let Ok(playlist_id) = PlaylistId::from_id(id_str.as_str()) {
-                  app.view.active_playlist_index = Some(index);
-                  app.open_playlist_tracks(
-                    playlist_id.into_static(),
-                    TrackTableContext::MyPlaylists,
-                  );
-                }
-              }
-            }
-            PlaylistFolderItem::CommunityPin => {
-              if let Ok(playlist_id) = PlaylistId::from_id(crate::core::app::COMMUNITY_PLAYLIST_ID)
-              {
-                app.view.active_playlist_index = None;
-                app.open_playlist_tracks(playlist_id.into_static(), TrackTableContext::MyPlaylists);
-              }
-            }
-          }
-        }
       }
     }
     // Deleting playlists is a Spotify-only (PlaylistWriter) action.
@@ -267,6 +181,75 @@ pub fn handler(key: Key, app: &mut App) {
   }
 }
 
+/// The down key's cursor move, named for the mouse wheel.
+pub(super) fn select_next(app: &mut App) {
+  let count = total_display_count(app);
+  if count > 0 {
+    let current = app.view.selected_playlist_index.unwrap_or(0);
+    app.view.selected_playlist_index = Some((current + 1) % count);
+  }
+}
+
+pub(super) fn select_previous(app: &mut App) {
+  let count = total_display_count(app);
+  if count > 0 {
+    let current = app.view.selected_playlist_index.unwrap_or(0);
+    app.view.selected_playlist_index = Some(if current == 0 { count - 1 } else { current - 1 });
+  }
+}
+
+/// The Enter consequence, routed by the active browse source.
+pub(super) fn activate_selected(app: &mut App) {
+  match app.active_source {
+    Source::Local => open_local_folder(app),
+    Source::Subsonic => open_subsonic_folder(app),
+    Source::Radio => play_radio_station(app),
+    Source::YouTube => open_youtube_playlist(app),
+    Source::Spotify => open_spotify_row(app),
+  }
+}
+
+fn open_spotify_row(app: &mut App) {
+  if let Some(selected_idx) = app.view.selected_playlist_index {
+    if selected_idx == 0 {
+      // "+ Add Playlist" is the leading row (row 0).
+      app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
+    } else if let Some(item) = app.get_playlist_display_item_at(selected_idx - 1) {
+      match item {
+        PlaylistFolderItem::Folder(folder) => {
+          // Navigate into/out of folder
+          let target_id = folder.target_id;
+          app.apply(Action::Open(OpenTarget::PlaylistFolder(target_id)));
+          // Land on the first item below the leading "+ Add Playlist" row.
+          // Counted after the apply: the count is folder-scoped.
+          let has_items = app.get_playlist_display_count() > 0;
+          app.view.selected_playlist_index = Some(if has_items { 1 } else { 0 });
+        }
+        PlaylistFolderItem::Playlist { index, .. } => {
+          // Open the playlist tracks: navigates immediately with the
+          // cleared table as the loading state (see open_playlist_tracks).
+          let index = *index;
+          let id_str = app.all_playlists.get(index).and_then(|p| p.id.clone());
+          if let Some(id_str) = id_str {
+            app.view.active_playlist_index = Some(index);
+            app.apply(Action::Open(OpenTarget::Playlist {
+              id: id_str,
+              from_search: false,
+            }));
+          }
+        }
+        PlaylistFolderItem::CommunityPin => {
+          app.view.active_playlist_index = None;
+          app.apply(Action::Open(OpenTarget::Playlist {
+            id: crate::core::app::COMMUNITY_PLAYLIST_ID.to_string(),
+            from_search: false,
+          }));
+        }
+      }
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -274,6 +257,7 @@ mod tests {
   use crate::core::state::RadioStationConfig;
   use crate::core::test_helpers::playlist_info;
   use crate::core::user_config::{UserConfig, UserConfigPaths};
+  use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 

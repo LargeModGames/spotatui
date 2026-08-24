@@ -3,9 +3,13 @@
 //! Provides sorting functionality for playlists, albums, artists, etc.
 
 use rspotify::model::track::FullTrack;
+use serde::{Deserialize, Serialize};
 
 /// Fields that can be used for sorting
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+///
+/// The serde derives on this enum, `SortOrder` and `SortContext` are the
+/// action-vocabulary wire shape: `Action::Sort` carries them directly.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum SortField {
   /// Original API order (no sorting applied)
   #[default]
@@ -75,7 +79,7 @@ impl SortField {
 }
 
 /// Sort order direction
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum SortOrder {
   #[default]
   Ascending,
@@ -128,7 +132,7 @@ impl SortOrder {
 }
 
 /// Context that supports sorting
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SortContext {
   /// Tracks in a playlist
   PlaylistTracks,

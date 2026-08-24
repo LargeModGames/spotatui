@@ -105,6 +105,35 @@ impl App {
     self.dispatch(IoEvent::GetPlaylistItems(id_str, self.playlist_offset));
   }
 
+  /// Open a decoded source's playlist or folder in the shared track table,
+  /// routed by URI scheme. Leaves the Spotify page cache alone.
+  pub(crate) fn open_source_playlist_tracks(&mut self, uri: String) {
+    let (context, event) = if uri.starts_with("file:") {
+      (
+        TrackTableContext::LocalPlaylist,
+        IoEvent::GetLocalTracks(uri),
+      )
+    } else if uri.starts_with("subsonic:") {
+      (
+        TrackTableContext::SubsonicPlaylist,
+        IoEvent::GetSubsonicTracks(uri),
+      )
+    } else if uri.starts_with(YOUTUBE_PLAYLIST_PREFIX) {
+      (
+        TrackTableContext::YouTubePlaylist,
+        IoEvent::GetYouTubeTracks(uri),
+      )
+    } else {
+      // Unknown scheme: silent no-op, like the other opening paths.
+      return;
+    };
+    self.track_table.tracks = Vec::new();
+    self.track_table.selected_index = 0;
+    self.track_table.context = Some(context);
+    self.dispatch(event);
+    self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+  }
+
   pub fn reset_playlist_tracks_view(
     &mut self,
     playlist_id: PlaylistId<'static>,

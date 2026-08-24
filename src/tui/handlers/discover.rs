@@ -1,6 +1,6 @@
 use super::common_key_events;
-use crate::core::app::{ActiveBlock, App, RouteId, TrackTableContext};
-use crate::infra::network::IoEvent;
+use crate::core::action::{Action, DiscoverTarget};
+use crate::core::app::App;
 use crate::tui::event::Key;
 
 const DISCOVER_OPTIONS_COUNT: usize = 2;
@@ -44,36 +44,12 @@ pub fn handler(key: Key, app: &mut App) {
       app.discover_top_tracks.clear();
     }
     Key::Enter => {
-      if app.discover_loading {
-        return; // Don't process Enter while loading
-      }
-      match app.view.discover_selected_index {
-        0 => {
-          // Top Artists Mix
-          if app.discover_artists_mix.is_empty() {
-            app.dispatch(IoEvent::GetTopArtistsMix);
-          } else {
-            // Mix already loaded, show it
-            app.track_table.tracks = app.discover_artists_mix.clone();
-            app.track_table.context = Some(TrackTableContext::DiscoverPlaylist);
-            app.track_table.selected_index = 0;
-            app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-          }
-        }
-        1 => {
-          // Top Tracks - always refetch if empty or if we want fresh data
-          if app.discover_top_tracks.is_empty() {
-            app.dispatch(IoEvent::GetUserTopTracks(app.view.discover_time_range));
-          } else {
-            // Tracks already loaded, show them
-            app.track_table.tracks = app.discover_top_tracks.clone();
-            app.track_table.context = Some(TrackTableContext::DiscoverPlaylist);
-            app.track_table.selected_index = 0;
-            app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-          }
-        }
-        _ => {}
-      }
+      let target = match app.view.discover_selected_index {
+        0 => DiscoverTarget::ArtistsMix,
+        1 => DiscoverTarget::TopTracks(app.view.discover_time_range),
+        _ => return,
+      };
+      app.apply(Action::OpenDiscover(target));
     }
     _ if key == app.user_config.keys.add_item_to_queue => {
       // Add the first track from the selected discover list to the queue.
@@ -83,9 +59,100 @@ pub fn handler(key: Key, app: &mut App) {
         _ => None,
       };
       if let Some(track) = track {
-        app.add_track_to_native_queue(track);
+        app.apply(Action::QueueTrack(track));
       }
     }
     _ => {}
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::DiscoverTimeRange;
+  use crate::core::plugin_api::TrackInfo;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::{channel, Receiver};
+  use std::time::SystemTime;
+
+  fn app_with_channel() -> (App, Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    (app, rx)
+  }
+
+  fn top_track() -> TrackInfo {
+    TrackInfo {
+      uri: Some("spotify:track:one".to_string()),
+      name: "One".to_string(),
+      artists: vec!["Artist".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 1_000,
+      id: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }
+  }
+
+  #[test]
+  fn enter_on_top_tracks_fetches_with_the_cycled_time_range() {
+    let (mut app, rx) = app_with_channel();
+    app.view.discover_selected_index = 1;
+
+    handler(Key::Char(']'), &mut app);
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.view.discover_time_range, DiscoverTimeRange::Long);
+    assert!(
+      matches!(
+        rx.try_recv(),
+        Ok(IoEvent::GetUserTopTracks(range)) if range == DiscoverTimeRange::Long
+      ),
+      "the empty cache triggered a fetch for the cycled range"
+    );
+  }
+
+  #[test]
+  fn cycling_the_time_range_invalidates_the_top_tracks_cache() {
+    let (mut app, _rx) = app_with_channel();
+    app.view.discover_selected_index = 1;
+    app.discover_top_tracks = vec![top_track()];
+
+    handler(Key::Char(']'), &mut app);
+
+    assert_eq!(app.view.discover_time_range, DiscoverTimeRange::Long);
+    assert!(
+      app.discover_top_tracks.is_empty(),
+      "a new time range invalidates the cached page"
+    );
+  }
+
+  #[test]
+  fn time_range_keys_do_nothing_on_the_artists_mix_row() {
+    let (mut app, _rx) = app_with_channel();
+    let before = app.view.discover_time_range;
+
+    handler(Key::Char('['), &mut app);
+    handler(Key::Char(']'), &mut app);
+
+    assert_eq!(app.view.discover_selected_index, 0);
+    assert_eq!(app.view.discover_time_range, before);
+  }
+
+  #[test]
+  fn down_wraps_across_the_two_rows() {
+    let (mut app, _rx) = app_with_channel();
+
+    handler(Key::Down, &mut app);
+    assert_eq!(app.view.discover_selected_index, 1);
+
+    handler(Key::Down, &mut app);
+    assert_eq!(app.view.discover_selected_index, 0);
   }
 }

@@ -336,12 +336,10 @@ impl DjState {
   }
 
   #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
-  pub fn take_input(&mut self) -> String {
-    let text = self.input.iter().collect::<String>();
+  pub fn clear_input(&mut self) {
     self.input.clear();
     self.input_idx = 0;
     self.input_cursor = 0;
-    text
   }
 }
 
@@ -388,12 +386,12 @@ mod tests {
   }
 
   #[test]
-  fn take_input_clears_cursor_state() {
+  fn clear_input_clears_cursor_state() {
     let mut state = DjState::default();
     state.input = "chill".chars().collect();
     state.input_idx = 5;
     state.input_cursor = 5;
-    assert_eq!(state.take_input(), "chill");
+    state.clear_input();
     assert!(state.input.is_empty());
     assert_eq!(state.input_idx, 0);
     assert_eq!(state.input_cursor, 0);

@@ -1,5 +1,5 @@
+use crate::core::action::Action;
 use crate::core::app::{App, CreatePlaylistFocus, CreatePlaylistStage};
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use unicode_width::UnicodeWidthChar;
 
@@ -19,7 +19,7 @@ fn handle_name_stage(key: Key, app: &mut App) {
         // right away; there is no Spotify-search stage (videos are added later
         // via search + `w`).
         if app.active_source == crate::core::source::Source::YouTube {
-          app.dispatch(IoEvent::CreateYouTubePlaylist(name.trim().to_string()));
+          app.apply(Action::CreateYouTubePlaylist(name.trim().to_string()));
           close_form(app);
           return;
         }
@@ -81,7 +81,7 @@ fn handle_search_input(key: Key, app: &mut App) {
     Key::Enter => {
       let query: String = app.view.create_playlist_search_input.iter().collect();
       if !query.trim().is_empty() {
-        app.dispatch(IoEvent::SearchTracksForPlaylist(query));
+        app.apply(Action::SearchTracksForPlaylist(query));
         app.view.create_playlist_focus = CreatePlaylistFocus::SearchResults;
       }
     }
@@ -201,28 +201,89 @@ fn handle_added_tracks_nav(key: Key, app: &mut App) {
 
 fn submit_playlist(app: &mut App) {
   let name: String = app.view.create_playlist_name.iter().collect();
+  // Bare base62 ids: the payload the form has always sent.
   let track_ids: Vec<String> = app
     .create_playlist_tracks
     .iter()
     .filter_map(|t| t.id.clone())
     .collect();
 
-  app.dispatch(IoEvent::CreateNewPlaylist(name, track_ids));
+  app.apply(Action::CreatePlaylist {
+    name,
+    track_uris: track_ids,
+  });
   close_form(app);
 }
 
 fn close_form(app: &mut App) {
   app.pop_navigation_stack();
-  // Reset form state
-  app.view.create_playlist_name = Vec::new();
-  app.view.create_playlist_name_idx = 0;
-  app.view.create_playlist_name_cursor = 0;
-  app.view.create_playlist_stage = CreatePlaylistStage::Name;
-  app.create_playlist_tracks = Vec::new();
-  app.create_playlist_search_results = Vec::new();
-  app.view.create_playlist_search_input = Vec::new();
-  app.view.create_playlist_search_idx = 0;
-  app.view.create_playlist_search_cursor = 0;
-  app.view.create_playlist_selected_result = 0;
-  app.view.create_playlist_focus = CreatePlaylistFocus::SearchInput;
+  app.clear_create_playlist_form_state();
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::{ActiveBlock, RouteId};
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::{channel, Receiver};
+  use std::time::SystemTime;
+
+  fn app_on_the_create_form() -> (App, Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
+    (app, rx)
+  }
+
+  #[test]
+  fn esc_on_the_name_stage_closes_and_resets_the_form() {
+    let (mut app, rx) = app_on_the_create_form();
+    handler(Key::Char('M'), &mut app);
+    handler(Key::Char('i'), &mut app);
+
+    handler(Key::Esc, &mut app);
+
+    assert!(app.view.create_playlist_name.is_empty());
+    assert_eq!(app.view.create_playlist_name_idx, 0);
+    assert_eq!(app.view.create_playlist_name_cursor, 0);
+    assert_eq!(app.view.create_playlist_stage, CreatePlaylistStage::Name);
+    assert_eq!(
+      app.view.create_playlist_focus,
+      CreatePlaylistFocus::SearchInput
+    );
+    assert!(app.create_playlist_tracks.is_empty());
+    assert!(app.create_playlist_search_results.is_empty());
+    assert_eq!(app.get_current_route().id, RouteId::Home);
+    assert!(rx.try_recv().is_err(), "closing the form asks for nothing");
+  }
+
+  #[test]
+  fn enter_on_a_blank_name_stays_on_the_name_stage() {
+    let (mut app, rx) = app_on_the_create_form();
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.view.create_playlist_stage, CreatePlaylistStage::Name);
+    assert_eq!(app.get_current_route().id, RouteId::CreatePlaylist);
+    assert!(rx.try_recv().is_err(), "expected nothing dispatched");
+  }
+
+  #[test]
+  fn enter_on_a_named_form_advances_before_creating_anything() {
+    let (mut app, rx) = app_on_the_create_form();
+    handler(Key::Char('M'), &mut app);
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(
+      app.view.create_playlist_stage,
+      CreatePlaylistStage::AddTracks
+    );
+    assert_eq!(
+      app.view.create_playlist_focus,
+      CreatePlaylistFocus::SearchInput
+    );
+    assert!(rx.try_recv().is_err(), "expected nothing dispatched");
+  }
 }

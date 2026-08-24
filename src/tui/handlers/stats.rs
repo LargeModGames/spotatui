@@ -1,6 +1,6 @@
 use super::common_key_events;
+use crate::core::action::Action;
 use crate::core::app::App;
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -24,8 +24,8 @@ pub fn handler(key: Key, app: &mut App) {
         );
       }
     }
-    Key::Char('[') => cycle_period(app, app.stats_period.prev()),
-    Key::Char(']') => cycle_period(app, app.stats_period.next()),
+    Key::Char('[') => cycle_period(app, false),
+    Key::Char(']') => cycle_period(app, true),
     Key::Enter => {
       let uri = app.stats_data.as_ref().and_then(|stats| {
         stats
@@ -35,7 +35,10 @@ pub fn handler(key: Key, app: &mut App) {
       });
       match uri {
         Some(uri) if uri.starts_with("spotify:track:") => {
-          app.dispatch(IoEvent::StartPlayback(None, Some(vec![uri]), Some(0)));
+          app.apply(Action::PlayUris {
+            uris: vec![uri],
+            offset: Some(0),
+          });
         }
         Some(_) | None => {
           let has_tracks = app
@@ -52,12 +55,9 @@ pub fn handler(key: Key, app: &mut App) {
   }
 }
 
-fn cycle_period(app: &mut App, period: crate::infra::history::RecapPeriod) {
-  app.stats_period = period;
-  app.stats_data = None;
+fn cycle_period(app: &mut App, forward: bool) {
+  app.apply(Action::CycleStatsPeriod { forward });
   app.view.stats_selected_track = 0;
-  app.stats_loading = true;
-  app.dispatch(IoEvent::LoadListeningStats(period));
 }
 
 #[cfg(test)]
@@ -65,6 +65,7 @@ mod tests {
   use super::*;
   use crate::core::user_config::UserConfig;
   use crate::infra::history::{RankedEntry, RecapPeriod, StatsData};
+  use crate::infra::network::IoEvent;
   use std::sync::mpsc::{channel, Receiver};
   use std::time::SystemTime;
 

@@ -1,3 +1,4 @@
+use crate::core::action::{Action, ActionOutcome};
 use crate::core::app::{App, SettingValue, SettingsCategory};
 use crate::tui::event::Key;
 use crate::tui::handlers::common_key_events::{
@@ -90,14 +91,10 @@ fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
     Key::Char('y') | Key::Char('Y') if save_settings(app) => {
       close_settings(app);
     }
-    Key::Char('n') | Key::Char('N') | Key::Esc => {
-      close_settings(app);
-    }
+    Key::Char('n') | Key::Char('N') | Key::Esc => close_settings(app),
     Key::Enter => {
       if app.view.settings_unsaved_prompt_save_selected {
-        if save_settings(app) {
-          close_settings(app);
-        }
+        save_and_close(app);
       } else {
         close_settings(app);
       }
@@ -113,6 +110,31 @@ fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
   }
 }
 
+/// A failing save leaves the prompt up under the error frame, like `y`.
+pub(super) fn save_and_close(app: &mut App) {
+  if save_settings(app) {
+    close_settings(app);
+  }
+}
+
+/// The wheel's Down/Up: an open non-key edit gets the step (a Number edit
+/// walks its value), otherwise the highlight moves.
+pub(super) fn step_list(app: &mut App, forward: bool) {
+  if app.view.settings_edit_mode {
+    handle_edit_mode(if forward { Key::Down } else { Key::Up }, app);
+  } else {
+    step_selection(app, forward);
+  }
+}
+
+pub(super) fn cancel_edit(app: &mut App) {
+  handle_edit_mode(Key::Esc, app);
+}
+
+pub(super) fn confirm_edit(app: &mut App) {
+  handle_edit_mode(Key::Enter, app);
+}
+
 fn request_exit_settings(app: &mut App) {
   if has_unsaved_settings_changes(app) {
     app.view.settings_unsaved_prompt_visible = true;
@@ -124,7 +146,7 @@ fn request_exit_settings(app: &mut App) {
   }
 }
 
-fn close_settings(app: &mut App) {
+pub(super) fn close_settings(app: &mut App) {
   app.view.settings_unsaved_prompt_visible = false;
   app.view.settings_unsaved_prompt_save_selected = true;
   app.view.settings_edit_mode = false;
@@ -437,7 +459,7 @@ fn select_previous_item(app: &mut App) {
   step_selection(app, false);
 }
 
-fn enter_edit_mode(app: &mut App) {
+pub(super) fn enter_edit_mode(app: &mut App) {
   // A filter that matches nothing leaves no row under the highlight, so Enter
   // must not edit whatever index the selection happened to keep.
   if selected_setting_position(app).is_none() {
@@ -543,29 +565,10 @@ fn handle_preset_edit(key: Key, app: &mut App) {
 }
 
 fn save_settings(app: &mut App) -> bool {
-  #[cfg(feature = "telemetry")]
-  let global_count_was_enabled = app.user_config.behavior.enable_global_song_count;
-  // Apply settings to user_config and save to file
-  app.apply_settings_changes();
-
-  // If the user just turned the global counter on, fetch the current count now so
-  // the home banner reflects it without waiting for the next launch.
-  #[cfg(feature = "telemetry")]
-  if !global_count_was_enabled && app.user_config.behavior.enable_global_song_count {
-    app.dispatch(crate::infra::network::IoEvent::FetchGlobalSongCount);
-  }
-  #[cfg(target_os = "macos")]
-  if app.user_config.keys.open_settings != Key::Ctrl(',') {
-    app.keybinding_runtime.effective_open_settings = None;
-    app.keybinding_runtime.fallback_reason = None;
-  }
-  if let Err(e) = app.user_config.save_config() {
-    app.handle_error(anyhow::anyhow!("Failed to save settings: {}", e));
-    return false;
-  }
-
-  app.settings_saved_items = app.settings_items.clone();
-  true
+  matches!(
+    app.apply(Action::SaveSettings),
+    ActionOutcome::SettingsSaved { saved: true }
+  )
 }
 
 #[cfg(test)]
@@ -695,14 +698,33 @@ mod tests {
 
   #[test]
   fn the_filter_uses_the_configured_search_binding() {
-    let mut app = App::default();
-    app.user_config.keys.search = Key::Char('f');
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.keys.search = Key::Char('f');
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
     open_settings(&mut app);
 
     handle_app(Key::Char('f'), &mut app);
 
     assert!(app.view.settings_filter_editing);
     assert!(app.view.settings_filter.is_empty());
+  }
+
+  #[test]
+  fn y_on_the_unsaved_prompt_keeps_the_screen_open_when_the_save_fails() {
+    // No config path: the write fails and the error frame lands on top.
+    let mut app = App::default();
+    open_settings(&mut app);
+    app.view.settings_unsaved_prompt_visible = true;
+
+    handler(Key::Char('y'), &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::Error);
+    assert!(app.view.settings_unsaved_prompt_visible);
   }
 
   #[test]

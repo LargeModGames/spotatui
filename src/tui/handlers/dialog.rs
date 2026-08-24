@@ -1,6 +1,6 @@
 use super::common_key_events;
+use crate::core::action::Action;
 use crate::core::app::{ActiveBlock, App, DialogContext, PlaylistPickerRow};
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -101,21 +101,14 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
           app.view.playlist_picker_selected_index = 0;
         }
         Some(PlaylistPickerRow::Playlist(playlist)) => {
-          let playlist_id = playlist.id.clone();
-          if let (Some(playlist_id), Some(pending_add)) =
-            (playlist_id, app.pending_playlist_track_add.clone())
-          {
-            if app.active_source == crate::core::source::Source::YouTube {
-              app.dispatch(IoEvent::AddTrackToYouTubePlaylist(
-                playlist_id,
-                pending_add.track_id,
-              ));
-            } else {
-              app.dispatch(IoEvent::AddTrackToPlaylist(
-                playlist_id,
-                pending_add.track_id,
-              ));
-            }
+          // `id` stays the presence guard; the payload is the URI, which carries the source.
+          let playlist_uri = playlist.id.is_some().then(|| playlist.uri.clone());
+          let track = app
+            .pending_playlist_track_add
+            .as_ref()
+            .map(|pending| pending.track_id.clone());
+          if let (Some(playlist), Some(track)) = (playlist_uri, track) {
+            app.apply(Action::AddTrackToPlaylist { playlist, track });
           }
           close_dialog(app);
         }
@@ -130,11 +123,15 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
 }
 
 fn handle_playlist_dialog(app: &mut App) {
-  app.user_unfollow_playlist()
+  if let Some(playlist_id) = app.selected_sidebar_playlist_id() {
+    app.apply(Action::UnfollowPlaylist(playlist_id));
+  }
 }
 
 fn handle_playlist_search_dialog(app: &mut App) {
-  app.user_unfollow_playlist_search_result()
+  if let Some(playlist_id) = app.selected_search_result_playlist_id() {
+    app.apply(Action::UnfollowPlaylist(playlist_id));
+  }
 }
 
 /// Confirmed deletion of the sidebar-selected local YouTube playlist.
@@ -145,26 +142,17 @@ fn handle_youtube_playlist_dialog(app: &mut App) {
     .and_then(|idx| app.youtube_playlists.get(idx))
     .map(|playlist| playlist.uri.clone());
   if let Some(uri) = uri {
-    app.dispatch(IoEvent::DeleteYouTubePlaylist(uri));
+    app.apply(Action::DeletePlaylist(uri));
   }
 }
 
 fn handle_remove_track_from_playlist_confirm(app: &mut App) {
   if let Some(pending_remove) = app.pending_playlist_track_removal.clone() {
-    // A `youtube:playlist:` target is a local YouTube playlist edit; anything
-    // else is the Spotify remove (which needs the snapshot position).
-    if pending_remove.playlist_id.starts_with("youtube:playlist:") {
-      app.dispatch(IoEvent::RemoveTrackFromYouTubePlaylist(
-        pending_remove.playlist_id,
-        pending_remove.track_id,
-      ));
-    } else {
-      app.dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(
-        pending_remove.playlist_id,
-        pending_remove.track_id,
-        pending_remove.position,
-      ));
-    }
+    app.apply(Action::RemoveTrackFromPlaylist {
+      playlist: pending_remove.playlist_id,
+      track: pending_remove.track_id,
+      position: pending_remove.position,
+    });
   }
 }
 
@@ -182,6 +170,7 @@ mod tests {
     test_helpers::{playlist_info, user_info},
     user_config::UserConfig,
   };
+  use crate::infra::network::IoEvent;
   use std::{sync::mpsc::channel, time::SystemTime};
 
   #[test]
@@ -233,7 +222,7 @@ mod tests {
 
     match rx.recv().unwrap() {
       IoEvent::AddTrackToPlaylist(playlist_id, track_id) => {
-        assert_eq!(playlist_id, "37i9dQZF1DXcBWIGoYBM5M");
+        assert_eq!(playlist_id, "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M");
         assert_eq!(track_id, "0000000000000000000001");
       }
       _ => panic!("expected add-track event"),
@@ -297,7 +286,7 @@ mod tests {
     handler(Key::Enter, &mut app);
     match rx.recv().unwrap() {
       IoEvent::AddTrackToPlaylist(playlist_id, track_id) => {
-        assert_eq!(playlist_id, "37i9dQZF1DXcBWIGoYBM5M");
+        assert_eq!(playlist_id, "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M");
         assert_eq!(track_id, "0000000000000000000001");
       }
       _ => panic!("expected add-track event"),

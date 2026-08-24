@@ -1,6 +1,40 @@
 use super::*;
 
 impl App {
+  /// Commit `settings_items` and write `config.yml`; `false` when the write
+  /// failed (the error frame is on top, do not close the screen over it).
+  pub(crate) fn save_settings_from_items(&mut self) -> bool {
+    #[cfg(feature = "telemetry")]
+    let global_count_was_enabled = self.user_config.behavior.enable_global_song_count;
+    // Apply settings to user_config and save to file
+    self.apply_settings_changes();
+
+    // If the user just turned the global counter on, fetch the current count now so
+    // the home banner reflects it without waiting for the next launch.
+    #[cfg(feature = "telemetry")]
+    if !global_count_was_enabled && self.user_config.behavior.enable_global_song_count {
+      self.dispatch(IoEvent::FetchGlobalSongCount);
+    }
+    #[cfg(target_os = "macos")]
+    if self.user_config.keys.open_settings != Key::Ctrl(',') {
+      self.keybinding_runtime.effective_open_settings = None;
+      self.keybinding_runtime.fallback_reason = None;
+    }
+    if let Err(e) = self.user_config.save_config() {
+      self.handle_error(anyhow::anyhow!("Failed to save settings: {}", e));
+      return false;
+    }
+
+    self.settings_saved_items = self.settings_items.clone();
+    true
+  }
+
+  pub(crate) fn cycle_visualizer_style(&mut self) {
+    self.user_config.behavior.visualizer_style = self.user_config.behavior.visualizer_style.next();
+    // Save the config so the preference persists
+    let _ = self.user_config.save_config();
+  }
+
   // Apply changes from settings_items back to user_config
   pub fn apply_settings_changes(&mut self) {
     use crate::core::user_config::{parse_theme_item, ThemePreset};

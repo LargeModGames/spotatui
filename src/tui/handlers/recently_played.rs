@@ -1,7 +1,7 @@
 use super::common_key_events;
+use crate::core::action::Action;
 use crate::core::app::App;
-use crate::core::app::RecommendationsContext;
-use crate::infra::network::IoEvent;
+use crate::core::plugin_api::TrackInfo;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -46,57 +46,38 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     Key::Char('s') => {
-      if let Some(recently_played_result) = &app.recently_played.result.clone() {
-        if let Some(selected_track) = recently_played_result.items.get(app.recently_played.index) {
-          if let Some(ref id_str) = selected_track.id {
-            app.dispatch(IoEvent::ToggleSaveTrack(id_str.clone()));
-          };
-        };
-      };
+      // The bare id, not the URI: a row can be a local file.
+      if let Some(id) = selected_recent_track(app).and_then(|track| track.id.clone()) {
+        app.apply(Action::ToggleSaveTrack(id));
+      }
     }
-    Key::Char('w') => open_add_to_playlist_for_selected_recent_track(app),
+    Key::Char('w') => {
+      let track = selected_recent_track(app).map(|track| (track.id.clone(), track.name.clone()));
+      if let Some((track_id, track_name)) = track {
+        app.apply(Action::OpenAddTrackDialogFor {
+          track_id,
+          track_name,
+        });
+      }
+    }
     Key::Enter => {
-      if let Some(recently_played_result) = &app.recently_played.result.clone() {
-        let selected = app.recently_played.index;
-        // Build uri list while tracking the remapped offset for the selected track.
-        // Tracks without a valid id (e.g. local files) are omitted from the uri list,
-        // so the offset into the resulting vec must be recomputed, not taken verbatim
-        // from `app.recently_played.index`.
-        let mut remapped_offset: Option<usize> = None;
-        let mut uri_index = 0usize;
-        let track_uris: Vec<String> = recently_played_result
-          .items
-          .iter()
-          .enumerate()
-          .filter_map(|(orig_index, item)| {
-            let playable = item.uri.clone();
-            if playable.is_some() {
-              if orig_index == selected {
-                remapped_offset = Some(uri_index);
-              }
-              uri_index += 1;
-            }
-            playable
-          })
-          .collect();
-
-        app.dispatch(IoEvent::StartPlayback(
-          None,
-          Some(track_uris),
-          remapped_offset,
-        ));
-      };
+      let selected = app.recently_played.index;
+      let request = app.recently_played.result.as_ref().map(|page| {
+        common_key_events::uri_playback_request(
+          page.items.iter().map(|track| track.uri.clone()),
+          selected,
+        )
+      });
+      if let Some((uris, offset)) = request {
+        app.apply(Action::PlayUris { uris, offset });
+      }
     }
     Key::Char('r') => {
-      if let Some(recently_played_result) = &app.recently_played.result.clone() {
-        if let Some(selected_track) = recently_played_result.items.get(app.recently_played.index) {
-          if let Some(ref id_str) = selected_track.id {
-            app.recommendations_context = Some(RecommendationsContext::Song);
-            app.recommendations_seed = selected_track.name.clone();
-            app.get_recommendations_for_track_id(id_str.clone());
-          };
-        };
-      };
+      let identity =
+        selected_recent_track(app).and_then(|track| Some((track.id.clone()?, track.name.clone())));
+      if let Some((id, name)) = identity {
+        app.apply(Action::RecommendFromTrackId { id, name });
+      }
     }
     _ if key == app.user_config.keys.add_item_to_queue => {
       let track = app
@@ -105,28 +86,45 @@ pub fn handler(key: Key, app: &mut App) {
         .as_ref()
         .and_then(|r| r.items.get(app.recently_played.index).cloned());
       if let Some(track) = track {
-        app.add_track_to_native_queue(track);
+        app.apply(Action::QueueTrack(track));
       }
     }
     _ => {}
   };
 }
 
-fn open_add_to_playlist_for_selected_recent_track(app: &mut App) {
-  let Some(recently_played_result) = &app.recently_played.result else {
-    return;
-  };
-  let Some(selected_track) = recently_played_result.items.get(app.recently_played.index) else {
-    return;
-  };
-
-  app.begin_add_track_to_playlist_flow(selected_track.id.clone(), selected_track.name.clone());
+/// The row under the cursor.
+fn selected_recent_track(app: &App) -> Option<&TrackInfo> {
+  app
+    .recently_played
+    .result
+    .as_ref()?
+    .items
+    .get(app.recently_played.index)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::ActiveBlock;
+
+  fn recent(uri: Option<&str>, name: &str) -> TrackInfo {
+    TrackInfo {
+      uri: uri.map(|u| u.to_string()),
+      name: name.to_string(),
+      artists: vec!["Artist".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 1_000,
+      id: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }
+  }
 
   #[test]
   fn on_left_press() {

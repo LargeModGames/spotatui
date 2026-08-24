@@ -312,23 +312,16 @@ fn on_enter(app: &mut App) {
           // with an offset.
         };
       }
-      TrackTableContext::RecommendedTracks => {
-        let mut playable_ids: Vec<String> = Vec::new();
-        let mut selected_offset: Option<usize> = None;
-
-        for (idx, track) in tracks.iter().enumerate() {
-          if let Some(playable_id) = track.uri.clone() {
-            if idx == *selected_index {
-              selected_offset = Some(playable_ids.len());
-            }
-            playable_ids.push(playable_id);
-          }
-        }
-
-        if !playable_ids.is_empty() {
+      TrackTableContext::RecommendedTracks | TrackTableContext::DiscoverPlaylist => {
+        // The whole list is sent so playback can continue past the selection.
+        let (uris, offset) = common_key_events::uri_playback_request(
+          tracks.iter().map(|track| track.uri.clone()),
+          *selected_index,
+        );
+        if !uris.is_empty() {
           app.apply(Action::PlayUris {
-            uris: playable_ids,
-            offset: Some(selected_offset.unwrap_or(0)),
+            uris,
+            offset: Some(offset.unwrap_or(0)),
           });
         }
       }
@@ -341,27 +334,6 @@ fn on_enter(app: &mut App) {
         }
       }
       TrackTableContext::AlbumSearch => {}
-      TrackTableContext::DiscoverPlaylist => {
-        // Play the selected track, but include the full discover list so playback can continue.
-        let mut playable_ids: Vec<String> = Vec::new();
-        let mut selected_offset: Option<usize> = None;
-
-        for (idx, track) in tracks.iter().enumerate() {
-          if let Some(playable_id) = track.uri.clone() {
-            if idx == *selected_index {
-              selected_offset = Some(playable_ids.len());
-            }
-            playable_ids.push(playable_id);
-          }
-        }
-
-        if !playable_ids.is_empty() {
-          app.apply(Action::PlayUris {
-            uris: playable_ids,
-            offset: Some(selected_offset.unwrap_or(0)),
-          });
-        }
-      }
       TrackTableContext::LocalPlaylist
       | TrackTableContext::SubsonicPlaylist
       | TrackTableContext::YouTubePlaylist => {
@@ -369,13 +341,14 @@ fn on_enter(app: &mut App) {
         // selected track, so Next/Previous/auto-advance have a queue to move
         // through. Routed to the local, subsonic or youtube player by URI
         // scheme (infra::local / infra::subsonic / infra::youtube dispatch).
-        let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
+        let (uris, offset) = common_key_events::uri_playback_request(
+          tracks.iter().map(|track| track.uri.clone()),
+          *selected_index,
+        );
         if !uris.is_empty() {
-          // `selected_index` is into the full track list; the filter above keeps
-          // every track (each carries a uri), so the index lines up.
           app.apply(Action::PlayUris {
             uris,
-            offset: Some(*selected_index),
+            offset: Some(offset.unwrap_or(0)),
           });
         }
       }
@@ -399,7 +372,7 @@ fn on_queue(app: &mut App) {
     .get(app.track_table.selected_index)
     .cloned()
   {
-    app.add_track_to_native_queue(track);
+    app.apply(Action::QueueTrack(track));
   }
 }
 
@@ -417,19 +390,11 @@ fn current_playlist_total_tracks(app: &App) -> Option<u32> {
 }
 
 fn saved_tracks_playback_request(app: &App) -> Option<(Vec<String>, usize)> {
-  let mut playable_ids = Vec::with_capacity(app.track_table.tracks.len());
-  let mut selected_playable_offset = None;
-
-  for (row_index, track) in app.track_table.tracks.iter().enumerate() {
-    if let Some(playable_id) = track.uri.clone() {
-      if row_index == app.track_table.selected_index {
-        selected_playable_offset = Some(playable_ids.len());
-      }
-      playable_ids.push(playable_id);
-    }
-  }
-
-  selected_playable_offset.map(|offset| (playable_ids, offset))
+  let (uris, offset) = common_key_events::uri_playback_request(
+    app.track_table.tracks.iter().map(|track| track.uri.clone()),
+    app.track_table.selected_index,
+  );
+  offset.map(|offset| (uris, offset))
 }
 
 #[cfg(test)]

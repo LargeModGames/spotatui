@@ -261,7 +261,7 @@ impl Network {
       let mut app = self.app.lock().await;
       match app.apply(Action::QueueTracks(std::mem::take(&mut report.resolved))) {
         ActionOutcome::Queued { accepted } => accepted,
-        ActionOutcome::Applied => 0,
+        ActionOutcome::Applied | ActionOutcome::SettingsSaved { .. } => 0,
       }
     };
     // After the block, not inside it: the network layer's helper takes the lock

@@ -689,22 +689,12 @@ impl Driver {
       RouteId::Podcasts if app.spotify_connected => {
         app.dispatch(IoEvent::GetCurrentUserSavedShows(None))
       }
-      RouteId::Stats => {
-        app.stats_loading = true;
-        let period = app.stats_period;
-        app.dispatch(IoEvent::LoadListeningStats(period));
-      }
+      RouteId::Stats => app.reload_stats(),
       _ => {}
     }
     // A persisted non-Spotify active source needs its sidebar data loaded
     // too (all of these are inert no-ops when the feature is off).
-    match app.active_source {
-      crate::core::source::Source::Local => app.dispatch(IoEvent::GetLocalPlaylists),
-      crate::core::source::Source::Subsonic => app.dispatch(IoEvent::GetSubsonicPlaylists),
-      crate::core::source::Source::Radio => app.dispatch(IoEvent::GetRadioStations),
-      crate::core::source::Source::YouTube => app.dispatch(IoEvent::GetYouTubePlaylists),
-      crate::core::source::Source::Spotify => {}
-    }
+    app.load_source_sidebar(app.active_source);
     if app.user_config.behavior.enable_global_song_count {
       app.dispatch(IoEvent::FetchGlobalSongCount);
     }

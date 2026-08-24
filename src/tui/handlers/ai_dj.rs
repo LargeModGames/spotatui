@@ -10,10 +10,9 @@
 
 use super::common_key_events;
 use crate::core::action::{Action, LibraryTarget};
-use crate::core::app::{ActiveBlock, App, RouteId};
+use crate::core::app::App;
 use crate::infra::dj::setup::{DjSetup, DjSetupChoice, DjSetupStep};
-use crate::infra::dj::{AskDjRequest, DjLine, TurnKind, MAX_BATCH};
-use crate::infra::network::IoEvent;
+use crate::infra::dj::DjLine;
 use crate::tui::event::Key;
 use unicode_width::UnicodeWidthChar;
 
@@ -39,19 +38,19 @@ pub fn handler(key: Key, app: &mut App) {
   if !matches!(key, Key::Char(_)) {
     let keys = &app.user_config.keys;
     if key == keys.dj_toggle_auto_queue {
-      toggle_auto_queue(app);
+      app.apply(Action::ToggleDjAutoQueue);
       return;
     }
     if key == keys.dj_vibe_shift {
-      vibe_shift(app);
+      app.apply(Action::DjVibeShift);
       return;
     }
     if key == keys.dj_toggle_fresh_only {
-      toggle_fresh_only(app);
+      app.apply(Action::ToggleDjFreshOnly);
       return;
     }
     if key == keys.dj_pick_model {
-      open_setup(app);
+      app.apply(Action::OpenDjSetup);
       return;
     }
   }
@@ -177,93 +176,8 @@ fn submit(app: &mut App) {
   if app.dj.input.is_empty() {
     return;
   }
-  // Checked before `take_input`, which clears the box: refusing the turn *and*
-  // deleting what the listener spent a minute typing is the worst of both.
-  if app.dj.thinking {
-    app.set_status_message("The DJ is still working on the last request", 3);
-    return;
-  }
-  let text = app.dj.take_input();
-  let text = text.trim().to_string();
-  if text.is_empty() {
-    return;
-  }
-
-  // Jumping back to the newest line: the user just spoke, so that is what they
-  // want to see.
-  app.dj.scroll = 0;
-  // A new instruction supersedes any refill already in flight.
-  let generation = app.dj.bump_generation();
-  let turn_seq = app.dj.begin_turn(TurnKind::Ask);
-  app.dj.push_line(DjLine::user(text.clone()));
-
-  // No `extra_instruction`: the line above *is* the instruction, and the brain
-  // reads it from the transcript. Passing it here as well is what made the DJ see
-  // the same request two and three times over.
-  //
-  // `dispatch_without_spinner` throughout this module: a brain call runs for up
-  // to `dj_agent_timeout_secs`, and plain `dispatch` would pin the global
-  // `is_loading` spinner for all of it. `dj.thinking` is the progress surface.
-  app.dispatch_without_spinner(IoEvent::AskDj(Box::new(AskDjRequest {
-    extra_instruction: None,
-    generation,
-    // The listener is right here, so the DJ may ask them something instead of
-    // guessing.
-    must_act: false,
-    // Only if the turn queues: a turn spent answering "what have I been
-    // listening to?" must not become the standing direction for every refill.
-    vibe_on_success: Some(text),
-    turn_seq,
-  })));
-}
-
-/// Toggle continuous auto-queue, dispatching an immediate refill if the queue is
-/// already short.
-pub fn toggle_auto_queue(app: &mut App) {
-  app.dj.auto_queue = !app.dj.auto_queue;
-  // Either direction invalidates a *refill* in flight: switching off should drop
-  // a pending one, and switching on starts a fresh one.
-  //
-  // A question the listener typed is not this toggle's to abandon. Bumping the
-  // generation would make its answer land and be discarded, and clearing
-  // `thinking` would let `submit` start a second brain call alongside the first.
-  // Nothing is left unguarded by skipping both: no refill can be in flight while
-  // an ask is (`wants_top_up` gates on the same flag), and later refills are
-  // already stopped by `auto_queue` itself.
-  let asked_turn_in_flight = app.dj.asked_turn_in_flight();
-  let generation = if asked_turn_in_flight {
-    app.dj.generation
-  } else {
-    app.dj.bump_generation()
-  };
-  if app.dj.auto_queue {
-    // Same rule the runner tick applies, so the immediate refill and the ongoing
-    // ones cannot disagree — on an external Connect device the native queue never
-    // fills, and refilling on its length would queue a batch per brain call
-    // forever. Said out loud, or auto-queue just looks broken on that device.
-    let external = app.spotify_external_device_active();
-    if external {
-      app.set_status_message(
-        "DJ auto-queue on — waits while another Spotify device is playing",
-        6,
-      );
-    } else {
-      app.set_status_message("DJ auto-queue on", 4);
-    }
-    if crate::infra::network::dj::wants_top_up(app.native_queue.len(), &app.dj, external) {
-      let turn_seq = app.dj.begin_turn(TurnKind::Refill);
-      app.dispatch_without_spinner(IoEvent::DjTopUp(generation, turn_seq));
-    }
-  } else {
-    if !asked_turn_in_flight {
-      // `finish_turn`, not a bare flag clear: it drops the step counter with the
-      // flag. Left behind, that counter belongs to a turn nobody is waiting on,
-      // and the next refill would paint it as its own progress until its first
-      // step lands.
-      app.dj.finish_turn(app.dj.turn_seq);
-    }
-    app.set_status_message("DJ auto-queue off", 4);
-  }
+  let text: String = app.dj.input.iter().collect();
+  app.apply(Action::AskDj(text));
 }
 
 /// Open the DJ screen, warming the library index if the filter is already on.
@@ -272,31 +186,6 @@ pub fn toggle_auto_queue(app: &mut App) {
 /// so every entry point (key, library row) fires the same sequence.
 pub fn open(app: &mut App) {
   app.apply(Action::OpenLibrary(LibraryTarget::AiDj));
-}
-
-/// Show the picker, whether or not the DJ screen is already open.
-///
-/// Focus and the route are handled exactly as [`open`] handles them, and for the
-/// same reasons: the route is pushed only when it is not already current, and
-/// focus is restored when it is. Skipping the restore left the modal painted while
-/// `active_block` was still the sidebar, so `handle_app` fed every key to the
-/// sidebar's handler and the picker accepted nothing.
-///
-/// Deliberately does not consult `dj_is_configured()` — pressing the key *is* the
-/// request.
-pub fn open_picker(app: &mut App) {
-  if app.get_current_route().id == RouteId::AiDj {
-    app.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
-  } else {
-    app.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
-  }
-  app.request_dj_library_index();
-  open_setup(app);
-}
-
-/// Open the picker, detecting what is installed once.
-pub(crate) fn open_setup(app: &mut App) {
-  app.dj.setup = Some(DjSetup::new(&app.user_config.behavior));
 }
 
 /// What a keypress means to the picker.
@@ -525,61 +414,13 @@ fn commit(app: &mut App) {
   persist_dj_setup(app, &message);
 }
 
-/// Toggle "only tracks I do not already have".
-///
-/// Switching it on kicks off the playlist crawl straight away rather than waiting
-/// for the first turn to need it: the crawl takes a few seconds and a brain call
-/// takes far longer, so starting now means the index is almost always warm by the
-/// time there is something to filter.
-pub fn toggle_fresh_only(app: &mut App) {
-  app.dj.avoid_library = !app.dj.avoid_library;
-  if app.dj.avoid_library {
-    app.set_status_message("DJ: only tracks you don't already have", 4);
-    app.request_dj_library_index();
-  } else {
-    app.set_status_message("DJ: recommending from everything", 4);
-  }
-}
-
-/// Re-roll the direction: drop the DJ's own queued tracks and ask again.
-///
-/// Dropping the tail is the point. A vibe shift that only takes effect after six
-/// already-queued tracks have played does not feel like a vibe shift.
-pub fn vibe_shift(app: &mut App) {
-  if app.dj.thinking {
-    app.set_status_message("The DJ is already working on something", 3);
-    return;
-  }
-  let generation = app.dj.bump_generation();
-  let dropped = app.drop_dj_queued_tracks();
-  let turn_seq = app.dj.begin_turn(TurnKind::Ask);
-  app.dj.scroll = 0;
-  app.dj.push_line(DjLine::system(if dropped > 0 {
-    format!("Shifting the vibe (dropped {dropped} queued track(s))")
-  } else {
-    "Shifting the vibe".to_string()
-  }));
-  // A steer rather than a transcript line: the listener never typed this, and the
-  // system line above already tells them what happened.
-  app.dispatch_without_spinner(IoEvent::AskDj(Box::new(AskDjRequest {
-    extra_instruction: Some(format!(
-      "Change direction. Queue {MAX_BATCH} tracks that go somewhere different from what has been \
-       playing, while still being something this listener would enjoy."
-    )),
-    generation,
-    // A vibe shift has just emptied the queue, so it has to refill it rather than
-    // stopping to ask what "different" means.
-    must_act: true,
-    vibe_on_success: None,
-    turn_seq,
-  })));
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::{ActiveBlock, RouteId};
   use crate::core::user_config::{UserConfig, UserConfigPaths};
+  use crate::infra::dj::TurnKind;
+  use crate::infra::network::IoEvent;
   use std::sync::mpsc::{channel, Receiver};
   use std::time::SystemTime;
 
@@ -765,7 +606,7 @@ mod tests {
     // picker is visible and accepts nothing.
     let (mut app, _rx) = dj_app();
     app.set_current_route_state(Some(ActiveBlock::Library), None);
-    open_picker(&mut app);
+    app.apply(Action::OpenDjSetup);
     assert!(app.dj.setup.is_some(), "the picker should be open");
     assert_eq!(
       app.get_current_route().active_block,
@@ -817,7 +658,7 @@ mod tests {
     let generation = app.dj.generation;
 
     app.dj.auto_queue = true;
-    toggle_auto_queue(&mut app);
+    app.apply(Action::ToggleDjAutoQueue);
 
     assert!(!app.dj.auto_queue);
     assert!(app.dj.thinking, "the question is still being answered");
@@ -835,7 +676,7 @@ mod tests {
     app.dj.step = Some((2, 4));
     let generation = app.dj.generation;
 
-    toggle_auto_queue(&mut app);
+    app.apply(Action::ToggleDjAutoQueue);
 
     assert!(!app.dj.thinking, "nobody is waiting on a refill");
     assert!(
@@ -880,12 +721,12 @@ mod tests {
     assert!(!app.is_loading, "submit must not set the global spinner");
 
     app.dj.thinking = false;
-    vibe_shift(&mut app);
+    app.apply(Action::DjVibeShift);
     assert!(matches!(rx.try_recv(), Ok(IoEvent::AskDj(_))));
     assert!(!app.is_loading, "a vibe shift must not either");
 
     app.dj.thinking = false;
-    toggle_auto_queue(&mut app);
+    app.apply(Action::ToggleDjAutoQueue);
     assert!(matches!(rx.try_recv(), Ok(IoEvent::DjTopUp(..))));
     assert!(!app.is_loading, "nor the auto-queue toggle's refill");
   }
@@ -899,7 +740,7 @@ mod tests {
     app.current_playback_context = Some(external_spotify_context());
     assert!(app.spotify_external_device_active());
 
-    toggle_auto_queue(&mut app);
+    app.apply(Action::ToggleDjAutoQueue);
     assert!(app.dj.auto_queue, "the preference itself still flips on");
     assert!(
       rx.try_recv().is_err(),
@@ -977,7 +818,7 @@ mod tests {
   #[test]
   fn toggling_auto_queue_on_with_a_short_queue_asks_for_a_refill() {
     let (mut app, rx) = dj_app();
-    toggle_auto_queue(&mut app);
+    app.apply(Action::ToggleDjAutoQueue);
     assert!(app.dj.auto_queue);
     match rx.try_recv().expect("a top-up should be dispatched") {
       IoEvent::DjTopUp(generation, _) => assert_eq!(generation, app.dj.generation),
@@ -988,10 +829,10 @@ mod tests {
   #[test]
   fn toggling_auto_queue_off_invalidates_work_in_flight() {
     let (mut app, _rx) = dj_app();
-    toggle_auto_queue(&mut app);
+    app.apply(Action::ToggleDjAutoQueue);
     let generation_on = app.dj.generation;
     app.dj.thinking = true;
-    toggle_auto_queue(&mut app);
+    app.apply(Action::ToggleDjAutoQueue);
     assert!(!app.dj.auto_queue);
     assert!(!app.dj.thinking, "a pending refill must be released");
     assert_ne!(app.dj.generation, generation_on);
@@ -1001,7 +842,7 @@ mod tests {
   fn a_vibe_shift_bumps_the_generation_and_asks_again() {
     let (mut app, rx) = dj_app();
     let before = app.dj.generation;
-    vibe_shift(&mut app);
+    app.apply(Action::DjVibeShift);
     assert_ne!(app.dj.generation, before);
     assert!(app.dj.thinking);
     match rx.try_recv().expect("an AskDj should be dispatched") {
@@ -1034,7 +875,7 @@ mod tests {
   fn a_vibe_shift_while_thinking_is_refused() {
     let (mut app, rx) = dj_app();
     app.dj.thinking = true;
-    vibe_shift(&mut app);
+    app.apply(Action::DjVibeShift);
     assert!(rx.try_recv().is_err());
   }
 
@@ -1043,15 +884,15 @@ mod tests {
     let (mut app, rx) = dj_app();
     assert!(!app.dj.avoid_library, "off unless configured on");
 
-    toggle_fresh_only(&mut app);
+    app.apply(Action::ToggleDjFreshOnly);
     assert!(app.dj.avoid_library);
     assert!(matches!(rx.try_recv(), Ok(IoEvent::DjIndexLibrary)));
 
     // Off, then on again with the index already cached: no second crawl.
-    toggle_fresh_only(&mut app);
+    app.apply(Action::ToggleDjFreshOnly);
     assert!(!app.dj.avoid_library);
     app.dj.library = Some(crate::infra::dj::DjLibrary::default());
-    toggle_fresh_only(&mut app);
+    app.apply(Action::ToggleDjFreshOnly);
     assert!(app.dj.avoid_library);
     assert!(
       rx.try_recv().is_err(),
@@ -1073,7 +914,7 @@ mod tests {
 
   #[test]
   fn opening_the_screen_with_the_filter_already_on_starts_the_crawl() {
-    // The config-default path never calls `toggle_fresh_only`, so opening the
+    // The config-default path never runs `ToggleDjFreshOnly`, so opening the
     // screen is the only chance to warm the index. Without this the first turn
     // crawls inline on the serial lane, blocking every other event behind it.
     let (tx, rx) = channel();
@@ -1152,7 +993,7 @@ mod tests {
     // over every character; below it the letters would land in the prompt behind
     // the overlay.
     let (mut app, _rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Char('j'), &mut app);
     handler(Key::Char('q'), &mut app);
     assert!(app.dj.input.is_empty());
@@ -1164,7 +1005,7 @@ mod tests {
     // The picker branch also has to sit above the modifier block: these keys start
     // minutes of work with the very backend the user is part way through changing.
     let (mut app, rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     let keys = app.user_config.keys.clone();
     handler(keys.dj_toggle_auto_queue, &mut app);
     handler(keys.dj_vibe_shift, &mut app);
@@ -1190,7 +1031,7 @@ mod tests {
       config_file_path: dir.path().join("config.yml"),
     });
 
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Enter, &mut app);
     assert_eq!(app.dj.setup.as_ref().unwrap().step, DjSetupStep::Model);
 
@@ -1234,7 +1075,7 @@ mod tests {
       config_file_path: dir.path().join("no-such-directory").join("config.yml"),
     });
 
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Esc, &mut app);
 
     assert!(app.dj.setup.is_none(), "the picker still closes");
@@ -1253,7 +1094,7 @@ mod tests {
     // The rows are numbered on screen, so a digit that only moved the cursor would
     // be a shortcut that saves nothing.
     let (mut app, _rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Char('2'), &mut app);
     let setup = app.dj.setup.as_ref().unwrap();
     assert_eq!(setup.backend_index, 1);
@@ -1265,7 +1106,7 @@ mod tests {
     // The digit path reaches `choice()`, which refuses the "Custom…" row. Without
     // the free-text branch in `advance` that refusal would read as a dead key.
     let (mut app, _rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Enter, &mut app);
     let custom_row = app.dj.setup.as_ref().unwrap().models.len();
     assert!(custom_row <= 9, "the claude list is short enough to reach");
@@ -1276,7 +1117,7 @@ mod tests {
   #[test]
   fn the_custom_row_opens_a_typing_step_that_takes_letters() {
     let (mut app, _rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Enter, &mut app);
     let last = app.dj.setup.as_ref().unwrap().models.len() - 1;
     app.dj.setup.as_mut().unwrap().model_index = last;
@@ -1321,7 +1162,7 @@ mod tests {
     let mut config = UserConfig::new();
     config.behavior.dj_configured = Some(true);
     let mut app = App::new(tx, config, Some(SystemTime::now()));
-    open_picker(&mut app);
+    app.apply(Action::OpenDjSetup);
     app.dj.setup.as_mut().unwrap().step = DjSetupStep::Model;
     app.pop_navigation_stack();
 
@@ -1344,7 +1185,7 @@ mod tests {
   #[test]
   fn the_reopen_binding_does_not_push_a_second_dj_route() {
     let (mut app, _rx) = dj_app();
-    open_picker(&mut app);
+    app.apply(Action::OpenDjSetup);
     app.dj.close_setup();
     app.pop_navigation_stack();
     assert_ne!(
@@ -1357,7 +1198,7 @@ mod tests {
   #[test]
   fn confirming_the_picker_writes_the_backend_and_marks_the_dj_configured() {
     let (mut app, _rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Enter, &mut app);
 
     // `apply_setup_choice`, never `commit`: only `persist_dj_setup` touches the
@@ -1380,7 +1221,7 @@ mod tests {
   #[test]
   fn dismissing_the_picker_marks_the_dj_configured_so_it_does_not_reappear() {
     let (mut app, _rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     dismiss_setup(&mut app);
     assert!(app.dj.setup.is_none());
     assert_eq!(app.user_config.behavior.dj_configured, Some(true));
@@ -1400,7 +1241,7 @@ mod tests {
   #[test]
   fn the_picker_bumps_the_generation_so_an_in_flight_batch_is_dropped() {
     let (mut app, _rx) = dj_app();
-    open_setup(&mut app);
+    app.apply(Action::OpenDjSetup);
     handler(Key::Enter, &mut app);
     let before = app.dj.generation;
     apply_setup_choice(&mut app);

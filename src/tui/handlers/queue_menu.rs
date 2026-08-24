@@ -1,4 +1,5 @@
 use super::common_key_events;
+use crate::core::action::Action;
 use crate::core::app::App;
 use crate::tui::event::Key;
 
@@ -19,33 +20,23 @@ pub fn handler(key: Key, app: &mut App) {
   }
 }
 
-/// Jump to the selected queue row: drop every item before it, then start the
-/// native queue there. If a context is playing and the queue does not already
-/// own playback, suspend it mid-track first (a decoded source resumes at the
-/// same track + position; a native-Spotify context resumes at the same track).
+fn queue_item_uri(app: &App, position: usize) -> Option<String> {
+  app.native_queue.get(position).and_then(|t| t.uri.clone())
+}
+
+/// Jump to the selected queue row and move the selection to the new head.
 /// Row 0 (now playing) is non-actionable.
 fn play_selected(app: &mut App) {
   let selected = app.view.queue_selected_index;
   if selected == 0 {
     return;
   }
-  let skip = selected - 1;
-  if skip >= app.native_queue.len() {
+  let position = selected - 1;
+  let Some(uri) = queue_item_uri(app, position) else {
     return;
-  }
-  // Drop the items before the selected one so it becomes the queue head.
-  app.native_queue.drain(..skip);
+  };
+  app.apply(Action::PlayQueueItem { uri, position });
   app.view.queue_selected_index = 1;
-  if !app.queue_owns_playback() {
-    app.suspend_active_decoded_context_mid_track();
-    // No decoded context recorded a suspension: a native-Spotify context may be
-    // playing instead — suspend it so the queue hands back to it on drain.
-    #[cfg(feature = "streaming")]
-    if app.queue_suspended.is_none() {
-      app.suspend_native_spotify_context_mid_track();
-    }
-  }
-  app.dispatch(crate::infra::network::IoEvent::AdvanceNativeQueue);
 }
 
 /// Total selectable rows: the now-playing header plus every queue item.
@@ -69,9 +60,9 @@ fn remove_selected(app: &mut App) {
   if selected == 0 {
     return;
   }
-  let idx = selected - 1;
-  if idx < app.native_queue.len() {
-    app.native_queue.remove(idx);
+  let position = selected - 1;
+  if let Some(uri) = queue_item_uri(app, position) {
+    app.apply(Action::RemoveFromQueue { uri, position });
     let max_index = row_count(app).saturating_sub(1);
     if app.view.queue_selected_index > max_index {
       app.view.queue_selected_index = max_index;
@@ -88,16 +79,24 @@ fn reorder(delta: i32, app: &mut App) {
   }
   let idx = selected - 1;
   let len = app.native_queue.len();
-  if idx >= len {
+  let Some(uri) = queue_item_uri(app, idx) else {
     return;
-  }
+  };
   match delta {
     1 if idx + 1 < len => {
-      app.native_queue.swap(idx, idx + 1);
+      app.apply(Action::MoveQueueItem {
+        uri,
+        from: idx,
+        to: idx + 1,
+      });
       app.view.queue_selected_index = selected + 1;
     }
     -1 if idx > 0 => {
-      app.native_queue.swap(idx, idx - 1);
+      app.apply(Action::MoveQueueItem {
+        uri,
+        from: idx,
+        to: idx - 1,
+      });
       app.view.queue_selected_index = selected - 1;
     }
     _ => {}
@@ -133,7 +132,9 @@ mod tests {
   fn app_with_queue(names: &[&str]) -> App {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.native_queue = names.iter().map(|n| track("spotify:track:x", n)).collect();
+    for name in names {
+      app.add_track_to_native_queue(track("spotify:track:x", name));
+    }
     app
   }
 
@@ -222,6 +223,32 @@ mod tests {
     // Now-playing row is non-actionable.
     app.view.queue_selected_index = 0;
     reorder(1, &mut app);
+    assert_eq!(app.view.queue_selected_index, 0);
+  }
+
+  #[test]
+  fn enter_drops_the_rows_above_the_selection_and_selects_the_new_head() {
+    let mut app = app_with_queue(&["A", "B", "C"]);
+    // Select C (row 3): A and B are dropped, C becomes the head.
+    app.view.queue_selected_index = 3;
+    handler(Key::Enter, &mut app);
+    assert_eq!(
+      app
+        .native_queue
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect::<Vec<_>>(),
+      vec!["C"]
+    );
+    assert_eq!(app.view.queue_selected_index, 1);
+  }
+
+  #[test]
+  fn enter_on_the_now_playing_row_changes_nothing() {
+    let mut app = app_with_queue(&["A", "B"]);
+    app.view.queue_selected_index = 0;
+    handler(Key::Enter, &mut app);
+    assert_eq!(app.native_queue.len(), 2);
     assert_eq!(app.view.queue_selected_index, 0);
   }
 }

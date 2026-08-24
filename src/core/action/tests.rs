@@ -510,6 +510,62 @@ fn remove_track_from_playlist_dispatches_with_position() {
 }
 
 #[test]
+fn add_track_to_playlist_routes_a_youtube_playlist_to_the_local_edit() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::AddTrackToPlaylist {
+    playlist: "youtube:playlist:y1".to_string(),
+    track: "v1".to_string(),
+  });
+
+  match rx.try_recv() {
+    Ok(IoEvent::AddTrackToYouTubePlaylist(playlist, track)) => {
+      assert_eq!(playlist, "youtube:playlist:y1");
+      assert_eq!(track, "v1");
+    }
+    _other => panic!("expected AddTrackToYouTubePlaylist (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn add_track_to_playlist_keeps_a_spotify_uri_on_the_web_api() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::AddTrackToPlaylist {
+    playlist: "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M".to_string(),
+    track: "t1".to_string(),
+  });
+
+  match rx.try_recv() {
+    Ok(IoEvent::AddTrackToPlaylist(playlist, track)) => {
+      assert_eq!(playlist, "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M");
+      assert_eq!(track, "t1");
+    }
+    _other => panic!("expected AddTrackToPlaylist (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn remove_track_from_playlist_routes_a_youtube_playlist_to_the_local_edit() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::RemoveTrackFromPlaylist {
+    playlist: "youtube:playlist:y1".to_string(),
+    track: "v1".to_string(),
+    position: 3,
+  });
+
+  match rx.try_recv() {
+    // The local edit removes by video id: the staged position is not carried.
+    Ok(IoEvent::RemoveTrackFromYouTubePlaylist(playlist, track)) => {
+      assert_eq!(playlist, "youtube:playlist:y1");
+      assert_eq!(track, "v1");
+    }
+    _other => panic!("expected RemoveTrackFromYouTubePlaylist (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
 fn follow_playlist_uses_the_unknown_owner_fallback() {
   let (mut app, rx) = app_with_channel();
 
@@ -555,7 +611,7 @@ fn unfollow_playlist_without_a_user_sets_an_error_status() {
   assert!(app.status_message_is_error);
   assert_eq!(
     app.status_message.as_deref(),
-    Some("plugin unfollow_playlist: user profile not loaded yet")
+    Some("Cannot unfollow: user profile not loaded yet")
   );
 }
 
@@ -985,7 +1041,7 @@ mod dj_actions {
 use super::{LibraryTarget, ListTarget, OpenTarget};
 use crate::core::app::{ActiveBlock, DialogContext, PendingTrackSelection, RecommendationsContext};
 use crate::core::pagination::Paged;
-use crate::core::plugin_api::{PlaylistInfo, TrackInfo};
+use crate::core::plugin_api::{AlbumInfo, PlaylistInfo, SavedAlbumInfo, TrackInfo};
 use crate::core::source::Source;
 use crate::core::test_helpers::{full_track, playlist_info};
 
@@ -1004,6 +1060,30 @@ fn track_page(offset: u32, ids: &[&str], has_next: bool) -> Paged<TrackInfo> {
     limit: ids.len() as u32,
     total: 4,
     next: has_next.then(|| "https://example.com/next".to_string()),
+    previous: None,
+  }
+}
+
+/// A saved-albums row with `cached` of `total` tracks embedded.
+fn saved_albums_page(cached: usize, total: u32) -> Paged<SavedAlbumInfo> {
+  Paged {
+    items: vec![SavedAlbumInfo {
+      album: AlbumInfo {
+        id: Some("5gzLOflH95LkKYE6XSXE9k".to_string()),
+        uri: Some("spotify:album:5gzLOflH95LkKYE6XSXE9k".to_string()),
+        name: "One Wayne G".to_string(),
+        total_tracks: Some(total),
+        tracks: (0..cached)
+          .map(|i| track("0000000000000000000001", &format!("Track {i}")))
+          .collect(),
+        ..AlbumInfo::default()
+      },
+      added_at: String::new(),
+    }],
+    offset: 0,
+    limit: 1,
+    total: 1,
+    next: None,
     previous: None,
   }
 }
@@ -1162,17 +1242,125 @@ fn load_more_playlist_tracks_does_not_refetch_an_in_flight_page() {
 // --- Open family ---
 
 #[test]
-fn open_album_dispatches_get_album() {
+fn open_album_without_from_search_leaves_the_track_table_alone() {
   let (mut app, rx) = app_with_channel();
+  app.track_table.context = Some(crate::core::app::TrackTableContext::SavedTracks);
 
-  app.apply(Action::Open(OpenTarget::Album(
-    "5gzLOflH95LkKYE6XSXE9k".to_string(),
-  )));
+  app.apply(Action::Open(OpenTarget::Album {
+    id: "5gzLOflH95LkKYE6XSXE9k".to_string(),
+    from_search: false,
+  }));
 
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::SavedTracks),
+    "a plain album open never restamps the table context"
+  );
   assert!(matches!(
     rx.try_recv(),
     Ok(IoEvent::GetAlbum(id)) if id == "5gzLOflH95LkKYE6XSXE9k"
   ));
+}
+
+#[test]
+fn open_album_from_search_pins_the_album_search_context() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::Album {
+    id: "5gzLOflH95LkKYE6XSXE9k".to_string(),
+    from_search: true,
+  }));
+
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::AlbumSearch)
+  );
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetAlbum(id)) if id == "5gzLOflH95LkKYE6XSXE9k"
+  ));
+}
+
+#[test]
+fn open_saved_album_with_a_complete_cached_tracklist_opens_from_the_cache() {
+  let (mut app, rx) = app_with_channel();
+  app
+    .library
+    .saved_albums
+    .upsert_page_by_offset(saved_albums_page(2, 2));
+
+  app.apply(Action::Open(OpenTarget::SavedAlbum(
+    "5gzLOflH95LkKYE6XSXE9k".to_string(),
+  )));
+
+  assert!(app.selected_album_full.is_some());
+  assert_eq!(
+    app.album_table_context,
+    crate::core::app::AlbumTableContext::Full
+  );
+  assert_eq!(app.get_current_route().id, RouteId::AlbumTracks);
+  assert!(
+    rx.try_recv().is_err(),
+    "a complete cached tracklist needs no round trip"
+  );
+}
+
+#[test]
+fn open_saved_album_with_a_truncated_cached_tracklist_refetches_the_full_album() {
+  let (mut app, rx) = app_with_channel();
+  app
+    .library
+    .saved_albums
+    .upsert_page_by_offset(saved_albums_page(50, 199));
+
+  app.apply(Action::Open(OpenTarget::SavedAlbum(
+    "5gzLOflH95LkKYE6XSXE9k".to_string(),
+  )));
+
+  // GetAlbum fetches the whole tracklist and pushes the route itself.
+  assert!(app.selected_album_full.is_none());
+  assert_ne!(app.get_current_route().id, RouteId::AlbumTracks);
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetAlbum(id)) if id == "5gzLOflH95LkKYE6XSXE9k"
+  ));
+}
+
+#[test]
+fn open_saved_album_with_an_unknown_id_is_a_silent_noop() {
+  let (mut app, rx) = app_with_channel();
+  app
+    .library
+    .saved_albums
+    .upsert_page_by_offset(saved_albums_page(2, 2));
+
+  app.apply(Action::Open(OpenTarget::SavedAlbum(
+    "0000000000000000000000".to_string(),
+  )));
+
+  assert!(app.selected_album_full.is_none());
+  assert_ne!(app.get_current_route().id, RouteId::AlbumTracks);
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn open_show_episodes_dispatches_the_show_snapshot() {
+  let (mut app, rx) = app_with_channel();
+  let show = crate::core::plugin_api::ShowInfo {
+    id: Some("3aNsrV6lkzmcU1w8u8kA7N".to_string()),
+    name: "A Podcast".to_string(),
+    ..Default::default()
+  };
+
+  app.apply(Action::OpenShowEpisodes(show));
+
+  match rx.try_recv() {
+    Ok(IoEvent::GetShowEpisodes(show)) => {
+      assert_eq!(show.id.as_deref(), Some("3aNsrV6lkzmcU1w8u8kA7N"));
+      assert_eq!(show.name, "A Podcast");
+    }
+    _other => panic!("expected GetShowEpisodes"),
+  }
 }
 
 #[test]
@@ -1481,6 +1669,61 @@ fn recommend_from_track_without_a_uri_still_carries_the_context_row() {
   }
 }
 
+#[test]
+fn recommend_from_artist_sets_the_artist_context_and_seeds_by_id() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::RecommendFromArtist {
+    id: "0OdUWJ0sBjDrqHygGUXeCF".to_string(),
+    name: "Band of Horses".to_string(),
+  });
+
+  assert_eq!(
+    app.recommendations_context,
+    Some(RecommendationsContext::Artist)
+  );
+  assert_eq!(app.recommendations_seed, "Band of Horses");
+  match rx.try_recv() {
+    Ok(IoEvent::GetRecommendationsForSeed(seed_artists, seed_tracks, first_track, country)) => {
+      assert_eq!(
+        seed_artists,
+        Some(vec!["0OdUWJ0sBjDrqHygGUXeCF".to_string()])
+      );
+      assert!(seed_tracks.is_none());
+      assert!(
+        (*first_track).is_none(),
+        "an artist seed prepends no context row"
+      );
+      assert_eq!(country, None);
+    }
+    _other => panic!("expected GetRecommendationsForSeed"),
+  }
+}
+
+#[test]
+fn recommend_from_track_id_seeds_the_song_context_without_a_context_row() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::RecommendFromTrackId {
+    id: "4uLU6hMCjMI75M1A2tKUQC".to_string(),
+    name: "Song A".to_string(),
+  });
+
+  assert_eq!(
+    app.recommendations_context,
+    Some(RecommendationsContext::Song)
+  );
+  assert_eq!(app.recommendations_seed, "Song A");
+  // The id-only event carries no seed snapshot, so no seed row is prepended.
+  match rx.try_recv() {
+    Ok(IoEvent::GetRecommendationsForTrackId(id, country)) => {
+      assert_eq!(id, "4uLU6hMCjMI75M1A2tKUQC");
+      assert_eq!(country, None);
+    }
+    _other => panic!("expected GetRecommendationsForTrackId"),
+  }
+}
+
 // --- dialogs ---
 
 #[test]
@@ -1535,6 +1778,62 @@ fn open_add_track_dialog_without_destinations_requests_them() {
   assert!(matches!(rx.try_recv(), Ok(IoEvent::GetUser)));
   assert!(matches!(rx.try_recv(), Ok(IoEvent::GetPlaylists)));
   assert!(app.pending_playlist_track_add.is_none());
+}
+
+#[test]
+fn open_add_track_dialog_for_a_named_track_opens_the_picker() {
+  let (mut app, rx) = app_with_channel();
+  app.user = Some(UserInfo {
+    id: "spotatui-owner".to_string(),
+    ..Default::default()
+  });
+  app.playlists = Some(Paged {
+    total: 1,
+    ..Default::default()
+  });
+  app.all_playlists = vec![playlist_info(
+    "37i9dQZF1DXcBWIGoYBM5M",
+    "Owned Playlist",
+    "spotatui-owner",
+    false,
+  )];
+
+  app.apply(Action::OpenAddTrackDialogFor {
+    track_id: Some("0000000000000000000001".to_string()),
+    track_name: "Search Track".to_string(),
+  });
+
+  let pending = app
+    .pending_playlist_track_add
+    .as_ref()
+    .expect("staged for the picker");
+  assert_eq!(pending.track_id, "0000000000000000000001");
+  assert_eq!(pending.track_name, "Search Track");
+  assert_eq!(
+    app.get_current_route().active_block,
+    ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+  );
+  assert!(
+    rx.try_recv().is_err(),
+    "the destinations are already loaded, so nothing is fetched"
+  );
+}
+
+#[test]
+fn open_add_track_dialog_for_a_track_without_an_id_reports_it() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenAddTrackDialogFor {
+    track_id: None,
+    track_name: "Local File".to_string(),
+  });
+
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Track cannot be added to playlist")
+  );
+  assert!(app.pending_playlist_track_add.is_none());
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
 }
 
 #[test]
@@ -1792,4 +2091,1385 @@ fn select_source_flips_scope_mirrors_runtime_state_and_persists() {
     rx.try_recv().is_err(),
     "sidebar loading stays with the caller"
   );
+}
+
+// --- the now-playing item family ---
+
+use super::CopyTarget;
+
+#[test]
+fn toggle_save_current_item_saves_the_playing_track() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context_with_track(true));
+
+  app.apply(Action::ToggleSaveCurrentItem);
+
+  match rx.try_recv() {
+    Ok(IoEvent::ToggleSaveTrack(uri)) => {
+      assert_eq!(uri, "spotify:track:4uLU6hMCjMI75M1A2tKUQC")
+    }
+    _other => panic!("expected ToggleSaveTrack for the playing track"),
+  }
+}
+
+#[test]
+fn toggle_save_current_item_without_playback_is_a_noop() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::ToggleSaveCurrentItem);
+
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+  assert!(
+    app.status_message.is_none(),
+    "nothing playing falls through silently"
+  );
+}
+
+#[test]
+fn open_add_playing_track_dialog_without_playback_reports_no_track() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenAddPlayingTrackDialog);
+
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("No track currently playing")
+  );
+  assert!(rx.try_recv().is_err());
+  assert!(app.pending_playlist_track_add.is_none());
+}
+
+#[test]
+fn open_add_playing_track_dialog_stages_the_playing_track() {
+  let (mut app, rx) = app_with_channel();
+  app.active_source = Source::YouTube;
+  app.youtube_playlists = vec![PlaylistInfo {
+    uri: "youtube:playlist:y1".to_string(),
+    ..playlist_info("y1", "Local List", "owner", false)
+  }];
+  app.current_playback_context = Some(playback_context_with_track(true));
+
+  app.apply(Action::OpenAddPlayingTrackDialog);
+
+  assert_eq!(
+    app.get_current_route().active_block,
+    ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+  );
+  let pending = app
+    .pending_playlist_track_add
+    .as_ref()
+    .expect("staged for the picker");
+  assert_eq!(pending.track_name, "Test Song");
+  assert!(
+    rx.try_recv().is_err(),
+    "the YouTube path fetches nothing when playlists exist"
+  );
+}
+
+#[test]
+fn copy_url_without_playback_is_a_silent_noop() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::CopyUrl(CopyTarget::CurrentSong));
+  app.apply(Action::CopyUrl(CopyTarget::CurrentAlbum));
+
+  // No clipboard assertion: a headless runner has no clipboard.
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+  assert!(app.api_error.is_empty(), "no failure is reported");
+}
+
+// --- LoadSourceSidebar ---
+
+#[test]
+fn load_source_sidebar_fetches_each_scopes_own_data() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::LoadSourceSidebar(Source::Local));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetLocalPlaylists)));
+
+  app.apply(Action::LoadSourceSidebar(Source::Subsonic));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetSubsonicPlaylists)));
+
+  app.apply(Action::LoadSourceSidebar(Source::Radio));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetRadioStations)));
+
+  app.apply(Action::LoadSourceSidebar(Source::YouTube));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetYouTubePlaylists)));
+}
+
+#[test]
+fn load_source_sidebar_for_spotify_fetches_nothing() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::LoadSourceSidebar(Source::Spotify));
+
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn load_source_sidebar_does_not_flip_the_browse_scope() {
+  let (mut app, _rx) = app_with_channel();
+  let before = app.active_source;
+
+  app.apply(Action::LoadSourceSidebar(Source::Radio));
+
+  assert_eq!(
+    app.active_source, before,
+    "the scope flip and its persistence stay with SelectSource"
+  );
+}
+
+// --- the listening party family ---
+
+use crate::infra::network::sync::{ControlMode, PartyRole, PartySession};
+
+#[test]
+fn start_party_hosts_in_host_only_control() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::StartParty);
+
+  match rx.try_recv() {
+    Ok(IoEvent::StartParty(mode)) => assert_eq!(mode, ControlMode::HostOnly),
+    _other => panic!("expected a host-only StartParty"),
+  }
+}
+
+#[test]
+fn join_party_carries_the_code_and_the_guest_name() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::JoinParty {
+    code: "ABC123".to_string(),
+    name: "Guest".to_string(),
+  });
+
+  match rx.try_recv() {
+    Ok(IoEvent::JoinParty { code, name }) => {
+      assert_eq!(code, "ABC123");
+      assert_eq!(name, "Guest");
+    }
+    _other => panic!("expected JoinParty carrying both fields"),
+  }
+}
+
+#[test]
+fn leave_party_dispatches_the_leave() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::LeaveParty);
+
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::LeaveParty)));
+}
+
+#[test]
+fn toggle_party_control_mode_flips_the_session_and_tells_the_relay() {
+  let (mut app, rx) = app_with_channel();
+  app.party_session = Some(PartySession {
+    role: PartyRole::Host,
+    code: "ABC123".to_string(),
+    guests: Vec::new(),
+    control_mode: ControlMode::HostOnly,
+    host_name: "Host".to_string(),
+  });
+
+  app.apply(Action::TogglePartyControlMode);
+
+  // The relay handler only sends the message; the popup renders from this record.
+  assert_eq!(
+    app.party_session.as_ref().map(|s| s.control_mode.clone()),
+    Some(ControlMode::SharedControl)
+  );
+  match rx.try_recv() {
+    Ok(IoEvent::SetPartyControlMode(mode)) => assert_eq!(mode, ControlMode::SharedControl),
+    _other => panic!("expected the relay to be told about shared control"),
+  }
+
+  app.apply(Action::TogglePartyControlMode);
+
+  assert_eq!(
+    app.party_session.as_ref().map(|s| s.control_mode.clone()),
+    Some(ControlMode::HostOnly)
+  );
+  match rx.try_recv() {
+    Ok(IoEvent::SetPartyControlMode(mode)) => assert_eq!(mode, ControlMode::HostOnly),
+    _other => panic!("expected the mode to flip back"),
+  }
+}
+
+#[test]
+fn toggle_party_control_mode_without_a_session_dispatches_nothing() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::TogglePartyControlMode);
+
+  assert!(app.party_session.is_none());
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+// --- decoded-source playlists, sidebar folders and saved stations ---
+
+use crate::core::state::RadioStationConfig;
+
+fn radio_station_row(name: &str, url: &str) -> TrackInfo {
+  let mut station = track("0000000000000000000001", name);
+  station.uri = Some(format!("radio:{url}"));
+  station
+}
+
+#[test]
+fn open_source_playlist_local_clears_the_table_and_fetches() {
+  let (mut app, rx) = app_with_channel();
+  app.track_table.tracks = vec![track("0000000000000000000002", "Stale")];
+  app.track_table.selected_index = 1;
+  app.playlist_track_positions = Some(vec![7]);
+
+  app.apply(Action::Open(OpenTarget::SourcePlaylist(
+    "file:///music/Jazz".to_string(),
+  )));
+
+  assert!(app.track_table.tracks.is_empty());
+  assert_eq!(app.track_table.selected_index, 0);
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::LocalPlaylist)
+  );
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  assert_eq!(
+    app.playlist_track_positions,
+    Some(vec![7]),
+    "a decoded source opens without the Spotify page reset"
+  );
+  match rx.try_recv() {
+    Ok(IoEvent::GetLocalTracks(uri)) => assert_eq!(uri, "file:///music/Jazz"),
+    _other => panic!("expected GetLocalTracks (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn open_source_playlist_subsonic_uses_the_subsonic_context() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::SourcePlaylist(
+    "subsonic:playlist:42".to_string(),
+  )));
+
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::SubsonicPlaylist)
+  );
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  match rx.try_recv() {
+    Ok(IoEvent::GetSubsonicTracks(uri)) => assert_eq!(uri, "subsonic:playlist:42"),
+    _other => panic!("expected GetSubsonicTracks (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn open_source_playlist_youtube_uses_the_youtube_context() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::SourcePlaylist(
+    "youtube:playlist:y1".to_string(),
+  )));
+
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::YouTubePlaylist)
+  );
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  match rx.try_recv() {
+    Ok(IoEvent::GetYouTubeTracks(uri)) => assert_eq!(uri, "youtube:playlist:y1"),
+    _other => panic!("expected GetYouTubeTracks (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn open_source_playlist_with_an_unknown_scheme_is_a_silent_noop() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::SourcePlaylist(
+    "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M".to_string(),
+  )));
+
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+  assert_eq!(app.get_current_route().id, RouteId::Home);
+  assert_eq!(app.track_table.context, None);
+}
+
+#[test]
+fn open_playlist_folder_scopes_the_visible_items() {
+  use crate::core::app::{PlaylistFolder, PlaylistFolderItem};
+  let (mut app, _rx) = app_with_channel();
+  app.user_config.behavior.pin_community_playlist = false;
+  app.all_playlists = vec![playlist_info(
+    "37i9dQZF1DXcBWIGoYBM5M",
+    "Inside",
+    "spotatui-owner",
+    false,
+  )];
+  app.playlist_folder_items = vec![
+    PlaylistFolderItem::Folder(PlaylistFolder {
+      name: "Mixes".to_string(),
+      current_id: 0,
+      target_id: 1,
+    }),
+    PlaylistFolderItem::Playlist {
+      index: 0,
+      current_id: 1,
+    },
+  ];
+  assert!(matches!(
+    app.get_playlist_display_item_at(0),
+    Some(PlaylistFolderItem::Folder(_))
+  ));
+
+  app.apply(Action::Open(OpenTarget::PlaylistFolder(1)));
+
+  assert_eq!(app.get_playlist_display_count(), 1);
+  assert!(matches!(
+    app.get_playlist_display_item_at(0),
+    Some(PlaylistFolderItem::Playlist { index: 0, .. })
+  ));
+}
+
+#[test]
+fn delete_playlist_dispatches_the_local_delete() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::DeletePlaylist("youtube:playlist:y1".to_string()));
+
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::DeleteYouTubePlaylist(uri)) if uri == "youtube:playlist:y1"
+  ));
+}
+
+#[test]
+fn remove_radio_station_removes_the_saved_copy_and_reports_it() {
+  // Unseeded, the persist would write the developer's real state.yml.
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  app.runtime_state.radio_stations = vec![RadioStationConfig {
+    name: "Groove Salad".to_string(),
+    url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  }];
+  app.radio_stations = vec![radio_station_row(
+    "Groove Salad",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  )];
+
+  app.apply(Action::RemoveRadioStation(
+    "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  ));
+
+  assert!(app.runtime_state.radio_stations.is_empty());
+  assert!(app.radio_stations.is_empty(), "the sidebar row goes too");
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Removed saved radio station: Groove Salad")
+  );
+}
+
+#[test]
+fn remove_radio_station_reports_a_config_owned_station_without_removing() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  app.user_config.behavior.radio_stations = vec![RadioStationConfig {
+    name: "Configured Groove".to_string(),
+    url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  }];
+  app.radio_stations = vec![radio_station_row(
+    "Configured Groove",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  )];
+
+  app.apply(Action::RemoveRadioStation(
+    "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  ));
+
+  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Radio station is configured in config.yml: Configured Groove")
+  );
+}
+
+#[test]
+fn remove_radio_station_removes_only_the_saved_copy_of_a_configured_station() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  app.user_config.behavior.radio_stations = vec![RadioStationConfig {
+    name: "Configured Groove".to_string(),
+    url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  }];
+  app.runtime_state.radio_stations = vec![RadioStationConfig {
+    name: "Runtime Duplicate".to_string(),
+    url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  }];
+  app.radio_stations = vec![radio_station_row(
+    "Configured Groove",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  )];
+
+  app.apply(Action::RemoveRadioStation(
+    "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  ));
+
+  assert!(app.runtime_state.radio_stations.is_empty());
+  // Config still supplies the row, so the sidebar keeps it.
+  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Removed saved radio station: Runtime Duplicate")
+  );
+}
+
+#[test]
+fn remove_radio_station_reports_an_unfavorited_station() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  app.radio_stations = vec![radio_station_row(
+    "Groove Salad",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  )];
+
+  app.apply(Action::RemoveRadioStation(
+    "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
+  ));
+
+  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Radio station is not favorited: Groove Salad")
+  );
+}
+
+#[test]
+fn remove_radio_station_without_a_stream_url_reports_it() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  app.radio_stations = vec![radio_station_row(
+    "Groove Salad",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  )];
+
+  app.apply(Action::RemoveRadioStation("not-a-radio-uri".to_string()));
+
+  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Radio station has no stream URL")
+  );
+}
+
+#[test]
+fn favorite_radio_station_persists_it_and_lists_it_in_the_sidebar() {
+  // Unseeded, the persist would write the developer's real state.yml.
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+
+  app.apply(Action::FavoriteRadioStation(radio_station_row(
+    "Groove Salad",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  )));
+
+  assert_eq!(app.runtime_state.radio_stations.len(), 1);
+  assert_eq!(
+    app.runtime_state.radio_stations[0].url,
+    "https://ice1.somafm.com/groovesalad-128-mp3"
+  );
+  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Favorited radio station: Groove Salad")
+  );
+}
+
+#[test]
+fn favorite_radio_station_without_a_stream_url_reports_it() {
+  let (mut app, _rx) = app_with_channel();
+  let mut station = radio_station_row(
+    "Groove Salad",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  );
+  station.uri = None;
+
+  app.apply(Action::FavoriteRadioStation(station));
+
+  assert!(app.runtime_state.radio_stations.is_empty());
+  assert!(app.radio_stations.is_empty(), "no sidebar row is added");
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Radio station has no stream URL")
+  );
+}
+
+// --- podcasts, episodes, the native queue and the Discover rows ---
+
+use super::DiscoverTarget;
+use crate::core::app::{
+  DiscoverTimeRange, EpisodeTableContext, SelectedFullShow, SelectedShow, TrackTableContext,
+};
+use crate::core::plugin_api::{EpisodeInfo, ShowInfo};
+
+fn show_info(id: Option<&str>, name: &str) -> ShowInfo {
+  ShowInfo {
+    id: id.map(|id| id.to_string()),
+    name: name.to_string(),
+    ..Default::default()
+  }
+}
+
+fn shows_page(offset: u32, limit: u32, names: &[&str]) -> Paged<ShowInfo> {
+  Paged {
+    items: names
+      .iter()
+      .map(|name| show_info(Some("3aNsrV6lkzmcU1w8u8kA7N"), name))
+      .collect(),
+    offset,
+    limit,
+    total: 40,
+    next: None,
+    previous: None,
+  }
+}
+
+fn episodes_page(offset: u32, limit: u32, names: &[&str]) -> Paged<EpisodeInfo> {
+  Paged {
+    items: names
+      .iter()
+      .map(|name| EpisodeInfo {
+        id: Some((*name).to_string()),
+        uri: Some(format!("spotify:episode:{name}")),
+        name: (*name).to_string(),
+        duration_ms: 1_000,
+        show_name: String::new(),
+        description: String::new(),
+        release_date: String::new(),
+        is_playable: true,
+        resume_point: None,
+        image_url: None,
+      })
+      .collect(),
+    offset,
+    limit,
+    total: 40,
+    next: None,
+    previous: None,
+  }
+}
+
+#[test]
+fn load_more_saved_shows_flips_to_a_cached_page() {
+  let (mut app, rx) = app_with_channel();
+  app.library.saved_shows.add_pages(shows_page(0, 20, &["A"]));
+  app
+    .library
+    .saved_shows
+    .add_pages(shows_page(20, 20, &["B"]));
+  // `add_pages` leaves the visible index on the tail; start from the first.
+  app.library.saved_shows.index = 0;
+
+  app.apply(Action::LoadMore(ListTarget::SavedShows));
+
+  assert_eq!(app.library.saved_shows.index, 1);
+  assert!(rx.try_recv().is_err(), "a cached page needs no fetch");
+}
+
+#[test]
+fn load_more_saved_shows_fetches_the_next_offset() {
+  let (mut app, rx) = app_with_channel();
+  app.library.saved_shows.add_pages(shows_page(0, 20, &["A"]));
+
+  app.apply(Action::LoadMore(ListTarget::SavedShows));
+
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetCurrentUserSavedShows(Some(20)))
+  ));
+}
+
+#[test]
+fn load_more_saved_shows_with_an_empty_cache_is_a_noop() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::LoadMore(ListTarget::SavedShows));
+
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn load_more_show_episodes_flips_to_a_cached_page() {
+  let (mut app, rx) = app_with_channel();
+  app.selected_show_simplified = Some(SelectedShow {
+    show: show_info(Some("3aNsrV6lkzmcU1w8u8kA7N"), "A Podcast"),
+  });
+  app.episode_table_context = EpisodeTableContext::Simplified;
+  app
+    .library
+    .show_episodes
+    .add_pages(episodes_page(0, 20, &["A"]));
+  app
+    .library
+    .show_episodes
+    .add_pages(episodes_page(20, 20, &["B"]));
+  app.library.show_episodes.index = 0;
+
+  app.apply(Action::LoadMore(ListTarget::ShowEpisodes));
+
+  assert_eq!(app.library.show_episodes.index, 1);
+  assert!(rx.try_recv().is_err(), "a cached page needs no fetch");
+}
+
+#[test]
+fn load_more_show_episodes_fetches_the_next_offset() {
+  let (mut app, rx) = app_with_channel();
+  app.selected_show_simplified = Some(SelectedShow {
+    show: show_info(Some("3aNsrV6lkzmcU1w8u8kA7N"), "A Podcast"),
+  });
+  app.episode_table_context = EpisodeTableContext::Simplified;
+  app
+    .library
+    .show_episodes
+    .add_pages(episodes_page(0, 20, &["A"]));
+
+  app.apply(Action::LoadMore(ListTarget::ShowEpisodes));
+
+  match rx.try_recv() {
+    Ok(IoEvent::GetCurrentShowEpisodes(show_id, offset)) => {
+      assert_eq!(show_id, "3aNsrV6lkzmcU1w8u8kA7N");
+      assert_eq!(offset, Some(20));
+    }
+    _other => panic!("expected GetCurrentShowEpisodes (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn load_more_show_episodes_reads_the_full_show_context() {
+  let (mut app, rx) = app_with_channel();
+  // Both snapshots are set; the context decides which id rides along.
+  app.selected_show_simplified = Some(SelectedShow {
+    show: show_info(Some("simplified-show"), "Simplified"),
+  });
+  app.selected_show_full = Some(SelectedFullShow {
+    show: show_info(Some("full-show"), "Full"),
+  });
+  app.episode_table_context = EpisodeTableContext::Full;
+  app
+    .library
+    .show_episodes
+    .add_pages(episodes_page(0, 20, &["A"]));
+
+  app.apply(Action::LoadMore(ListTarget::ShowEpisodes));
+
+  match rx.try_recv() {
+    Ok(IoEvent::GetCurrentShowEpisodes(show_id, _offset)) => assert_eq!(show_id, "full-show"),
+    _other => panic!("expected GetCurrentShowEpisodes (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn load_more_show_episodes_without_a_selected_show_is_a_noop() {
+  let (mut app, rx) = app_with_channel();
+  app
+    .library
+    .show_episodes
+    .add_pages(episodes_page(0, 20, &["A"]));
+
+  app.apply(Action::LoadMore(ListTarget::ShowEpisodes));
+
+  assert!(rx.try_recv().is_err(), "no open show means no fetch");
+}
+
+#[test]
+fn queue_track_pushes_onto_the_native_queue() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::QueueTrack(track("0000000000000000000001", "One")));
+
+  assert_eq!(app.native_queue.len(), 1);
+  assert_eq!(app.native_queue[0].name, "One");
+  assert!(rx.try_recv().is_err(), "nothing goes to the Web API queue");
+}
+
+#[test]
+fn queue_track_on_an_external_spotify_device_falls_back_to_the_web_api() {
+  let (mut app, rx) = app_with_channel();
+  // A Spotify context with no native streaming device reads as external.
+  app.current_playback_context = Some(playback_context(true, false));
+
+  app.apply(Action::QueueTrack(track("0000000000000000000001", "One")));
+
+  assert!(app.native_queue.is_empty());
+  match rx.try_recv() {
+    Ok(IoEvent::AddItemToQueue(uri)) => {
+      assert_eq!(uri, "spotify:track:0000000000000000000001");
+    }
+    _other => panic!("expected AddItemToQueue (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn queue_track_without_a_uri_reports_it() {
+  let (mut app, rx) = app_with_channel();
+  let mut uri_less = track("0000000000000000000001", "One");
+  uri_less.uri = None;
+
+  app.apply(Action::QueueTrack(uri_less));
+
+  assert!(app.native_queue.is_empty());
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Cannot queue: track has no URI")
+  );
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn queue_track_rejects_a_radio_stream() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::QueueTrack(radio_station_row(
+    "Groove Salad",
+    "https://ice1.somafm.com/groovesalad-128-mp3",
+  )));
+
+  assert!(app.native_queue.is_empty());
+  assert_eq!(
+    app.status_message.as_deref(),
+    Some("Radio stations can't be queued")
+  );
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn open_discover_artists_mix_fetches_when_the_cache_is_empty() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenDiscover(DiscoverTarget::ArtistsMix));
+
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetTopArtistsMix)));
+  assert_eq!(
+    app.get_current_route().id,
+    RouteId::Home,
+    "the fetch pushes no route"
+  );
+}
+
+#[test]
+fn open_discover_artists_mix_shows_the_cache_when_loaded() {
+  let (mut app, rx) = app_with_channel();
+  app.discover_artists_mix = vec![track("0000000000000000000001", "One")];
+  // A stale in-range cursor must be reset to the top, not clamped.
+  app.track_table.selected_index = 4;
+
+  app.apply(Action::OpenDiscover(DiscoverTarget::ArtistsMix));
+
+  assert_eq!(app.track_table.tracks.len(), 1);
+  assert_eq!(
+    app.track_table.context,
+    Some(TrackTableContext::DiscoverPlaylist)
+  );
+  assert_eq!(app.track_table.selected_index, 0);
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  assert!(rx.try_recv().is_err(), "a cached mix needs no fetch");
+}
+
+#[test]
+fn open_discover_top_tracks_carries_the_time_range() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::OpenDiscover(DiscoverTarget::TopTracks(
+    DiscoverTimeRange::Long,
+  )));
+
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetUserTopTracks(DiscoverTimeRange::Long))
+  ));
+}
+
+#[test]
+fn open_discover_top_tracks_shows_the_cache_when_loaded() {
+  let (mut app, rx) = app_with_channel();
+  app.discover_top_tracks = vec![track("0000000000000000000001", "One")];
+  app.track_table.selected_index = 4;
+
+  app.apply(Action::OpenDiscover(DiscoverTarget::TopTracks(
+    DiscoverTimeRange::Short,
+  )));
+
+  assert_eq!(app.track_table.tracks.len(), 1);
+  assert_eq!(
+    app.track_table.context,
+    Some(TrackTableContext::DiscoverPlaylist)
+  );
+  assert_eq!(app.track_table.selected_index, 0);
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  assert!(rx.try_recv().is_err(), "a cached page needs no fetch");
+}
+
+#[test]
+fn open_discover_while_loading_is_a_noop() {
+  for target in [
+    DiscoverTarget::ArtistsMix,
+    DiscoverTarget::TopTracks(DiscoverTimeRange::Medium),
+  ] {
+    let (mut app, rx) = app_with_channel();
+    app.discover_loading = true;
+
+    app.apply(Action::OpenDiscover(target));
+
+    assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+    assert_eq!(app.get_current_route().id, RouteId::Home);
+    assert_eq!(app.track_table.context, None);
+  }
+}
+
+// --- the create-playlist form and the friends social graph ---
+
+use crate::core::app::FriendSearchResult;
+
+#[test]
+fn create_youtube_playlist_dispatches_the_local_create() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::CreateYouTubePlaylist("Focus".to_string()));
+
+  match rx.try_recv() {
+    Ok(IoEvent::CreateYouTubePlaylist(name)) => assert_eq!(name, "Focus"),
+    _other => panic!("expected CreateYouTubePlaylist (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn search_tracks_for_playlist_dispatches_the_query_untrimmed() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::SearchTracksForPlaylist("daft punk ".to_string()));
+
+  match rx.try_recv() {
+    Ok(IoEvent::SearchTracksForPlaylist(query)) => {
+      assert_eq!(query, "daft punk ", "the arm must not trim");
+    }
+    _other => panic!("expected SearchTracksForPlaylist (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn add_friend_by_code_dispatches() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::AddFriendByCode("JAY123".to_string()));
+
+  match rx.try_recv() {
+    Ok(IoEvent::AddFriendByCode(code)) => assert_eq!(code, "JAY123"),
+    _other => panic!("expected AddFriendByCode (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn add_friend_by_user_id_dispatches() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::AddFriendByUserId("user-1".to_string()));
+
+  match rx.try_recv() {
+    Ok(IoEvent::AddFriendByUserId(user_id)) => assert_eq!(user_id, "user-1"),
+    _other => panic!("expected AddFriendByUserId (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn unfollow_friend_dispatches() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::UnfollowFriend("user-1".to_string()));
+
+  match rx.try_recv() {
+    Ok(IoEvent::UnfollowFriend(user_id)) => assert_eq!(user_id, "user-1"),
+    _other => panic!("expected UnfollowFriend (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn search_friend_users_asks_from_two_bytes_up() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::SearchFriendUsers("ab".to_string()));
+
+  match rx.try_recv() {
+    Ok(IoEvent::SearchFriendUsers(query)) => assert_eq!(query, "ab"),
+    _other => panic!("expected SearchFriendUsers (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn search_friend_users_below_the_threshold_clears_stale_results() {
+  let (mut app, rx) = app_with_channel();
+  app.friend_user_search_results = vec![FriendSearchResult {
+    id: "user-1".to_string(),
+    name: "Jay".to_string(),
+    is_following: false,
+  }];
+
+  app.apply(Action::SearchFriendUsers("a".to_string()));
+
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+  assert!(
+    app.friend_user_search_results.is_empty(),
+    "a below-threshold query drops the stale results"
+  );
+}
+
+// --- stats, settings, sort and the native queue ---
+
+use super::ActionOutcome;
+use crate::core::plugin_api::ArtistInfo;
+use crate::core::sort::{SortContext, SortField, SortOrder};
+
+#[test]
+fn cycle_stats_period_walks_the_period_ring_and_reloads() {
+  let (mut app, rx) = app_with_channel();
+  let start = app.stats_period;
+
+  app.apply(Action::CycleStatsPeriod { forward: true });
+
+  assert_eq!(app.stats_period, start.next());
+  assert!(app.stats_loading);
+  assert!(app.stats_data.is_none());
+  match rx.try_recv() {
+    Ok(IoEvent::LoadListeningStats(period)) => assert_eq!(period, start.next()),
+    _other => panic!("expected LoadListeningStats (IoEvent is not Debug)"),
+  }
+
+  app.apply(Action::CycleStatsPeriod { forward: false });
+
+  assert_eq!(app.stats_period, start);
+  match rx.try_recv() {
+    Ok(IoEvent::LoadListeningStats(period)) => assert_eq!(period, start),
+    _other => panic!("expected LoadListeningStats (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn save_settings_writes_the_config_and_reports_success() {
+  use crate::core::user_config::UserConfigPaths;
+
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.user_config.path_to_config = Some(UserConfigPaths {
+    config_file_path: dir.path().join("config.yml"),
+  });
+  app.load_settings_for_category();
+
+  let outcome = app.apply(Action::SaveSettings);
+
+  assert_eq!(outcome, ActionOutcome::SettingsSaved { saved: true });
+  assert!(app.settings_saved_items == app.settings_items);
+  assert!(dir.path().join("config.yml").exists());
+}
+
+#[test]
+fn save_settings_without_a_config_path_reports_failure_and_raises_the_error_frame() {
+  let (mut app, _rx) = app_with_channel();
+
+  let outcome = app.apply(Action::SaveSettings);
+
+  assert_eq!(outcome, ActionOutcome::SettingsSaved { saved: false });
+  assert!(!app.api_error.is_empty());
+  assert_eq!(app.get_current_route().id, RouteId::Error);
+}
+
+#[test]
+fn cycle_visualizer_style_steps_the_configured_style() {
+  let (mut app, _rx) = app_with_channel();
+  let before = app.user_config.behavior.visualizer_style;
+
+  app.apply(Action::CycleVisualizerStyle);
+
+  assert_eq!(app.user_config.behavior.visualizer_style, before.next());
+}
+
+fn artist(name: &str) -> ArtistInfo {
+  ArtistInfo {
+    id: None,
+    uri: None,
+    name: name.to_string(),
+    image_url: None,
+  }
+}
+
+fn artist_names(app: &App) -> Vec<&str> {
+  app.artists.iter().map(|a| a.name.as_str()).collect()
+}
+
+#[test]
+fn sort_saved_artists_reorders_the_cached_rows_in_place() {
+  let (mut app, rx) = app_with_channel();
+  app.artists = vec![artist("Zed"), artist("Alpha"), artist("Mid")];
+
+  app.apply(Action::Sort {
+    context: SortContext::SavedArtists,
+    field: SortField::Name,
+  });
+
+  assert_eq!(artist_names(&app), vec!["Alpha", "Mid", "Zed"]);
+  assert_eq!(app.artist_sort.field, SortField::Name);
+  assert_eq!(app.artist_sort.order, SortOrder::Ascending);
+  assert!(
+    rx.try_recv().is_err(),
+    "an in-place sort dispatches nothing"
+  );
+}
+
+#[test]
+fn sorting_by_the_field_in_effect_flips_the_direction_and_resorts() {
+  let (mut app, _rx) = app_with_channel();
+  app.artists = vec![artist("Zed"), artist("Alpha")];
+  app.apply(Action::Sort {
+    context: SortContext::SavedArtists,
+    field: SortField::Name,
+  });
+
+  app.apply(Action::Sort {
+    context: SortContext::SavedArtists,
+    field: SortField::Name,
+  });
+
+  assert_eq!(app.artist_sort.order, SortOrder::Descending);
+  assert_eq!(artist_names(&app), vec!["Zed", "Alpha"]);
+}
+
+#[test]
+fn toggle_sort_order_flips_the_recorded_direction_without_resorting() {
+  let (mut app, _rx) = app_with_channel();
+  app.artists = vec![artist("Zed"), artist("Alpha")];
+  app.apply(Action::Sort {
+    context: SortContext::SavedArtists,
+    field: SortField::Name,
+  });
+
+  app.apply(Action::ToggleSortOrder(SortContext::SavedArtists));
+
+  assert_eq!(app.artist_sort.order, SortOrder::Descending);
+  assert_eq!(
+    artist_names(&app),
+    vec!["Alpha", "Zed"],
+    "the rows keep the order that was applied"
+  );
+}
+
+fn queued(uri: &str, name: &str) -> TrackInfo {
+  TrackInfo {
+    uri: Some(uri.to_string()),
+    name: name.to_string(),
+    artists: vec![],
+    album: String::new(),
+    duration_ms: 0,
+    id: None,
+    album_id: None,
+    artist_refs: vec![],
+    is_playable: true,
+    is_local: false,
+    track_number: 0,
+    explicit: false,
+    image_url: None,
+  }
+}
+
+fn queue_names(app: &App) -> Vec<&str> {
+  app.native_queue.iter().map(|t| t.name.as_str()).collect()
+}
+
+fn app_with_three_queued() -> (App, Receiver<IoEvent>) {
+  let (mut app, rx) = app_with_channel();
+  app.native_queue = vec![
+    queued("spotify:track:a", "A"),
+    queued("spotify:track:b", "B"),
+    queued("spotify:track:c", "C"),
+  ];
+  (app, rx)
+}
+
+#[test]
+fn play_queue_item_drops_the_earlier_items_and_advances() {
+  let (mut app, rx) = app_with_three_queued();
+
+  app.apply(Action::PlayQueueItem {
+    uri: "spotify:track:c".to_string(),
+    position: 2,
+  });
+
+  assert_eq!(queue_names(&app), vec!["C"]);
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::AdvanceNativeQueue)));
+}
+
+#[test]
+fn play_queue_item_falls_back_to_the_uri_when_the_position_is_stale() {
+  let (mut app, rx) = app_with_three_queued();
+
+  app.apply(Action::PlayQueueItem {
+    uri: "spotify:track:c".to_string(),
+    position: 0,
+  });
+
+  assert_eq!(queue_names(&app), vec!["C"]);
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::AdvanceNativeQueue)));
+}
+
+#[test]
+fn queue_actions_on_an_unknown_uri_are_noops() {
+  let (mut app, rx) = app_with_three_queued();
+  let unknown = "spotify:track:zzz".to_string();
+
+  app.apply(Action::PlayQueueItem {
+    uri: unknown.clone(),
+    position: 0,
+  });
+  app.apply(Action::RemoveFromQueue {
+    uri: unknown.clone(),
+    position: 1,
+  });
+  app.apply(Action::MoveQueueItem {
+    uri: unknown,
+    from: 0,
+    to: 2,
+  });
+
+  assert_eq!(queue_names(&app), vec!["A", "B", "C"]);
+  assert!(rx.try_recv().is_err(), "nothing may be dispatched");
+}
+
+#[test]
+fn remove_from_queue_and_move_queue_item_edit_the_queue() {
+  let (mut app, rx) = app_with_three_queued();
+
+  app.apply(Action::RemoveFromQueue {
+    uri: "spotify:track:b".to_string(),
+    position: 1,
+  });
+  assert_eq!(queue_names(&app), vec!["A", "C"]);
+
+  app.apply(Action::MoveQueueItem {
+    uri: "spotify:track:c".to_string(),
+    from: 1,
+    to: 0,
+  });
+  assert_eq!(queue_names(&app), vec!["C", "A"]);
+
+  // An out-of-range destination changes nothing.
+  app.apply(Action::MoveQueueItem {
+    uri: "spotify:track:c".to_string(),
+    from: 0,
+    to: 5,
+  });
+  assert_eq!(queue_names(&app), vec!["C", "A"]);
+  assert!(rx.try_recv().is_err(), "queue edits dispatch nothing");
+}
+
+// --- the DJ screen's own actions (no-ops without ai-dj) ---
+
+#[cfg(feature = "ai-dj")]
+mod dj_screen_actions {
+  use super::*;
+  use crate::infra::dj::{DjLine, DjSpeaker, TurnKind};
+
+  #[test]
+  fn ask_dj_starts_one_turn_and_bumps_the_generation_once() {
+    let (mut app, rx) = app_with_channel();
+    let before = app.dj.generation;
+
+    app.apply(Action::AskDj("  something chill  ".to_string()));
+
+    assert!(app.dj.thinking, "the turn is in flight");
+    assert_eq!(app.dj.generation, before + 1);
+    assert_eq!(app.dj.transcript.len(), 1);
+    assert_eq!(app.dj.transcript[0], DjLine::user("something chill"));
+    assert!(
+      !app.is_loading,
+      "a brain call must not pin the global spinner"
+    );
+    match rx.try_recv() {
+      Ok(IoEvent::AskDj(request)) => {
+        assert!(request.extra_instruction.is_none());
+        assert_eq!(request.generation, app.dj.generation);
+        assert!(!request.must_act);
+        assert_eq!(request.vibe_on_success.as_deref(), Some("something chill"));
+        assert_eq!(request.turn_seq, app.dj.turn_seq);
+      }
+      _other => panic!("expected AskDj (IoEvent is not Debug)"),
+    }
+  }
+
+  #[test]
+  fn ask_dj_while_a_turn_is_in_flight_is_refused_and_says_so() {
+    let (mut app, rx) = app_with_channel();
+    app.dj.begin_turn(TurnKind::Ask);
+    let generation = app.dj.generation;
+
+    // Whitespace on purpose: the busy message has to win over the blank check.
+    app.apply(Action::AskDj("   ".to_string()));
+
+    assert!(rx.try_recv().is_err(), "nothing may be dispatched");
+    assert_eq!(app.dj.generation, generation);
+    assert!(app.dj.transcript.is_empty());
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("The DJ is still working on the last request")
+    );
+  }
+
+  #[test]
+  fn ask_dj_with_a_blank_prompt_dispatches_nothing() {
+    let (mut app, rx) = app_with_channel();
+
+    app.apply(Action::AskDj("   ".to_string()));
+
+    assert!(rx.try_recv().is_err());
+    assert!(!app.dj.thinking);
+    assert!(app.dj.transcript.is_empty());
+  }
+
+  #[test]
+  fn a_vibe_shift_asks_again_with_a_steer_that_must_act() {
+    let (mut app, rx) = app_with_channel();
+    let before = app.dj.generation;
+
+    app.apply(Action::DjVibeShift);
+
+    assert_eq!(app.dj.generation, before + 1);
+    assert!(app.dj.thinking);
+    assert!(!app.is_loading);
+    match rx.try_recv() {
+      Ok(IoEvent::AskDj(request)) => {
+        assert!(request
+          .extra_instruction
+          .as_deref()
+          .is_some_and(|steer| steer.contains("Change direction")));
+        assert!(request.must_act);
+        assert!(request.vibe_on_success.is_none());
+      }
+      _other => panic!("expected AskDj (IoEvent is not Debug)"),
+    }
+    let last = app.dj.transcript.last().unwrap();
+    assert!(last.text.contains("vibe"));
+    assert_eq!(last.speaker, DjSpeaker::System);
+  }
+
+  #[test]
+  fn a_vibe_shift_while_thinking_is_refused() {
+    let (mut app, rx) = app_with_channel();
+    app.dj.begin_turn(TurnKind::Ask);
+
+    app.apply(Action::DjVibeShift);
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("The DJ is already working on something")
+    );
+  }
+
+  #[test]
+  fn toggling_dj_auto_queue_on_with_a_short_queue_asks_for_a_refill() {
+    let (mut app, rx) = app_with_channel();
+
+    app.apply(Action::ToggleDjAutoQueue);
+
+    assert!(app.dj.auto_queue);
+    assert!(!app.is_loading);
+    match rx.try_recv() {
+      Ok(IoEvent::DjTopUp(generation, turn_seq)) => {
+        assert_eq!(generation, app.dj.generation);
+        assert_eq!(turn_seq, app.dj.turn_seq);
+      }
+      _other => panic!("expected DjTopUp (IoEvent is not Debug)"),
+    }
+  }
+
+  #[test]
+  fn toggling_dj_auto_queue_off_does_not_abandon_a_question_in_flight() {
+    let (mut app, rx) = app_with_channel();
+    app.apply(Action::AskDj("something warm".to_string()));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::AskDj(_))));
+    let generation = app.dj.generation;
+    app.dj.auto_queue = true;
+
+    app.apply(Action::ToggleDjAutoQueue);
+
+    assert!(!app.dj.auto_queue);
+    assert!(app.dj.thinking, "the question is still being answered");
+    assert_eq!(app.dj.generation, generation);
+  }
+
+  #[test]
+  fn toggling_dj_auto_queue_off_still_abandons_a_refill() {
+    let (mut app, _rx) = app_with_channel();
+    app.dj.auto_queue = true;
+    app.dj.begin_turn(TurnKind::Refill);
+    app.dj.step = Some((2, 4));
+    let generation = app.dj.generation;
+
+    app.apply(Action::ToggleDjAutoQueue);
+
+    assert!(!app.dj.thinking, "nobody is waiting on a refill");
+    assert!(app.dj.step.is_none());
+    assert_ne!(app.dj.generation, generation);
+  }
+
+  #[test]
+  fn toggling_dj_fresh_only_starts_the_crawl_once() {
+    let (mut app, rx) = app_with_channel();
+    assert!(!app.dj.avoid_library);
+
+    app.apply(Action::ToggleDjFreshOnly);
+    assert!(app.dj.avoid_library);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::DjIndexLibrary)));
+
+    // Off, then on again with the index already cached: no second crawl.
+    app.apply(Action::ToggleDjFreshOnly);
+    assert!(!app.dj.avoid_library);
+    app.dj.library = Some(crate::infra::dj::DjLibrary::default());
+    app.apply(Action::ToggleDjFreshOnly);
+    assert!(app.dj.avoid_library);
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn open_dj_setup_opens_the_screen_and_the_picker_without_stacking_routes() {
+    let (mut app, rx) = app_with_channel();
+
+    app.apply(Action::OpenDjSetup);
+
+    assert_eq!(app.get_current_route().id, RouteId::AiDj);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::AiDj);
+    assert!(app.dj.setup.is_some());
+    assert!(rx.try_recv().is_err(), "the filter is off, so no crawl");
+
+    app.apply(Action::OpenDjSetup);
+    app.pop_navigation_stack();
+    assert_ne!(app.get_current_route().id, RouteId::AiDj);
+  }
+
+  #[test]
+  fn open_dj_setup_warms_the_library_index_when_the_filter_is_on() {
+    let (mut app, rx) = app_with_channel();
+    app.apply(Action::OpenDjSetup);
+    assert!(rx.try_recv().is_err());
+    app.dj.avoid_library = true;
+
+    // Already on the DJ screen: the picker key still warms the index.
+    app.apply(Action::OpenDjSetup);
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::DjIndexLibrary)));
+    assert_eq!(app.get_current_route().id, RouteId::AiDj);
+  }
 }
