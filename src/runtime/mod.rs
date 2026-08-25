@@ -3,13 +3,16 @@
 //! `run_cli()` is the console entry point: it wires logging, parses the
 //! command line, runs the shared `bootstrap::boot()` sequence (config, state,
 //! auth, `App`), and then either executes one CLI subcommand or launches the
-//! terminal UI. The IoEvent pump every frontend drives lives in `pump`.
+//! terminal UI. The IoEvent pump every frontend drives lives in `pump`, and
+//! the native-streaming startup every frontend shares lives in `streaming`.
 
 mod bootstrap;
 mod cli;
 mod pump;
 #[cfg(feature = "tui")]
 mod startup;
+#[cfg(any(feature = "streaming", test))]
+mod streaming;
 
 use crate::core::migrations::apply_legacy_state_file_migrations;
 use anyhow::{anyhow, Result};

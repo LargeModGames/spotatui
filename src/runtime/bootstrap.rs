@@ -383,8 +383,8 @@ pub(super) struct Boot {
   pub(super) client_config: ClientConfig,
   pub(super) spotify: Option<AuthCodePkceSpotify>,
   pub(super) token_cache_path: PathBuf,
-  /// Read after boot only by the deferred native-streaming startup.
-  #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+  /// Read after boot only by the frontend launch's streaming startup.
+  #[cfg_attr(not(all(feature = "tui", feature = "streaming")), allow(dead_code))]
   pub(super) runtime_state: RuntimeState,
   #[cfg_attr(not(feature = "tui"), allow(dead_code))]
   pub(super) restore_playback: Option<crate::core::persisted_playback::PersistedPlayback>,
@@ -396,12 +396,14 @@ pub(super) struct Boot {
   pub(super) initial_startup_behavior: StartupBehavior,
   #[cfg_attr(not(feature = "tui"), allow(dead_code))]
   pub(super) client_id_notice_message: Option<String>,
-  /// Read after boot only by the streaming credential flow.
-  #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+  /// Read after boot only by the frontend launch's streaming startup.
+  #[cfg_attr(not(all(feature = "tui", feature = "streaming")), allow(dead_code))]
   pub(super) onboarding: Arc<dyn Onboarding>,
   #[cfg(feature = "streaming")]
+  #[cfg_attr(not(feature = "tui"), allow(dead_code))]
   pub(super) cached_me: Option<PrivateUser>,
   #[cfg(feature = "streaming")]
+  #[cfg_attr(not(feature = "tui"), allow(dead_code))]
   pub(super) selected_redirect_uri: String,
 }
 
