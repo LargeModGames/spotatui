@@ -180,6 +180,8 @@ pub enum Action {
   /// Delete a local `youtube:playlist:` playlist; Spotify playlists leave
   /// through [`Action::UnfollowPlaylist`].
   DeletePlaylist(String),
+  /// Save or unsave a track by bare base62 id or `spotify:track:` URI; the
+  /// network layer accepts both.
   ToggleSaveTrack(String),
   /// Save or unsave whatever is playing now, resolved through the
   /// playback-ownership order at apply time (the native queue slot's own
@@ -238,11 +240,10 @@ pub enum Action {
   OpenLibrary(LibraryTarget),
   /// Show a Discover row's cached mix, or fetch it.
   OpenDiscover(DiscoverTarget),
-  /// Switch the active browse source (and persist the choice). Browse scope
-  /// only: never interrupts playback.
+  /// Switch the active browse source (and persist the choice), then fetch
+  /// the sidebar data that source needs. Browse scope only: never
+  /// interrupts playback.
   SelectSource(Source),
-  /// Fetch the sidebar data a browse source needs; a no-op for Spotify.
-  LoadSourceSidebar(Source),
   /// Open the add-to-playlist picker for the track table's current
   /// selection; resolved from the selection at apply time.
   OpenAddTrackDialog,

@@ -375,19 +375,19 @@ impl App {
       self.set_status_message("Radio station has no stream URL".to_string(), 4);
       return;
     };
-    let station_name = self
-      .radio_stations
-      .iter()
-      .find(|station| station.uri.as_deref() == Some(uri.as_str()))
-      .map(|station| station.name.clone())
-      .unwrap_or_default();
+    let station_name = |app: &Self| {
+      app
+        .radio_stations
+        .iter()
+        .find(|station| station.uri.as_deref() == Some(uri.as_str()))
+        .map(|station| station.name.clone())
+        .unwrap_or_default()
+    };
     let config_owned = self.is_config_owned_radio_station_url(url);
-    if self.is_configured_radio_station_url(url) {
+    if config_owned && !self.is_state_owned_radio_station_url(url) {
+      let name = station_name(self);
       self.set_status_message(
-        format!(
-          "Radio station is configured in config.yml: {}",
-          station_name
-        ),
+        format!("Radio station is configured in config.yml: {name}"),
         4,
       );
       return;
@@ -405,10 +405,8 @@ impl App {
         self.set_status_message(format!("Removed saved radio station: {}", removed.name), 4);
       }
       Ok(None) => {
-        self.set_status_message(
-          format!("Radio station is not favorited: {}", station_name),
-          4,
-        );
+        let name = station_name(self);
+        self.set_status_message(format!("Radio station is not favorited: {name}"), 4);
       }
       Err(error) => {
         self.set_error_status_message(format!("Could not remove radio station: {error}"), 6);

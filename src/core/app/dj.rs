@@ -96,17 +96,7 @@ impl App {
   /// `Action::OpenLibrary(LibraryTarget::AiDj)`.
   #[cfg(feature = "ai-dj")]
   pub(super) fn open_ai_dj_screen(&mut self) {
-    // Pushed only when the DJ is not already the current route, for the reason
-    // `open_dj_setup` shares: a second `RouteId::AiDj` on the stack turns the Esc
-    // that should leave the DJ into one that lands back on it. Reachable with the
-    // DJ already open because focus can be elsewhere — Left to the sidebar, then
-    // the open key or the sidebar's own "AI DJ" row — which is also why focus is
-    // restored rather than left where it was.
-    if self.get_current_route().id == RouteId::AiDj {
-      self.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
-    } else {
-      self.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
-    }
+    self.focus_dj_screen();
     // Asked once, on the first visit, and only here because `open` is the single
     // funnel every entry point goes through. Not in `first_run.rs`: that runs before
     // the TUI, gated on the absence of client.yml, and would interrogate every user
@@ -118,6 +108,22 @@ impl App {
     if self.dj.setup.is_some() || !self.user_config.behavior.dj_is_configured() {
       use crate::infra::dj::setup::DjSetup;
       self.dj.setup = Some(DjSetup::new(&self.user_config.behavior));
+    }
+  }
+
+  /// Make the DJ screen current and focused, then start the library crawl.
+  #[cfg(feature = "ai-dj")]
+  fn focus_dj_screen(&mut self) {
+    // Pushed only when the DJ is not already the current route: a second
+    // `RouteId::AiDj` on the stack turns the Esc that should leave the DJ into
+    // one that lands back on it. Reachable with the DJ already open because
+    // focus can be elsewhere — Left to the sidebar, then the open key or the
+    // sidebar's own "AI DJ" row — which is also why focus is restored rather
+    // than left where it was.
+    if self.get_current_route().id == RouteId::AiDj {
+      self.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
+    } else {
+      self.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
     }
     self.request_dj_library_index();
   }
@@ -278,12 +284,7 @@ impl App {
   #[cfg(feature = "ai-dj")]
   pub(crate) fn open_dj_setup(&mut self) {
     use crate::infra::dj::setup::DjSetup;
-    if self.get_current_route().id == RouteId::AiDj {
-      self.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
-    } else {
-      self.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
-    }
-    self.request_dj_library_index();
+    self.focus_dj_screen();
     self.dj.setup = Some(DjSetup::new(&self.user_config.behavior));
   }
 }

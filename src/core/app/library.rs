@@ -536,7 +536,11 @@ impl App {
     }
   }
 
-  pub fn get_episode_table_next(&mut self, show_id: String) {
+  /// Next page of the open show's episodes; a no-op when no show is open.
+  pub(crate) fn get_episode_table_next(&mut self) {
+    let Some(show_id) = self.selected_episode_show_id() else {
+      return;
+    };
     match self
       .library
       .show_episodes
@@ -550,13 +554,6 @@ impl App {
           self.dispatch(IoEvent::GetCurrentShowEpisodes(show_id, offset));
         }
       }
-    }
-  }
-
-  /// Next page of the open show's episodes; a no-op when no show is open.
-  pub(crate) fn get_episode_table_next_page(&mut self) {
-    if let Some(show_id) = self.selected_episode_show_id() {
-      self.get_episode_table_next(show_id);
     }
   }
 

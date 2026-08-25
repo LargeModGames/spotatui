@@ -112,14 +112,18 @@ impl App {
       self.dispatch(event);
     } else {
       let tracks = cached.clone();
-      self.show_discover_tracks(tracks);
+      self.show_tracks_in_table(tracks, TrackTableContext::DiscoverPlaylist);
     }
   }
 
-  /// Reopening Discover resets the cursor to the top row instead of clamping it.
-  fn show_discover_tracks(&mut self, tracks: Vec<TrackInfo>) {
+  /// Open the shared track table on `tracks` with the cursor on the top row.
+  pub(super) fn show_tracks_in_table(
+    &mut self,
+    tracks: Vec<TrackInfo>,
+    context: TrackTableContext,
+  ) {
     self.track_table.tracks = tracks;
-    self.track_table.context = Some(TrackTableContext::DiscoverPlaylist);
+    self.track_table.context = Some(context);
     self.track_table.selected_index = 0;
     self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
   }

@@ -197,7 +197,7 @@ fn handle_input_mouse(mouse: MouseEvent, input_area: Rect, app: &mut App) {
     return;
   }
 
-  focus_input(app);
+  super::focus_global_search(app);
   set_input_cursor_from_column(input_area, mouse.column, app);
 }
 
@@ -458,15 +458,6 @@ fn focus_content_table(active_block: ActiveBlock, app: &mut App) {
 
 fn focus_playbar(block: ActiveBlock, app: &mut App) {
   app.set_current_route_state(Some(block), Some(block));
-}
-
-fn focus_input(app: &mut App) {
-  // Same rule as the search key: never rewrite the error frame in place.
-  if app.get_current_route().id == RouteId::Error {
-    app.clear_api_error();
-  }
-  app.view.input_context = crate::core::app::InputContext::GlobalSearch;
-  app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
 }
 
 fn set_input_cursor_from_column(input_area: Rect, mouse_column: u16, app: &mut App) {
@@ -2094,7 +2085,7 @@ mod tests {
 
   #[test]
   fn click_on_the_search_input_from_the_error_page_is_ignored() {
-    // The error screen is not mouse-interactive, so the click never reaches `focus_input`.
+    // The error screen is not mouse-interactive, so the click never reaches `focus_global_search`.
     let mut app = App::default();
     app.view.size = Viewport {
       width: 160,
@@ -2119,11 +2110,11 @@ mod tests {
   }
 
   #[test]
-  fn focus_input_dismisses_a_live_error_before_taking_focus() {
+  fn focus_global_search_dismisses_a_live_error_before_taking_focus() {
     let mut app = App::default();
     app.handle_error(anyhow::anyhow!("boom"));
 
-    focus_input(&mut app);
+    crate::tui::handlers::focus_global_search(&mut app);
 
     assert!(app.api_error.is_empty());
     let route = app.get_current_route();

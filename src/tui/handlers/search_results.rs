@@ -306,11 +306,6 @@ fn selected_search_show_row(app: &App) -> Option<&ShowInfo> {
   app.search_results.shows.as_ref()?.items.get(index)
 }
 
-/// The highlighted show's snapshot, which the episode-list open carries whole.
-fn selected_search_show(app: &App) -> Option<ShowInfo> {
-  selected_search_show_row(app).cloned()
-}
-
 /// The highlighted show's Spotify id, for the save/unsave keys.
 fn selected_search_show_id(app: &App) -> Option<String> {
   selected_search_show_row(app)?.id.clone()
@@ -360,7 +355,7 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
       // OpenShowEpisodes populates app.library.show_episodes (opening the show
       // by id sets EpisodeTableContext::Full but does NOT populate it, leaving
       // a blank episode list). `show` is already a domain ShowInfo.
-      if let Some(show) = selected_search_show(app) {
+      if let Some(show) = selected_search_show_row(app).cloned() {
         app.apply(Action::OpenShowEpisodes(show));
       }
     }
@@ -409,15 +404,15 @@ fn handle_recommended_tracks(app: &mut App) {
     SearchResultBlock::AlbumSearch => {}
     SearchResultBlock::SongSearch => {
       if let Some(index) = app.search_results.selected_tracks_index {
-        if let Some(track) = app
+        let identity = app
           .search_results
           .tracks
           .as_ref()
           .and_then(|paged| paged.items.get(index))
-          .cloned()
-        {
-          app.apply(Action::RecommendFromTrack(track));
-        };
+          .and_then(|track| Some((track.id.clone()?, track.name.clone())));
+        if let Some((id, name)) = identity {
+          app.apply(Action::RecommendFromTrackId { id, name });
+        }
       };
     }
     SearchResultBlock::ArtistSearch => {

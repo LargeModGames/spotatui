@@ -173,9 +173,6 @@ fn scroll_forward(app: &mut App, amount: u16) {
 
 /// Send what the user typed to the DJ.
 fn submit(app: &mut App) {
-  if app.dj.input.is_empty() {
-    return;
-  }
   let text: String = app.dj.input.iter().collect();
   app.apply(Action::AskDj(text));
 }

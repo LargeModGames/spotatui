@@ -196,10 +196,12 @@ fn handle_recommend_event_on_selected_block(app: &mut App) {
   };
   match artist.artist_selected_block {
     ArtistBlock::TopTracks => {
-      // `track` is already a domain TrackInfo (Artist.top_tracks was
-      // migrated), so seed recommendations with it directly.
-      if let Some(track) = selected_top_track(artist) {
-        app.apply(Action::RecommendFromTrack(track));
+      let identity = artist
+        .top_tracks
+        .get(artist.selected_top_track_index)
+        .and_then(|track| Some((track.id.clone()?, track.name.clone())));
+      if let Some((id, name)) = identity {
+        app.apply(Action::RecommendFromTrackId { id, name });
       }
     }
     ArtistBlock::RelatedArtists => {
@@ -316,10 +318,15 @@ pub fn handler(key: Key, app: &mut App) {
       }
       Key::Char('w') => match artist.artist_selected_block {
         ArtistBlock::TopTracks => {
-          if let Some(track) = app.artist.as_ref().and_then(selected_top_track) {
+          let identity = app
+            .artist
+            .as_ref()
+            .and_then(|artist| artist.top_tracks.get(artist.selected_top_track_index))
+            .map(|track| (track.id.clone(), track.name.clone()));
+          if let Some((track_id, track_name)) = identity {
             app.apply(Action::OpenAddTrackDialogFor {
-              track_id: track.id,
-              track_name: track.name,
+              track_id,
+              track_name,
             });
           }
         }

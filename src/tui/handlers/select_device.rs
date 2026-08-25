@@ -102,7 +102,6 @@ fn select_source(app: &mut App) {
     if source == Source::Local {
       app.view.local_playlists_index = 0;
     }
-    app.apply(Action::LoadSourceSidebar(source));
   }
 
   // Adding Spotify from a free-source session: start the in-TUI OAuth login

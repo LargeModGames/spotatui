@@ -89,18 +89,17 @@ fn remove_radio_station(app: &mut App) {
     app.set_status_message("No radio station selected".to_string(), 4);
     return;
   };
-  let uri = match app.radio_stations.get(idx) {
-    None => {
-      app.set_status_message("No radio station selected".to_string(), 4);
-      return;
-    }
-    Some(station) => match station.uri.clone() {
-      None => {
-        app.set_status_message("Radio station has no stream URL".to_string(), 4);
-        return;
-      }
-      Some(uri) => uri,
-    },
+  let Some(uri) = app
+    .radio_stations
+    .get(idx)
+    .map(|station| station.uri.clone())
+  else {
+    app.set_status_message("No radio station selected".to_string(), 4);
+    return;
+  };
+  let Some(uri) = uri else {
+    app.set_status_message("Radio station has no stream URL".to_string(), 4);
+    return;
   };
   app.apply(Action::RemoveRadioStation(uri));
   // The clamp is a no-op for every outcome that leaves the list untouched.

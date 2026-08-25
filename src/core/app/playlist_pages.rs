@@ -127,11 +127,8 @@ impl App {
       // Unknown scheme: silent no-op, like the other opening paths.
       return;
     };
-    self.track_table.tracks = Vec::new();
-    self.track_table.selected_index = 0;
-    self.track_table.context = Some(context);
     self.dispatch(event);
-    self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    self.show_tracks_in_table(Vec::new(), context);
   }
 
   pub fn reset_playlist_tracks_view(

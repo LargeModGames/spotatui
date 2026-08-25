@@ -2088,9 +2088,36 @@ fn select_source_flips_scope_mirrors_runtime_state_and_persists() {
     "sparse patch persisted the choice"
   );
   assert!(
-    rx.try_recv().is_err(),
-    "sidebar loading stays with the caller"
+    matches!(rx.try_recv(), Ok(IoEvent::GetLocalPlaylists)),
+    "the new scope's sidebar is fetched"
   );
+}
+
+#[test]
+fn select_source_fetches_each_scopes_own_sidebar() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+
+  app.apply(Action::SelectSource(Source::Subsonic));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetSubsonicPlaylists)));
+
+  app.apply(Action::SelectSource(Source::Radio));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetRadioStations)));
+
+  app.apply(Action::SelectSource(Source::YouTube));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetYouTubePlaylists)));
+}
+
+#[test]
+fn select_source_spotify_fetches_no_sidebar() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+
+  app.apply(Action::SelectSource(Source::Spotify));
+
+  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
 }
 
 // --- the now-playing item family ---
@@ -2176,47 +2203,6 @@ fn copy_url_without_playback_is_a_silent_noop() {
   // No clipboard assertion: a headless runner has no clipboard.
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
   assert!(app.api_error.is_empty(), "no failure is reported");
-}
-
-// --- LoadSourceSidebar ---
-
-#[test]
-fn load_source_sidebar_fetches_each_scopes_own_data() {
-  let (mut app, rx) = app_with_channel();
-
-  app.apply(Action::LoadSourceSidebar(Source::Local));
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetLocalPlaylists)));
-
-  app.apply(Action::LoadSourceSidebar(Source::Subsonic));
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetSubsonicPlaylists)));
-
-  app.apply(Action::LoadSourceSidebar(Source::Radio));
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetRadioStations)));
-
-  app.apply(Action::LoadSourceSidebar(Source::YouTube));
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetYouTubePlaylists)));
-}
-
-#[test]
-fn load_source_sidebar_for_spotify_fetches_nothing() {
-  let (mut app, rx) = app_with_channel();
-
-  app.apply(Action::LoadSourceSidebar(Source::Spotify));
-
-  assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
-}
-
-#[test]
-fn load_source_sidebar_does_not_flip_the_browse_scope() {
-  let (mut app, _rx) = app_with_channel();
-  let before = app.active_source;
-
-  app.apply(Action::LoadSourceSidebar(Source::Radio));
-
-  assert_eq!(
-    app.active_source, before,
-    "the scope flip and its persistence stay with SelectSource"
-  );
 }
 
 // --- the listening party family ---

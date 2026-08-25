@@ -67,7 +67,7 @@ pub fn handler(key: Key, app: &mut App) {
       handle_recommended_tracks(app);
     }
     _ if key == app.user_config.keys.add_item_to_queue => {
-      if let Some(track) = selected_album_track(app) {
+      if let Some(track) = selected_album_track(app).cloned() {
         app.apply(Action::QueueTrack(track));
       }
     }
@@ -76,18 +76,17 @@ pub fn handler(key: Key, app: &mut App) {
 }
 
 /// The track under the cursor of whichever album context is open.
-fn selected_album_track(app: &App) -> Option<TrackInfo> {
+fn selected_album_track(app: &App) -> Option<&TrackInfo> {
   match app.album_table_context {
     AlbumTableContext::Full => app
       .selected_album_full
       .as_ref()?
       .album
       .tracks
-      .get(app.view.saved_album_tracks_index)
-      .cloned(),
+      .get(app.view.saved_album_tracks_index),
     AlbumTableContext::Simplified => {
       let selected = app.selected_album_simplified.as_ref()?;
-      selected.tracks.items.get(selected.selected_index).cloned()
+      selected.tracks.items.get(selected.selected_index)
     }
   }
 }
@@ -170,20 +169,16 @@ fn handle_low_event(app: &mut App) {
 }
 
 fn handle_recommended_tracks(app: &mut App) {
-  let Some(track) = selected_album_track(app) else {
-    return;
-  };
-  if let Some(id) = track.id {
-    app.apply(Action::RecommendFromTrackId {
-      id,
-      name: track.name,
-    });
+  let identity =
+    selected_album_track(app).and_then(|track| Some((track.id.clone()?, track.name.clone())));
+  if let Some((id, name)) = identity {
+    app.apply(Action::RecommendFromTrackId { id, name });
   }
 }
 
 fn handle_save_event(app: &mut App) {
   // The payload is the bare base62 id, not the track URI.
-  if let Some(track_id) = selected_album_track(app).and_then(|track| track.id) {
+  if let Some(track_id) = selected_album_track(app).and_then(|track| track.id.clone()) {
     app.apply(Action::ToggleSaveTrack(track_id));
   }
 }

@@ -272,15 +272,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       // Search is gated on the active source's capability (no `Searcher` impl
       // for Local Files), so it's a no-op with a hint there.
       if app.active_source.supports_search() {
-        // Never rewrite the error frame in place to `{Error, Input}`: push
-        // dedupes on the top frame's id, so a surviving Error frame makes
-        // every later error silently fail to render. Dismiss the error and
-        // open search on the screen below.
-        if app.get_current_route().id == RouteId::Error {
-          app.clear_api_error();
-        }
-        app.view.input_context = InputContext::GlobalSearch;
-        app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
+        focus_global_search(app);
       } else {
         app.set_status_message(
           format!("Search isn't available for {}", app.active_source.label()),
@@ -408,6 +400,18 @@ pub fn handle_app(key: Key, app: &mut App) {
     }
     _ => handle_block_events(key, app),
   }
+}
+
+/// Open the global search box. Never rewrite the error frame in place to
+/// `{Error, Input}`: push dedupes on the top frame's id, so a surviving Error
+/// frame makes every later error silently fail to render. Dismiss the error
+/// and open search on the screen below.
+pub(super) fn focus_global_search(app: &mut App) {
+  if app.get_current_route().id == RouteId::Error {
+    app.clear_api_error();
+  }
+  app.view.input_context = InputContext::GlobalSearch;
+  app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
 }
 
 fn is_input_mode(app: &App) -> bool {

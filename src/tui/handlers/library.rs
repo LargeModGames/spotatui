@@ -71,7 +71,6 @@ fn open_local_source(app: &mut App) {
   app.view.selected_playlist_index = Some(0);
   app.view.local_playlists_index = 0;
   app.apply(Action::SelectSource(Source::Local));
-  app.apply(Action::LoadSourceSidebar(Source::Local));
   app.apply(Action::OpenLibrary(LibraryTarget::LocalFiles));
 }
 

@@ -160,7 +160,7 @@ impl App {
         super::ListTarget::PlaylistTracks => self.get_playlist_tracks_next(),
         super::ListTarget::SavedTracks => self.get_current_user_saved_tracks_next(),
         super::ListTarget::SavedShows => self.get_current_user_saved_shows_next(),
-        super::ListTarget::ShowEpisodes => self.get_episode_table_next_page(),
+        super::ListTarget::ShowEpisodes => self.get_episode_table_next(),
       },
       Action::Sort { context, field } => self.apply_sort_field(context, field),
       Action::ToggleSortOrder(context) => self.toggle_sort_order(context),
@@ -185,7 +185,9 @@ impl App {
           }
         }
         super::OpenTarget::SourcePlaylist(uri) => self.open_source_playlist_tracks(uri),
-        super::OpenTarget::PlaylistFolder(target_id) => self.open_playlist_folder(target_id),
+        super::OpenTarget::PlaylistFolder(target_id) => {
+          self.current_playlist_folder_id = target_id;
+        }
         super::OpenTarget::Show(id) => self.dispatch(IoEvent::GetShow(id)),
         super::OpenTarget::TrackAlbum(track_id) => {
           self.dispatch(IoEvent::GetAlbumForTrack(track_id));
@@ -196,8 +198,10 @@ impl App {
       }
       Action::OpenLibrary(target) => self.open_library_section(target),
       Action::OpenDiscover(target) => self.open_discover_mix(target),
-      Action::SelectSource(source) => self.set_active_source(source),
-      Action::LoadSourceSidebar(source) => self.load_source_sidebar(source),
+      Action::SelectSource(source) => {
+        self.set_active_source(source);
+        self.load_source_sidebar(source);
+      }
       Action::OpenAddTrackDialog => self.begin_add_track_to_playlist_flow_from_selection(),
       Action::OpenAddTrackDialogFor {
         track_id,
@@ -219,9 +223,13 @@ impl App {
       Action::RecommendFromTrackId { id, name } => {
         self.load_recommendations_for_track_id(id, name);
       }
-      Action::StartParty => self.start_party(),
-      Action::JoinParty { code, name } => self.join_party(code, name),
-      Action::LeaveParty => self.leave_party(),
+      Action::StartParty => {
+        self.dispatch(IoEvent::StartParty(
+          crate::infra::network::sync::ControlMode::HostOnly,
+        ));
+      }
+      Action::JoinParty { code, name } => self.dispatch(IoEvent::JoinParty { code, name }),
+      Action::LeaveParty => self.dispatch(IoEvent::LeaveParty),
       Action::TogglePartyControlMode => self.toggle_party_control_mode(),
       Action::SetPlaybarSegment { plugin, text } => match text {
         Some(t) => {

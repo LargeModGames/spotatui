@@ -88,9 +88,7 @@ pub(super) fn reload_category(app: &mut App) {
 
 fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
   match key {
-    Key::Char('y') | Key::Char('Y') if save_settings(app) => {
-      close_settings(app);
-    }
+    Key::Char('y') | Key::Char('Y') => save_and_close(app),
     Key::Char('n') | Key::Char('N') | Key::Esc => close_settings(app),
     Key::Enter => {
       if app.view.settings_unsaved_prompt_save_selected {
@@ -110,7 +108,7 @@ fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
   }
 }
 
-/// A failing save leaves the prompt up under the error frame, like `y`.
+/// A failing save leaves the prompt up under the error frame.
 pub(super) fn save_and_close(app: &mut App) {
   if save_settings(app) {
     close_settings(app);
