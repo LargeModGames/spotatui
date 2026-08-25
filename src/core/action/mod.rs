@@ -31,7 +31,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::plugin_api::{PluginPopup, PluginScreenContent, TrackInfo};
+use crate::core::app::DiscoverTimeRange;
+use crate::core::plugin_api::{PluginPopup, PluginScreenContent, ShowInfo, TrackInfo};
+use crate::core::sort::{SortContext, SortField};
 use crate::core::source::Source;
 use crate::core::theme::{Color, ThemeField};
 
@@ -111,6 +113,27 @@ pub enum Action {
   },
   /// Add one playable URI (track or episode) to the queue.
   AddToQueue(String),
+  /// Add one track to the native cross-source queue (the queue key). Distinct
+  /// from [`Action::AddToQueue`], the Spotify Web API queue.
+  QueueTrack(TrackInfo),
+  /// Jump to one native-queue item, addressed by URI with the 0-based position
+  /// as the tie-breaker for duplicates.
+  PlayQueueItem {
+    uri: String,
+    position: usize,
+  },
+  /// Addressed like [`Action::PlayQueueItem`].
+  RemoveFromQueue {
+    uri: String,
+    position: usize,
+  },
+  /// Move a native-queue item to an absolute index; addressed like
+  /// [`Action::PlayQueueItem`], out of range is a no-op.
+  MoveQueueItem {
+    uri: String,
+    from: usize,
+    to: usize,
+  },
   /// Run a search against the Spotify catalog; the user country is resolved
   /// at apply time. Deliberately source-blind: existing producers (Lua
   /// `spotatui.search`) contracted the Web API search, so browsing scope
@@ -131,10 +154,20 @@ pub enum Action {
     name: String,
     track_uris: Vec<String>,
   },
+  /// Create a playlist in the local YouTube playlists file; a no-op without
+  /// the `youtube` feature. [`Action::CreatePlaylist`] stays Spotify-only.
+  CreateYouTubePlaylist(String),
+  /// Search for tracks to add to the playlist being composed; results land
+  /// in the create form's candidate list, not the search screen.
+  SearchTracksForPlaylist(String),
+  /// `playlist` is a URI: `youtube:playlist:` edits the local YouTube file,
+  /// anything else is the Spotify add (bare id or `spotify:playlist:` URI).
   AddTrackToPlaylist {
     playlist: String,
     track: String,
   },
+  /// Routed like [`Action::AddTrackToPlaylist`]; `position` is only read by
+  /// the Spotify removal.
   RemoveTrackFromPlaylist {
     playlist: String,
     track: String,
@@ -144,13 +177,34 @@ pub enum Action {
   FollowPlaylist(String),
   /// Unfollow a playlist; the current user id is resolved at apply time.
   UnfollowPlaylist(String),
+  /// Delete a local `youtube:playlist:` playlist; Spotify playlists leave
+  /// through [`Action::UnfollowPlaylist`].
+  DeletePlaylist(String),
+  /// Save or unsave a track by bare base62 id or `spotify:track:` URI; the
+  /// network layer accepts both.
   ToggleSaveTrack(String),
+  /// Save or unsave whatever is playing now, resolved through the
+  /// playback-ownership order at apply time (the native queue slot's own
+  /// track before the cached Spotify context).
+  ToggleSaveCurrentItem,
   SaveAlbum(String),
   UnsaveAlbum(String),
   SaveShow(String),
   UnsaveShow(String),
   FollowArtist(String),
   UnfollowArtist(String),
+  /// The spotatui.com social graph (friend code / user id), not Spotify.
+  AddFriendByCode(String),
+  AddFriendByUserId(String),
+  UnfollowFriend(String),
+  /// A query under the server's two-byte minimum clears the stale results
+  /// instead of asking. The network layer only accepts a result while the
+  /// live search buffer still equals the query.
+  SearchFriendUsers(String),
+  /// Persist an internet-radio station and mirror it into the sidebar.
+  FavoriteRadioStation(TrackInfo),
+  /// Remove a saved station by `radio:` URI.
+  RemoveRadioStation(String),
   /// message, ttl_secs
   Notify(String, u64),
   /// Error message, ttl_secs. Always shown; blocks normal message
@@ -163,20 +217,44 @@ pub enum Action {
   Back,
   /// Fetch the next page of a paginated list surface - the shared "hit the
   /// end of the list" consequence that GUI infinite scroll also fires.
-  /// Self-guarding: a no-op when no next page exists.
+  /// Self-guarding: a no-op when no next page exists. Page-flipped surfaces
+  /// (saved shows, show episodes) move the visible page when it is cached.
   LoadMore(ListTarget),
+  /// Sort a list surface by a field, like the sort menu: the field already
+  /// in effect flips the direction instead.
+  Sort {
+    context: SortContext,
+    field: SortField,
+  },
+  /// Flip the recorded sort direction without re-sorting loaded rows.
+  ToggleSortOrder(SortContext),
   /// Open a resource page (album/artist/show/playlist) by id. Never starts
   /// playback; Open and Play stay disjoint.
   Open(OpenTarget),
+  /// Open a show's episode list from a snapshot the producer holds
+  /// ([`OpenTarget::Show`] only knows an id). Top-level because `ShowInfo`
+  /// has no `Eq`.
+  OpenShowEpisodes(ShowInfo),
   /// Open a library sidebar section and fetch its data, mirroring the
   /// library row's Enter consequence exactly.
   OpenLibrary(LibraryTarget),
-  /// Switch the active browse source (and persist the choice). Browse scope
-  /// only: never interrupts playback.
+  /// Show a Discover row's cached mix, or fetch it.
+  OpenDiscover(DiscoverTarget),
+  /// Switch the active browse source (and persist the choice), then fetch
+  /// the sidebar data that source needs. Browse scope only: never
+  /// interrupts playback.
   SelectSource(Source),
   /// Open the add-to-playlist picker for the track table's current
   /// selection; resolved from the selection at apply time.
   OpenAddTrackDialog,
+  /// The picker for one named track; `track_id` is `None` when the item
+  /// cannot be added (a local file, an episode) and apply reports that.
+  OpenAddTrackDialogFor {
+    track_id: Option<String>,
+    track_name: String,
+  },
+  /// The picker for the item playing now, resolved at apply time.
+  OpenAddPlayingTrackDialog,
   /// Stage a remove-track-from-playlist confirmation for the track table's
   /// current selection; resolved from the selection at apply time.
   OpenRemoveTrackDialog,
@@ -189,14 +267,42 @@ pub enum Action {
   /// Open the context (album/artist/playlist) that playback runs in;
   /// resolved from the current playback context at apply time.
   JumpToContext,
+  /// Copy a share URL for the item playing now to the clipboard; a silent
+  /// no-op without playback or a clipboard.
+  CopyUrl(CopyTarget),
   /// Generate a listening recap. The period is resolved at apply time: the
   /// selected period on the Stats screen when that screen is current, 30
   /// days anywhere else.
   GenerateRecap,
+  /// Step the Stats period through its ring and reload; relative because the
+  /// period type is not part of the wire shape.
+  CycleStatsPeriod {
+    forward: bool,
+  },
   /// Seed the track-radio recommendations flow from one track. The full
   /// snapshot rides along because the results table prepends it as the
   /// context row.
   RecommendFromTrack(TrackInfo),
+  /// `name` is the seed label the results header shows.
+  RecommendFromArtist {
+    id: String,
+    name: String,
+  },
+  /// Like [`Action::RecommendFromTrack`] but prepends no context row.
+  RecommendFromTrackId {
+    id: String,
+    name: String,
+  },
+  /// Always starts in host-only control; [`Action::TogglePartyControlMode`]
+  /// is the only mode change.
+  StartParty,
+  JoinParty {
+    code: String,
+    name: String,
+  },
+  LeaveParty,
+  /// A no-op without a session.
+  TogglePartyControlMode,
   /// Set or clear a playbar segment for a plugin (keyed by plugin name).
   SetPlaybarSegment {
     plugin: String,
@@ -208,6 +314,11 @@ pub enum Action {
   ClosePopup,
   /// Apply theme color overrides at runtime.
   SetTheme(Vec<(ThemeField, Color)>),
+  /// Commit the Settings screen's staged rows and write `config.yml`; the
+  /// outcome says whether the write succeeded.
+  SaveSettings,
+  /// Cycle the visualizer style and persist it.
+  CycleVisualizerStyle,
   /// Publish (retained) content for a registered plugin screen.
   SetScreenContent {
     name: String,
@@ -226,6 +337,22 @@ pub enum Action {
   /// depends on that exact count. A no-op outside `dj-core` builds.
   #[cfg_attr(not(feature = "dj-core"), allow(dead_code))]
   SetDjVibe(Option<String>),
+  /// The DJ screen's own keys; no-ops outside `ai-dj` builds. `AskDj` refuses
+  /// a turn already in flight and bumps the DJ generation exactly once.
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  AskDj(String),
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  DjVibeShift,
+  /// A toggle, not a setter: the body bumps the generation and may dispatch
+  /// on every call.
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  ToggleDjAutoQueue,
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  ToggleDjFreshOnly,
+  /// Opens the DJ screen first when it is not current; does not consult the
+  /// configured flag.
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  OpenDjSetup,
 }
 
 /// What applying an [`Action`] produced, beyond the state change itself.
@@ -236,6 +363,8 @@ pub enum ActionOutcome {
   /// [`Action::QueueTracks`]: how many offered tracks entered the queue.
   #[cfg_attr(not(feature = "dj-core"), allow(dead_code))]
   Queued { accepted: usize },
+  /// [`Action::SaveSettings`]: whether `config.yml` was written.
+  SettingsSaved { saved: bool },
 }
 
 /// An absolute repeat mode, mirroring Spotify's three states without the
@@ -307,13 +436,22 @@ pub enum ListTarget {
   PlaylistTracks,
   /// The liked-songs (saved tracks) table.
   SavedTracks,
+  /// The saved-podcasts list (page-flipped, not continuous).
+  SavedShows,
+  /// The open show's episode list; the show is resolved at apply time.
+  ShowEpisodes,
 }
 
 /// A resource deep-link [`Action::Open`] can address, by id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpenTarget {
-  /// Open an album page.
-  Album(String),
+  /// Open an album page. `from_search` pins the track table to the
+  /// album-search context first, matching the search-results Enter; every
+  /// other producer passes `false` and leaves the table untouched.
+  Album { id: String, from_search: bool },
+  /// Open a saved album from the saved-albums cache; a truncated tracklist is
+  /// refetched in full.
+  SavedAlbum(String),
   /// Open an artist page. The display name rides along because
   /// `App::get_artist` seeds the header with it before data arrives.
   Artist { id: String, name: String },
@@ -321,6 +459,12 @@ pub enum OpenTarget {
   /// the producer uses (search results vs the user's playlists), matching
   /// what each opening path has always passed.
   Playlist { id: String, from_search: bool },
+  /// A decoded source's playlist or folder, routed by URI scheme (`file:`,
+  /// `subsonic:`, `youtube:playlist:`); an unknown scheme is a no-op.
+  SourcePlaylist(String),
+  /// Scope the playlist sidebar to a rootlist folder id (session-local, not
+  /// to be persisted).
+  PlaylistFolder(usize),
   /// Open a podcast show's episode list.
   Show(String),
   /// Open the album containing this track.
@@ -383,4 +527,19 @@ impl LibraryTarget {
   pub fn from_name(name: &str) -> Option<LibraryTarget> {
     LibraryTarget::ALL.into_iter().find(|t| t.name() == name)
   }
+}
+
+/// Which Discover row [`Action::OpenDiscover`] activates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiscoverTarget {
+  ArtistsMix,
+  TopTracks(DiscoverTimeRange),
+}
+
+/// What [`Action::CopyUrl`] copies; both address the item playing now (an
+/// episode gives its episode / show URL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CopyTarget {
+  CurrentSong,
+  CurrentAlbum,
 }

@@ -145,10 +145,10 @@ worth knowing before adding an event:
 
 ### The `core/app/` module folder
 
-`App` was one 10,920-line file; it is now 34 files. The struct stays **flat** - all
+`App` was one 10,920-line file; it is now 35 files. The struct stays **flat** - all
 ~168 fields declared once in `src/core/app/mod.rs` (26 of them feature-gated), plus
-the 70 presentation fields grouped in `App.view` - and its ~210 methods are split
-across 33 sibling modules by concern, each with its own `impl App` block. The
+the 70 presentation fields grouped in `App.view` - and its ~250 methods are split
+across 34 sibling modules by concern, each with its own `impl App` block. The
 boundaries are organizational, not architectural.
 
 Rules when working in here:

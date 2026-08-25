@@ -1,9 +1,7 @@
 use super::common_key_events;
-use crate::{
-  core::app::{ActiveBlock, AlbumTableContext, App, RouteId, SelectedFullAlbum},
-  infra::network::IoEvent,
-  tui::event::Key,
-};
+use crate::core::action::{Action, OpenTarget};
+use crate::core::app::App;
+use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
@@ -43,33 +41,17 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     Key::Enter => {
-      if let Some(albums) = app.library.saved_albums.get_results(None) {
-        if let Some(selected_album) = albums.items.get(app.view.album_list_index) {
-          let album = selected_album.album.clone();
-          // The library cache embeds only the first page of each album's
-          // tracklist (50 tracks max); refetch longer albums in full.
-          let cached_is_complete = album
-            .total_tracks
-            .is_none_or(|total| album.tracks.len() as u32 >= total);
-          if !cached_is_complete {
-            if let Some(id) = album.id.clone() {
-              // GetAlbum sets the Full context and pushes AlbumTracks itself.
-              app.dispatch(IoEvent::GetAlbum(id));
-              return;
-            }
-          }
-          app.selected_album_full = Some(SelectedFullAlbum {
-            album,
-            selected_index: 0,
-          });
-          app.album_table_context = AlbumTableContext::Full;
-          app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
-        };
+      if let Some(id) = selected_saved_album_id(app) {
+        app.apply(Action::Open(OpenTarget::SavedAlbum(id)));
       }
     }
     k if k == app.user_config.keys.next_page => app.get_current_user_saved_albums_next(),
     k if k == app.user_config.keys.previous_page => app.get_current_user_saved_albums_previous(),
-    Key::Char('D') => app.current_user_saved_album_delete(ActiveBlock::AlbumList),
+    Key::Char('D') => {
+      if let Some(id) = selected_saved_album_id(app) {
+        app.apply(Action::UnsaveAlbum(id));
+      }
+    }
     // Open sort menu
     Key::Char(',') => {
       super::sort_menu::open_sort_menu(app, crate::core::sort::SortContext::SavedAlbums);
@@ -78,12 +60,27 @@ pub fn handler(key: Key, app: &mut App) {
   };
 }
 
+/// The album id under the list cursor.
+fn selected_saved_album_id(app: &App) -> Option<String> {
+  app
+    .library
+    .saved_albums
+    .get_results(None)?
+    .items
+    .get(app.view.album_list_index)?
+    .album
+    .id
+    .clone()
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::app::ActiveBlock;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{AlbumInfo, SavedAlbumInfo, TrackInfo};
   use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
@@ -109,10 +106,18 @@ mod tests {
     cached_tracks: usize,
     total_tracks: u32,
   ) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    app_with_saved_album_id(Some("longalbum".to_string()), cached_tracks, total_tracks)
+  }
+
+  fn app_with_saved_album_id(
+    album_id: Option<String>,
+    cached_tracks: usize,
+    total_tracks: u32,
+  ) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     let album = AlbumInfo {
-      id: Some("longalbum".to_string()),
+      id: album_id,
       uri: Some("spotify:album:longalbum".to_string()),
       name: "One Wayne G".to_string(),
       total_tracks: Some(total_tracks),
@@ -121,7 +126,7 @@ mod tests {
         .collect(),
       ..AlbumInfo::default()
     };
-    app.library.saved_albums.add_pages(Paged {
+    app.library.saved_albums.upsert_page_by_offset(Paged {
       items: vec![SavedAlbumInfo {
         album,
         added_at: String::new(),
@@ -166,6 +171,21 @@ mod tests {
       IoEvent::GetAlbum(id) => assert_eq!(id, "longalbum"),
       _ => panic!("expected GetAlbum"),
     }
+  }
+
+  #[test]
+  fn enter_on_a_saved_album_without_an_id_opens_nothing() {
+    // An id-less row cannot be opened by id; every Web API album has one.
+    let (mut app, rx) = app_with_saved_album_id(None, 50, 199);
+
+    handler(Key::Enter, &mut app);
+
+    assert!(app.selected_album_full.is_none());
+    assert_ne!(
+      app.get_current_route().active_block,
+      ActiveBlock::AlbumTracks
+    );
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]

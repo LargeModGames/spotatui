@@ -1,4 +1,5 @@
 use super::common_key_events;
+use crate::core::action::Action;
 use crate::core::app::{ActiveBlock, App, SourceFocus};
 use crate::core::source::Source;
 use crate::infra::network::IoEvent;
@@ -95,35 +96,11 @@ pub fn handler(key: Key, app: &mut App) {
 fn select_source(app: &mut App) {
   let source = Source::ALL[app.view.source_list_index];
   if app.active_source != source {
-    app.active_source = source;
-    // Mirror the persisted value so it survives restarts.
-    app.runtime_state.active_source = source;
-    if let Err(e) = app.save_runtime_state(
-      &crate::core::state::PersistedRuntimeState::active_source(app.runtime_state.active_source),
-    ) {
-      log::warn!("[source] failed to persist active_source: {e}");
-    }
+    app.apply(Action::SelectSource(source));
     // Reset the sidebar playlist cursor to the top of the new source's list.
     app.view.selected_playlist_index = Some(0);
-    match source {
-      Source::Local => {
-        // Populate the sidebar with local folders for the newly active source.
-        app.view.local_playlists_index = 0;
-        app.dispatch(IoEvent::GetLocalPlaylists);
-      }
-      Source::Subsonic => {
-        // Populate the sidebar with the server's playlists.
-        app.dispatch(IoEvent::GetSubsonicPlaylists);
-      }
-      Source::Radio => {
-        // Populate the sidebar with the configured stations.
-        app.dispatch(IoEvent::GetRadioStations);
-      }
-      Source::YouTube => {
-        // Populate the sidebar with the local YouTube playlists file.
-        app.dispatch(IoEvent::GetYouTubePlaylists);
-      }
-      Source::Spotify => {}
+    if source == Source::Local {
+      app.view.local_playlists_index = 0;
     }
   }
 
@@ -172,8 +149,13 @@ fn transfer_to_selected_device(app: &mut App) {
     return;
   };
 
+  // Both clones end the `app.devices` borrow before the apply.
+  let device_id = device_id.clone();
   let device_name = device.name.clone();
-  app.dispatch(IoEvent::TransferPlaybackToDevice(device_id.clone(), true));
+  app.apply(Action::TransferPlayback {
+    device_id,
+    persist: true,
+  });
   app.set_status_message(format!("Switching playback to {}", device_name), 4);
   app.pop_navigation_stack();
 }

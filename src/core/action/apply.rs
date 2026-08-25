@@ -64,6 +64,14 @@ impl App {
         self.dispatch(IoEvent::TransferPlaybackToDevice(device_id, persist));
       }
       Action::AddToQueue(uri) => self.dispatch(IoEvent::AddItemToQueue(uri)),
+      Action::QueueTrack(track) => self.add_track_to_native_queue(track),
+      Action::PlayQueueItem { uri, position } => self.play_queue_item(&uri, position),
+      Action::RemoveFromQueue { uri, position } => {
+        self.remove_queue_item(&uri, position);
+      }
+      Action::MoveQueueItem { uri, from, to } => {
+        self.move_queue_item(&uri, from, to);
+      }
       Action::Search(query) => {
         let country = self.get_user_country();
         self.dispatch(IoEvent::GetSearchResults(query, country));
@@ -93,18 +101,20 @@ impl App {
       Action::CreatePlaylist { name, track_uris } => {
         self.dispatch(IoEvent::CreateNewPlaylist(name, track_uris));
       }
+      Action::CreateYouTubePlaylist(name) => {
+        self.dispatch(IoEvent::CreateYouTubePlaylist(name));
+      }
+      Action::SearchTracksForPlaylist(query) => {
+        self.dispatch(IoEvent::SearchTracksForPlaylist(query));
+      }
       Action::AddTrackToPlaylist { playlist, track } => {
-        self.dispatch(IoEvent::AddTrackToPlaylist(playlist, track));
+        self.add_track_to_playlist(playlist, track);
       }
       Action::RemoveTrackFromPlaylist {
         playlist,
         track,
         position,
-      } => {
-        self.dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(
-          playlist, track, position,
-        ));
-      }
+      } => self.remove_track_from_playlist(playlist, track, position),
       Action::FollowPlaylist(playlist) => {
         // The network handler ignores the owner-id parameter; "unknown"
         // mirrors the fallback the built-in follow flow uses.
@@ -120,18 +130,26 @@ impl App {
           self.dispatch(IoEvent::UserUnfollowPlaylist(user_id, playlist_id));
         } else {
           self.set_error_status_message(
-            "plugin unfollow_playlist: user profile not loaded yet".to_string(),
+            "Cannot unfollow: user profile not loaded yet".to_string(),
             4,
           );
         }
       }
+      Action::DeletePlaylist(uri) => self.dispatch(IoEvent::DeleteYouTubePlaylist(uri)),
       Action::ToggleSaveTrack(uri) => self.dispatch(IoEvent::ToggleSaveTrack(uri)),
+      Action::ToggleSaveCurrentItem => self.toggle_save_current_item(),
       Action::SaveAlbum(id) => self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id)),
       Action::UnsaveAlbum(id) => self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id)),
       Action::SaveShow(id) => self.dispatch(IoEvent::CurrentUserSavedShowAdd(id)),
       Action::UnsaveShow(id) => self.dispatch(IoEvent::CurrentUserSavedShowDelete(id)),
       Action::FollowArtist(id) => self.dispatch(IoEvent::UserFollowArtists(vec![id])),
       Action::UnfollowArtist(id) => self.dispatch(IoEvent::UserUnfollowArtists(vec![id])),
+      Action::AddFriendByCode(code) => self.dispatch(IoEvent::AddFriendByCode(code)),
+      Action::AddFriendByUserId(user_id) => self.dispatch(IoEvent::AddFriendByUserId(user_id)),
+      Action::UnfollowFriend(user_id) => self.dispatch(IoEvent::UnfollowFriend(user_id)),
+      Action::SearchFriendUsers(query) => self.search_friend_users(query),
+      Action::FavoriteRadioStation(station) => self.favorite_radio_station(station),
+      Action::RemoveRadioStation(uri) => self.remove_saved_radio_station(uri),
       Action::Notify(msg, ttl) => self.set_status_message(msg, ttl),
       Action::NotifyError(msg, ttl) => self.set_error_status_message(msg, ttl),
       Action::Navigate(target) => apply_navigate(self, target),
@@ -141,9 +159,19 @@ impl App {
       Action::LoadMore(target) => match target {
         super::ListTarget::PlaylistTracks => self.get_playlist_tracks_next(),
         super::ListTarget::SavedTracks => self.get_current_user_saved_tracks_next(),
+        super::ListTarget::SavedShows => self.get_current_user_saved_shows_next(),
+        super::ListTarget::ShowEpisodes => self.get_episode_table_next(),
       },
+      Action::Sort { context, field } => self.apply_sort_field(context, field),
+      Action::ToggleSortOrder(context) => self.toggle_sort_order(context),
       Action::Open(target) => match target {
-        super::OpenTarget::Album(id) => self.dispatch(IoEvent::GetAlbum(id)),
+        super::OpenTarget::Album { id, from_search } => {
+          if from_search {
+            self.track_table.context = Some(crate::core::app::TrackTableContext::AlbumSearch);
+          }
+          self.dispatch(IoEvent::GetAlbum(id));
+        }
+        super::OpenTarget::SavedAlbum(id) => self.open_saved_album(id),
         super::OpenTarget::Artist { id, name } => self.get_artist(id, name),
         super::OpenTarget::Playlist { id, from_search } => {
           // Same silent no-op on an unparseable id as today's opening paths.
@@ -156,20 +184,53 @@ impl App {
             self.open_playlist_tracks(playlist_id, context);
           }
         }
+        super::OpenTarget::SourcePlaylist(uri) => self.open_source_playlist_tracks(uri),
+        super::OpenTarget::PlaylistFolder(target_id) => {
+          self.current_playlist_folder_id = target_id;
+        }
         super::OpenTarget::Show(id) => self.dispatch(IoEvent::GetShow(id)),
         super::OpenTarget::TrackAlbum(track_id) => {
           self.dispatch(IoEvent::GetAlbumForTrack(track_id));
         }
       },
+      Action::OpenShowEpisodes(show) => {
+        self.dispatch(IoEvent::GetShowEpisodes(Box::new(show)));
+      }
       Action::OpenLibrary(target) => self.open_library_section(target),
-      Action::SelectSource(source) => self.set_active_source(source),
+      Action::OpenDiscover(target) => self.open_discover_mix(target),
+      Action::SelectSource(source) => {
+        self.set_active_source(source);
+        self.load_source_sidebar(source);
+      }
       Action::OpenAddTrackDialog => self.begin_add_track_to_playlist_flow_from_selection(),
+      Action::OpenAddTrackDialogFor {
+        track_id,
+        track_name,
+      } => self.begin_add_track_to_playlist_flow(track_id, track_name),
+      Action::OpenAddPlayingTrackDialog => self.begin_add_playing_track_to_playlist_flow(),
       Action::OpenRemoveTrackDialog => self.begin_remove_track_from_playlist_flow(),
       Action::JumpToAlbum => self.jump_to_album(),
       Action::JumpToArtist => self.jump_to_artist_album(),
       Action::JumpToContext => self.jump_to_context(),
+      Action::CopyUrl(target) => match target {
+        super::CopyTarget::CurrentSong => self.copy_song_url(),
+        super::CopyTarget::CurrentAlbum => self.copy_album_url(),
+      },
       Action::GenerateRecap => self.generate_recap(),
+      Action::CycleStatsPeriod { forward } => self.cycle_stats_period(forward),
       Action::RecommendFromTrack(track) => self.load_recommendations_for_track(track),
+      Action::RecommendFromArtist { id, name } => self.load_recommendations_for_artist(id, name),
+      Action::RecommendFromTrackId { id, name } => {
+        self.load_recommendations_for_track_id(id, name);
+      }
+      Action::StartParty => {
+        self.dispatch(IoEvent::StartParty(
+          crate::infra::network::sync::ControlMode::HostOnly,
+        ));
+      }
+      Action::JoinParty { code, name } => self.dispatch(IoEvent::JoinParty { code, name }),
+      Action::LeaveParty => self.dispatch(IoEvent::LeaveParty),
+      Action::TogglePartyControlMode => self.toggle_party_control_mode(),
       Action::SetPlaybarSegment { plugin, text } => match text {
         Some(t) => {
           self.plugin_playbar_segments.insert(plugin, t);
@@ -185,6 +246,12 @@ impl App {
           self.user_config.theme.set(field, color);
         }
       }
+      Action::SaveSettings => {
+        return ActionOutcome::SettingsSaved {
+          saved: self.save_settings_from_items(),
+        };
+      }
+      Action::CycleVisualizerStyle => self.cycle_visualizer_style(),
       Action::SetScreenContent { name, content } => {
         self.plugin_screens.insert(name, content);
       }
@@ -221,6 +288,33 @@ impl App {
         {
           let _ = vibe;
         }
+      }
+      // Gated on `ai-dj`, not `dj-core`: the bodies need the in-app DJ's events.
+      Action::AskDj(text) => {
+        #[cfg(feature = "ai-dj")]
+        {
+          self.ask_dj(text);
+        }
+        #[cfg(not(feature = "ai-dj"))]
+        {
+          let _ = text;
+        }
+      }
+      Action::DjVibeShift => {
+        #[cfg(feature = "ai-dj")]
+        self.dj_vibe_shift();
+      }
+      Action::ToggleDjAutoQueue => {
+        #[cfg(feature = "ai-dj")]
+        self.toggle_dj_auto_queue();
+      }
+      Action::ToggleDjFreshOnly => {
+        #[cfg(feature = "ai-dj")]
+        self.toggle_dj_fresh_only();
+      }
+      Action::OpenDjSetup => {
+        #[cfg(feature = "ai-dj")]
+        self.open_dj_setup();
       }
     }
     ActionOutcome::Applied

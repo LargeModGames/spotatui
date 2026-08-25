@@ -62,4 +62,49 @@ impl App {
     self.clear_friend_add_dialog_state();
     self.view.friend_add_dialog_visible = true;
   }
+
+  pub fn copy_friend_code(&mut self) {
+    let Some(code) = self.friend_code.clone() else {
+      self.set_status_message("Friend code not loaded yet", 3);
+      return;
+    };
+
+    let Some(clipboard) = &mut self.clipboard else {
+      self.set_status_message("Clipboard not available", 3);
+      return;
+    };
+
+    if clipboard.set_text(code.clone()).is_ok() {
+      self.set_status_message(format!("Copied friend code: {}", code), 3);
+    } else {
+      self.set_status_message("Failed to copy to clipboard", 3);
+    }
+  }
+
+  /// A query under the server's two-byte minimum clears the stale results
+  /// instead of asking.
+  pub(crate) fn search_friend_users(&mut self, query: String) {
+    if query.len() >= 2 {
+      self.dispatch(IoEvent::SearchFriendUsers(query));
+    } else {
+      self.friend_user_search_results.clear();
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn copy_friend_code_without_a_code_reports_not_loaded() {
+    let mut app = App::default();
+
+    app.copy_friend_code();
+
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some("Friend code not loaded yet")
+    );
+  }
 }

@@ -1062,12 +1062,7 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
   };
 
   let available_fields = context.available_fields();
-  let current_sort = match context {
-    crate::core::sort::SortContext::PlaylistTracks => &app.playlist_sort,
-    crate::core::sort::SortContext::SavedAlbums => &app.album_sort,
-    crate::core::sort::SortContext::SavedArtists => &app.artist_sort,
-    crate::core::sort::SortContext::RecentlyPlayed => &app.recently_played_sort,
-  };
+  let current_sort = app.sort_state(context);
 
   let width = std::cmp::min(f.area().width.saturating_sub(4), 35);
   let height = (available_fields.len() + 4) as u16; // +4 for borders/padding

@@ -89,24 +89,14 @@ impl App {
   ///
   /// Every entry point goes through here so the crawl is never left to the
   /// resolve step. `behavior.dj_avoid_library: true` seeds the toggle without
-  /// going through `toggle_fresh_only`, so without this the first turn of such
+  /// going through `toggle_dj_fresh_only`, so without this the first turn of such
   /// a session would crawl inline on the serial IoEvent lane — head-of-line
   /// blocking every other event behind a few seconds of pagination.
   /// Moved verbatim from the terminal DJ handler; reached through
   /// `Action::OpenLibrary(LibraryTarget::AiDj)`.
   #[cfg(feature = "ai-dj")]
   pub(super) fn open_ai_dj_screen(&mut self) {
-    // Pushed only when the DJ is not already the current route, for the reason
-    // `open_picker` documents: a second `RouteId::AiDj` on the stack turns the Esc
-    // that should leave the DJ into one that lands back on it. Reachable with the
-    // DJ already open because focus can be elsewhere — Left to the sidebar, then
-    // the open key or the sidebar's own "AI DJ" row — which is also why focus is
-    // restored rather than left where it was.
-    if self.get_current_route().id == RouteId::AiDj {
-      self.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
-    } else {
-      self.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
-    }
+    self.focus_dj_screen();
     // Asked once, on the first visit, and only here because `open` is the single
     // funnel every entry point goes through. Not in `first_run.rs`: that runs before
     // the TUI, gated on the absence of client.yml, and would interrogate every user
@@ -119,6 +109,22 @@ impl App {
       use crate::infra::dj::setup::DjSetup;
       self.dj.setup = Some(DjSetup::new(&self.user_config.behavior));
     }
+  }
+
+  /// Make the DJ screen current and focused, then start the library crawl.
+  #[cfg(feature = "ai-dj")]
+  fn focus_dj_screen(&mut self) {
+    // Pushed only when the DJ is not already the current route: a second
+    // `RouteId::AiDj` on the stack turns the Esc that should leave the DJ into
+    // one that lands back on it. Reachable with the DJ already open because
+    // focus can be elsewhere — Left to the sidebar, then the open key or the
+    // sidebar's own "AI DJ" row — which is also why focus is restored rather
+    // than left where it was.
+    if self.get_current_route().id == RouteId::AiDj {
+      self.set_current_route_state(Some(ActiveBlock::AiDj), Some(ActiveBlock::AiDj));
+    } else {
+      self.push_navigation_stack(RouteId::AiDj, ActiveBlock::AiDj);
+    }
     self.request_dj_library_index();
   }
 
@@ -130,6 +136,156 @@ impl App {
     if self.dj.avoid_library && self.dj.library.is_none() && !self.dj.library_indexing {
       self.dispatch(IoEvent::DjIndexLibrary);
     }
+  }
+
+  /// Ask the DJ for something, in the listener's own words. The input box is
+  /// cleared only when the turn starts.
+  #[cfg(feature = "ai-dj")]
+  pub(crate) fn ask_dj(&mut self, text: String) {
+    use crate::infra::dj::{AskDjRequest, DjLine, TurnKind};
+    // Checked before the trim so a blank ask during a turn still reports busy.
+    if self.dj.thinking {
+      self.set_status_message("The DJ is still working on the last request", 3);
+      return;
+    }
+    let text = text.trim();
+    if text.is_empty() {
+      return;
+    }
+    let text = text.to_string();
+    self.dj.clear_input();
+
+    // Jumping back to the newest line: the user just spoke, so that is what they
+    // want to see.
+    self.dj.scroll = 0;
+    // A new instruction supersedes any refill already in flight.
+    let generation = self.dj.bump_generation();
+    let turn_seq = self.dj.begin_turn(TurnKind::Ask);
+    self.dj.push_line(DjLine::user(text.clone()));
+
+    // No `extra_instruction`: the line above *is* the instruction, and the brain
+    // reads it from the transcript. Passing it here as well is what made the DJ see
+    // the same request two and three times over.
+    //
+    // `dispatch_without_spinner` throughout the DJ actions: a brain call runs for
+    // up to `dj_agent_timeout_secs`, and plain `dispatch` would pin the global
+    // `is_loading` spinner for all of it. `dj.thinking` is the progress surface.
+    self.dispatch_without_spinner(IoEvent::AskDj(Box::new(AskDjRequest {
+      extra_instruction: None,
+      generation,
+      // The listener is right here, so the DJ may ask them something instead of
+      // guessing.
+      must_act: false,
+      // Only if the turn queues: a turn spent answering "what have I been
+      // listening to?" must not become the standing direction for every refill.
+      vibe_on_success: Some(text),
+      turn_seq,
+    })));
+  }
+
+  /// Toggle continuous auto-queue, refilling at once if the queue is short.
+  #[cfg(feature = "ai-dj")]
+  pub(crate) fn toggle_dj_auto_queue(&mut self) {
+    use crate::infra::dj::TurnKind;
+    self.dj.auto_queue = !self.dj.auto_queue;
+    // Either direction invalidates a *refill* in flight: switching off should drop
+    // a pending one, and switching on starts a fresh one.
+    //
+    // A question the listener typed is not this toggle's to abandon. Bumping the
+    // generation would make its answer land and be discarded, and clearing
+    // `thinking` would let a new ask start a second brain call alongside the
+    // first. Nothing is left unguarded by skipping both: no refill can be in
+    // flight while an ask is (`wants_top_up` gates on the same flag), and later
+    // refills are already stopped by `auto_queue` itself.
+    let asked_turn_in_flight = self.dj.asked_turn_in_flight();
+    let generation = if asked_turn_in_flight {
+      self.dj.generation
+    } else {
+      self.dj.bump_generation()
+    };
+    if self.dj.auto_queue {
+      // Same rule the driver tick applies, so the immediate refill and the ongoing
+      // ones cannot disagree — on an external Connect device the native queue never
+      // fills, and refilling on its length would queue a batch per brain call
+      // forever. Said out loud, or auto-queue just looks broken on that device.
+      let external = self.spotify_external_device_active();
+      if external {
+        self.set_status_message(
+          "DJ auto-queue on — waits while another Spotify device is playing",
+          6,
+        );
+      } else {
+        self.set_status_message("DJ auto-queue on", 4);
+      }
+      if crate::infra::network::dj::wants_top_up(self.native_queue.len(), &self.dj, external) {
+        let turn_seq = self.dj.begin_turn(TurnKind::Refill);
+        self.dispatch_without_spinner(IoEvent::DjTopUp(generation, turn_seq));
+      }
+    } else {
+      if !asked_turn_in_flight {
+        // `finish_turn`, not a bare flag clear: it drops the step counter with the
+        // flag. Left behind, that counter belongs to a turn nobody is waiting on,
+        // and the next refill would paint it as its own progress until its first
+        // step lands.
+        self.dj.finish_turn(self.dj.turn_seq);
+      }
+      self.set_status_message("DJ auto-queue off", 4);
+    }
+  }
+
+  /// Toggle "only tracks I do not already have", warming the index when on.
+  #[cfg(feature = "ai-dj")]
+  pub(crate) fn toggle_dj_fresh_only(&mut self) {
+    self.dj.avoid_library = !self.dj.avoid_library;
+    if self.dj.avoid_library {
+      self.set_status_message("DJ: only tracks you don't already have", 4);
+      self.request_dj_library_index();
+    } else {
+      self.set_status_message("DJ: recommending from everything", 4);
+    }
+  }
+
+  /// Re-roll the direction: drop the DJ's own queued tracks and ask again.
+  #[cfg(feature = "ai-dj")]
+  pub(crate) fn dj_vibe_shift(&mut self) {
+    use crate::infra::dj::{AskDjRequest, DjLine, TurnKind, MAX_BATCH};
+    if self.dj.thinking {
+      self.set_status_message("The DJ is already working on something", 3);
+      return;
+    }
+    let generation = self.dj.bump_generation();
+    let dropped = self.drop_dj_queued_tracks();
+    let turn_seq = self.dj.begin_turn(TurnKind::Ask);
+    self.dj.scroll = 0;
+    self.dj.push_line(DjLine::system(if dropped > 0 {
+      format!("Shifting the vibe (dropped {dropped} queued track(s))")
+    } else {
+      "Shifting the vibe".to_string()
+    }));
+    // A steer rather than a transcript line: the listener never typed this, and the
+    // system line above already tells them what happened.
+    self.dispatch_without_spinner(IoEvent::AskDj(Box::new(AskDjRequest {
+      extra_instruction: Some(format!(
+        "Change direction. Queue {MAX_BATCH} tracks that go somewhere different from what has been \
+         playing, while still being something this listener would enjoy."
+      )),
+      generation,
+      // A vibe shift has just emptied the queue, so it has to refill it rather than
+      // stopping to ask what "different" means.
+      must_act: true,
+      vibe_on_success: None,
+      turn_seq,
+    })));
+  }
+
+  /// Show the DJ's backend/model picker, opening the DJ screen first when it
+  /// is not current. Does not consult `dj_is_configured()`: the key press is
+  /// the request.
+  #[cfg(feature = "ai-dj")]
+  pub(crate) fn open_dj_setup(&mut self) {
+    use crate::infra::dj::setup::DjSetup;
+    self.focus_dj_screen();
+    self.dj.setup = Some(DjSetup::new(&self.user_config.behavior));
   }
 }
 

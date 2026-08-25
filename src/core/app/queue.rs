@@ -46,6 +46,62 @@ impl App {
     }
   }
 
+  /// The position while its URI still matches, else the first item with that
+  /// URI (the queue can hold duplicates).
+  fn queue_position_for(&self, uri: &str, position: usize) -> Option<usize> {
+    if self
+      .native_queue
+      .get(position)
+      .and_then(|t| t.uri.as_deref())
+      == Some(uri)
+    {
+      return Some(position);
+    }
+    self
+      .native_queue
+      .iter()
+      .position(|t| t.uri.as_deref() == Some(uri))
+  }
+
+  /// Jump to a queued item: drop everything before it and hand the sink to
+  /// the queue, suspending a playing context mid-track first.
+  pub(crate) fn play_queue_item(&mut self, uri: &str, position: usize) {
+    let Some(skip) = self.queue_position_for(uri, position) else {
+      return;
+    };
+    // Drop the items before the selected one so it becomes the queue head.
+    self.native_queue.drain(..skip);
+    if !self.queue_owns_playback() {
+      self.suspend_active_decoded_context_mid_track();
+      // No decoded context recorded a suspension: a native-Spotify context may be
+      // playing instead — suspend it so the queue hands back to it on drain.
+      #[cfg(feature = "streaming")]
+      if self.queue_suspended.is_none() {
+        self.suspend_native_spotify_context_mid_track();
+      }
+    }
+    self.dispatch(IoEvent::AdvanceNativeQueue);
+  }
+
+  /// Remove one native-queue item; a no-op when it is not in the queue.
+  pub(crate) fn remove_queue_item(&mut self, uri: &str, position: usize) {
+    if let Some(idx) = self.queue_position_for(uri, position) {
+      self.native_queue.remove(idx);
+    }
+  }
+
+  /// Move one native-queue item to index `to`; a no-op when out of range.
+  pub(crate) fn move_queue_item(&mut self, uri: &str, from: usize, to: usize) {
+    let Some(from) = self.queue_position_for(uri, from) else {
+      return;
+    };
+    if to >= self.native_queue.len() {
+      return;
+    }
+    let item = self.native_queue.remove(from);
+    self.native_queue.insert(to, item);
+  }
+
   /// Whether the native queue's playback slot currently owns the output (either a
   /// decoded queued track or a native-streamed Spotify one). The single gated
   /// entry point for every queue-ownership check; reduces to `false` in a build

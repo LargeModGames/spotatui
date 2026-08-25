@@ -1,7 +1,7 @@
 use super::*;
 
 /// Time range for Top Tracks/Artists in Discover feature
-#[derive(Clone, PartialEq, Debug, Copy, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub enum DiscoverTimeRange {
   /// Last 4 weeks
   Short,
@@ -80,5 +80,51 @@ impl App {
     self.recommendations_context = Some(RecommendationsContext::Song);
     self.recommendations_seed = track.name.clone();
     self.get_recommendations_for_seed(None, seed_tracks, Some(track));
+  }
+
+  pub fn load_recommendations_for_artist(&mut self, id: String, name: String) {
+    self.recommendations_context = Some(RecommendationsContext::Artist);
+    self.recommendations_seed = name;
+    self.get_recommendations_for_seed(Some(vec![id]), None, None);
+  }
+
+  /// Unlike [`Self::load_recommendations_for_track`], no context row is
+  /// prepended to the results table.
+  pub fn load_recommendations_for_track_id(&mut self, id: String, name: String) {
+    self.recommendations_context = Some(RecommendationsContext::Song);
+    self.recommendations_seed = name;
+    self.get_recommendations_for_track_id(id);
+  }
+
+  /// Show the cached mix, or fetch it; a no-op while a fetch is in flight.
+  pub(crate) fn open_discover_mix(&mut self, target: crate::core::action::DiscoverTarget) {
+    use crate::core::action::DiscoverTarget;
+    if self.discover_loading {
+      return;
+    }
+    let (cached, event) = match target {
+      DiscoverTarget::ArtistsMix => (&self.discover_artists_mix, IoEvent::GetTopArtistsMix),
+      DiscoverTarget::TopTracks(range) => {
+        (&self.discover_top_tracks, IoEvent::GetUserTopTracks(range))
+      }
+    };
+    if cached.is_empty() {
+      self.dispatch(event);
+    } else {
+      let tracks = cached.clone();
+      self.show_tracks_in_table(tracks, TrackTableContext::DiscoverPlaylist);
+    }
+  }
+
+  /// Open the shared track table on `tracks` with the cursor on the top row.
+  pub(super) fn show_tracks_in_table(
+    &mut self,
+    tracks: Vec<TrackInfo>,
+    context: TrackTableContext,
+  ) {
+    self.track_table.tracks = tracks;
+    self.track_table.context = Some(context);
+    self.track_table.selected_index = 0;
+    self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
   }
 }

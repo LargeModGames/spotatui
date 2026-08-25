@@ -11,7 +11,7 @@ use crate::core::state::{
 };
 use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
 use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
-use crate::infra::network::sync::{PartySession, PartyStatus};
+use crate::infra::network::sync::{ControlMode, PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
 #[cfg(any(
   feature = "streaming",
@@ -90,6 +90,7 @@ mod models;
 mod native_backend;
 mod native_recovery;
 mod native_shuffle;
+mod party;
 mod persistence;
 mod playback_routing;
 mod playlist_folders;

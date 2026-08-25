@@ -4,6 +4,18 @@ use super::*;
 /// shuffle) into one disk write, and the retry delay after a failed save.
 const STATE_SAVE_DEBOUNCE_MS: u64 = 500;
 
+/// Ungated copy of the `radio:` scheme: favoriting persists stations in
+/// builds without the radio player too.
+const RADIO_URI_PREFIX: &str = "radio:";
+
+/// The trimmed stream URL behind a `radio:` URI.
+fn radio_stream_url(uri: &str) -> Option<&str> {
+  uri
+    .strip_prefix(RADIO_URI_PREFIX)
+    .map(str::trim)
+    .filter(|url| !url.is_empty())
+}
+
 impl App {
   /// Snapshot the currently-playing non-Spotify session for persistence, or
   /// `None` when Spotify (or nothing) owns playback. Reads the live position and
@@ -310,6 +322,96 @@ impl App {
       return Err(error);
     }
     Ok(removed)
+  }
+
+  fn add_station_to_sidebar(&mut self, mut station: TrackInfo, name: String, url: &str) {
+    let uri = format!("{}{url}", RADIO_URI_PREFIX);
+    if self
+      .radio_stations
+      .iter()
+      .any(|existing| existing.uri.as_deref() == Some(uri.as_str()))
+    {
+      return;
+    }
+
+    station.name = name;
+    station.uri = Some(uri);
+    self.radio_stations.push(station);
+    if self.view.selected_playlist_index.is_none() {
+      self.view.selected_playlist_index = Some(0);
+    }
+  }
+
+  /// Favorite one radio station: persist it and mirror it into the sidebar.
+  pub(crate) fn favorite_radio_station(&mut self, station: TrackInfo) {
+    let Some(url) = station.uri.as_deref().and_then(radio_stream_url) else {
+      self.set_status_message("Radio station has no stream URL".to_string(), 4);
+      return;
+    };
+
+    let trimmed = station.name.trim();
+    let name = if trimmed.is_empty() { url } else { trimmed }.to_string();
+    let url = url.to_string();
+
+    let message = match self.add_radio_station(&name, &url) {
+      Ok(RadioStationAddOutcome::Added) => format!("Favorited radio station: {name}"),
+      Ok(RadioStationAddOutcome::AlreadyExists) => {
+        format!("Radio station already favorited: {name}")
+      }
+      Err(error) => {
+        self.set_error_status_message(format!("Could not favorite radio station: {error}"), 6);
+        return;
+      }
+    };
+
+    self.add_station_to_sidebar(station, name, &url);
+    self.set_status_message(message, 4);
+  }
+
+  /// Remove a saved radio station by `radio:` URI; a config.yml station is
+  /// reported, not removed.
+  pub(crate) fn remove_saved_radio_station(&mut self, uri: String) {
+    let Some(url) = radio_stream_url(&uri) else {
+      self.set_status_message("Radio station has no stream URL".to_string(), 4);
+      return;
+    };
+    let station_name = |app: &Self| {
+      app
+        .radio_stations
+        .iter()
+        .find(|station| station.uri.as_deref() == Some(uri.as_str()))
+        .map(|station| station.name.clone())
+        .unwrap_or_default()
+    };
+    let config_owned = self.is_config_owned_radio_station_url(url);
+    if config_owned && !self.is_state_owned_radio_station_url(url) {
+      let name = station_name(self);
+      self.set_status_message(
+        format!("Radio station is configured in config.yml: {name}"),
+        4,
+      );
+      return;
+    }
+
+    match self.remove_radio_station_by_url(url) {
+      Ok(Some(removed)) => {
+        if !config_owned {
+          self
+            .radio_stations
+            .retain(|station| station.uri.as_deref() != Some(uri.as_str()));
+        }
+        // The saved copy's name, not the sidebar row's: a station configured in
+        // config.yml keeps its configured name while its saved duplicate goes.
+        self.set_status_message(format!("Removed saved radio station: {}", removed.name), 4);
+      }
+      Ok(None) => {
+        let name = station_name(self);
+        self.set_status_message(format!("Radio station is not favorited: {name}"), 4);
+      }
+      Err(error) => {
+        self.set_error_status_message(format!("Could not remove radio station: {error}"), 6);
+      }
+    }
   }
 
   /// Flush a scheduled state save once its debounce window has passed, or

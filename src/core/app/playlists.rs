@@ -1,5 +1,8 @@
 use super::*;
 
+/// Playlist URIs with this scheme address the local YouTube playlists file.
+pub(crate) const YOUTUBE_PLAYLIST_PREFIX: &str = "youtube:playlist:";
+
 #[derive(Clone)]
 pub struct PendingPlaylistTrackAdd {
   /// Track id/URI passed through to `AddTrackToPlaylist`.
@@ -56,6 +59,21 @@ impl App {
     self.view.confirm = false;
     self.pending_keybinding_persist = None;
     self.clear_playlist_track_dialog_state();
+  }
+
+  /// Reset the create-playlist form; the caller pops the frame.
+  pub fn clear_create_playlist_form_state(&mut self) {
+    self.view.create_playlist_name = Vec::new();
+    self.view.create_playlist_name_idx = 0;
+    self.view.create_playlist_name_cursor = 0;
+    self.view.create_playlist_stage = CreatePlaylistStage::Name;
+    self.create_playlist_tracks = Vec::new();
+    self.create_playlist_search_results = Vec::new();
+    self.view.create_playlist_search_input = Vec::new();
+    self.view.create_playlist_search_idx = 0;
+    self.view.create_playlist_search_cursor = 0;
+    self.view.create_playlist_selected_result = 0;
+    self.view.create_playlist_focus = CreatePlaylistFocus::SearchInput;
   }
 
   pub fn playlist_is_editable(&self, playlist: &PlaylistInfo) -> bool {
@@ -187,6 +205,31 @@ impl App {
   /// Resolve the track table's current selection and open the
   /// add-to-playlist picker for it. Silent no-op when no row is selected,
   /// exactly like the `w` key that has always driven it.
+  /// Add a track to a playlist, routed by the playlist URI's scheme.
+  pub(crate) fn add_track_to_playlist(&mut self, playlist: String, track: String) {
+    if playlist.starts_with(YOUTUBE_PLAYLIST_PREFIX) {
+      self.dispatch(IoEvent::AddTrackToYouTubePlaylist(playlist, track));
+    } else {
+      self.dispatch(IoEvent::AddTrackToPlaylist(playlist, track));
+    }
+  }
+
+  /// Remove a track from a playlist, routed by the playlist URI's scheme.
+  pub(crate) fn remove_track_from_playlist(
+    &mut self,
+    playlist: String,
+    track: String,
+    position: usize,
+  ) {
+    if playlist.starts_with(YOUTUBE_PLAYLIST_PREFIX) {
+      self.dispatch(IoEvent::RemoveTrackFromYouTubePlaylist(playlist, track));
+    } else {
+      self.dispatch(IoEvent::RemoveTrackFromPlaylistAtPosition(
+        playlist, track, position,
+      ));
+    }
+  }
+
   pub fn begin_add_track_to_playlist_flow_from_selection(&mut self) {
     let Some(track) = self.track_table.tracks.get(self.track_table.selected_index) else {
       return;
@@ -194,6 +237,30 @@ impl App {
     let track_id = track.id.clone();
     let track_name = track.name.clone();
     self.begin_add_track_to_playlist_flow(track_id, track_name);
+  }
+
+  /// Open the add-to-playlist picker for the item playing now. Reads only
+  /// `current_playback_context`, so a native queue slot stages the suspended
+  /// context's track.
+  pub fn begin_add_playing_track_to_playlist_flow(&mut self) {
+    match self
+      .current_playback_context
+      .as_ref()
+      .and_then(|context| context.item.as_ref())
+    {
+      Some(PlayableItem::Track(track)) => {
+        let track_id = track.id.as_ref().map(|id| id.uri());
+        let name = track.name.clone();
+        self.begin_add_track_to_playlist_flow(track_id, name);
+      }
+      Some(PlayableItem::Episode(_)) => {
+        self.set_status_message("Only tracks can be added to playlists".to_string(), 4);
+      }
+      Some(_) => {}
+      None => {
+        self.set_status_message("No track currently playing".to_string(), 4);
+      }
+    }
   }
 
   /// Stage a remove-track-from-playlist confirmation for the track table's
@@ -314,74 +381,28 @@ impl App {
     Some((playlist_id, playlist_name))
   }
 
-  pub fn user_follow_playlist(&mut self) {
-    info!("following playlist");
-    if let SearchResult {
-      playlists: Some(ref playlists),
-      selected_playlists_index: Some(selected_index),
-      ..
-    } = self.search_results
-    {
-      let Some(selected_playlist) = playlists.items.get(selected_index) else {
-        return;
-      };
-      let selected_public = selected_playlist.public;
-      if let Some(ref playlist_id_str) = selected_playlist.id {
-        // owner_id carries the Spotify user id (populated in PlaylistInfo::from_simplified).
-        // The network handler ignores this param (_playlist_owner_id), so a fallback
-        // string is harmless — but we use the real id when available.
-        let owner_id = selected_playlist
-          .owner_id
-          .clone()
-          .unwrap_or_else(|| "unknown".to_string());
-        self.dispatch(IoEvent::UserFollowPlaylist(
-          owner_id,
-          playlist_id_str.clone(),
-          selected_public,
-        ));
-      }
-    }
+  /// The sidebar-selected playlist's id for the unfollow confirm; `None` on a
+  /// folder or pin row.
+  pub fn selected_sidebar_playlist_id(&self) -> Option<String> {
+    let selected_index = self.view.selected_playlist_index?;
+    // Row 0 is the "+ Add Playlist" entry; display items start at row 1.
+    let display_index = selected_index.checked_sub(1)?;
+    let index = match self.get_playlist_display_item_at(display_index)? {
+      PlaylistFolderItem::Playlist { index, .. } => *index,
+      // A folder row or the community pin is not an unfollowable playlist.
+      PlaylistFolderItem::Folder(_) | PlaylistFolderItem::CommunityPin => return None,
+    };
+    self
+      .all_playlists
+      .get(index)
+      .and_then(|playlist| playlist.id.clone())
   }
 
-  pub fn user_unfollow_playlist(&mut self) {
-    info!("unfollowing playlist");
-    if let (Some(selected_index), Some(user)) = (self.view.selected_playlist_index, &self.user) {
-      // Row 0 is the "+ Add Playlist" entry; display items start at row 1.
-      if let Some(PlaylistFolderItem::Playlist { index, .. }) = selected_index
-        .checked_sub(1)
-        .and_then(|i| self.get_playlist_display_item_at(i))
-      {
-        // Pass the stored string ids straight through to the IoEvent.
-        let ids = self.all_playlists.get(*index).and_then(|playlist| {
-          let selected_id = playlist.id.clone()?;
-          Some((user.id.clone(), selected_id))
-        });
-        if let Some((user_id, selected_id)) = ids {
-          self.dispatch(IoEvent::UserUnfollowPlaylist(user_id, selected_id));
-        }
-      }
-    }
-  }
-
-  pub fn user_unfollow_playlist_search_result(&mut self) {
-    info!("unfollowing playlist from search results");
-    if let (Some(playlists), Some(selected_index), Some(user)) = (
-      &self.search_results.playlists,
-      self.search_results.selected_playlists_index,
-      &self.user,
-    ) {
-      let Some(selected_playlist) = playlists.items.get(selected_index) else {
-        return;
-      };
-      // `user.id` is the domain string id (UserInfo) and `selected_playlist.id`
-      // is an Option<String> (PlaylistInfo); both pass straight to the IoEvent.
-      if let Some(ref id_str) = selected_playlist.id {
-        self.dispatch(IoEvent::UserUnfollowPlaylist(
-          user.id.clone(),
-          id_str.clone(),
-        ));
-      }
-    }
+  /// The highlighted search-result playlist's Spotify id.
+  pub fn selected_search_result_playlist_id(&self) -> Option<String> {
+    let playlists = self.search_results.playlists.as_ref()?;
+    let selected_index = self.search_results.selected_playlists_index?;
+    playlists.items.get(selected_index)?.id.clone()
   }
 }
 
@@ -440,5 +461,76 @@ mod tests {
       Some("No editable playlists available")
     );
     assert!(app.pending_playlist_track_add.is_none());
+  }
+
+  /// A sidebar with the "+ Add Playlist" row, then one folder, then one
+  /// playlist row (both visible at the root level).
+  fn app_with_sidebar_playlist() -> App {
+    // Read-only resolvers: no channel needed, nothing dispatches.
+    let mut app = App::default();
+    app.user_config.behavior.pin_community_playlist = false;
+    app.all_playlists = vec![playlist_info(
+      "37i9dQZF1DXcBWIGoYBM5M",
+      "Owned",
+      "spotatui-owner",
+      false,
+    )];
+    app.playlist_folder_items = vec![
+      PlaylistFolderItem::Folder(PlaylistFolder {
+        name: "Mixes".to_string(),
+        current_id: 0,
+        target_id: 1,
+      }),
+      PlaylistFolderItem::Playlist {
+        index: 0,
+        current_id: 0,
+      },
+    ];
+    app
+  }
+
+  #[test]
+  fn selected_sidebar_playlist_id_resolves_the_row_below_add_playlist() {
+    let mut app = app_with_sidebar_playlist();
+    app.user = Some(user_info("spotatui-owner"));
+    // Row 0 is "+ Add Playlist", row 1 the folder, row 2 the playlist.
+    app.view.selected_playlist_index = Some(2);
+
+    assert_eq!(
+      app.selected_sidebar_playlist_id().as_deref(),
+      Some("37i9dQZF1DXcBWIGoYBM5M")
+    );
+  }
+
+  #[test]
+  fn selected_sidebar_playlist_id_skips_rows_that_are_not_playlists() {
+    let mut app = app_with_sidebar_playlist();
+    app.user = Some(user_info("spotatui-owner"));
+
+    app.view.selected_playlist_index = Some(0);
+    assert_eq!(app.selected_sidebar_playlist_id(), None, "+ Add Playlist");
+    app.view.selected_playlist_index = Some(1);
+    assert_eq!(app.selected_sidebar_playlist_id(), None, "a folder row");
+    app.view.selected_playlist_index = None;
+    assert_eq!(app.selected_sidebar_playlist_id(), None, "no selection");
+  }
+
+  #[test]
+  fn selected_search_result_playlist_id_resolves_the_selection() {
+    let mut app = App::default();
+    app.search_results.playlists = Some(Paged {
+      items: vec![
+        playlist_info("37i9dQZF1DWZqd5JICZI0u", "First", "friend-owner", false),
+        playlist_info("37i9dQZF1DXcBWIGoYBM5M", "Second", "friend-owner", false),
+      ],
+      total: 2,
+      ..Default::default()
+    });
+    app.search_results.selected_playlists_index = Some(1);
+
+    assert_eq!(
+      app.selected_search_result_playlist_id().as_deref(),
+      Some("37i9dQZF1DXcBWIGoYBM5M")
+    );
   }
 }

@@ -42,7 +42,7 @@ mod sort_menu;
 mod stats;
 mod track_table;
 
-use crate::core::action::{Action, NavTarget};
+use crate::core::action::{Action, CopyTarget, NavTarget};
 use crate::core::app::{ActiveBlock, App, ArtistBlock, InputContext, RouteId, SearchResultBlock};
 use crate::core::source::Source;
 use crate::tui::event::Key;
@@ -64,21 +64,6 @@ fn key_matches_open_settings_binding(key: Key, binding: Key) -> bool {
 #[cfg(not(target_os = "macos"))]
 fn key_matches_open_settings_binding(key: Key, binding: Key) -> bool {
   key == binding
-}
-
-/// The `radio:` URI scheme shared across handlers. The canonical parser in
-/// `crate::infra::radio` lives behind the `internet-radio` feature, so the
-/// favoriting handlers (which persist config even in slim builds) keep this one
-/// ungated copy rather than duplicating it per file.
-pub(super) const RADIO_URI_PREFIX: &str = "radio:";
-
-/// Strip the `radio:` prefix off a station URI and return the trimmed,
-/// non-empty stream URL.
-pub(super) fn radio_stream_url(uri: &str) -> Option<&str> {
-  uri
-    .strip_prefix(RADIO_URI_PREFIX)
-    .map(str::trim)
-    .filter(|url| !url.is_empty())
 }
 
 fn should_route_friends_before_globals(key: Key, app: &App) -> bool {
@@ -218,19 +203,19 @@ pub fn handle_app(key: Key, app: &mut App) {
     }
     #[cfg(feature = "ai-dj")]
     _ if key == app.user_config.keys.dj_toggle_auto_queue => {
-      ai_dj::toggle_auto_queue(app);
+      app.apply(Action::ToggleDjAutoQueue);
     }
     #[cfg(feature = "ai-dj")]
     _ if key == app.user_config.keys.dj_vibe_shift => {
-      ai_dj::vibe_shift(app);
+      app.apply(Action::DjVibeShift);
     }
     #[cfg(feature = "ai-dj")]
     _ if key == app.user_config.keys.dj_toggle_fresh_only => {
-      ai_dj::toggle_fresh_only(app);
+      app.apply(Action::ToggleDjFreshOnly);
     }
     #[cfg(feature = "ai-dj")]
     _ if key == app.user_config.keys.dj_pick_model => {
-      ai_dj::open_picker(app);
+      app.apply(Action::OpenDjSetup);
     }
     _ if key == app.user_config.keys.manage_devices => {
       app.apply(Action::Navigate(NavTarget::Devices));
@@ -287,15 +272,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       // Search is gated on the active source's capability (no `Searcher` impl
       // for Local Files), so it's a no-op with a hint there.
       if app.active_source.supports_search() {
-        // Never rewrite the error frame in place to `{Error, Input}`: push
-        // dedupes on the top frame's id, so a surviving Error frame makes
-        // every later error silently fail to render. Dismiss the error and
-        // open search on the screen below.
-        if app.get_current_route().id == RouteId::Error {
-          app.clear_api_error();
-        }
-        app.view.input_context = InputContext::GlobalSearch;
-        app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
+        focus_global_search(app);
       } else {
         app.set_status_message(
           format!("Search isn't available for {}", app.active_source.label()),
@@ -305,7 +282,7 @@ pub fn handle_app(key: Key, app: &mut App) {
     }
     _ if key == app.user_config.keys.copy_song_url => {
       if app.active_source.supports_library() {
-        app.copy_song_url();
+        app.apply(Action::CopyUrl(CopyTarget::CurrentSong));
       } else {
         app.set_status_message(
           format!("Copy URL isn't available for {}", app.active_source.label()),
@@ -314,7 +291,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       }
     }
     _ if key == app.user_config.keys.copy_album_url => {
-      app.copy_album_url();
+      app.apply(Action::CopyUrl(CopyTarget::CurrentAlbum));
     }
     _ if key == app.user_config.keys.audio_analysis => {
       app.apply(Action::Navigate(NavTarget::Analysis));
@@ -346,7 +323,7 @@ pub fn handle_app(key: Key, app: &mut App) {
           app.set_status_message("No radio station selected or playing".to_string(), 4);
         }
       } else if app.active_source.supports_like() {
-        playbar::toggle_like_currently_playing_item(app);
+        app.apply(Action::ToggleSaveCurrentItem);
       } else {
         app.set_status_message(
           format!("Like isn't available for {}", app.active_source.label()),
@@ -418,11 +395,23 @@ pub fn handle_app(key: Key, app: &mut App) {
       if is_input_mode(app) {
         handle_block_events(key, app);
       } else {
-        playbar::add_currently_playing_track_to_playlist(app);
+        app.apply(Action::OpenAddPlayingTrackDialog);
       }
     }
     _ => handle_block_events(key, app),
   }
+}
+
+/// Open the global search box. Never rewrite the error frame in place to
+/// `{Error, Input}`: push dedupes on the top frame's id, so a surviving Error
+/// frame makes every later error silently fail to render. Dismiss the error
+/// and open search on the screen below.
+pub(super) fn focus_global_search(app: &mut App) {
+  if app.get_current_route().id == RouteId::Error {
+    app.clear_api_error();
+  }
+  app.view.input_context = InputContext::GlobalSearch;
+  app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
 }
 
 fn is_input_mode(app: &App) -> bool {

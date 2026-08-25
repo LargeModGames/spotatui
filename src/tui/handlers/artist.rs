@@ -1,6 +1,7 @@
 use super::common_key_events;
-use crate::core::app::{ActiveBlock, App, ArtistBlock, RecommendationsContext};
-use crate::infra::network::IoEvent;
+use crate::core::action::{Action, OpenTarget};
+use crate::core::app::{App, Artist, ArtistBlock};
+use crate::core::plugin_api::TrackInfo;
 use crate::tui::event::Key;
 
 fn handle_down_press_on_selected_block(app: &mut App) {
@@ -155,81 +156,87 @@ fn handle_low_press_on_selected_block(app: &mut App) {
   }
 }
 
-fn handle_recommend_event_on_selected_block(app: &mut App) {
-  if let Some(artist) = &mut app.artist.clone() {
-    match artist.artist_selected_block {
-      ArtistBlock::TopTracks => {
-        let selected_index = artist.selected_top_track_index;
-        if let Some(track) = artist.top_tracks.get(selected_index) {
-          // TrackInfo.id is Option<String> — wrap it in a Vec<String> if present.
-          let track_id_list: Option<Vec<String>> = track.id.as_ref().map(|id| vec![id.clone()]);
-          app.recommendations_context = Some(RecommendationsContext::Song);
-          app.recommendations_seed = track.name.clone();
-          // `track` is already a domain TrackInfo (Artist.top_tracks was
-          // migrated), so seed recommendations with it directly.
-          app.get_recommendations_for_seed(None, track_id_list, Some(track.clone()));
-        }
-      }
-      ArtistBlock::RelatedArtists => {
-        let selected_index = artist.selected_related_artist_index;
-        let related = &artist.related_artists[selected_index];
-        // ArtistInfo.id is Option<String>; only dispatch if an id is present to
-        // avoid a seed-less recommendation call that returns garbage results.
-        if let Some(id_str) = &related.id {
-          let artist_id_list: Option<Vec<String>> = Some(vec![id_str.clone()]);
-          let artist_name = related.name.clone();
+/// The top track under the cursor.
+fn selected_top_track(artist: &Artist) -> Option<TrackInfo> {
+  artist
+    .top_tracks
+    .get(artist.selected_top_track_index)
+    .cloned()
+}
 
-          app.recommendations_context = Some(RecommendationsContext::Artist);
-          app.recommendations_seed = artist_name;
-          app.get_recommendations_for_seed(artist_id_list, None, None);
-        }
+fn top_track_playback_request(artist: &Artist) -> (Vec<String>, Option<usize>) {
+  common_key_events::uri_playback_request(
+    artist.top_tracks.iter().map(|track| track.uri.clone()),
+    artist.selected_top_track_index,
+  )
+}
+
+/// The album id under the artist page's album cursor.
+fn selected_album_id(artist: &Artist) -> Option<String> {
+  artist
+    .albums
+    .items
+    .get(artist.selected_album_index)?
+    .id
+    .clone()
+}
+
+/// `None` when the row is missing or has no id: the related-artists list is
+/// often empty while the cursor still reports 0.
+fn selected_related_artist(artist: &Artist) -> Option<(String, String)> {
+  let related = artist
+    .related_artists
+    .get(artist.selected_related_artist_index)?;
+  Some((related.id.clone()?, related.name.clone()))
+}
+
+fn handle_recommend_event_on_selected_block(app: &mut App) {
+  let Some(artist) = &app.artist else {
+    return;
+  };
+  match artist.artist_selected_block {
+    ArtistBlock::TopTracks => {
+      // The full track: the results table prepends the seed as a context row.
+      if let Some(track) = selected_top_track(artist) {
+        app.apply(Action::RecommendFromTrack(track));
       }
-      _ => {}
     }
+    ArtistBlock::RelatedArtists => {
+      // ArtistInfo.id is Option<String>; only dispatch if an id is present to
+      // avoid a seed-less recommendation call that returns garbage results.
+      if let Some((id, name)) = selected_related_artist(artist) {
+        app.apply(Action::RecommendFromArtist { id, name });
+      }
+    }
+    _ => {}
   }
 }
 
 fn handle_enter_event_on_selected_block(app: &mut App) {
-  if let Some(artist) = &mut app.artist.clone() {
-    match artist.artist_selected_block {
-      ArtistBlock::TopTracks => {
-        let selected_index = artist.selected_top_track_index;
-        // TrackInfo.uri is the `spotify:track:` URI consumed by the dispatch boundary.
-        let top_tracks: Vec<String> = artist
-          .top_tracks
-          .iter()
-          .filter_map(|track| track.uri.clone())
-          .collect();
-        app.dispatch(IoEvent::StartPlayback(
-          None,
-          Some(top_tracks),
-          Some(selected_index),
-        ));
-      }
-      ArtistBlock::Albums => {
-        if let Some(selected_album) = artist
-          .albums
-          .items
-          .get(artist.selected_album_index)
-          .cloned()
-        {
-          // GetAlbum fetches a FullAlbum and sets AlbumTableContext::Full — do NOT
-          // set track_table.context here, as GetAlbum does not use the track table.
-          if let Some(id_str) = &selected_album.id {
-            app.dispatch(IoEvent::GetAlbum(id_str.clone()));
-          }
-        }
-      }
-      ArtistBlock::RelatedArtists => {
-        let selected_index = artist.selected_related_artist_index;
-        let related = &artist.related_artists[selected_index];
-        let artist_name = related.name.clone();
-        if let Some(id_str) = &related.id {
-          app.get_artist(id_str.clone(), artist_name);
-        }
-      }
-      ArtistBlock::Empty => {}
+  let Some(artist) = &app.artist else {
+    return;
+  };
+  match artist.artist_selected_block {
+    ArtistBlock::TopTracks => {
+      let (uris, offset) = top_track_playback_request(artist);
+      app.apply(Action::PlayUris { uris, offset });
     }
+    ArtistBlock::Albums => {
+      // GetAlbum fetches a FullAlbum and sets AlbumTableContext::Full — do NOT
+      // set track_table.context here, as GetAlbum does not use the track table.
+      if let Some(id) = selected_album_id(artist) {
+        app.apply(Action::Open(OpenTarget::Album {
+          id,
+          from_search: false,
+        }));
+      }
+    }
+    ArtistBlock::RelatedArtists => {
+      if let Some((id, name)) = selected_related_artist(artist) {
+        app.apply(Action::Open(OpenTarget::Artist { id, name }));
+      }
+    }
+    ArtistBlock::Empty => {}
   }
 }
 
@@ -307,29 +314,52 @@ pub fn handler(key: Key, app: &mut App) {
         handle_recommend_event_on_selected_block(app);
       }
       Key::Char('w') => match artist.artist_selected_block {
-        ArtistBlock::TopTracks => open_add_to_playlist_for_selected_top_track(app),
-        ArtistBlock::Albums => app.current_user_saved_album_add(ActiveBlock::ArtistBlock),
-        ArtistBlock::RelatedArtists => app.user_follow_artists(ActiveBlock::ArtistBlock),
+        ArtistBlock::TopTracks => {
+          let identity = app
+            .artist
+            .as_ref()
+            .and_then(|artist| artist.top_tracks.get(artist.selected_top_track_index))
+            .map(|track| (track.id.clone(), track.name.clone()));
+          if let Some((track_id, track_name)) = identity {
+            app.apply(Action::OpenAddTrackDialogFor {
+              track_id,
+              track_name,
+            });
+          }
+        }
+        ArtistBlock::Albums => {
+          if let Some(id) = artist_page_album_id(app) {
+            app.apply(Action::SaveAlbum(id));
+          }
+        }
+        ArtistBlock::RelatedArtists => {
+          if let Some((id, _)) = artist_page_related_artist(app) {
+            app.apply(Action::FollowArtist(id));
+          }
+        }
         _ => (),
       },
       Key::Char('D') => match artist.artist_selected_block {
-        ArtistBlock::Albums => app.current_user_saved_album_delete(ActiveBlock::ArtistBlock),
-        ArtistBlock::RelatedArtists => app.user_unfollow_artists(ActiveBlock::ArtistBlock),
+        ArtistBlock::Albums => {
+          if let Some(id) = artist_page_album_id(app) {
+            app.apply(Action::UnsaveAlbum(id));
+          }
+        }
+        ArtistBlock::RelatedArtists => {
+          if let Some((id, _)) = artist_page_related_artist(app) {
+            app.apply(Action::UnfollowArtist(id));
+          }
+        }
         _ => (),
       },
       _ if key == app.user_config.keys.add_item_to_queue => {
-        let track = app.artist.as_ref().and_then(|artist| {
-          if let ArtistBlock::TopTracks = artist.artist_selected_block {
-            artist
-              .top_tracks
-              .get(artist.selected_top_track_index)
-              .cloned()
-          } else {
-            None
-          }
-        });
+        let track = app
+          .artist
+          .as_ref()
+          .filter(|artist| artist.artist_selected_block == ArtistBlock::TopTracks)
+          .and_then(selected_top_track);
         if let Some(track) = track {
-          app.add_track_to_native_queue(track);
+          app.apply(Action::QueueTrack(track));
         }
       }
       _ => {}
@@ -337,21 +367,37 @@ pub fn handler(key: Key, app: &mut App) {
   }
 }
 
-fn open_add_to_playlist_for_selected_top_track(app: &mut App) {
-  let Some(artist) = &app.artist else {
-    return;
-  };
-  let Some(track) = artist.top_tracks.get(artist.selected_top_track_index) else {
-    return;
-  };
+/// Re-read from the whole `App`: the key match's borrow of `app.artist` has
+/// ended by the time an arm body runs.
+fn artist_page_album_id(app: &App) -> Option<String> {
+  app.artist.as_ref().and_then(selected_album_id)
+}
 
-  app.begin_add_track_to_playlist_flow(track.id.clone(), track.name.clone());
+fn artist_page_related_artist(app: &App) -> Option<(String, String)> {
+  app.artist.as_ref().and_then(selected_related_artist)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::ActiveBlock;
+  use crate::core::pagination::Paged;
+  use crate::core::plugin_api::ArtistInfo;
+
+  fn artist_page(related_artists: Vec<ArtistInfo>) -> Artist {
+    Artist {
+      artist_id: "artist1".to_string(),
+      artist_name: "First".to_string(),
+      albums: Paged::default(),
+      related_artists,
+      top_tracks: vec![],
+      selected_album_index: 0,
+      selected_related_artist_index: 0,
+      selected_top_track_index: 0,
+      artist_hovered_block: ArtistBlock::TopTracks,
+      artist_selected_block: ArtistBlock::RelatedArtists,
+    }
+  }
 
   #[test]
   fn on_esc() {
@@ -361,5 +407,82 @@ mod tests {
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::Empty);
+  }
+
+  #[test]
+  fn r_on_a_top_track_seeds_recommendations_with_the_track_as_the_context_row() {
+    use crate::core::plugin_api::TrackInfo;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut page = artist_page(vec![]);
+    page.artist_selected_block = ArtistBlock::TopTracks;
+    page.top_tracks = vec![TrackInfo {
+      uri: Some("spotify:track:one".to_string()),
+      name: "One".to_string(),
+      artists: vec!["First".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 1_000,
+      id: Some("one".to_string()),
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }];
+    app.artist = Some(page);
+
+    handler(Key::Char('r'), &mut app);
+
+    match rx.try_recv() {
+      Ok(IoEvent::GetRecommendationsForSeed(None, seed_tracks, first_track, _)) => {
+        assert_eq!(seed_tracks, Some(vec!["spotify:track:one".to_string()]));
+        assert_eq!(
+          (*first_track).map(|track| track.name),
+          Some("One".to_string())
+        );
+      }
+      _ => panic!("expected GetRecommendationsForSeed with the top track as first_track"),
+    }
+    assert_eq!(app.recommendations_seed, "One");
+  }
+
+  #[test]
+  fn related_artist_lookup_on_an_empty_list_resolves_nothing() {
+    // An empty related-artists list with the cursor at 0 used to index out of bounds.
+    assert_eq!(selected_related_artist(&artist_page(vec![])), None);
+  }
+
+  #[test]
+  fn related_artist_lookup_returns_the_row_identity() {
+    let page = artist_page(vec![ArtistInfo {
+      id: Some("artist2".to_string()),
+      uri: Some("spotify:artist:artist2".to_string()),
+      name: "Second".to_string(),
+      image_url: None,
+    }]);
+
+    assert_eq!(
+      selected_related_artist(&page),
+      Some(("artist2".to_string(), "Second".to_string()))
+    );
+  }
+
+  #[test]
+  fn related_artist_lookup_without_an_id_resolves_nothing() {
+    let page = artist_page(vec![ArtistInfo {
+      id: None,
+      uri: None,
+      name: "Unknown".to_string(),
+      image_url: None,
+    }]);
+
+    assert_eq!(selected_related_artist(&page), None);
   }
 }

@@ -1,6 +1,6 @@
+use crate::core::action::Action;
 use crate::core::app::App;
-use crate::infra::network::sync::{ControlMode, PartyStatus};
-use crate::infra::network::IoEvent;
+use crate::infra::network::sync::PartyStatus;
 use crate::tui::event::Key;
 
 const PARTY_CODE_LEN: usize = 6;
@@ -30,7 +30,7 @@ fn handle_disconnected_menu(key: Key, app: &mut App) {
         app.pop_navigation_stack();
       }
       Key::Char('1') | Key::Char('h') => {
-        app.dispatch(IoEvent::StartParty(ControlMode::HostOnly));
+        app.apply(Action::StartParty);
       }
       Key::Char('2') | Key::Char('j') | Key::Char('J') => {
         // Switch to "Enter code" view (one space so the code-entry UI is shown).
@@ -39,7 +39,7 @@ fn handle_disconnected_menu(key: Key, app: &mut App) {
         app.view.party_join_name.clear();
       }
       Key::Enter => {
-        app.dispatch(IoEvent::StartParty(ControlMode::HostOnly));
+        app.apply(Action::StartParty);
       }
       _ => {}
     }
@@ -73,7 +73,7 @@ fn handle_code_input(key: Key, app: &mut App) {
         .collect();
       let name = normalized_guest_name(&app.view.party_join_name);
       if code.len() == PARTY_CODE_LEN && !name.is_empty() {
-        app.dispatch(IoEvent::JoinParty { code, name });
+        app.apply(Action::JoinParty { code, name });
         app.view.party_input.clear();
         app.view.party_input_idx = 0;
         app.view.party_join_name.clear();
@@ -111,23 +111,10 @@ fn handle_hosting_menu(key: Key, app: &mut App) {
       app.pop_navigation_stack();
     }
     Key::Char('l') | Key::Char('L') => {
-      app.dispatch(IoEvent::LeaveParty);
+      app.apply(Action::LeaveParty);
     }
     Key::Char('c') | Key::Char('C') => {
-      let new_mode = if let Some(session) = &mut app.party_session {
-        let updated_mode = match session.control_mode {
-          ControlMode::HostOnly => ControlMode::SharedControl,
-          ControlMode::SharedControl => ControlMode::HostOnly,
-        };
-        session.control_mode = updated_mode.clone();
-        Some(updated_mode)
-      } else {
-        None
-      };
-
-      if let Some(updated_mode) = new_mode {
-        app.dispatch(IoEvent::SetPartyControlMode(updated_mode));
-      }
+      app.apply(Action::TogglePartyControlMode);
     }
     _ => {}
   }
@@ -139,8 +126,79 @@ fn handle_joined_menu(key: Key, app: &mut App) {
       app.pop_navigation_stack();
     }
     Key::Char('l') | Key::Char('L') => {
-      app.dispatch(IoEvent::LeaveParty);
+      app.apply(Action::LeaveParty);
     }
     _ => {}
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::{ActiveBlock, RouteId};
+
+  /// Open the code-entry view and type `keys` into it, all through key presses.
+  fn app_typing(keys: &str) -> App {
+    let mut app = App::default();
+    handler(Key::Char('2'), &mut app);
+    for c in keys.chars() {
+      handler(Key::Char(c), &mut app);
+    }
+    app
+  }
+
+  #[test]
+  fn party_code_entry_uppercases_each_typed_character() {
+    let app = app_typing("abcdef");
+
+    // The trailing space is the sentinel that makes the popup render the code form.
+    assert_eq!(app.view.party_input.iter().collect::<String>(), "ABCDEF ");
+    assert_eq!(app.view.party_input_idx, 6);
+    assert!(app.view.party_join_name.is_empty());
+  }
+
+  #[test]
+  fn party_name_entry_starts_once_the_code_is_complete() {
+    let app = app_typing("abcdefGuest");
+
+    assert_eq!(app.view.party_input.iter().collect::<String>(), "ABCDEF ");
+    assert_eq!(app.view.party_join_name.iter().collect::<String>(), "Guest");
+  }
+
+  #[test]
+  fn party_backspace_deletes_the_name_before_the_code() {
+    let mut app = app_typing("abcdefX");
+
+    handler(Key::Backspace, &mut app);
+    assert!(app.view.party_join_name.is_empty());
+    assert_eq!(app.view.party_input.iter().collect::<String>(), "ABCDEF ");
+
+    handler(Key::Backspace, &mut app);
+    assert_eq!(app.view.party_input.iter().collect::<String>(), "ABCDE ");
+  }
+
+  #[test]
+  fn party_enter_with_an_incomplete_code_keeps_the_buffers() {
+    let mut app = app_typing("abcde");
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.view.party_input.iter().collect::<String>(), "ABCDE ");
+    assert_eq!(app.view.party_input_idx, 5);
+  }
+
+  #[test]
+  fn esc_in_code_entry_clears_the_buffers_without_leaving_the_popup() {
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::Party, ActiveBlock::Party);
+    handler(Key::Char('2'), &mut app);
+    handler(Key::Char('a'), &mut app);
+
+    handler(Key::Esc, &mut app);
+
+    assert!(app.view.party_input.is_empty());
+    assert_eq!(app.view.party_input_idx, 0);
+    assert!(app.view.party_join_name.is_empty());
+    assert_eq!(app.get_current_route().id, RouteId::Party);
   }
 }

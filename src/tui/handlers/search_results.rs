@@ -1,14 +1,9 @@
 use super::common_key_events;
-use crate::core::app::{
-  ActiveBlock, App, DialogContext, RecommendationsContext, RouteId, SearchResultBlock,
-  TrackTableContext,
-};
-use crate::core::plugin_api::TrackInfo;
+use crate::core::action::{Action, OpenTarget};
+use crate::core::app::{ActiveBlock, App, DialogContext, RouteId, SearchResultBlock};
+use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use crate::core::source::Source;
-use crate::core::state::RadioStationAddOutcome;
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
-use rspotify::model::idtypes::PlaylistId;
 
 fn handle_down_press_on_selected_block(app: &mut App) {
   // Start selecting within the selected block
@@ -274,76 +269,94 @@ fn handle_add_item_to_queue(app: &mut App) {
         .and_then(|tracks| tracks.items.get(index).cloned())
     });
     if let Some(track) = track {
-      app.add_track_to_native_queue(track);
+      app.apply(Action::QueueTrack(track));
     }
   }
+}
+
+/// The highlighted album's id; `.get()` guards a stale index.
+fn selected_search_album_id(app: &App) -> Option<String> {
+  let index = app.search_results.selected_album_index?;
+  app
+    .search_results
+    .albums
+    .as_ref()?
+    .items
+    .get(index)?
+    .id
+    .clone()
+}
+
+/// The highlighted artist's (id, name).
+fn selected_search_artist_identity(app: &App) -> Option<(String, String)> {
+  let index = app.search_results.selected_artists_index?;
+  let artist = app.search_results.artists.as_ref()?.items.get(index)?;
+  Some((artist.id.clone()?, artist.name.clone()))
+}
+
+/// The highlighted track row; `None` without a selection.
+fn selected_search_track_row(app: &App) -> Option<&TrackInfo> {
+  let index = app.search_results.selected_tracks_index?;
+  app.search_results.tracks.as_ref()?.items.get(index)
+}
+
+/// The highlighted show row; `None` without a selection.
+fn selected_search_show_row(app: &App) -> Option<&ShowInfo> {
+  let index = app.search_results.selected_shows_index?;
+  app.search_results.shows.as_ref()?.items.get(index)
+}
+
+/// The highlighted show's Spotify id, for the save/unsave keys.
+fn selected_search_show_id(app: &App) -> Option<String> {
+  selected_search_show_row(app)?.id.clone()
 }
 
 fn handle_enter_event_on_selected_block(app: &mut App) {
   match &app.search_results.selected_block {
     SearchResultBlock::AlbumSearch => {
-      if let (Some(index), Some(albums_result)) = (
-        app.search_results.selected_album_index,
-        &app.search_results.albums,
-      ) {
-        if let Some(album) = albums_result.items.get(index) {
-          if let Some(ref id_str) = album.id {
-            app.track_table.context = Some(TrackTableContext::AlbumSearch);
-            app.dispatch(IoEvent::GetAlbum(id_str.clone()));
-          }
-        };
+      if let Some(id) = selected_search_album_id(app) {
+        app.apply(Action::Open(OpenTarget::Album {
+          id,
+          from_search: true,
+        }));
       }
     }
     SearchResultBlock::SongSearch => {
-      let index = app.search_results.selected_tracks_index;
-      let track_ids: Option<Vec<String>> = app.search_results.tracks.as_ref().map(|paged| {
-        paged
-          .items
-          .iter()
-          .filter_map(|track| track.uri.clone())
-          .collect()
-      });
-      app.dispatch(IoEvent::StartPlayback(None, track_ids, index));
+      let Some(paged) = app.search_results.tracks.as_ref() else {
+        return;
+      };
+      // No selection: an out-of-range index yields `offset: None`.
+      let selected = app
+        .search_results
+        .selected_tracks_index
+        .unwrap_or(paged.items.len());
+      let (uris, offset) = common_key_events::uri_playback_request(
+        paged.items.iter().map(|track| track.uri.clone()),
+        selected,
+      );
+      app.apply(Action::PlayUris { uris, offset });
     }
     SearchResultBlock::ArtistSearch => {
-      if let Some(index) = app.search_results.selected_artists_index {
-        if let Some(result) = &app.search_results.artists {
-          if let Some(artist) = result.items.get(index) {
-            if let Some(ref id_str) = artist.id {
-              app.get_artist(id_str.clone(), artist.name.clone());
-            }
-          };
-        };
-      };
+      if let Some((id, name)) = selected_search_artist_identity(app) {
+        app.apply(Action::Open(OpenTarget::Artist { id, name }));
+      }
     }
     SearchResultBlock::PlaylistSearch => {
-      if let (Some(index), Some(playlists_result)) = (
-        app.search_results.selected_playlists_index,
-        &app.search_results.playlists,
-      ) {
-        if let Some(playlist) = playlists_result.items.get(index) {
-          if let Some(ref id_str) = playlist.id {
-            if let Ok(playlist_id) = PlaylistId::from_id(id_str.as_str()) {
-              // Go to playlist tracks table: navigates immediately with the
-              // cleared table as the loading state (see open_playlist_tracks).
-              app
-                .open_playlist_tracks(playlist_id.into_static(), TrackTableContext::PlaylistSearch);
-            }
-          }
-        };
+      // Go to playlist tracks table: navigates immediately with the cleared
+      // table as the loading state (see open_playlist_tracks).
+      if let Some(id) = app.selected_search_result_playlist_id() {
+        app.apply(Action::Open(OpenTarget::Playlist {
+          id,
+          from_search: true,
+        }));
       }
     }
     SearchResultBlock::ShowSearch => {
-      if let (Some(index), Some(shows_result)) = (
-        app.search_results.selected_shows_index,
-        &app.search_results.shows,
-      ) {
-        if let Some(show) = shows_result.items.get(index) {
-          // GetShowEpisodes populates app.library.show_episodes (GetShow sets
-          // EpisodeTableContext::Full but does NOT populate it, leaving a blank
-          // episode list). `show` is already a domain ShowInfo.
-          app.dispatch(IoEvent::GetShowEpisodes(Box::new(show.clone())));
-        };
+      // OpenShowEpisodes populates app.library.show_episodes (opening the show
+      // by id sets EpisodeTableContext::Full but does NOT populate it, leaving
+      // a blank episode list). `show` is already a domain ShowInfo.
+      if let Some(show) = selected_search_show_row(app).cloned() {
+        app.apply(Action::OpenShowEpisodes(show));
       }
     }
     SearchResultBlock::Empty => {}
@@ -391,35 +404,21 @@ fn handle_recommended_tracks(app: &mut App) {
     SearchResultBlock::AlbumSearch => {}
     SearchResultBlock::SongSearch => {
       if let Some(index) = app.search_results.selected_tracks_index {
-        if let Some(track) = app
+        let identity = app
           .search_results
           .tracks
           .as_ref()
           .and_then(|paged| paged.items.get(index))
-          .cloned()
-        {
-          let track_id_list: Option<Vec<String>> = track.id.as_ref().map(|id| vec![id.clone()]);
-
-          app.recommendations_context = Some(RecommendationsContext::Song);
-          app.recommendations_seed = track.name.clone();
-          app.get_recommendations_for_seed(None, track_id_list, Some(track));
-        };
+          .and_then(|track| Some((track.id.clone()?, track.name.clone())));
+        if let Some((id, name)) = identity {
+          app.apply(Action::RecommendFromTrackId { id, name });
+        }
       };
     }
     SearchResultBlock::ArtistSearch => {
-      if let Some(index) = app.search_results.selected_artists_index {
-        if let Some(artist) = app
-          .search_results
-          .artists
-          .as_ref()
-          .and_then(|paged| paged.items.get(index))
-        {
-          let artist_id_list: Option<Vec<String>> = artist.id.as_ref().map(|id| vec![id.clone()]);
-          app.recommendations_context = Some(RecommendationsContext::Artist);
-          app.recommendations_seed = artist.name.clone();
-          app.get_recommendations_for_seed(artist_id_list, None, None);
-        };
-      };
+      if let Some((id, name)) = selected_search_artist_identity(app) {
+        app.apply(Action::RecommendFromArtist { id, name });
+      }
     }
     SearchResultBlock::PlaylistSearch => {}
     SearchResultBlock::ShowSearch => {}
@@ -438,57 +437,12 @@ fn selected_radio_station(app: &App) -> Option<TrackInfo> {
     .cloned()
 }
 
-/// Move `station` into the sidebar list under the favorited `name`/`url`,
-/// deduped by `radio:` URI. Takes ownership so the station is not cloned again.
-fn add_station_to_sidebar(app: &mut App, mut station: TrackInfo, name: String, url: &str) {
-  let uri = format!("{}{url}", super::RADIO_URI_PREFIX);
-  if app
-    .radio_stations
-    .iter()
-    .any(|existing| existing.uri.as_deref() == Some(uri.as_str()))
-  {
-    return;
-  }
-
-  station.name = name;
-  station.uri = Some(uri);
-  app.radio_stations.push(station);
-  if app.view.selected_playlist_index.is_none() {
-    app.view.selected_playlist_index = Some(0);
-  }
-}
-
-fn favorite_radio_station(app: &mut App, station: TrackInfo) {
-  let Some(url) = station.uri.as_deref().and_then(super::radio_stream_url) else {
-    app.set_status_message("Radio station has no stream URL".to_string(), 4);
-    return;
-  };
-
-  let trimmed = station.name.trim();
-  let name = if trimmed.is_empty() { url } else { trimmed }.to_string();
-  let url = url.to_string();
-
-  let message = match app.add_radio_station(&name, &url) {
-    Ok(RadioStationAddOutcome::Added) => format!("Favorited radio station: {name}"),
-    Ok(RadioStationAddOutcome::AlreadyExists) => {
-      format!("Radio station already favorited: {name}")
-    }
-    Err(error) => {
-      app.set_error_status_message(format!("Could not favorite radio station: {error}"), 6);
-      return;
-    }
-  };
-
-  add_station_to_sidebar(app, station, name, &url);
-  app.set_status_message(message, 4);
-}
-
 pub(super) fn favorite_selected_radio_station(app: &mut App) {
   let Some(station) = selected_radio_station(app) else {
     app.set_status_message("No radio station selected".to_string(), 4);
     return;
   };
-  favorite_radio_station(app, station);
+  app.apply(Action::FavoriteRadioStation(station));
 }
 
 #[cfg(feature = "internet-radio")]
@@ -500,7 +454,7 @@ pub(super) fn favorite_current_radio_station(app: &mut App) -> bool {
   else {
     return false;
   };
-  favorite_radio_station(app, station);
+  app.apply(Action::FavoriteRadioStation(station));
   true
 }
 
@@ -641,30 +595,53 @@ pub fn handler(key: Key, app: &mut App) {
     // Handle pressing enter when block is selected to start playing track
     Key::Enter => match app.search_results.selected_block {
       SearchResultBlock::Empty => handle_enter_event_on_hovered_block(app),
-      SearchResultBlock::PlaylistSearch => {
-        app.playlist_offset = 0;
-        handle_enter_event_on_selected_block(app);
-      }
       _ => handle_enter_event_on_selected_block(app),
     },
     Key::Char('w') => match app.search_results.selected_block {
       SearchResultBlock::AlbumSearch => {
-        app.current_user_saved_album_add(ActiveBlock::SearchResultBlock)
+        if let Some(id) = selected_search_album_id(app) {
+          app.apply(Action::SaveAlbum(id));
+        }
       }
-      SearchResultBlock::SongSearch => open_add_to_playlist_for_selected_search_track(app),
-      SearchResultBlock::ArtistSearch => app.user_follow_artists(ActiveBlock::SearchResultBlock),
+      SearchResultBlock::SongSearch => {
+        let track =
+          selected_search_track_row(app).map(|track| (track.id.clone(), track.name.clone()));
+        if let Some((track_id, track_name)) = track {
+          app.apply(Action::OpenAddTrackDialogFor {
+            track_id,
+            track_name,
+          });
+        }
+      }
+      SearchResultBlock::ArtistSearch => {
+        if let Some((id, _name)) = selected_search_artist_identity(app) {
+          app.apply(Action::FollowArtist(id));
+        }
+      }
       SearchResultBlock::PlaylistSearch => {
-        app.user_follow_playlist();
+        if let Some(id) = app.selected_search_result_playlist_id() {
+          app.apply(Action::FollowPlaylist(id));
+        }
       }
-      SearchResultBlock::ShowSearch => app.user_follow_show(ActiveBlock::SearchResultBlock),
+      SearchResultBlock::ShowSearch => {
+        if let Some(id) = selected_search_show_id(app) {
+          app.apply(Action::SaveShow(id));
+        }
+      }
       SearchResultBlock::Empty => {}
     },
     Key::Char('D') => match app.search_results.selected_block {
       SearchResultBlock::AlbumSearch => {
-        app.current_user_saved_album_delete(ActiveBlock::SearchResultBlock)
+        if let Some(id) = selected_search_album_id(app) {
+          app.apply(Action::UnsaveAlbum(id));
+        }
       }
       SearchResultBlock::SongSearch => {}
-      SearchResultBlock::ArtistSearch => app.user_unfollow_artists(ActiveBlock::SearchResultBlock),
+      SearchResultBlock::ArtistSearch => {
+        if let Some((id, _name)) = selected_search_artist_identity(app) {
+          app.apply(Action::UnfollowArtist(id));
+        }
+      }
       SearchResultBlock::PlaylistSearch => {
         if let (Some(playlists), Some(selected_index)) = (
           &app.search_results.playlists,
@@ -682,7 +659,11 @@ pub fn handler(key: Key, app: &mut App) {
           }
         }
       }
-      SearchResultBlock::ShowSearch => app.user_unfollow_show(ActiveBlock::SearchResultBlock),
+      SearchResultBlock::ShowSearch => {
+        if let Some(id) = selected_search_show_id(app) {
+          app.apply(Action::UnsaveShow(id));
+        }
+      }
       SearchResultBlock::Empty => {}
     },
     Key::Char('r') => handle_recommended_tracks(app),
@@ -703,35 +684,22 @@ fn handle_save_track_event(app: &mut App) {
         .and_then(|track| track.uri.clone())
     });
     if let Some(uri) = uri {
-      app.dispatch(IoEvent::ToggleSaveTrack(uri));
+      app.apply(Action::ToggleSaveTrack(uri));
     }
   }
-}
-
-fn open_add_to_playlist_for_selected_search_track(app: &mut App) {
-  let Some(tracks) = &app.search_results.tracks else {
-    return;
-  };
-  let Some(selected_index) = app.search_results.selected_tracks_index else {
-    return;
-  };
-  let Some(track) = tracks.items.get(selected_index) else {
-    return;
-  };
-
-  app.begin_add_track_to_playlist_flow(track.id.clone(), track.name.clone());
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::{
-    app::{ActiveBlock, RouteId},
+    app::{ActiveBlock, RouteId, TrackTableContext},
     pagination::Paged,
     plugin_api::TrackInfo,
     test_helpers::{full_track, playlist_info, user_info},
     user_config::UserConfig,
   };
+  use crate::infra::network::IoEvent;
   use std::{sync::mpsc::channel, time::SystemTime};
 
   fn station(uri: &str, name: &str) -> TrackInfo {
@@ -942,5 +910,57 @@ mod tests {
     // Out-of-range index: the dialog is not opened (no-op), matching sibling
     // `.get()`-guarded handlers elsewhere in this file.
     assert!(app.view.dialog.is_none());
+  }
+
+  #[test]
+  fn enter_on_song_search_without_results_starts_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+
+    handler(Key::Enter, &mut app);
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(
+      app.search_results.selected_block,
+      SearchResultBlock::SongSearch
+    );
+    assert!(rx.try_recv().is_err(), "no results means nothing starts");
+  }
+
+  #[test]
+  fn enter_on_playlist_search_opens_the_track_table_in_the_search_context() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    // No public setter for search results: seeded directly.
+    app.search_results.playlists = Some(Paged {
+      items: vec![playlist_info(
+        "37i9dQZF1DXcBWIGoYBM5M",
+        "Search Playlist",
+        "spotatui-owner",
+        false,
+      )],
+      offset: 0,
+      limit: 1,
+      total: 1,
+      next: None,
+      previous: None,
+    });
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+
+    handler(Key::Right, &mut app);
+    handler(Key::Down, &mut app);
+    handler(Key::Enter, &mut app);
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::PlaylistSearch)
+    );
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+    assert_eq!(
+      app.pending_playlist_open.as_deref(),
+      Some("37i9dQZF1DXcBWIGoYBM5M")
+    );
   }
 }

@@ -10,18 +10,8 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::right_event(k, &app.user_config.keys) => {
       common_key_events::handle_right_event(app)
     }
-    k if common_key_events::down_event(k, &app.user_config.keys) => {
-      let next_index = common_key_events::on_down_press_handler(
-        library_options(),
-        Some(app.library.selected_index),
-      );
-      app.library.selected_index = next_index;
-    }
-    k if common_key_events::up_event(k, &app.user_config.keys) => {
-      let next_index =
-        common_key_events::on_up_press_handler(library_options(), Some(app.library.selected_index));
-      app.library.selected_index = next_index;
-    }
+    k if common_key_events::down_event(k, &app.user_config.keys) => select_next(app),
+    k if common_key_events::up_event(k, &app.user_config.keys) => select_previous(app),
     k if common_key_events::high_event(k) => {
       let next_index = common_key_events::on_high_press_handler();
       app.library.selected_index = next_index;
@@ -36,26 +26,41 @@ pub fn handler(key: Key, app: &mut App) {
     }
     // `library` should probably be an array of structs with enums rather than just using indexes
     // like this
-    Key::Enter => {
-      // Every row is resolved by NAME (through `LibraryTarget`), never by
-      // position: feature-gated rows shift the indices of everything after
-      // them, so a positional match silently remaps when features change.
-      let Some(name) = library_options().get(app.library.selected_index).copied() else {
-        return;
-      };
-      let Some(target) = LibraryTarget::from_name(name) else {
-        return;
-      };
-
-      #[cfg(feature = "local-files")]
-      if target == LibraryTarget::LocalFiles {
-        open_local_source(app);
-        return;
-      }
-      app.apply(Action::OpenLibrary(target));
-    }
+    Key::Enter => activate_selected(app),
     _ => (),
   };
+}
+
+/// The down key's cursor move, named for the mouse wheel.
+pub(super) fn select_next(app: &mut App) {
+  let next_index =
+    common_key_events::on_down_press_handler(library_options(), Some(app.library.selected_index));
+  app.library.selected_index = next_index;
+}
+
+pub(super) fn select_previous(app: &mut App) {
+  let next_index =
+    common_key_events::on_up_press_handler(library_options(), Some(app.library.selected_index));
+  app.library.selected_index = next_index;
+}
+
+pub(super) fn activate_selected(app: &mut App) {
+  // Every row is resolved by NAME (through `LibraryTarget`), never by
+  // position: feature-gated rows shift the indices of everything after
+  // them, so a positional match silently remaps when features change.
+  let Some(name) = library_options().get(app.library.selected_index).copied() else {
+    return;
+  };
+  let Some(target) = LibraryTarget::from_name(name) else {
+    return;
+  };
+
+  #[cfg(feature = "local-files")]
+  if target == LibraryTarget::LocalFiles {
+    open_local_source(app);
+    return;
+  }
+  app.apply(Action::OpenLibrary(target));
 }
 
 /// Doubles as the "switch to Local source" shortcut: it flips the active source
@@ -63,11 +68,9 @@ pub fn handler(key: Key, app: &mut App) {
 /// sidebar cursor resets are presentation state and stay in the TUI.
 #[cfg(feature = "local-files")]
 fn open_local_source(app: &mut App) {
-  use crate::infra::network::IoEvent;
   app.view.selected_playlist_index = Some(0);
   app.view.local_playlists_index = 0;
   app.apply(Action::SelectSource(Source::Local));
-  app.dispatch(IoEvent::GetLocalPlaylists);
   app.apply(Action::OpenLibrary(LibraryTarget::LocalFiles));
 }
 

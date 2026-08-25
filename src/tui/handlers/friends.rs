@@ -1,6 +1,6 @@
 use super::common_key_events;
+use crate::core::action::Action;
 use crate::core::app::{App, FriendAddMode, FriendFilter};
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 use crate::tui::ui::friends::filtered_friends;
 
@@ -47,7 +47,7 @@ pub fn handler(key: Key, app: &mut App) {
     }
 
     // Copy own friend code to clipboard
-    Key::Char('c') => copy_friend_code(app),
+    Key::Char('c') => app.copy_friend_code(),
 
     // Open add-friend dialog
     Key::Char('a') => app.open_friend_add_dialog(),
@@ -107,7 +107,7 @@ fn handle_add_dialog(key: Key, app: &mut App) {
         let code: String = app.view.friend_add_input.iter().collect();
         let code = code.trim().to_string();
         if !code.is_empty() {
-          app.dispatch(IoEvent::AddFriendByCode(code));
+          app.apply(Action::AddFriendByCode(code));
           app.clear_friend_add_dialog_state();
         }
       }
@@ -115,7 +115,7 @@ fn handle_add_dialog(key: Key, app: &mut App) {
         let idx = app.view.friend_user_search_selected;
         if let Some(result) = app.friend_user_search_results.get(idx) {
           let user_id = result.id.clone();
-          app.dispatch(IoEvent::AddFriendByUserId(user_id));
+          app.apply(Action::AddFriendByUserId(user_id));
           app.clear_friend_add_dialog_state();
         }
       }
@@ -128,11 +128,7 @@ fn handle_add_dialog(key: Key, app: &mut App) {
       FriendAddMode::Search => {
         app.view.friend_user_search_input.pop();
         let query: String = app.view.friend_user_search_input.iter().collect();
-        if query.len() >= 2 {
-          app.dispatch(IoEvent::SearchFriendUsers(query));
-        } else {
-          app.friend_user_search_results.clear();
-        }
+        app.apply(Action::SearchFriendUsers(query));
       }
     },
 
@@ -161,9 +157,7 @@ fn handle_add_dialog(key: Key, app: &mut App) {
       FriendAddMode::Search => {
         app.view.friend_user_search_input.push(c);
         let query: String = app.view.friend_user_search_input.iter().collect();
-        if query.len() >= 2 {
-          app.dispatch(IoEvent::SearchFriendUsers(query));
-        }
+        app.apply(Action::SearchFriendUsers(query));
       }
     },
 
@@ -195,28 +189,71 @@ fn move_up(app: &mut App) {
   }
 }
 
-fn copy_friend_code(app: &mut App) {
-  let Some(code) = app.friend_code.clone() else {
-    app.set_status_message("Friend code not loaded yet", 3);
-    return;
-  };
-
-  let Some(clipboard) = &mut app.clipboard else {
-    app.set_status_message("Clipboard not available", 3);
-    return;
-  };
-
-  if clipboard.set_text(code.clone()).is_ok() {
-    app.set_status_message(format!("Copied friend code: {}", code), 3);
-  } else {
-    app.set_status_message("Failed to copy to clipboard", 3);
+fn unfollow_selected(app: &mut App) {
+  let user_id = filtered_friends(app)
+    .get(app.view.friend_selected_index)
+    .map(|friend| friend.id.clone());
+  if let Some(user_id) = user_id {
+    app.apply(Action::UnfollowFriend(user_id));
   }
 }
 
-fn unfollow_selected(app: &mut App) {
-  let filtered = filtered_friends(app);
-  if let Some(friend) = filtered.get(app.view.friend_selected_index) {
-    let user_id = friend.id.clone();
-    app.dispatch(IoEvent::UnfollowFriend(user_id));
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::{ActiveBlock, RouteId};
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::{channel, Receiver};
+  use std::time::SystemTime;
+
+  fn app_on_the_friends_screen() -> (App, Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.push_navigation_stack(RouteId::Friends, ActiveBlock::Friends);
+    (app, rx)
+  }
+
+  #[test]
+  fn esc_first_clears_the_filter_then_leaves_the_screen() {
+    let (mut app, _rx) = app_on_the_friends_screen();
+    handler(Key::Char('z'), &mut app);
+    assert_eq!(app.view.friend_search_input, vec!['z']);
+
+    handler(Key::Esc, &mut app);
+
+    assert!(app.view.friend_search_input.is_empty());
+    assert_eq!(
+      app.get_current_route().id,
+      RouteId::Friends,
+      "the first Esc only clears the filter"
+    );
+
+    handler(Key::Esc, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::Home);
+  }
+
+  #[test]
+  fn unfollow_without_a_selected_friend_does_nothing() {
+    let (mut app, rx) = app_on_the_friends_screen();
+
+    handler(Key::Char('u'), &mut app);
+
+    assert!(app.friends.is_empty());
+    assert_eq!(app.get_current_route().id, RouteId::Friends);
+    assert!(rx.try_recv().is_err(), "expected nothing dispatched");
+  }
+
+  #[test]
+  fn a_short_user_search_query_asks_for_nothing() {
+    let (mut app, rx) = app_on_the_friends_screen();
+    app.open_friend_add_dialog();
+    handler(Key::Tab, &mut app);
+
+    handler(Key::Char('a'), &mut app);
+
+    assert_eq!(app.view.friend_user_search_input, vec!['a']);
+    assert!(rx.try_recv().is_err(), "below the server's minimum");
   }
 }

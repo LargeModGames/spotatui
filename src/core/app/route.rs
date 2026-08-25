@@ -233,6 +233,19 @@ impl App {
     }
   }
 
+  /// Fetch the sidebar data a browse source needs; Spotify's playlists arrive
+  /// with the session.
+  pub(crate) fn load_source_sidebar(&mut self, source: Source) {
+    let event = match source {
+      Source::Local => IoEvent::GetLocalPlaylists,
+      Source::Subsonic => IoEvent::GetSubsonicPlaylists,
+      Source::Radio => IoEvent::GetRadioStations,
+      Source::YouTube => IoEvent::GetYouTubePlaylists,
+      Source::Spotify => return,
+    };
+    self.dispatch(event);
+  }
+
   // The navigation_stack actually only controls the large block to the right of `library` and
   // `playlists`
   pub fn push_navigation_stack(&mut self, next_route_id: RouteId, next_active_block: ActiveBlock) {
@@ -275,13 +288,11 @@ impl App {
 
   /// Remove every frame still serving as the error screen.
   ///
-  /// Matched on the id AND the block, not on the id alone. A mouse click on
-  /// the search input rewrites the error frame in place to `{ id: Error,
-  /// active_block: Input }` (it does not push; the search key instead
-  /// dismisses the error first), so an id-only match would delete a frame
-  /// that is holding live text-input focus and drop the user's next
-  /// keystrokes into the global bindings. Such a frame no longer draws the
-  /// error screen, so leaving it is harmless.
+  /// Matched on the id AND the block: a producer that rewrites the current
+  /// frame in place could leave a `{ Error, Input }` frame holding text-input
+  /// focus, and an id-only match would drop its keystrokes into the global
+  /// bindings. No such producer exists today; such a frame no longer draws
+  /// the error screen, so leaving it is harmless.
   ///
   /// Both `push_navigation_stack` and the frames below the top are covered:
   /// pushes dedupe only against the top frame, so navigating away and failing

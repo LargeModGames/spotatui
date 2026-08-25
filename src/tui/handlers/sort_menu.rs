@@ -3,21 +3,22 @@
 //! Handles keyboard input for the sort menu popup
 
 use super::common_key_events;
+use crate::core::action::Action;
 use crate::core::app::{ActiveBlock, App};
-use crate::core::sort::{SortContext, SortField};
+use crate::core::sort::SortContext;
 use crate::tui::event::Key;
-use rspotify::prelude::Id;
 
 /// Handle input when the sort menu is active
 pub fn handler(key: Key, app: &mut App) {
-  let available_fields = match app.view.sort_context {
-    Some(ctx) => ctx.available_fields(),
+  let context = match app.view.sort_context {
+    Some(ctx) => ctx,
     None => {
       // No context, close menu
       close_sort_menu(app);
       return;
     }
   };
+  let available_fields = context.available_fields();
 
   match key {
     Key::Esc | Key::Char(',') => {
@@ -39,7 +40,10 @@ pub fn handler(key: Key, app: &mut App) {
     }
     Key::Enter => {
       if let Some(field) = available_fields.get(app.view.sort_menu_selected) {
-        apply_sort(app, *field);
+        app.apply(Action::Sort {
+          context,
+          field: *field,
+        });
       }
       close_sort_menu(app);
     }
@@ -49,13 +53,13 @@ pub fn handler(key: Key, app: &mut App) {
       for field in available_fields {
         if let Some(shortcut) = field.shortcut() {
           if c == shortcut || c == shortcut.to_ascii_uppercase() {
-            apply_sort(app, *field);
+            app.apply(Action::Sort {
+              context,
+              field: *field,
+            });
             // Toggle order if uppercase
             if c.is_ascii_uppercase() {
-              if let Some(ctx) = app.view.sort_context {
-                let sort_state = get_sort_state_mut(app, ctx);
-                sort_state.order = sort_state.order.toggle();
-              }
+              app.apply(Action::ToggleSortOrder(context));
             }
             close_sort_menu(app);
             return;
@@ -74,12 +78,7 @@ pub fn open_sort_menu(app: &mut App, context: SortContext) {
   app.view.sort_menu_selected = 0;
 
   // Find current sort field in the available fields to highlight it
-  let current_field = match context {
-    SortContext::PlaylistTracks => app.playlist_sort.field,
-    SortContext::SavedAlbums => app.album_sort.field,
-    SortContext::SavedArtists => app.artist_sort.field,
-    SortContext::RecentlyPlayed => app.recently_played_sort.field,
-  };
+  let current_field = app.sort_state(context).field;
 
   let available = context.available_fields();
   for (i, field) in available.iter().enumerate() {
@@ -98,120 +97,49 @@ fn close_sort_menu(app: &mut App) {
   app.set_current_route_state(Some(ActiveBlock::Empty), None);
 }
 
-fn apply_sort(app: &mut App, field: SortField) {
-  if let Some(ctx) = app.view.sort_context {
-    let sort_state = get_sort_state_mut(app, ctx);
-    sort_state.apply_field(field);
-
-    // Actually sort the data
-    match ctx {
-      SortContext::PlaylistTracks => {
-        if let Some(playlist_id) = app.current_playlist_track_table_id() {
-          app.dispatch(
-            crate::infra::network::IoEvent::FetchAllPlaylistTracksAndSort(
-              playlist_id.id().to_string(),
-            ),
-          );
-        }
-      }
-      SortContext::SavedAlbums => sort_saved_albums(app),
-      SortContext::SavedArtists => sort_saved_artists(app),
-      SortContext::RecentlyPlayed => app.sort_recently_played_items(),
-    }
-  }
-}
-
-fn get_sort_state_mut(app: &mut App, ctx: SortContext) -> &mut crate::core::sort::SortState {
-  match ctx {
-    SortContext::PlaylistTracks => &mut app.playlist_sort,
-    SortContext::SavedAlbums => &mut app.album_sort,
-    SortContext::SavedArtists => &mut app.artist_sort,
-    SortContext::RecentlyPlayed => &mut app.recently_played_sort,
-  }
-}
-
-fn sort_saved_albums(app: &mut App) {
-  use crate::core::sort::sort_by_key_with_order;
-
-  let sort_state = app.album_sort;
-
-  // Sort library.saved_albums pages
-  for page in &mut app.library.saved_albums.pages {
-    match sort_state.field {
-      SortField::Name => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
-        a.album.name.to_lowercase()
-      }),
-      SortField::Artist => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
-        a.album
-          .artists
-          .first()
-          .map(|artist| artist.name.to_lowercase())
-          .unwrap_or_default()
-      }),
-      SortField::DateAdded => {
-        sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.added_at.clone())
-      }
-      _ => {}
-    }
-  }
-}
-
-fn sort_saved_artists(app: &mut App) {
-  use crate::core::sort::sort_by_key_with_order;
-
-  let sort_state = app.artist_sort;
-  if sort_state.field != SortField::Name {
-    return;
-  }
-
-  // Sort library.saved_artists pages
-  for page in &mut app.library.saved_artists.pages {
-    sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.name.to_lowercase());
-  }
-
-  // Also sort the app.artists vec
-  sort_by_key_with_order(&mut app.artists, sort_state.order, |a| {
-    a.name.to_lowercase()
-  });
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::TrackTableContext;
-  use crate::core::test_helpers::playlist_info;
-  use crate::core::user_config::UserConfig;
-  use crate::infra::network::IoEvent;
-  use rspotify::model::idtypes::PlaylistId;
-  use std::sync::mpsc::channel;
-  use std::time::SystemTime;
+  use crate::core::sort::{SortField, SortOrder};
+
+  fn app_with_open_menu(context: SortContext) -> App {
+    let mut app = App::default();
+    open_sort_menu(&mut app, context);
+    app
+  }
 
   #[test]
-  fn playlist_sort_dispatches_for_current_playlist_table_id() {
-    let (tx, rx) = channel();
-    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    let sidebar_playlist = playlist_info(
-      "37i9dQZF1DXcBWIGoYBM5M",
-      "Sidebar Playlist",
-      "spotatui-test-user",
-      false,
-    );
-    let search_playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
-      .unwrap()
-      .into_static();
-    app.all_playlists = vec![sidebar_playlist];
-    app.view.active_playlist_index = Some(0);
-    app.track_table.context = Some(TrackTableContext::PlaylistSearch);
-    app.playlist_track_table_id = Some(search_playlist_id.clone());
-    app.view.sort_context = Some(SortContext::PlaylistTracks);
+  fn enter_applies_the_highlighted_field_and_closes_the_menu() {
+    let mut app = app_with_open_menu(SortContext::SavedArtists);
+    // Available fields for artists: [Default, Name].
+    app.view.sort_menu_selected = 1;
 
-    apply_sort(&mut app, SortField::Name);
+    handler(Key::Enter, &mut app);
 
-    match rx.recv().unwrap() {
-      IoEvent::FetchAllPlaylistTracksAndSort(playlist_id) => {
-        assert_eq!(playlist_id, search_playlist_id.id());
-      }
-      _ => panic!("expected playlist sort fetch"),
-    }
+    assert_eq!(app.artist_sort.field, SortField::Name);
+    assert_eq!(app.artist_sort.order, SortOrder::Ascending);
+    assert!(!app.view.sort_menu_visible);
+    assert!(app.view.sort_context.is_none());
+  }
+
+  #[test]
+  fn an_uppercase_shortcut_records_the_reversed_order() {
+    let mut app = app_with_open_menu(SortContext::SavedArtists);
+
+    handler(Key::Char('N'), &mut app);
+
+    assert_eq!(app.artist_sort.field, SortField::Name);
+    assert_eq!(app.artist_sort.order, SortOrder::Descending);
+    assert!(!app.view.sort_menu_visible);
+  }
+
+  #[test]
+  fn a_character_without_a_shortcut_leaves_the_menu_open() {
+    let mut app = app_with_open_menu(SortContext::SavedArtists);
+
+    handler(Key::Char('x'), &mut app);
+
+    assert_eq!(app.artist_sort.field, SortField::Default);
+    assert!(app.view.sort_menu_visible);
   }
 }

@@ -247,9 +247,15 @@ fn ratchet_counters_match_the_checked_in_baselines() {
       "ioevent_refs_in_tui",
       count_occurrences(&["src/tui"], &[], "IoEvent::"),
     ),
+    // Both spellings of a synthesized keystroke.
     (
       "synthetic_keys_in_mouse_handler",
-      count_occurrences(&[], &["src/tui/handlers/mouse.rs"], "handler(Key::"),
+      count_occurrences(&[], &["src/tui/handlers/mouse.rs"], "handler(Key::")
+        + count_occurrences(
+          &[],
+          &["src/tui/handlers/mouse.rs"],
+          "handle_block_events(Key::",
+        ),
     ),
     (
       "wildcard_arms_in_action_tree",

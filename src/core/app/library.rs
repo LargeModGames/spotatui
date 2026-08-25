@@ -119,6 +119,117 @@ impl App {
     }
   }
 
+  /// Sort one list surface by a field, like the sort menu's Enter.
+  pub(crate) fn apply_sort_field(&mut self, context: SortContext, field: SortField) {
+    self.sort_state_mut(context).apply_field(field);
+
+    // Actually sort the data
+    match context {
+      SortContext::PlaylistTracks => {
+        if let Some(playlist_id) = self.current_playlist_track_table_id() {
+          self.dispatch(IoEvent::FetchAllPlaylistTracksAndSort(
+            playlist_id.id().to_string(),
+          ));
+        }
+      }
+      SortContext::SavedAlbums => self.sort_saved_albums(),
+      SortContext::SavedArtists => self.sort_saved_artists(),
+      SortContext::RecentlyPlayed => self.sort_recently_played_items(),
+    }
+  }
+
+  /// Flip the recorded direction without re-sorting loaded rows (the sort
+  /// menu's uppercase shortcut, quirk kept).
+  pub(crate) fn toggle_sort_order(&mut self, context: SortContext) {
+    let sort_state = self.sort_state_mut(context);
+    sort_state.order = sort_state.order.toggle();
+  }
+
+  pub(crate) fn sort_state(&self, context: SortContext) -> &SortState {
+    match context {
+      SortContext::PlaylistTracks => &self.playlist_sort,
+      SortContext::SavedAlbums => &self.album_sort,
+      SortContext::SavedArtists => &self.artist_sort,
+      SortContext::RecentlyPlayed => &self.recently_played_sort,
+    }
+  }
+
+  fn sort_state_mut(&mut self, context: SortContext) -> &mut SortState {
+    match context {
+      SortContext::PlaylistTracks => &mut self.playlist_sort,
+      SortContext::SavedAlbums => &mut self.album_sort,
+      SortContext::SavedArtists => &mut self.artist_sort,
+      SortContext::RecentlyPlayed => &mut self.recently_played_sort,
+    }
+  }
+
+  fn sort_saved_albums(&mut self) {
+    use crate::core::sort::sort_by_key_with_order;
+
+    let sort_state = self.album_sort;
+
+    // Sort library.saved_albums pages
+    for page in &mut self.library.saved_albums.pages {
+      match sort_state.field {
+        SortField::Name => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
+          a.album.name.to_lowercase()
+        }),
+        SortField::Artist => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
+          a.album
+            .artists
+            .first()
+            .map(|artist| artist.name.to_lowercase())
+            .unwrap_or_default()
+        }),
+        SortField::DateAdded => {
+          sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.added_at.clone())
+        }
+        _ => {}
+      }
+    }
+  }
+
+  fn sort_saved_artists(&mut self) {
+    use crate::core::sort::sort_by_key_with_order;
+
+    let sort_state = self.artist_sort;
+    if sort_state.field != SortField::Name {
+      return;
+    }
+
+    // Sort library.saved_artists pages
+    for page in &mut self.library.saved_artists.pages {
+      sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.name.to_lowercase());
+    }
+
+    // Also sort the app.artists vec
+    sort_by_key_with_order(&mut self.artists, sort_state.order, |a| {
+      a.name.to_lowercase()
+    });
+  }
+
+  pub(crate) fn reload_stats(&mut self) {
+    self.stats_loading = true;
+    self.dispatch(IoEvent::LoadListeningStats(self.stats_period));
+  }
+
+  /// The period is written before the fetch: the result handler only accepts
+  /// data for the current period.
+  pub(crate) fn set_stats_period(&mut self, period: RecapPeriod) {
+    self.stats_period = period;
+    self.stats_data = None;
+    self.reload_stats();
+  }
+
+  pub(crate) fn cycle_stats_period(&mut self, forward: bool) {
+    let period = if forward {
+      self.stats_period.next()
+    } else {
+      self.stats_period.prev()
+    };
+    self.set_stats_period(period);
+  }
+
   pub fn set_saved_tracks_to_table_continuous(&mut self) {
     let mut tracks = Vec::new();
     let mut expected_offset = 0;
@@ -182,8 +293,7 @@ impl App {
         self.last_friends_refresh_at = std::time::Instant::now();
       }
       LibraryTarget::Stats => {
-        self.stats_loading = true;
-        self.dispatch(IoEvent::LoadListeningStats(self.stats_period));
+        self.reload_stats();
         self.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
       }
       LibraryTarget::LikedSongs => {
@@ -328,66 +438,78 @@ impl App {
     }
   }
 
-  pub fn current_user_saved_album_delete(&mut self, block: ActiveBlock) {
-    info!("removing album from saved albums");
-    match block {
-      ActiveBlock::SearchResultBlock => {
-        if let Some(albums) = &self.search_results.albums {
-          if let Some(selected_index) = self.search_results.selected_album_index {
-            if let Some(selected_album) = albums.items.get(selected_index) {
-              if let Some(ref id_str) = selected_album.id {
-                self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id_str.clone()));
-              }
-            }
-          }
-        }
-      }
-      ActiveBlock::AlbumList => {
-        if let Some(albums) = self.library.saved_albums.get_results(None) {
-          if let Some(selected_album) = albums.items.get(self.view.album_list_index) {
-            if let Some(id) = selected_album.album.id.as_deref() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id.to_string()));
-            }
-          }
-        }
-      }
-      ActiveBlock::ArtistBlock => {
-        if let Some(artist) = &self.artist {
-          if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(id_str) = &selected_album.id {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(id_str.clone()));
-            }
-          }
-        }
-      }
-      _ => (),
+  /// Open a saved album's track list from the visible saved-albums page.
+  pub fn open_saved_album(&mut self, album_id: String) {
+    let Some(album) = self
+      .library
+      .saved_albums
+      .get_results(None)
+      .and_then(|albums| {
+        albums
+          .items
+          .iter()
+          .find(|saved| saved.album.id.as_deref() == Some(album_id.as_str()))
+      })
+      .map(|saved| &saved.album)
+    else {
+      return;
+    };
+    // The library cache embeds only the first page of each album's
+    // tracklist (50 tracks max); refetch longer albums in full.
+    let cached_is_complete = album
+      .total_tracks
+      .is_none_or(|total| album.tracks.len() as u32 >= total);
+    if !cached_is_complete {
+      // GetAlbum sets the Full context and pushes AlbumTracks itself.
+      self.dispatch(IoEvent::GetAlbum(album_id));
+      return;
     }
+    self.selected_album_full = Some(SelectedFullAlbum {
+      album: album.clone(),
+      selected_index: 0,
+    });
+    self.album_table_context = AlbumTableContext::Full;
+    self.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
   }
 
-  pub fn current_user_saved_album_add(&mut self, block: ActiveBlock) {
-    info!("adding album to saved albums");
-    match block {
-      ActiveBlock::SearchResultBlock => {
-        if let Some(albums) = &self.search_results.albums {
-          if let Some(selected_index) = self.search_results.selected_album_index {
-            if let Some(selected_album) = albums.items.get(selected_index) {
-              if let Some(ref id_str) = selected_album.id {
-                self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id_str.clone()));
-              }
-            }
-          }
-        }
+  /// Save or unsave the item playing right now, through the ownership order.
+  pub fn toggle_save_current_item(&mut self) {
+    let queue_now_is_spotify = self.queue_now_is_spotify();
+    let queued_spotify_track_uri = queue_now_is_spotify
+      .then(|| self.queue_now_spotify_track_uri())
+      .flatten();
+
+    if spotify_context_is_suspended(
+      self.queue_owns_playback(),
+      queue_now_is_spotify,
+      self.active_decoded_source(),
+    ) {
+      self.set_status_message("The current playback source cannot be liked", 4);
+      return;
+    }
+
+    // A queued Spotify track plays via a direct `player.load` outside the Spirc
+    // context, so the cached playback context still names the suspended context's
+    // track — resolve the queue slot's own track instead of falling through.
+    if queue_now_is_spotify {
+      match queued_spotify_track_uri {
+        Some(uri) => self.dispatch(IoEvent::ToggleSaveTrack(uri)),
+        None => self.set_status_message("The current playback source cannot be liked", 4),
       }
-      ActiveBlock::ArtistBlock => {
-        if let Some(artist) = &self.artist {
-          if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(id_str) = &selected_album.id {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id_str.clone()));
-            }
-          }
-        }
-      }
-      _ => (),
+      return;
+    }
+
+    let uri = match self
+      .current_playback_context
+      .as_ref()
+      .and_then(|context| context.item.as_ref())
+    {
+      Some(PlayableItem::Track(track)) => track.id.as_ref().map(|id| id.uri()),
+      Some(PlayableItem::Episode(episode)) => Some(episode.id.uri()),
+      _ => None,
+    };
+    if let Some(uri) = uri {
+      self.dispatch(IoEvent::ToggleSaveTrack(uri));
     }
   }
 
@@ -414,7 +536,11 @@ impl App {
     }
   }
 
-  pub fn get_episode_table_next(&mut self, show_id: String) {
+  /// Next page of the open show's episodes; a no-op when no show is open.
+  pub(crate) fn get_episode_table_next(&mut self) {
+    let Some(show_id) = self.selected_episode_show_id() else {
+      return;
+    };
     match self
       .library
       .show_episodes
@@ -437,103 +563,9 @@ impl App {
     }
   }
 
-  pub fn user_unfollow_artists(&mut self, block: ActiveBlock) {
-    info!("unfollowing artist");
-    match block {
-      ActiveBlock::SearchResultBlock => {
-        if let Some(artists) = &self.search_results.artists {
-          if let Some(selected_index) = self.search_results.selected_artists_index {
-            if let Some(selected_artist) = artists.items.get(selected_index) {
-              if let Some(ref id_str) = selected_artist.id {
-                self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
-              }
-            }
-          }
-        }
-      }
-      ActiveBlock::AlbumList => {
-        if let Some(artists) = self.library.saved_artists.get_results(None) {
-          if let Some(id) = artists
-            .items
-            .get(self.view.artists_list_index)
-            .and_then(|selected_artist| selected_artist.id.as_deref())
-          {
-            self.dispatch(IoEvent::UserUnfollowArtists(vec![id.to_string()]));
-          }
-        }
-      }
-      ActiveBlock::ArtistBlock => {
-        if let Some(artist) = &self.artist {
-          if let Some(selected_artis) = artist
-            .related_artists
-            .get(artist.selected_related_artist_index)
-          {
-            if let Some(id_str) = &selected_artis.id {
-              self.dispatch(IoEvent::UserUnfollowArtists(vec![id_str.clone()]));
-            }
-          }
-        }
-      }
-      _ => (),
-    };
-  }
-
-  pub fn user_follow_artists(&mut self, block: ActiveBlock) {
-    info!("following artist");
-    match block {
-      ActiveBlock::SearchResultBlock => {
-        if let Some(artists) = &self.search_results.artists {
-          if let Some(selected_index) = self.search_results.selected_artists_index {
-            if let Some(selected_artist) = artists.items.get(selected_index) {
-              if let Some(ref id_str) = selected_artist.id {
-                self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
-              }
-            }
-          }
-        }
-      }
-      ActiveBlock::ArtistBlock => {
-        if let Some(artist) = &self.artist {
-          if let Some(selected_artis) = artist
-            .related_artists
-            .get(artist.selected_related_artist_index)
-          {
-            if let Some(id_str) = &selected_artis.id {
-              self.dispatch(IoEvent::UserFollowArtists(vec![id_str.clone()]));
-            }
-          }
-        }
-      }
-      _ => (),
-    }
-  }
-
-  pub fn user_follow_show(&mut self, block: ActiveBlock) {
-    info!("following show");
-    match block {
-      ActiveBlock::SearchResultBlock => {
-        if let Some(shows) = &self.search_results.shows {
-          if let Some(selected_index) = self.search_results.selected_shows_index {
-            if let Some(show) = shows.items.get(selected_index) {
-              if let Some(ref id_str) = show.id {
-                self.dispatch(IoEvent::CurrentUserSavedShowAdd(id_str.clone()));
-              }
-            }
-          }
-        }
-      }
-      ActiveBlock::EpisodeTable => {
-        if let Some(show_id) = self.selected_episode_show_id() {
-          self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id));
-        }
-      }
-      _ => (),
-    }
-  }
-
   /// Resolve the currently selected show's id/URI (from the episode-table
   /// context). Returns `None` if the stored domain show has no id.
-  fn selected_episode_show_id(&self) -> Option<String> {
+  pub(crate) fn selected_episode_show_id(&self) -> Option<String> {
     match self.episode_table_context {
       EpisodeTableContext::Full => self
         .selected_show_full
@@ -543,42 +575,6 @@ impl App {
         .selected_show_simplified
         .as_ref()
         .and_then(|s| s.show.id.clone()),
-    }
-  }
-
-  pub fn user_unfollow_show(&mut self, block: ActiveBlock) {
-    info!("unfollowing show");
-    match block {
-      ActiveBlock::Podcasts => {
-        if let Some(id) = self
-          .library
-          .saved_shows
-          .get_results(None)
-          .and_then(|shows| shows.items.get(self.view.shows_list_index))
-          .and_then(|selected_show| selected_show.id.as_deref())
-        {
-          self.dispatch(IoEvent::CurrentUserSavedShowDelete(id.to_string()));
-        }
-      }
-      ActiveBlock::SearchResultBlock => {
-        if let Some(shows) = &self.search_results.shows {
-          if let Some(selected_index) = self.search_results.selected_shows_index {
-            if let Some(id_str) = shows
-              .items
-              .get(selected_index)
-              .and_then(|show| show.id.clone())
-            {
-              self.dispatch(IoEvent::CurrentUserSavedShowDelete(id_str));
-            }
-          }
-        }
-      }
-      ActiveBlock::EpisodeTable => {
-        if let Some(show_id) = self.selected_episode_show_id() {
-          self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id));
-        }
-      }
-      _ => (),
     }
   }
 
@@ -601,6 +597,18 @@ impl App {
       .and_then(|user| user.country.as_deref())?;
     serde_json::from_value(serde_json::Value::String(code.to_string())).ok()
   }
+}
+
+/// Whether Like must not consult the cached Spotify playback context. A queue
+/// slot playing a *decoded* item (or any decoded per-source playback) suspends
+/// the context; a queue slot playing a *Spotify* track stays eligible — it is
+/// liked via the slot's own track, never the cached context.
+fn spotify_context_is_suspended(
+  queue_owns_playback: bool,
+  queue_now_is_spotify: bool,
+  decoded_source_active: bool,
+) -> bool {
+  (queue_owns_playback && !queue_now_is_spotify) || decoded_source_active
 }
 
 #[cfg(test)]
@@ -674,5 +682,137 @@ mod tests {
       app.track_table.context,
       Some(TrackTableContext::SavedTracks)
     );
+  }
+
+  #[test]
+  fn non_spotify_playback_cannot_use_cached_spotify_item_for_like() {
+    // A decoded queue slot or any decoded per-source playback suspends Like.
+    assert!(spotify_context_is_suspended(true, false, false));
+    assert!(spotify_context_is_suspended(false, false, true));
+    // A queue slot playing a *Spotify* track stays eligible.
+    assert!(!spotify_context_is_suspended(true, true, false));
+    // Plain Spotify context playback.
+    assert!(!spotify_context_is_suspended(false, false, false));
+  }
+
+  #[cfg(feature = "streaming")]
+  mod queued_spotify_like {
+    use super::*;
+    use crate::infra::queue::QueueNowPlaying;
+    use std::sync::mpsc::Receiver;
+
+    /// An app whose cached playback context still names the suspended context's
+    /// last Spotify track — the regression target: Like must never save it
+    /// while the queue slot owns playback.
+    #[allow(deprecated)]
+    fn app_with_stale_context() -> (App, Receiver<IoEvent>) {
+      let (tx, rx) = channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+      app.current_playback_context = Some(CurrentPlaybackContext {
+        device: Device {
+          id: Some("native-device".to_string()),
+          is_active: true,
+          is_private_session: false,
+          is_restricted: false,
+          name: "spotatui".to_string(),
+          _type: DeviceType::Computer,
+          volume_percent: Some(50),
+        },
+        repeat_state: RepeatState::Off,
+        shuffle_state: false,
+        context: None,
+        timestamp: Utc::now(),
+        progress: None,
+        is_playing: true,
+        item: Some(PlayableItem::Track(FullTrack {
+          album: SimplifiedAlbum::default(),
+          artists: vec![SimplifiedArtist::default()],
+          available_markets: Vec::new(),
+          disc_number: 1,
+          duration: chrono::Duration::milliseconds(180_000),
+          explicit: false,
+          external_ids: Default::default(),
+          external_urls: Default::default(),
+          href: None,
+          id: Some(
+            TrackId::from_id("0000000000000000000009")
+              .unwrap()
+              .into_static(),
+          ),
+          is_local: false,
+          is_playable: Some(true),
+          linked_from: None,
+          restrictions: None,
+          name: "Cached".to_string(),
+          popularity: 50,
+          preview_url: None,
+          track_number: 1,
+          r#type: rspotify::model::Type::Track,
+        })),
+        currently_playing_type: CurrentlyPlayingType::Track,
+        actions: Actions::default(),
+      });
+      (app, rx)
+    }
+
+    #[test]
+    fn like_saves_the_queued_spotify_track_not_the_cached_context_item() {
+      let (mut app, rx) = app_with_stale_context();
+      app.queue_now = Some(QueueNowPlaying::Spotify {
+        track: queue_track(Some("spotify:track:queued"), "Queued"),
+      });
+
+      app.toggle_save_current_item();
+
+      assert!(
+        matches!(rx.try_recv(), Ok(IoEvent::ToggleSaveTrack(uri)) if uri == "spotify:track:queued"),
+        "expected the queue slot's own track to be liked"
+      );
+      assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn like_for_uri_less_queued_track_never_falls_back_to_cached_context() {
+      let (mut app, rx) = app_with_stale_context();
+      app.queue_now = Some(QueueNowPlaying::Spotify {
+        track: queue_track(None, "Queued"),
+      });
+
+      app.toggle_save_current_item();
+
+      assert!(rx.try_recv().is_err(), "nothing may be dispatched");
+      assert_eq!(
+        app.status_message.as_deref(),
+        Some("The current playback source cannot be liked")
+      );
+    }
+  }
+
+  #[test]
+  fn playlist_sort_dispatches_for_current_playlist_table_id() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let sidebar_playlist = playlist_info(
+      "37i9dQZF1DXcBWIGoYBM5M",
+      "Sidebar Playlist",
+      "spotatui-test-user",
+      false,
+    );
+    let search_playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static();
+    app.all_playlists = vec![sidebar_playlist];
+    app.view.active_playlist_index = Some(0);
+    app.track_table.context = Some(TrackTableContext::PlaylistSearch);
+    app.playlist_track_table_id = Some(search_playlist_id.clone());
+
+    app.apply_sort_field(SortContext::PlaylistTracks, SortField::Name);
+
+    match rx.recv().unwrap() {
+      IoEvent::FetchAllPlaylistTracksAndSort(playlist_id) => {
+        assert_eq!(playlist_id, search_playlist_id.id());
+      }
+      _ => panic!("expected playlist sort fetch"),
+    }
   }
 }

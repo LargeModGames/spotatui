@@ -1,6 +1,5 @@
 use super::common_key_events;
-use crate::core::app::{ActiveBlock, App, RouteId, TrackTableContext};
-use crate::infra::network::IoEvent;
+use crate::core::app::App;
 use crate::tui::event::Key;
 
 /// Handler for the Local Files folder browser: a list of folders (one per
@@ -35,17 +34,41 @@ pub fn handler(key: Key, app: &mut App) {
         common_key_events::on_low_press_handler(&app.local_playlists);
     }
     Key::Enter => {
-      if let Some(folder) = app.local_playlists.get(app.view.local_playlists_index) {
-        let uri = folder.uri.clone();
-        // Reset the shared track table and mark it local so selecting a row
-        // dispatches a `file://` play; the fetch fills in the rows.
-        app.track_table.tracks = Vec::new();
-        app.track_table.selected_index = 0;
-        app.track_table.context = Some(TrackTableContext::LocalPlaylist);
-        app.dispatch(IoEvent::GetLocalTracks(uri));
-        app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-      }
+      let uri = app
+        .local_playlists
+        .get(app.view.local_playlists_index)
+        .map(|folder| folder.uri.clone());
+      super::playlist::open_source_playlist(app, uri);
     }
     _ => {}
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::test_helpers::playlist_info;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  #[test]
+  fn enter_opens_the_selected_folder_by_its_source_uri() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut first = playlist_info("first", "First", "me", false);
+    first.uri = "file:///music/first".to_string();
+    let mut second = playlist_info("second", "Second", "me", false);
+    second.uri = "file:///music/second".to_string();
+    app.local_playlists = vec![first, second];
+    app.view.local_playlists_index = 1;
+
+    handler(Key::Enter, &mut app);
+
+    match rx.try_recv() {
+      Ok(IoEvent::GetLocalTracks(uri)) => assert_eq!(uri, "file:///music/second"),
+      _ => panic!("expected GetLocalTracks for the selected folder"),
+    }
   }
 }
