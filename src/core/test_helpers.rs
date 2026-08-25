@@ -130,6 +130,8 @@ pub fn full_track(id: &str, name: &str) -> FullTrack {
 pub struct ScriptedOnboarding {
   answers: std::sync::Mutex<std::collections::VecDeque<String>>,
   pub shown: std::sync::Mutex<Vec<String>>,
+  pub asked: std::sync::Mutex<Vec<crate::core::onboarding::OnboardingPrompt>>,
+  interactive: bool,
 }
 
 impl ScriptedOnboarding {
@@ -137,7 +139,17 @@ impl ScriptedOnboarding {
     Self {
       answers: std::sync::Mutex::new(answers.iter().map(|answer| format!("{answer}\n")).collect()),
       shown: std::sync::Mutex::new(Vec::new()),
+      asked: std::sync::Mutex::new(Vec::new()),
+      interactive: true,
     }
+  }
+
+  /// A double for the non-interactive path (`is_interactive` reports false),
+  /// matching what a windowed or piped frontend would see.
+  pub fn non_interactive(answers: &[&str]) -> Self {
+    let mut onboarding = Self::with_answers(answers);
+    onboarding.interactive = false;
+    onboarding
   }
 
   pub fn saw(&self, text: &str) -> bool {
@@ -169,5 +181,36 @@ impl crate::core::onboarding::Onboarding for ScriptedOnboarding {
     _options: &[crate::core::source::Source],
   ) -> anyhow::Result<Option<Vec<crate::core::source::Source>>> {
     Ok(None)
+  }
+
+  fn is_interactive(&self) -> bool {
+    self.interactive
+  }
+
+  fn ask(
+    &self,
+    prompt: &crate::core::onboarding::OnboardingPrompt,
+  ) -> anyhow::Result<crate::core::onboarding::OnboardingAnswer> {
+    use crate::core::onboarding::{confirm_answer, OnboardingPrompt};
+    self.asked.lock().unwrap().push(prompt.clone());
+    // Record what the terminal impl would render, so `saw` can pin the text.
+    let OnboardingPrompt::Confirm {
+      title,
+      body,
+      question,
+    } = prompt;
+    {
+      let mut shown = self.shown.lock().unwrap();
+      shown.push(title.clone());
+      shown.push(body.clone());
+      shown.push(question.clone());
+    }
+    let answer = self
+      .answers
+      .lock()
+      .unwrap()
+      .pop_front()
+      .ok_or_else(|| anyhow::anyhow!("script ran out of answers for prompt {prompt:?}"))?;
+    Ok(confirm_answer(&answer))
   }
 }

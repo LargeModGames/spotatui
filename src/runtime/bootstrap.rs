@@ -11,7 +11,7 @@ use crate::core::limits::MAX_PLAYBAR_ROWS;
 use crate::core::migrations::{
   apply_legacy_config_radio_station_migration, apply_legacy_config_runtime_state_migration,
 };
-use crate::core::onboarding::Onboarding;
+use crate::core::onboarding::{Onboarding, OnboardingAnswer, OnboardingPrompt};
 use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::{
   validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
@@ -26,9 +26,9 @@ use rspotify::model::user::PrivateUser;
 use rspotify::AuthCodePkceSpotify;
 use std::{
   fs,
-  io::{self, Write},
+  io::Write,
   panic,
-  path::PathBuf,
+  path::{Path, PathBuf},
   sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -208,9 +208,10 @@ fn describe_client_id_notice(notice: auth::ClientIdNotice) -> String {
 /// choice into `config.yml`. Asked before the first-run source picker so the
 /// answer applies to whichever source(s) the user sets up. Non-interactive runs
 /// default to opt-out so telemetry is never enabled for a user we couldn't ask.
-fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
-  use std::io::IsTerminal;
-
+fn prompt_global_song_count_opt_in(
+  user_config: &mut UserConfig,
+  onboarding: &dyn Onboarding,
+) -> Result<()> {
   let config_paths = match &user_config.path_to_config {
     Some(path) => path,
     None => {
@@ -234,29 +235,16 @@ fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
     !config_string.trim().is_empty() && config_string.contains("enable_global_song_count")
   };
 
-  let should_prompt = !client_yml_exists || !config_has_answer;
-
-  if !should_prompt {
+  if !should_prompt_global_song_count(client_yml_exists, config_has_answer) {
     return Ok(());
   }
 
-  let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+  let interactive = onboarding.is_interactive();
   let enable = if interactive {
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("Global Song Counter");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("\nspotatui can contribute to a global counter showing total");
-    println!("songs played by all users worldwide.");
-    println!("\nPrivacy: This feature is completely anonymous.");
-    println!("• No personal information is collected");
-    println!("• No song names, artists, or listening history");
-    println!("• Only a simple increment when a new song starts");
-    println!("\nWould you like to participate? (Y/n): ");
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input = input.trim().to_lowercase();
-    input.is_empty() || input == "y" || input == "yes"
+    matches!(
+      onboarding.ask(&global_song_counter_prompt())?,
+      OnboardingAnswer::Yes
+    )
   } else {
     // Never enable anonymous telemetry for a user we couldn't prompt.
     false
@@ -264,8 +252,58 @@ fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
 
   user_config.behavior.enable_global_song_count = enable;
 
-  let config_yml = if config_paths.config_file_path.exists() {
-    fs::read_to_string(&config_paths.config_file_path).unwrap_or_default()
+  persist_global_song_count(&config_paths.config_file_path, enable)?;
+
+  if interactive {
+    if enable {
+      onboarding.info("Thank you for participating!\n");
+    } else {
+      onboarding.info("Opted out. You can change this anytime in Settings -> Behavior.\n");
+    }
+  }
+
+  Ok(())
+}
+
+/// A genuine first run has no answer yet; a stale config predating the setting
+/// is asked again even when `client.yml` exists.
+fn should_prompt_global_song_count(client_yml_exists: bool, config_has_answer: bool) -> bool {
+  !client_yml_exists || !config_has_answer
+}
+
+fn global_song_counter_prompt() -> OnboardingPrompt {
+  OnboardingPrompt::Confirm {
+    title: "Global Song Counter".to_string(),
+    body: "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment when a new song starts".to_string(),
+    question: "\nWould you like to participate? (Y/n): ".to_string(),
+  }
+}
+
+fn auth_setup_migration_prompt() -> OnboardingPrompt {
+  OnboardingPrompt::Confirm {
+    title: "Authentication Setup Update".to_string(),
+    body: "\nConfiguration handling has changed and your authentication setup may need an update."
+      .to_string(),
+    question: "Would you like to run the new auth setup wizard now? (Y/n): ".to_string(),
+  }
+}
+
+/// Ask about the auth-setup migration. Deliberately NOT gated on
+/// interactivity: piped or closed stdin reads as empty input, which answers
+/// yes and runs the wizard, exactly as before this went through `Onboarding`.
+fn ask_auth_setup_migration(onboarding: &dyn Onboarding) -> Result<bool> {
+  Ok(matches!(
+    onboarding.ask(&auth_setup_migration_prompt())?,
+    OnboardingAnswer::Yes
+  ))
+}
+
+/// Merge `enable` into the `behavior` section of `config.yml`, creating the file
+/// when absent. Sibling keys are preserved; this hand-patch bypasses
+/// `UserConfig::save_config` on purpose (it runs before that config is loaded).
+fn persist_global_song_count(config_file_path: &Path, enable: bool) -> Result<()> {
+  let config_yml = if config_file_path.exists() {
+    fs::read_to_string(config_file_path).unwrap_or_default()
   } else {
     String::new()
   };
@@ -290,15 +328,7 @@ fn prompt_global_song_count_opt_in(user_config: &mut UserConfig) -> Result<()> {
   }
 
   let updated_config = serde_yaml::to_string(&config)?;
-  fs::write(&config_paths.config_file_path, updated_config)?;
-
-  if interactive {
-    if enable {
-      println!("Thank you for participating!\n");
-    } else {
-      println!("Opted out. You can change this anytime in Settings -> Behavior.\n");
-    }
-  }
+  fs::write(config_file_path, updated_config)?;
 
   Ok(())
 }
@@ -500,7 +530,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
   // Global song counter opt-in (interactive TUI only). Asked before the source
   // picker so the choice applies no matter which source(s) the user sets up.
   if matches.subcommand_name().is_none() {
-    prompt_global_song_count_opt_in(&mut user_config)?;
+    prompt_global_song_count_opt_in(&mut user_config, onboarding.as_ref())?;
   }
 
   let mut client_config = ClientConfig::new();
@@ -523,29 +553,16 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
   let reconfigure_auth = matches.get_flag("reconfigure-auth");
 
   if reconfigure_auth {
-    println!("\nReconfiguring client authentication...");
+    onboarding.info("\nReconfiguring client authentication...");
     client_config.reconfigure_auth(onboarding.as_ref())?;
-    println!("Client authentication setup updated.\n");
+    onboarding.info("Client authentication setup updated.\n");
   } else if matches.subcommand_name().is_none() && client_config.needs_auth_setup_migration() {
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("Authentication Setup Update");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!(
-      "\nConfiguration handling has changed and your authentication setup may need an update."
-    );
-    println!("Would you like to run the new auth setup wizard now? (Y/n): ");
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input = input.trim().to_lowercase();
-    let run_migration = input.is_empty() || input == "y" || input == "yes";
-
-    if run_migration {
+    if ask_auth_setup_migration(onboarding.as_ref())? {
       client_config.reconfigure_auth(onboarding.as_ref())?;
-      println!("Client authentication setup updated.\n");
+      onboarding.info("Client authentication setup updated.\n");
     } else {
       client_config.mark_auth_setup_migrated()?;
-      println!("Skipped. You can run this anytime with `spotatui --reconfigure-auth`.\n");
+      onboarding.info("Skipped. You can run this anytime with `spotatui --reconfigure-auth`.\n");
     }
   }
 
@@ -685,9 +702,15 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 
 #[cfg(test)]
 mod tests {
-  use super::apply_configured_runtime_defaults;
+  use super::{
+    apply_configured_runtime_defaults, ask_auth_setup_migration, auth_setup_migration_prompt,
+    global_song_counter_prompt, persist_global_song_count, prompt_global_song_count_opt_in,
+    should_prompt_global_song_count,
+  };
   use crate::core::limits::MAX_PLAYBAR_ROWS;
+  use crate::core::onboarding::OnboardingPrompt;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
+  use crate::core::test_helpers::ScriptedOnboarding;
   use crate::core::user_config::UserConfig;
 
   fn user_config_with_runtime_defaults() -> UserConfig {
@@ -745,5 +768,139 @@ mod tests {
     assert_eq!(runtime.sidebar_width_percent, 40);
     assert_eq!(runtime.playbar_height_rows, MAX_PLAYBAR_ROWS);
     assert_eq!(runtime.library_height_percent, 60);
+  }
+
+  fn user_config_at(config_file_path: std::path::PathBuf) -> UserConfig {
+    let mut config = UserConfig::new();
+    let path = crate::core::user_config::UserConfigPaths { config_file_path };
+    config.path_to_config.replace(path);
+    config
+  }
+
+  #[test]
+  fn global_song_counter_prompt_predicate_matches_first_run_and_stale_configs() {
+    // Genuine first run: no client.yml, nothing answered.
+    assert!(should_prompt_global_song_count(false, false));
+    // Stale config predating the setting.
+    assert!(should_prompt_global_song_count(true, false));
+    // No client.yml yet, even with an answer present.
+    assert!(should_prompt_global_song_count(false, true));
+    // Asked and answered already.
+    assert!(!should_prompt_global_song_count(true, true));
+  }
+
+  #[test]
+  fn first_run_prompts_carry_the_historical_banner_text() {
+    let OnboardingPrompt::Confirm {
+      title,
+      body,
+      question,
+    } = global_song_counter_prompt();
+    assert_eq!(title, "Global Song Counter");
+    assert_eq!(
+      body,
+      "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment when a new song starts"
+    );
+    assert_eq!(question, "\nWould you like to participate? (Y/n): ");
+
+    let OnboardingPrompt::Confirm {
+      title,
+      body,
+      question,
+    } = auth_setup_migration_prompt();
+    assert_eq!(title, "Authentication Setup Update");
+    assert_eq!(
+      body,
+      "\nConfiguration handling has changed and your authentication setup may need an update."
+    );
+    assert_eq!(
+      question,
+      "Would you like to run the new auth setup wizard now? (Y/n): "
+    );
+  }
+
+  #[test]
+  fn scripted_yes_answers_the_global_song_counter_without_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    std::fs::write(
+      &config_path,
+      "theme:\n  background: '#000000'\nbehavior:\n  volume_percent: 42\n",
+    )
+    .unwrap();
+    let mut user_config = user_config_at(config_path.clone());
+    let onboarding = ScriptedOnboarding::with_answers(&["y"]);
+
+    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+
+    assert!(user_config.behavior.enable_global_song_count);
+    let persisted = std::fs::read_to_string(&config_path).unwrap();
+    assert!(persisted.contains("enable_global_song_count: true"));
+    assert!(persisted.contains("volume_percent: 42"));
+    assert!(persisted.contains("'#000000'"));
+    assert!(onboarding.saw("Global Song Counter"));
+    assert!(onboarding.saw("\nWould you like to participate? (Y/n): "));
+    assert!(onboarding.saw("Thank you for participating!\n"));
+  }
+
+  #[test]
+  fn scripted_no_answers_the_global_song_counter_and_persists_opt_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut user_config = user_config_at(config_path.clone());
+    let onboarding = ScriptedOnboarding::with_answers(&["nope"]);
+
+    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+
+    assert!(!user_config.behavior.enable_global_song_count);
+    let persisted = std::fs::read_to_string(&config_path).unwrap();
+    assert!(persisted.contains("enable_global_song_count: false"));
+    assert!(onboarding.saw("Opted out. You can change this anytime in Settings -> Behavior.\n"));
+  }
+
+  #[test]
+  fn non_interactive_onboarding_silently_opts_out_and_persists_false() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut user_config = user_config_at(config_path.clone());
+    let onboarding = ScriptedOnboarding::non_interactive(&[]);
+
+    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+
+    // Never enable anonymous telemetry for a user we couldn't prompt.
+    assert!(!user_config.behavior.enable_global_song_count);
+    let persisted = std::fs::read_to_string(&config_path).unwrap();
+    assert!(persisted.contains("enable_global_song_count: false"));
+    assert!(!onboarding.saw("\nWould you like to participate? (Y/n): "));
+    assert!(!onboarding.saw("Opted out. You can change this anytime in Settings -> Behavior.\n"));
+    assert!(!onboarding.saw("Thank you for participating!\n"));
+  }
+
+  #[test]
+  fn global_song_counter_write_creates_the_config_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+
+    persist_global_song_count(&config_path, true).unwrap();
+
+    let persisted = std::fs::read_to_string(&config_path).unwrap();
+    assert!(persisted.contains("enable_global_song_count: true"));
+  }
+
+  #[test]
+  fn auth_setup_migration_ask_runs_the_wizard_on_an_empty_answer() {
+    let onboarding = ScriptedOnboarding::with_answers(&[""]);
+
+    assert!(ask_auth_setup_migration(&onboarding).unwrap());
+    assert!(onboarding.saw("Authentication Setup Update"));
+    assert!(onboarding.saw("Would you like to run the new auth setup wizard now? (Y/n): "));
+  }
+
+  #[test]
+  fn auth_setup_migration_ask_skips_the_wizard_on_a_decline() {
+    let onboarding = ScriptedOnboarding::with_answers(&["n"]);
+
+    assert!(!ask_auth_setup_migration(&onboarding).unwrap());
+    assert!(onboarding.saw("Would you like to run the new auth setup wizard now? (Y/n): "));
   }
 }

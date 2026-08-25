@@ -48,6 +48,30 @@ impl crate::core::onboarding::Onboarding for HeadlessOnboarding {
     Ok(input)
   }
 
+  fn is_interactive(&self) -> bool {
+    use std::io::IsTerminal;
+    io::stdin().is_terminal() && io::stdout().is_terminal()
+  }
+
+  fn ask(
+    &self,
+    prompt: &crate::core::onboarding::OnboardingPrompt,
+  ) -> Result<crate::core::onboarding::OnboardingAnswer> {
+    use crate::core::onboarding::{confirm_answer, OnboardingPrompt, BANNER_RULE};
+    // Both bootstrap prompts are UI-launch-only and headless builds bail out
+    // before boot there; keep a plain console fallback if this is reached.
+    let OnboardingPrompt::Confirm {
+      title,
+      body,
+      question,
+    } = prompt;
+    println!("\n{BANNER_RULE}\n{title}\n{BANNER_RULE}\n{body}");
+    println!("{question}");
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(confirm_answer(&input))
+  }
+
   fn pick_sources(
     &self,
     _options: &[crate::core::source::Source],
