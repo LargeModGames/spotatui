@@ -43,3 +43,32 @@ pub fn handler(key: Key, app: &mut App) {
     _ => {}
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::test_helpers::playlist_info;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  #[test]
+  fn enter_opens_the_selected_folder_by_its_source_uri() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut first = playlist_info("first", "First", "me", false);
+    first.uri = "file:///music/first".to_string();
+    let mut second = playlist_info("second", "Second", "me", false);
+    second.uri = "file:///music/second".to_string();
+    app.local_playlists = vec![first, second];
+    app.view.local_playlists_index = 1;
+
+    handler(Key::Enter, &mut app);
+
+    match rx.try_recv() {
+      Ok(IoEvent::GetLocalTracks(uri)) => assert_eq!(uri, "file:///music/second"),
+      _ => panic!("expected GetLocalTracks for the selected folder"),
+    }
+  }
+}

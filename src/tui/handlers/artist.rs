@@ -196,12 +196,9 @@ fn handle_recommend_event_on_selected_block(app: &mut App) {
   };
   match artist.artist_selected_block {
     ArtistBlock::TopTracks => {
-      let identity = artist
-        .top_tracks
-        .get(artist.selected_top_track_index)
-        .and_then(|track| Some((track.id.clone()?, track.name.clone())));
-      if let Some((id, name)) = identity {
-        app.apply(Action::RecommendFromTrackId { id, name });
+      // The full track: the results table prepends the seed as a context row.
+      if let Some(track) = selected_top_track(artist) {
+        app.apply(Action::RecommendFromTrack(track));
       }
     }
     ArtistBlock::RelatedArtists => {
@@ -410,6 +407,50 @@ mod tests {
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::Empty);
+  }
+
+  #[test]
+  fn r_on_a_top_track_seeds_recommendations_with_the_track_as_the_context_row() {
+    use crate::core::plugin_api::TrackInfo;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut page = artist_page(vec![]);
+    page.artist_selected_block = ArtistBlock::TopTracks;
+    page.top_tracks = vec![TrackInfo {
+      uri: Some("spotify:track:one".to_string()),
+      name: "One".to_string(),
+      artists: vec!["First".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 1_000,
+      id: Some("one".to_string()),
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }];
+    app.artist = Some(page);
+
+    handler(Key::Char('r'), &mut app);
+
+    match rx.try_recv() {
+      Ok(IoEvent::GetRecommendationsForSeed(None, seed_tracks, first_track, _)) => {
+        assert_eq!(seed_tracks, Some(vec!["spotify:track:one".to_string()]));
+        assert_eq!(
+          (*first_track).map(|track| track.name),
+          Some("One".to_string())
+        );
+      }
+      _ => panic!("expected GetRecommendationsForSeed with the top track as first_track"),
+    }
+    assert_eq!(app.recommendations_seed, "One");
   }
 
   #[test]

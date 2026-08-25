@@ -127,6 +127,37 @@ mod tests {
   }
 
   #[test]
+  fn enter_skips_uri_less_rows_and_remaps_the_offset() {
+    use crate::core::pagination::CursorPaged;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.recently_played.result = Some(CursorPaged {
+      items: vec![
+        recent(Some("spotify:track:one"), "One"),
+        recent(None, "Local"),
+        recent(Some("spotify:track:three"), "Three"),
+      ],
+      ..Default::default()
+    });
+    app.recently_played.index = 2;
+
+    handler(Key::Enter, &mut app);
+
+    match rx.try_recv() {
+      Ok(IoEvent::StartPlayback(None, Some(uris), offset)) => {
+        assert_eq!(uris, vec!["spotify:track:one", "spotify:track:three"]);
+        assert_eq!(offset, Some(1));
+      }
+      _ => panic!("expected StartPlayback of the playable rows"),
+    }
+  }
+
+  #[test]
   fn on_left_press() {
     let mut app = App::default();
     app.set_current_route_state(
