@@ -191,14 +191,14 @@ impl crate::core::onboarding::Onboarding for ScriptedOnboarding {
     &self,
     prompt: &crate::core::onboarding::OnboardingPrompt,
   ) -> anyhow::Result<crate::core::onboarding::OnboardingAnswer> {
-    use crate::core::onboarding::{confirm_answer, OnboardingAnswer, OnboardingPrompt};
+    use crate::core::onboarding::{confirm_answer, OnboardingPrompt};
     self.asked.lock().unwrap().push(prompt.clone());
     // Record what the terminal impl would render, so `saw` can pin the text.
-    if let OnboardingPrompt::Confirm {
+    let OnboardingPrompt::Confirm {
       title,
       body,
       question,
-    } = prompt
+    } = prompt;
     {
       let mut shown = self.shown.lock().unwrap();
       shown.push(title.clone());
