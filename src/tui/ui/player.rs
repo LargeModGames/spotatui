@@ -868,6 +868,8 @@ struct LocalPlaybarView {
   /// internet radio and native queue slots, whose playbar drops the mode
   /// segments entirely rather than showing blank `Shuffle:`/`Repeat:` labels.
   show_modes: bool,
+  /// The delivered audio format (Qobuz, e.g. `FLAC 24/96`), shown after the artists.
+  quality: Option<String>,
 }
 
 /// Render the playbar for an active local-file playback session.
@@ -892,6 +894,7 @@ fn draw_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     queue_position: (local.queue.len() > 1).then(|| (local.index + 1, local.queue.len())),
     live: false,
     show_modes: true,
+    quality: None,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -916,6 +919,7 @@ fn draw_subsonic_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .then(|| (subsonic.index + 1, subsonic.tracks.len())),
     live: false,
     show_modes: true,
+    quality: None,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -944,6 +948,7 @@ fn draw_qobuz_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     queue_position: (qobuz.tracks.len() > 1).then(|| (qobuz.index + 1, qobuz.tracks.len())),
     live: false,
     show_modes: true,
+    quality: qobuz.quality.map(|q| q.label()),
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -967,6 +972,7 @@ fn draw_youtube_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     queue_position: (youtube.tracks.len() > 1).then(|| (youtube.index + 1, youtube.tracks.len())),
     live: false,
     show_modes: true,
+    quality: None,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -1000,6 +1006,7 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     queue_position: None,
     live: true,
     show_modes: false,
+    quality: None,
   };
   render_local_playbar(f, app, layout_chunk, &view);
 }
@@ -1091,10 +1098,24 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     .border_style(get_color(highlight_state, app.user_config.theme));
   f.render_widget(title_block, layout_chunk);
 
-  let lines = Text::from(Span::styled(
+  let mut subtitle = vec![Span::styled(
     view.artists.clone(),
     Style::default().fg(app.user_config.theme.playbar_text.into()),
-  ));
+  )];
+  if let Some(quality) = view.quality.as_ref() {
+    let separator = if view.artists.is_empty() {
+      ""
+    } else {
+      " \u{2022} "
+    };
+    subtitle.push(Span::styled(
+      format!("{separator}{quality}"),
+      Style::default()
+        .fg(app.user_config.theme.playbar_text.into())
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::DIM)),
+    ));
+  }
+  let lines = Text::from(Line::from(subtitle));
   let artist = Paragraph::new(lines)
     .style(Style::default().fg(app.user_config.theme.playbar_text.into()))
     .block(
@@ -1199,6 +1220,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       // The native queue ignores the decoded shuffle/repeat modes (they belong
       // to the suspended source resumed once the queue drains), so hide them.
       show_modes: false,
+      quality: None,
     };
     render_local_playbar(f, app, layout_chunk, &view);
     return;
@@ -1218,6 +1240,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       queue_position: None,
       live: false,
       show_modes: false,
+      quality: None,
     };
     render_local_playbar(f, app, layout_chunk, &view);
     return;
@@ -2075,6 +2098,7 @@ mod tests {
       queue_position: Some((3, 12)),
       live: false,
       show_modes: true,
+      quality: None,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
 
@@ -2118,12 +2142,46 @@ mod tests {
       queue_position: None,
       live: false,
       show_modes: true,
+      quality: None,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
     assert!(content.contains("Paused"), "should show Paused: {content}");
     assert!(
       !content.contains('/') || !content.contains("1/1"),
       "a single-track session should not show a queue indicator: {content}"
+    );
+  }
+
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn playbar_renders_delivered_quality_after_artists() {
+    let view = LocalPlaybarView {
+      source_label: "Qobuz",
+      name: "Track".to_string(),
+      artists: "Artist".to_string(),
+      is_playing: true,
+      position_ms: 0,
+      duration_ms: 200_000,
+      volume_percent: 50,
+      queue_position: None,
+      live: false,
+      show_modes: true,
+      quality: Some("FLAC 16/44.1".to_string()),
+    };
+    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    assert!(
+      content.contains("Artist \u{2022} FLAC 16/44.1"),
+      "the delivered format should follow the artists: {content}"
+    );
+
+    let no_artists = LocalPlaybarView {
+      artists: String::new(),
+      ..view
+    };
+    let content = rendered_text(Rect::new(0, 0, 160, 6), &no_artists);
+    assert!(
+      content.contains("FLAC 16/44.1") && !content.contains('\u{2022}'),
+      "no separator without artists: {content}"
     );
   }
 
@@ -2144,6 +2202,7 @@ mod tests {
       queue_position: None,
       live: true,
       show_modes: false,
+      quality: None,
     };
     let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
 

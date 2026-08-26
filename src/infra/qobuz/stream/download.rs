@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 
-use super::cmaf::{self, InitSegment};
+use super::cmaf::{self, InitSegment, StreamQuality};
 
 const SEGMENT_PLACEHOLDER: &str = "$SEGMENT$";
 
@@ -54,6 +54,11 @@ impl TrackDownload {
   /// The size of the finished file, from the init table.
   pub fn total_bytes(&self) -> u64 {
     self.init.total_bytes()
+  }
+
+  /// The delivered audio format, from the init table.
+  pub fn quality(&self) -> StreamQuality {
+    self.init.quality()
   }
 
   /// Fetch, decrypt and append every audio segment, then flush the file.
@@ -164,6 +169,7 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(download.total_bytes(), 42 + 70 + 20);
+    assert_eq!(download.quality().label(), "FLAC 24/96");
     download.finish().await.unwrap();
     assert_eq!(std::fs::read(tmp.path()).unwrap(), expected);
   }

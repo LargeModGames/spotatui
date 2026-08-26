@@ -32,6 +32,8 @@ use crate::core::source::{MediaSource, Searcher};
 use crate::infra::audio::LocalPlayer;
 use stream::download::{self, TrackDownload};
 
+pub use stream::cmaf::StreamQuality;
+
 /// The active Qobuz playback session; the playbar reads position and pause
 /// live from `player`, like the Subsonic twin.
 pub struct QobuzPlaybackState {
@@ -46,6 +48,8 @@ pub struct QobuzPlaybackState {
   pub advancing: bool,
   /// The decrypted audio of the current track; `None` while it downloads.
   pub tempfile: Option<tempfile::NamedTempFile>,
+  /// The delivered format of the current track; `None` while it downloads.
+  pub quality: Option<StreamQuality>,
   /// Backup of the pre-shuffle order while shuffle is on.
   pub shuffle_backup: Option<crate::infra::queue::ShuffleBackup>,
   /// Stamp of the download in flight; a finished download with another stamp is dropped.

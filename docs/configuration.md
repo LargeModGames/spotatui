@@ -108,6 +108,8 @@ behavior:
   qobuz_quality: 6   # 5 = MP3 320, 6 = FLAC 16/44.1, 7 = FLAC 24/96, 27 = FLAC 24/192
 ```
 
+This is the requested quality. Qobuz serves some tracks at a lower one, so when a track plays from a Qobuz listing, the playbar shows the format it delivered, for example `FLAC 16/44.1`.
+
 Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` (all three together) replace the constants spotatui otherwise reads from the Qobuz web player at runtime.
 
 ## Layout

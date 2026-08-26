@@ -29,7 +29,7 @@ use tokio::sync::Mutex;
 
 use super::auth::{self, QobuzBundleCache};
 use super::stream::download::TrackDownload;
-use super::{track_id_from_uri, QobuzPlaybackState, QobuzSource, Unauthorized};
+use super::{track_id_from_uri, QobuzPlaybackState, QobuzSource, StreamQuality, Unauthorized};
 use crate::core::app::{App, SearchResultBlock, TrackTableContext};
 use crate::core::pagination::Paged;
 use crate::core::plugin_api::TrackInfo;
@@ -528,10 +528,11 @@ async fn spawn_fetch(
         .await
         .set_status_message(format!("Qobuz: downloading {} MB", total / 1_000_000), 6);
     }
+    let delivered = download.quality();
     if let Err(e) = download.finish().await {
       return fail_fetch(&app, fetch_id, e).await;
     }
-    commit_fetch(&app, fetch_id, tmp).await;
+    commit_fetch(&app, fetch_id, tmp, delivered).await;
   });
   if let Some(s) = app
     .lock()
@@ -558,7 +559,12 @@ async fn fail_fetch(app: &Arc<Mutex<App>>, fetch_id: u64, err: anyhow::Error) {
 /// Play the downloaded file and finalize the session, under one lock so a
 /// concurrent skip (which restamps `fetch_id` under the same lock) cannot
 /// interleave. A decode failure tears the session down.
-async fn commit_fetch(app: &Arc<Mutex<App>>, fetch_id: u64, tmp: NamedTempFile) {
+async fn commit_fetch(
+  app: &Arc<Mutex<App>>,
+  fetch_id: u64,
+  tmp: NamedTempFile,
+  quality: StreamQuality,
+) {
   let mut guard = app.lock().await;
   let Some((player, was_paused)) = guard
     .qobuz_playback
@@ -593,6 +599,7 @@ async fn commit_fetch(app: &Arc<Mutex<App>>, fetch_id: u64, tmp: NamedTempFile) 
   let display = match guard.qobuz_playback.as_mut() {
     Some(s) => {
       s.tempfile = Some(tmp);
+      s.quality = Some(quality);
       s.advancing = false;
       s.fetch = None;
       let resume = s.resume_at.take();
@@ -658,6 +665,7 @@ async fn start_qobuz_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: us
       index,
       advancing: true,
       tempfile: None,
+      quality: None,
       shuffle_backup: None,
       fetch_id,
       resume_at: None,
@@ -751,6 +759,7 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
             fetch.abort();
           }
           s.resume_at = None;
+          s.quality = None;
           s.index = target;
           s.advancing = true;
           s.fetch_id = fetch_id;
