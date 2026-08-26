@@ -9,7 +9,7 @@ This file is maintained as three near-identical copies: `CLAUDE.md`, `AGENTS.md`
 # Full build (native streaming + audio viz + Lua scripting + OS integrations)
 cargo run
 
-# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's six legs
+# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's seven legs
 cargo run --no-default-features --features telemetry,tui
 
 # With the free alternative sources (Local/Subsonic/Radio/YouTube). These are NOT
@@ -28,7 +28,7 @@ cargo test --no-default-features --features telemetry,tui
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
 (`.github/workflows/ci.yml`, on `ubuntu-latest`) runs `check`, `test`, and `clippy`
-across a **six-leg** feature matrix:
+across a **seven-leg** feature matrix:
 
 | Leg | Features |
 |-----|----------|
@@ -37,7 +37,8 @@ across a **six-leg** feature matrix:
 | `mcp-only` | `telemetry,tui,mcp-server` |
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
-| `headless` | `telemetry` - the only leg without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
+| `headless` | `telemetry` - one of two legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
+| `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its two entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
 
 - `mcp-only` and `ai-dj-only` matter more than their size suggests: both enable
   `dj-core` **without** `streaming` (a combination nothing else covers), and each
@@ -87,7 +88,7 @@ units under `src/`:
 | `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
-| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `startup.rs` (the UI-launch half, gated on `tui`) |
+| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui`) |
 
 ### Data flow
 

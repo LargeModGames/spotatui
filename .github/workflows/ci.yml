@@ -58,13 +58,18 @@ jobs:
           # Slim build used for fast local iteration (matches CLAUDE.md).
           - name: slim
             args: "--locked --no-default-features --features telemetry,tui"
-          # Headless: the only leg without `tui`. Identical to slim while
-          # `mod tui` is still ungated; once the GUI substrate migration gates
-          # the module, this leg turns any `crate::tui` import from
+          # Headless: one of two legs without `tui`. `mod tui` is
+          # feature-gated, so this leg turns any `crate::tui` import from
           # core/infra/cli into a compile error, which is what keeps a second
           # frontend from silently re-coupling to the terminal one.
           - name: headless
             args: "--locked --no-default-features --features telemetry"
+          # Native streaming without the terminal frontend: the combination
+          # a second frontend or a daemon consumes. Proves the streaming startup
+          # and the player-event wiring type-check and pass clippy with no
+          # `crate::tui` in scope.
+          - name: headless-streaming
+            args: "--locked --no-default-features --features telemetry,streaming"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -198,6 +203,9 @@ jobs:
           # See the check job for why the headless leg exists.
           - name: headless
             args: "--locked --no-default-features --features telemetry"
+          # See the check job for why the headless-streaming leg exists.
+          - name: headless-streaming
+            args: "--locked --no-default-features --features telemetry,streaming"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:

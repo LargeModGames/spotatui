@@ -4,9 +4,11 @@
 
 use super::bootstrap::Boot;
 use super::pump::start_tokio;
-use crate::core::app::App;
 #[cfg(feature = "streaming")]
-use crate::core::config::ClientConfig;
+use super::streaming::launch::{
+  cache_streaming_credentials, deferred_streaming_startup, DeferredStreamingContext,
+};
+use crate::core::app::App;
 use crate::core::user_config::StartupBehavior;
 #[cfg(feature = "discord-rpc")]
 use crate::core::user_config::UserConfig;
@@ -16,30 +18,14 @@ use crate::infra::discord_rpc;
 use crate::infra::macos_media;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::infra::mpris;
-#[cfg(feature = "streaming")]
-use crate::infra::network::requests::spotify_get_typed_compat_for_with_refresh;
 use crate::infra::network::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::infra::player;
 use anyhow::Result;
 use log::info;
-#[cfg(feature = "streaming")]
-use log::warn;
-#[cfg(feature = "streaming")]
-use rspotify::{model::user::PrivateUser, AuthCodePkceSpotify};
-#[cfg(feature = "streaming")]
-use std::path::Path;
-#[cfg(feature = "streaming")]
-use std::path::PathBuf;
 use std::sync::{atomic::AtomicU64, Arc};
-// Used by the streaming OAuth timeout and by `restore_playback_session`'s
-// per-source position seeks.
-#[cfg(any(
-  feature = "streaming",
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "youtube"
-))]
+// Used by `restore_playback_session`'s per-source position seeks.
+#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -196,409 +182,6 @@ fn update_windows_metadata(
   }
 }
 
-#[cfg(feature = "streaming")]
-fn subscription_level_label(level: rspotify::model::SubscriptionLevel) -> &'static str {
-  match level {
-    rspotify::model::SubscriptionLevel::Premium => "premium",
-    rspotify::model::SubscriptionLevel::Free => "free",
-  }
-}
-
-/// Runs after the UI is up (see `deferred_streaming_startup`), so outcomes are
-/// reported via `info!` + the returned status message only — never `println!`,
-/// which would corrupt the TUI. Reuses the `/me` captured during token
-/// validation when available instead of paying a second round trip.
-#[cfg(feature = "streaming")]
-async fn account_supports_native_streaming(
-  spotify: &AuthCodePkceSpotify,
-  cached_me: Option<PrivateUser>,
-  token_cache_path: &Path,
-  app: &Arc<Mutex<App>>,
-) -> (bool, Option<&'static str>) {
-  let user_result = match cached_me {
-    Some(user) => Ok(user),
-    None => {
-      spotify_get_typed_compat_for_with_refresh::<PrivateUser>(
-        spotify,
-        "me",
-        &[],
-        token_cache_path,
-        app,
-      )
-      .await
-    }
-  };
-  match user_result {
-    #[allow(deprecated)]
-    Ok(user) => match user.product {
-      Some(rspotify::model::SubscriptionLevel::Premium) => (true, None),
-      Some(level) => {
-        let plan = subscription_level_label(level);
-        info!(
-          "spotify {} account detected: playback is unavailable (native streaming and Web API playback controls require premium)",
-          plan
-        );
-        (
-          false,
-          Some("Spotify Free account: playback controls unavailable (Premium required)"),
-        )
-      }
-      None => {
-        info!("spotify account level unknown: native streaming disabled to avoid librespot exit");
-        (
-          false,
-          Some("Could not verify Spotify plan: native streaming disabled"),
-        )
-      }
-    },
-    Err(e) => {
-      info!(
-        "spotify account level check failed ({}); native streaming disabled to avoid librespot exit",
-        e
-      );
-      (
-        false,
-        Some("Could not verify Spotify plan: native streaming disabled"),
-      )
-    }
-  }
-}
-
-#[cfg(any(feature = "streaming", test))]
-#[derive(Debug, PartialEq, Eq)]
-enum StartupDeviceEvent {
-  Transfer {
-    device_id: String,
-    persist_device_id: bool,
-  },
-  AutoSelectStreaming {
-    device_name: String,
-    persist_device_id: bool,
-  },
-}
-
-#[cfg(any(feature = "streaming", test))]
-#[derive(Debug, PartialEq, Eq)]
-struct StartupDeviceDecision {
-  event: Option<StartupDeviceEvent>,
-  status_message: Option<String>,
-}
-
-#[cfg(feature = "streaming")]
-impl StartupDeviceEvent {
-  fn into_io_event(self) -> IoEvent {
-    match self {
-      StartupDeviceEvent::Transfer {
-        device_id,
-        persist_device_id,
-      } => IoEvent::TransferPlaybackToDevice(device_id, persist_device_id),
-      StartupDeviceEvent::AutoSelectStreaming {
-        device_name,
-        persist_device_id,
-      } => IoEvent::AutoSelectStreamingDevice(device_name, persist_device_id, false),
-    }
-  }
-}
-
-#[cfg(any(feature = "streaming", test))]
-fn startup_device_decision(
-  startup_behavior: StartupBehavior,
-  saved_device_id: Option<String>,
-  devices_snapshot: Option<&[rspotify::model::device::Device]>,
-  native_device_name: &str,
-) -> StartupDeviceDecision {
-  if startup_behavior != StartupBehavior::Play {
-    return StartupDeviceDecision {
-      event: None,
-      status_message: None,
-    };
-  }
-
-  let event = match saved_device_id {
-    Some(saved_device_id) => {
-      if let Some(devices) = devices_snapshot {
-        let mut saved_device_available = false;
-        let mut native_device_id = None;
-
-        for device in devices {
-          if device.id.as_ref() == Some(&saved_device_id) {
-            saved_device_available = true;
-            break;
-          }
-
-          if native_device_id.is_none() && device.name.eq_ignore_ascii_case(native_device_name) {
-            native_device_id = device.id.clone();
-          }
-        }
-
-        if saved_device_available {
-          Some(StartupDeviceEvent::Transfer {
-            device_id: saved_device_id,
-            persist_device_id: true,
-          })
-        } else {
-          native_device_id.map_or_else(
-            || {
-              Some(StartupDeviceEvent::AutoSelectStreaming {
-                device_name: native_device_name.to_string(),
-                persist_device_id: false,
-              })
-            },
-            |device_id| {
-              Some(StartupDeviceEvent::Transfer {
-                device_id,
-                persist_device_id: false,
-              })
-            },
-          )
-        }
-      } else {
-        Some(StartupDeviceEvent::Transfer {
-          device_id: saved_device_id,
-          persist_device_id: true,
-        })
-      }
-    }
-    None => Some(StartupDeviceEvent::AutoSelectStreaming {
-      device_name: native_device_name.to_string(),
-      persist_device_id: true,
-    }),
-  };
-
-  let status_message = matches!(
-    event,
-    Some(
-      StartupDeviceEvent::Transfer {
-        persist_device_id: false,
-        ..
-      } | StartupDeviceEvent::AutoSelectStreaming {
-        persist_device_id: false,
-        ..
-      }
-    )
-  )
-  .then(|| format!("Saved device unavailable; using {}", native_device_name));
-
-  StartupDeviceDecision {
-    event,
-    status_message,
-  }
-}
-
-/// Everything native streaming needs that used to gate the first frame:
-/// account probe, librespot session handshake, player event handler, and the
-/// saved-device startup decision. Bundled so `deferred_streaming_startup` can
-/// run it all on a background task after the UI is already up.
-#[cfg(feature = "streaming")]
-struct DeferredStreamingContext {
-  app: Arc<Mutex<App>>,
-  spotify: AuthCodePkceSpotify,
-  cached_me: Option<PrivateUser>,
-  token_cache_path: PathBuf,
-  client_config: ClientConfig,
-  redirect_uri: String,
-  volume_percent: u8,
-  device_startup_behavior: StartupBehavior,
-  /// Spotify startup Play/Pause, run after the device decision so it lands on
-  /// the selected device instead of 404ing with NO_ACTIVE_DEVICE while init is
-  /// still in flight. `None` when a non-Spotify session restore owns startup.
-  spotify_startup_behavior: Option<StartupBehavior>,
-  initial_shuffle_enabled: bool,
-  recovery_tx: tokio::sync::mpsc::UnboundedSender<player::StreamingRecoveryRequest>,
-  shared_position: Arc<AtomicU64>,
-  shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
-  #[cfg(all(feature = "mpris", target_os = "linux"))]
-  mpris_manager: Option<Arc<mpris::MprisManager>>,
-  #[cfg(all(feature = "macos-media", target_os = "macos"))]
-  macos_media_manager: Option<Arc<macos_media::MacMediaManager>>,
-  #[cfg(all(feature = "windows-media", target_os = "windows"))]
-  windows_media_manager: Option<Arc<smtc_tokio::WindowsMediaManager>>,
-}
-
-/// Initialize native streaming in the background (D1). The UI renders its
-/// first frame immediately; this task probes the account (reusing the auth
-/// `/me` when available), performs the librespot handshake with the same
-/// double-timeout as before, stores the player in `App`, spawns the player
-/// event handler, and finally makes the saved-device startup decision —
-/// dispatching its outcome through the normal IoEvent pump.
-#[cfg(feature = "streaming")]
-fn deferred_streaming_startup(ctx: DeferredStreamingContext) {
-  tokio::spawn(async move {
-    let app = Arc::clone(&ctx.app);
-    let spotify_startup_behavior = ctx.spotify_startup_behavior;
-    let initial_shuffle_enabled = ctx.initial_shuffle_enabled;
-    deferred_streaming_startup_inner(ctx).await;
-    // Whatever happened above (backend up, unsupported account, failed or
-    // timed-out init), the pending window is over.
-    let mut app = app.lock().await;
-    app.native_backend_pending = false;
-    // The Spotify startup Play/Pause runs here, after the device decision:
-    // before init was deferred, the device transfer always completed first,
-    // and firing these earlier 404s with NO_ACTIVE_DEVICE straight onto the
-    // Error screen. A request the user parked during init takes precedence
-    // over the configured startup behavior — their intent is newer.
-    if app.pending_start_playback.is_none() {
-      match spotify_startup_behavior {
-        Some(StartupBehavior::Play) => {
-          app.dispatch(IoEvent::Shuffle(initial_shuffle_enabled));
-          app.dispatch(IoEvent::StartPlayback(None, None, None));
-        }
-        Some(StartupBehavior::Pause) => {
-          app.dispatch(IoEvent::PausePlayback);
-        }
-        Some(StartupBehavior::Continue) | None => {}
-      }
-    }
-    // A StartPlayback parked during init replays now — against the native
-    // backend when it exists, else through the normal Connect path.
-    app.replay_pending_start_playback();
-  });
-}
-
-#[cfg(feature = "streaming")]
-async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
-  let (supported, status_message) =
-    account_supports_native_streaming(&ctx.spotify, ctx.cached_me, &ctx.token_cache_path, &ctx.app)
-      .await;
-  if let Some(message) = status_message {
-    ctx.app.lock().await.set_status_message(message, 12);
-  }
-  if !supported {
-    return;
-  }
-
-  info!("initializing native streaming player");
-  let streaming_config = player::StreamingConfig {
-    device_name: ctx.client_config.streaming_device_name.clone(),
-    bitrate: ctx.client_config.streaming_bitrate,
-    audio_cache: ctx.client_config.streaming_audio_cache,
-    cache_path: player::get_default_cache_path(),
-    initial_volume: ctx.volume_percent,
-  };
-  let client_id = ctx.client_config.client_id.clone();
-  let redirect_uri = ctx.redirect_uri.clone();
-
-  // Internal Spirc timeout defaults to 30s (configurable via
-  // SPOTATUI_STREAMING_INIT_TIMEOUT_SECS). The outer timeout here is a safety net
-  // that catches hangs *outside* Spirc init (e.g. OAuth callback never arriving,
-  // blocking I/O in credential retrieval). Set it above the internal timeout.
-  let internal_timeout_secs: u64 = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
-    .ok()
-    .and_then(|v| v.parse().ok())
-    .filter(|&v: &u64| v > 0)
-    .unwrap_or(30);
-  let outer_timeout = Duration::from_secs(internal_timeout_secs.saturating_add(15));
-
-  let init_task = tokio::spawn(async move {
-    player::StreamingPlayer::new_cache_only(&client_id, &redirect_uri, streaming_config).await
-  });
-  let abort_handle = init_task.abort_handle();
-
-  let streaming_player = match tokio::time::timeout(outer_timeout, init_task).await {
-    Ok(Ok(Ok(p))) => {
-      info!(
-        "native streaming player initialized as '{}'",
-        p.device_name()
-      );
-      // Note: We don't activate() here - that's handled by AutoSelectStreamingDevice
-      // which respects the user's saved device preference (e.g., spotifyd)
-      Arc::new(p)
-    }
-    Ok(Ok(Err(e))) => {
-      info!(
-        "failed to initialize streaming: {} - falling back to web api",
-        e
-      );
-      ctx.app.lock().await.set_status_message(
-        "Native streaming didn't start; using Spotify Connect for now. Restart spotatui to reconnect native playback.",
-        12,
-      );
-      return;
-    }
-    Ok(Err(e)) => {
-      info!(
-        "streaming initialization panicked: {} - falling back to web api",
-        e
-      );
-      return;
-    }
-    Err(_) => {
-      abort_handle.abort();
-      warn!(
-        "streaming initialization hung unexpectedly (outer timeout {}s) - falling back to web api",
-        outer_timeout.as_secs()
-      );
-      return;
-    }
-  };
-
-  info!("native playback enabled - spotatui is available as a spotify connect device");
-
-  // Store streaming player reference in App for direct control (bypasses event channel)
-  {
-    let mut app_mut = ctx.app.lock().await;
-    app_mut.streaming_player = Some(Arc::clone(&streaming_player));
-    // Startup playlist loading may have fallen back to a flat list while the
-    // deferred player was unavailable. Refresh once so rootlist folders are
-    // reconciled now that librespot is ready.
-    app_mut.dispatch(IoEvent::GetPlaylists);
-  }
-
-  // Spawn player event listener (updates app state from native player events)
-  player::spawn_player_event_handler(player::PlayerEventContext {
-    player: Arc::clone(&streaming_player),
-    app: Arc::clone(&ctx.app),
-    shared_position: ctx.shared_position,
-    shared_is_playing: ctx.shared_is_playing,
-    recovery_tx: ctx.recovery_tx,
-    #[cfg(all(feature = "mpris", target_os = "linux"))]
-    mpris_manager: ctx.mpris_manager,
-    #[cfg(all(feature = "macos-media", target_os = "macos"))]
-    macos_media_manager: ctx.macos_media_manager,
-    #[cfg(all(feature = "windows-media", target_os = "windows"))]
-    windows_media_manager: ctx.windows_media_manager,
-  });
-
-  // Auto-select the saved playback device when available (fallback to native
-  // streaming). This used to run inline in the network task before the pump
-  // started; the decision's outcome now dispatches through the pump.
-  let device_name = streaming_player.device_name().to_string();
-  let saved_device_id = ctx.client_config.device_id.clone();
-  let mut devices_snapshot = None;
-  if let Ok(devices) =
-    spotify_get_typed_compat_for_with_refresh::<rspotify::model::device::DevicePayload>(
-      &ctx.spotify,
-      "me/player/devices",
-      &[],
-      &ctx.token_cache_path,
-      &ctx.app,
-    )
-    .await
-  {
-    let devices_vec = devices.devices;
-    let mut app_mut = ctx.app.lock().await;
-    app_mut.devices = Some(rspotify::model::device::DevicePayload {
-      devices: devices_vec.clone(),
-    });
-    devices_snapshot = Some(devices_vec);
-  }
-
-  let startup_decision = startup_device_decision(
-    ctx.device_startup_behavior,
-    saved_device_id,
-    devices_snapshot.as_deref(),
-    &device_name,
-  );
-
-  let mut app_mut = ctx.app.lock().await;
-  if let Some(message) = startup_decision.status_message {
-    app_mut.set_status_message(message, 5);
-  }
-  if let Some(event) = startup_decision.event {
-    app_mut.dispatch(event.into_io_event());
-  }
-}
-
 /// Launch the terminal UI: OS media integrations, the deferred native
 /// streaming startup, persisted-session restore, the network task driving
 /// the IoEvent pump, and finally the blocking UI event loop.
@@ -625,43 +208,15 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
 
   info!("launching interactive terminal ui");
   #[cfg(feature = "streaming")]
-  if client_config.enable_streaming && !player::streaming_credentials_are_cached().unwrap_or(false)
-  {
-    if let Some(spotify) = spotify.as_ref() {
-      let (supported, status_message) = account_supports_native_streaming(
-        spotify,
-        cached_me.clone(),
-        &final_token_cache_path,
-        &app,
-      )
-      .await;
-      if let Some(message) = status_message {
-        app.lock().await.set_status_message(message, 12);
-      }
-      if supported {
-        // The OAuth flow spins up a blocking local callback server and waits on
-        // the browser; keep it off the async reactor so it never ties up a
-        // worker thread while the user completes sign-in.
-        let onboarding_for_streaming = onboarding.clone();
-        let cached = tokio::task::spawn_blocking(move || {
-          player::ensure_streaming_credentials_cached(onboarding_for_streaming.as_ref())
-        })
-        .await
-        .unwrap_or_else(|e| Err(anyhow::anyhow!("credential caching task panicked: {e}")));
-        if let Err(error) = cached {
-          warn!("native streaming authentication unavailable: {error}");
-          // Name the actual failure. The generic message left issue #414's
-          // reporter with a browser "unable to connect" page, a login that
-          // repeated every launch, and nothing on screen or in reach that
-          // said which half of startup had failed or why.
-          app.lock().await.set_status_message(
-            format!("Native streaming authentication failed ({error}); using Spotify Connect."),
-            10,
-          );
-        }
-      }
-    }
-  }
+  cache_streaming_credentials(
+    &client_config,
+    spotify.as_ref(),
+    cached_me.as_ref(),
+    &final_token_cache_path,
+    &onboarding,
+    &app,
+  )
+  .await;
   // Shown here rather than at authentication time: the streaming credential
   // flow above can block on a browser round trip, which would burn the
   // message's TTL before the first frame ever renders. Never displaces a
@@ -737,8 +292,12 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   #[cfg(feature = "streaming")]
   let (streaming_recovery_tx, streaming_recovery_rx) =
     tokio::sync::mpsc::unbounded_channel::<player::StreamingRecoveryRequest>();
+  // The supervisor that drains this channel starts inside
+  // `deferred_streaming_startup`, so install the sender on the same
+  // condition; otherwise a recovery request would latch
+  // `native_backend_pending` on a channel nobody reads.
   #[cfg(feature = "streaming")]
-  {
+  if streaming_attempted {
     let mut app_mut = app.lock().await;
     app_mut.streaming_recovery_tx = Some(streaming_recovery_tx.clone());
   }
@@ -969,7 +528,7 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
       cached_me,
       token_cache_path: final_token_cache_path.clone(),
       client_config: client_config.clone(),
-      redirect_uri: selected_redirect_uri.clone(),
+      redirect_uri: selected_redirect_uri,
       volume_percent: runtime_state.volume_percent,
       device_startup_behavior,
       // A restored non-Spotify session owns the startup play/pause decision;
@@ -980,7 +539,8 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
         Some(initial_startup_behavior)
       },
       initial_shuffle_enabled,
-      recovery_tx: streaming_recovery_tx.clone(),
+      recovery_tx: streaming_recovery_tx,
+      recovery_rx: streaming_recovery_rx,
       shared_position: shared_position_for_events,
       shared_is_playing: shared_is_playing_for_events,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -989,25 +549,6 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
       macos_media_manager: macos_media_for_events,
       #[cfg(all(feature = "windows-media", target_os = "windows"))]
       windows_media_manager: windows_media_for_events,
-    });
-  }
-
-  #[cfg(feature = "streaming")]
-  {
-    player::spawn_streaming_recovery_handler(player::StreamingRecoveryContext {
-      app: Arc::clone(&app),
-      shared_position: Arc::clone(&shared_position),
-      shared_is_playing: Arc::clone(&shared_is_playing),
-      recovery_rx: streaming_recovery_rx,
-      recovery_tx: streaming_recovery_tx.clone(),
-      client_config: client_config.clone(),
-      redirect_uri: selected_redirect_uri.clone(),
-      #[cfg(all(feature = "mpris", target_os = "linux"))]
-      mpris_manager: mpris_manager.clone(),
-      #[cfg(all(feature = "macos-media", target_os = "macos"))]
-      macos_media_manager: macos_media_manager.clone(),
-      #[cfg(all(feature = "windows-media", target_os = "windows"))]
-      windows_media_manager: windows_media_manager.clone(),
     });
   }
 
@@ -1927,197 +1468,4 @@ async fn route_decoded_windows_event(
     }
   }
   true
-}
-
-#[cfg(test)]
-mod tests {
-  use super::{startup_device_decision, StartupDeviceEvent};
-  use crate::core::user_config::StartupBehavior;
-  use rspotify::model::{device::Device, DeviceType};
-
-  const NATIVE_NAME: &str = "spotatui";
-  const NATIVE_ID: &str = "native-device";
-  const EXTERNAL_ID: &str = "phone-device";
-
-  #[allow(deprecated)]
-  fn device(id: &str, name: &str) -> Device {
-    Device {
-      id: Some(id.to_string()),
-      is_active: false,
-      is_private_session: false,
-      is_restricted: false,
-      name: name.to_string(),
-      _type: DeviceType::Computer,
-      volume_percent: Some(50),
-    }
-  }
-
-  fn startup_device_event(
-    startup_behavior: StartupBehavior,
-    saved_device_id: Option<String>,
-    devices_snapshot: Option<&[Device]>,
-  ) -> Option<StartupDeviceEvent> {
-    startup_device_decision(
-      startup_behavior,
-      saved_device_id,
-      devices_snapshot,
-      NATIVE_NAME,
-    )
-    .event
-  }
-
-  #[test]
-  fn continue_without_saved_device_does_not_transfer() {
-    let devices = vec![device(NATIVE_ID, NATIVE_NAME)];
-
-    assert_eq!(
-      startup_device_event(StartupBehavior::Continue, None, Some(&devices)),
-      None
-    );
-  }
-
-  #[test]
-  fn continue_with_saved_native_device_does_not_transfer() {
-    let devices = vec![device(NATIVE_ID, NATIVE_NAME)];
-
-    assert_eq!(
-      startup_device_event(
-        StartupBehavior::Continue,
-        Some(NATIVE_ID.to_string()),
-        Some(&devices),
-      ),
-      None
-    );
-  }
-
-  #[test]
-  fn continue_with_saved_external_device_does_not_transfer() {
-    let devices = vec![
-      device(EXTERNAL_ID, "Jay's phone"),
-      device(NATIVE_ID, NATIVE_NAME),
-    ];
-
-    assert_eq!(
-      startup_device_event(
-        StartupBehavior::Continue,
-        Some(EXTERNAL_ID.to_string()),
-        Some(&devices),
-      ),
-      None
-    );
-  }
-
-  #[test]
-  fn play_with_saved_available_device_transfers_to_saved_device() {
-    let devices = vec![
-      device(EXTERNAL_ID, "Jay's phone"),
-      device(NATIVE_ID, NATIVE_NAME),
-    ];
-
-    assert_eq!(
-      startup_device_event(
-        StartupBehavior::Play,
-        Some(EXTERNAL_ID.to_string()),
-        Some(&devices),
-      ),
-      Some(StartupDeviceEvent::Transfer {
-        device_id: EXTERNAL_ID.to_string(),
-        persist_device_id: true,
-      })
-    );
-  }
-
-  #[test]
-  fn play_without_saved_device_auto_selects_native_fallback() {
-    let devices = vec![device(NATIVE_ID, NATIVE_NAME)];
-
-    assert_eq!(
-      startup_device_event(StartupBehavior::Play, None, Some(&devices)),
-      Some(StartupDeviceEvent::AutoSelectStreaming {
-        device_name: NATIVE_NAME.to_string(),
-        persist_device_id: true,
-      })
-    );
-  }
-
-  #[test]
-  fn continue_with_unavailable_saved_device_does_not_fall_back_to_native() {
-    let devices = vec![device(NATIVE_ID, NATIVE_NAME)];
-
-    assert_eq!(
-      startup_device_event(
-        StartupBehavior::Continue,
-        Some(EXTERNAL_ID.to_string()),
-        Some(&devices),
-      ),
-      None
-    );
-  }
-
-  #[test]
-  fn play_with_unavailable_saved_device_transfers_to_native_without_persisting() {
-    let devices = vec![device(NATIVE_ID, NATIVE_NAME)];
-
-    let decision = startup_device_decision(
-      StartupBehavior::Play,
-      Some(EXTERNAL_ID.to_string()),
-      Some(&devices),
-      NATIVE_NAME,
-    );
-
-    assert_eq!(
-      decision.event,
-      Some(StartupDeviceEvent::Transfer {
-        device_id: NATIVE_ID.to_string(),
-        persist_device_id: false,
-      })
-    );
-    assert_eq!(
-      decision.status_message,
-      Some(format!("Saved device unavailable; using {}", NATIVE_NAME))
-    );
-  }
-
-  #[test]
-  fn play_with_unavailable_saved_device_auto_selects_native_without_persisting() {
-    let devices = vec![device("other-device", "Other speaker")];
-
-    let decision = startup_device_decision(
-      StartupBehavior::Play,
-      Some(EXTERNAL_ID.to_string()),
-      Some(&devices),
-      NATIVE_NAME,
-    );
-
-    assert_eq!(
-      decision.event,
-      Some(StartupDeviceEvent::AutoSelectStreaming {
-        device_name: NATIVE_NAME.to_string(),
-        persist_device_id: false,
-      })
-    );
-    assert_eq!(
-      decision.status_message,
-      Some(format!("Saved device unavailable; using {}", NATIVE_NAME))
-    );
-  }
-
-  #[test]
-  fn play_with_saved_device_and_no_snapshot_transfers_to_saved_device() {
-    let decision = startup_device_decision(
-      StartupBehavior::Play,
-      Some(EXTERNAL_ID.to_string()),
-      None,
-      NATIVE_NAME,
-    );
-
-    assert_eq!(
-      decision.event,
-      Some(StartupDeviceEvent::Transfer {
-        device_id: EXTERNAL_ID.to_string(),
-        persist_device_id: true,
-      })
-    );
-    assert_eq!(decision.status_message, None);
-  }
 }
