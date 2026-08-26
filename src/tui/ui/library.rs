@@ -93,20 +93,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     let items: Vec<String> = if app.qobuz_playlists.is_empty() {
       vec!["(not logged in \u{2014} press `d`, pick Qobuz)".to_string()]
     } else {
-      app
-        .qobuz_playlists
-        .iter()
-        .map(|p| {
-          let icon = if p.uri.starts_with("qobuz:favorites:") {
-            "\u{2665}"
-          } else if p.uri.starts_with("qobuz:album:") {
-            "\u{1F4BF}"
-          } else {
-            "\u{1F3B5}"
-          };
-          format!("{icon} {}", p.name)
-        })
-        .collect()
+      app.qobuz_playlists.iter().map(|p| p.name.clone()).collect()
     };
     draw_selectable_list(
       f,

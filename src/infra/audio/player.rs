@@ -49,6 +49,10 @@ pub struct LocalPlayer {
   _keepalive: mpsc::Sender<()>,
 }
 
+/// A decoded stream, ready for [`LocalPlayer::play_prepared`].
+#[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+pub struct PreparedStream(Box<dyn rodio::Source + Send>);
+
 impl LocalPlayer {
   /// Open the default audio output device and return a ready player.
   ///
@@ -100,15 +104,8 @@ impl LocalPlayer {
   }
 
   /// Decode an already-opened **live stream** and play it, replacing whatever
-  /// was playing.
-  ///
-  /// Unlike [`play_file`](Self::play_file) the reader is treated as
-  /// non-seekable: the decoder is built with `with_seekable(false)` so the
-  /// symphonia probe never issues the `Seek` that breaks on an infinite HTTP
-  /// (internet-radio) stream — the `Seek` bound is only there to satisfy
-  /// rodio's type signature. A live stream has no filename, so format
-  /// detection is primed from `mime_type` (e.g. `"audio/mpeg"` from the ICY
-  /// response's Content-Type) when available.
+  /// was playing: [`prepare_stream`](Self::prepare_stream) with no byte
+  /// length, then [`play_prepared`](Self::play_prepared).
   ///
   /// **Blocking:** the probe reads from the network reader; call it off the
   /// async runtime (e.g. `spawn_blocking`) like `play_file`.
@@ -117,18 +114,52 @@ impl LocalPlayer {
   where
     R: std::io::Read + std::io::Seek + Send + Sync + 'static,
   {
+    let prepared = Self::prepare_stream(reader, mime_type, None)?;
+    self.play_prepared(prepared);
+    Ok(())
+  }
+
+  /// Build the decoder for a stream without a sink change, so the caller can
+  /// decide under its own lock if the stream is still wanted.
+  ///
+  /// With `byte_len` the reader is seekable and the decoder knows the total
+  /// size (a progressive download of a known file). Without it the reader is
+  /// treated as non-seekable: the decoder is built with `with_seekable(false)`
+  /// so the symphonia probe never issues the `Seek` that breaks on an infinite
+  /// HTTP (internet-radio) stream. The `Seek` bound is only there to satisfy
+  /// rodio's type signature. A stream has no filename, so format detection is
+  /// primed from `mime_type` (e.g. `"audio/mpeg"`) when available.
+  ///
+  /// **Blocking:** the probe reads from the network reader; call it off the
+  /// async runtime (e.g. `spawn_blocking`) like `play_file`.
+  #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+  pub fn prepare_stream<R>(
+    reader: R,
+    mime_type: Option<&str>,
+    byte_len: Option<u64>,
+  ) -> Result<PreparedStream>
+  where
+    R: std::io::Read + std::io::Seek + Send + Sync + 'static,
+  {
     let mut builder = Decoder::builder().with_data(reader).with_seekable(false);
+    if let Some(len) = byte_len {
+      builder = builder.with_byte_len(len);
+    }
     if let Some(mime) = mime_type {
       builder = builder.with_mime_type(mime);
     }
     let decoder = builder
       .build()
       .map_err(|e| anyhow::anyhow!("decoding audio stream: {e}"))?;
+    Ok(PreparedStream(Box::new(decoder)))
+  }
 
+  /// Play a prepared stream, replacing whatever was playing. Does not block.
+  #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+  pub fn play_prepared(&self, stream: PreparedStream) {
     self.sink.clear();
-    self.sink.append(decoder);
+    self.sink.append(stream.0);
     self.sink.play();
-    Ok(())
   }
 
   /// Pause playback, keeping the current position.

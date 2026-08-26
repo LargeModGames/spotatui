@@ -12,6 +12,8 @@
 mod player;
 #[cfg(feature = "audio-decode")]
 pub use player::LocalPlayer;
+#[cfg(feature = "qobuz")]
+pub use player::PreparedStream;
 
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 mod analyzer;

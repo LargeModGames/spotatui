@@ -1,8 +1,9 @@
 //! Qobuz media source.
 //!
 //! Browses the user's Qobuz library and plays tracks through the encrypted CMAF
-//! stream: every track is downloaded, decrypted and rebuilt as a FLAC tempfile,
-//! then decoded by the shared [`LocalPlayer`](crate::infra::audio::LocalPlayer).
+//! stream: each track is decrypted and rebuilt as a FLAC tempfile while the
+//! shared [`LocalPlayer`](crate::infra::audio::LocalPlayer) decodes it
+//! (see [`stream::progressive`]).
 //! The three bundle constants are scraped at runtime (see [`auth`]); nothing
 //! secret is embedded.
 //!
@@ -30,7 +31,9 @@ use tokio::sync::Mutex;
 use crate::core::plugin_api::{ArtistRef, PlaylistInfo, SearchResults, TrackInfo};
 use crate::core::source::{MediaSource, Searcher};
 use crate::infra::audio::LocalPlayer;
+use stream::cmaf::InitSegment;
 use stream::download::{self, TrackDownload};
+use stream::progressive::SegmentStream;
 
 pub use stream::cmaf::StreamQuality;
 
@@ -43,12 +46,13 @@ pub struct QobuzPlaybackState {
   /// The playing listing's tracks in order; the playbar reads `tracks[index]`.
   pub tracks: Vec<TrackInfo>,
   pub index: usize,
-  /// Set for the whole download window so the tick never reads the empty sink
-  /// as end-of-track.
+  /// Set until the track starts to play so the tick never reads the empty
+  /// sink as end-of-track.
   pub advancing: bool,
-  /// The decrypted audio of the current track; `None` while it downloads.
+  /// The current track's file, filled while it plays; `None` until playback
+  /// starts.
   pub tempfile: Option<tempfile::NamedTempFile>,
-  /// The delivered format of the current track; `None` while it downloads.
+  /// The delivered format of the current track; `None` until playback starts.
   pub quality: Option<StreamQuality>,
   /// Backup of the pre-shuffle order while shuffle is on.
   pub shuffle_backup: Option<crate::infra::queue::ShuffleBackup>,
@@ -343,24 +347,47 @@ impl QobuzSource {
     })
   }
 
-  /// Start a track download into `dest`; a stale session is renewed once.
+  /// The stream URL and key of a track; a stale session is renewed once.
+  async fn track_stream(&self, track_id: &str, format_id: u8) -> Result<TrackStream> {
+    let session = self.stream_session().await?;
+    match self.file_url(&session, track_id, format_id).await {
+      Ok(stream) => Ok(stream),
+      Err(e) if e.downcast_ref::<Unauthorized>().is_some() => Err(e),
+      Err(_) => {
+        *shared_session().lock().await = None;
+        let session = self.stream_session().await?;
+        self.file_url(&session, track_id, format_id).await
+      }
+    }
+  }
+
+  /// Start a track download into `dest`.
   pub async fn begin_download(
     &self,
     track_id: &str,
     format_id: u8,
     dest: &Path,
   ) -> Result<TrackDownload> {
-    let session = self.stream_session().await?;
-    let stream = match self.file_url(&session, track_id, format_id).await {
-      Ok(stream) => stream,
-      Err(e) if e.downcast_ref::<Unauthorized>().is_some() => return Err(e),
-      Err(_) => {
-        *shared_session().lock().await = None;
-        let session = self.stream_session().await?;
-        self.file_url(&session, track_id, format_id).await?
-      }
-    };
+    let stream = self.track_stream(track_id, format_id).await?;
     download::begin(&self.http, &stream.url_template, stream.content_key, dest).await
+  }
+
+  /// Start a progressive stream of a track: segment 0 is fetched, so the
+  /// total size and the delivered format are known before any audio.
+  pub async fn begin_stream(
+    &self,
+    track_id: &str,
+    format_id: u8,
+  ) -> Result<(InitSegment, SegmentStream)> {
+    let stream = self.track_stream(track_id, format_id).await?;
+    let init = download::fetch_init(&self.http, &stream.url_template).await?;
+    let segments = SegmentStream::new(
+      self.http.clone(),
+      stream.url_template,
+      stream.content_key,
+      &init,
+    );
+    Ok((init, segments))
   }
 
   // -------------------------------------------------------------------------
@@ -829,8 +856,8 @@ mod tests {
     assert!(!session.is_valid_at(1_000 - SESSION_MARGIN_SECS));
   }
 
-  /// Live end to end: scrape the bundle, start a session, download and decrypt
-  /// one track, and play it through the shared sink. Needs
+  /// Live end to end: scrape the bundle, start a session, stream one track
+  /// through the shared sink while it downloads, and seek ahead. Needs
   /// `SPOTATUI_QOBUZ_TOKEN` (and `SPOTATUI_QOBUZ_TEST_FORMAT`, default 27). Run:
   /// `cargo test --features qobuz -- --ignored live_qobuz --nocapture`
   #[tokio::test]
@@ -870,23 +897,35 @@ mod tests {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let started = Instant::now();
-    let download = source
-      .begin_download(track_id, format, tmp.path())
+    let (init, segments) = source
+      .begin_stream(track_id, format)
       .await
       .expect("session start + file url + init segment");
-    let total = download.total_bytes();
-    eprintln!("init after {:?}, total {} bytes", started.elapsed(), total);
-    download.finish().await.expect("segments");
-    eprintln!("download done after {:?}", started.elapsed());
-
-    let bytes = std::fs::read(tmp.path()).unwrap();
-    assert_eq!(bytes.len() as u64, total);
-    if format != 5 {
-      assert!(bytes.starts_with(b"fLaC"), "got {:02X?}", &bytes[..4]);
-    }
+    let total = init.total_bytes();
+    eprintln!(
+      "init after {:?}, total {} bytes, {}",
+      started.elapsed(),
+      total,
+      init.quality().label()
+    );
+    let reader = stream::progressive::open(segments, &tmp)
+      .await
+      .expect("open stream");
+    let mime = if init.quality().flac {
+      "audio/flac"
+    } else {
+      "audio/mpeg"
+    };
+    let prepared = tokio::task::spawn_blocking(move || {
+      LocalPlayer::prepare_stream(reader, Some(mime), Some(total))
+    })
+    .await
+    .unwrap()
+    .expect("decode the stream head");
+    eprintln!("decoder ready after {:?}", started.elapsed());
 
     let player = LocalPlayer::new().expect("open default output device");
-    player.play_file(tmp.path()).expect("play decrypted track");
+    player.play_prepared(prepared);
     eprintln!("playing after {:?}", started.elapsed());
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(
@@ -894,6 +933,25 @@ mod tests {
       "playback position should advance, got {:?}",
       player.position()
     );
-    player.stop();
+    // A seek past the downloaded part restarts the stream at that segment.
+    let seek_started = Instant::now();
+    tokio::task::spawn_blocking(move || {
+      player.seek(Duration::from_secs(90)).expect("seek ahead");
+      eprintln!("seek to 90 s took {:?}", seek_started.elapsed());
+      std::thread::sleep(Duration::from_millis(600));
+      assert!(
+        player.position() >= Duration::from_secs(90),
+        "position after seek: {:?}",
+        player.position()
+      );
+      player.stop();
+    })
+    .await
+    .unwrap();
+
+    if format != 5 {
+      let bytes = std::fs::read(tmp.path()).unwrap();
+      assert!(bytes.starts_with(b"fLaC"), "got {:02X?}", &bytes[..4]);
+    }
   }
 }

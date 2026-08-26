@@ -70,11 +70,14 @@ aes = { version = "0.8", optional = true }
 cbc = { version = "0.1", optional = true }
 ctr = { version = "0.9", optional = true }
 hkdf = { version = "0.13", optional = true }
+# Qobuz progressive delivery: the chunk type of a stream-download source.
+bytes = { version = "1", optional = true }
 
-# Internet-radio dependencies: stream-download buffers an infinite HTTP (ICY)
-# stream behind a Read+Seek adapter that rodio can decode without seeking;
-# icy-metadata parses in-band StreamTitle now-playing metadata. Both are only
-# compiled under the opt-in `internet-radio` feature.
+# stream-download buffers a byte stream behind a Read+Seek adapter that rodio
+# can decode while the download runs. Internet radio uses it on an infinite HTTP
+# (ICY) stream, without seeking; Qobuz uses it on its segment transport, with
+# seeking. icy-metadata parses in-band StreamTitle now-playing metadata and is
+# only compiled under the opt-in `internet-radio` feature.
 stream-download = { version = "0.24", optional = true, default-features = false, features = ["reqwest-rustls"] }
 icy-metadata = { version = "0.6", optional = true, default-features = false }
 
@@ -195,9 +198,9 @@ internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
 # rodio's default `mp4` feature decodes) to a tempfile, play through the shared
 # LocalPlayer. Unofficial-fragile by design — see plan-multi-source.md.
 youtube = ["audio-decode", "dep:tempfile"]
-# Qobuz through its encrypted CMAF stream: every track is downloaded, decrypted
-# and rebuilt as a FLAC tempfile, then played through the shared LocalPlayer.
-qobuz = ["audio-decode", "dep:tempfile", "reqwest/stream", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
+# Qobuz through its encrypted CMAF stream: each track is decrypted and rebuilt
+# as a FLAC tempfile while it plays through the shared LocalPlayer.
+qobuz = ["audio-decode", "dep:tempfile", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
 
 # --- AI DJ / MCP -------------------------------------------------------------
 # Shared tool layer behind both front doors: the taste brief built from the local

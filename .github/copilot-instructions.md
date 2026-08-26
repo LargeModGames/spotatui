@@ -430,10 +430,13 @@ working in those directories.
   (`src/infra/audio/player.rs`) - the only file where rodio types appear.
   Subsonic and YouTube download each track to a `NamedTempFile` first (YouTube by
   shelling out to `yt-dlp`); Radio streams through a non-seekable ring buffer.
-- Qobuz (`src/infra/qobuz/`) downloads each track through the web player's
-  encrypted CMAF stream, decrypts it, and rebuilds a FLAC `NamedTempFile`. The
-  download runs off the pump (a track is 30 to 200 MB) behind a `fetch_id`
-  guard. The transport (`sign.rs`, `stream/`) is pure and unit tested. The
+- Qobuz (`src/infra/qobuz/`) plays each track through the web player's
+  encrypted CMAF stream while it downloads: `stream/progressive.rs` is a
+  `stream-download` source that yields the decrypted segments (and restarts at
+  a seek), rebuilt as a FLAC `NamedTempFile` the session keeps. The fetch runs
+  off the pump behind a `fetch_id` guard; a superseded stream is dropped, which
+  cancels its download. The transport (`sign.rs`, `stream/`) is pure and unit
+  tested. The
   three web-player constants are scraped at runtime (`auth.rs`), cached in
   `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars; they are
   never embedded. Failures are status messages, never `handle_error`.

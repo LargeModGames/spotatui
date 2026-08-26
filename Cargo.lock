@@ -5778,6 +5778,7 @@ dependencies = [
  "backtrace",
  "base64",
  "block2",
+ "bytes",
  "cbc",
  "chrono",
  "clap",

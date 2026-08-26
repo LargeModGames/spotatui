@@ -9,15 +9,18 @@
 //! ## Playback
 //!
 //! Qobuz playback owns [`App::qobuz_playback`] and never writes Spotify or
-//! librespot fields. A track is a 30 to 200 MB download, so the session is
-//! published at once (marked `advancing`, like the native queue slot) and the
-//! download runs on a detached task: the pump keeps serving every other event
-//! and a skip during the download supersedes it through `fetch_id`.
+//! librespot fields. A track plays while it downloads (`stream::progressive`):
+//! the session is published at once (marked `advancing`, like the native queue
+//! slot) and a detached task fetches segment 0, opens the stream, and builds
+//! the decoder, which waits for the first bytes. The pump keeps serving every
+//! other event, and a skip during that window supersedes it through
+//! `fetch_id`; the superseded stream is dropped, which cancels its download.
 //!
 //! Failures are status messages (never `handle_error`): the CLI never reaches
 //! this router, so no exit signal is lost. A 401 clears the in-memory token so
-//! the next browse re-runs the browser login. A failed download tears the
-//! session down instead of skipping (a skip would walk the queue at tick speed).
+//! the next browse re-runs the browser login. A failure before the first bytes
+//! tears the session down instead of skipping (a skip would walk the queue at
+//! tick speed); a failure after that ends the track early.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -29,19 +32,18 @@ use tokio::sync::Mutex;
 
 use super::auth::{self, QobuzBundleCache};
 use super::stream::download::TrackDownload;
+use super::stream::progressive;
 use super::{track_id_from_uri, QobuzPlaybackState, QobuzSource, StreamQuality, Unauthorized};
 use crate::core::app::{App, SearchResultBlock, TrackTableContext};
 use crate::core::pagination::Paged;
 use crate::core::plugin_api::TrackInfo;
 use crate::core::source::{MediaSource, Searcher};
 use crate::core::state::PersistedRuntimeState;
-use crate::infra::audio::LocalPlayer;
+use crate::infra::audio::{LocalPlayer, PreparedStream};
 use crate::infra::network::IoEvent;
 use crate::infra::queue::{advance_index, replay_file};
 
 const LOGIN_EXPIRED: &str = "Qobuz: login expired, press `d` and pick Qobuz to log in again";
-/// Downloads above this size get a status message that names the size.
-const LARGE_DOWNLOAD_BYTES: u64 = 20_000_000;
 
 /// Whether a URI is owned by the Qobuz source.
 pub fn is_qobuz_uri(uri: &str) -> bool {
@@ -112,7 +114,11 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     },
     IoEvent::Seek(position_ms) => match player(app).await {
       Some(p) => {
-        let _ = p.seek(Duration::from_millis(*position_ms as u64));
+        // A seek past the downloaded part waits for that segment: off the pump.
+        let position = Duration::from_millis(*position_ms as u64);
+        tokio::task::spawn_blocking(move || {
+          let _ = p.seek(position);
+        });
         true
       }
       None => false,
@@ -493,19 +499,11 @@ pub(crate) async fn download_for_queue(
   Ok(tmp)
 }
 
-/// Whether the published session still waits for the download stamped `fetch_id`.
-async fn is_current(app: &Arc<Mutex<App>>, fetch_id: u64) -> bool {
-  app
-    .lock()
-    .await
-    .qobuz_playback
-    .as_ref()
-    .is_some_and(|s| s.fetch_id == fetch_id)
-}
-
-/// Run the download for the published session on a detached task, then play
-/// it when the session still waits for this fetch. The task's abort handle is
-/// stored on the session, so a skip, a new queue, or a teardown cancels it.
+/// Open the track's stream for the published session on a detached task and
+/// build its decoder, then play it when the session still waits for this
+/// fetch. The task's abort handle is stored on the session, so a skip, a new
+/// queue, or a teardown cancels it; a decoder build already in progress ends
+/// on its own and drops its stream, which cancels that download.
 async fn spawn_fetch(
   app: &Arc<Mutex<App>>,
   source: Arc<QobuzSource>,
@@ -516,23 +514,36 @@ async fn spawn_fetch(
   let task = tokio::spawn(async move {
     let app = task_app;
     let quality = app.lock().await.user_config.behavior.qobuz_quality;
-    let (tmp, download) = match begin_track_download(&source, &track_id, quality).await {
-      Ok(started) => started,
-      Err(e) => return fail_fetch(&app, fetch_id, e).await,
+    let tmp = match NamedTempFile::new().context("creating temp file for Qobuz stream") {
+      Ok(tmp) => tmp,
+      Err(e) => return fail_fetch(&app, fetch_id, "stream", e).await,
     };
-    // The size is known after segment 0, before the long part.
-    let total = download.total_bytes();
-    if total > LARGE_DOWNLOAD_BYTES && is_current(&app, fetch_id).await {
-      app
-        .lock()
-        .await
-        .set_status_message(format!("Qobuz: downloading {} MB", total / 1_000_000), 6);
-    }
-    let delivered = download.quality();
-    if let Err(e) = download.finish().await {
-      return fail_fetch(&app, fetch_id, e).await;
-    }
-    commit_fetch(&app, fetch_id, tmp, delivered).await;
+    let (init, stream) = match source.begin_stream(&track_id, quality).await {
+      Ok(started) => started,
+      Err(e) => return fail_fetch(&app, fetch_id, "stream", e).await,
+    };
+    let delivered = init.quality();
+    let total = init.total_bytes();
+    let reader = match progressive::open(stream, &tmp).await {
+      Ok(reader) => reader,
+      Err(e) => return fail_fetch(&app, fetch_id, "stream", e).await,
+    };
+    // The decoder's first read waits for the prefetch: off the App lock.
+    let mime = if delivered.flac {
+      "audio/flac"
+    } else {
+      "audio/mpeg"
+    };
+    let prepared = tokio::task::spawn_blocking(move || {
+      LocalPlayer::prepare_stream(reader, Some(mime), Some(total))
+    })
+    .await;
+    let prepared = match prepared {
+      Ok(Ok(prepared)) => prepared,
+      Ok(Err(e)) => return fail_fetch(&app, fetch_id, "play", e).await,
+      Err(e) => return fail_fetch(&app, fetch_id, "play", anyhow::anyhow!(e)).await,
+    };
+    commit_fetch(&app, fetch_id, tmp, delivered, prepared).await;
   });
   if let Some(s) = app
     .lock()
@@ -545,32 +556,33 @@ async fn spawn_fetch(
   }
 }
 
-/// A failed download: tear the session down only if it still waits for this
+/// A failed fetch: tear the session down only if it still waits for this
 /// fetch, under one lock, and report the error from the same guard.
-async fn fail_fetch(app: &Arc<Mutex<App>>, fetch_id: u64, err: anyhow::Error) {
+async fn fail_fetch(app: &Arc<Mutex<App>>, fetch_id: u64, step: &str, err: anyhow::Error) {
   let mut guard = app.lock().await;
   let Some(s) = guard.qobuz_playback.take_if(|s| s.fetch_id == fetch_id) else {
     return;
   };
   s.player.stop();
-  report_locked(&mut guard, "download", err);
+  report_locked(&mut guard, step, err);
 }
 
-/// Play the downloaded file and finalize the session, under one lock so a
+/// Play the prepared stream and finalize the session, under one lock so a
 /// concurrent skip (which restamps `fetch_id` under the same lock) cannot
-/// interleave. A decode failure tears the session down.
+/// interleave. A stale stream is dropped, which cancels its download.
 async fn commit_fetch(
   app: &Arc<Mutex<App>>,
   fetch_id: u64,
   tmp: NamedTempFile,
   quality: StreamQuality,
+  prepared: PreparedStream,
 ) {
   let mut guard = app.lock().await;
   let Some((player, was_paused)) = guard
     .qobuz_playback
     .as_ref()
     .filter(|s| s.fetch_id == fetch_id)
-    // A pause pressed during the download window applies to the previous
+    // A pause pressed during the fetch window applies to the previous
     // track's sink; a fresh player starts paused, so only a session that
     // already played something counts.
     .map(|s| {
@@ -582,20 +594,9 @@ async fn commit_fetch(
   else {
     return;
   };
-  let path = tmp.path().to_path_buf();
-  let decode_player = Arc::clone(&player);
-  let played = tokio::task::spawn_blocking(move || decode_player.play_file(&path))
-    .await
-    .map(|r| r.map_err(|e| e.to_string()))
-    .unwrap_or_else(|e| Err(e.to_string()));
-  if let Err(e) = played {
-    if let Some(s) = guard.qobuz_playback.take_if(|s| s.fetch_id == fetch_id) {
-      s.player.stop();
-    }
-    guard.set_status_message(format!("Qobuz: play: {e}"), 6);
-    return;
-  }
+  player.play_prepared(prepared);
   player.set_volume(guard.runtime_state.volume_percent as f32 / 100.0);
+  let mut seek_to = None;
   let display = match guard.qobuz_playback.as_mut() {
     Some(s) => {
       s.tempfile = Some(tmp);
@@ -603,9 +604,7 @@ async fn commit_fetch(
       s.advancing = false;
       s.fetch = None;
       let resume = s.resume_at.take();
-      if let Some(position_ms) = resume.map(|r| r.position_ms).filter(|&ms| ms > 0) {
-        let _ = player.seek(Duration::from_millis(position_ms));
-      }
+      seek_to = resume.map(|r| r.position_ms).filter(|&ms| ms > 0);
       if was_paused || resume.is_some_and(|r| r.paused) {
         player.pause();
       }
@@ -615,6 +614,13 @@ async fn commit_fetch(
   };
   if let Some(display) = display {
     guard.set_status_message(format!("\u{266a} {display}"), 4);
+  }
+  drop(guard);
+  // The restore seek waits for that part of the download: off the App lock.
+  if let Some(position_ms) = seek_to {
+    tokio::task::spawn_blocking(move || {
+      let _ = player.seek(Duration::from_millis(position_ms));
+    });
   }
 }
 
