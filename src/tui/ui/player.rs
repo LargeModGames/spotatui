@@ -552,6 +552,7 @@ fn non_spotify_source_playback_active(app: &App) -> bool {
   #[cfg(not(any(
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "internet-radio",
     feature = "youtube"
   )))]
@@ -564,6 +565,11 @@ fn non_spotify_source_playback_active(app: &App) -> bool {
 
   #[cfg(feature = "subsonic")]
   if app.subsonic_playback.is_some() {
+    return true;
+  }
+
+  #[cfg(feature = "qobuz")]
+  if app.qobuz_playback.is_some() {
     return true;
   }
 
@@ -836,6 +842,7 @@ fn extract_track_info(app: &App) -> (Option<String>, Option<String>) {
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "internet-radio",
   feature = "youtube",
   feature = "streaming",
@@ -913,6 +920,34 @@ fn draw_subsonic_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   render_local_playbar(f, app, layout_chunk, &view);
 }
 
+/// Render the playbar for an active Qobuz playback session; the download
+/// window (`advancing`) shows as a loading suffix, like the queue slot.
+#[cfg(feature = "qobuz")]
+fn draw_qobuz_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  let Some(qobuz) = app.qobuz_playback.as_ref() else {
+    return;
+  };
+  let track = qobuz.current();
+  let name = track.map(|t| t.name.clone()).unwrap_or_default();
+  let view = LocalPlaybarView {
+    source_label: "Qobuz",
+    name: if qobuz.advancing {
+      format!("{name} (loading\u{2026})")
+    } else {
+      name
+    },
+    artists: track.map(|t| t.artists.join(", ")).unwrap_or_default(),
+    is_playing: !qobuz.player.is_paused(),
+    position_ms: qobuz.player.position().as_millis(),
+    duration_ms: track.map(|t| t.duration_ms).unwrap_or(0),
+    volume_percent: app.runtime_state.volume_percent,
+    queue_position: (qobuz.tracks.len() > 1).then(|| (qobuz.index + 1, qobuz.tracks.len())),
+    live: false,
+    show_modes: true,
+  };
+  render_local_playbar(f, app, layout_chunk, &view);
+}
+
 /// Render the playbar for an active YouTube playback session, reading
 /// progress/pause live from the player just like the Subsonic path.
 #[cfg(feature = "youtube")]
@@ -972,6 +1007,7 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "internet-radio",
   feature = "youtube",
   feature = "streaming",
@@ -1129,7 +1165,12 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // suspended context (whose `*_playback` is still `Some`) and not the stale
   // Spotify context (still cached when a Spotify context was suspended).
   // Checked first so the playbar always shows what is actually audible.
-  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let source_label = d
       .track
@@ -1194,6 +1235,13 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   #[cfg(feature = "subsonic")]
   if app.subsonic_playback.is_some() {
     draw_subsonic_playbar(f, app, layout_chunk);
+    return;
+  }
+
+  // Qobuz playback likewise renders from its own session state.
+  #[cfg(feature = "qobuz")]
+  if app.qobuz_playback.is_some() {
+    draw_qobuz_playbar(f, app, layout_chunk);
     return;
   }
 

@@ -67,6 +67,7 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   #[cfg(any(
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "internet-radio",
     feature = "youtube"
   ))]
@@ -176,6 +177,7 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "internet-radio",
   feature = "youtube"
 ))]
@@ -183,7 +185,12 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // The native queue slot playing a decoded track wins over every per-source
   // context: it is what is actually audible, and it drives the playbar / MPRIS /
   // cover art / lyrics via the shared track-change detector.
-  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let mut snapshot = source_snapshot(
       d.track.name.clone(),
@@ -247,6 +254,22 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
     ));
   }
 
+  #[cfg(feature = "qobuz")]
+  if let Some(qobuz) = app.qobuz_playback.as_ref() {
+    let track = qobuz.tracks.get(qobuz.index)?;
+    return Some(source_snapshot(
+      track.name.clone(),
+      track.artists.clone(),
+      track.album.clone(),
+      track.duration_ms as u32,
+      track.uri.clone(),
+      track.image_url.clone(),
+      qobuz.player.position().as_millis(),
+      !qobuz.player.is_paused(),
+      app,
+    ));
+  }
+
   #[cfg(feature = "youtube")]
   if let Some(youtube) = app.youtube_playback.as_ref() {
     let track = youtube.tracks.get(youtube.index)?;
@@ -305,6 +328,7 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "internet-radio",
   feature = "youtube"
 ))]

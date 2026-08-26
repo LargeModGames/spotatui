@@ -86,6 +86,9 @@ impl App {
         crate::core::source::Source::YouTube => {
           self.dispatch(IoEvent::GetYouTubeSearchResults(query));
         }
+        crate::core::source::Source::Qobuz => {
+          self.dispatch(IoEvent::GetQobuzSearchResults(query));
+        }
         // Spotify and Local both land on the Web API search, exactly like
         // the search input's if-chain (which has no Local branch).
         crate::core::source::Source::Spotify | crate::core::source::Source::Local => {

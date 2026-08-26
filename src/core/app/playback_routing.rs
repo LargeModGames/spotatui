@@ -87,7 +87,12 @@ impl App {
   pub(crate) fn active_decoded_source(&self) -> bool {
     // The native queue slot playing a decoded track owns the sink even when no
     // per-source `*_playback` context is set (e.g. queueing from an idle app).
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     if self.queue_now_decoded_player().is_some() {
       return true;
     }
@@ -102,6 +107,10 @@ impl App {
     }
     #[cfg(feature = "subsonic")]
     if self.subsonic_playback.is_some() {
+      return true;
+    }
+    #[cfg(feature = "qobuz")]
+    if self.qobuz_playback.is_some() {
       return true;
     }
     #[cfg(feature = "internet-radio")]
@@ -137,6 +146,10 @@ impl App {
     if self.subsonic_playback.is_some() {
       return true;
     }
+    #[cfg(feature = "qobuz")]
+    if self.qobuz_playback.is_some() {
+      return true;
+    }
     #[cfg(feature = "youtube")]
     if self.youtube_playback.is_some() {
       return true;
@@ -152,6 +165,7 @@ impl App {
   #[cfg(any(
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "internet-radio",
     feature = "youtube"
   ))]
@@ -166,7 +180,12 @@ impl App {
     allow(dead_code)
   )]
   pub fn active_decoded_player(&self) -> Option<&std::sync::Arc<crate::infra::audio::LocalPlayer>> {
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     if let Some(p) = self.queue_now_decoded_player() {
       return Some(p);
     }
@@ -181,6 +200,10 @@ impl App {
     }
     #[cfg(feature = "subsonic")]
     if let Some(s) = &self.subsonic_playback {
+      return Some(&s.player);
+    }
+    #[cfg(feature = "qobuz")]
+    if let Some(s) = &self.qobuz_playback {
       return Some(&s.player);
     }
     #[cfg(feature = "internet-radio")]
@@ -202,7 +225,12 @@ impl App {
   /// and seek keys become correct no-ops for radio. In a build with all seekable
   /// source features off this reduces to `None`.
   pub(super) fn active_source_position_ms(&self) -> Option<u128> {
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     if let Some(p) = self.queue_now_decoded_player() {
       return Some(p.position().as_millis());
     }
@@ -218,6 +246,10 @@ impl App {
     #[cfg(feature = "subsonic")]
     if let Some(subsonic) = &self.subsonic_playback {
       return Some(subsonic.player.position().as_millis());
+    }
+    #[cfg(feature = "qobuz")]
+    if let Some(qobuz) = &self.qobuz_playback {
+      return Some(qobuz.player.position().as_millis());
     }
     #[cfg(feature = "youtube")]
     if let Some(youtube) = &self.youtube_playback {

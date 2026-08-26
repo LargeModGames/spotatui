@@ -180,7 +180,7 @@ tracks); `album_id` is the album's base62 id, when known; `artist_refs` is an ar
 and empty when only the combined `artists` display list is available (e.g. native-playback
 snapshots); `is_playable` and `is_local` default to `true`/`false`; `track_number` defaults to
 `0` and `explicit` to `false` when unknown; `image_url` is a directly-fetchable cover-art URL
-when the source provides one (e.g. Subsonic, YouTube), otherwise `nil`.
+when the source provides one (e.g. Subsonic, YouTube, Qobuz), otherwise `nil`.
 
 The cached reads for playlists, queue and search results refresh when the underlying data
 changes; they are cheap to call but can be empty until the app has actually fetched that data.
@@ -333,7 +333,7 @@ spotatui.storage_set("play_count", plays)
 
 Theme values use the same string forms as `config.yml` (named color or `"r, g, b"`), so they
 can round-trip through `spotatui.set_theme`. Secrets and service credentials (sync token,
-relay URL, Subsonic credentials, Discord client id) are never exposed. The snapshot is
+relay URL, Subsonic credentials, the Qobuz token, Discord client id) are never exposed. The snapshot is
 populated once the app is running; reading it at load time (before the `start` event) returns
 empty defaults.
 
@@ -608,7 +608,7 @@ Trees are capped at 8 levels of nesting and 256 widgets per screen.
 `{ type = "cover_art" }` renders the artwork spotatui has *already* downloaded and decoded for
 the current track - there is no second download, and the app keeps ownership of the terminal
 graphics protocol, resizing, placement and cleanup. It works for every source that supplies
-art (Spotify, Subsonic, YouTube, local files with an embedded picture).
+art (Spotify, Subsonic, YouTube, Qobuz, local files with an embedded picture).
 
 - `source` - optional; only `"current"` is accepted today. Any other value is an error, so a
   future source fails loudly on an old build rather than showing the wrong image.

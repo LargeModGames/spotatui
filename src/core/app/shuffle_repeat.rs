@@ -8,7 +8,12 @@ impl App {
   /// Call only when [`active_queueable_decoded_source`](Self::active_queueable_decoded_source)
   /// holds, so exactly one branch applies.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+    not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    )),
     allow(unused_variables)
   )]
   fn apply_decoded_shuffle(&mut self) {
@@ -38,6 +43,12 @@ impl App {
         s.set_shuffle(on);
       }
     }
+    #[cfg(feature = "qobuz")]
+    if let Some(s) = self.qobuz_playback.as_mut() {
+      if !s.advancing {
+        s.set_shuffle(on);
+      }
+    }
   }
 
   /// Re-sync the active queueable source's queue order to `decoded_shuffle` when
@@ -45,7 +56,12 @@ impl App {
   /// because a track change was in flight. Driven by the runner tick, so it lands
   /// as soon as the advance commits (`advancing` clears). A no-op whenever the
   /// order already matches `decoded_shuffle`, so it is cheap to call every tick.
-  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   pub(crate) fn reconcile_decoded_shuffle(&mut self) {
     // The native queue owns the sink: any per-source struct is a suspended
     // context whose order is reconciled when it resumes, not now.
@@ -73,6 +89,12 @@ impl App {
         s.set_shuffle(on);
       }
     }
+    #[cfg(feature = "qobuz")]
+    if let Some(s) = self.qobuz_playback.as_mut() {
+      if !s.advancing && s.shuffle_backup.is_some() != on {
+        s.set_shuffle(on);
+      }
+    }
   }
 
   /// Store a Spotify `RepeatState` as the decoded repeat mode. Used by the
@@ -85,7 +107,12 @@ impl App {
   /// handler) when the native queue owns playback or no queueable decoded source
   /// is active — the same ownership gate as the MPRIS mode setters, so a
   /// suspended context under the queue is never touched.
-  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   pub(crate) fn set_decoded_repeat_from_state(
     &mut self,
     state: rspotify::model::enums::RepeatState,
@@ -117,6 +144,7 @@ impl App {
     any(
       feature = "local-files",
       feature = "subsonic",
+      feature = "qobuz",
       feature = "internet-radio",
       feature = "youtube"
     )
@@ -141,6 +169,7 @@ impl App {
     any(
       feature = "local-files",
       feature = "subsonic",
+      feature = "qobuz",
       feature = "internet-radio",
       feature = "youtube"
     )

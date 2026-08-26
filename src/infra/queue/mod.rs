@@ -339,7 +339,12 @@ fn restore_in_place<T>(items: &mut Vec<T>, backup: &ShuffleBackup, current: usiz
 /// Gated on the *queueable* decoded sources rather than `audio-decode`: replay
 /// is the repeat-one path of a finite track list. Internet radio decodes audio
 /// too, but a live stream has no track to re-decode.
-#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
 pub async fn replay_file(
   player: std::sync::Arc<crate::infra::audio::LocalPlayer>,
   path: std::path::PathBuf,
@@ -358,7 +363,12 @@ pub async fn replay_file(
 /// [`dispatch::try_play_queued`] can play. Internet radio pulls `audio-decode`
 /// in as well, but a live stream is never a queue item, so a radio-only build
 /// can never construct this.
-#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
 pub struct DecodedQueuePlayback {
   /// The output-device sink. Shared (`Arc::ptr_eq`) with the suspended context's
   /// player when there is one, so no second device is opened.
@@ -375,13 +385,16 @@ pub struct DecodedQueuePlayback {
   /// one, and the stale result is silently discarded. Only *read* by the
   /// Subsonic/YouTube fetch-completion path, so a build with neither (e.g. a
   /// local-files-only build) writes it without reading it.
-  #[cfg_attr(not(any(feature = "subsonic", feature = "youtube")), allow(dead_code))]
+  #[cfg_attr(
+    not(any(feature = "subsonic", feature = "qobuz", feature = "youtube")),
+    allow(dead_code)
+  )]
   pub fetch_id: u64,
   /// The tempfile backing a downloaded track (Subsonic / YouTube). `None` for a
   /// local file, which is played straight from disk. Held purely to keep the
   /// file alive on disk for the duration of playback (dropped with the slot), so
   /// it is never read back.
-  #[cfg(any(feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
   #[allow(dead_code)]
   pub tempfile: Option<tempfile::NamedTempFile>,
 }
@@ -399,10 +412,16 @@ pub struct DecodedQueuePlayback {
   feature = "streaming",
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "youtube"
 ))]
 pub enum QueueNowPlaying {
-  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   Decoded(DecodedQueuePlayback),
   /// A Spotify track playing via native streaming (`player.load`, no Spirc
   /// context).

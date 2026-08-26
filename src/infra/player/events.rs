@@ -563,14 +563,24 @@ async fn handle_player_events(
           let stray_over_queue = {
             let guard = app.lock().await;
             let decoded_slot = {
-              #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+              #[cfg(any(
+                feature = "local-files",
+                feature = "subsonic",
+                feature = "qobuz",
+                feature = "youtube"
+              ))]
               {
                 guard.queue_now_decoded_player().is_some()
               }
               // Without a queueable decoded source the slot can never be
               // decoded (internet radio enables `audio-decode` but is never
               // queued), so there is nothing to shadow librespot here.
-              #[cfg(not(any(feature = "local-files", feature = "subsonic", feature = "youtube")))]
+              #[cfg(not(any(
+                feature = "local-files",
+                feature = "subsonic",
+                feature = "qobuz",
+                feature = "youtube"
+              )))]
               {
                 false
               }

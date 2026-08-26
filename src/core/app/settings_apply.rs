@@ -83,6 +83,12 @@ impl App {
             self.user_config.behavior.status_message_ttl_percent = (*v).clamp(10, 1000) as u16;
           }
         }
+        "behavior.qobuz_quality" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.qobuz_quality =
+              crate::core::user_config::qobuz_quality_from_label(v);
+          }
+        }
         "behavior.playback_poll_seconds" => {
           if let SettingValue::Number(v) = &setting.value {
             self.user_config.behavior.playback_poll_seconds = (*v).max(1) as u64;

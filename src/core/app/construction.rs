@@ -18,6 +18,7 @@ impl Default for App {
       community_pin_item: PlaylistFolderItem::CommunityPin,
       local_playlists: Vec::new(),
       subsonic_playlists: Vec::new(),
+      qobuz_playlists: Vec::new(),
       radio_stations: Vec::new(),
       youtube_playlists: Vec::new(),
       youtube_open_playlist: None,
@@ -60,6 +61,7 @@ impl Default for App {
         feature = "streaming",
         feature = "local-files",
         feature = "subsonic",
+        feature = "qobuz",
         feature = "youtube"
       ))]
       queue_now: None,
@@ -181,6 +183,8 @@ impl Default for App {
       local_playback: None,
       #[cfg(feature = "subsonic")]
       subsonic_playback: None,
+      #[cfg(feature = "qobuz")]
+      qobuz_playback: None,
       #[cfg(feature = "internet-radio")]
       radio_playback: None,
       #[cfg(feature = "youtube")]

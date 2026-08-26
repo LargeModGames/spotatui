@@ -391,7 +391,12 @@ impl Driver {
     // Native queue slot: when the queued track finishes, advance the queue
     // (play the next queued item, or resume the suspended context). Runs
     // before the per-source blocks so it takes precedence over them.
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     {
       use crate::infra::queue::QueueNowPlaying;
       let advance = match app.queue_now.as_mut() {
@@ -442,7 +447,12 @@ impl Driver {
     // dispatching) because the sink stays empty for the whole decode — or,
     // for Subsonic/YouTube, multi-second download — window; without it the
     // next tick would re-dispatch and skip several tracks per advance.
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     macro_rules! decoded_auto_advance {
       ($app:ident, $playback:ident, $queue:ident) => {
         if !$app.queue_owns_playback() {
@@ -487,13 +497,20 @@ impl Driver {
     decoded_auto_advance!(app, local_playback, queue);
     #[cfg(feature = "subsonic")]
     decoded_auto_advance!(app, subsonic_playback, tracks);
+    #[cfg(feature = "qobuz")]
+    decoded_auto_advance!(app, qobuz_playback, tracks);
     #[cfg(feature = "youtube")]
     decoded_auto_advance!(app, youtube_playback, tracks);
 
     // Apply any shuffle toggle that was deferred while a track change was in
     // flight, now that the advance may have committed (a cheap no-op when the
     // queue order already matches the decoded shuffle state).
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     app.reconcile_decoded_shuffle();
 
     // Internet radio has no queue to auto-advance; instead the tick watches
@@ -524,7 +541,12 @@ impl Driver {
     // The native queue slot owns the sink when playing a decoded track; read
     // progress from its player first (it may share the suspended context's
     // player, in which case a per-source block below reads the same value).
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
       source_owns_playback = true;
       app.song_progress_ms = d.player.position().as_millis();
@@ -545,6 +567,13 @@ impl Driver {
         source_owns_playback = true;
         let position_ms = subsonic.player.position().as_millis();
         app.song_progress_ms = position_ms;
+      }
+    }
+    #[cfg(feature = "qobuz")]
+    if !spotify_queue_slot {
+      if let Some(qobuz) = app.qobuz_playback.as_ref() {
+        source_owns_playback = true;
+        app.song_progress_ms = qobuz.player.position().as_millis();
       }
     }
     #[cfg(feature = "internet-radio")]

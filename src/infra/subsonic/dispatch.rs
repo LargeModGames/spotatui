@@ -335,6 +335,14 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
       youtube.player.stop();
     }
   }
+  // Tear down any Qobuz session (it is routed after Subsonic in the pump).
+  #[cfg(feature = "qobuz")]
+  {
+    let qobuz = app.lock().await.qobuz_playback.take();
+    if let Some(qobuz) = qobuz {
+      qobuz.player.stop();
+    }
+  }
 }
 
 /// Reuse the live subsonic player, or open a fresh output device for one. A

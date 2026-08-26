@@ -19,6 +19,24 @@ pub struct RadioStationConfig {
   pub url: String,
 }
 
+/// The Qobuz web-player constants, cached by bundle version (public values only).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct QobuzBundleCache {
+  pub bundle_version: String,
+  pub app_id: String,
+  pub app_secret: String,
+  pub oauth_key: String,
+}
+
+impl QobuzBundleCache {
+  fn is_complete(&self) -> bool {
+    !self.bundle_version.is_empty()
+      && !self.app_id.is_empty()
+      && !self.app_secret.is_empty()
+      && !self.oauth_key.is_empty()
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RadioStationAddOutcome {
   Added,
@@ -104,6 +122,7 @@ impl RuntimeState {
       library_height_percent: Some(self.library_height_percent.min(100)),
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
+      qobuz_bundle_cache: None,
     }
   }
 
@@ -201,6 +220,8 @@ pub struct PersistedRuntimeState {
   pub radio_stations: Option<Vec<RadioStationConfig>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub community_pin_prompt_shown: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub qobuz_bundle_cache: Option<QobuzBundleCache>,
 }
 
 impl PersistedRuntimeState {
@@ -284,6 +305,14 @@ impl PersistedRuntimeState {
     }
   }
 
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  pub fn qobuz_bundle_cache(qobuz_bundle_cache: QobuzBundleCache) -> Self {
+    Self {
+      qobuz_bundle_cache: Some(qobuz_bundle_cache),
+      ..Default::default()
+    }
+  }
+
   pub fn merge_patch(&mut self, patch: &Self) {
     merge_state_patch(self, patch);
   }
@@ -299,6 +328,7 @@ impl PersistedRuntimeState {
       && self.library_height_percent.is_none()
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
+      && self.qobuz_bundle_cache.is_none()
   }
 }
 
@@ -455,6 +485,10 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .as_deref()
       .map(sanitized_radio_stations),
     community_pin_prompt_shown: state.community_pin_prompt_shown,
+    qobuz_bundle_cache: state
+      .qobuz_bundle_cache
+      .clone()
+      .filter(QobuzBundleCache::is_complete),
   }
 }
 
@@ -497,6 +531,9 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   }
   if let Some(community_pin_prompt_shown) = patch.community_pin_prompt_shown {
     merged.community_pin_prompt_shown = Some(community_pin_prompt_shown);
+  }
+  if let Some(qobuz_bundle_cache) = &patch.qobuz_bundle_cache {
+    merged.qobuz_bundle_cache = Some(qobuz_bundle_cache.clone());
   }
 }
 
@@ -623,6 +660,12 @@ mod tests {
         url: "https://example.test/stream".to_string(),
       }]),
       community_pin_prompt_shown: Some(true),
+      qobuz_bundle_cache: Some(QobuzBundleCache {
+        bundle_version: "8.2.0-b034".to_string(),
+        app_id: "123456789".to_string(),
+        app_secret: "s".repeat(32),
+        oauth_key: "k".to_string(),
+      }),
     };
 
     save(&path, &state).unwrap();
@@ -657,6 +700,25 @@ mod tests {
     .unwrap();
 
     assert_eq!(load(&path).unwrap().community_pin_prompt_shown, Some(true));
+  }
+
+  #[test]
+  fn incomplete_qobuz_bundle_cache_is_dropped_on_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    save(
+      &path,
+      &PersistedRuntimeState::qobuz_bundle_cache(QobuzBundleCache {
+        bundle_version: "8.2.0-b034".to_string(),
+        app_id: String::new(),
+        app_secret: "s".to_string(),
+        oauth_key: "k".to_string(),
+      }),
+    )
+    .unwrap();
+
+    assert_eq!(load(&path).unwrap().qobuz_bundle_cache, None);
   }
 
   #[test]

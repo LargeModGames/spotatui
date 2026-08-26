@@ -67,7 +67,10 @@ pub trait Onboarding: Send + Sync {
   /// completed by a later [`Self::info`] (a flushed `print!` on the console).
   // Only the source-configuration flows emit progress fragments; builds
   // without those sources have no caller.
-  #[cfg_attr(not(any(feature = "subsonic", feature = "youtube")), allow(dead_code))]
+  #[cfg_attr(
+    not(any(feature = "subsonic", feature = "qobuz", feature = "youtube")),
+    allow(dead_code)
+  )]
   fn progress(&self, text: &str);
 
   /// Show `prompt` verbatim (nothing appended) and read one line of input,

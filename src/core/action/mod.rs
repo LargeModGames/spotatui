@@ -460,7 +460,7 @@ pub enum OpenTarget {
   /// what each opening path has always passed.
   Playlist { id: String, from_search: bool },
   /// A decoded source's playlist or folder, routed by URI scheme (`file:`,
-  /// `subsonic:`, `youtube:playlist:`); an unknown scheme is a no-op.
+  /// `subsonic:`, `youtube:playlist:`, `qobuz:`); an unknown scheme is a no-op.
   SourcePlaylist(String),
   /// Scope the playlist sidebar to a rootlist folder id (session-local, not
   /// to be persisted).

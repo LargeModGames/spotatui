@@ -4,10 +4,10 @@
 // - Windows/macOS: cpal (WASAPI/CoreAudio)
 //
 // It also hosts the shared decoded-audio output engine (`LocalPlayer`), used by
-// any source that plays through the local rodio sink (local files, Subsonic).
+// any source that plays through the local rodio sink (local files, Subsonic, Qobuz).
 
-// Shared decode/output engine. Gated on `audio-decode`, which both `local-files`
-// and `subsonic` pull in, so the player is reachable from either source.
+// Shared decode/output engine. Gated on `audio-decode`, which `local-files`,
+// `subsonic` and `qobuz` pull in, so the player is reachable from each source.
 #[cfg(feature = "audio-decode")]
 mod player;
 #[cfg(feature = "audio-decode")]

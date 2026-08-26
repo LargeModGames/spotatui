@@ -241,6 +241,7 @@ impl App {
       Source::Subsonic => IoEvent::GetSubsonicPlaylists,
       Source::Radio => IoEvent::GetRadioStations,
       Source::YouTube => IoEvent::GetYouTubePlaylists,
+      Source::Qobuz => IoEvent::GetQobuzPlaylists,
       Source::Spotify => return,
     };
     self.dispatch(event);

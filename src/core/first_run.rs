@@ -19,7 +19,7 @@ use crate::core::onboarding::Onboarding;
 use crate::core::source::Source;
 use crate::core::state::RuntimeState;
 use crate::core::user_config::UserConfig;
-#[cfg(feature = "subsonic")]
+#[cfg(any(feature = "subsonic", feature = "qobuz"))]
 use anyhow::anyhow;
 use anyhow::Result;
 
@@ -139,7 +139,8 @@ fn compiled_in_sources() -> Vec<Source> {
       feature = "youtube",
       feature = "subsonic",
       feature = "internet-radio",
-      feature = "local-files"
+      feature = "local-files",
+      feature = "qobuz"
     )),
     allow(unused_mut)
   )]
@@ -152,11 +153,13 @@ fn compiled_in_sources() -> Vec<Source> {
   options.push(Source::Radio);
   #[cfg(feature = "local-files")]
   options.push(Source::Local);
+  #[cfg(feature = "qobuz")]
+  options.push(Source::Qobuz);
   options
 }
 
 // `user_config` and `onboarding` are only read by credential/config-collecting
-// sources; a build with none of them (slim) leaves them unused.
+// sources; a build with none of them (slim, or Qobuz alone) leaves them unused.
 #[cfg_attr(
   not(any(feature = "subsonic", feature = "youtube", feature = "local-files")),
   allow(unused_variables)
@@ -173,8 +176,69 @@ async fn configure_source(
     Source::YouTube => configure_youtube(user_config, onboarding),
     #[cfg(feature = "local-files")]
     Source::Local => configure_local(user_config, onboarding),
+    #[cfg(feature = "qobuz")]
+    Source::Qobuz => configure_qobuz(onboarding).await?,
     // Radio needs no setup; other sources are handled above when compiled in.
     _ => {}
+  }
+  Ok(())
+}
+
+/// Log in to Qobuz through the browser and save the credentials file.
+#[cfg(feature = "qobuz")]
+async fn configure_qobuz(onboarding: &dyn Onboarding) -> Result<()> {
+  use crate::infra::qobuz::{auth, shared_qobuz_client, QobuzSource};
+
+  onboarding.info(
+    "\nQobuz setup: spotatui logs in through your browser (a paid Qobuz subscription is needed).",
+  );
+  onboarding.progress("Fetching the Qobuz web player constants... ");
+  let constants = match auth::resolve_constants(&shared_qobuz_client(), None).await {
+    Ok(constants) => {
+      onboarding.info("OK");
+      constants
+    }
+    Err(e) => {
+      onboarding.info(&format!("failed: {e:#}"));
+      onboarding.info("Press `d` in the app and pick Qobuz to try again.");
+      return Ok(());
+    }
+  };
+
+  let attempt = auth::LoginAttempt::bind(constants.clone()).await?;
+  let url = attempt.url();
+  onboarding.info("\nAttempting to open this URL in your browser:");
+  onboarding.info(&format!("{url}\n"));
+  if let Err(e) = open::that(&url) {
+    onboarding.info(&format!("Failed to open browser automatically: {e}"));
+    onboarding.info("Please manually open the URL above in your browser.");
+  }
+  onboarding.info("Waiting for the Qobuz login to complete...");
+
+  let credentials = match attempt.wait().await {
+    Ok(credentials) => credentials,
+    Err(e) => {
+      onboarding.info(&format!("Qobuz login failed: {e:#}"));
+      onboarding.info("Press `d` in the app and pick Qobuz to try again.");
+      return Ok(());
+    }
+  };
+  let path = crate::core::paths::qobuz_credentials_path()
+    .ok_or_else(|| anyhow!("cannot resolve the spotatui config directory"))?;
+  auth::write_credentials(&path, &credentials)?;
+  auth::set_token(Some(credentials.user_auth_token.clone()));
+  onboarding.info("Logged in to Qobuz.");
+
+  // Best-effort stream check: a failure is not fatal, the login is saved.
+  onboarding.progress("Testing the stream session... ");
+  let source = QobuzSource::new(
+    constants.app_id,
+    constants.app_secret,
+    credentials.user_auth_token,
+  );
+  match source.session_start().await {
+    Ok(_) => onboarding.info("OK"),
+    Err(e) => onboarding.info(&format!("failed: {e:#}")),
   }
   Ok(())
 }

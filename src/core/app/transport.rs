@@ -24,7 +24,12 @@ impl App {
   pub fn toggle_playback(&mut self) {
     // The native queue slot owns the sink: toggle its player directly (covers the
     // idle-app case where no per-source context is set).
-    #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
     if let Some(player) = self.queue_now_decoded_player() {
       if player.is_paused() {
         player.resume();
@@ -68,6 +73,17 @@ impl App {
         subsonic.player.resume();
       } else {
         subsonic.player.pause();
+      }
+      return;
+    }
+
+    // Qobuz playback owns the session the same way: toggle its sink directly.
+    #[cfg(feature = "qobuz")]
+    if let Some(qobuz) = &self.qobuz_playback {
+      if qobuz.player.is_paused() {
+        qobuz.player.resume();
+      } else {
+        qobuz.player.pause();
       }
       return;
     }

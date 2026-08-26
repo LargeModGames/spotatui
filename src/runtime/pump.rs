@@ -83,6 +83,15 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         && crate::infra::subsonic::dispatch::route_subsonic_event(&network.app, &io_event).await;
       #[cfg(not(feature = "subsonic"))]
       let handled_subsonic = false;
+      // Qobuz is intercepted after Subsonic. A `qobuz:` URI falls through the
+      // earlier dispatches and is caught here (see infra::qobuz::dispatch).
+      #[cfg(feature = "qobuz")]
+      let handled_qobuz = !handled_queue
+        && !handled_locally
+        && !handled_subsonic
+        && crate::infra::qobuz::dispatch::route_qobuz_event(&network.app, &io_event).await;
+      #[cfg(not(feature = "qobuz"))]
+      let handled_qobuz = false;
       // Internet radio is intercepted last before the Spotify network. A
       // `radio:` URI falls through both earlier dispatches and is caught here
       // (see infra::radio::dispatch). Skipped when already consumed.
@@ -90,6 +99,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       let handled_radio = !handled_queue
         && !handled_locally
         && !handled_subsonic
+        && !handled_qobuz
         && crate::infra::radio::dispatch::route_radio_event(&network.app, &io_event).await;
       #[cfg(not(feature = "internet-radio"))]
       let handled_radio = false;
@@ -100,6 +110,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       let handled_youtube = !handled_queue
         && !handled_locally
         && !handled_subsonic
+        && !handled_qobuz
         && !handled_radio
         && crate::infra::youtube::dispatch::route_youtube_event(&network.app, &io_event).await;
       #[cfg(not(feature = "youtube"))]
@@ -107,6 +118,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       if !handled_queue
         && !handled_locally
         && !handled_subsonic
+        && !handled_qobuz
         && !handled_radio
         && !handled_youtube
       {
@@ -115,8 +127,8 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         // A source router consumed the event and returned without touching
         // `is_loading`, which `App::dispatch` set to true. Only
         // `handle_network_event` resets it, and we skipped that path, so clear
-        // it here — otherwise selecting/loading Local, Subsonic, Radio, or
-        // YouTube content leaves the UI stuck on the loading indicator.
+        // it here — otherwise selecting/loading Local, Subsonic, Qobuz, Radio,
+        // or YouTube content leaves the UI stuck on the loading indicator.
         network.app.lock().await.is_loading = false;
       }
     }

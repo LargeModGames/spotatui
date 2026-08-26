@@ -465,6 +465,14 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
       subsonic.player.stop();
     }
   }
+  // Tear down any Qobuz session.
+  #[cfg(feature = "qobuz")]
+  {
+    let qobuz = app.lock().await.qobuz_playback.take();
+    if let Some(qobuz) = qobuz {
+      qobuz.player.stop();
+    }
+  }
   // Tear down any radio session.
   #[cfg(feature = "internet-radio")]
   {

@@ -17,6 +17,7 @@ use crate::infra::network::IoEvent;
   feature = "streaming",
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "youtube"
 ))]
 use crate::infra::queue::QueueNowPlaying;
@@ -39,6 +40,7 @@ use std::sync::mpsc::Sender;
   feature = "streaming",
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "youtube",
   all(feature = "mpris", target_os = "linux")
 ))]
@@ -193,6 +195,7 @@ pub struct App {
     feature = "streaming",
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "youtube"
   ))]
   pub queue_now: Option<crate::infra::queue::QueueNowPlaying>,
@@ -300,6 +303,9 @@ pub struct App {
   /// The user's Subsonic server playlists shown by the Subsonic browser.
   /// Populated by `GetSubsonicPlaylists` dispatch.
   pub subsonic_playlists: Vec<PlaylistInfo>,
+  /// The Qobuz sidebar rows (favorites, playlists, albums) shown by the Qobuz
+  /// browser. Populated by `GetQobuzPlaylists` dispatch.
+  pub qobuz_playlists: Vec<PlaylistInfo>,
   /// The user's configured internet-radio stations (as playable rows, uri
   /// `radio:<url>`) shown by the sidebar when the Radio source is active.
   /// Populated by `GetRadioStations` dispatch.
@@ -490,6 +496,10 @@ pub struct App {
   /// live from the player here, never touching Spotify/librespot fields.
   #[cfg(feature = "subsonic")]
   pub subsonic_playback: Option<crate::infra::subsonic::SubsonicPlaybackState>,
+  /// The active Qobuz playback session, or `None` when another backend owns
+  /// playback. Same decoupling contract as [`local_playback`](Self::local_playback).
+  #[cfg(feature = "qobuz")]
+  pub qobuz_playback: Option<crate::infra::qobuz::QobuzPlaybackState>,
   /// The active internet-radio playback session (multi-source Phase 5), or
   /// `None` when another backend owns playback. Same decoupling contract as
   /// [`local_playback`](Self::local_playback); unlike it there is no queue —

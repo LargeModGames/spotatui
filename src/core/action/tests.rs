@@ -1518,6 +1518,13 @@ fn search_active_source_routes_by_the_active_source() {
     Ok(IoEvent::GetYouTubeSearchResults(q)) if q == "coltrane"
   ));
 
+  app.active_source = Source::Qobuz;
+  app.apply(Action::SearchActiveSource(query.clone()));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::GetQobuzSearchResults(q)) if q == "coltrane"
+  ));
+
   app.active_source = Source::Spotify;
   app.apply(Action::SearchActiveSource(query.clone()));
   assert!(matches!(
@@ -2107,6 +2114,9 @@ fn select_source_fetches_each_scopes_own_sidebar() {
 
   app.apply(Action::SelectSource(Source::YouTube));
   assert!(matches!(rx.try_recv(), Ok(IoEvent::GetYouTubePlaylists)));
+
+  app.apply(Action::SelectSource(Source::Qobuz));
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQobuzPlaylists)));
 }
 
 #[test]
@@ -2329,6 +2339,25 @@ fn open_source_playlist_local_clears_the_table_and_fetches() {
   match rx.try_recv() {
     Ok(IoEvent::GetLocalTracks(uri)) => assert_eq!(uri, "file:///music/Jazz"),
     _other => panic!("expected GetLocalTracks (IoEvent is not Debug)"),
+  }
+}
+
+#[test]
+fn open_source_playlist_qobuz_uses_the_qobuz_context() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::Open(OpenTarget::SourcePlaylist(
+    "qobuz:album:0060254730301".to_string(),
+  )));
+
+  assert_eq!(
+    app.track_table.context,
+    Some(crate::core::app::TrackTableContext::QobuzPlaylist)
+  );
+  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  match rx.try_recv() {
+    Ok(IoEvent::GetQobuzTracks(uri)) => assert_eq!(uri, "qobuz:album:0060254730301"),
+    _other => panic!("expected GetQobuzTracks (IoEvent is not Debug)"),
   }
 }
 

@@ -1,17 +1,16 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Acceptance logic for the callback server: given a raw HTTP request, return
-/// the full callback URL when it carries an OAuth `code=` query parameter,
-/// else `None` (browser noise like /favicon.ico, pre-flight requests, or
-/// malformed input).
-fn extract_callback_url(request: &str) -> Option<String> {
+/// the full callback URL when `accept` approves its path, else `None`
+/// (browser noise like /favicon.ico, pre-flight requests, or malformed input).
+fn extract_callback_url(request: &str, accept: fn(&str) -> bool) -> Option<String> {
   let split: Vec<&str> = request.split_whitespace().collect();
   if split.len() <= 1 {
     return None;
   }
   // The path is the second whitespace-separated token, e.g. "/callback?code=...".
   let path = split[1];
-  if !path.contains("code=") {
+  if !accept(path) {
     return None;
   }
 
@@ -25,6 +24,11 @@ fn extract_callback_url(request: &str) -> Option<String> {
   Some(format!("http://{}{}", host, path))
 }
 
+/// The Spotify callback carries an OAuth `code=` query parameter.
+fn spotify_callback(path: &str) -> bool {
+  path.contains("code=")
+}
+
 /// OAuth callback server, used by both the pre-TUI startup login and the
 /// in-TUI login flow: it never blocks the caller's thread (the old blocking
 /// variant parked a tokio worker in a std accept() loop with no timeout and
@@ -36,12 +40,24 @@ pub async fn redirect_uri_web_server_async(port: u16) -> Result<String, ()> {
   let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
     .await
     .map_err(|e| log::warn!("[login] failed to bind callback server on port {port}: {e}"))?;
-  run_accept_loop(listener).await
+  run_accept_loop(listener, spotify_callback).await
+}
+
+/// The callback server on a pre-bound listener, for callbacks `accept` approves.
+#[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+pub async fn redirect_uri_web_server_on(
+  listener: tokio::net::TcpListener,
+  accept: fn(&str) -> bool,
+) -> Result<String, ()> {
+  run_accept_loop(listener, accept).await
 }
 
 /// Accept-loop extracted so tests can inject a pre-bound listener (port 0) and
 /// avoid races caused by hard-coding a port that might already be in use.
-async fn run_accept_loop(listener: tokio::net::TcpListener) -> Result<String, ()> {
+async fn run_accept_loop(
+  listener: tokio::net::TcpListener,
+  accept: fn(&str) -> bool,
+) -> Result<String, ()> {
   const MAX_CONSECUTIVE_ACCEPT_ERRORS: u8 = 20;
   let mut consecutive_accept_errors = 0u8;
   loop {
@@ -68,7 +84,7 @@ async fn run_accept_loop(listener: tokio::net::TcpListener) -> Result<String, ()
     };
     let request = String::from_utf8_lossy(&buffer[..n]);
 
-    if let Some(url) = extract_callback_url(&request) {
+    if let Some(url) = extract_callback_url(&request, accept) {
       let _ = write_async_response(&mut stream, "200 OK", include_str!("redirect_uri.html")).await;
       return Ok(url);
     }
@@ -100,7 +116,7 @@ mod tests {
   #[test]
   fn valid_callback_returns_url_with_code() {
     let request = "GET /login?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
-    let url = extract_callback_url(request);
+    let url = extract_callback_url(request, spotify_callback);
     assert!(url.is_some());
     let url = url.unwrap();
     assert!(
@@ -118,25 +134,33 @@ mod tests {
   #[test]
   fn whitespace_only_request_returns_none() {
     // Whitespace-only payload: split_whitespace() returns empty vec (len 0 ≤ 1) → None silently
-    assert!(extract_callback_url(" \r\n\r\n").is_none());
+    assert!(extract_callback_url(" \r\n\r\n", spotify_callback).is_none());
   }
 
   #[test]
   fn preflight_single_token_returns_none() {
     // A single token (no path) also triggers the malformed branch → None, no panic
-    assert!(extract_callback_url("GET").is_none());
+    assert!(extract_callback_url("GET", spotify_callback).is_none());
   }
 
   #[test]
   fn favicon_request_returns_none() {
     let request = "GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
-    assert!(extract_callback_url(request).is_none());
+    assert!(extract_callback_url(request, spotify_callback).is_none());
   }
 
   #[test]
   fn root_request_returns_none() {
     let request = "GET / HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
-    assert!(extract_callback_url(request).is_none());
+    assert!(extract_callback_url(request, spotify_callback).is_none());
+  }
+
+  #[test]
+  fn accept_predicate_decides_which_callback_paths_count() {
+    let request = "GET /?code_autorisation=abc HTTP/1.1\r\nHost: localhost:8989\r\n\r\n";
+    assert!(extract_callback_url(request, spotify_callback).is_none());
+    let url = extract_callback_url(request, |path| path.contains("code_autorisation=")).unwrap();
+    assert_eq!(url, "http://localhost/?code_autorisation=abc");
   }
 
   // --- async server tests --------------------------------------------------
@@ -158,7 +182,7 @@ mod tests {
       let _ = stream.read(&mut buf).await;
     });
 
-    let result = run_accept_loop(listener).await;
+    let result = run_accept_loop(listener, spotify_callback).await;
     client.await.unwrap();
 
     let url = result.expect("server should return Ok(url)");
@@ -201,7 +225,7 @@ mod tests {
       let _ = real.read(&mut vec![0u8; 4096]).await;
     });
 
-    let result = run_accept_loop(listener).await;
+    let result = run_accept_loop(listener, spotify_callback).await;
     client.await.unwrap();
 
     let url = result.expect("server should return Ok(url)");

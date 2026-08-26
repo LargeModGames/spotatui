@@ -15,6 +15,7 @@ pub(crate) fn total_display_count(app: &App) -> usize {
     Source::Radio => app.radio_stations.len(),
     // Local YouTube playlists + the "+ New Playlist" entry.
     Source::YouTube => app.youtube_playlists.len() + 1,
+    Source::Qobuz => app.qobuz_playlists.len(),
     Source::Spotify => app.get_playlist_display_count() + 1,
   }
 }
@@ -43,6 +44,17 @@ fn open_subsonic_folder(app: &mut App) {
     .view
     .selected_playlist_index
     .and_then(|idx| app.subsonic_playlists.get(idx))
+    .map(|playlist| playlist.uri.clone());
+  open_source_playlist(app, uri);
+}
+
+/// Qobuz: open the highlighted row (favorites, playlist, or album) in the
+/// shared track table.
+fn open_qobuz_folder(app: &mut App) {
+  let uri = app
+    .view
+    .selected_playlist_index
+    .and_then(|idx| app.qobuz_playlists.get(idx))
     .map(|playlist| playlist.uri.clone());
   open_source_playlist(app, uri);
 }
@@ -204,6 +216,7 @@ pub(super) fn activate_selected(app: &mut App) {
     Source::Subsonic => open_subsonic_folder(app),
     Source::Radio => play_radio_station(app),
     Source::YouTube => open_youtube_playlist(app),
+    Source::Qobuz => open_qobuz_folder(app),
     Source::Spotify => open_spotify_row(app),
   }
 }

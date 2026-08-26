@@ -51,7 +51,7 @@ reviews:
         ttl_secs)` in the async network layer. The TTL is in seconds.
 
         Code behind a feature flag (streaming, cover-art, local-files, subsonic,
-        internet-radio, youtube, scripting, mpris, discord-rpc) must compile in
+        internet-radio, youtube, qobuz, scripting, mpris, discord-rpc) must compile in
         the slim build (`--no-default-features --features telemetry`). Flag
         unguarded use of a gated item.
 

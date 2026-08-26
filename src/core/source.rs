@@ -48,16 +48,18 @@ pub enum Source {
   Subsonic,
   Radio,
   YouTube,
+  Qobuz,
 }
 
 impl Source {
   /// Every selectable source, in display order. Add new sources here.
-  pub const ALL: [Source; 5] = [
+  pub const ALL: [Source; 6] = [
     Source::Spotify,
     Source::Local,
     Source::Subsonic,
     Source::Radio,
     Source::YouTube,
+    Source::Qobuz,
   ];
 
   /// Human-readable label shown in the source picker.
@@ -68,6 +70,7 @@ impl Source {
       Source::Subsonic => "Subsonic",
       Source::Radio => "Internet Radio",
       Source::YouTube => "YouTube",
+      Source::Qobuz => "Qobuz",
     }
   }
 
@@ -81,6 +84,7 @@ impl Source {
       Source::Subsonic => "Subsonic",
       Source::Radio => "Radio",
       Source::YouTube => "YouTube",
+      Source::Qobuz => "Qobuz",
     }
   }
 
@@ -93,6 +97,7 @@ impl Source {
       "Subsonic" => Source::Subsonic,
       "Radio" => Source::Radio,
       "YouTube" => Source::YouTube,
+      "Qobuz" => Source::Qobuz,
       _ => Source::Spotify,
     }
   }
@@ -101,7 +106,7 @@ impl Source {
   pub fn supports_search(&self) -> bool {
     matches!(
       self,
-      Source::Spotify | Source::Subsonic | Source::Radio | Source::YouTube
+      Source::Spotify | Source::Subsonic | Source::Radio | Source::YouTube | Source::Qobuz
     )
   }
 
@@ -182,6 +187,16 @@ mod tests {
     assert!(!Source::YouTube.supports_library());
     assert!(!Source::YouTube.supports_playlist_write());
     assert!(!Source::YouTube.supports_like());
+  }
+
+  #[test]
+  fn qobuz_supports_search_only() {
+    // `catalog/search` is searchable; favorites and playlists are read through
+    // the sidebar, and like/playlist writes are follow-ups.
+    assert!(Source::Qobuz.supports_search());
+    assert!(!Source::Qobuz.supports_library());
+    assert!(!Source::Qobuz.supports_playlist_write());
+    assert!(!Source::Qobuz.supports_like());
   }
 
   #[test]

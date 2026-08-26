@@ -148,7 +148,12 @@ pub enum IoEvent {
   /// `route_youtube_event`); it never reaches the Spotify network handler. Only
   /// dispatched by the runner tick under a decoded source feature.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+    not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "youtube",
+      feature = "qobuz"
+    )),
     allow(dead_code)
   )]
   ReplayCurrentTrack,
@@ -240,6 +245,20 @@ pub enum IoEvent {
   /// by `infra::subsonic::dispatch`; an inert no-op without the `subsonic` feature.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
   GetSubsonicSearchResults(String),
+  /// List the Qobuz sidebar rows: favorites, playlists, albums (handled by
+  /// `infra::qobuz::dispatch`; a no-op on the Spotify network).
+  GetQobuzPlaylists,
+  /// List the tracks of a Qobuz sidebar row by its `qobuz:` URI. Only read by
+  /// `infra::qobuz::dispatch`; without the feature the event is an inert no-op.
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  GetQobuzTracks(String),
+  /// Run a Qobuz catalog search and populate `app.search_results`. Only read
+  /// by `infra::qobuz::dispatch`; an inert no-op without the `qobuz` feature.
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  GetQobuzSearchResults(String),
+  /// Start the in-TUI Qobuz browser login (handled by `infra::qobuz::dispatch`).
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  QobuzLogin,
   /// Load the configured internet-radio stations into the sidebar (handled by
   /// `infra::radio::dispatch`; a no-op on the Spotify network).
   GetRadioStations,
@@ -505,6 +524,10 @@ impl Network {
         | IoEvent::GetSubsonicPlaylists
         | IoEvent::GetSubsonicTracks(_)
         | IoEvent::GetSubsonicSearchResults(_)
+        | IoEvent::GetQobuzPlaylists
+        | IoEvent::GetQobuzTracks(_)
+        | IoEvent::GetQobuzSearchResults(_)
+        | IoEvent::QobuzLogin
         | IoEvent::GetRadioStations
         | IoEvent::GetRadioSearchResults(_)
         | IoEvent::GetYouTubeSearchResults(_)
@@ -981,6 +1004,12 @@ impl Network {
       IoEvent::GetSubsonicPlaylists
       | IoEvent::GetSubsonicTracks(_)
       | IoEvent::GetSubsonicSearchResults(_) => {}
+      // Qobuz browse/search/login events are handled by infra::qobuz::dispatch
+      // before reaching the network; they only arrive here when the feature is off.
+      IoEvent::GetQobuzPlaylists
+      | IoEvent::GetQobuzTracks(_)
+      | IoEvent::GetQobuzSearchResults(_)
+      | IoEvent::QobuzLogin => {}
       // Radio browse/search events are handled by infra::radio::dispatch before
       // reaching the network; they only arrive here when the feature is off.
       IoEvent::GetRadioStations | IoEvent::GetRadioSearchResults(_) => {}

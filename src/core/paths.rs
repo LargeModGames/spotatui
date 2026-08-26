@@ -51,6 +51,12 @@ pub(crate) fn app_state_dir() -> Option<PathBuf> {
   )
 }
 
+/// The Qobuz credentials file: `<config dir>/qobuz_credentials.yml`.
+#[cfg(feature = "qobuz")]
+pub(crate) fn qobuz_credentials_path() -> Option<PathBuf> {
+  app_config_dir().map(|dir| dir.join("qobuz_credentials.yml"))
+}
+
 /// Directory holding this run's log file.
 ///
 /// The OS temp directory rather than the state dir: a log file is written per

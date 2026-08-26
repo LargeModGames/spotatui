@@ -229,6 +229,14 @@ async fn release_other_backends(_app: &Arc<Mutex<App>>) {
       subsonic.player.stop();
     }
   }
+  // Tear down any Qobuz session.
+  #[cfg(feature = "qobuz")]
+  {
+    let qobuz = _app.lock().await.qobuz_playback.take();
+    if let Some(qobuz) = qobuz {
+      qobuz.player.stop();
+    }
+  }
   // Tear down any YouTube session (the pump's short-circuit means the YouTube
   // dispatch never sees this radio: start).
   #[cfg(feature = "youtube")]

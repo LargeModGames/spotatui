@@ -44,7 +44,7 @@ fn client() -> anyhow::Result<&'static reqwest::Client> {
 #[derive(Clone, Debug)]
 pub enum CoverArtRequest {
   /// Download and decode an image from a URL (Spotify album art, YouTube
-  /// thumbnail, Subsonic getCoverArt).
+  /// thumbnail, Subsonic getCoverArt, Qobuz album art).
   Url(String),
   /// Read the embedded cover picture out of a local audio file. `key` is the
   /// track's `file://` URI (used as the cache identity); `path` is the resolved

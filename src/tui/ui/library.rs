@@ -87,6 +87,39 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     return;
   }
 
+  // Qobuz: the sidebar Playlists panel lists the favorites row, the user's
+  // playlists, and the favorite albums, each opening the shared track table.
+  if app.active_source == Source::Qobuz {
+    let items: Vec<String> = if app.qobuz_playlists.is_empty() {
+      vec!["(not logged in \u{2014} press `d`, pick Qobuz)".to_string()]
+    } else {
+      app
+        .qobuz_playlists
+        .iter()
+        .map(|p| {
+          let icon = if p.uri.starts_with("qobuz:favorites:") {
+            "\u{2665}"
+          } else if p.uri.starts_with("qobuz:album:") {
+            "\u{1F4BF}"
+          } else {
+            "\u{1F3B5}"
+          };
+          format!("{icon} {}", p.name)
+        })
+        .collect()
+    };
+    draw_selectable_list(
+      f,
+      app,
+      layout_chunk,
+      "Qobuz",
+      &items,
+      highlight_state,
+      app.view.selected_playlist_index,
+    );
+    return;
+  }
+
   // Internet Radio: the sidebar Playlists panel lists the configured stations.
   // A station is a leaf — Enter plays it directly instead of drilling in.
   if app.active_source == Source::Radio {
@@ -192,10 +225,11 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     return;
   }
 
-  // Subsonic, Radio and YouTube support search but have no Spotify-style saved
-  // library, so keep the search input and show the source's list, but hide the
-  // Library panel.
+  // Subsonic, Qobuz, Radio and YouTube support search but have no Spotify-style
+  // saved library, so keep the search input and show the source's list, but
+  // hide the Library panel.
   if app.active_source == Source::Subsonic
+    || app.active_source == Source::Qobuz
     || app.active_source == Source::Radio
     || app.active_source == Source::YouTube
   {

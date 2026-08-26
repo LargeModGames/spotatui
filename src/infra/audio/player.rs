@@ -74,7 +74,7 @@ impl LocalPlayer {
   /// Only the tempfile-based sources play files; a build with just
   /// `internet-radio` uses [`play_stream`](Self::play_stream) instead.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic")),
+    not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
   )]
   pub fn play_file(&self, path: &Path) -> Result<()> {
@@ -171,7 +171,7 @@ impl LocalPlayer {
   /// Radio never polls this (an infinite stream has no end-of-track), so it is
   /// dead code in a build with just `internet-radio`.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic")),
+    not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
   )]
   pub fn is_finished(&self) -> bool {
@@ -183,7 +183,7 @@ impl LocalPlayer {
   /// Radio consumes `Seek` as a no-op (nothing to seek within a live stream),
   /// so this is dead code in a build with just `internet-radio`.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic")),
+    not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
   )]
   pub fn seek(&self, pos: Duration) -> Result<()> {

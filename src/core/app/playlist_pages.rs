@@ -123,6 +123,11 @@ impl App {
         TrackTableContext::YouTubePlaylist,
         IoEvent::GetYouTubeTracks(uri),
       )
+    } else if uri.starts_with("qobuz:") {
+      (
+        TrackTableContext::QobuzPlaylist,
+        IoEvent::GetQobuzTracks(uri),
+      )
     } else {
       // Unknown scheme: silent no-op, like the other opening paths.
       return;

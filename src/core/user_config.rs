@@ -49,6 +49,38 @@ pub fn normalize_tick_rate_milliseconds(value: i64) -> u64 {
   value.clamp(1, MAX_TICK_RATE_MILLISECONDS as i64) as u64
 }
 
+/// The Qobuz `format_id` values, in the order of [`QOBUZ_QUALITY_LABELS`].
+const QOBUZ_QUALITY_IDS: [u8; 4] = [5, 6, 7, 27];
+/// Settings-screen labels for the Qobuz qualities, in [`QOBUZ_QUALITY_IDS`] order.
+pub const QOBUZ_QUALITY_LABELS: &[&str] = &["MP3 320", "FLAC 16/44.1", "FLAC 24/96", "FLAC 24/192"];
+
+/// The settings label of a Qobuz `format_id` (unknown ids read as the default).
+pub fn qobuz_quality_label(quality: u8) -> &'static str {
+  let index = QOBUZ_QUALITY_IDS
+    .iter()
+    .position(|&id| id == quality)
+    .unwrap_or(1);
+  QOBUZ_QUALITY_LABELS[index]
+}
+
+/// The Qobuz `format_id` behind a settings label (unknown labels read as the default).
+pub fn qobuz_quality_from_label(label: &str) -> u8 {
+  let index = QOBUZ_QUALITY_LABELS
+    .iter()
+    .position(|&l| l == label)
+    .unwrap_or(1);
+  QOBUZ_QUALITY_IDS[index]
+}
+
+/// A configured Qobuz quality, or the default for an unknown id.
+fn qobuz_quality_or_default(quality: u8) -> u8 {
+  if QOBUZ_QUALITY_IDS.contains(&quality) {
+    quality
+  } else {
+    6
+  }
+}
+
 /// Parse a human-readable update delay into seconds.
 /// Accepts: "0", "30s", "10m", "2h", "7d", or a bare second count.
 pub fn parse_update_delay_secs(value: &str) -> Result<u64, String> {
@@ -499,6 +531,7 @@ pub struct BehaviorConfigString {
   pub subsonic_username: Option<String>,
   pub subsonic_password: Option<String>,
   pub ytdlp_path: Option<String>,
+  pub qobuz_quality: Option<u8>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub radio_stations: Option<Vec<RadioStationConfig>>,
   // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
@@ -680,6 +713,9 @@ pub struct BehaviorConfig {
   /// Path to the `yt-dlp` binary used by the YouTube source. `None` resolves
   /// plain `yt-dlp` through `$PATH`.
   pub ytdlp_path: Option<String>,
+  /// Qobuz stream quality: 5 (MP3 320), 6 (FLAC 16/44.1), 7 (FLAC 24/96),
+  /// 27 (FLAC 24/192). Default 6.
+  pub qobuz_quality: u8,
   /// User-authored stations shown alongside stations saved at runtime.
   /// In-app favorite/remove actions mutate `state.yml`, not this list.
   pub radio_stations: Vec<RadioStationConfig>,
@@ -1065,6 +1101,7 @@ impl UserConfig {
         subsonic_username: None,
         subsonic_password: None,
         ytdlp_path: None,
+        qobuz_quality: 6,
         radio_stations: Vec::new(),
         // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
         gauge_filled_icon: "⣿".to_string(),
@@ -1610,6 +1647,9 @@ impl UserConfig {
     if let Some(ytdlp_path) = trim_to_none(behavior_config.ytdlp_path) {
       self.behavior.ytdlp_path = Some(ytdlp_path);
     }
+    if let Some(qobuz_quality) = behavior_config.qobuz_quality {
+      self.behavior.qobuz_quality = qobuz_quality_or_default(qobuz_quality);
+    }
 
     // ===== Phase 2: icons / glyphs / labels =====
     // Width-restricted glyphs (column math depends on them) are validated to
@@ -2043,6 +2083,7 @@ impl UserConfig {
       subsonic_username: self.behavior.subsonic_username.clone(),
       subsonic_password: self.behavior.subsonic_password.clone(),
       ytdlp_path: self.behavior.ytdlp_path.clone(),
+      qobuz_quality: Some(self.behavior.qobuz_quality),
       radio_stations: if self.behavior.radio_stations.is_empty() {
         None
       } else {

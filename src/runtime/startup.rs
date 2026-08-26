@@ -665,6 +665,7 @@ async fn restore_playback_session(
   #[cfg(any(
     feature = "youtube",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "local-files",
     feature = "internet-radio"
   ))]
@@ -753,6 +754,41 @@ async fn restore_playback_session(
           s.player.pause();
         }
         s.shuffle_backup = shuffle;
+      }
+    }
+    #[cfg(feature = "qobuz")]
+    PersistedPlayback::Qobuz {
+      tracks,
+      index,
+      position_ms,
+      paused,
+      repeat,
+      shuffle_on,
+      shuffle,
+    } => {
+      let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();
+      if uris.is_empty() {
+        return;
+      }
+      // Seed the browse table so the start path's snapshot resolves metadata.
+      app.lock().await.track_table.tracks = tracks;
+      crate::infra::qobuz::dispatch::route_qobuz_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(uris), Some(index)),
+      )
+      .await;
+      // The download runs off the pump; the seek and pause apply when it plays.
+      let mut guard = app.lock().await;
+      if guard.qobuz_playback.is_some() {
+        guard.decoded_repeat = repeat;
+        guard.decoded_shuffle = shuffle_on;
+      }
+      if let Some(s) = guard.qobuz_playback.as_mut() {
+        s.shuffle_backup = shuffle;
+        s.resume_at = Some(crate::infra::qobuz::ResumePoint {
+          position_ms,
+          paused: resolve_paused(paused),
+        });
       }
     }
     #[cfg(feature = "youtube")]
@@ -844,6 +880,7 @@ async fn handle_mpris_events(
     #[cfg(any(
       feature = "local-files",
       feature = "subsonic",
+      feature = "qobuz",
       feature = "internet-radio",
       feature = "youtube"
     ))]
@@ -1069,6 +1106,7 @@ async fn handle_mpris_events(
   any(
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "internet-radio",
     feature = "youtube"
   )
@@ -1227,6 +1265,7 @@ async fn handle_macos_media_events(
     #[cfg(any(
       feature = "local-files",
       feature = "subsonic",
+      feature = "qobuz",
       feature = "internet-radio",
       feature = "youtube"
     ))]
@@ -1283,6 +1322,7 @@ async fn handle_macos_media_events(
   any(
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "internet-radio",
     feature = "youtube"
   )
@@ -1346,6 +1386,7 @@ async fn handle_windows_media_events(
     #[cfg(any(
       feature = "local-files",
       feature = "subsonic",
+      feature = "qobuz",
       feature = "internet-radio",
       feature = "youtube"
     ))]
@@ -1432,6 +1473,7 @@ async fn handle_windows_media_events(
   any(
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "internet-radio",
     feature = "youtube"
   )

@@ -274,6 +274,15 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
     }
   }
 
+  // Tear down any Qobuz session, for the same short-circuit reason.
+  #[cfg(feature = "qobuz")]
+  {
+    let qobuz = app.lock().await.qobuz_playback.take();
+    if let Some(qobuz) = qobuz {
+      qobuz.player.stop();
+    }
+  }
+
   // Tear down any radio session, for the same short-circuit reason.
   #[cfg(feature = "internet-radio")]
   {
