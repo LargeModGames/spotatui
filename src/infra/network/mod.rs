@@ -1303,6 +1303,15 @@ impl Network {
   }
 
   async fn start_party(&mut self, control_mode: sync::ControlMode) {
+    // The event bypasses the auth gate, so the handler carries the requirement
+    // itself: the relay drives Spotify playback, and opening the socket first
+    // would leave a live party the drain has to close again.
+    if self.spotify.is_none() {
+      self
+        .show_status_message(SPOTIFY_NOT_CONNECTED_STATUS.to_string(), 6)
+        .await;
+      return;
+    }
     {
       let mut app = self.app.lock().await;
       app.party_status = sync::PartyStatus::Connecting;
@@ -1344,6 +1353,13 @@ impl Network {
   }
 
   async fn join_party(&mut self, code: String, name: String) {
+    // Same requirement as `start_party`.
+    if self.spotify.is_none() {
+      self
+        .show_status_message(SPOTIFY_NOT_CONNECTED_STATUS.to_string(), 6)
+        .await;
+      return;
+    }
     {
       let mut app = self.app.lock().await;
       app.party_status = sync::PartyStatus::Connecting;
