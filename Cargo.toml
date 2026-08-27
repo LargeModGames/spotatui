@@ -59,14 +59,25 @@ ratatui-image = { version = "11.0.4", optional = true, default-features = false,
 image = { version = "0.25", optional = true }
 mlua = { version = "0.12", features = ["lua54", "vendored", "serde"], optional = true }
 md-5 = { version = "0.11", optional = true }
-# Subsonic streams each track to a tempfile before playing it through the shared
+# Subsonic, YouTube and Qobuz stream each track to a tempfile before playing it through the shared
 # rodio sink. Also a dev-dependency (used by tests across features).
 tempfile = { version = "3", optional = true }
+# Qobuz transport: the signed-request and key-derivation primitives plus the
+# bundle scrape. Same `cipher 0.4` line as librespot, so no graph fork.
+base64 = { version = "0.22", optional = true }
+regex = { version = "1", optional = true }
+aes = { version = "0.8", optional = true }
+cbc = { version = "0.1", optional = true }
+ctr = { version = "0.9", optional = true }
+hkdf = { version = "0.13", optional = true }
+# Qobuz progressive delivery: the chunk type of a stream-download source.
+bytes = { version = "1", optional = true }
 
-# Internet-radio dependencies: stream-download buffers an infinite HTTP (ICY)
-# stream behind a Read+Seek adapter that rodio can decode without seeking;
-# icy-metadata parses in-band StreamTitle now-playing metadata. Both are only
-# compiled under the opt-in `internet-radio` feature.
+# stream-download buffers a byte stream behind a Read+Seek adapter that rodio
+# can decode while the download runs. Internet radio uses it on an infinite HTTP
+# (ICY) stream, without seeking; Qobuz uses it on its segment transport, with
+# seeking. icy-metadata parses in-band StreamTitle now-playing metadata and is
+# only compiled under the opt-in `internet-radio` feature.
 stream-download = { version = "0.24", optional = true, default-features = false, features = ["reqwest-rustls"] }
 icy-metadata = { version = "0.6", optional = true, default-features = false }
 
@@ -171,14 +182,14 @@ art-decode = ["dep:image", "dep:colorgrad"]
 cover-art = ["tui", "art-decode", "dep:ratatui-image"]
 scripting = ["dep:mlua"]
 # Shared audio decode/output engine (rodio bundles symphonia). Pulled by any
-# source that plays decoded audio through the local sink (local files, Subsonic).
+# source that plays decoded audio through the local sink (local files, Subsonic, Qobuz).
 audio-decode = ["dep:rodio"]
 # Convenience alias to pull in every alternative (non-Spotify) source at once,
 # e.g. `cargo run --features all-sources`. Deliberately NOT part of `default`:
 # the release binaries enable these explicitly (see .github/workflows/cd.yml) and
 # adding them to `default` would pull lofty/symphonia/md-5/stream-download into
 # every plain `cargo build`.
-all-sources = ["local-files", "subsonic", "internet-radio", "youtube"]
+all-sources = ["local-files", "subsonic", "internet-radio", "youtube", "qobuz"]
 local-files = ["audio-decode", "dep:lofty", "dep:symphonia"]
 subsonic = ["dep:md-5", "audio-decode", "dep:tempfile", "reqwest/stream"]
 internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
@@ -187,6 +198,9 @@ internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
 # rodio's default `mp4` feature decodes) to a tempfile, play through the shared
 # LocalPlayer. Unofficial-fragile by design — see plan-multi-source.md.
 youtube = ["audio-decode", "dep:tempfile"]
+# Qobuz through its encrypted CMAF stream: each track is decrypted and rebuilt
+# as a FLAC tempfile while it plays through the shared LocalPlayer.
+qobuz = ["audio-decode", "dep:tempfile", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
 
 # --- AI DJ / MCP -------------------------------------------------------------
 # Shared tool layer behind both front doors: the taste brief built from the local

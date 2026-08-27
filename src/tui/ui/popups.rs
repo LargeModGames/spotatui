@@ -338,7 +338,7 @@ fn queue_item_line(item: &PlayableInfo) -> String {
 /// tracks. Rows read from the still-alive per-source `*_playback` state.
 fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
   // Format the upcoming rows of a Subsonic/YouTube `TrackInfo` context list.
-  #[cfg(any(feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
   fn track_rows(
     tracks: &[crate::core::plugin_api::TrackInfo],
     start: usize,
@@ -385,6 +385,7 @@ fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
     feature = "streaming",
     feature = "local-files",
     feature = "subsonic",
+    feature = "qobuz",
     feature = "youtube",
     feature = "internet-radio"
   ))]
@@ -416,6 +417,13 @@ fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
           _ => Vec::new(),
         }
       }
+      #[cfg(feature = "qobuz")]
+      SuspendedContext::Qobuz { resume_index, .. } => {
+        match (resume_index, app.qobuz_playback.as_ref()) {
+          (Some(i), Some(s)) => track_rows(&s.tracks, *i, max),
+          _ => Vec::new(),
+        }
+      }
       #[cfg(feature = "youtube")]
       SuspendedContext::YouTube { resume_index, .. } => {
         match (resume_index, app.youtube_playback.as_ref()) {
@@ -437,6 +445,10 @@ fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
     }
     #[cfg(feature = "subsonic")]
     if let Some(s) = app.subsonic_playback.as_ref() {
+      return track_rows(&s.tracks, s.index + 1, max);
+    }
+    #[cfg(feature = "qobuz")]
+    if let Some(s) = app.qobuz_playback.as_ref() {
       return track_rows(&s.tracks, s.index + 1, max);
     }
     #[cfg(feature = "youtube")]

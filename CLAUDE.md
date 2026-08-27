@@ -14,7 +14,7 @@ cargo run
 # Slim build - no librespot/audio/scripting; fastest iteration, one of CI's seven legs
 cargo run --no-default-features --features telemetry,tui
 
-# With the free alternative sources (Local/Subsonic/Radio/YouTube). These are NOT
+# With the alternative sources (Local/Subsonic/Radio/YouTube/Qobuz). These are NOT
 # in `default`, so a plain `cargo run` is Spotify-only; use the `all-sources` alias
 # (or list them individually) to exercise the first-run source picker and playback.
 cargo run --features all-sources
@@ -35,7 +35,7 @@ across a **seven-leg** feature matrix:
 | Leg | Features |
 |-----|----------|
 | `default` | a plain `cargo test`: streaming + audio-viz-cpal + scripting + self-update + OS integrations |
-| `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz, all four sources) |
+| `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz, all five sources) |
 | `mcp-only` | `telemetry,tui,mcp-server` |
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
@@ -47,7 +47,7 @@ across a **seven-leg** feature matrix:
   front door has to build without the other.
 - Reproducing legs locally: `cargo test` reproduces `default`. For `all-sources`,
   copy the exact `--no-default-features --features …` string out of `ci.yml` -
-  `cargo test --features all-sources` is **not** it (the alias only adds the four
+  `cargo test --features all-sources` is **not** it (the alias only adds the five
   sources on top of default), and the leg includes `audio-viz` (PipeWire), so it
   only compiles on Linux.
 - Every CI leg passes `--locked`; the local commands do not. Regenerate
@@ -87,7 +87,7 @@ units under `src/`:
 | Unit | Role |
 |------|------|
 | `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), the shared action vocabulary (`action/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
-| `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
+| `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
 | `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui`) |
@@ -122,8 +122,9 @@ worth knowing before adding an event:
 
 - **Source routing**: non-Spotify playback is routed by URI scheme *before* the
   Spotify handler, in this order: `route_queue_event` → `route_local_event`
-  (`file:`) → `route_subsonic_event` (`subsonic:`) → `route_radio_event`
-  (`radio:`) → `route_youtube_event` (`youtube:`) → `Network::handle_network_event`.
+  (`file:`) → `route_subsonic_event` (`subsonic:`) → `route_qobuz_event`
+  (`qobuz:`) → `route_radio_event` (`radio:`) → `route_youtube_event`
+  (`youtube:`) → `Network::handle_network_event`.
   This is what keeps `infra/network/` Spotify-only.
 - **Service lane**: `Network::runs_on_service_lane` lists events that run on a
   detached task so slow, source-agnostic work cannot head-of-line-block the serial
@@ -190,7 +191,7 @@ regressions. Check in this order: `queue_owns_playback()` /
 `queue_now_is_spotify()`, then `active_decoded_source()`, then
 `is_native_streaming_active_for_playback()`.
 
-- Starting a decoded source (Local/Subsonic/Radio/YouTube) only **pauses**
+- Starting a decoded source (Local/Subsonic/Qobuz/Radio/YouTube) only **pauses**
   librespot - the native flag stays true, so driving librespot directly resumes
   the wrong player.
 - While the native queue slot owns the sink, `current_playback_context` names the
@@ -362,7 +363,7 @@ navigation. Adding a binding means fields on both `KeyBindings` and
 
 ### Config & on-disk files
 
-Four files, four owners - a value that changes as the app runs goes in state,
+Five files, five owners - a value that changes as the app runs goes in state,
 never config:
 
 | File | Owner | Contents |
@@ -371,6 +372,7 @@ never config:
 | `client.yml` (config dir) | `core/config.rs` | Spotify app credentials |
 | `state.yml` (state dir) | `core/state.rs` | machine-written runtime values |
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
+| `qobuz_credentials.yml` (config dir) | `infra/qobuz/auth.rs` | the Qobuz login token (feature `qobuz`) |
 
 - All paths resolve through `core/paths.rs`, never `dirs::` directly.
 - `state.yml` saves are read-modify-write **sparse patches** so a second running
@@ -390,7 +392,7 @@ never config:
 - `default` = `telemetry, tui, streaming, audio-viz-cpal, macos-media,
   windows-media, mpris, discord-rpc, self-update, scripting`. Notably **not**
   in default: `cover-art` (so a plain `cargo run` has no album art, though
-  every shipped binary enables it), the four sources, and the DJ features.
+  every shipped binary enables it), the five sources, and the DJ features.
 - `tui` gates `mod tui` and owns the terminal-only crates (ratatui, crossterm,
   tui-bar-graph, colorgrad - the last also pulled by `art-decode` for the
   adaptive-theme HSV math). `gui` is a reserved placeholder that only gates the
@@ -406,7 +408,7 @@ never config:
   the non-default picks avoid librespot's `pipe` sink writing raw audio to stdout
   and destroying the TUI.
 - `audio-decode` (rodio) is the shared engine pulled in by the sources;
-  `all-sources` = `local-files, subsonic, internet-radio, youtube`.
+  `all-sources` = `local-files, subsonic, internet-radio, youtube, qobuz`.
 - `dj-core` is a shared implementation feature pulled in by `mcp-server` and
   `ai-dj`; none of the three are in `default`, and neither front door may assume
   the other (or `streaming`) is present.
@@ -425,12 +427,21 @@ See `.claude/skills/add-tui-screen/SKILL.md`.
 plugins), and `src/cli/CLAUDE.md` (CLI subcommands) load automatically when
 working in those directories.
 
-### Alternative sources (Local / Subsonic / Radio / YouTube)
+### Alternative sources (Local / Subsonic / Radio / YouTube / Qobuz)
 
-- All four decode through **one** shared rodio sink, `LocalPlayer`
+- All five decode through **one** shared rodio sink, `LocalPlayer`
   (`src/infra/audio/player.rs`) - the only file where rodio types appear.
   Subsonic and YouTube download each track to a `NamedTempFile` first (YouTube by
   shelling out to `yt-dlp`); Radio streams through a non-seekable ring buffer.
+- Qobuz (`src/infra/qobuz/`) plays each track through the web player's
+  encrypted CMAF stream while it downloads: `stream/progressive.rs` is a
+  `stream-download` source that yields the decrypted segments (and restarts at
+  a seek), rebuilt as a FLAC `NamedTempFile` the session keeps. The fetch runs
+  off the pump behind a `fetch_id` guard; a superseded stream is dropped, which
+  cancels its download. The transport (`sign.rs`, `stream/`) is pure and unit
+  tested. The three web-player constants are scraped at runtime (`auth.rs`),
+  cached in `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars;
+  they are never embedded. Failures are status messages, never `handle_error`.
 - macOS cannot play any decoded source: `LocalPlayer::new()` bails there because
   rodio SIGSEGVs on CoreAudio/Bluetooth (#9/#20) - which is why macOS releases
   exclude the source features.

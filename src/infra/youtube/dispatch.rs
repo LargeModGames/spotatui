@@ -30,13 +30,12 @@ use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
 use super::{is_youtube_uri, video_id_from_uri, YouTubePlaybackState, YouTubeSource};
-use crate::core::app::{App, SearchResultBlock};
-use crate::core::pagination::Paged;
+use crate::core::app::App;
 use crate::core::plugin_api::TrackInfo;
-use crate::core::source::Searcher;
+use crate::core::source::{Searcher, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{advance_index, replay_file};
+use crate::infra::queue::{advance_index, replay_file, snapshot_tracks};
 
 /// Skip direction within the YouTube queue.
 #[derive(Clone, Copy)]
@@ -121,7 +120,7 @@ pub async fn route_youtube_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool
     },
     IoEvent::ChangeVolume(volume) => match player(app).await {
       Some(p) => {
-        p.set_volume(*volume as f32 / 100.0);
+        p.set_volume(*volume);
         let mut app = app.lock().await;
         app.runtime_state.volume_percent = *volume;
         app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
@@ -164,23 +163,7 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> YouTubeSource {
 async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str) {
   let source = build_source(app).await;
   match source.search(query).await {
-    Ok(results) => {
-      let total = results.tracks.len() as u32;
-      let mut app = app.lock().await;
-      app.search_results.tracks = Some(Paged {
-        items: results.tracks,
-        total,
-        ..Default::default()
-      });
-      app.search_results.albums = None;
-      app.search_results.artists = None;
-      app.search_results.playlists = None;
-      app.search_results.shows = None;
-      // Focus the songs block so the first hit is selectable immediately.
-      app.search_results.selected_tracks_index = Some(0);
-      app.search_results.hovered_block = SearchResultBlock::SongSearch;
-      app.search_results.selected_block = SearchResultBlock::Empty;
-    }
+    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
     Err(e) => set_error(app, format!("YouTube search failed: {e}")).await,
   }
 }
@@ -416,31 +399,8 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
     .map(|s| Arc::clone(&s.player))
 }
 
-/// Snapshot the `TrackInfo`s for `uris`, preserving order, looking each up in
-/// both browse views a play can originate from (the shared track table and the
-/// search results). Any uri found in neither is dropped.
-fn snapshot_tracks(
-  table: &[TrackInfo],
-  search: Option<&[TrackInfo]>,
-  uris: &[String],
-) -> Vec<TrackInfo> {
-  uris
-    .iter()
-    .filter_map(|uri| {
-      let matches = |t: &&TrackInfo| t.uri.as_deref() == Some(uri.as_str());
-      table
-        .iter()
-        .find(matches)
-        .or_else(|| search.and_then(|s| s.iter().find(matches)))
-        .cloned()
-    })
-    .collect()
-}
-
 /// Release the other backends so only YouTube holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // In a youtube-only build every block below is compiled out.
-  let _ = app;
   // Pause native Spotify so librespot releases the device.
   #[cfg(feature = "streaming")]
   {
@@ -449,29 +409,12 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
       player.pause();
     }
   }
-  // Tear down any local-file session (dropping it releases its device handle).
-  #[cfg(feature = "local-files")]
-  {
-    let local = app.lock().await.local_playback.take();
-    if let Some(local) = local {
-      local.player.stop();
-    }
-  }
-  // Tear down any Subsonic session.
-  #[cfg(feature = "subsonic")]
-  {
-    let subsonic = app.lock().await.subsonic_playback.take();
-    if let Some(subsonic) = subsonic {
-      subsonic.player.stop();
-    }
-  }
-  // Tear down any radio session.
-  #[cfg(feature = "internet-radio")]
-  {
-    let radio = app.lock().await.radio_playback.take();
-    if let Some(radio) = radio {
-      radio.player.stop();
-    }
+  let players = app
+    .lock()
+    .await
+    .take_decoded_sessions_except(Source::YouTube);
+  for player in players {
+    player.stop_detached();
   }
 }
 
@@ -586,7 +529,7 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
   match result {
     Ok(Ok(())) => {
       let volume = app.lock().await.runtime_state.volume_percent;
-      player.set_volume(volume as f32 / 100.0);
+      player.set_volume(volume);
 
       let display = tracks[index].name.clone();
       let mut guard = app.lock().await;
@@ -795,6 +738,7 @@ async fn set_error(app: &Arc<Mutex<App>>, message: String) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::pagination::Paged;
   use crate::core::user_config::UserConfig;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
@@ -820,37 +764,6 @@ mod tests {
       explicit: false,
       image_url: None,
     }
-  }
-
-  #[test]
-  fn snapshot_finds_tracks_in_table_preserving_order() {
-    let table = vec![video("youtube:aaa", "A"), video("youtube:bbb", "B")];
-    let snap = snapshot_tracks(
-      &table,
-      None,
-      &["youtube:bbb".to_string(), "youtube:aaa".to_string()],
-    );
-    assert_eq!(snap.len(), 2);
-    assert_eq!(snap[0].name, "B");
-    assert_eq!(snap[1].name, "A");
-  }
-
-  #[test]
-  fn snapshot_falls_back_to_search_results() {
-    // Search->play is the primary YouTube path: the track table may hold a
-    // stale Spotify playlist while the played uris come from the search view.
-    let table = vec![video("spotify:track:x", "Spotify Row")];
-    let search = vec![video("youtube:searched123", "Searched")];
-    let snap = snapshot_tracks(&table, Some(&search), &["youtube:searched123".to_string()]);
-    assert_eq!(snap.len(), 1);
-    assert_eq!(snap[0].name, "Searched");
-  }
-
-  #[test]
-  fn snapshot_drops_unknown_uris() {
-    let table = vec![video("youtube:aaa", "A")];
-    let snap = snapshot_tracks(&table, None, &["youtube:missing".to_string()]);
-    assert!(snap.is_empty());
   }
 
   /// Search/transport events that are not YouTube's must fall through.

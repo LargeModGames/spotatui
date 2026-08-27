@@ -123,12 +123,42 @@ impl App {
         TrackTableContext::YouTubePlaylist,
         IoEvent::GetYouTubeTracks(uri),
       )
+    } else if uri.starts_with("qobuz:") {
+      (
+        TrackTableContext::QobuzPlaylist,
+        IoEvent::GetQobuzTracks(uri),
+      )
     } else {
       // Unknown scheme: silent no-op, like the other opening paths.
       return;
     };
     self.dispatch(event);
     self.show_tracks_in_table(Vec::new(), context);
+  }
+
+  /// Show a decoded source's search hits as a songs-only result set with the
+  /// songs block focused. The album/artist blocks stay empty: their Enter
+  /// paths dispatch Spotify-bound events.
+  #[cfg(any(
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  pub(crate) fn show_source_search_tracks(&mut self, tracks: Vec<TrackInfo>) {
+    let total = tracks.len() as u32;
+    self.search_results.tracks = Some(Paged {
+      items: tracks,
+      total,
+      ..Default::default()
+    });
+    self.search_results.albums = None;
+    self.search_results.artists = None;
+    self.search_results.playlists = None;
+    self.search_results.shows = None;
+    self.search_results.selected_tracks_index = Some(0);
+    self.search_results.hovered_block = SearchResultBlock::SongSearch;
+    self.search_results.selected_block = SearchResultBlock::Empty;
   }
 
   pub fn reset_playlist_tracks_view(

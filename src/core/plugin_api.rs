@@ -62,7 +62,7 @@ pub struct TrackInfo {
   #[serde(default)]
   pub explicit: bool,
   /// A directly-fetchable cover-art image URL for this track, when the source
-  /// can provide one (Subsonic getCoverArt, YouTube thumbnail). `None` for
+  /// can provide one (Subsonic getCoverArt, YouTube thumbnail, Qobuz album art). `None` for
   /// sources without per-track art. Additive: only adds a key to the serialized
   /// snapshot, preserving the api_version = 4 plugin contract.
   #[serde(default)]

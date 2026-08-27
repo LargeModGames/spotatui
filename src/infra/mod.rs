@@ -20,6 +20,8 @@ pub mod mpris;
 pub mod network;
 #[cfg(feature = "streaming")]
 pub mod player;
+#[cfg(feature = "qobuz")]
+pub mod qobuz;
 pub mod queue;
 #[cfg(feature = "internet-radio")]
 pub mod radio;

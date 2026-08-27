@@ -12,12 +12,13 @@ pub enum QueueItemSource {
   LocalFile,
   Subsonic,
   YouTube,
+  Qobuz,
 }
 
 /// Classify a queue item by its URI scheme. Anything that is not a local file,
-/// Subsonic, or YouTube URI is treated as Spotify (the `spotify:track:` scheme).
-/// Radio URIs (`radio:`) are never queued, so they are rejected before reaching
-/// this function.
+/// Subsonic, YouTube, or Qobuz URI is treated as Spotify (the `spotify:track:`
+/// scheme). Radio URIs (`radio:`) are never queued, so they are rejected before
+/// reaching this function.
 pub fn queue_item_source(uri: &str) -> QueueItemSource {
   if uri.starts_with("file:") {
     QueueItemSource::LocalFile
@@ -25,6 +26,8 @@ pub fn queue_item_source(uri: &str) -> QueueItemSource {
     QueueItemSource::Subsonic
   } else if uri.starts_with("youtube:") {
     QueueItemSource::YouTube
+  } else if uri.starts_with("qobuz:") {
+    QueueItemSource::Qobuz
   } else {
     QueueItemSource::Spotify
   }
@@ -51,7 +54,7 @@ pub fn queue_item_source(uri: &str) -> QueueItemSource {
 /// than have an empty handle queued for it.
 #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
 pub fn is_playable_track_uri(uri: &str) -> bool {
-  ["spotify:track:", "file:", "subsonic:", "youtube:"]
+  ["spotify:track:", "file:", "subsonic:", "youtube:", "qobuz:"]
     .iter()
     .any(|prefix| {
       uri
@@ -84,6 +87,7 @@ pub fn missing_source_feature(uri: &str) -> Option<&'static str> {
     QueueItemSource::LocalFile => "local-files",
     QueueItemSource::Subsonic => "subsonic",
     QueueItemSource::YouTube => "youtube",
+    QueueItemSource::Qobuz => "qobuz",
     QueueItemSource::Spotify => unreachable!("returned above"),
   })
 }
@@ -96,6 +100,7 @@ pub fn source_label(source: QueueItemSource) -> &'static str {
     QueueItemSource::LocalFile => "Local",
     QueueItemSource::Subsonic => "Subsonic",
     QueueItemSource::YouTube => "YouTube",
+    QueueItemSource::Qobuz => "Qobuz",
   }
 }
 
@@ -110,6 +115,7 @@ pub fn source_available(source: QueueItemSource) -> bool {
     QueueItemSource::LocalFile => cfg!(feature = "local-files"),
     QueueItemSource::Subsonic => cfg!(feature = "subsonic"),
     QueueItemSource::YouTube => cfg!(feature = "youtube"),
+    QueueItemSource::Qobuz => cfg!(feature = "qobuz"),
   }
 }
 
@@ -160,6 +166,11 @@ pub enum SuspendedContext {
     resume_index: Option<usize>,
     resume_position_ms: u64,
   },
+  #[cfg(feature = "qobuz")]
+  Qobuz {
+    resume_index: Option<usize>,
+    resume_position_ms: u64,
+  },
   #[cfg(feature = "youtube")]
   YouTube {
     resume_index: Option<usize>,
@@ -197,6 +208,7 @@ mod tests {
       queue_item_source("youtube:5NV6Rdv1a3I"),
       QueueItemSource::YouTube
     );
+    assert_eq!(queue_item_source("qobuz:track:42"), QueueItemSource::Qobuz);
     // Unknown schemes fall back to Spotify.
     assert_eq!(
       queue_item_source("something-else"),
@@ -211,6 +223,7 @@ mod tests {
       "file:/home/jay/Music/a.flac",
       "subsonic:track:1",
       "youtube:5NV6Rdv1a3I",
+      "qobuz:track:42",
     ] {
       assert!(is_playable_track_uri(uri), "{uri} should be playable");
     }
@@ -233,6 +246,7 @@ mod tests {
       "file:",
       "subsonic:",
       "youtube:",
+      "qobuz:",
     ] {
       assert!(!is_playable_track_uri(uri), "{uri} should not be playable");
     }
@@ -244,6 +258,7 @@ mod tests {
     assert_eq!(source_label(QueueItemSource::LocalFile), "Local");
     assert_eq!(source_label(QueueItemSource::Subsonic), "Subsonic");
     assert_eq!(source_label(QueueItemSource::YouTube), "YouTube");
+    assert_eq!(source_label(QueueItemSource::Qobuz), "Qobuz");
   }
 
   #[test]
@@ -267,6 +282,7 @@ mod tests {
       ),
       ("subsonic:abc", "subsonic", cfg!(feature = "subsonic")),
       ("youtube:abc", "youtube", cfg!(feature = "youtube")),
+      ("qobuz:track:1", "qobuz", cfg!(feature = "qobuz")),
     ] {
       assert!(is_playable_track_uri(uri), "{uri} should be well-formed");
       assert_eq!(

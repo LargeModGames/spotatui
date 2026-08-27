@@ -152,6 +152,7 @@ fn source_note(source: Source) -> &'static str {
     Source::Subsonic => " (free, needs a Subsonic/Navidrome server)",
     Source::Radio => " (free)",
     Source::Local => " (free)",
+    Source::Qobuz => " (paid subscription, logs in through the browser)",
   }
 }
 

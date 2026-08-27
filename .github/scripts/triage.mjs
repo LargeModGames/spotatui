@@ -77,7 +77,7 @@ openIssues = openIssues.filter((i) => i.number !== issue.number);
 const compared = openIssues.length;
 
 const system = `You triage GitHub issues for "spotatui", a Rust terminal UI Spotify client
-(it also has non-Spotify sources: local files, Subsonic, internet radio, YouTube).
+(it also has non-Spotify sources: local files, Subsonic, internet radio, YouTube, Qobuz).
 Return ONLY a JSON object — no prose, no Markdown fences — with this exact shape:
 {
   "category": one of ${JSON.stringify(ALLOWED_LABELS)} or null,

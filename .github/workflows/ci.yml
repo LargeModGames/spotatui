@@ -38,13 +38,13 @@ jobs:
           - name: default
             args: "--locked"
           # The exact feature set shipped for Linux by cd.yml, so every new
-          # source subsystem (local-files, subsonic, internet-radio, youtube),
+          # source subsystem (local-files, subsonic, internet-radio, youtube, qobuz),
           # cover-art, and both DJ front doors are compiled and tested in CI.
           # Keep this list in sync with cd.yml's `Build release binary` step
           # whenever a feature is added there, or the release build becomes the
           # first place a break shows up.
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
           # `mcp-server` and `ai-dj` are two front doors on the same `dj-core`
           # implementation, and each has to build without the other: the
           # field-level `#[cfg(feature = "ai-dj")]` on `DjState::setup` exists
@@ -100,7 +100,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,tui,mcp-server"
@@ -155,7 +155,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run tests with coverage
-        run: cargo llvm-cov --locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube --lcov --output-path lcov.info
+        run: cargo llvm-cov --locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -192,7 +192,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,tui,mcp-server"

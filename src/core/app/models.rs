@@ -36,6 +36,7 @@ pub enum TrackTableContext {
   LocalPlaylist,
   SubsonicPlaylist,
   YouTubePlaylist,
+  QobuzPlaylist,
 }
 
 pub struct SearchResult {

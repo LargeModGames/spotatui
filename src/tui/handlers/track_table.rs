@@ -91,10 +91,11 @@ pub fn handler(key: Key, app: &mut App) {
           }
           TrackTableContext::AlbumSearch => {}
           TrackTableContext::DiscoverPlaylist => {}
-          // Local folders and Subsonic/YouTube playlists have no pagination.
+          // Local folders and Subsonic/YouTube/Qobuz playlists have no pagination.
           TrackTableContext::LocalPlaylist
           | TrackTableContext::SubsonicPlaylist
-          | TrackTableContext::YouTubePlaylist => {}
+          | TrackTableContext::YouTubePlaylist
+          | TrackTableContext::QobuzPlaylist => {}
         }
       };
     }
@@ -111,10 +112,11 @@ pub fn handler(key: Key, app: &mut App) {
           }
           TrackTableContext::AlbumSearch => {}
           TrackTableContext::DiscoverPlaylist => {}
-          // Local folders and Subsonic/YouTube playlists have no pagination.
+          // Local folders and Subsonic/YouTube/Qobuz playlists have no pagination.
           TrackTableContext::LocalPlaylist
           | TrackTableContext::SubsonicPlaylist
-          | TrackTableContext::YouTubePlaylist => {}
+          | TrackTableContext::YouTubePlaylist
+          | TrackTableContext::QobuzPlaylist => {}
         }
       };
     }
@@ -242,9 +244,9 @@ fn play_random_song(app: &mut App) {
           });
         }
       }
-      TrackTableContext::YouTubePlaylist => {
+      TrackTableContext::YouTubePlaylist | TrackTableContext::QobuzPlaylist => {
         // Queue the whole playlist and start at a random offset, so
-        // Next/Previous keep working within the playlist.
+        // Next/Previous and auto-advance keep working within the playlist.
         let playable_ids: Vec<String> = app
           .track_table
           .tracks
@@ -336,7 +338,8 @@ fn on_enter(app: &mut App) {
       TrackTableContext::AlbumSearch => {}
       TrackTableContext::LocalPlaylist
       | TrackTableContext::SubsonicPlaylist
-      | TrackTableContext::YouTubePlaylist => {
+      | TrackTableContext::YouTubePlaylist
+      | TrackTableContext::QobuzPlaylist => {
         // Queue the whole folder/playlist (in displayed order) and start at the
         // selected track, so Next/Previous/auto-advance have a queue to move
         // through. Routed to the local, subsonic or youtube player by URI

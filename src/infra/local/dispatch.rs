@@ -35,7 +35,7 @@ use tokio::sync::Mutex;
 
 use super::{file_uri_to_path, track_info_from_path, LocalPlaybackState, LocalSource};
 use crate::core::app::{App, TrackTableContext};
-use crate::core::source::MediaSource;
+use crate::core::source::{MediaSource, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
 use crate::infra::queue::{advance_index, replay_file};
@@ -107,7 +107,7 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     },
     IoEvent::ChangeVolume(volume) => match player(app).await {
       Some(player) => {
-        player.set_volume(*volume as f32 / 100.0);
+        player.set_volume(*volume);
         // Keep the playbar's volume readout in sync.
         let mut app = app.lock().await;
         app.runtime_state.volume_percent = *volume;
@@ -263,33 +263,11 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
     }
   }
 
-  // Tear down any Subsonic session (the `!handled_locally` short-circuit in the
-  // runtime means the subsonic dispatch never sees this file:// start, so the
-  // teardown must happen here — see infra::subsonic::dispatch device ownership).
-  #[cfg(feature = "subsonic")]
-  {
-    let subsonic = app.lock().await.subsonic_playback.take();
-    if let Some(subsonic) = subsonic {
-      subsonic.player.stop();
-    }
-  }
-
-  // Tear down any radio session, for the same short-circuit reason.
-  #[cfg(feature = "internet-radio")]
-  {
-    let radio = app.lock().await.radio_playback.take();
-    if let Some(radio) = radio {
-      radio.player.stop();
-    }
-  }
-
-  // Tear down any YouTube session, for the same short-circuit reason.
-  #[cfg(feature = "youtube")]
-  {
-    let youtube = app.lock().await.youtube_playback.take();
-    if let Some(youtube) = youtube {
-      youtube.player.stop();
-    }
+  // The other decoded sources never see this file:// start (the pump's
+  // `!handled_locally` short-circuit), so their sessions are torn down here.
+  let players = app.lock().await.take_decoded_sessions_except(Source::Local);
+  for player in players {
+    player.stop_detached();
   }
 
   let player = match acquire_player(app).await {
@@ -310,7 +288,7 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
   match result {
     Ok(Ok(info)) => {
       let volume = app.lock().await.runtime_state.volume_percent;
-      player.set_volume(volume as f32 / 100.0);
+      player.set_volume(volume);
 
       // Publish the session exactly once, now that the source is decoding.
       // Publish-once covers the empty-sink race here: `local_playback` is `None`

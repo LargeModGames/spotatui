@@ -19,6 +19,31 @@
 
 pub mod dispatch;
 
+#[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+use crate::core::plugin_api::TrackInfo;
+
+/// Snapshot the `TrackInfo`s for `uris` in order from the track table, then
+/// the search results (a play can come from either view). Unknown URIs are
+/// dropped.
+#[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+pub fn snapshot_tracks(
+  table: &[TrackInfo],
+  search: Option<&[TrackInfo]>,
+  uris: &[String],
+) -> Vec<TrackInfo> {
+  uris
+    .iter()
+    .filter_map(|uri| {
+      let matches = |t: &&TrackInfo| t.uri.as_deref() == Some(uri.as_str());
+      table
+        .iter()
+        .find(matches)
+        .or_else(|| search.and_then(|s| s.iter().find(matches)))
+        .cloned()
+    })
+    .collect()
+}
+
 /// The runner-tick decision at a decoded source's auto-advance point, once the
 /// native queue is in the picture.
 ///
@@ -339,7 +364,12 @@ fn restore_in_place<T>(items: &mut Vec<T>, backup: &ShuffleBackup, current: usiz
 /// Gated on the *queueable* decoded sources rather than `audio-decode`: replay
 /// is the repeat-one path of a finite track list. Internet radio decodes audio
 /// too, but a live stream has no track to re-decode.
-#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
 pub async fn replay_file(
   player: std::sync::Arc<crate::infra::audio::LocalPlayer>,
   path: std::path::PathBuf,
@@ -358,7 +388,12 @@ pub async fn replay_file(
 /// [`dispatch::try_play_queued`] can play. Internet radio pulls `audio-decode`
 /// in as well, but a live stream is never a queue item, so a radio-only build
 /// can never construct this.
-#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
 pub struct DecodedQueuePlayback {
   /// The output-device sink. Shared (`Arc::ptr_eq`) with the suspended context's
   /// player when there is one, so no second device is opened.
@@ -375,15 +410,21 @@ pub struct DecodedQueuePlayback {
   /// one, and the stale result is silently discarded. Only *read* by the
   /// Subsonic/YouTube fetch-completion path, so a build with neither (e.g. a
   /// local-files-only build) writes it without reading it.
-  #[cfg_attr(not(any(feature = "subsonic", feature = "youtube")), allow(dead_code))]
+  #[cfg_attr(
+    not(any(feature = "subsonic", feature = "qobuz", feature = "youtube")),
+    allow(dead_code)
+  )]
   pub fetch_id: u64,
   /// The tempfile backing a downloaded track (Subsonic / YouTube). `None` for a
   /// local file, which is played straight from disk. Held purely to keep the
   /// file alive on disk for the duration of playback (dropped with the slot), so
   /// it is never read back.
-  #[cfg(any(feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
   #[allow(dead_code)]
   pub tempfile: Option<tempfile::NamedTempFile>,
+  /// The delivered audio format of a downloaded track (Qobuz, e.g.
+  /// `FLAC 24/96`), shown after the artists in the playbar.
+  pub quality: Option<String>,
 }
 
 /// What the native queue's playback slot is currently playing.
@@ -399,10 +440,16 @@ pub struct DecodedQueuePlayback {
   feature = "streaming",
   feature = "local-files",
   feature = "subsonic",
+  feature = "qobuz",
   feature = "youtube"
 ))]
 pub enum QueueNowPlaying {
-  #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   Decoded(DecodedQueuePlayback),
   /// A Spotify track playing via native streaming (`player.load`, no Spirc
   /// context).
@@ -415,6 +462,66 @@ pub enum QueueNowPlaying {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+  mod snapshot {
+    use super::*;
+
+    fn track(uri: &str, name: &str) -> TrackInfo {
+      TrackInfo {
+        uri: Some(uri.to_string()),
+        name: name.to_string(),
+        artists: vec!["Artist".to_string()],
+        album: "Album".to_string(),
+        duration_ms: 1000,
+        id: None,
+        album_id: None,
+        artist_refs: vec![],
+        is_playable: true,
+        is_local: false,
+        track_number: 0,
+        explicit: false,
+        image_url: None,
+      }
+    }
+
+    #[test]
+    fn snapshot_finds_tracks_in_table_preserving_order() {
+      let table = vec![
+        track("subsonic:track:a", "A"),
+        track("subsonic:track:b", "B"),
+      ];
+      let snap = snapshot_tracks(
+        &table,
+        None,
+        &[
+          "subsonic:track:b".to_string(),
+          "subsonic:track:a".to_string(),
+        ],
+      );
+      assert_eq!(snap.len(), 2);
+      assert_eq!(snap[0].name, "B");
+      assert_eq!(snap[1].name, "A");
+    }
+
+    #[test]
+    fn snapshot_falls_back_to_search_results_for_search_to_play() {
+      // The track table holds a browsed playlist while the played uris come
+      // from the search results: both views must be consulted.
+      let table = vec![track("spotify:track:x", "Browsed")];
+      let search = vec![track("youtube:searched", "Searched")];
+      let snap = snapshot_tracks(&table, Some(&search), &["youtube:searched".to_string()]);
+      assert_eq!(snap.len(), 1);
+      assert_eq!(snap[0].name, "Searched");
+    }
+
+    #[test]
+    fn snapshot_drops_unknown_uris() {
+      let table = vec![track("qobuz:track:a", "A")];
+      let snap = snapshot_tracks(&table, None, &["qobuz:track:missing".to_string()]);
+      assert!(snap.is_empty());
+    }
+  }
 
   #[test]
   fn advance_decision_full_table() {

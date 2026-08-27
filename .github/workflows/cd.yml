@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Multi-source features (local-files, subsonic, internet-radio, youtube)
+          # Multi-source features (local-files, subsonic, internet-radio, youtube, qobuz)
           # ship on Linux and Windows only: they share the rodio output engine,
           # which is gated off at runtime on macOS (CoreAudio/Bluetooth crashes,
           # #9/#20). Add them to the macOS rows once the macOS output path lands.
@@ -31,12 +31,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_prefix: linux-x86_64 # most Linux distros
             binary_postfix: ""
-            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
           - os: ubuntu-24.04-arm # free native ARM64 runner for public repos
             target: aarch64-unknown-linux-gnu
             artifact_prefix: linux-aarch64 # Raspberry Pi 4/5, ARM servers, Asahi Linux
             binary_postfix: ""
-            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube"
+            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
           - os: macos-15-intel # Intel runner for x86_64 (available until Aug 2027)
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
@@ -51,7 +51,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_prefix: windows-x86_64
             binary_postfix: ".exe"
-            audio_features: "audio-viz-cpal,windows-media,local-files,subsonic,internet-radio,youtube"
+            audio_features: "audio-viz-cpal,windows-media,local-files,subsonic,internet-radio,youtube,qobuz"
 
     steps:
       - name: Checkout sources
@@ -196,7 +196,7 @@ jobs:
 
             Checksums (`.sha256`) are optional and only needed if you want to verify the download.
 
-            The Linux and Windows builds include the extra music sources (Local Files, Subsonic, Internet Radio, YouTube). The YouTube source needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
+            The Linux and Windows builds include the extra music sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz). The YouTube source needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
 
             To update use "spotatui update --install" or use your package manager of choice.
           draft: false

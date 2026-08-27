@@ -194,6 +194,17 @@ impl App {
           description: "Scale status message duration from 10% to 1000%".to_string(),
           value: SettingValue::Number(self.user_config.behavior.status_message_ttl_percent as i64),
         },
+        #[cfg(feature = "qobuz")]
+        SettingItem {
+          id: "behavior.qobuz_quality".to_string(),
+          name: "Qobuz Quality".to_string(),
+          description: "Stream quality for Qobuz tracks (hi-res files are large)".to_string(),
+          value: SettingValue::Cycle(
+            crate::core::user_config::qobuz_quality_label(self.user_config.behavior.qobuz_quality)
+              .to_string(),
+            crate::core::user_config::QOBUZ_QUALITY_LABELS,
+          ),
+        },
         SettingItem {
           id: "behavior.playback_poll_seconds".to_string(),
           name: "Playback Poll Seconds".to_string(),

@@ -99,6 +99,19 @@ behavior:
 
 Stations saved from inside the app are stored in `state.yml`. The sidebar merges configured stations first and app-saved stations second, deduped by stream URL. To remove a configured station, edit `config.yml`; the in-app remove action only removes app-saved stations from `state.yml`.
 
+## Qobuz
+
+Qobuz logs in through the browser (first-run picker, or `d` then Qobuz) and keeps the token in `qobuz_credentials.yml` next to `config.yml`. One key selects the stream quality:
+
+```yaml
+behavior:
+  qobuz_quality: 6   # 5 = MP3 320, 6 = FLAC 16/44.1, 7 = FLAC 24/96, 27 = FLAC 24/192
+```
+
+This is the requested quality. Qobuz serves some tracks at a lower one, so when a track plays from a Qobuz listing, the playbar shows the format it delivered, for example `FLAC 16/44.1`.
+
+Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` (all three together) replace the constants spotatui otherwise reads from the Qobuz web player at runtime.
+
 ## Layout
 
 ```yaml
@@ -178,7 +191,7 @@ format:
 
 The defaults above reproduce the built-in output exactly.
 
-### `playbar_status` (Spotify playback) and `playbar_status_source` (local/Subsonic/Radio/YouTube playback)
+### `playbar_status` (Spotify playback) and `playbar_status_source` (local/Subsonic/Qobuz/Radio/YouTube playback)
 
 Both templates accept the same keys; keys that don't apply to the current mode render empty.
 

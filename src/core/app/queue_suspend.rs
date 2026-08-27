@@ -13,7 +13,12 @@ impl App {
   pub(crate) fn suspend_active_decoded_context_for_skip(
     &mut self,
     #[cfg_attr(
-      not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+      not(any(
+        feature = "local-files",
+        feature = "subsonic",
+        feature = "qobuz",
+        feature = "youtube"
+      )),
       allow(unused_variables)
     )]
     cause: crate::infra::queue::SuspendCause,
@@ -24,7 +29,12 @@ impl App {
     // the *same* track on an auto-advance (a queued song must not consume the
     // repeat) but advances on a manual skip; Off clamps to `None` at the boundary.
     #[cfg_attr(
-      not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+      not(any(
+        feature = "local-files",
+        feature = "subsonic",
+        feature = "qobuz",
+        feature = "youtube"
+      )),
       allow(unused_variables)
     )]
     let repeat = self.decoded_repeat;
@@ -60,6 +70,21 @@ impl App {
         crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
       s.advancing = true;
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::YouTube {
+        resume_index,
+        resume_position_ms: 0,
+      });
+      return;
+    }
+    #[cfg(feature = "qobuz")]
+    if let Some(s) = self.qobuz_playback.as_mut() {
+      let resume_index =
+        crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
+      // The queue takes the sink: a download in flight must not commit onto it.
+      if let Some(fetch) = s.fetch.take() {
+        fetch.abort();
+      }
+      s.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Qobuz {
         resume_index,
         resume_position_ms: 0,
       });
@@ -106,6 +131,21 @@ impl App {
       let index = s.index;
       s.advancing = true;
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::YouTube {
+        resume_index: Some(index),
+        resume_position_ms: position_ms,
+      });
+      return;
+    }
+    #[cfg(feature = "qobuz")]
+    if let Some(s) = self.qobuz_playback.as_mut() {
+      let position_ms = s.player.position().as_millis() as u64;
+      let index = s.index;
+      // The queue takes the sink: a download in flight must not commit onto it.
+      if let Some(fetch) = s.fetch.take() {
+        fetch.abort();
+      }
+      s.advancing = true;
+      self.queue_suspended = Some(crate::core::queue::SuspendedContext::Qobuz {
         resume_index: Some(index),
         resume_position_ms: position_ms,
       });

@@ -4,7 +4,7 @@
 </h1>
 <p align="center">
   A terminal music player written in Rust, powered by <a href="https://github.com/ratatui-org/ratatui">Ratatui</a><br>
-  Native Spotify streaming, synced lyrics, a real-time audio visualizer, local file,<br> Subsonic/Navidrome, Internet Radio, and YouTube sources. Spotify is optional.
+  Native Spotify streaming, synced lyrics, a real-time audio visualizer, local file,<br> Subsonic/Navidrome, Internet Radio, YouTube, and Qobuz sources. Spotify is optional.
 </p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
@@ -33,6 +33,7 @@
   - [Subsonic / Navidrome](#subsonic--navidrome)
   - [Internet Radio](#internet-radio)
   - [YouTube](#youtube)
+  - [Qobuz](#qobuz)
 - [AI DJ](#ai-dj)
 - [Native Streaming](#native-streaming)
 - [Configuration](#configuration)
@@ -64,11 +65,11 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 | Key differences | spotify-tui | spotatui |
 |---|---|---|
 | Spotify backend | external Connect device (spotifyd, official client, ...) | built-in native client |
-| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio |
+| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio, Qobuz |
 
 ## Features
 
-- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), or [YouTube](#youtube). The free sources need no Spotify account; press `d` to switch between them at any time.
+- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), [YouTube](#youtube), or [Qobuz](#qobuz). The free sources need no Spotify account; press `d` to switch between them at any time.
 - **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
 - **Synced lyrics.** Line-by-line lyrics that follow playback.
 - **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
@@ -80,7 +81,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 
 ## Installation
 
-> **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, and Local Files all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
+> **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, Local Files, and Qobuz all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
 
 ```bash
 # One-line installer — macOS, Linux, WSL. Grabs the prebuilt binary for your
@@ -150,7 +151,7 @@ Or if you use pipewire:
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
-> **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, and YouTube. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube`.
+> **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz`.
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
@@ -166,6 +167,7 @@ Welcome to spotatui! Choose your music source:
   3) Subsonic       (free, needs a Subsonic/Navidrome server)
   4) Internet Radio (free)
   5) Local Files    (free)
+  6) Qobuz          (paid subscription, logs in through the browser)
 ```
 
 Pick a **free source** to skip Spotify entirely, or pick **Spotify** to run the auth wizard (you'll create a Spotify Developer app — see the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation#connecting-to-spotify)). Only sources compiled into your build are listed.
@@ -201,13 +203,14 @@ spotatui is a general music player, not just a Spotify client. Press `d` to open
 | **Subsonic** | Browse, search, and stream from any Subsonic-compatible server (Navidrome, Gonic, Airsonic, Funkwhale, …) | A server account |
 | **Internet Radio** | Play icecast/shoutcast streams with live now-playing metadata; search the [radio-browser.info](https://www.radio-browser.info) directory (30k+ stations) | Nothing |
 | **YouTube** | Search YouTube and play audio; build **local playlists** stored in a plain file | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended) |
+| **Qobuz** | Stream your Qobuz library (favorites, playlists, albums, search) at the configured quality, MP3 320 up to FLAC 24/192, through spotatui's own engine | A paid Qobuz account |
 
 **Resuming your last session:** quit while playing from a non-Spotify source and spotatui restores that track and its position on the next launch, following the `startup_behavior` setting (`continue`, `play`, or `pause`).
 
 **Availability:** included in the Linux and Windows release binaries. Not yet on macOS (the shared audio output path is disabled there pending a fix; contributions welcome). When building from source, enable them with cargo features:
 
 ```bash
-cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube
+cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz
 ```
 
 Each source has a few config keys; the essentials are below, and the full reference lives in the [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration).
@@ -240,6 +243,17 @@ Search the radio-browser.info directory in-app (Enter plays a station directly),
 Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recommended). No Google account, API key, or cookies — search and playback are anonymous. If playback breaks after a YouTube change, updating yt-dlp (`yt-dlp -U`) is the fix; no spotatui update needed.
 
 **Local YouTube playlists** live in the spotatui config directory as `youtube_playlists.yml`, a plain human-editable file you can back up or share. Create one from the sidebar, add tracks with `w`, and play a playlist as a queue with `Enter`.
+
+### Qobuz
+
+Pick **Qobuz** in the first-run picker or the `d` menu: spotatui opens the Qobuz login page in your browser and saves the token to `qobuz_credentials.yml` in the config directory (owner-only on Unix; on Windows the file keeps the config folder's permissions). No app registration is needed. The sidebar lists your favorite tracks, playlists, and favorite albums; search finds tracks. Each track plays while it downloads: the encrypted stream is decrypted and rebuilt as a FLAC temporary file, playback starts after the first segments arrive, and a seek past the downloaded part continues the download from there. When a track plays from a Qobuz listing, the playbar shows the format that Qobuz delivered, for example `FLAC 16/44.1`. This can be lower than the configured quality.
+
+```yaml
+behavior:
+  qobuz_quality: 6   # 5 = MP3 320, 6 = FLAC 16/44.1, 7 = FLAC 24/96, 27 = FLAC 24/192
+```
+
+Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. spotatui reads the three constants it needs from the Qobuz web player at runtime; when Qobuz changes its web player and the login stops working, set `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` from the bundle instead of waiting for a release.
 
 ## AI DJ
 
@@ -336,7 +350,7 @@ spotatui is extremely lightweight compared to the official Electron client.
 
 ## Playback Requirements
 
-The free sources (Local Files, Subsonic, Internet Radio, YouTube) play through spotatui's own audio engine and need no extra setup.
+The non-Spotify sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz) play through spotatui's own audio engine and need no extra setup.
 
 Spotify is different: it uses the [Web API](https://developer.spotify.com/documentation/web-api/), which doesn't stream audio itself. To play Spotify tracks you need **one** of:
 

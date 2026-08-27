@@ -26,7 +26,12 @@ impl App {
   /// active decoded context was suspended under the native queue, or `None` when
   /// no decoded context is suspended. Only one context is ever active, so this
   /// unambiguously describes it.
-  #[cfg(any(feature = "youtube", feature = "subsonic", feature = "local-files"))]
+  #[cfg(any(
+    feature = "youtube",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "local-files"
+  ))]
   fn suspended_resume(&self) -> Option<(Option<usize>, u64)> {
     match self.queue_suspended.as_ref()? {
       #[cfg(feature = "local-files")]
@@ -36,6 +41,11 @@ impl App {
       } => Some((*resume_index, *resume_position_ms)),
       #[cfg(feature = "subsonic")]
       crate::core::queue::SuspendedContext::Subsonic {
+        resume_index,
+        resume_position_ms,
+      } => Some((*resume_index, *resume_position_ms)),
+      #[cfg(feature = "qobuz")]
+      crate::core::queue::SuspendedContext::Qobuz {
         resume_index,
         resume_position_ms,
       } => Some((*resume_index, *resume_position_ms)),
@@ -58,6 +68,7 @@ impl App {
     #[cfg(any(
       feature = "youtube",
       feature = "subsonic",
+      feature = "qobuz",
       feature = "local-files",
       feature = "internet-radio"
     ))]
@@ -111,6 +122,34 @@ impl App {
         Some((None, _)) => {}
         None => {
           return Some(PersistedPlayback::Subsonic {
+            tracks: s.tracks.clone(),
+            index: s.index,
+            position_ms: s.player.position().as_millis() as u64,
+            paused: s.player.is_paused(),
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
+          });
+        }
+      }
+    }
+    #[cfg(feature = "qobuz")]
+    if let Some(s) = self.qobuz_playback.as_ref() {
+      match self.suspended_resume() {
+        Some((Some(index), position_ms)) => {
+          return Some(PersistedPlayback::Qobuz {
+            tracks: s.tracks.clone(),
+            index,
+            position_ms,
+            paused: false,
+            repeat: self.decoded_repeat,
+            shuffle_on: self.decoded_shuffle,
+            shuffle: s.shuffle_backup.clone(),
+          });
+        }
+        Some((None, _)) => {}
+        None => {
+          return Some(PersistedPlayback::Qobuz {
             tracks: s.tracks.clone(),
             index: s.index,
             position_ms: s.player.position().as_millis() as u64,
@@ -194,7 +233,12 @@ impl App {
   fn has_persistable_playback(&self) -> bool {
     // Mirrors `current_persisted_playback`: a decoded context suspended past
     // its end (resume_index == None) does not persist.
-    #[cfg(any(feature = "youtube", feature = "subsonic", feature = "local-files"))]
+    #[cfg(any(
+      feature = "youtube",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "local-files"
+    ))]
     {
       let context_resumable = !matches!(self.suspended_resume(), Some((None, _)));
       #[cfg(feature = "youtube")]
@@ -203,6 +247,10 @@ impl App {
       }
       #[cfg(feature = "subsonic")]
       if self.subsonic_playback.is_some() && context_resumable {
+        return true;
+      }
+      #[cfg(feature = "qobuz")]
+      if self.qobuz_playback.is_some() && context_resumable {
         return true;
       }
       #[cfg(feature = "local-files")]

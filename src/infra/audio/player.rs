@@ -49,6 +49,10 @@ pub struct LocalPlayer {
   _keepalive: mpsc::Sender<()>,
 }
 
+/// A decoded stream, ready for [`LocalPlayer::play_prepared`].
+#[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+pub struct PreparedStream(Box<dyn rodio::Source + Send>);
+
 impl LocalPlayer {
   /// Open the default audio output device and return a ready player.
   ///
@@ -74,7 +78,7 @@ impl LocalPlayer {
   /// Only the tempfile-based sources play files; a build with just
   /// `internet-radio` uses [`play_stream`](Self::play_stream) instead.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic")),
+    not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
   )]
   pub fn play_file(&self, path: &Path) -> Result<()> {
@@ -100,15 +104,8 @@ impl LocalPlayer {
   }
 
   /// Decode an already-opened **live stream** and play it, replacing whatever
-  /// was playing.
-  ///
-  /// Unlike [`play_file`](Self::play_file) the reader is treated as
-  /// non-seekable: the decoder is built with `with_seekable(false)` so the
-  /// symphonia probe never issues the `Seek` that breaks on an infinite HTTP
-  /// (internet-radio) stream — the `Seek` bound is only there to satisfy
-  /// rodio's type signature. A live stream has no filename, so format
-  /// detection is primed from `mime_type` (e.g. `"audio/mpeg"` from the ICY
-  /// response's Content-Type) when available.
+  /// was playing: [`prepare_stream`](Self::prepare_stream) with no byte
+  /// length, then [`play_prepared`](Self::play_prepared).
   ///
   /// **Blocking:** the probe reads from the network reader; call it off the
   /// async runtime (e.g. `spawn_blocking`) like `play_file`.
@@ -117,18 +114,56 @@ impl LocalPlayer {
   where
     R: std::io::Read + std::io::Seek + Send + Sync + 'static,
   {
-    let mut builder = Decoder::builder().with_data(reader).with_seekable(false);
+    let prepared = Self::prepare_stream(reader, mime_type, None)?;
+    self.play_prepared(prepared);
+    Ok(())
+  }
+
+  /// Build the decoder for a stream without a sink change, so the caller can
+  /// decide under its own lock if the stream is still wanted.
+  ///
+  /// With `byte_len` the reader is seekable and the decoder knows the total
+  /// size (a progressive download of a known file). Without it the reader is
+  /// treated as non-seekable: the decoder is built with `with_seekable(false)`
+  /// so the symphonia probe never issues the `Seek` that breaks on an infinite
+  /// HTTP (internet-radio) stream. The `Seek` bound is only there to satisfy
+  /// rodio's type signature. A stream has no filename, so format detection is
+  /// primed from `mime_type` (e.g. `"audio/mpeg"`) when available.
+  ///
+  /// **Blocking:** the probe reads from the network reader; call it off the
+  /// async runtime (e.g. `spawn_blocking`) like `play_file`.
+  #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+  pub fn prepare_stream<R>(
+    reader: R,
+    mime_type: Option<&str>,
+    byte_len: Option<u64>,
+  ) -> Result<PreparedStream>
+  where
+    R: std::io::Read + std::io::Seek + Send + Sync + 'static,
+  {
+    let mut builder = Decoder::builder()
+      .with_data(reader)
+      .with_seekable(byte_len.is_some());
+    if let Some(len) = byte_len {
+      builder = builder.with_byte_len(len);
+    }
     if let Some(mime) = mime_type {
       builder = builder.with_mime_type(mime);
     }
     let decoder = builder
       .build()
       .map_err(|e| anyhow::anyhow!("decoding audio stream: {e}"))?;
+    Ok(PreparedStream(Box::new(decoder)))
+  }
 
+  /// Play a prepared stream, replacing whatever was playing. The clear waits
+  /// for the audio thread to drop the previous source: call it off the `App`
+  /// lock (see `stop_detached`).
+  #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+  pub fn play_prepared(&self, stream: PreparedStream) {
     self.sink.clear();
-    self.sink.append(decoder);
+    self.sink.append(stream.0);
     self.sink.play();
-    Ok(())
   }
 
   /// Pause playback, keeping the current position.
@@ -153,10 +188,16 @@ impl LocalPlayer {
     self.sink.clear();
   }
 
-  /// Set the output volume. `volume` is a linear gain clamped to `0.0..=1.0`
-  /// (1.0 = original file level).
-  pub fn set_volume(&self, volume: f32) {
-    self.sink.set_volume(volume.clamp(0.0, 1.0));
+  /// Stop on the blocking pool and return at once. `stop` waits for the audio
+  /// thread, which a stalled network source holds until its stall timeout.
+  pub fn stop_detached(self: std::sync::Arc<Self>) {
+    tokio::task::spawn_blocking(move || self.stop());
+  }
+
+  /// Set the output volume from the user's percent, on the same logarithmic
+  /// curve as native streaming, so one setting is equally loud on every source.
+  pub fn set_volume(&self, percent: u8) {
+    self.sink.set_volume(volume_gain(percent));
   }
 
   /// The playback position of the current source.
@@ -171,7 +212,7 @@ impl LocalPlayer {
   /// Radio never polls this (an infinite stream has no end-of-track), so it is
   /// dead code in a build with just `internet-radio`.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic")),
+    not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
   )]
   pub fn is_finished(&self) -> bool {
@@ -183,7 +224,7 @@ impl LocalPlayer {
   /// Radio consumes `Seek` as a no-op (nothing to seek within a live stream),
   /// so this is dead code in a build with just `internet-radio`.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic")),
+    not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
   )]
   pub fn seek(&self, pos: Duration) -> Result<()> {
@@ -254,9 +295,39 @@ fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The gain for a volume percent: librespot's `VolumeCtrl::Log` mapping over
+/// a 60 dB range (`1000^(p/100 - 1)`), which the native player uses by default.
+/// 0% is silence, 100% is the file level, and 80% is about -12 dB.
+pub fn volume_gain(percent: u8) -> f32 {
+  const DB_RATIO: f64 = 1000.0;
+  match percent {
+    0 => 0.0,
+    p if p >= 100 => 1.0,
+    p => ((f64::from(p) / 100.0 - 1.0) * DB_RATIO.ln()).exp() as f32,
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn volume_gain_follows_the_native_log_curve() {
+    assert_eq!(volume_gain(0), 0.0);
+    assert_eq!(volume_gain(100), 1.0);
+    assert_eq!(volume_gain(150), 1.0);
+    let at_80 = volume_gain(80);
+    assert!(
+      (at_80 - 0.251).abs() < 0.001,
+      "80% is about -12 dB: {at_80}"
+    );
+    let at_50 = volume_gain(50);
+    assert!(
+      (at_50 - 0.0316).abs() < 0.001,
+      "50% is about -30 dB: {at_50}"
+    );
+    assert!(volume_gain(20) < at_50 && at_50 < at_80);
+  }
   use std::io::Write;
 
   /// Write a minimal valid WAV file (44-byte header + silence) that symphonia

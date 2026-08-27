@@ -35,13 +35,11 @@ use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
 use super::{track_id_from_uri, SubsonicPlaybackState, SubsonicSource};
-use crate::core::app::{App, SearchResultBlock, TrackTableContext};
-use crate::core::pagination::Paged;
-use crate::core::plugin_api::TrackInfo;
-use crate::core::source::{MediaSource, Searcher};
+use crate::core::app::{App, TrackTableContext};
+use crate::core::source::{MediaSource, Searcher, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{advance_index, replay_file};
+use crate::infra::queue::{advance_index, replay_file, snapshot_tracks};
 
 /// Environment variable that overrides the configured Subsonic password. Prefer
 /// it over the plaintext config field so the secret is never written to disk.
@@ -119,7 +117,7 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
     },
     IoEvent::ChangeVolume(volume) => match player(app).await {
       Some(p) => {
-        p.set_volume(*volume as f32 / 100.0);
+        p.set_volume(*volume);
         let mut app = app.lock().await;
         app.runtime_state.volume_percent = *volume;
         app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
@@ -225,23 +223,7 @@ async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str) {
     return;
   };
   match source.search(query).await {
-    Ok(results) => {
-      let total = results.tracks.len() as u32;
-      let mut app = app.lock().await;
-      app.search_results.tracks = Some(Paged {
-        items: results.tracks,
-        total,
-        ..Default::default()
-      });
-      app.search_results.albums = None;
-      app.search_results.artists = None;
-      app.search_results.playlists = None;
-      app.search_results.shows = None;
-      // Focus the songs block so the first hit is selectable immediately.
-      app.search_results.selected_tracks_index = Some(0);
-      app.search_results.hovered_block = SearchResultBlock::SongSearch;
-      app.search_results.selected_block = SearchResultBlock::Empty;
-    }
+    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
     Err(e) => set_error(app, format!("Subsonic search failed: {e}")).await,
   }
 }
@@ -260,47 +242,7 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
     .map(|s| Arc::clone(&s.player))
 }
 
-/// Snapshot the `TrackInfo`s for `uris`, preserving order, looking each up in
-/// **both** browse views: the track table (browse→play) and the search results
-/// (search→play). A playback request can originate from either — the track-table
-/// Enter sends `track_table.tracks` uris, the search-result Enter sends
-/// `search_results.tracks` uris — so the metadata may live in either. Any uri
-/// found in neither is dropped.
-fn snapshot_tracks(
-  table: &[TrackInfo],
-  search: Option<&[TrackInfo]>,
-  uris: &[String],
-) -> Vec<TrackInfo> {
-  uris
-    .iter()
-    .filter_map(|uri| find_track(table, search, uri).cloned())
-    .collect()
-}
-
-/// Find a track's metadata by URI in the track table, falling back to the search
-/// results.
-fn find_track<'a>(
-  table: &'a [TrackInfo],
-  search: Option<&'a [TrackInfo]>,
-  uri: &str,
-) -> Option<&'a TrackInfo> {
-  let matches = |t: &&TrackInfo| t.uri.as_deref() == Some(uri);
-  table
-    .iter()
-    .find(matches)
-    .or_else(|| search.and_then(|s| s.iter().find(matches)))
-}
-
-/// Release the other two backends so only subsonic holds the output device.
-#[cfg_attr(
-  not(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "internet-radio",
-    feature = "youtube"
-  )),
-  allow(unused_variables)
-)]
+/// Release the other backends so only subsonic holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
   // Pause native Spotify so librespot releases the device.
   #[cfg(feature = "streaming")]
@@ -310,30 +252,14 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
       player.pause();
     }
   }
-  // Tear down any local-file session (dropping it releases its device handle).
-  #[cfg(feature = "local-files")]
-  {
-    let local = app.lock().await.local_playback.take();
-    if let Some(local) = local {
-      local.player.stop();
-    }
-  }
-  // Tear down any radio session (the `!handled_subsonic` short-circuit in the
-  // runtime means the radio dispatch never sees this subsonic: start).
-  #[cfg(feature = "internet-radio")]
-  {
-    let radio = app.lock().await.radio_playback.take();
-    if let Some(radio) = radio {
-      radio.player.stop();
-    }
-  }
-  // Tear down any YouTube session, for the same short-circuit reason.
-  #[cfg(feature = "youtube")]
-  {
-    let youtube = app.lock().await.youtube_playback.take();
-    if let Some(youtube) = youtube {
-      youtube.player.stop();
-    }
+  // The other decoded sources never see this subsonic: start (the pump's
+  // `!handled_subsonic` short-circuit), so their sessions are torn down here.
+  let players = app
+    .lock()
+    .await
+    .take_decoded_sessions_except(Source::Subsonic);
+  for player in players {
+    player.stop_detached();
   }
 }
 
@@ -431,7 +357,7 @@ async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx:
   match result {
     Ok(Ok(())) => {
       let volume = app.lock().await.runtime_state.volume_percent;
-      player.set_volume(volume as f32 / 100.0);
+      player.set_volume(volume);
 
       let display = tracks[index].name.clone();
       let mut guard = app.lock().await;
@@ -615,66 +541,6 @@ async fn set_error(app: &Arc<Mutex<App>>, message: String) {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  fn track(uri: &str, name: &str) -> TrackInfo {
-    TrackInfo {
-      uri: Some(uri.to_string()),
-      name: name.to_string(),
-      artists: vec!["Artist".to_string()],
-      album: "Album".to_string(),
-      duration_ms: 1000,
-      id: None,
-      album_id: None,
-      artist_refs: vec![],
-      is_playable: true,
-      is_local: false,
-      track_number: 0,
-      explicit: false,
-      image_url: None,
-    }
-  }
-
-  #[test]
-  fn snapshot_finds_tracks_in_table_preserving_order() {
-    let table = vec![
-      track("subsonic:track:a", "A"),
-      track("subsonic:track:b", "B"),
-    ];
-    let snap = snapshot_tracks(
-      &table,
-      None,
-      &[
-        "subsonic:track:b".to_string(),
-        "subsonic:track:a".to_string(),
-      ],
-    );
-    assert_eq!(snap.len(), 2);
-    assert_eq!(snap[0].name, "B");
-    assert_eq!(snap[1].name, "A");
-  }
-
-  #[test]
-  fn snapshot_falls_back_to_search_results_for_search_to_play() {
-    // The track table holds a previously-browsed playlist; the played uris come
-    // from the search results. The lookup must consult both. (Regression: the
-    // search->play path looked only at the table and found nothing.)
-    let table = vec![track("subsonic:track:browsed", "Browsed")];
-    let search = vec![track("subsonic:track:searched", "Searched")];
-    let snap = snapshot_tracks(
-      &table,
-      Some(&search),
-      &["subsonic:track:searched".to_string()],
-    );
-    assert_eq!(snap.len(), 1, "search-sourced uri must resolve");
-    assert_eq!(snap[0].name, "Searched");
-  }
-
-  #[test]
-  fn snapshot_drops_unknown_uris() {
-    let table = vec![track("subsonic:track:a", "A")];
-    let snap = snapshot_tracks(&table, None, &["subsonic:track:missing".to_string()]);
-    assert!(snap.is_empty());
-  }
 
   /// End-to-end dispatch test: drive `route_subsonic_event` exactly as the
   /// runtime pump does — browse, play, advance the queue, and tear down on a

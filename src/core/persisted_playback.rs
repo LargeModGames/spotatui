@@ -95,6 +95,19 @@ pub enum PersistedPlayback {
     #[serde(default)]
     shuffle: Option<crate::infra::queue::ShuffleBackup>,
   },
+  /// Qobuz: full track metadata (from the API) plus the queue position.
+  Qobuz {
+    tracks: Vec<TrackInfo>,
+    index: usize,
+    position_ms: u64,
+    paused: bool,
+    #[serde(default)]
+    repeat: crate::infra::queue::RepeatMode,
+    #[serde(default)]
+    shuffle_on: bool,
+    #[serde(default)]
+    shuffle: Option<crate::infra::queue::ShuffleBackup>,
+  },
   /// YouTube: full track metadata (from `yt-dlp`) plus the queue position.
   YouTube {
     tracks: Vec<TrackInfo>,
@@ -244,6 +257,26 @@ mod tests {
         position_ms: 42_000,
         paused: true,
         repeat: RepeatMode::Track,
+        shuffle_on: false,
+        shuffle: None,
+      }),
+      vec![],
+    );
+    save(&path, &s).unwrap();
+    assert_eq!(load(&path).unwrap(), Some(s));
+  }
+
+  #[test]
+  fn save_then_load_round_trips_qobuz_playback() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("last_session.yml");
+    let s = session(
+      Some(PersistedPlayback::Qobuz {
+        tracks: vec![track("qobuz:track:1", "Hi-res")],
+        index: 0,
+        position_ms: 12_000,
+        paused: true,
+        repeat: RepeatMode::Context,
         shuffle_on: false,
         shuffle: None,
       }),
