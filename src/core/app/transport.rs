@@ -165,10 +165,10 @@ impl App {
     };
 
     if is_playing {
-      self.dispatch(IoEvent::PausePlayback);
+      self.dispatch_spotify_fallback(IoEvent::PausePlayback);
     } else {
       // When no offset or uris are passed, spotify will resume current playback
-      self.dispatch(IoEvent::StartPlayback(None, None, None));
+      self.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
     }
   }
 
@@ -213,7 +213,7 @@ impl App {
       }
 
       // Fallback for external devices
-      self.dispatch(IoEvent::Seek(0));
+      self.dispatch_spotify_fallback(IoEvent::Seek(0));
     } else {
       // If less than 3 seconds in, go to previous track
       #[cfg(feature = "streaming")]
@@ -238,7 +238,7 @@ impl App {
       }
 
       // Fallback for external devices
-      self.dispatch(IoEvent::PreviousTrack);
+      self.dispatch_spotify_fallback(IoEvent::PreviousTrack);
     }
   }
 
@@ -287,7 +287,7 @@ impl App {
     }
 
     self.song_progress_ms = 0;
-    self.dispatch(IoEvent::ForcePreviousTrack);
+    self.dispatch_spotify_fallback(IoEvent::ForcePreviousTrack);
   }
 
   pub fn next_track(&mut self) {
@@ -359,7 +359,7 @@ impl App {
     }
 
     // Fallback for external devices
-    self.dispatch(IoEvent::NextTrack);
+    self.dispatch_spotify_fallback(IoEvent::NextTrack);
   }
 
   /// Start playback of an explicit list of playable URIs, optionally from an
@@ -368,6 +368,10 @@ impl App {
   /// pump's source routers, exactly as for the equivalent keybinding.
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
   pub(crate) fn start_playback_uris(&mut self, uris: Vec<String>, offset: Option<usize>) {
+    // No URIs: nothing to start, and an empty start would only tear the current player down.
+    if uris.is_empty() {
+      return;
+    }
     self.dispatch(IoEvent::StartPlayback(None, Some(uris), offset));
   }
 

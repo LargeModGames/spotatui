@@ -31,16 +31,19 @@ impl App {
       "seeking forwards by {} ms",
       self.user_config.behavior.seek_milliseconds
     );
-    // A seekable decoded source (local/subsonic/youtube) owns the session: seek
-    // relative to *its* live position, never from the stale/foreign Spotify
-    // progress. Radio returns None here, so its seek keys are correct no-ops.
-    // The source player clamps to the track duration internally, so no upper
-    // clamp is needed (and we must not read the stale Spotify context duration).
-    if let Some(pos) = self.active_source_position_ms() {
-      let new_progress = (pos as u32).saturating_add(self.user_config.behavior.seek_milliseconds);
-      self.song_progress_ms = new_progress as u128;
-      self.seek_ms = None;
-      self.dispatch(IoEvent::Seek(new_progress));
+    // A decoded source owns the session: seek relative to *its* live position,
+    // never from the stale/foreign Spotify progress. The source player clamps
+    // to the track duration internally, so no upper clamp is needed (and we
+    // must not read the stale Spotify context duration). Radio has no position
+    // (not seekable): stop there instead of repositioning the paused Spotify
+    // player underneath it.
+    if self.active_decoded_source() {
+      if let Some(pos) = self.active_source_position_ms() {
+        let new_progress = (pos as u32).saturating_add(self.user_config.behavior.seek_milliseconds);
+        self.song_progress_ms = new_progress as u128;
+        self.seek_ms = None;
+        self.dispatch(IoEvent::Seek(new_progress));
+      }
       return;
     }
     if let Some(CurrentPlaybackContext {
@@ -97,14 +100,17 @@ impl App {
       "seeking backwards by {} ms",
       self.user_config.behavior.seek_milliseconds
     );
-    // A seekable decoded source (local/subsonic/youtube) owns the session: seek
-    // relative to *its* live position, never from the stale/foreign Spotify
-    // progress. Radio returns None here, so its seek keys are correct no-ops.
-    if let Some(pos) = self.active_source_position_ms() {
-      let new_progress = (pos as u32).saturating_sub(self.user_config.behavior.seek_milliseconds);
-      self.song_progress_ms = new_progress as u128;
-      self.seek_ms = None;
-      self.dispatch(IoEvent::Seek(new_progress));
+    // A decoded source owns the session: seek relative to *its* live position,
+    // never from the stale/foreign Spotify progress. Radio has no position (not
+    // seekable): stop there instead of repositioning the paused Spotify player
+    // underneath it.
+    if self.active_decoded_source() {
+      if let Some(pos) = self.active_source_position_ms() {
+        let new_progress = (pos as u32).saturating_sub(self.user_config.behavior.seek_milliseconds);
+        self.song_progress_ms = new_progress as u128;
+        self.seek_ms = None;
+        self.dispatch(IoEvent::Seek(new_progress));
+      }
       return;
     }
     let old_progress = match self.seek_ms {
@@ -145,15 +151,18 @@ impl App {
   /// dragging on the playbar progress line). The target is clamped to the track
   /// duration. Mirrors the dispatch logic of [`Self::seek_forwards`].
   pub fn seek_to(&mut self, position_ms: u32) {
-    // A seekable decoded source (local/subsonic/youtube) owns the session: seek
-    // it to the absolute target directly (the source player clamps to the track
-    // duration internally). Radio returns None here, so its playbar drags are
-    // correct no-ops. Never read the stale Spotify context duration for a source.
-    if self.active_source_position_ms().is_some() {
-      // Decoded `.seek()` can re-decode forward for many codecs, so a mouse
-      // drag must not dispatch one seek per drag event; coalesce to the last
-      // target with the same throttle-and-flush pattern as the other backends.
-      self.queue_source_seek(position_ms);
+    // A decoded source owns the session: seek it to the absolute target directly
+    // (the source player clamps to the track duration internally). Never read
+    // the stale Spotify context duration for a source. Radio has no position
+    // (not seekable): stop there instead of repositioning the paused Spotify
+    // player underneath it.
+    if self.active_decoded_source() {
+      if self.active_source_position_ms().is_some() {
+        // Decoded `.seek()` can re-decode forward for many codecs, so a mouse
+        // drag must not dispatch one seek per drag event; coalesce to the last
+        // target with the same throttle-and-flush pattern as the other backends.
+        self.queue_source_seek(position_ms);
+      }
       return;
     }
     if let Some(CurrentPlaybackContext {

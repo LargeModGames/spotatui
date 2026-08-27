@@ -138,7 +138,9 @@ impl ClientConfig {
     Ok(())
   }
 
-  pub fn load_config(&mut self, onboarding: &dyn Onboarding) -> Result<()> {
+  /// Load `client.yml`, or run the auth wizard when the file is absent.
+  /// Returns `true` when the wizard ran.
+  pub fn load_config(&mut self, onboarding: &dyn Onboarding) -> Result<bool> {
     let paths = self.get_or_build_paths()?;
     if paths.config_file_path.exists() {
       let config_string = fs::read_to_string(&paths.config_file_path)?;
@@ -155,7 +157,7 @@ impl ClientConfig {
       self.streaming_bitrate = config_yml.streaming_bitrate;
       self.streaming_audio_cache = config_yml.streaming_audio_cache;
 
-      Ok(())
+      Ok(false)
     } else {
       onboarding.info(BANNER);
 
@@ -164,7 +166,8 @@ impl ClientConfig {
         paths.config_file_path.display()
       ));
 
-      self.run_auth_setup_wizard(onboarding)
+      self.run_auth_setup_wizard(onboarding)?;
+      Ok(true)
     }
   }
 

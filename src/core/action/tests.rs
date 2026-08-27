@@ -11,7 +11,7 @@ use std::sync::mpsc::{channel, Receiver};
 use std::time::SystemTime;
 
 use super::{Action, NavTarget, RepeatSetting};
-use crate::core::app::{App, RouteId, UserInfo};
+use crate::core::app::{App, RouteId, UserInfo, NOTHING_PLAYING_STATUS};
 use crate::core::theme::{Color, Theme, ThemeField};
 use crate::core::user_config::UserConfig;
 use crate::infra::network::IoEvent;
@@ -19,6 +19,13 @@ use crate::infra::network::IoEvent;
 fn app_with_channel() -> (App, Receiver<IoEvent>) {
   let (tx, rx) = channel();
   let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+  (app, rx)
+}
+
+/// The same fixture with no Spotify session (`spotify_connected == false`).
+fn session_free_app_with_channel() -> (App, Receiver<IoEvent>) {
+  let (tx, rx) = channel();
+  let app = App::new(tx, UserConfig::new(), None);
   (app, rx)
 }
 
@@ -266,6 +273,62 @@ fn toggle_shuffle_flips_the_spotify_shuffle_state() {
   assert!(matches!(rx.try_recv(), Ok(IoEvent::Shuffle(true))));
 }
 
+// --- transport without a Spotify session ---
+
+#[test]
+fn next_track_without_a_session_reports_nothing_playing() {
+  let (mut app, rx) = session_free_app_with_channel();
+
+  app.apply(Action::NextTrack);
+
+  assert!(rx.try_recv().is_err());
+  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+}
+
+#[test]
+fn toggle_playback_without_a_session_reports_nothing_playing() {
+  let (mut app, rx) = session_free_app_with_channel();
+
+  app.apply(Action::TogglePlayback);
+
+  assert!(rx.try_recv().is_err());
+  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+}
+
+#[test]
+fn volume_down_without_a_session_leaves_no_latch() {
+  // The fixture starts at 100%, so only a decrease reaches the API fallback.
+  let (mut app, rx) = session_free_app_with_channel();
+
+  app.apply(Action::VolumeDown);
+
+  assert!(rx.try_recv().is_err());
+  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  assert!(!app.is_volume_change_in_flight);
+  assert!(app.pending_volume.is_none());
+}
+
+#[test]
+fn set_repeat_without_a_session_reports_nothing_playing() {
+  let (mut app, rx) = session_free_app_with_channel();
+
+  app.apply(Action::SetRepeat(RepeatSetting::Track));
+
+  assert!(rx.try_recv().is_err());
+  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+}
+
+#[test]
+fn flush_pending_volume_without_a_session_clears_the_pending_value() {
+  let (mut app, rx) = session_free_app_with_channel();
+  app.pending_volume = Some(40);
+
+  app.flush_pending_volume();
+
+  assert!(rx.try_recv().is_err());
+  assert!(app.pending_volume.is_none());
+}
+
 // --- jump-to navigation ---
 
 #[test]
@@ -386,6 +449,18 @@ fn play_uris_carries_the_offset() {
     rx.try_recv(),
     Ok(IoEvent::StartPlayback(None, Some(_), Some(0)))
   ));
+}
+
+#[test]
+fn play_uris_with_an_empty_list_dispatches_nothing() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::PlayUris {
+    uris: vec![],
+    offset: None,
+  });
+
+  assert!(rx.try_recv().is_err());
 }
 
 #[test]
@@ -2128,6 +2203,36 @@ fn select_source_spotify_fetches_no_sidebar() {
   app.apply(Action::SelectSource(Source::Spotify));
 
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn selecting_spotify_without_a_session_does_not_reach_disk() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = session_free_app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+
+  app.apply(Action::SelectSource(Source::Spotify));
+
+  assert_eq!(app.active_source, Source::Spotify);
+  assert!(!dir.path().join("state.yml").exists());
+
+  app.spotify_connected = true;
+  app.persist_active_source();
+
+  let written = std::fs::read_to_string(dir.path().join("state.yml")).unwrap();
+  assert!(written.contains("active_source") && written.contains("Spotify"));
+}
+
+#[test]
+fn selecting_a_free_source_without_a_session_still_persists() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = session_free_app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+
+  app.apply(Action::SelectSource(Source::Local));
+
+  let written = std::fs::read_to_string(dir.path().join("state.yml")).unwrap();
+  assert!(written.contains("active_source") && written.contains("Local"));
 }
 
 // --- the now-playing item family ---

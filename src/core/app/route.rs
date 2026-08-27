@@ -226,6 +226,17 @@ impl App {
   pub fn set_active_source(&mut self, source: Source) {
     self.active_source = source;
     self.runtime_state.active_source = source;
+    // The Spotify scope reaches disk when the login succeeds (see
+    // `persist_active_source`), so a cancelled login never forces a browser at
+    // the next boot.
+    if source == Source::Spotify && !self.spotify_connected {
+      return;
+    }
+    self.persist_active_source();
+  }
+
+  /// Write the current browse scope to `state.yml`.
+  pub(crate) fn persist_active_source(&mut self) {
     if let Err(e) = self.save_runtime_state(
       &crate::core::state::PersistedRuntimeState::active_source(self.runtime_state.active_source),
     ) {

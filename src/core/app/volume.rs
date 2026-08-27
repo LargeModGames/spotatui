@@ -1,7 +1,30 @@
 use super::*;
 
 impl App {
+  /// Coalesced Web API volume for an external device.
+  fn queue_api_volume(&mut self, volume: u8) {
+    if self.playback_owner() == PlaybackOwner::None {
+      self.set_status_message(NOTHING_PLAYING_STATUS, 4);
+      return;
+    }
+    self.pending_volume = Some(volume);
+    if !self.is_volume_change_in_flight {
+      self.is_volume_change_in_flight = true;
+      self.dispatch(IoEvent::ChangeVolume(volume));
+    }
+  }
+
   pub fn flush_pending_volume(&mut self) {
+    if self.pending_volume.is_some() && self.playback_owner() == PlaybackOwner::None {
+      self.pending_volume = None;
+      return;
+    }
+    // A decoded source took the value in its own branch; a Web API call here
+    // would only latch `is_volume_change_in_flight` with no Spotify reply to
+    // clear it.
+    if self.active_decoded_source() {
+      return;
+    }
     if self.is_volume_change_in_flight {
       return; // previous request still processing
     }
@@ -80,13 +103,7 @@ impl App {
         }
       }
 
-      // Fallback to API-based volume control for external devices
-      // Coalesce: only dispatch if no request is already in flight
-      self.pending_volume = Some(next_volume);
-      if !self.is_volume_change_in_flight {
-        self.is_volume_change_in_flight = true;
-        self.dispatch(IoEvent::ChangeVolume(next_volume));
-      }
+      self.queue_api_volume(next_volume);
     }
   }
 
@@ -136,13 +153,7 @@ impl App {
         }
       }
 
-      // Fallback to API-based volume control for external devices
-      // Coalesce: only dispatch if no request is already in flight
-      self.pending_volume = Some(next_volume);
-      if !self.is_volume_change_in_flight {
-        self.is_volume_change_in_flight = true;
-        self.dispatch(IoEvent::ChangeVolume(next_volume));
-      }
+      self.queue_api_volume(next_volume);
     }
   }
 
@@ -197,13 +208,7 @@ impl App {
         }
       }
 
-      // Fallback to API-based volume control for external devices
-      // Coalesce: only dispatch if no request is already in flight
-      self.pending_volume = Some(next_volume_u8);
-      if !self.is_volume_change_in_flight {
-        self.is_volume_change_in_flight = true;
-        self.dispatch(IoEvent::ChangeVolume(next_volume_u8));
-      }
+      self.queue_api_volume(next_volume_u8);
     }
   }
 }

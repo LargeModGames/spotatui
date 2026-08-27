@@ -1,6 +1,79 @@
 use super::*;
 
+pub(crate) const NOTHING_PLAYING_STATUS: &str = "Nothing is playing";
+
+/// The status shown when a Spotify-bound request finds no session.
+pub(crate) const SPOTIFY_NOT_CONNECTED_STATUS: &str =
+  "Spotify not connected. Press `d` and pick Spotify to log in.";
+
+/// Who owns the audio output, in the order the transport chains check.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlaybackOwner {
+  /// The native queue slot (a decoded track or a queued Spotify track).
+  Queue,
+  /// A decoded source's sink (Local, Subsonic, Qobuz, Radio, YouTube).
+  Decoded,
+  /// librespot as the active Connect device.
+  #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+  NativeSpotify,
+  /// A Spotify session with no local player: an external device or idle.
+  Spotify,
+  /// No player and no session.
+  None,
+}
+
 impl App {
+  pub(crate) fn playback_owner(&self) -> PlaybackOwner {
+    if self.queue_owns_playback() {
+      return PlaybackOwner::Queue;
+    }
+    if self.active_decoded_source() {
+      return PlaybackOwner::Decoded;
+    }
+    #[cfg(feature = "streaming")]
+    if self.is_native_streaming_active_for_playback() {
+      return PlaybackOwner::NativeSpotify;
+    }
+    if self.spotify_connected {
+      return PlaybackOwner::Spotify;
+    }
+    PlaybackOwner::None
+  }
+
+  /// The last arm of a transport chain: the Web API when a session exists,
+  /// otherwise a source-neutral status instead of the "not connected" nag.
+  pub(crate) fn dispatch_spotify_fallback(&mut self, event: IoEvent) {
+    if self.playback_owner() == PlaybackOwner::None {
+      self.set_status_message(NOTHING_PLAYING_STATUS, 4);
+      return;
+    }
+    self.dispatch(event);
+  }
+
+  /// Whether a decoded source owns the sink and is not paused.
+  pub(crate) fn decoded_is_playing(&self) -> bool {
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "internet-radio",
+      feature = "youtube"
+    ))]
+    {
+      self.active_decoded_player().is_some_and(|p| !p.is_paused())
+    }
+    #[cfg(not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "internet-radio",
+      feature = "youtube"
+    )))]
+    {
+      false
+    }
+  }
+
   /// Check if native streaming is the active playback device
   /// Returns true while the player is connected or reconnecting and it is the
   /// currently active device.
@@ -209,16 +282,6 @@ impl App {
     feature = "internet-radio",
     feature = "youtube"
   ))]
-  // Consumed only by the OS media integrations (MPRIS / macOS / Windows), so
-  // builds with decoded sources but none of those integrations leave it unused.
-  #[cfg_attr(
-    not(any(
-      all(feature = "mpris", target_os = "linux"),
-      all(feature = "macos-media", target_os = "macos"),
-      all(feature = "windows-media", target_os = "windows")
-    )),
-    allow(dead_code)
-  )]
   pub fn active_decoded_player(&self) -> Option<&std::sync::Arc<crate::infra::audio::LocalPlayer>> {
     #[cfg(any(
       feature = "local-files",
@@ -299,7 +362,7 @@ impl App {
   }
 }
 
-#[cfg(all(test, feature = "streaming"))]
+#[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
@@ -316,6 +379,7 @@ mod tests {
 
     assert!(!app.active_decoded_source());
     assert!(app.active_source_position_ms().is_none());
+    assert_eq!(app.playback_owner(), PlaybackOwner::Queue);
   }
 
   #[cfg(all(feature = "streaming", feature = "audio-decode"))]
@@ -329,5 +393,37 @@ mod tests {
     });
 
     assert!(app.active_decoded_player().is_none());
+  }
+
+  #[test]
+  fn playback_owner_is_none_without_a_session() {
+    let (app, _rx) = session_free_app();
+
+    assert_eq!(app.playback_owner(), PlaybackOwner::None);
+  }
+
+  #[test]
+  fn playback_owner_is_spotify_with_a_session_and_no_player() {
+    assert_eq!(make_app_simple().playback_owner(), PlaybackOwner::Spotify);
+  }
+
+  #[test]
+  fn dispatch_spotify_fallback_reports_nothing_playing_without_a_session() {
+    let (mut app, rx) = session_free_app();
+
+    app.dispatch_spotify_fallback(IoEvent::NextTrack);
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  }
+
+  #[test]
+  fn dispatch_spotify_fallback_dispatches_with_a_session() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+
+    app.dispatch_spotify_fallback(IoEvent::NextTrack);
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
   }
 }

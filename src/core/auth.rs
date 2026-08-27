@@ -456,6 +456,15 @@ pub async fn authenticate_with_fallback(
   authenticate_candidates(client_config, config_paths, true, onboarding).await
 }
 
+/// Load a cached token (with refresh); fails instead of opening a browser.
+pub async fn authenticate_cached(
+  client_config: &mut ClientConfig,
+  config_paths: &ConfigPaths,
+  onboarding: &dyn Onboarding,
+) -> Result<AuthenticatedClient> {
+  authenticate_candidates(client_config, config_paths, false, onboarding).await
+}
+
 /// Best-effort silent Spotify load for a free-source launch: returns `Some` only
 /// when a cached token is present and usable, `None` otherwise (never prompts).
 pub async fn try_load_spotify_silently(
@@ -463,7 +472,7 @@ pub async fn try_load_spotify_silently(
   config_paths: &ConfigPaths,
   onboarding: &dyn Onboarding,
 ) -> Option<AuthenticatedClient> {
-  authenticate_candidates(client_config, config_paths, false, onboarding)
+  authenticate_cached(client_config, config_paths, onboarding)
     .await
     .ok()
 }

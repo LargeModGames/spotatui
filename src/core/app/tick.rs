@@ -202,10 +202,11 @@ impl App {
 
     self.poll_current_playback();
     let playing_now = self.user_config.behavior.keepawake_enabled
-      && self
-        .native_is_playing
-        .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
-        .unwrap_or(false);
+      && (self.decoded_is_playing()
+        || self
+          .native_is_playing
+          .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
+          .unwrap_or(false));
     match (playing_now, self.keepawake.is_some()) {
       (true, false) => {
         self.keepawake = keepawake::Builder::default()

@@ -15,7 +15,7 @@ pub mod sync;
 pub mod user;
 pub mod utils;
 
-use crate::core::app::App;
+use crate::core::app::{App, SPOTIFY_NOT_CONNECTED_STATUS};
 use crate::core::auth;
 use crate::core::config::ClientConfig;
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
@@ -593,13 +593,11 @@ impl Network {
     if !bypass_auth {
       if self.spotify.is_none() {
         self
-          .show_status_message(
-            "Spotify not connected. Press `d` and pick Spotify to log in.".to_string(),
-            6,
-          )
+          .show_status_message(SPOTIFY_NOT_CONNECTED_STATUS.to_string(), 6)
           .await;
         let mut app = self.app.lock().await;
         app.is_loading = false;
+        app.is_volume_change_in_flight = false;
         if pending_playlist_id
           .as_deref()
           .is_some_and(|id| app.pending_playlist_open.as_deref() == Some(id))
@@ -1275,6 +1273,9 @@ impl Network {
       let mut app = self.app.lock().await;
       app.spotify_token_expiry = expiry;
       app.spotify_connected = true;
+      if app.active_source == crate::core::source::Source::Spotify {
+        app.persist_active_source();
+      }
       // Load Spotify data now that a session exists.
       app.dispatch(IoEvent::GetUser);
       app.dispatch(IoEvent::GetPlaylists);
@@ -1455,6 +1456,11 @@ impl Network {
   }
 
   pub async fn process_party_messages(&mut self) {
+    // Every relay handler below drives the Spotify client; without a session
+    // there is nothing to sync and `spotify()` would panic the pump.
+    if self.spotify.is_none() {
+      return;
+    }
     let messages: Vec<sync::SyncMessage> = {
       match &mut self.party_incoming_rx {
         Some(rx) => {

@@ -236,6 +236,16 @@ impl Default for App {
 }
 
 impl App {
+  /// `App::default()` with a Spotify session, for tests that need one without
+  /// an `IoEvent` channel.
+  #[cfg(all(test, feature = "tui"))]
+  pub(crate) fn default_connected() -> App {
+    App {
+      spotify_connected: true,
+      ..App::default()
+    }
+  }
+
   #[cfg(test)]
   pub fn new(
     io_tx: Sender<IoEvent>,

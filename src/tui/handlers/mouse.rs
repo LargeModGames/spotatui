@@ -1199,7 +1199,7 @@ mod tests {
 
   #[test]
   fn click_main_layout_playbar_control_triggers_action() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1224,7 +1224,7 @@ mod tests {
 
   #[test]
   fn click_main_layout_playbar_progress_seeks() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1270,7 +1270,7 @@ mod tests {
 
   #[test]
   fn click_playbar_time_label_does_not_seek() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1293,7 +1293,7 @@ mod tests {
 
   #[test]
   fn drag_playbar_progress_seeks() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1326,7 +1326,7 @@ mod tests {
     use crate::tui::ui::player::draw_playbar;
     use ratatui::{backend::TestBackend, Terminal};
 
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1367,7 +1367,7 @@ mod tests {
 
   #[test]
   fn click_lyrics_view_playbar_control_triggers_action() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1393,7 +1393,7 @@ mod tests {
 
   #[test]
   fn click_miniplayer_control_triggers_action_and_keeps_miniplayer_focus() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1446,7 +1446,7 @@ mod tests {
 
   #[test]
   fn click_hidden_lyrics_view_playbar_area_does_nothing() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1474,7 +1474,7 @@ mod tests {
 
   #[test]
   fn resized_playbar_control_click_still_maps_correctly() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1498,7 +1498,7 @@ mod tests {
 
   #[test]
   fn smaller_resized_playbar_control_click_still_maps_correctly() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1522,7 +1522,7 @@ mod tests {
 
   #[test]
   fn click_playbar_outside_controls_does_nothing() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
