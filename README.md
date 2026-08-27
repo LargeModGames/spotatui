@@ -246,7 +246,7 @@ Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recom
 
 ### Qobuz
 
-Pick **Qobuz** in the first-run picker or the `d` menu: spotatui opens the Qobuz login page in your browser and saves the token to `qobuz_credentials.yml` in the config directory (owner-only). No app registration is needed. The sidebar lists your favorite tracks, playlists, and favorite albums; search finds tracks. Each track plays while it downloads: the encrypted stream is decrypted and rebuilt as a FLAC temporary file, playback starts after the first segments arrive, and a seek past the downloaded part continues the download from there. When a track plays from a Qobuz listing, the playbar shows the format that Qobuz delivered, for example `FLAC 16/44.1`. This can be lower than the configured quality.
+Pick **Qobuz** in the first-run picker or the `d` menu: spotatui opens the Qobuz login page in your browser and saves the token to `qobuz_credentials.yml` in the config directory (owner-only on Unix; on Windows the file keeps the config folder's permissions). No app registration is needed. The sidebar lists your favorite tracks, playlists, and favorite albums; search finds tracks. Each track plays while it downloads: the encrypted stream is decrypted and rebuilt as a FLAC temporary file, playback starts after the first segments arrive, and a seek past the downloaded part continues the download from there. When a track plays from a Qobuz listing, the playbar shows the format that Qobuz delivered, for example `FLAC 16/44.1`. This can be lower than the configured quality.
 
 ```yaml
 behavior:
