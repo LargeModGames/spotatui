@@ -23,7 +23,7 @@ cargo run --features all-sources
 ## CI Checks (run before opening a PR)
 
 ```bash
-cargo fmt --all
+car2go fmt --all
 cargo clippy --no-default-features --features telemetry,tui -- -D warnings
 cargo test --no-default-features --features telemetry,tui
 ```
@@ -363,7 +363,7 @@ navigation. Adding a binding means fields on both `KeyBindings` and
 
 ### Config & on-disk files
 
-Four files, four owners - a value that changes as the app runs goes in state,
+Five files, five owners - a value that changes as the app runs goes in state,
 never config:
 
 | File | Owner | Contents |
@@ -372,6 +372,7 @@ never config:
 | `client.yml` (config dir) | `core/config.rs` | Spotify app credentials |
 | `state.yml` (state dir) | `core/state.rs` | machine-written runtime values |
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
+| `qobuz_credentials.yml` (config dir) | `infra/qobuz/auth.rs` | the Qobuz login token (feature `qobuz`) |
 
 - All paths resolve through `core/paths.rs`, never `dirs::` directly.
 - `state.yml` saves are read-modify-write **sparse patches** so a second running
@@ -438,10 +439,9 @@ working in those directories.
   a seek), rebuilt as a FLAC `NamedTempFile` the session keeps. The fetch runs
   off the pump behind a `fetch_id` guard; a superseded stream is dropped, which
   cancels its download. The transport (`sign.rs`, `stream/`) is pure and unit
-  tested. The
-  three web-player constants are scraped at runtime (`auth.rs`), cached in
-  `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars; they are
-  never embedded. Failures are status messages, never `handle_error`.
+  tested. The three web-player constants are scraped at runtime (`auth.rs`),
+  cached in `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars;
+  they are never embedded. Failures are status messages, never `handle_error`.
 - macOS cannot play any decoded source: `LocalPlayer::new()` bails there because
   rodio SIGSEGVs on CoreAudio/Bluetooth (#9/#20) - which is why macOS releases
   exclude the source features.

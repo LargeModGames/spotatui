@@ -21,11 +21,11 @@ const LOGIN_URL: &str = "https://play.qobuz.com/login";
 const PLAY_ORIGIN: &str = "https://play.qobuz.com";
 const BUNDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-pub const APP_ID_ENV: &str = "SPOTATUI_QOBUZ_APP_ID";
-pub const APP_SECRET_ENV: &str = "SPOTATUI_QOBUZ_APP_SECRET";
-pub const OAUTH_KEY_ENV: &str = "SPOTATUI_QOBUZ_OAUTH_KEY";
+const APP_ID_ENV: &str = "SPOTATUI_QOBUZ_APP_ID";
+const APP_SECRET_ENV: &str = "SPOTATUI_QOBUZ_APP_SECRET";
+const OAUTH_KEY_ENV: &str = "SPOTATUI_QOBUZ_OAUTH_KEY";
 /// Overrides the saved user token (the value of `X-User-Auth-Token`).
-pub const TOKEN_ENV: &str = "SPOTATUI_QOBUZ_TOKEN";
+pub(super) const TOKEN_ENV: &str = "SPOTATUI_QOBUZ_TOKEN";
 
 /// Base64 that accepts both alphabets, with or without padding.
 const LENIENT_BASE64: GeneralPurpose = GeneralPurpose::new(
@@ -56,7 +56,7 @@ pub fn decode_base64(text: &str) -> Result<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 /// The constants from the env overrides, when all three are set and non-empty.
-pub fn constants_from_env_with(
+fn constants_from_env_with(
   app_id: Option<String>,
   app_secret: Option<String>,
   oauth_key: Option<String>,
@@ -79,7 +79,7 @@ fn constants_from_env() -> Option<QobuzBundleCache> {
 }
 
 /// The bundle path (`/resources/<version>/bundle.js`) from the login page.
-pub fn bundle_path(login_html: &str) -> Option<String> {
+fn bundle_path(login_html: &str) -> Option<String> {
   Regex::new(r#"src="(/resources/[^"/]+/bundle\.js)""#)
     .ok()?
     .captures(login_html)
@@ -87,7 +87,7 @@ pub fn bundle_path(login_html: &str) -> Option<String> {
 }
 
 /// The version segment of a bundle path.
-pub fn bundle_version(path: &str) -> Option<String> {
+fn bundle_version(path: &str) -> Option<String> {
   path
     .strip_prefix("/resources/")?
     .strip_suffix("/bundle.js")
@@ -102,7 +102,7 @@ fn capture(js: &str, pattern: &str, what: &str) -> Result<String> {
 }
 
 /// Extract the three constants from the bundle source.
-pub fn parse_bundle(js: &str, version: &str) -> Result<QobuzBundleCache> {
+fn parse_bundle(js: &str, version: &str) -> Result<QobuzBundleCache> {
   let app_id = capture(js, r#"production:\{api:\{appId:"(\d+)""#, "app id")?;
   // ASCII classes only: the captures are sliced by byte index further down.
   let seed_re = Regex::new(r#"initialSeed\("([A-Za-z0-9+/=]+)",window\.utimezone\.([A-Za-z]+)\)"#)?;
@@ -220,7 +220,7 @@ pub struct QobuzCredentials {
 }
 
 /// Read the credentials file; `None` when missing, unreadable, or without a token.
-pub fn read_credentials(path: &Path) -> Option<QobuzCredentials> {
+fn read_credentials(path: &Path) -> Option<QobuzCredentials> {
   std::fs::read_to_string(path)
     .ok()
     .and_then(|text| serde_yaml::from_str::<QobuzCredentials>(&text).ok())
@@ -228,13 +228,21 @@ pub fn read_credentials(path: &Path) -> Option<QobuzCredentials> {
 }
 
 /// Write the credentials file with private permissions.
-pub fn write_credentials(path: &Path, credentials: &QobuzCredentials) -> Result<()> {
+fn write_credentials(path: &Path, credentials: &QobuzCredentials) -> Result<()> {
   if let Some(dir) = path.parent() {
     crate::core::paths::ensure_private_dir(dir)?;
   }
   let yaml = serde_yaml::to_string(credentials).context("serializing Qobuz credentials")?;
   crate::core::auth::write_private_file_atomic(path, yaml.as_bytes())
     .with_context(|| format!("writing {}", path.display()))
+}
+
+/// Keep the token in memory and save the credentials file.
+pub fn save_login(credentials: &QobuzCredentials) -> Result<()> {
+  set_token(Some(credentials.user_auth_token.clone()));
+  let path = crate::core::paths::qobuz_credentials_path()
+    .ok_or_else(|| anyhow!("no config directory to save credentials in"))?;
+  write_credentials(&path, credentials)
 }
 
 /// The token to use: the env override first, then the credentials file.
@@ -245,7 +253,7 @@ pub fn token_with(env_token: Option<String>, saved: Option<QobuzCredentials>) ->
 }
 
 /// The saved or overridden token, if any.
-pub fn load_token() -> Option<String> {
+pub(super) fn load_token() -> Option<String> {
   token_with(
     std::env::var(TOKEN_ENV).ok(),
     crate::core::paths::qobuz_credentials_path().and_then(|p| read_credentials(&p)),
@@ -275,15 +283,15 @@ pub fn set_token(token: Option<String>) {
 
 const OAUTH_URL: &str = "https://www.qobuz.com/signin/oauth";
 /// How long the browser round trip may take before the login is abandoned.
-pub const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// The authorization URL for `app_id` with a `localhost:<port>` redirect.
-pub fn login_url(app_id: &str, port: u16) -> String {
+fn login_url(app_id: &str, port: u16) -> String {
   format!("{OAUTH_URL}?ext_app_id={app_id}&redirect_url=http%3A%2F%2Flocalhost%3A{port}")
 }
 
 /// The authorization code from the callback URL (`code_autorisation`, else `code`).
-pub fn callback_code(url: &str) -> Option<String> {
+fn callback_code(url: &str) -> Option<String> {
   let parsed = url::Url::parse(url).ok()?;
   let mut fallback = None;
   for (key, value) in parsed.query_pairs() {
@@ -360,7 +368,7 @@ impl LoginAttempt {
 }
 
 /// `GET oauth/callback`: trade the browser's code for the user token.
-pub async fn exchange_code(constants: &QobuzBundleCache, code: &str) -> Result<QobuzCredentials> {
+async fn exchange_code(constants: &QobuzBundleCache, code: &str) -> Result<QobuzCredentials> {
   let source = super::QobuzSource::new(&constants.app_id, &constants.app_secret, "");
   let reply: super::types::OauthCallback = source
     .get(

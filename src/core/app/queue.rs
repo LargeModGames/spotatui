@@ -177,8 +177,8 @@ impl App {
   }
 
   /// The queue slot's player when it is playing a *decoded* queued track (local /
-  /// Subsonic / YouTube). `None` for a Spotify slot or an empty slot. Gated on
-  /// exactly those three sources: they are the decoded ones a queue item can
+  /// Subsonic / Qobuz / YouTube). `None` for a Spotify slot or an empty slot. Gated
+  /// on exactly those four sources: they are the decoded ones a queue item can
   /// name, so a build whose only decoded source is internet radio has no
   /// decoded slot to look up.
   #[cfg(any(

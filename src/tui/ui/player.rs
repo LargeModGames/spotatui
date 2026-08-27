@@ -1220,7 +1220,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       // The native queue ignores the decoded shuffle/repeat modes (they belong
       // to the suspended source resumed once the queue drains), so hide them.
       show_modes: false,
-      quality: None,
+      quality: d.quality.clone(),
     };
     render_local_playbar(f, app, layout_chunk, &view);
     return;

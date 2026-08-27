@@ -96,7 +96,7 @@ pub struct SegmentStream {
   skip: usize,
   /// Chunks at or past this index are not yielded until the next seek.
   end: usize,
-  in_flight: Option<JoinHandle<Result<Vec<u8>>>>,
+  in_flight: Option<JoinHandle<Result<Bytes>>>,
   attempts: u32,
   failure: Option<String>,
 }
@@ -183,7 +183,7 @@ impl SegmentStream {
     }
   }
 
-  fn spawn_fetch(&self, index: u32) -> JoinHandle<Result<Vec<u8>>> {
+  fn spawn_fetch(&self, index: u32) -> JoinHandle<Result<Bytes>> {
     let http = self.http.clone();
     let template = self.url_template.clone();
     let key = self.content_key;
@@ -221,7 +221,7 @@ impl Stream for SegmentStream {
       };
       this.in_flight = None;
       match outcome {
-        Ok(bytes) => Bytes::from(bytes),
+        Ok(bytes) => bytes,
         Err(e) => {
           // `stream-download` logs the error and polls again; the failure
           // flag ends the stream after the last attempt.

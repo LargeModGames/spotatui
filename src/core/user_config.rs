@@ -53,13 +53,16 @@ pub fn normalize_tick_rate_milliseconds(value: i64) -> u64 {
 const QOBUZ_QUALITY_IDS: [u8; 4] = [5, 6, 7, 27];
 /// Settings-screen labels for the Qobuz qualities, in [`QOBUZ_QUALITY_IDS`] order.
 pub const QOBUZ_QUALITY_LABELS: &[&str] = &["MP3 320", "FLAC 16/44.1", "FLAC 24/96", "FLAC 24/192"];
+/// The default quality (FLAC 16/44.1) as an index into both tables.
+const QOBUZ_QUALITY_DEFAULT_INDEX: usize = 1;
+const QOBUZ_QUALITY_DEFAULT: u8 = QOBUZ_QUALITY_IDS[QOBUZ_QUALITY_DEFAULT_INDEX];
 
 /// The settings label of a Qobuz `format_id` (unknown ids read as the default).
 pub fn qobuz_quality_label(quality: u8) -> &'static str {
   let index = QOBUZ_QUALITY_IDS
     .iter()
     .position(|&id| id == quality)
-    .unwrap_or(1);
+    .unwrap_or(QOBUZ_QUALITY_DEFAULT_INDEX);
   QOBUZ_QUALITY_LABELS[index]
 }
 
@@ -68,7 +71,7 @@ pub fn qobuz_quality_from_label(label: &str) -> u8 {
   let index = QOBUZ_QUALITY_LABELS
     .iter()
     .position(|&l| l == label)
-    .unwrap_or(1);
+    .unwrap_or(QOBUZ_QUALITY_DEFAULT_INDEX);
   QOBUZ_QUALITY_IDS[index]
 }
 
@@ -77,7 +80,7 @@ fn qobuz_quality_or_default(quality: u8) -> u8 {
   if QOBUZ_QUALITY_IDS.contains(&quality) {
     quality
   } else {
-    6
+    QOBUZ_QUALITY_DEFAULT
   }
 }
 
@@ -1101,7 +1104,7 @@ impl UserConfig {
         subsonic_username: None,
         subsonic_password: None,
         ytdlp_path: None,
-        qobuz_quality: 6,
+        qobuz_quality: QOBUZ_QUALITY_DEFAULT,
         radio_stations: Vec::new(),
         // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
         gauge_filled_icon: "⣿".to_string(),

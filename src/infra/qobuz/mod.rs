@@ -19,7 +19,6 @@ pub mod stream;
 mod types;
 
 use std::fmt;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -32,7 +31,7 @@ use crate::core::plugin_api::{ArtistRef, PlaylistInfo, SearchResults, TrackInfo}
 use crate::core::source::{MediaSource, Searcher};
 use crate::infra::audio::LocalPlayer;
 use stream::cmaf::InitSegment;
-use stream::download::{self, TrackDownload};
+use stream::download;
 use stream::progressive::SegmentStream;
 
 pub use stream::cmaf::StreamQuality;
@@ -98,10 +97,10 @@ impl QobuzPlaybackState {
 
 const API_BASE: &str = "https://www.qobuz.com/api.json/0.2/";
 
-pub const TRACK_PREFIX: &str = "qobuz:track:";
-pub const PLAYLIST_PREFIX: &str = "qobuz:playlist:";
-pub const ALBUM_PREFIX: &str = "qobuz:album:";
-pub const FAVORITES_URI: &str = "qobuz:favorites:tracks";
+const TRACK_PREFIX: &str = "qobuz:track:";
+const PLAYLIST_PREFIX: &str = "qobuz:playlist:";
+const ALBUM_PREFIX: &str = "qobuz:album:";
+const FAVORITES_URI: &str = "qobuz:favorites:tracks";
 
 /// Per-request caps; they bound each segment GET, never a whole track.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -140,9 +139,9 @@ impl StreamSession {
 }
 
 /// What `file/url` returned for one track, with the content key unwrapped.
-pub struct TrackStream {
-  pub url_template: String,
-  pub content_key: [u8; 16],
+struct TrackStream {
+  url_template: String,
+  content_key: [u8; 16],
 }
 
 fn unix_now() -> u64 {
@@ -298,7 +297,7 @@ impl QobuzSource {
   }
 
   /// The shared session, renewed when expired.
-  pub async fn stream_session(&self) -> Result<StreamSession> {
+  async fn stream_session(&self) -> Result<StreamSession> {
     let mut slot = shared_session().lock().await;
     if let Some(session) = slot.as_ref().filter(|s| s.is_valid_at(unix_now())) {
       return Ok(session.clone());
@@ -309,7 +308,7 @@ impl QobuzSource {
   }
 
   /// `GET file/url` for one track at `format_id` (5, 6, 7, or 27).
-  pub async fn file_url(
+  async fn file_url(
     &self,
     session: &StreamSession,
     track_id: &str,
@@ -361,17 +360,6 @@ impl QobuzSource {
     }
   }
 
-  /// Start a track download into `dest`.
-  pub async fn begin_download(
-    &self,
-    track_id: &str,
-    format_id: u8,
-    dest: &Path,
-  ) -> Result<TrackDownload> {
-    let stream = self.track_stream(track_id, format_id).await?;
-    download::begin(&self.http, &stream.url_template, stream.content_key, dest).await
-  }
-
   /// Start a progressive stream of a track: segment 0 is fetched, so the
   /// total size and the delivered format are known before any audio.
   pub async fn begin_stream(
@@ -395,47 +383,37 @@ impl QobuzSource {
   // -------------------------------------------------------------------------
 
   async fn user_playlists(&self) -> Result<Vec<types::Playlist>> {
-    let mut out = Vec::new();
-    loop {
+    paginate(|offset| async move {
       let page: types::UserPlaylists = self
         .get(
           "playlist/getUserPlaylists",
           &[
             ("limit", PAGE_LIMIT.to_string()),
-            ("offset", out.len().to_string()),
+            ("offset", offset.to_string()),
           ],
         )
         .await?;
-      let got = page.playlists.items.len();
-      let total = page.playlists.total as usize;
-      out.extend(page.playlists.items);
-      if got == 0 || out.len() >= total || out.len() >= MAX_ITEMS {
-        return Ok(out);
-      }
-    }
+      Ok((page.playlists.items, page.playlists.total as usize))
+    })
+    .await
   }
 
   async fn favorite_albums(&self) -> Result<Vec<types::Album>> {
-    let mut out = Vec::new();
-    loop {
+    paginate(|offset| async move {
       let page: types::Favorites = self
         .get(
           "favorite/getUserFavorites",
           &[
             ("type", "albums".to_string()),
             ("limit", PAGE_LIMIT.to_string()),
-            ("offset", out.len().to_string()),
+            ("offset", offset.to_string()),
           ],
         )
         .await?;
       let albums = page.albums.unwrap_or_default();
-      let got = albums.items.len();
-      let total = albums.total as usize;
-      out.extend(albums.items);
-      if got == 0 || out.len() >= total || out.len() >= MAX_ITEMS {
-        return Ok(out);
-      }
-    }
+      Ok((albums.items, albums.total as usize))
+    })
+    .await
   }
 
   async fn favorite_track_count(&self) -> Result<u32> {
@@ -506,20 +484,33 @@ impl QobuzSource {
   }
 
   async fn listing_tracks(&self, listing: &Listing) -> Result<Vec<TrackInfo>> {
-    let mut out = Vec::new();
-    loop {
-      let (page, album) = self.listing_page(listing, out.len()).await?;
-      let got = page.items.len();
-      let total = page.total as usize;
-      out.extend(
-        page
-          .items
-          .iter()
-          .map(|t| track_to_track_info(t, album.as_ref())),
-      );
-      if got == 0 || out.len() >= total || out.len() >= MAX_ITEMS {
-        return Ok(out);
-      }
+    paginate(|offset| async move {
+      let (page, album) = self.listing_page(listing, offset).await?;
+      let tracks = page
+        .items
+        .iter()
+        .map(|t| track_to_track_info(t, album.as_ref()))
+        .collect();
+      Ok((tracks, page.total as usize))
+    })
+    .await
+  }
+}
+
+/// Collect every page of a listing; `fetch(offset)` returns one page's items
+/// and the listing's total.
+async fn paginate<T, F, Fut>(mut fetch: F) -> Result<Vec<T>>
+where
+  F: FnMut(usize) -> Fut,
+  Fut: std::future::Future<Output = Result<(Vec<T>, usize)>>,
+{
+  let mut out = Vec::new();
+  loop {
+    let (items, total) = fetch(out.len()).await?;
+    let got = items.len();
+    out.extend(items);
+    if got == 0 || out.len() >= total || out.len() >= MAX_ITEMS {
+      return Ok(out);
     }
   }
 }
@@ -646,21 +637,14 @@ impl MediaSource for QobuzSource {
 
   /// Favorite tracks, then the user's playlists, then favorite albums.
   async fn playlists(&self) -> Result<Vec<PlaylistInfo>> {
-    let mut out = vec![favorites_playlist(self.favorite_track_count().await?)];
-    out.extend(
-      self
-        .user_playlists()
-        .await?
-        .iter()
-        .map(playlist_to_playlist_info),
-    );
-    out.extend(
-      self
-        .favorite_albums()
-        .await?
-        .iter()
-        .map(album_to_playlist_info),
-    );
+    let (favorite_count, playlists, albums) = tokio::try_join!(
+      self.favorite_track_count(),
+      self.user_playlists(),
+      self.favorite_albums()
+    )?;
+    let mut out = vec![favorites_playlist(favorite_count)];
+    out.extend(playlists.iter().map(playlist_to_playlist_info));
+    out.extend(albums.iter().map(album_to_playlist_info));
     Ok(out)
   }
 

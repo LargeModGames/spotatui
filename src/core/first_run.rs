@@ -19,7 +19,7 @@ use crate::core::onboarding::Onboarding;
 use crate::core::source::Source;
 use crate::core::state::RuntimeState;
 use crate::core::user_config::UserConfig;
-#[cfg(any(feature = "subsonic", feature = "qobuz"))]
+#[cfg(feature = "subsonic")]
 use anyhow::anyhow;
 use anyhow::Result;
 
@@ -223,10 +223,7 @@ async fn configure_qobuz(onboarding: &dyn Onboarding) -> Result<()> {
       return Ok(());
     }
   };
-  let path = crate::core::paths::qobuz_credentials_path()
-    .ok_or_else(|| anyhow!("cannot resolve the spotatui config directory"))?;
-  auth::write_credentials(&path, &credentials)?;
-  auth::set_token(Some(credentials.user_auth_token.clone()));
+  auth::save_login(&credentials)?;
   onboarding.info("Logged in to Qobuz.");
 
   // Best-effort stream check: a failure is not fatal, the login is saved.

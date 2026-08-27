@@ -223,9 +223,7 @@ fn play_random_song(app: &mut App) {
           });
         }
       }
-      TrackTableContext::LocalPlaylist
-      | TrackTableContext::SubsonicPlaylist
-      | TrackTableContext::QobuzPlaylist => {
+      TrackTableContext::LocalPlaylist | TrackTableContext::SubsonicPlaylist => {
         // Single-file playback: play one random track from the folder/playlist.
         // Wire shape changed with the Action conversion: this used to send the
         // track in the context slot (`StartPlayback(Some(uri), None, None)`).
@@ -246,9 +244,9 @@ fn play_random_song(app: &mut App) {
           });
         }
       }
-      TrackTableContext::YouTubePlaylist => {
+      TrackTableContext::YouTubePlaylist | TrackTableContext::QobuzPlaylist => {
         // Queue the whole playlist and start at a random offset, so
-        // Next/Previous keep working within the playlist.
+        // Next/Previous and auto-advance keep working within the playlist.
         let playable_ids: Vec<String> = app
           .track_table
           .tracks

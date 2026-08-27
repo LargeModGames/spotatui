@@ -122,7 +122,7 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
       Some(true)
     }
     IoEvent::ChangeVolume(volume) => {
-      player.set_volume(*volume as f32 / 100.0);
+      player.set_volume(*volume);
       let mut app = app.lock().await;
       app.runtime_state.volume_percent = *volume;
       app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
@@ -354,7 +354,9 @@ async fn play_queued_subsonic(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &st
   let uri = uri.to_string();
   let name = track.name.clone();
   tokio::spawn(async move {
-    let result = crate::infra::subsonic::dispatch::download_for_queue(&source, &uri).await;
+    let result = crate::infra::subsonic::dispatch::download_for_queue(&source, &uri)
+      .await
+      .map(|tmp| (tmp, None));
     finish_decoded_fetch(&app, fetch_id, result, &name).await;
   });
   true
@@ -376,7 +378,9 @@ async fn play_queued_qobuz(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) 
   let uri = uri.to_string();
   let name = track.name.clone();
   tokio::spawn(async move {
-    let result = crate::infra::qobuz::dispatch::download_for_queue(&source, &uri, quality).await;
+    let result = crate::infra::qobuz::dispatch::download_for_queue(&source, &uri, quality)
+      .await
+      .map(|(tmp, label)| (tmp, Some(label)));
     finish_decoded_fetch(&app, fetch_id, result, &name).await;
   });
   true
@@ -400,7 +404,9 @@ async fn play_queued_youtube(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
   let uri = uri.to_string();
   let name = track.name.clone();
   tokio::spawn(async move {
-    let result = crate::infra::youtube::dispatch::download_for_queue(&source, &uri).await;
+    let result = crate::infra::youtube::dispatch::download_for_queue(&source, &uri)
+      .await
+      .map(|tmp| (tmp, None));
     finish_decoded_fetch(&app, fetch_id, result, &name).await;
   });
   true
@@ -588,21 +594,23 @@ async fn publish_pending_decoded(
     fetch_id,
     #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
     tempfile: None,
+    quality: None,
   }));
   fetch_id
 }
 
 /// Complete a background queue fetch: if the slot still carries `fetch_id`,
-/// play the downloaded file and finalize the slot; otherwise (skipped, torn
-/// down, or replaced meanwhile) drop the result silently. On a download or
-/// decode failure the queue advances past the item, exactly like the old
-/// inline path. Play + finalize happen under one `App` lock so a concurrent
-/// advance (which pops under the same lock) can never interleave.
+/// play the downloaded file and finalize the slot (with the delivered format
+/// label, when the source reports one); otherwise (skipped, torn down, or
+/// replaced meanwhile) drop the result silently. On a download or decode
+/// failure the queue advances past the item, exactly like the old inline
+/// path. Play + finalize happen under one `App` lock so a concurrent advance
+/// (which pops under the same lock) can never interleave.
 #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
 async fn finish_decoded_fetch(
   app: &Arc<Mutex<App>>,
   fetch_id: u64,
-  result: anyhow::Result<tempfile::NamedTempFile>,
+  result: anyhow::Result<(tempfile::NamedTempFile, Option<String>)>,
   track_name: &str,
 ) {
   use crate::infra::queue::QueueNowPlaying;
@@ -611,8 +619,8 @@ async fn finish_decoded_fetch(
     Some(QueueNowPlaying::Decoded(d)) if d.fetch_id == fetch_id => Arc::clone(&d.player),
     _ => return, // superseded — the tempfile drops here
   };
-  let tmp = match result {
-    Ok(tmp) => tmp,
+  let (tmp, quality) = match result {
+    Ok(fetched) => fetched,
     Err(e) => {
       guard.set_status_message(format!("Cannot play {track_name}: {e}"), 4);
       guard.dispatch(IoEvent::AdvanceNativeQueue);
@@ -630,9 +638,10 @@ async fn finish_decoded_fetch(
     guard.dispatch(IoEvent::AdvanceNativeQueue);
     return;
   }
-  player.set_volume(guard.runtime_state.volume_percent as f32 / 100.0);
+  player.set_volume(guard.runtime_state.volume_percent);
   if let Some(QueueNowPlaying::Decoded(d)) = guard.queue_now.as_mut() {
     d.tempfile = Some(tmp);
+    d.quality = quality;
     d.advancing = false;
   }
   guard.set_status_message(format!("\u{266a} {track_name} (queue)"), 4);
@@ -665,6 +674,7 @@ async fn publish_decoded(
     fetch_id: next_fetch_id(),
     #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
     tempfile,
+    quality: None,
   }));
   guard.set_status_message(format!("\u{266a} {name} (queue)"), 4);
   #[cfg(feature = "streaming")]
@@ -771,7 +781,7 @@ async fn release_librespot(app: &Arc<Mutex<App>>) {
 #[cfg(feature = "local-files")]
 async fn apply_volume(app: &Arc<Mutex<App>>, player: &Arc<LocalPlayer>) {
   let volume = app.lock().await.runtime_state.volume_percent;
-  player.set_volume(volume as f32 / 100.0);
+  player.set_volume(volume);
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,8 +1080,10 @@ async fn resume_qobuz(
   queue_player: Option<Arc<LocalPlayer>>,
 ) {
   let Some(index) = resume_index else {
-    if let Some(s) = app.lock().await.qobuz_playback.take() {
-      s.player.stop();
+    // Take under the lock, stop off it: a sink clear waits for the audio thread.
+    let session = app.lock().await.qobuz_playback.take();
+    if let Some(s) = session {
+      Arc::clone(&s.player).stop_detached();
     }
     if let Some(player) = queue_player {
       player.stop();
@@ -1097,11 +1109,7 @@ async fn resume_qobuz(
   let _ = queue_player;
   match replay {
     Some((player, path)) => {
-      let decode_player = Arc::clone(&player);
-      let ok = tokio::task::spawn_blocking(move || decode_player.play_file(&path))
-        .await
-        .map(|r| r.is_ok())
-        .unwrap_or(false);
+      let ok = super::replay_file(Arc::clone(&player), path).await;
       if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
         s.advancing = false;
       }

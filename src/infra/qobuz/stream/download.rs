@@ -1,30 +1,14 @@
-//! Segment download: fetch, decrypt, and write the track as segments arrive.
-//!
-//! Two phases so the caller can read the total size before the long part:
-//! [`begin`] fetches segment 0 and writes the codec header, then
-//! [`TrackDownload::finish`] streams every audio segment into the same file.
-//! The progressive player (`progressive`) shares the segment fetch and skips
-//! the file: it yields each decrypted segment to `stream-download` instead.
-
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
+//! Segment download: fetch, parse, and decrypt one segment at a time. The
+//! progressive stream (`progressive`) drives it and hands each decrypted
+//! segment to `stream-download`.
 
 use anyhow::{anyhow, Context, Result};
+use bytes::Bytes;
 use reqwest::Client;
 
 use super::cmaf::{self, InitSegment};
 
 const SEGMENT_PLACEHOLDER: &str = "$SEGMENT$";
-
-/// A track download after segment 0 was parsed and the header was written.
-pub struct TrackDownload {
-  http: Client,
-  url_template: String,
-  content_key: [u8; 16],
-  init: InitSegment,
-  file: File,
-}
 
 /// Fetch and parse segment 0.
 pub async fn fetch_init(http: &Client, url_template: &str) -> Result<InitSegment> {
@@ -35,58 +19,18 @@ pub async fn fetch_init(http: &Client, url_template: &str) -> Result<InitSegment
   cmaf::parse_init(&bytes).context("segment 0 parse")
 }
 
-/// Fetch and parse segment 0 and write the codec header to `dest`.
-pub async fn begin(
-  http: &Client,
-  url_template: &str,
-  content_key: [u8; 16],
-  dest: &Path,
-) -> Result<TrackDownload> {
-  let init = fetch_init(http, url_template).await?;
-  let mut file =
-    File::create(dest).with_context(|| format!("creating stream file {}", dest.display()))?;
-  file
-    .write_all(&init.header)
-    .with_context(|| format!("writing stream to {}", dest.display()))?;
-  Ok(TrackDownload {
-    http: http.clone(),
-    url_template: url_template.to_string(),
-    content_key,
-    init,
-    file,
-  })
-}
-
-impl TrackDownload {
-  /// Fetch, decrypt and append every audio segment, then flush the file.
-  pub async fn finish(mut self) -> Result<()> {
-    let count = self.init.segment_lengths.len() as u32;
-    for index in 1..=count {
-      let bytes =
-        fetch_audio_segment(&self.http, &self.url_template, index, &self.content_key).await?;
-      self
-        .file
-        .write_all(&bytes)
-        .with_context(|| format!("segment {index} write"))?;
-    }
-    self.file.flush().context("flushing stream file")
-  }
-}
-
 /// Fetch audio segment `index` (1 or later) and return its decrypted frames.
 pub(super) async fn fetch_audio_segment(
   http: &Client,
   url_template: &str,
   index: u32,
   content_key: &[u8; 16],
-) -> Result<Vec<u8>> {
+) -> Result<Bytes> {
   let mut bytes = fetch_segment(http, url_template, index).await?;
   let table = cmaf::parse_segment(&bytes).with_context(|| format!("segment {index} parse"))?;
   let range = cmaf::decrypt_frames(&mut bytes, &table, content_key)
     .with_context(|| format!("segment {index} decrypt"))?;
-  bytes.truncate(range.end);
-  bytes.drain(..range.start);
-  Ok(bytes)
+  Ok(Bytes::from(bytes).slice(range))
 }
 
 fn segment_url(template: &str, index: u32) -> String {
@@ -181,38 +125,10 @@ mod tests {
   use super::*;
 
   #[tokio::test]
-  async fn download_rebuilds_header_and_decrypted_frames() {
-    let (segments, expected) = fixture_track();
-    let template = serve(segments).await;
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    let download = begin(&Client::new(), &template, KEY, tmp.path())
-      .await
-      .unwrap();
-    download.finish().await.unwrap();
-    assert_eq!(std::fs::read(tmp.path()).unwrap(), expected);
-  }
-
-  #[tokio::test]
-  async fn missing_segment_fails_the_download() {
-    let (mut segments, _) = fixture_track();
-    segments.pop();
-    let template = serve(segments).await;
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    let download = begin(&Client::new(), &template, KEY, tmp.path())
-      .await
-      .unwrap();
-    let err = download.finish().await.unwrap_err().to_string();
-    assert!(err.contains("segment 2"), "{err}");
-  }
-
-  #[tokio::test]
   async fn template_without_placeholder_is_rejected() {
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    assert!(
-      begin(&Client::new(), "http://127.0.0.1:1/x", KEY, tmp.path())
-        .await
-        .is_err()
-    );
+    assert!(fetch_init(&Client::new(), "http://127.0.0.1:1/x")
+      .await
+      .is_err());
   }
 
   #[test]

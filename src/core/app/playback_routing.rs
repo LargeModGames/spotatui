@@ -157,9 +157,49 @@ impl App {
     false
   }
 
-  /// The player of whichever decoded source (local file, Subsonic, internet
-  /// radio, or YouTube) currently owns the session, or `None` when Spotify (or
-  /// nothing) owns it. All four sources decode through the same `LocalPlayer`
+  /// Take every decoded session except `keep`'s, so one backend can own the
+  /// output device, and return their players. Stop them off the `App` lock: a
+  /// sink clear waits for the audio thread.
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  pub(crate) fn take_decoded_sessions_except(
+    &mut self,
+    keep: crate::core::source::Source,
+  ) -> Vec<std::sync::Arc<crate::infra::audio::LocalPlayer>> {
+    use crate::core::source::Source;
+    use std::sync::Arc;
+    let mut players = Vec::new();
+    #[cfg(feature = "local-files")]
+    if keep != Source::Local {
+      players.extend(self.local_playback.take().map(|s| Arc::clone(&s.player)));
+    }
+    #[cfg(feature = "subsonic")]
+    if keep != Source::Subsonic {
+      players.extend(self.subsonic_playback.take().map(|s| Arc::clone(&s.player)));
+    }
+    #[cfg(feature = "qobuz")]
+    if keep != Source::Qobuz {
+      players.extend(self.qobuz_playback.take().map(|s| Arc::clone(&s.player)));
+    }
+    #[cfg(feature = "internet-radio")]
+    if keep != Source::Radio {
+      players.extend(self.radio_playback.take().map(|s| Arc::clone(&s.player)));
+    }
+    #[cfg(feature = "youtube")]
+    if keep != Source::YouTube {
+      players.extend(self.youtube_playback.take().map(|s| Arc::clone(&s.player)));
+    }
+    players
+  }
+
+  /// The player of whichever decoded source (local file, Subsonic, Qobuz,
+  /// internet radio, or YouTube) currently owns the session, or `None` when
+  /// Spotify (or nothing) owns it. All five decode through the same `LocalPlayer`
   /// sink, so a single accessor covers transport/seek routing for every one.
   /// Ordering mirrors [`Self::active_decoded_source`].
   #[cfg(any(

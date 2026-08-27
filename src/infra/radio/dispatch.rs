@@ -30,10 +30,9 @@ use super::{
   config_station_to_track_info, is_radio_uri, open_radio_stream, stream_url_from_uri,
   uri_for_stream_url, RadioPlaybackState, RadioSource,
 };
-use crate::core::app::{App, SearchResultBlock};
-use crate::core::pagination::Paged;
+use crate::core::app::App;
 use crate::core::plugin_api::TrackInfo;
-use crate::core::source::Searcher;
+use crate::core::source::{Searcher, Source};
 use crate::core::state::merged_radio_stations;
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
@@ -88,7 +87,7 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     },
     IoEvent::ChangeVolume(volume) => match player(app).await {
       Some(p) => {
-        p.set_volume(*volume as f32 / 100.0);
+        p.set_volume(*volume);
         let mut app = app.lock().await;
         app.runtime_state.volume_percent = *volume;
         app.schedule_state_save(crate::core::state::PersistedRuntimeState::volume_percent(
@@ -143,23 +142,7 @@ async fn load_radio_stations(app: &Arc<Mutex<App>>) {
 async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str) {
   let source = RadioSource::new();
   match source.search(query).await {
-    Ok(results) => {
-      let total = results.tracks.len() as u32;
-      let mut app = app.lock().await;
-      app.search_results.tracks = Some(Paged {
-        items: results.tracks,
-        total,
-        ..Default::default()
-      });
-      app.search_results.albums = None;
-      app.search_results.artists = None;
-      app.search_results.playlists = None;
-      app.search_results.shows = None;
-      // Focus the songs block so the first hit is selectable immediately.
-      app.search_results.selected_tracks_index = Some(0);
-      app.search_results.hovered_block = SearchResultBlock::SongSearch;
-      app.search_results.selected_block = SearchResultBlock::Empty;
-    }
+    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
     Err(e) => set_error(app, format!("Radio search failed: {e}")).await,
   }
 }
@@ -204,47 +187,20 @@ fn snapshot_station(app: &App, uri: &str) -> TrackInfo {
 }
 
 /// Release the other backends so only radio holds the output device.
-async fn release_other_backends(_app: &Arc<Mutex<App>>) {
+async fn release_other_backends(app: &Arc<Mutex<App>>) {
   // Pause native Spotify so librespot releases the device.
   #[cfg(feature = "streaming")]
   {
-    let streaming = _app.lock().await.streaming_player.clone();
+    let streaming = app.lock().await.streaming_player.clone();
     if let Some(player) = streaming {
       player.pause();
     }
   }
-  // Tear down any local-file session (dropping it releases its device handle).
-  #[cfg(feature = "local-files")]
-  {
-    let local = _app.lock().await.local_playback.take();
-    if let Some(local) = local {
-      local.player.stop();
-    }
-  }
-  // Tear down any Subsonic session.
-  #[cfg(feature = "subsonic")]
-  {
-    let subsonic = _app.lock().await.subsonic_playback.take();
-    if let Some(subsonic) = subsonic {
-      subsonic.player.stop();
-    }
-  }
-  // Tear down any Qobuz session.
-  #[cfg(feature = "qobuz")]
-  {
-    let qobuz = _app.lock().await.qobuz_playback.take();
-    if let Some(qobuz) = qobuz {
-      qobuz.player.stop();
-    }
-  }
-  // Tear down any YouTube session (the pump's short-circuit means the YouTube
-  // dispatch never sees this radio: start).
-  #[cfg(feature = "youtube")]
-  {
-    let youtube = _app.lock().await.youtube_playback.take();
-    if let Some(youtube) = youtube {
-      youtube.player.stop();
-    }
+  // The other decoded sources never see this radio: start (the pump's
+  // short-circuit), so their sessions are torn down here.
+  let players = app.lock().await.take_decoded_sessions_except(Source::Radio);
+  for player in players {
+    player.stop_detached();
   }
 }
 
@@ -322,7 +278,7 @@ async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
   match result {
     Ok(Ok(())) => {
       let volume = app.lock().await.runtime_state.volume_percent;
-      player.set_volume(volume as f32 / 100.0);
+      player.set_volume(volume);
 
       let display = station.name.clone();
       let mut guard = app.lock().await;
@@ -355,6 +311,7 @@ async fn set_error(app: &Arc<Mutex<App>>, message: String) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::pagination::Paged;
   use crate::core::user_config::UserConfig;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
