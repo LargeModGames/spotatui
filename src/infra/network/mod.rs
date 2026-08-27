@@ -1890,4 +1890,75 @@ mod tests {
 
     assert!(app.lock().await.pending_playlist_open.is_none());
   }
+
+  fn session_free_network(app: &Arc<Mutex<App>>) -> Network {
+    Network::new(None, ClientConfig::new(), app, temp_token_cache_path())
+  }
+
+  fn app_without_a_session() -> Arc<Mutex<App>> {
+    let (io_tx, _io_rx) = std::sync::mpsc::channel();
+    Arc::new(Mutex::new(App::new(io_tx, UserConfig::new(), None)))
+  }
+
+  #[tokio::test]
+  async fn start_party_without_a_session_opens_no_relay() {
+    let app = app_without_a_session();
+    let mut network = session_free_network(&app);
+
+    network.start_party(sync::ControlMode::HostOnly).await;
+
+    assert!(network.party_connection.is_none());
+    assert!(network.party_incoming_rx.is_none());
+    let app = app.lock().await;
+    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some(SPOTIFY_NOT_CONNECTED_STATUS)
+    );
+  }
+
+  #[tokio::test]
+  async fn join_party_without_a_session_opens_no_relay() {
+    let app = app_without_a_session();
+    let mut network = session_free_network(&app);
+
+    network
+      .join_party("ABC123".to_string(), "Guest".to_string())
+      .await;
+
+    assert!(network.party_connection.is_none());
+    assert!(network.party_incoming_rx.is_none());
+    let app = app.lock().await;
+    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
+    assert_eq!(
+      app.status_message.as_deref(),
+      Some(SPOTIFY_NOT_CONNECTED_STATUS)
+    );
+  }
+
+  #[tokio::test]
+  async fn process_party_messages_closes_a_party_that_outlived_its_session() {
+    let app = app_without_a_session();
+    let mut network = session_free_network(&app);
+    let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    network.party_incoming_rx = Some(rx);
+    {
+      let mut app = app.lock().await;
+      app.party_status = sync::PartyStatus::Hosting;
+      app.party_session = Some(sync::PartySession {
+        role: sync::PartyRole::Host,
+        code: "ABC123".to_string(),
+        guests: Vec::new(),
+        control_mode: sync::ControlMode::HostOnly,
+        host_name: "Host".to_string(),
+      });
+    }
+
+    network.process_party_messages().await;
+
+    assert!(network.party_incoming_rx.is_none());
+    let app = app.lock().await;
+    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
+    assert!(app.party_session.is_none());
+  }
 }
