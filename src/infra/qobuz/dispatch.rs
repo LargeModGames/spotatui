@@ -32,7 +32,9 @@ use tokio::sync::Mutex;
 
 use super::auth::{self, QobuzBundleCache};
 use super::stream::progressive;
-use super::{track_id_from_uri, QobuzPlaybackState, QobuzSource, StreamQuality, Unauthorized};
+use super::{
+  track_id_from_uri, QobuzPlaybackState, QobuzSource, ResumePoint, StreamQuality, Unauthorized,
+};
 use crate::core::app::{App, TrackTableContext};
 use crate::core::source::{MediaSource, Searcher, Source};
 use crate::core::state::PersistedRuntimeState;
@@ -80,12 +82,12 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     IoEvent::StartPlayback(None, Some(uris), offset)
       if uris.first().is_some_and(|u| is_qobuz_uri(u)) =>
     {
-      start_qobuz_queue(app, uris, offset.unwrap_or(0)).await;
+      start_qobuz_queue(app, uris, offset.unwrap_or(0), None).await;
       true
     }
     // A single Qobuz track with no surrounding list: a one-track queue.
     IoEvent::StartPlayback(Some(uri), _, _) if is_qobuz_uri(uri) => {
-      start_qobuz_queue(app, std::slice::from_ref(uri), 0).await;
+      start_qobuz_queue(app, std::slice::from_ref(uri), 0, None).await;
       true
     }
     // Bare "resume current": ours only while Qobuz owns the session.
@@ -561,8 +563,14 @@ async fn commit_fetch(
 }
 
 /// Begin playing a list of Qobuz tracks, taking over the session and starting
-/// at `start_idx` (clamped into range).
-async fn start_qobuz_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: usize) {
+/// at `start_idx` (clamped into range). `resume` is applied when the first
+/// track plays (session restore), so it is in place before the fetch starts.
+pub(crate) async fn start_qobuz_queue(
+  app: &Arc<Mutex<App>>,
+  uris: &[String],
+  start_idx: usize,
+  resume: Option<ResumePoint>,
+) {
   let tracks = {
     let guard = app.lock().await;
     let search = guard
@@ -609,7 +617,7 @@ async fn start_qobuz_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: us
     quality: None,
     shuffle_backup: None,
     fetch_id: next_fetch_id(),
-    resume_at: None,
+    resume_at: resume,
     fetch: None,
   };
   // Honor the player-global decoded shuffle for the freshly built queue.

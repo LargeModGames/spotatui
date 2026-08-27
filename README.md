@@ -203,7 +203,7 @@ spotatui is a general music player, not just a Spotify client. Press `d` to open
 | **Subsonic** | Browse, search, and stream from any Subsonic-compatible server (Navidrome, Gonic, Airsonic, Funkwhale, …) | A server account |
 | **Internet Radio** | Play icecast/shoutcast streams with live now-playing metadata; search the [radio-browser.info](https://www.radio-browser.info) directory (30k+ stations) | Nothing |
 | **YouTube** | Search YouTube and play audio; build **local playlists** stored in a plain file | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended) |
-| **Qobuz** | Stream your Qobuz library (favorites, playlists, albums, search) in FLAC through spotatui's own engine | A paid Qobuz account |
+| **Qobuz** | Stream your Qobuz library (favorites, playlists, albums, search) at the configured quality, MP3 320 up to FLAC 24/192, through spotatui's own engine | A paid Qobuz account |
 
 **Resuming your last session:** quit while playing from a non-Spotify source and spotatui restores that track and its position on the next launch, following the `startup_behavior` setting (`continue`, `play`, or `pause`).
 
@@ -246,7 +246,7 @@ Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recom
 
 ### Qobuz
 
-Pick **Qobuz** in the first-run picker or the `d` menu: spotatui opens the Qobuz login page in your browser and saves the token to `qobuz_credentials.yml` in the config directory (owner-only). No app registration is needed. The sidebar lists your favorite tracks, playlists, and favorite albums; search finds tracks. Each track is downloaded and decrypted to a temporary file before it plays, so a hi-res track takes a moment to start. When a track plays from a Qobuz listing, the playbar shows the format that Qobuz delivered, for example `FLAC 16/44.1`. This can be lower than the configured quality.
+Pick **Qobuz** in the first-run picker or the `d` menu: spotatui opens the Qobuz login page in your browser and saves the token to `qobuz_credentials.yml` in the config directory (owner-only). No app registration is needed. The sidebar lists your favorite tracks, playlists, and favorite albums; search finds tracks. Each track plays while it downloads: the encrypted stream is decrypted and rebuilt as a FLAC temporary file, playback starts after the first segments arrive, and a seek past the downloaded part continues the download from there. When a track plays from a Qobuz listing, the playbar shows the format that Qobuz delivered, for example `FLAC 16/44.1`. This can be lower than the configured quality.
 
 ```yaml
 behavior:

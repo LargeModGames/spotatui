@@ -14,7 +14,7 @@ cargo run
 # Slim build - no librespot/audio/scripting; fastest iteration, one of CI's seven legs
 cargo run --no-default-features --features telemetry,tui
 
-# With the free alternative sources (Local/Subsonic/Radio/YouTube/Qobuz). These are NOT
+# With the alternative sources (Local/Subsonic/Radio/YouTube/Qobuz). These are NOT
 # in `default`, so a plain `cargo run` is Spotify-only; use the `all-sources` alias
 # (or list them individually) to exercise the first-run source picker and playback.
 cargo run --features all-sources
@@ -23,7 +23,7 @@ cargo run --features all-sources
 ## CI Checks (run before opening a PR)
 
 ```bash
-car2go fmt --all
+cargo fmt --all
 cargo clippy --no-default-features --features telemetry,tui -- -D warnings
 cargo test --no-default-features --features telemetry,tui
 ```

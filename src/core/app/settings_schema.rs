@@ -194,6 +194,7 @@ impl App {
           description: "Scale status message duration from 10% to 1000%".to_string(),
           value: SettingValue::Number(self.user_config.behavior.status_message_ttl_percent as i64),
         },
+        #[cfg(feature = "qobuz")]
         SettingItem {
           id: "behavior.qobuz_quality".to_string(),
           name: "Qobuz Quality".to_string(),

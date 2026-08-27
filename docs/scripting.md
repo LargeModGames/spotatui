@@ -333,7 +333,8 @@ spotatui.storage_set("play_count", plays)
 
 Theme values use the same string forms as `config.yml` (named color or `"r, g, b"`), so they
 can round-trip through `spotatui.set_theme`. Secrets and service credentials (sync token,
-relay URL, Subsonic credentials, the Qobuz token, Discord client id) are never exposed. The snapshot is
+relay URL, Subsonic credentials, the Qobuz token, Discord client id) are never exposed, and
+source-specific settings (Subsonic, YouTube, Qobuz) are not part of the snapshot. The snapshot is
 populated once the app is running; reading it at load time (before the `start` event) returns
 empty defaults.
 

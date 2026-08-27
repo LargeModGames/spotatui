@@ -772,12 +772,12 @@ async fn restore_playback_session(
       }
       // Seed the browse table so the start path's snapshot resolves metadata.
       app.lock().await.track_table.tracks = tracks;
-      crate::infra::qobuz::dispatch::route_qobuz_event(
-        app,
-        &IoEvent::StartPlayback(None, Some(uris), Some(index)),
-      )
-      .await;
       // The download runs off the pump; the seek and pause apply when it plays.
+      let resume = crate::infra::qobuz::ResumePoint {
+        position_ms,
+        paused: resolve_paused(paused),
+      };
+      crate::infra::qobuz::dispatch::start_qobuz_queue(app, &uris, index, Some(resume)).await;
       let mut guard = app.lock().await;
       if guard.qobuz_playback.is_some() {
         guard.decoded_repeat = repeat;
@@ -785,10 +785,6 @@ async fn restore_playback_session(
       }
       if let Some(s) = guard.qobuz_playback.as_mut() {
         s.shuffle_backup = shuffle;
-        s.resume_at = Some(crate::infra::qobuz::ResumePoint {
-          position_ms,
-          paused: resolve_paused(paused),
-        });
       }
     }
     #[cfg(feature = "youtube")]

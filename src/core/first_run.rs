@@ -205,7 +205,14 @@ async fn configure_qobuz(onboarding: &dyn Onboarding) -> Result<()> {
     }
   };
 
-  let attempt = auth::LoginAttempt::bind(constants.clone()).await?;
+  let attempt = match auth::LoginAttempt::bind(constants.clone()).await {
+    Ok(attempt) => attempt,
+    Err(e) => {
+      onboarding.info(&format!("Qobuz login could not start: {e:#}"));
+      onboarding.info("Press `d` in the app and pick Qobuz to try again.");
+      return Ok(());
+    }
+  };
   let url = attempt.url();
   onboarding.info("\nAttempting to open this URL in your browser:");
   onboarding.info(&format!("{url}\n"));

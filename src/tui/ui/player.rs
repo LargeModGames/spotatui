@@ -2065,7 +2065,7 @@ mod tests {
 
   /// Collect every rendered cell symbol in `area` into one string for substring
   /// assertions.
-  #[cfg(feature = "local-files")]
+  #[cfg(any(feature = "local-files", feature = "qobuz"))]
   fn rendered_text(area: Rect, view: &LocalPlaybarView) -> String {
     use ratatui::{backend::TestBackend, Terminal};
 
@@ -2152,7 +2152,7 @@ mod tests {
     );
   }
 
-  #[cfg(feature = "local-files")]
+  #[cfg(any(feature = "local-files", feature = "qobuz"))]
   #[test]
   fn playbar_renders_delivered_quality_after_artists() {
     let view = LocalPlaybarView {

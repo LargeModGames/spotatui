@@ -83,6 +83,7 @@ impl App {
             self.user_config.behavior.status_message_ttl_percent = (*v).clamp(10, 1000) as u16;
           }
         }
+        #[cfg(feature = "qobuz")]
         "behavior.qobuz_quality" => {
           if let SettingValue::Cycle(v, _) = &setting.value {
             self.user_config.behavior.qobuz_quality =

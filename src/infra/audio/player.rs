@@ -141,7 +141,9 @@ impl LocalPlayer {
   where
     R: std::io::Read + std::io::Seek + Send + Sync + 'static,
   {
-    let mut builder = Decoder::builder().with_data(reader).with_seekable(false);
+    let mut builder = Decoder::builder()
+      .with_data(reader)
+      .with_seekable(byte_len.is_some());
     if let Some(len) = byte_len {
       builder = builder.with_byte_len(len);
     }
