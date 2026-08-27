@@ -864,11 +864,8 @@ mod tests {
       .await
       .expect("bundle scrape");
     eprintln!(
-      "bundle {} app_id {} secret_len {} oauth_key_len {}",
-      constants.bundle_version,
-      constants.app_id,
-      constants.app_secret.len(),
-      constants.oauth_key.len()
+      "bundle {} app_id {}",
+      constants.bundle_version, constants.app_id
     );
     let source = QobuzSource::new(constants.app_id, constants.app_secret, token);
 
