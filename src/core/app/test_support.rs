@@ -106,3 +106,9 @@ pub(super) fn make_app_simple() -> App {
   let (tx, _rx) = channel();
   App::new(tx, UserConfig::new(), Some(SystemTime::now()))
 }
+
+/// An `App` with no Spotify session; the receiver keeps `dispatch` observable.
+pub(super) fn session_free_app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+  let (tx, rx) = channel();
+  (App::new(tx, UserConfig::new(), None), rx)
+}

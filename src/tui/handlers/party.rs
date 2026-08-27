@@ -74,9 +74,6 @@ fn handle_code_input(key: Key, app: &mut App) {
       let name = normalized_guest_name(&app.view.party_join_name);
       if code.len() == PARTY_CODE_LEN && !name.is_empty() {
         app.apply(Action::JoinParty { code, name });
-        app.view.party_input.clear();
-        app.view.party_input_idx = 0;
-        app.view.party_join_name.clear();
       }
     }
     Key::Backspace => {

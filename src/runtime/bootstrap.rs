@@ -17,7 +17,7 @@ use crate::core::user_config::{
   validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
 };
 use crate::infra::network::IoEvent;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use backtrace::Backtrace;
 use clap::ArgMatches;
 use log::info;
@@ -269,6 +269,34 @@ fn prompt_global_song_count_opt_in(
 /// is asked again even when `client.yml` exists.
 fn should_prompt_global_song_count(client_yml_exists: bool, config_has_answer: bool) -> bool {
   !client_yml_exists || !config_has_answer
+}
+
+/// How boot obtains a Spotify session.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SpotifyAuthMode {
+  /// Open the browser when no usable token is cached.
+  Interactive,
+  /// A cached token or a failed boot with a clear message.
+  CachedOrFail,
+  /// A cached token or no session; the frontend offers the login.
+  CachedOrNone,
+}
+
+/// Interactive only right after the client wizard (fresh install,
+/// `--reconfigure-auth`, or the auth-setup migration): the user just asked for
+/// Spotify. A subcommand needs a session; a UI launch never blocks on a browser.
+fn spotify_auth_mode(
+  subcommand: bool,
+  reconfigure_auth: bool,
+  wizard_ran: bool,
+) -> SpotifyAuthMode {
+  if reconfigure_auth || wizard_ran {
+    SpotifyAuthMode::Interactive
+  } else if subcommand {
+    SpotifyAuthMode::CachedOrFail
+  } else {
+    SpotifyAuthMode::CachedOrNone
+  }
 }
 
 fn global_song_counter_prompt() -> OnboardingPrompt {
@@ -549,7 +577,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     )
     .await?;
   }
-  client_config.load_config(onboarding.as_ref())?;
+  let mut wizard_ran = client_config.load_config(onboarding.as_ref())?;
   info!("client authentication config loaded");
 
   let reconfigure_auth = matches.get_flag("reconfigure-auth");
@@ -561,6 +589,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
   } else if matches.subcommand_name().is_none() && client_config.needs_auth_setup_migration() {
     if ask_auth_setup_migration(onboarding.as_ref())? {
       client_config.reconfigure_auth(onboarding.as_ref())?;
+      wizard_ran = true;
       onboarding.info("Client authentication setup updated.\n");
     } else {
       client_config.mark_auth_setup_migrated()?;
@@ -570,12 +599,11 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 
   let config_paths = client_config.get_or_build_paths()?;
 
-  // Spotify is only mandatory when the active source IS Spotify, or when running
-  // a CLI subcommand (every subcommand is Spotify-only and should fail cleanly
-  // when unauthenticated). A free-source TUI launch tries a silent token load and
-  // tolerates its absence; the user can add Spotify later via in-TUI login.
-  let spotify_required = matches.subcommand_name().is_some()
-    || runtime_state.active_source == crate::core::source::Source::Spotify;
+  let auth_mode = spotify_auth_mode(
+    matches.subcommand_name().is_some(),
+    reconfigure_auth,
+    wizard_ran,
+  );
 
   // The GitHub update check runs concurrently with authentication: both are
   // network round trips and neither depends on the other, so the check no
@@ -583,15 +611,24 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
   // still restarts the process, exactly as before.)
   let (authenticated, installed_update) = tokio::join!(
     async {
-      if spotify_required {
-        auth::authenticate_with_fallback(&mut client_config, &config_paths, onboarding.as_ref())
-          .await
-          .map(Some)
-      } else {
-        Ok(
+      match auth_mode {
+        SpotifyAuthMode::Interactive => {
+          auth::authenticate_with_fallback(&mut client_config, &config_paths, onboarding.as_ref())
+            .await
+            .map(Some)
+        }
+        SpotifyAuthMode::CachedOrFail => {
+          auth::authenticate_cached(&mut client_config, &config_paths, onboarding.as_ref())
+            .await
+            .map(Some)
+            .context(
+              "Spotify is not connected. Start `spotatui`, press `d` and pick Spotify to log in.",
+            )
+        }
+        SpotifyAuthMode::CachedOrNone => Ok(
           auth::try_load_spotify_silently(&mut client_config, &config_paths, onboarding.as_ref())
             .await,
-        )
+        ),
       }
     },
     super::cli::run_auto_update(matches, &user_config)
@@ -707,7 +744,7 @@ mod tests {
   use super::{
     apply_configured_runtime_defaults, ask_auth_setup_migration, auth_setup_migration_prompt,
     global_song_counter_prompt, persist_global_song_count, prompt_global_song_count_opt_in,
-    should_prompt_global_song_count,
+    should_prompt_global_song_count, spotify_auth_mode, SpotifyAuthMode,
   };
   use crate::core::limits::MAX_PLAYBAR_ROWS;
   use crate::core::onboarding::OnboardingPrompt;
@@ -904,5 +941,25 @@ mod tests {
 
     assert!(!ask_auth_setup_migration(&onboarding).unwrap());
     assert!(onboarding.saw("Would you like to run the new auth setup wizard now? (Y/n): "));
+  }
+
+  #[test]
+  fn the_boot_auth_mode_follows_the_wizard_and_the_subcommand() {
+    let cases = [
+      (false, true, false, SpotifyAuthMode::Interactive),
+      (true, true, false, SpotifyAuthMode::Interactive),
+      (false, false, true, SpotifyAuthMode::Interactive),
+      (true, false, true, SpotifyAuthMode::Interactive),
+      (true, false, false, SpotifyAuthMode::CachedOrFail),
+      (false, false, false, SpotifyAuthMode::CachedOrNone),
+    ];
+
+    for (subcommand, reconfigure_auth, wizard_ran, expected) in cases {
+      assert_eq!(
+        spotify_auth_mode(subcommand, reconfigure_auth, wizard_ran),
+        expected,
+        "subcommand={subcommand} reconfigure_auth={reconfigure_auth} wizard_ran={wizard_ran}"
+      );
+    }
   }
 }

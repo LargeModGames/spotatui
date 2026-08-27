@@ -1,7 +1,60 @@
 //! The serial IoEvent pump: source routing by URI scheme, the service lane,
 //! and the party-relay drain. Every frontend drives `App` through this.
 
+use crate::core::app::SPOTIFY_NOT_CONNECTED_STATUS;
+use crate::core::queue::{
+  missing_source_feature, queue_item_source, source_available, QueueItemSource,
+};
 use crate::infra::network::{IoEvent, Network};
+
+/// The URI a `StartPlayback` addresses: the context, or the head of the list.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+fn start_playback_uri(event: &IoEvent) -> Option<&str> {
+  match event {
+    IoEvent::StartPlayback(Some(uri), _, _) => Some(uri),
+    IoEvent::StartPlayback(None, Some(uris), _) => uris.first().map(String::as_str),
+    _ => None,
+  }
+}
+
+/// Whether some router or the Spotify session will start `event`; a start
+/// nobody takes must not reach the routers, whose foreign-start arms tear the
+/// audible player down.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+fn start_playback_has_taker(event: &IoEvent, spotify_session: bool) -> bool {
+  match event {
+    IoEvent::StartPlayback(None, None, None) => true,
+    IoEvent::StartPlayback(..) => match start_playback_uri(event) {
+      // Radio is never queued, so `queue_item_source` does not know its scheme.
+      Some(uri) if uri.starts_with("radio:") => cfg!(feature = "internet-radio"),
+      Some(uri) => match queue_item_source(uri) {
+        QueueItemSource::Spotify => spotify_session,
+        source => source_available(source),
+      },
+      None => spotify_session,
+    },
+    _ => true,
+  }
+}
+
+/// Why the gate dropped a start: the source feature this build lacks, else
+/// the missing Spotify session.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+fn dropped_start_status(event: &IoEvent) -> String {
+  let missing_feature = match start_playback_uri(event) {
+    Some(uri) if uri.starts_with("radio:") => {
+      (!cfg!(feature = "internet-radio")).then_some("internet-radio")
+    }
+    Some(uri) => missing_source_feature(uri),
+    None => None,
+  };
+  match missing_feature {
+    Some(feature) => {
+      format!("This spotatui was built without the `{feature}` feature, so nothing can play that.")
+    }
+    None => SPOTIFY_NOT_CONNECTED_STATUS.to_string(),
+  }
+}
 
 // CLI mode never starts the pump; only a frontend launch does.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -55,6 +108,12 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
     }
 
     {
+      if !start_playback_has_taker(&io_event, network.spotify.is_some()) {
+        let mut app = network.app.lock().await;
+        app.set_status_message(dropped_start_status(&io_event), 6);
+        app.is_loading = false;
+        continue;
+      }
       // The native queue router runs first: it owns `AdvanceNativeQueue` and
       // the queue slot's transport controls, and relinquishes the slot on an
       // unrelated `StartPlayback` (returning false so the per-source
@@ -133,5 +192,72 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       }
     }
     network.process_party_messages().await;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_bare_resume_always_has_a_taker() {
+    let resume = IoEvent::StartPlayback(None, None, None);
+
+    assert!(start_playback_has_taker(&resume, false));
+    assert!(start_playback_has_taker(&resume, true));
+  }
+
+  #[test]
+  fn a_spotify_start_needs_a_session() {
+    let start = IoEvent::StartPlayback(None, Some(vec!["spotify:track:x".to_string()]), Some(0));
+
+    assert!(start_playback_has_taker(&start, true));
+    assert!(!start_playback_has_taker(&start, false));
+  }
+
+  #[test]
+  fn an_empty_start_has_no_taker_without_a_session() {
+    let empty = IoEvent::StartPlayback(None, Some(vec![]), Some(0));
+
+    assert!(!start_playback_has_taker(&empty, false));
+  }
+
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn a_local_start_has_a_taker_without_a_session() {
+    let list = IoEvent::StartPlayback(None, Some(vec!["file:///a.mp3".to_string()]), Some(0));
+    let context = IoEvent::StartPlayback(Some("file:///album".to_string()), None, None);
+
+    assert!(start_playback_has_taker(&list, false));
+    assert!(start_playback_has_taker(&context, false));
+  }
+
+  #[cfg(feature = "internet-radio")]
+  #[test]
+  fn a_radio_start_has_a_taker_without_a_session() {
+    let start = IoEvent::StartPlayback(Some("radio:https://x.example/s".to_string()), None, None);
+
+    assert!(start_playback_has_taker(&start, false));
+  }
+
+  #[cfg(not(feature = "local-files"))]
+  #[test]
+  fn a_compiled_out_source_has_no_taker_and_names_the_feature() {
+    let start = IoEvent::StartPlayback(None, Some(vec!["file:///a.mp3".to_string()]), Some(0));
+
+    assert!(!start_playback_has_taker(&start, true));
+    assert!(dropped_start_status(&start).contains("`local-files`"));
+  }
+
+  #[test]
+  fn a_spotify_start_without_a_session_reports_the_missing_session() {
+    let start = IoEvent::StartPlayback(None, Some(vec!["spotify:track:x".to_string()]), Some(0));
+
+    assert_eq!(dropped_start_status(&start), SPOTIFY_NOT_CONNECTED_STATUS);
+  }
+
+  #[test]
+  fn a_non_start_event_always_has_a_taker() {
+    assert!(start_playback_has_taker(&IoEvent::NextTrack, false));
   }
 }

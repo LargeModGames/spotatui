@@ -53,7 +53,7 @@ impl App {
           RepeatSetting::Track => RepeatState::Track,
           RepeatSetting::Context => RepeatState::Context,
         };
-        self.dispatch(IoEvent::Repeat(state));
+        self.dispatch_spotify_fallback(IoEvent::Repeat(state));
       }
       Action::PlayUris { uris, offset } => self.start_playback_uris(uris, offset),
       Action::PlayContext { uri, offset } => self.start_playback_context(uri, offset),
@@ -226,12 +226,8 @@ impl App {
       Action::RecommendFromTrackId { id, name } => {
         self.load_recommendations_for_track_id(id, name);
       }
-      Action::StartParty => {
-        self.dispatch(IoEvent::StartParty(
-          crate::infra::network::sync::ControlMode::HostOnly,
-        ));
-      }
-      Action::JoinParty { code, name } => self.dispatch(IoEvent::JoinParty { code, name }),
+      Action::StartParty => self.start_party(),
+      Action::JoinParty { code, name } => self.join_party(code, name),
       Action::LeaveParty => self.dispatch(IoEvent::LeaveParty),
       Action::TogglePartyControlMode => self.toggle_party_control_mode(),
       Action::SetPlaybarSegment { plugin, text } => match text {

@@ -11,6 +11,17 @@ const _: () = assert!(
   STALE_TICK_AFTER.as_millis() >= 2 * crate::core::user_config::MAX_TICK_RATE_MILLISECONDS as u128
 );
 
+/// Whether the machine must stay awake. The audible player answers first: a
+/// decoded source that owns the sink overrides the suspended librespot flag and
+/// the stale Spotify context it left behind.
+fn playing_for_keepawake(
+  decoded: Option<bool>,
+  native: Option<bool>,
+  spotify: Option<bool>,
+) -> bool {
+  decoded.or(native).or(spotify).unwrap_or(false)
+}
+
 impl App {
   /// Milliseconds into the current track, or `None` when no tick has run for
   /// over [`STALE_TICK_AFTER`]. A frontend that stops driving
@@ -202,10 +213,11 @@ impl App {
 
     self.poll_current_playback();
     let playing_now = self.user_config.behavior.keepawake_enabled
-      && self
-        .native_is_playing
-        .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
-        .unwrap_or(false);
+      && playing_for_keepawake(
+        self.decoded_playing_state(),
+        self.native_is_playing,
+        self.current_playback_context.as_ref().map(|c| c.is_playing),
+      );
     match (playing_now, self.keepawake.is_some()) {
       (true, false) => {
         self.keepawake = keepawake::Builder::default()
@@ -374,5 +386,34 @@ mod tests {
 
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
     assert!(app.is_fetching_current_playback);
+  }
+
+  #[test]
+  fn a_paused_decoded_source_overrides_the_suspended_spotify_state() {
+    // The Spotify-to-decoded handoff only pauses librespot, so both the native
+    // flag and the context it left behind can still read as playing.
+    assert!(!playing_for_keepawake(Some(false), Some(true), Some(true)));
+  }
+
+  #[test]
+  fn a_playing_decoded_source_keeps_the_machine_awake() {
+    assert!(playing_for_keepawake(Some(true), Some(false), Some(false)));
+  }
+
+  #[test]
+  fn without_a_decoded_owner_the_native_flag_decides() {
+    assert!(playing_for_keepawake(None, Some(true), Some(false)));
+    assert!(!playing_for_keepawake(None, Some(false), Some(true)));
+  }
+
+  #[test]
+  fn without_a_decoded_owner_or_a_native_flag_spotify_decides() {
+    assert!(playing_for_keepawake(None, None, Some(true)));
+    assert!(!playing_for_keepawake(None, None, Some(false)));
+  }
+
+  #[test]
+  fn nothing_playing_lets_the_machine_sleep() {
+    assert!(!playing_for_keepawake(None, None, None));
   }
 }

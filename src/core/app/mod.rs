@@ -128,6 +128,7 @@ pub use native_backend::*;
 pub use native_recovery::*;
 #[cfg(feature = "streaming")]
 pub(crate) use native_shuffle::*;
+pub use playback_routing::*;
 pub use playlist_folders::*;
 pub use playlists::*;
 pub use plugins::*;

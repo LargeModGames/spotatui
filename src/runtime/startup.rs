@@ -152,12 +152,13 @@ fn update_macos_metadata(
   }
 }
 
+/// Returns the snapshot's play state and position, `None` with no snapshot.
 #[cfg(all(feature = "windows-media", target_os = "windows"))]
 fn update_windows_metadata(
   manager: &smtc_tokio::WindowsMediaManager,
   last_metadata: &mut Option<WindowsMetadata>,
   app: &App,
-) {
+) -> Option<(bool, u64)> {
   if let Some(snapshot) = crate::infra::media_metadata::current_playback_snapshot(app) {
     let new_metadata = WindowsMetadata {
       title: snapshot.metadata.title.clone(),
@@ -177,8 +178,12 @@ fn update_windows_metadata(
       );
       *last_metadata = Some(new_metadata);
     }
-  } else if last_metadata.is_some() {
-    *last_metadata = None;
+    Some((snapshot.is_playing, snapshot.progress_ms as u64))
+  } else {
+    if last_metadata.is_some() {
+      *last_metadata = None;
+    }
+    None
   }
 }
 
@@ -221,10 +226,16 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   // flow above can block on a browser round trip, which would burn the
   // message's TTL before the first frame ever renders. Never displaces a
   // message something else just set (they are more urgent than this notice).
-  if let Some(message) = client_id_notice_message {
+  // A Spotify browse scope with no session comes second: say so once, before
+  // the first key press reaches the auth gate.
+  {
     let mut app_mut = app.lock().await;
     if app_mut.status_message.is_none() {
-      app_mut.set_status_message(message, 15);
+      if let Some(message) = client_id_notice_message {
+        app_mut.set_status_message(message, 15);
+      } else if spotify.is_none() && app_mut.active_source == crate::core::source::Source::Spotify {
+        app_mut.set_status_message(crate::core::app::SPOTIFY_NOT_CONNECTED_STATUS, 8);
+      }
     }
   }
 
@@ -331,6 +342,8 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   // Gated on whether streaming will be attempted (the player itself now
   // initializes in the background): registering media keys for a session
   // whose native init later fails is harmless — the handlers just no-op.
+  // macOS plays no decoded source, so without native streaming the keys would
+  // only be taken away from the other players.
   #[cfg(all(feature = "macos-media", target_os = "macos"))]
   let macos_media_manager: Option<Arc<macos_media::MacMediaManager>> = if streaming_attempted {
     match macos_media::MacMediaManager::new() {
@@ -350,8 +363,9 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
     None
   };
 
+  // Registered without a Spotify session, like MPRIS, so decoded sources get media keys too.
   #[cfg(all(feature = "windows-media", target_os = "windows"))]
-  let windows_media_manager: Option<Arc<smtc_tokio::WindowsMediaManager>> = if streaming_attempted {
+  let windows_media_manager: Option<Arc<smtc_tokio::WindowsMediaManager>> =
     match smtc_tokio::WindowsMediaManager::new() {
       Ok(mgr) => {
         info!("windows smtc com registered - media keys enabled");
@@ -364,10 +378,7 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
         );
         None
       }
-    }
-  } else {
-    None
-  };
+    };
 
   #[cfg(feature = "discord-rpc")]
   let discord_rpc_manager: DiscordRpcHandle = if user_config.behavior.enable_discord_rpc {
@@ -461,25 +472,21 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
       loop {
         interval.tick().await;
         if let Ok(app) = app_for_windows_metadata.try_lock() {
-          update_windows_metadata(&windows_media_for_metadata, &mut last_metadata, &app);
-          let is_playing = if app.native_track_info.is_some() {
-            app.native_is_playing.unwrap_or(false)
-          } else {
-            app
-              .current_playback_context
-              .as_ref()
-              .map(|c| c.is_playing)
-              .unwrap_or(false)
-          };
-
-          if app.native_track_info.is_none() {
+          let snapshot_state =
+            update_windows_metadata(&windows_media_for_metadata, &mut last_metadata, &app);
+          // Native playback pushes its own state from the player events; an
+          // external device or a decoded source (over paused librespot) is
+          // polled here from the snapshot.
+          if app.native_track_info.is_none() || app.active_decoded_source() {
+            let (is_playing, position_ms) =
+              snapshot_state.unwrap_or((false, app.song_progress_ms as u64));
             if last_playing != Some(is_playing) {
               windows_media_for_metadata.set_playback_status(is_playing);
               last_playing = Some(is_playing);
             }
-            windows_media_for_metadata.set_position(app.song_progress_ms as u64);
+            windows_media_for_metadata.set_position(position_ms);
           } else {
-            last_playing = Some(is_playing);
+            last_playing = Some(app.native_is_playing.unwrap_or(false));
           }
         }
       }
@@ -913,9 +920,9 @@ async fn handle_mpris_events(
             .unwrap_or(false)
         });
         if is_playing {
-          app_lock.dispatch(IoEvent::PausePlayback);
+          app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
         } else {
-          app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+          app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
         }
       }
       MprisEvent::Play => {
@@ -926,7 +933,7 @@ async fn handle_mpris_events(
           continue;
         }
         let mut app_lock = app.lock().await;
-        app_lock.dispatch(IoEvent::StartPlayback(None, None, None));
+        app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
       }
       MprisEvent::Pause => {
         #[cfg(feature = "streaming")]
@@ -936,27 +943,13 @@ async fn handle_mpris_events(
           continue;
         }
         let mut app_lock = app.lock().await;
-        app_lock.dispatch(IoEvent::PausePlayback);
+        app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
       }
       MprisEvent::Next => {
-        #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          let _ = player;
-          app.lock().await.next_track();
-          continue;
-        }
-        let mut app_lock = app.lock().await;
-        app_lock.dispatch(IoEvent::NextTrack);
+        app.lock().await.next_track();
       }
       MprisEvent::Previous => {
-        #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          let _ = player;
-          app.lock().await.previous_track();
-          continue;
-        }
-        let mut app_lock = app.lock().await;
-        app_lock.dispatch(IoEvent::PreviousTrack);
+        app.lock().await.previous_track();
       }
       MprisEvent::Stop => {
         #[cfg(feature = "streaming")]
@@ -966,7 +959,7 @@ async fn handle_mpris_events(
           continue;
         }
         let mut app_lock = app.lock().await;
-        app_lock.dispatch(IoEvent::PausePlayback);
+        app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
       }
       MprisEvent::Seek(offset_micros) => {
         // MPRIS sends relative offset in microseconds (can be negative for rewind)
@@ -990,7 +983,7 @@ async fn handle_mpris_events(
         let offset_ms = offset_micros / 1000;
         let new_position_ms = (current_ms + offset_ms).max(0) as u32;
         app_lock.song_progress_ms = new_position_ms as u128;
-        app_lock.dispatch(IoEvent::Seek(new_position_ms));
+        app_lock.dispatch_spotify_fallback(IoEvent::Seek(new_position_ms));
         drop(app_lock);
         mpris_manager.emit_seeked(new_position_ms as u64);
       }
@@ -1011,7 +1004,7 @@ async fn handle_mpris_events(
         // Fallback: dispatch Seek IoEvent
         let mut app_lock = app.lock().await;
         app_lock.song_progress_ms = new_position_ms as u128;
-        app_lock.dispatch(IoEvent::Seek(new_position_ms));
+        app_lock.dispatch_spotify_fallback(IoEvent::Seek(new_position_ms));
         drop(app_lock);
         mpris_manager.emit_seeked(new_position_ms as u64);
       }
@@ -1044,7 +1037,7 @@ async fn handle_mpris_events(
         app_lock.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
           shuffle,
         ));
-        app_lock.dispatch(IoEvent::Shuffle(shuffle));
+        app_lock.dispatch_spotify_fallback(IoEvent::Shuffle(shuffle));
       }
       MprisEvent::SetLoopStatus(loop_status) => {
         use mpris::LoopStatusEvent;
@@ -1075,7 +1068,7 @@ async fn handle_mpris_events(
         if let Some(ref mut ctx) = app_lock.current_playback_context {
           ctx.repeat_state = repeat_state;
         }
-        app_lock.dispatch(IoEvent::Repeat(repeat_state));
+        app_lock.dispatch_spotify_fallback(IoEvent::Repeat(repeat_state));
       }
       MprisEvent::SetVolume(volume_percent) => {
         let mut app_lock = app.lock().await;
@@ -1405,7 +1398,7 @@ async fn handle_windows_media_events(
         app
           .lock()
           .await
-          .dispatch(IoEvent::StartPlayback(None, None, None));
+          .dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
       }
       WindowsMediaEvent::Pause => {
         if let Some(player) = &player_opt {
@@ -1414,29 +1407,25 @@ async fn handle_windows_media_events(
             continue;
           }
         }
-        app.lock().await.dispatch(IoEvent::PausePlayback);
+        app
+          .lock()
+          .await
+          .dispatch_spotify_fallback(IoEvent::PausePlayback);
       }
       WindowsMediaEvent::Next => {
-        if let Some(player) = &player_opt {
-          let _ = player;
-          app.lock().await.next_track();
-        } else {
-          app.lock().await.dispatch(IoEvent::NextTrack);
-        }
+        app.lock().await.next_track();
       }
       WindowsMediaEvent::Previous => {
-        if let Some(player) = &player_opt {
-          let _ = player;
-          app.lock().await.previous_track();
-        } else {
-          app.lock().await.dispatch(IoEvent::PreviousTrack);
-        }
+        app.lock().await.previous_track();
       }
       WindowsMediaEvent::Stop => {
         if let Some(player) = &player_opt {
           player.stop();
         } else {
-          app.lock().await.dispatch(IoEvent::PausePlayback);
+          app
+            .lock()
+            .await
+            .dispatch_spotify_fallback(IoEvent::PausePlayback);
         }
       }
       WindowsMediaEvent::SetPosition(pos) => {
@@ -1448,7 +1437,7 @@ async fn handle_windows_media_events(
         }
         let mut app_lock = app.lock().await;
         app_lock.song_progress_ms = pos as u128;
-        app_lock.dispatch(IoEvent::Seek(pos as u32));
+        app_lock.dispatch_spotify_fallback(IoEvent::Seek(pos as u32));
       }
     }
   }

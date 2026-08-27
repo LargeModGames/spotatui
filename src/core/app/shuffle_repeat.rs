@@ -244,7 +244,7 @@ impl App {
       }
 
       // Fallback to API-based shuffle for external devices
-      self.dispatch(IoEvent::Shuffle(new_shuffle_state));
+      self.dispatch_spotify_fallback(IoEvent::Shuffle(new_shuffle_state));
     };
   }
 
@@ -314,7 +314,7 @@ impl App {
       }
 
       // Fallback to API-based repeat for external devices
-      self.dispatch(IoEvent::Repeat(current_repeat_state));
+      self.dispatch_spotify_fallback(IoEvent::Repeat(current_repeat_state));
     }
   }
 }

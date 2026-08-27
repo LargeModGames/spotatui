@@ -88,7 +88,7 @@ units under `src/`:
 | `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
-| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui`) |
+| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller, plus the boot auth rule `spotify_auth_mode`: interactive only right after the client wizard or `--reconfigure-auth`, a subcommand needs a cached token, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui`) |
 
 ### Data flow
 
@@ -124,6 +124,11 @@ worth knowing before adding an event:
   (`qobuz:`) → `route_radio_event` (`radio:`) → `route_youtube_event`
   (`youtube:`) → `Network::handle_network_event`.
   This is what keeps `infra/network/` Spotify-only.
+- **Claim gate**: before the routers, `start_playback_has_taker` drops a
+  `StartPlayback` whose URI scheme (`core::queue::queue_item_source`) names no
+  compiled-in source and that no Spotify session can take. The routers'
+  foreign-start teardown arms therefore only run for a real source-to-source
+  handoff.
 - **Service lane**: `Network::runs_on_service_lane` lists events that run on a
   detached task so slow, source-agnostic work cannot head-of-line-block the serial
   pump. The service lane's `Network` is built with **no Spotify client** - adding a
@@ -187,7 +192,11 @@ fixtures are `pub(super) fn`s in `test_support.rs`, imported as
 Multiple players share one UI, and the predicate order is the #1 source of
 regressions. Check in this order: `queue_owns_playback()` /
 `queue_now_is_spotify()`, then `active_decoded_source()`, then
-`is_native_streaming_active_for_playback()`.
+`is_native_streaming_active_for_playback()`. `App::playback_owner()` folds them
+into one `PlaybackOwner`, and the transport chains (play/pause,
+next, previous, shuffle, repeat, volume) end on `dispatch_spotify_fallback`,
+which answers "Nothing is playing" instead of a Spotify dispatch when no
+session exists.
 
 - Starting a decoded source (Local/Subsonic/Qobuz/Radio/YouTube) only **pauses**
   librespot - the native flag stays true, so driving librespot directly resumes
