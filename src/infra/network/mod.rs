@@ -1457,8 +1457,19 @@ impl Network {
 
   pub async fn process_party_messages(&mut self) {
     // Every relay handler below drives the Spotify client; without a session
-    // there is nothing to sync and `spotify()` would panic the pump.
+    // there is nothing to sync and `spotify()` would panic the pump. Close the
+    // party instead of returning, so an unread receiver cannot grow without a
+    // bound. The guard keeps the common no-party drain to one comparison.
     if self.spotify.is_none() {
+      if self.party_connection.is_some() || self.party_incoming_rx.is_some() {
+        self.leave_party().await;
+        self
+          .show_status_message(
+            "Listening Party ended: Spotify is not connected.".to_string(),
+            6,
+          )
+          .await;
+      }
       return;
     }
     let messages: Vec<sync::SyncMessage> = {

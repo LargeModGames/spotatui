@@ -50,8 +50,9 @@ impl App {
     self.dispatch(event);
   }
 
-  /// Whether a decoded source owns the sink and is not paused.
-  pub(crate) fn decoded_is_playing(&self) -> bool {
+  /// `Some(true)` when a decoded source owns the sink and plays, `Some(false)`
+  /// when it owns the sink and is paused, `None` when none owns it.
+  pub(crate) fn decoded_playing_state(&self) -> Option<bool> {
     #[cfg(any(
       feature = "local-files",
       feature = "subsonic",
@@ -60,7 +61,7 @@ impl App {
       feature = "youtube"
     ))]
     {
-      self.active_decoded_player().is_some_and(|p| !p.is_paused())
+      self.active_decoded_player().map(|p| !p.is_paused())
     }
     #[cfg(not(any(
       feature = "local-files",
@@ -70,7 +71,7 @@ impl App {
       feature = "youtube"
     )))]
     {
-      false
+      None
     }
   }
 
