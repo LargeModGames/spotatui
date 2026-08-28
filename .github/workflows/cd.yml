@@ -41,12 +41,12 @@ jobs:
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz"
           - os: macos-latest # Apple Silicon runner for aarch64
             target: aarch64-apple-darwin
             artifact_prefix: macos-aarch64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_prefix: windows-x86_64
@@ -196,7 +196,7 @@ jobs:
 
             Checksums (`.sha256`) are optional and only needed if you want to verify the download.
 
-            The Linux and Windows builds include the extra music sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz). The YouTube source needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
+            The Linux, macOS, and Windows builds include the extra music sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz). The YouTube source needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
 
             To update use "spotatui update --install" or use your package manager of choice.
           draft: false

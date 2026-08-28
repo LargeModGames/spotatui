@@ -15,12 +15,13 @@
 //!
 //! ## Cross-platform output
 //!
-//! `rodio` is the project-validated output backend on **Linux and Windows**
-//! (librespot itself uses `rodio-backend` there). On **macOS** rodio crashes on
-//! CoreAudio/Bluetooth devices (the reason librespot uses `portaudio-backend`
-//! there; see issues #9/#20), so [`LocalPlayer::new`] refuses to construct an
-//! output on macOS and returns a clear error. A macOS output path (portaudio or
-//! a direct CoreAudio backend) is a tracked follow-up that needs a Mac to test.
+//! `rodio` drives the default output device on all three platforms, CoreAudio
+//! included. macOS was gated off here until the rodio 0.22 / cpal 0.17 output
+//! path was measured on a Mac (the two `#[ignore]`d tests below): the crashes
+//! behind that gate (issues #9/#20) were librespot's own `rodio-backend`, an
+//! older rodio on the pre-`DeviceSinkBuilder` API. librespot still uses
+//! `portaudio-backend` on macOS for that reason; this player does not share
+//! that code path and does not need it.
 //!
 //! ## Threading
 //!
@@ -241,7 +242,6 @@ impl LocalPlayer {
 
 /// Open the default output device on a dedicated thread and return a control
 /// `Player` plus a keepalive sender (dropping it releases the device).
-#[cfg(not(target_os = "macos"))]
 fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
   use rodio::DeviceSinkBuilder;
 
@@ -280,15 +280,6 @@ fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
     .map_err(|e| anyhow::anyhow!("opening default audio output device: {e}"))?;
 
   Ok((sink, keepalive_tx))
-}
-
-/// macOS output is not yet supported — see module docs.
-#[cfg(target_os = "macos")]
-fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
-  anyhow::bail!(
-    "Local audio playback is not yet supported on macOS: rodio output crashes on \
-     CoreAudio/Bluetooth devices (see issues #9/#20). A macOS output path is a tracked follow-up."
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +351,6 @@ mod tests {
   /// `cargo test --features local-files -- --ignored plays_wav`
   #[test]
   #[ignore = "requires an audio output device"]
-  #[cfg(not(target_os = "macos"))]
   fn plays_wav_through_sink() {
     let dir = tempfile::tempdir().unwrap();
     let wav = dir.path().join("sample.wav");
@@ -390,7 +380,6 @@ mod tests {
 
   #[test]
   #[ignore = "requires an audio output device"]
-  #[cfg(not(target_os = "macos"))]
   fn position_advances_while_playing() {
     let dir = tempfile::tempdir().unwrap();
     let wav = dir.path().join("sample.wav");

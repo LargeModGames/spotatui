@@ -55,7 +55,8 @@ across a **seven-leg** feature matrix:
   test-only helper whose production caller is compiled out on some leg needs
   `#[allow(dead_code)]`.
 - The `all-sources` leg must stay in sync with `cd.yml`'s Linux release row
-  (macOS releases ship a smaller set - no decoded sources).
+  (macOS releases ship the same five sources but a different
+  backend/OS-integration set).
 - A pull_request-only `Gates ratchet` job diffs `tools/gates.count` against the
   merge-base (`tools/check_gates_ratchet.sh`): coupling counters may only fall;
   the two adoption counters (`test_attribute_total`,
@@ -449,9 +450,10 @@ working in those directories.
   tested. The three web-player constants are scraped at runtime (`auth.rs`),
   cached in `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars;
   they are never embedded. Failures are status messages, never `handle_error`.
-- macOS cannot play any decoded source: `LocalPlayer::new()` bails there because
-  rodio SIGSEGVs on CoreAudio/Bluetooth (#9/#20) - which is why macOS releases
-  exclude the source features.
+- All three platforms play decoded sources. macOS was gated off in
+  `LocalPlayer` until rodio 0.22 / cpal 0.17 were measured on CoreAudio; the
+  SIGSEGVs behind that gate (#9/#20) were librespot's own rodio-backend, which
+  is why librespot still uses portaudio-backend there and this player does not.
 - Repeat/shuffle for decoded sources live in the pure module
   `src/infra/queue/mod.rs` (`advance_decision`, `resume_index_after_queue`, …);
   state is player-global on `App` (`decoded_repeat`, `decoded_shuffle`).
