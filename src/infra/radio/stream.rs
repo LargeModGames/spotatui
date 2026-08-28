@@ -50,6 +50,14 @@ const RING_BUFFER_BYTES: usize = 512 * 1024;
 /// never completes the handshake fails fast instead of hanging the serial pump.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Cap on the format probe, the last unbounded step of tune-in. rodio's probe
+/// scans for a start-of-stream marker it recognises, and a live stream has no
+/// end to stop it: a station whose codec symphonia does not register — MPEG-2
+/// ADTS AAC, which it does not, is common on European radio — leaves it
+/// scanning forever, on the serial pump. Generous next to a healthy probe,
+/// which matches within the first prefetched bytes.
+pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Cap on the connect + header-wait phase (`HttpStream::new`). A station that
 /// accepts the connection then withholds response headers would otherwise hang
 /// the pump forever. This bounds only the tune-in handshake — NOT the audio body,
@@ -61,6 +69,15 @@ const HEADER_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct OpenedStream {
   /// The decodable audio byte stream (ICY metadata already stripped).
   pub reader: Box<dyn StreamReader>,
+  /// Stops the background download, which is how a probe that will never
+  /// finish is made to let go of the stream.
+  ///
+  /// It has to be the *download* that stops, not the reader: a probe waiting
+  /// for bytes parks inside `read`, so a flag it only checks between reads
+  /// would never be seen. Cancelling marks the stream done and wakes every
+  /// waiter, so the read returns, the probe hits end-of-stream and gives up,
+  /// and the thread and its download go away together.
+  pub cancel: Box<dyn Fn() + Send + Sync>,
   /// Live now-playing title (`StreamTitle`), updated by the reader as metadata
   /// blocks arrive. Stays `None` for streams without ICY metadata.
   pub now_playing: Arc<Mutex<Option<String>>>,
@@ -123,6 +140,9 @@ pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
     .await
     .map_err(|e| anyhow!("buffering radio stream: {e}"))?;
 
+  let cancellation = download.cancellation_token();
+  let cancel: Box<dyn Fn() + Send + Sync> = Box::new(move || cancellation.cancel());
+
   let now_playing: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
   let reader: Box<dyn StreamReader> = match icy_headers.metadata_interval() {
     Some(metaint) => {
@@ -148,6 +168,7 @@ pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
 
   Ok(OpenedStream {
     reader,
+    cancel,
     now_playing,
     content_type,
     station_name,

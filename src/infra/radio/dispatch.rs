@@ -270,10 +270,31 @@ async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
   }
 
   let now_playing = Arc::clone(&opened.now_playing);
-  let (reader, mime) = (opened.reader, opened.content_type);
+  let (reader, mime, cancel) = (opened.reader, opened.content_type, opened.cancel);
   let decode_player = Arc::clone(&player);
-  let result =
-    tokio::task::spawn_blocking(move || decode_player.play_stream(reader, mime.as_deref())).await;
+  // Bound the probe, the last unbounded step of tune-in. It scans for a marker
+  // it recognises and a live stream never ends, so an unsupported codec would
+  // otherwise scan forever — and this is awaited on the serial pump, where that
+  // is not silence but a frozen app. Cancelling on the way out is what lets the
+  // probe thread and its download go, since `spawn_blocking` cannot be aborted.
+  let result = tokio::time::timeout(
+    super::stream::PROBE_TIMEOUT,
+    tokio::task::spawn_blocking(move || decode_player.play_stream(reader, mime.as_deref())),
+  )
+  .await;
+
+  let result = match result {
+    Ok(result) => result,
+    Err(_) => {
+      cancel();
+      set_error(
+        app,
+        "Cannot play radio stream: no recognisable audio format in time.".to_string(),
+      )
+      .await;
+      return;
+    }
+  };
 
   match result {
     Ok(Ok(())) => {
@@ -431,6 +452,45 @@ mod tests {
       Some("radio:https://ice1.somafm.com/groovesalad-128-mp3")
     );
     assert_eq!(guard.radio_stations[1].name, "Secret Agent");
+  }
+
+  /// The station shape that froze the app: a live stream whose codec rodio's
+  /// symphonia does not register (MPEG-2 ADTS AAC — its ADTS reader only claims
+  /// the MPEG-4 `ff f1` marker, not `ff f9`). The probe scans for a marker that
+  /// will never arrive, and this runs on the serial pump, so an unbounded one
+  /// takes searching and playback controls down with it. What must happen
+  /// instead: give up, say so, publish no session, and leave the app usable.
+  #[tokio::test(flavor = "multi_thread")]
+  #[ignore = "hits a live radio station AND requires an audio output device"]
+  async fn an_unrecognisable_live_stream_gives_up_instead_of_hanging() {
+    let app = Arc::new(Mutex::new(test_app()));
+    {
+      let mut guard = app.lock().await;
+      guard.runtime_state.radio_stations = vec![crate::core::state::RadioStationConfig {
+        name: "Radio Bruno (MPEG-2 ADTS AAC)".to_string(),
+        url: "https://stream3.xdevel.com/audio6s975355-281/stream/icecast.audio".to_string(),
+      }];
+    }
+    assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
+    let uri = app.lock().await.radio_stations[0].uri.clone().unwrap();
+
+    let started = std::time::Instant::now();
+    assert!(route_radio_event(&app, &IoEvent::StartPlayback(Some(uri), None, None)).await);
+    let elapsed = started.elapsed();
+
+    assert!(
+      elapsed < super::super::stream::PROBE_TIMEOUT + std::time::Duration::from_secs(15),
+      "tune-in must be bounded, took {elapsed:?}"
+    );
+    let guard = app.lock().await;
+    assert!(
+      guard.radio_playback.is_none(),
+      "nothing decodable, so no session may be published"
+    );
+    assert!(
+      guard.api_error.contains("radio stream") || guard.status_message.is_some(),
+      "the user has to be told why nothing played"
+    );
   }
 
   /// End-to-end dispatch test: drive `route_radio_event` exactly as the runtime
