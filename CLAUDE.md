@@ -456,6 +456,24 @@ working in those directories.
   `LocalPlayer` until rodio 0.22 / cpal 0.17 were measured on CoreAudio; the
   SIGSEGVs behind that gate (#9/#20) were librespot's own rodio-backend, which
   is why librespot still uses portaudio-backend there and this player does not.
+- Losing the output device has **two** shapes and only one is an error. cpal
+  reports the device being *removed* (`DeviceNotAvailable`); it cannot report the
+  common case - the OS moving its **default output** elsewhere (headphones out,
+  AirPods in the case), which leaves the stream bound to a device nobody hears.
+  So `LocalPlayer` both raises a `lost` flag from its own cpal error callback
+  *and* remembers the device name it opened, comparing it against the current
+  default in `device_lost()`. It then *refuses* `play_file`/`play_prepared`/
+  `stop`/`seek`: those wait on rodio's audio callback with no timeout, and they
+  run on the serial pump, so blocking one wedges the whole app rather than just
+  falling silent. Every such wait also goes through `bounded()`, which re-asks
+  the device every 3s rather than timing out blind - a dead device and a source
+  stalled on the network are indistinguishable from the caller's side, and
+  Qobuz's stream stall alone is 60s.
+  The driver's tick polls `device_lost()`, calls `LocalPlayer::reopen()` to
+  rebuild on the new default device, and restages the track (replay + seek +
+  pause). That recovery must stay *before* every advance block: a dead sink
+  never drains, so `is_finished()` is false and would otherwise read as a
+  still-playing track.
 - Repeat/shuffle for decoded sources live in the pure module
   `src/infra/queue/mod.rs` (`advance_decision`, `resume_index_after_queue`, …);
   state is player-global on `App` (`decoded_repeat`, `decoded_shuffle`).

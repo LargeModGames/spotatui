@@ -23,6 +23,31 @@
 //! `portaudio-backend` on macOS for that reason; this player does not share
 //! that code path and does not need it.
 //!
+//! ## Losing the output device
+//!
+//! Losing the device mid-track takes two shapes, and only one of them is an
+//! error anybody reports. cpal notices the device being *removed* and reports
+//! `DeviceNotAvailable`. It cannot notice the far more common case: the OS
+//! moving its **default output** somewhere else — headphones unplugged, AirPods
+//! back in their case — which leaves the stream happily bound to a device
+//! nobody is listening to. So the sink also remembers which device it opened
+//! and [`device_lost`](LocalPlayer::device_lost) compares that against the
+//! current default.
+//!
+//! Either way no audio callback runs again, and that matters far beyond
+//! silence: rodio's
+//! `clear` and `try_seek` *wait on that callback* (`sleep_until_end`, and the
+//! seek feedback channel, neither with a timeout), and the transport methods
+//! here are called straight from the serial IoEvent pump. A blocked one wedges
+//! the pump, and with it every unrelated thing behind it — searches included.
+//!
+//! So every method that would wait on the audio thread refuses once the device
+//! is gone, and — because a detector that misses one day would freeze the app
+//! again — the wait itself is bounded: an audio thread that does not answer
+//! *is* the last-resort detector. The driver's tick notices, calls
+//! [`LocalPlayer::reopen`] to rebuild the output on the new default device, and
+//! restages the track there.
+//!
 //! ## Threading
 //!
 //! `rodio::MixerDeviceSink` is `!Send`, so it cannot live on the shared player
@@ -33,7 +58,8 @@
 
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -44,11 +70,41 @@ use rodio::{Decoder, Player};
 /// Cheap to hold behind an `Arc`: the heavy `MixerDeviceSink` lives on a
 /// dedicated thread, and the `Player` here is a lightweight `Arc`-backed handle.
 pub struct LocalPlayer {
-  sink: Player,
-  /// Dropping this sender signals the audio thread to drop its `OutputStream`
-  /// and release the audio device. Held for the player's lifetime.
-  _keepalive: mpsc::Sender<()>,
+  /// Replaced wholesale by [`reopen`](LocalPlayer::reopen). Only ever locked to
+  /// clone the `Arc` out, never held across a rodio call: `clear` waits on the
+  /// audio thread while the render tick reads `position()` from another one.
+  sink: Mutex<Sink>,
+  /// The last percent handed to [`set_volume`](LocalPlayer::set_volume),
+  /// re-applied to a reopened sink so a device change is not also a volume jump.
+  volume_percent: AtomicU8,
 }
+
+/// One open output: rodio's control handle, the audio thread's keepalive, and
+/// the flag cpal's error callback raises when the device disappears.
+struct Sink {
+  player: Arc<Player>,
+  /// Dropping this sender signals the audio thread to drop its `OutputStream`
+  /// and release the audio device. Held for the sink's lifetime.
+  _keepalive: mpsc::Sender<()>,
+  /// Raised by our cpal error callback when the device is *removed*.
+  lost: Arc<AtomicBool>,
+  /// The device this sink was opened on, as cpal names it, so a default-output
+  /// change can be spotted (see module docs). `None` when the name could not be
+  /// read, which only disables the comparison — never fakes a change.
+  device_name: Option<String>,
+}
+
+/// How often a wait on the audio thread stops to re-ask whether the device is
+/// still there. Well above a healthy `clear` (one buffer, tens of milliseconds),
+/// short enough that a real disconnect is noticed while the user still connects
+/// it to what they just did.
+const AUDIO_THREAD_POLL: Duration = Duration::from_secs(3);
+
+/// The absolute ceiling on such a wait. Above Qobuz's 60s stream stall so a
+/// slow network is never mistaken for a dead device, and finite so an audio
+/// thread that wedges for a reason nothing here can name still cannot take the
+/// app with it.
+const AUDIO_THREAD_CEILING: Duration = Duration::from_secs(90);
 
 /// A decoded stream, ready for [`LocalPlayer::play_prepared`].
 #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
@@ -61,13 +117,118 @@ impl LocalPlayer {
   /// setup, off any latency-sensitive path. Returns an error if no output
   /// device is available (e.g. headless CI) or on macOS (see module docs).
   pub fn new() -> Result<Self> {
-    let (sink, keepalive) = open_sink()?;
+    let sink = open_sink()?;
     // Start silent; nothing is queued until the first `play_file`.
-    sink.pause();
+    sink.player.pause();
     Ok(Self {
-      sink,
-      _keepalive: keepalive,
+      sink: Mutex::new(sink),
+      volume_percent: AtomicU8::new(100),
     })
+  }
+
+  /// The rodio handle, for the calls that cannot block (they only touch
+  /// atomics and short-lived mutexes, never the audio thread).
+  fn player(&self) -> Arc<Player> {
+    Arc::clone(&self.sink.lock().unwrap().player)
+  }
+
+  /// The rodio handle for calls that *do* wait on the audio thread, refusing
+  /// once the device is gone — see the module docs: waiting there never
+  /// returns, and would wedge the serial IoEvent pump rather than fall silent.
+  fn live_player(&self) -> Result<Arc<Player>> {
+    let sink = self.sink.lock().unwrap();
+    if sink.lost.load(Ordering::Relaxed) {
+      anyhow::bail!("audio output device disconnected");
+    }
+    Ok(Arc::clone(&sink.player))
+  }
+
+  /// Whether the sink is still connected to something the user can hear. The
+  /// driver's tick polls this to decide when to [`reopen`](Self::reopen).
+  ///
+  /// Two ways to fail (see module docs): the device was removed and cpal told
+  /// us, or the OS quietly moved its default output elsewhere and nobody did.
+  pub fn device_lost(&self) -> bool {
+    let sink = self.sink.lock().unwrap();
+    if sink.lost.load(Ordering::Relaxed) {
+      return true;
+    }
+    // Only a name read successfully on *both* sides is evidence: a missing one
+    // means "cannot tell", which must not read as "changed" — mid-switch there
+    // is briefly no default device at all, and tearing playback down for that
+    // would be worse than the silence this exists to catch.
+    match (&sink.device_name, default_output_name()) {
+      (Some(opened), Some(current)) => *opened != current,
+      _ => false,
+    }
+  }
+
+  /// Wait on the audio thread, but never forever.
+  ///
+  /// rodio's `clear` and `try_seek` block until the audio callback answers, and
+  /// they run on the serial IoEvent pump: one that never returns takes every
+  /// unrelated request behind it down too. `device_lost` normally catches a
+  /// dead device before we get here — this is the backstop for a way of losing
+  /// one that neither cpal nor the default-output check saw.
+  ///
+  /// A plain timeout would be wrong: a dead device and a source stalled on the
+  /// network look identical from here (Qobuz gives its stream 60 seconds), and
+  /// cutting the second one short would break slow playback to fix a freeze. So
+  /// the wait re-*asks the device* every [`AUDIO_THREAD_POLL`] instead of
+  /// guessing, gives up at once when it really went away, and only past
+  /// [`AUDIO_THREAD_CEILING`] — nothing identifiably wrong, still no answer —
+  /// declares it lost anyway, because a pump that never returns is worse than
+  /// a track that never plays.
+  ///
+  /// A call that truly never returns leaves its worker parked for the life of
+  /// the process. That is the cheap half of this trade.
+  fn bounded<T: Send + 'static>(&self, op: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+      let _ = tx.send(op());
+    });
+
+    let started = std::time::Instant::now();
+    loop {
+      match rx.recv_timeout(AUDIO_THREAD_POLL) {
+        Ok(value) => return Some(value),
+        // The worker vanished without answering; nothing left to wait for.
+        Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+          if self.device_lost() {
+            return None;
+          }
+          if started.elapsed() >= AUDIO_THREAD_CEILING {
+            self
+              .sink
+              .lock()
+              .unwrap()
+              .lost
+              .store(true, Ordering::Relaxed);
+            return None;
+          }
+        }
+      }
+    }
+  }
+
+  /// Rebuild the output on the *current* default device and drop the dead one.
+  ///
+  /// The new sink starts paused and empty, at the volume the old one had, so
+  /// the caller restages whatever was playing (see the driver's tick). Dropping
+  /// the old `Sink` releases its keepalive, which lets the old audio thread
+  /// exit; `Player`'s own `Drop` only sets a flag, so nothing here blocks.
+  ///
+  /// **Blocking:** opens a device, like [`new`](Self::new).
+  pub fn reopen(&self) -> Result<()> {
+    let fresh = open_sink()?;
+    // Configure before publishing: once swapped in, other threads can see it.
+    fresh.player.pause();
+    fresh
+      .player
+      .set_volume(volume_gain(self.volume_percent.load(Ordering::Relaxed)));
+    *self.sink.lock().unwrap() = fresh;
+    Ok(())
   }
 
   /// Decode the file at `path` and play it, replacing whatever was playing.
@@ -83,13 +244,17 @@ impl LocalPlayer {
     allow(dead_code)
   )]
   pub fn play_file(&self, path: &Path) -> Result<()> {
+    let sink = self.live_player()?;
     // Stop whatever is currently playing *before* any fallible step (open or
     // decode), so a failure here can never leave the previous track audible. A
     // manual Next/Previous into a missing or undecodable file must fall silent:
     // `play_index`'s failure arm relies on the sink draining here so the runner
     // tick's `is_finished()` fires and auto-advance skips past the bad file
     // instead of dead-ending on a stale, still-playing track.
-    self.sink.clear();
+    let clearing = Arc::clone(&sink);
+    if self.bounded(move || clearing.clear()).is_none() {
+      anyhow::bail!("audio output device stopped responding");
+    }
 
     let file = std::fs::File::open(path)
       .with_context(|| format!("opening audio file {}", path.display()))?;
@@ -99,8 +264,8 @@ impl LocalPlayer {
     let decoder = Decoder::new(BufReader::new(file))
       .with_context(|| format!("decoding audio file {}", path.display()))?;
 
-    self.sink.append(decoder);
-    self.sink.play();
+    sink.append(decoder);
+    sink.play();
     Ok(())
   }
 
@@ -159,34 +324,40 @@ impl LocalPlayer {
 
   /// Play a prepared stream, replacing whatever was playing. The clear waits
   /// for the audio thread to drop the previous source: call it off the `App`
-  /// lock (see `stop_detached`).
+  /// lock (see `stop_detached`). A no-op once the device is gone.
   #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
   pub fn play_prepared(&self, stream: PreparedStream) {
-    self.sink.clear();
-    self.sink.append(stream.0);
-    self.sink.play();
+    let Ok(sink) = self.live_player() else { return };
+    let clearing = Arc::clone(&sink);
+    if self.bounded(move || clearing.clear()).is_none() {
+      return;
+    }
+    sink.append(stream.0);
+    sink.play();
   }
 
   /// Pause playback, keeping the current position.
   pub fn pause(&self) {
-    self.sink.pause();
+    self.player().pause();
   }
 
   /// Resume playback from the current position.
   pub fn resume(&self) {
-    self.sink.play();
+    self.player().play();
   }
 
   /// Whether playback is currently paused.
   pub fn is_paused(&self) -> bool {
-    self.sink.is_paused()
+    self.player().is_paused()
   }
 
   /// Stop playback and discard the current source.
   ///
-  /// After this, [`is_finished`](Self::is_finished) reports `true`.
+  /// After this, [`is_finished`](Self::is_finished) reports `true`. A no-op
+  /// once the device is gone — the sink it would drain is already dead.
   pub fn stop(&self) {
-    self.sink.clear();
+    let Ok(sink) = self.live_player() else { return };
+    self.bounded(move || sink.clear());
   }
 
   /// Stop on the blocking pool and return at once. `stop` waits for the audio
@@ -198,12 +369,13 @@ impl LocalPlayer {
   /// Set the output volume from the user's percent, on the same logarithmic
   /// curve as native streaming, so one setting is equally loud on every source.
   pub fn set_volume(&self, percent: u8) {
-    self.sink.set_volume(volume_gain(percent));
+    self.volume_percent.store(percent, Ordering::Relaxed);
+    self.player().set_volume(volume_gain(percent));
   }
 
   /// The playback position of the current source.
   pub fn position(&self) -> Duration {
-    self.sink.get_pos()
+    self.player().get_pos()
   }
 
   /// Whether the sink has no source playing — either nothing was ever played,
@@ -217,7 +389,7 @@ impl LocalPlayer {
     allow(dead_code)
   )]
   pub fn is_finished(&self) -> bool {
-    self.sink.empty()
+    self.player().empty()
   }
 
   /// Seek to an absolute position within the current source.
@@ -229,10 +401,11 @@ impl LocalPlayer {
     allow(dead_code)
   )]
   pub fn seek(&self, pos: Duration) -> Result<()> {
-    self
-      .sink
-      .try_seek(pos)
-      .map_err(|e| anyhow::anyhow!("seeking local audio: {e}"))
+    let sink = self.live_player()?;
+    match self.bounded(move || sink.try_seek(pos)) {
+      Some(result) => result.map_err(|e| anyhow::anyhow!("seeking local audio: {e}")),
+      None => anyhow::bail!("audio output device stopped responding"),
+    }
   }
 }
 
@@ -240,10 +413,34 @@ impl LocalPlayer {
 // Platform-specific output construction
 // ---------------------------------------------------------------------------
 
-/// Open the default output device on a dedicated thread and return a control
-/// `Player` plus a keepalive sender (dropping it releases the device).
-fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
+/// Open the default output device on a dedicated thread and return the live
+/// [`Sink`] (dropping its keepalive releases the device).
+fn open_sink() -> Result<Sink> {
+  use rodio::cpal::traits::HostTrait;
+  use rodio::cpal::StreamError;
   use rodio::DeviceSinkBuilder;
+
+  // Pick the device here rather than letting rodio do it, so the sink can
+  // remember which one it got and notice the OS moving on from it later.
+  let device = rodio::cpal::default_host()
+    .default_output_device()
+    .context("no audio output device available")?;
+  let device_name = device_name(&device);
+
+  let lost = Arc::new(AtomicBool::new(false));
+  let on_error = {
+    let lost = Arc::clone(&lost);
+    move |err: StreamError| {
+      // Ours only because rodio's default callback `eprintln!`s (its `tracing`
+      // feature is off here) and raw stderr corrupts the TUI. The one error
+      // worth recording is the device going away: cpal pauses the stream and
+      // reports `DeviceNotAvailable`, after which no audio callback runs again
+      // and every rodio call that waits on one would hang (see module docs).
+      if matches!(err, StreamError::DeviceNotAvailable) {
+        lost.store(true, Ordering::Relaxed);
+      }
+    }
+  };
 
   let (init_tx, init_rx) = mpsc::channel::<std::result::Result<Player, String>>();
   let (keepalive_tx, keepalive_rx) = mpsc::channel::<()>();
@@ -251,7 +448,16 @@ fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
   std::thread::Builder::new()
     .name("spotatui-local-audio".to_string())
     .spawn(move || {
-      match DeviceSinkBuilder::open_default_sink() {
+      // `open_default_sink()` would install rodio's `eprintln!` callback and
+      // pick the device itself, so build the same thing by hand: the default
+      // device, falling back to its other supported configs. Unlike rodio's
+      // helper this does not then sweep every *other* output device — a machine
+      // whose default output cannot be opened gets a clear error instead of
+      // audio from a surprise device.
+      let opened = DeviceSinkBuilder::from_device(device)
+        .map(|builder| builder.with_error_callback(on_error))
+        .and_then(|builder| builder.open_sink_or_fallback());
+      match opened {
         Ok(mut stream) => {
           // rodio prints a drop warning for the `MixerDeviceSink` to stderr by
           // default (it has no `tracing` feature enabled here). Raw stderr
@@ -274,12 +480,34 @@ fn open_sink() -> Result<(Player, mpsc::Sender<()>)> {
     })
     .context("spawning local audio output thread")?;
 
-  let sink = init_rx
+  let player = init_rx
     .recv()
     .context("local audio output thread exited before initialising")?
     .map_err(|e| anyhow::anyhow!("opening default audio output device: {e}"))?;
 
-  Ok((sink, keepalive_tx))
+  Ok(Sink {
+    player: Arc::new(player),
+    _keepalive: keepalive_tx,
+    lost,
+    device_name,
+  })
+}
+
+/// A device's name as cpal reports it. `None` when it cannot be read — the
+/// caller must treat that as "cannot tell", never as a change.
+fn device_name(device: &rodio::Device) -> Option<String> {
+  use rodio::DeviceTrait;
+  device.description().ok().map(|d| d.name().to_string())
+}
+
+/// The name of the output device the OS currently calls its default, which is
+/// what a sink opened earlier is compared against.
+fn default_output_name() -> Option<String> {
+  use rodio::cpal::traits::HostTrait;
+  rodio::cpal::default_host()
+    .default_output_device()
+    .as_ref()
+    .and_then(device_name)
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +604,142 @@ mod tests {
       player.is_finished(),
       "stop should clear the source so the sink reports finished"
     );
+  }
+
+  /// The anti-hang guarantee. Once the device is gone, the calls that wait on
+  /// the audio thread must refuse rather than block: they run on the serial
+  /// IoEvent pump, so one that never returns takes the whole app down with it,
+  /// searches included. A regression does not fail loudly — it deadlocks — so
+  /// the assertion is a timeout around a worker thread.
+  #[test]
+  #[ignore = "requires an audio output device"]
+  fn a_lost_device_refuses_the_calls_that_wait_on_the_audio_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("sample.wav");
+    write_wav(&wav, 44_100, 44_100 * 30); // still playing when the device drops
+
+    let player = Arc::new(LocalPlayer::new().expect("open default output device"));
+    player.play_file(&wav).expect("play wav");
+
+    // Raise exactly the flag cpal's error callback raises on a disconnect.
+    player
+      .sink
+      .lock()
+      .unwrap()
+      .lost
+      .store(true, Ordering::Relaxed);
+    assert!(player.device_lost());
+
+    let (tx, rx) = mpsc::channel();
+    let worker = Arc::clone(&player);
+    let path = wav.clone();
+    std::thread::spawn(move || {
+      let refused = (
+        worker.play_file(&path).is_err(),
+        worker.seek(Duration::from_secs(1)).is_err(),
+      );
+      worker.stop(); // must return instead of draining a sink nothing feeds
+      let _ = tx.send(refused);
+    });
+
+    match rx.recv_timeout(Duration::from_secs(5)) {
+      Ok((play_refused, seek_refused)) => {
+        assert!(play_refused, "play_file should refuse a lost device");
+        assert!(seek_refused, "seek should refuse a lost device");
+      }
+      Err(_) => panic!("a transport call blocked on the dead audio thread"),
+    }
+  }
+
+  /// The detector that matters most in practice. cpal reports nothing when the
+  /// OS moves its default output elsewhere — the stream stays bound to a device
+  /// nobody can hear — so comparing against the current default is what catches
+  /// headphones unplugged or AirPods going back in their case.
+  #[test]
+  #[ignore = "requires an audio output device"]
+  fn a_default_output_change_reads_as_a_lost_device() {
+    let player = LocalPlayer::new().expect("open default output device");
+    assert!(
+      !player.device_lost(),
+      "a sink freshly opened on the current default is not lost"
+    );
+
+    // Stand in for the OS switching away: the sink names a device that is no
+    // longer the default.
+    player.sink.lock().unwrap().device_name = Some("a device that went away".to_string());
+    assert!(
+      player.device_lost(),
+      "a default that moved is a lost device"
+    );
+
+    // A name we could not read means "cannot tell", never "changed": mid-switch
+    // there is briefly no default at all, and tearing playback down for that
+    // would be worse than the silence this exists to catch.
+    player.sink.lock().unwrap().device_name = None;
+    assert!(!player.device_lost(), "an unreadable name is not evidence");
+
+    player.reopen().expect("reopen on the default device");
+    assert!(
+      !player.device_lost(),
+      "reopen re-anchors the sink to the new default"
+    );
+  }
+
+  /// The backstop, on the path that matters: the audio thread stops answering
+  /// *because* the device went away. The wait must notice at its first check
+  /// rather than sit out a stall timeout meant for slow networks — this is the
+  /// difference between a stutter and the frozen app the user reported.
+  #[test]
+  #[ignore = "requires an audio output device"]
+  fn a_wait_gives_up_as_soon_as_the_device_is_gone() {
+    let player = LocalPlayer::new().expect("open default output device");
+    // The device moved out from under the sink, as it does when headphones go.
+    player.sink.lock().unwrap().device_name = Some("a device that went away".to_string());
+
+    let started = std::time::Instant::now();
+    let answered = player.bounded(|| std::thread::sleep(Duration::from_secs(120)));
+
+    assert!(answered.is_none(), "the wait must give up, not block");
+    assert!(
+      started.elapsed() < AUDIO_THREAD_POLL + Duration::from_secs(2),
+      "it must give up at the first check, got {:?}",
+      started.elapsed()
+    );
+  }
+
+  /// Recovery: a reopened sink is alive, empty, paused and at the volume the
+  /// dead one had, ready for the driver to restage the track onto.
+  #[test]
+  #[ignore = "requires an audio output device"]
+  fn reopening_gives_a_live_empty_sink_at_the_same_volume() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("sample.wav");
+    write_wav(&wav, 44_100, 44_100);
+
+    let player = LocalPlayer::new().expect("open default output device");
+    player.set_volume(40);
+    player.play_file(&wav).expect("play wav");
+    player
+      .sink
+      .lock()
+      .unwrap()
+      .lost
+      .store(true, Ordering::Relaxed);
+
+    player.reopen().expect("reopen on the default device");
+
+    assert!(!player.device_lost(), "the fresh sink starts alive");
+    assert!(player.is_finished(), "the fresh sink starts empty");
+    assert!(player.is_paused(), "the fresh sink waits to be restaged");
+    let gain = player.player().volume();
+    assert!(
+      (gain - volume_gain(40)).abs() < 0.0001,
+      "a device change should not also be a volume jump: {gain}"
+    );
+    // And it is usable: the restage the driver dispatches must land.
+    player
+      .play_file(&wav)
+      .expect("reopened sink accepts a track");
   }
 
   #[test]
