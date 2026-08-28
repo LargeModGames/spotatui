@@ -56,6 +56,13 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     return true;
   }
 
+  // The slot is done, with the rest of the queue left where it is: the driver's
+  // tick sends this when the slot's device died and would not reopen.
+  if let IoEvent::FinishNativeQueue = event {
+    resume_or_finish(app).await;
+    return true;
+  }
+
   #[cfg(feature = "streaming")]
   if let IoEvent::ReplayPublishedSpotifyQueueSlot = event {
     if replay_published_spotify_slot(app).await {

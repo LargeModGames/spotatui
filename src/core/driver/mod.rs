@@ -397,10 +397,12 @@ impl Driver {
     // every advance block below: a dead device must not read as end-of-track.
     //
     // Rebuild the output on the new default device and restage the track there,
-    // paused where it stopped — the same thing macOS does when AirPods come
-    // out, and the reason not to resume playing: nobody wants the music to jump
-    // to the laptop speakers. The pump is serial, so the three dispatches land
-    // in order: replay from the top, seek back, pause.
+    // at the position it stopped. Whether it stays paused depends on which of
+    // the two shapes this was: cpal reporting the device *removed* (headphones
+    // out) pauses, like macOS itself does — nobody wants the music jumping to
+    // the laptop speakers. A default that merely moved (headphones *in*) keeps
+    // whatever play/pause state the session had. The pump is serial, so the
+    // dispatches land in order: replay from the top, seek back, then pause.
     #[cfg(any(
       feature = "local-files",
       feature = "subsonic",
@@ -422,6 +424,12 @@ impl Driver {
             .$playback
             .as_ref()
             .map_or(0, |s| s.player.position().as_millis() as u32);
+          // Read both before the reopen: it swaps in a fresh sink that is
+          // paused and reports no removal.
+          let pause_after = $app
+            .$playback
+            .as_ref()
+            .is_some_and(|s| s.player.device_removed() || s.player.is_paused());
           // Reopening is what makes the session playable again; if even the new
           // default device will not open there is nothing to restage onto.
           let reopened = $app
@@ -439,8 +447,12 @@ impl Driver {
             if resume_ms > 0 {
               $app.dispatch(IoEvent::Seek(resume_ms));
             }
-            $app.dispatch(IoEvent::PausePlayback);
-            $app.set_status_message("Audio device changed - playback paused here.", 8);
+            if pause_after {
+              $app.dispatch(IoEvent::PausePlayback);
+              $app.set_status_message("Audio device changed - playback paused here.", 8);
+            } else {
+              $app.set_status_message("Audio device changed - playback moved to it.", 8);
+            }
           } else {
             $app.$playback = None;
             $app.set_status_message("Audio output device disconnected.", 8);
@@ -473,7 +485,15 @@ impl Driver {
     // The native queue slot's own sink. There is no "replay this queued item"
     // event, so recovery here reopens the device and lets the advance block
     // below take it from the top of the next item: the interrupted queued track
-    // is skipped rather than restaged.
+    // is skipped rather than restaged, and settled to the right play/pause
+    // state once that advance has been dispatched.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
+    let mut queue_device_recovered = None;
     #[cfg(any(
       feature = "local-files",
       feature = "subsonic",
@@ -487,14 +507,28 @@ impl Driver {
         _ => false,
       };
       if lost {
+        // Same split as the context path above: removal pauses, a default that
+        // moved keeps the state the slot had.
+        let pause_after = match app.queue_now.as_ref() {
+          Some(QueueNowPlaying::Decoded(d)) => d.player.device_removed() || d.player.is_paused(),
+          _ => false,
+        };
         let reopened = match app.queue_now.as_ref() {
           Some(QueueNowPlaying::Decoded(d)) => d.player.reopen().is_ok(),
           _ => false,
         };
-        if !reopened {
-          app.queue_now = None;
+        if reopened {
+          // The fresh sink is empty, so the advance block below fires and the
+          // next queued item starts: settle its play/pause state after it, not
+          // here, or the queue plays out loud on a device the user just left.
+          queue_device_recovered = Some(pause_after);
+        } else {
+          // No device to play on. Hand the slot to the same teardown a drained
+          // queue uses: clearing `queue_now` here would strand the suspended
+          // context (latched `advancing`) and the remaining queued items.
+          app.dispatch(IoEvent::FinishNativeQueue);
+          app.set_status_message("Audio output device disconnected.", 8);
         }
-        app.set_status_message("Audio output device disconnected.", 8);
       }
     }
 
@@ -520,6 +554,24 @@ impl Driver {
       };
       if advance {
         app.dispatch(IoEvent::AdvanceNativeQueue);
+      }
+    }
+
+    // The queue slot recovered onto a new device just above; the advance it
+    // triggered is already dispatched, so this lands behind it on the serial
+    // pump.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
+    if let Some(pause_after) = queue_device_recovered {
+      if pause_after {
+        app.dispatch(IoEvent::PausePlayback);
+        app.set_status_message("Audio device changed - playback paused here.", 8);
+      } else {
+        app.set_status_message("Audio device changed - playback moved to it.", 8);
       }
     }
 

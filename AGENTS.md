@@ -477,10 +477,15 @@ working in those directories.
   stalled on the network are indistinguishable from the caller's side, and
   Qobuz's stream stall alone is 60s.
   The driver's tick polls `device_lost()`, calls `LocalPlayer::reopen()` to
-  rebuild on the new default device, and restages the track (replay + seek +
-  pause). That recovery must stay *before* every advance block: a dead sink
-  never drains, so `is_finished()` is false and would otherwise read as a
-  still-playing track.
+  rebuild on the new default device, and restages the track (replay + seek,
+  then pause only when `device_removed()` says cpal saw a *removal* or the
+  session was already paused - a default that merely moved means the user
+  plugged something in and keeps playing). That recovery must stay *before*
+  every advance block: a dead sink never drains, so `is_finished()` is false
+  and would otherwise read as a still-playing track. The queue slot has no
+  replay event, so it settles its pause state *after* the advance block has
+  dispatched, and a reopen that fails hands the slot to `FinishNativeQueue`
+  (the same teardown a drained queue runs) rather than dropping `queue_now`.
 - Repeat/shuffle for decoded sources live in the pure module
   `src/infra/queue/mod.rs` (`advance_decision`, `resume_index_after_queue`, …);
   state is player-global on `App` (`decoded_repeat`, `decoded_shuffle`).
@@ -508,7 +513,11 @@ working in those directories.
   `OpenedStream::cancel` - stopping the *download*, not the reader: a probe
   waiting for bytes parks inside `read`, so a flag checked between reads is
   never seen, while cancelling marks the stream done, wakes every waiter, and
-  lets the probe thread and its download go.
+  lets the probe thread and its download go. Only `prepare_stream` runs inside
+  the timed closure: `timeout` abandons a `spawn_blocking` closure but cannot
+  stop it, and the radio player is shared, so a probe that matched just after
+  the deadline would otherwise append the new station to the live sink. The
+  `play_prepared` happens after the timeout check.
 - YouTube is unofficial-fragile by design: when it breaks, the fix is a newer
   `yt-dlp`, not a spotatui release. One in-repo mitigation: a failed download
   retries once through the embedded player clients (`web_embedded,tv_embedded`),

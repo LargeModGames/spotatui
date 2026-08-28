@@ -143,6 +143,23 @@ pub enum IoEvent {
   /// `infra::queue::dispatch::route_queue_event` (wired first in the pump); it
   /// never reaches the Spotify network handler.
   AdvanceNativeQueue,
+  /// Give up the native queue slot without playing anything else: run the same
+  /// teardown a drained queue does (stop the slot, resume the suspended
+  /// context). Dispatched by the driver's tick when the slot's output device is
+  /// gone and no replacement will open. Consumed by
+  /// `infra::queue::dispatch::route_queue_event`; it never reaches the Spotify
+  /// network handler. Only the decoded queue slot can lose a device, so in a
+  /// build without a queueable decoded source nothing dispatches it.
+  #[cfg_attr(
+    not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    )),
+    allow(dead_code)
+  )]
+  FinishNativeQueue,
   /// Replay the current track of the active decoded source (repeat-one). Consumed
   /// by the per-source routers (`route_local_event` / `route_subsonic_event` /
   /// `route_youtube_event`); it never reaches the Spotify network handler. Only
@@ -861,7 +878,7 @@ impl Network {
       }
       // Consumed by the queue router before it reaches the network; only lands
       // here if the router somehow let it through. No Spotify work to do.
-      IoEvent::AdvanceNativeQueue => {}
+      IoEvent::AdvanceNativeQueue | IoEvent::FinishNativeQueue => {}
       #[cfg(feature = "streaming")]
       IoEvent::ReplayPublishedSpotifyQueueSlot => {}
       // Consumed by a per-source router when a decoded source owns playback; only

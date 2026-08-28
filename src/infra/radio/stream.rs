@@ -31,7 +31,7 @@ use stream_download::storage::bounded::BoundedStorageProvider;
 use stream_download::storage::memory::MemoryStorageProvider;
 use stream_download::{Settings, StreamDownload};
 
-/// The bounds [`LocalPlayer::play_stream`](crate::infra::audio::LocalPlayer::play_stream)
+/// The bounds [`LocalPlayer::prepare_stream`](crate::infra::audio::LocalPlayer::prepare_stream)
 /// requires, as one nameable trait so the reader stack can be boxed.
 pub trait StreamReader: Read + Seek + Send + Sync {}
 impl<T: Read + Seek + Send + Sync> StreamReader for T {}
@@ -65,7 +65,7 @@ pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A successfully opened radio stream, ready to hand to
-/// [`LocalPlayer::play_stream`](crate::infra::audio::LocalPlayer::play_stream).
+/// [`LocalPlayer::prepare_stream`](crate::infra::audio::LocalPlayer::prepare_stream).
 pub struct OpenedStream {
   /// The decodable audio byte stream (ICY metadata already stripped).
   pub reader: Box<dyn StreamReader>,
@@ -243,12 +243,15 @@ mod tests {
     let player = Arc::new(LocalPlayer::new().expect("open default output device"));
     let decode_player = Arc::clone(&player);
     let (reader, mime) = (opened.reader, opened.content_type);
-    tokio::task::spawn_blocking(move || decode_player.play_stream(reader, mime.as_deref()))
-      .await
-      .unwrap()
-      .expect("stream should decode and play");
+    tokio::task::spawn_blocking(move || {
+      let prepared =
+        LocalPlayer::prepare_stream(reader, mime.as_deref(), None).expect("stream should decode");
+      decode_player.play_prepared(prepared);
+    })
+    .await
+    .expect("decode task should not panic");
 
-    assert!(!player.is_paused(), "should be playing after play_stream");
+    assert!(!player.is_paused(), "should be playing after play_prepared");
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(
       player.position() >= Duration::from_millis(500),

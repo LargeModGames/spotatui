@@ -106,6 +106,12 @@ const AUDIO_THREAD_POLL: Duration = Duration::from_secs(3);
 /// app with it.
 const AUDIO_THREAD_CEILING: Duration = Duration::from_secs(90);
 
+/// How long to wait for the audio thread to hand back an opened device.
+/// `reopen` runs from the driver's tick, on the UI thread under the `App` lock,
+/// so this wait cannot be unbounded either. A healthy open is tens of
+/// milliseconds; this is a backstop, not a deadline anybody should reach.
+const DEVICE_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// A decoded stream, ready for [`LocalPlayer::play_prepared`].
 #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
 pub struct PreparedStream(Box<dyn rodio::Source + Send>);
@@ -141,6 +147,14 @@ impl LocalPlayer {
       anyhow::bail!("audio output device disconnected");
     }
     Ok(Arc::clone(&sink.player))
+  }
+
+  /// Whether cpal reported the device *removed* (headphones unplugged, a USB
+  /// DAC pulled), as against the OS merely moving its default output somewhere
+  /// else. Recovery pauses only for removal — that is what macOS itself does,
+  /// and a device the user just *plugged in* should keep playing.
+  pub fn device_removed(&self) -> bool {
+    self.sink.lock().unwrap().lost.load(Ordering::Relaxed)
   }
 
   /// Whether the sink is still connected to something the user can hear. The
@@ -183,6 +197,14 @@ impl LocalPlayer {
   /// A call that truly never returns leaves its worker parked for the life of
   /// the process. That is the cheap half of this trade.
   fn bounded<T: Send + 'static>(&self, op: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    // The sink this wait belongs to. `reopen` swaps in a whole new `Sink`, so
+    // every check below must be about *this* one: a poll that read the fresh
+    // sink would find it healthy, wait out the full ceiling, and then mark the
+    // live sink lost.
+    let (waited_on, lost) = {
+      let sink = self.sink.lock().unwrap();
+      (Arc::clone(&sink.player), Arc::clone(&sink.lost))
+    };
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
       let _ = tx.send(op());
@@ -195,16 +217,16 @@ impl LocalPlayer {
         // The worker vanished without answering; nothing left to wait for.
         Err(mpsc::RecvTimeoutError::Disconnected) => return None,
         Err(mpsc::RecvTimeoutError::Timeout) => {
+          // Reopened under us: the caller's result would land on a sink nobody
+          // plays through any more, and the driver is already restaging.
+          if !Arc::ptr_eq(&waited_on, &self.player()) {
+            return None;
+          }
           if self.device_lost() {
             return None;
           }
           if started.elapsed() >= AUDIO_THREAD_CEILING {
-            self
-              .sink
-              .lock()
-              .unwrap()
-              .lost
-              .store(true, Ordering::Relaxed);
+            lost.store(true, Ordering::Relaxed);
             return None;
           }
         }
@@ -238,7 +260,8 @@ impl LocalPlayer {
   /// opened or its format is unsupported.
   ///
   /// Only the tempfile-based sources play files; a build with just
-  /// `internet-radio` uses [`play_stream`](Self::play_stream) instead.
+  /// `internet-radio` uses [`prepare_stream`](Self::prepare_stream) plus
+  /// [`play_prepared`](Self::play_prepared) instead.
   #[cfg_attr(
     not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
@@ -264,24 +287,14 @@ impl LocalPlayer {
     let decoder = Decoder::new(BufReader::new(file))
       .with_context(|| format!("decoding audio file {}", path.display()))?;
 
+    // The decode is long enough for the driver's tick to have reopened the
+    // device under us; appending to the old sink would play into nothing.
+    if !Arc::ptr_eq(&sink, &self.player()) {
+      anyhow::bail!("audio output device changed while decoding");
+    }
+
     sink.append(decoder);
     sink.play();
-    Ok(())
-  }
-
-  /// Decode an already-opened **live stream** and play it, replacing whatever
-  /// was playing: [`prepare_stream`](Self::prepare_stream) with no byte
-  /// length, then [`play_prepared`](Self::play_prepared).
-  ///
-  /// **Blocking:** the probe reads from the network reader; call it off the
-  /// async runtime (e.g. `spawn_blocking`) like `play_file`.
-  #[cfg(feature = "internet-radio")]
-  pub fn play_stream<R>(&self, reader: R, mime_type: Option<&str>) -> Result<()>
-  where
-    R: std::io::Read + std::io::Seek + Send + Sync + 'static,
-  {
-    let prepared = Self::prepare_stream(reader, mime_type, None)?;
-    self.play_prepared(prepared);
     Ok(())
   }
 
@@ -481,8 +494,8 @@ fn open_sink() -> Result<Sink> {
     .context("spawning local audio output thread")?;
 
   let player = init_rx
-    .recv()
-    .context("local audio output thread exited before initialising")?
+    .recv_timeout(DEVICE_OPEN_TIMEOUT)
+    .context("local audio output thread did not open a device")?
     .map_err(|e| anyhow::anyhow!("opening default audio output device: {e}"))?;
 
   Ok(Sink {
@@ -704,6 +717,38 @@ mod tests {
       started.elapsed() < AUDIO_THREAD_POLL + Duration::from_secs(2),
       "it must give up at the first check, got {:?}",
       started.elapsed()
+    );
+  }
+
+  /// The reopen window. `reopen` swaps in a whole `Sink`, and a wait already
+  /// running belongs to the old one: it must give up at once rather than sit
+  /// out the ceiling and then mark the *live* sink lost — the driver is
+  /// already restaging onto that sink.
+  #[test]
+  #[ignore = "requires an audio output device"]
+  fn a_wait_gives_up_when_the_sink_is_reopened_under_it() {
+    let player = Arc::new(LocalPlayer::new().expect("open default output device"));
+
+    let waiting = Arc::clone(&player);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+      let gave_up = waiting
+        .bounded(|| std::thread::sleep(Duration::from_secs(120)))
+        .is_none();
+      let _ = tx.send(gave_up);
+    });
+
+    // Reopen while that wait is parked, before its first poll.
+    std::thread::sleep(AUDIO_THREAD_POLL / 2);
+    player.reopen().expect("reopen on the default device");
+
+    match rx.recv_timeout(AUDIO_THREAD_POLL + Duration::from_secs(2)) {
+      Ok(gave_up) => assert!(gave_up, "a wait on a replaced sink must give up"),
+      Err(_) => panic!("the wait outlived the sink it belonged to"),
+    }
+    assert!(
+      !player.device_lost(),
+      "the ceiling must never be charged to the fresh sink"
     );
   }
 
