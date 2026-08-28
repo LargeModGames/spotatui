@@ -29,8 +29,8 @@ cargo test --no-default-features --features telemetry,tui
 ```
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
-(`.github/workflows/ci.yml`, on `ubuntu-latest`) runs `check`, `test`, and `clippy`
-across a **seven-leg** feature matrix:
+(`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` on `ubuntu-latest`
+across a **seven-leg** feature matrix, plus one `macos-latest` job (below):
 
 | Leg | Features |
 |-----|----------|
@@ -59,6 +59,13 @@ across a **seven-leg** feature matrix:
 - The `all-sources` leg must stay in sync with `cd.yml`'s Linux release row
   (macOS releases ship the same five sources but a different
   backend/OS-integration set).
+- One further job, `macos`, runs `check` + `clippy` (no `test`) on
+  `macos-latest` with cd.yml's macOS release feature set. It is the only leg
+  that compiles the `#[cfg(target_os = "macos")]` arms, the portaudio playback
+  backend, `macos-media`, and `audio-viz-cpal` - none of which the Linux legs
+  can speak for. No `test`: the suite is platform-independent logic the Linux
+  legs already run, and the device tests are `#[ignore]`d (CI runners have no
+  audio output). Keep its feature list in sync with cd.yml's macOS rows.
 - A pull_request-only `Gates ratchet` job diffs `tools/gates.count` against the
   merge-base (`tools/check_gates_ratchet.sh`): coupling counters may only fall;
   the two adoption counters (`test_attribute_total`,
