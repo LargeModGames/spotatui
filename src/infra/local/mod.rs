@@ -162,16 +162,24 @@ impl MediaSource for LocalSource {
     "file"
   }
 
-  /// Return one [`PlaylistInfo`] per immediate subdirectory of `root`, plus a
-  /// synthetic `"(root)"` entry when the music root itself directly contains
-  /// at least one audio file.
+  /// Return one [`PlaylistInfo`] per directory *at or below* `root` that
+  /// directly contains at least one audio file, plus a synthetic `"(root)"`
+  /// entry when the music root itself directly contains one.
+  ///
+  /// The scan is recursive because a music library is commonly two levels deep
+  /// (`Artist/Album/…`, or a downloader's `Jamendo/Playlist - Fresh & New/…`):
+  /// listing only the immediate subdirectories showed those container folders
+  /// with a `0` track count and an empty track table when selected.
   ///
   /// The playlist `uri` is `file://<abs-path>`, the `name` is the directory's
-  /// file name (or `"(root)"` for the synthetic entry), and `track_count` is
-  /// the number of audio files directly inside that directory (non-recursive).
+  /// path relative to `root` joined with `/` (`"Jamendo/Playlist - Fresh & New"`),
+  /// and `track_count` is the number of audio files directly inside that
+  /// directory. Directories that only *contain* other directories are not
+  /// listed — there is nothing to play in them.
   ///
   /// The `"(root)"` entry, when present, is always placed first so loose files
-  /// at the root are easy to find.
+  /// at the root are easy to find. Its count stays non-recursive so it matches
+  /// what [`tracks`](Self::tracks) returns for the same URI.
   ///
   /// TODO(multi-source): move std::fs::read_dir calls into tokio::task::spawn_blocking
   ///   or tokio::fs before wiring — blocking I/O on the async executor stalls
@@ -180,34 +188,30 @@ impl MediaSource for LocalSource {
     let entries = std::fs::read_dir(&self.root)
       .with_context(|| format!("reading music root {:?}", self.root))?;
 
-    let mut playlists = Vec::new();
-    // Count loose audio files directly in root in the same pass that collects
+    let mut dirs: Vec<(PathBuf, u32)> = Vec::new();
+    // Count loose audio files directly in root in the same pass that walks the
     // subdirectories, so we avoid a second read_dir call on the same path.
     let mut root_audio_count: u32 = 0;
-    for entry in entries {
-      let entry = entry.context("reading directory entry")?;
-      let path = entry.path();
-      if !path.is_dir() {
-        if path.is_file() && is_audio_file(&path) {
-          root_audio_count += 1;
-        }
+    for entry in entries.flatten() {
+      if is_hidden(&entry) {
         continue;
       }
+      let Ok(file_type) = entry.file_type() else {
+        continue;
+      };
+      let path = entry.path();
+      if file_type.is_dir() {
+        collect_audio_dirs(&path, 1, &mut dirs);
+      } else if file_type.is_file() && is_audio_file(&path) {
+        root_audio_count += 1;
+      }
+    }
 
-      let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-
-      // Count audio files directly inside this subdirectory.
-      let track_count = count_audio_files(&path).unwrap_or(0);
-
-      let uri = path_to_file_uri(&path);
-
-      playlists.push(PlaylistInfo {
-        uri,
-        name,
+    let mut playlists: Vec<PlaylistInfo> = dirs
+      .into_iter()
+      .map(|(path, track_count)| PlaylistInfo {
+        name: relative_display_name(&self.root, &path),
+        uri: path_to_file_uri(&path),
         owner: "local".to_string(),
         track_count,
         id: None,
@@ -215,10 +219,11 @@ impl MediaSource for LocalSource {
         public: None,
         image_url: None,
         owner_id: None,
-      });
-    }
+      })
+      .collect();
 
-    // Sort alphabetically for stable ordering across runs.
+    // Sort alphabetically for stable ordering across runs. The relative names
+    // carry `/`, so a parent folder's playlists stay grouped together.
     playlists.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Prepend a synthetic "(root)" entry when the root directory itself
@@ -519,16 +524,68 @@ pub(crate) fn extract_embedded_cover(path: &Path) -> Result<image::DynamicImage>
   image::load_from_memory(picture.data()).context("decoding embedded cover art")
 }
 
-/// Count audio files (non-recursively) in `dir`.
-fn count_audio_files(dir: &Path) -> Result<u32> {
-  let mut count = 0u32;
-  for entry in std::fs::read_dir(dir)? {
-    let path = entry?.path();
-    if path.is_file() && is_audio_file(&path) {
-      count += 1;
+/// How many directory levels below the music root the scan descends.
+///
+// ponytail: a depth cap rather than a visited-inode set; raise it if someone
+// keeps their library deeper than Artist/Album/Disc.
+const MAX_SCAN_DEPTH: usize = 8;
+
+/// Whether a directory entry is hidden (`.Trash`, `.DS_Store`, …) and should be
+/// skipped by the scan.
+fn is_hidden(entry: &std::fs::DirEntry) -> bool {
+  entry.file_name().to_string_lossy().starts_with('.')
+}
+
+/// A directory's path relative to `root`, joined with `/` for display
+/// (`"Jamendo/Playlist - Fresh & New"`). Falls back to the full path if `path`
+/// is not below `root`, which cannot happen for paths produced by the scan.
+fn relative_display_name(root: &Path, path: &Path) -> String {
+  path
+    .strip_prefix(root)
+    .unwrap_or(path)
+    .components()
+    .map(|c| c.as_os_str().to_string_lossy())
+    .collect::<Vec<_>>()
+    .join("/")
+}
+
+/// Walk `dir` and everything below it, pushing `(path, count)` for every
+/// directory that directly contains at least one audio file.
+///
+/// Symlinked directories are **not** followed: `DirEntry::file_type` does not
+/// dereference, so `is_dir()` is false for a symlink and a link loop cannot hang
+/// the scan. A directory that cannot be read (permissions) is skipped rather
+/// than failing the whole scan — one unreadable folder must not hide the rest of
+/// the library.
+fn collect_audio_dirs(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u32)>) {
+  let Ok(entries) = std::fs::read_dir(dir) else {
+    return;
+  };
+
+  let mut audio_count = 0u32;
+  let mut subdirs = Vec::new();
+  for entry in entries.flatten() {
+    if is_hidden(&entry) {
+      continue;
+    }
+    let Ok(file_type) = entry.file_type() else {
+      continue;
+    };
+    if file_type.is_dir() {
+      subdirs.push(entry.path());
+    } else if file_type.is_file() && is_audio_file(&entry.path()) {
+      audio_count += 1;
     }
   }
-  Ok(count)
+
+  if audio_count > 0 {
+    out.push((dir.to_path_buf(), audio_count));
+  }
+  if depth < MAX_SCAN_DEPTH {
+    for sub in subdirs {
+      collect_audio_dirs(&sub, depth + 1, out);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -693,8 +750,11 @@ mod tests {
     let root = dir.path();
 
     // Create in reverse alphabetical order to verify that the sort actually fires.
+    // Each needs an audio file: a folder with nothing to play is not a playlist.
     std::fs::create_dir(root.join("Rock")).unwrap();
+    write_wav(&root.join("Rock/riff.wav"), 44100, 100);
     std::fs::create_dir(root.join("Jazz")).unwrap();
+    write_wav(&root.join("Jazz/blue.wav"), 44100, 100);
     // A loose audio file in root triggers the synthetic "(root)" entry.
     std::fs::File::create(root.join("stray.mp3")).unwrap();
 
@@ -902,6 +962,90 @@ mod tests {
     let src = LocalSource::new("/tmp/music");
     assert_eq!(src.name(), "Local Files");
     assert_eq!(src.scheme(), "file");
+  }
+
+  // ---------------------------------------------------------------------------
+  // playlists() — recursive scan
+  // ---------------------------------------------------------------------------
+
+  #[test]
+  fn playlists_finds_nested_folders_with_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // The shape that broke browsing: a container folder whose audio lives one
+    // level further down.
+    std::fs::create_dir_all(root.join("Jamendo/Fresh & New")).unwrap();
+    write_wav(&root.join("Jamendo/Fresh & New/001.wav"), 44100, 100);
+
+    let src = LocalSource::new(root);
+    let playlists = tokio::runtime::Runtime::new()
+      .unwrap()
+      .block_on(src.playlists())
+      .unwrap();
+
+    let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+      names,
+      vec!["Jamendo/Fresh & New"],
+      "the nested folder holding the audio is the playlist"
+    );
+    assert_eq!(playlists[0].track_count, 1);
+    assert_eq!(
+      file_uri_to_path(&playlists[0].uri).unwrap(),
+      root.join("Jamendo/Fresh & New"),
+      "uri must point at the folder that actually holds the files"
+    );
+  }
+
+  #[test]
+  fn playlists_omits_folders_with_no_direct_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    std::fs::create_dir_all(root.join("Artist/Album")).unwrap();
+    write_wav(&root.join("Artist/Album/track.wav"), 44100, 100);
+    // A container with neither audio nor audio-bearing children at all.
+    std::fs::create_dir(root.join("Empty")).unwrap();
+
+    let src = LocalSource::new(root);
+    let playlists = tokio::runtime::Runtime::new()
+      .unwrap()
+      .block_on(src.playlists())
+      .unwrap();
+
+    let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+      names,
+      vec!["Artist/Album"],
+      "container and empty folders have nothing to play; got {names:?}"
+    );
+  }
+
+  #[test]
+  fn playlists_stops_at_max_scan_depth() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // One level deeper than the cap allows.
+    let mut deep = root.to_path_buf();
+    for i in 0..=MAX_SCAN_DEPTH {
+      deep = deep.join(format!("d{i}"));
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    write_wav(&deep.join("buried.wav"), 44100, 100);
+
+    let src = LocalSource::new(root);
+    let playlists = tokio::runtime::Runtime::new()
+      .unwrap()
+      .block_on(src.playlists())
+      .unwrap();
+
+    assert!(
+      playlists.is_empty(),
+      "a folder below the depth cap must not be scanned; got {:?}",
+      playlists.iter().map(|p| &p.name).collect::<Vec<_>>()
+    );
   }
 
   #[test]
