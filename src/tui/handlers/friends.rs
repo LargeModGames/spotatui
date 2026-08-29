@@ -115,7 +115,7 @@ fn handle_add_dialog(key: Key, app: &mut App) {
         let idx = app.view.friend_user_search_selected;
         if let Some(result) = app.friend_user_search_results.get(idx) {
           let user_id = result.id.clone();
-          app.apply(Action::AddFriendByUserId(user_id));
+          app.apply(Action::AddFriendById(user_id));
           app.clear_friend_add_dialog_state();
         }
       }

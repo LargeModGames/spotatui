@@ -148,7 +148,7 @@ impl App {
       Action::FollowArtist(id) => self.dispatch(IoEvent::UserFollowArtists(vec![id])),
       Action::UnfollowArtist(id) => self.dispatch(IoEvent::UserUnfollowArtists(vec![id])),
       Action::AddFriendByCode(code) => self.dispatch(IoEvent::AddFriendByCode(code)),
-      Action::AddFriendByUserId(user_id) => self.dispatch(IoEvent::AddFriendByUserId(user_id)),
+      Action::AddFriendById(user_id) => self.dispatch(IoEvent::AddFriendById(user_id)),
       Action::UnfollowFriend(user_id) => self.dispatch(IoEvent::UnfollowFriend(user_id)),
       Action::SearchFriendUsers(query) => self.search_friend_users(query),
       Action::FavoriteRadioStation(station) => self.favorite_radio_station(station),
