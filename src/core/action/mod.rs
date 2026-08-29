@@ -195,7 +195,7 @@ pub enum Action {
   UnfollowArtist(String),
   /// The spotatui.com social graph (friend code / user id), not Spotify.
   AddFriendByCode(String),
-  AddFriendByUserId(String),
+  AddFriendById(String),
   UnfollowFriend(String),
   /// A query under the server's two-byte minimum clears the stale results
   /// instead of asking. The network layer only accepts a result while the

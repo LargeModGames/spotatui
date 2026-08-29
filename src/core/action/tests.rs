@@ -3099,11 +3099,11 @@ fn add_friend_by_code_dispatches() {
 fn add_friend_by_user_id_dispatches() {
   let (mut app, rx) = app_with_channel();
 
-  app.apply(Action::AddFriendByUserId("user-1".to_string()));
+  app.apply(Action::AddFriendById("user-1".to_string()));
 
   match rx.try_recv() {
-    Ok(IoEvent::AddFriendByUserId(user_id)) => assert_eq!(user_id, "user-1"),
-    _other => panic!("expected AddFriendByUserId (IoEvent is not Debug)"),
+    Ok(IoEvent::AddFriendById(user_id)) => assert_eq!(user_id, "user-1"),
+    _other => panic!("expected AddFriendById (IoEvent is not Debug)"),
   }
 }
 
