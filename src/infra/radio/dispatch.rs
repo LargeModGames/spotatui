@@ -306,11 +306,16 @@ async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
     Ok(Ok(prepared)) => {
       // The clear inside waits on the audio thread: keep it off the runtime.
       let decode_player = Arc::clone(&player);
-      if let Err(e) =
-        tokio::task::spawn_blocking(move || decode_player.play_prepared(prepared)).await
-      {
-        set_error(app, format!("Radio playback task failed: {e}")).await;
-        return;
+      match tokio::task::spawn_blocking(move || decode_player.play_prepared(prepared)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+          set_error(app, format!("Cannot play radio stream: {e}")).await;
+          return;
+        }
+        Err(e) => {
+          set_error(app, format!("Radio playback task failed: {e}")).await;
+          return;
+        }
       }
       let volume = app.lock().await.runtime_state.volume_percent;
       player.set_volume(volume);
@@ -334,8 +339,10 @@ async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
 /// the decoder, which drops the stream reader, which cancels the background
 /// download task (`cancel_on_drop`).
 pub async fn teardown_radio(app: &Arc<Mutex<App>>) {
-  if let Some(s) = app.lock().await.radio_playback.take() {
-    s.player.stop();
+  // Take under the lock, stop off it: a sink clear waits for the audio thread.
+  let session = app.lock().await.radio_playback.take();
+  if let Some(s) = session {
+    Arc::clone(&s.player).stop_detached_holding(s);
   }
 }
 

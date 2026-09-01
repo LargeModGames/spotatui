@@ -207,11 +207,19 @@ pub struct App {
   /// queue slot is published; capped so a genuinely-gone track can't loop.
   #[cfg(feature = "streaming")]
   pub spotify_queue_guard_reloads: u8,
-  /// Whether the published Spotify queue slot should be playing. Set on
-  /// publish, flipped by the slot's pause/resume transport arms. Unlike
+  /// Whether the queue slot should be playing. Set on a Spotify slot's publish
+  /// and on a user skip, flipped by the slot's pause/resume transport arms,
+  /// cleared by a device removal; read by the paths that stage the next
+  /// decoded item and by the suspended context's resume. Unlike
   /// `native_is_playing` this survives a backend teardown, so a recovery
   /// replay of the slot can honor a user's pause.
-  #[cfg(feature = "streaming")]
+  #[cfg(any(
+    feature = "streaming",
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   pub queue_slot_desired_playing: bool,
   /// Decoded cover art for the current track plus its load status. The TUI
   /// renderer (`tui::cover_art`) caches its terminal protocols on this

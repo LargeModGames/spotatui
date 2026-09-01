@@ -14,6 +14,13 @@ mod player;
 pub use player::LocalPlayer;
 #[cfg(feature = "qobuz")]
 pub use player::PreparedStream;
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
+pub use player::Reopen;
 
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 mod analyzer;

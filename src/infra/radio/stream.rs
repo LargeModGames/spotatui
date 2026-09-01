@@ -246,7 +246,9 @@ mod tests {
     tokio::task::spawn_blocking(move || {
       let prepared =
         LocalPlayer::prepare_stream(reader, mime.as_deref(), None).expect("stream should decode");
-      decode_player.play_prepared(prepared);
+      decode_player
+        .play_prepared(prepared)
+        .expect("stream should play");
     })
     .await
     .expect("decode task should not panic");

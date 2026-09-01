@@ -38,7 +38,7 @@ use crate::core::app::{App, TrackTableContext};
 use crate::core::source::{MediaSource, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{advance_index, replay_file};
+use crate::infra::queue::{advance_index, replay_file, restage, ResumePoint};
 
 /// Whether a URI is owned by the local-files source.
 fn is_file_uri(uri: &str) -> bool {
@@ -199,14 +199,18 @@ async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
       return false; // not ours — let Spotify handle it
     };
     local.advancing = true;
+    let resume = local.resume_at.take().or(Some(ResumePoint {
+      position_ms: 0,
+      paused: local.player.is_paused(),
+    }));
     local
       .queue
       .get(local.index)
       .and_then(|uri| file_uri_to_path(uri).ok())
-      .map(|path| (Arc::clone(&local.player), path))
+      .map(|path| (Arc::clone(&local.player), path, resume))
   };
   let replayed = match target {
-    Some((player, path)) => replay_file(player, path).await,
+    Some((player, path, resume)) => replay_file(player, path, resume).await,
     None => false,
   };
   if replayed {
@@ -218,8 +222,10 @@ async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
       local.failed_since_played.clear();
     }
   } else {
-    if let Some(local) = app.lock().await.local_playback.take() {
-      local.player.stop();
+    // Take under the lock, stop off it: a sink clear waits for the audio thread.
+    let ended = app.lock().await.local_playback.take();
+    if let Some(local) = ended {
+      Arc::clone(&local.player).stop_detached_holding(local);
     }
     set_error(app, "Cannot replay local file".to_string()).await;
   }
@@ -306,6 +312,7 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
         advancing: false,
         shuffle_backup: None,
         failed_since_played: std::collections::HashSet::new(),
+        resume_at: None,
       };
       // Honor the player-global decoded shuffle for the freshly-built queue so it
       // persists across contexts like Spotify (the just-decoded start track stays
@@ -321,12 +328,13 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
   }
 }
 
-/// Decode and play a single local file on `player`, returning its metadata.
-/// Extracted so the native queue engine can play a one-off `file://` track on a
-/// borrowed player without touching `local_playback`. Mirrors the core of
-/// [`play_index`] (tag read + blocking decode) with no session bookkeeping.
+/// Decode and stage a single local file on `player`, returning its metadata;
+/// the caller starts it. Extracted so the native queue engine can play a
+/// one-off `file://` track on a borrowed player without touching
+/// `local_playback`. Mirrors the core of [`play_index`] (tag read + blocking
+/// decode) with no session bookkeeping.
 #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
-pub(crate) async fn play_single_file(
+pub(crate) async fn stage_single_file(
   player: &Arc<LocalPlayer>,
   uri: &str,
 ) -> anyhow::Result<crate::core::plugin_api::TrackInfo> {
@@ -334,7 +342,7 @@ pub(crate) async fn play_single_file(
   let decode_player = Arc::clone(player);
   let info = tokio::task::spawn_blocking(move || {
     let info = track_info_from_path(&path);
-    decode_player.play_file(&path).map(|()| info)
+    decode_player.stage_file(&path).map(|()| info)
   })
   .await??;
   Ok(info)
@@ -350,13 +358,17 @@ pub(crate) async fn play_single_file(
 /// source is in the sink (or the play failed), reopening auto-advance.
 pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
   // Snapshot the player + URI under a short lock.
-  let (player, uri) = {
+  let (player, uri, resume) = {
     let mut guard = app.lock().await;
     let Some(local) = guard.local_playback.as_mut() else {
       return; // session torn down between dispatch and here
     };
     match local.queue.get(target) {
-      Some(uri) => (Arc::clone(&local.player), uri.clone()),
+      Some(uri) => (
+        Arc::clone(&local.player),
+        uri.clone(),
+        local.resume_at.take(),
+      ),
       None => {
         // Out of range — nothing to play. The caller (skip/auto-advance)
         // optimistically set `advancing`; clear it here so this dead-end does
@@ -381,7 +393,7 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
   let decode_player = Arc::clone(&player);
   let result = tokio::task::spawn_blocking(move || {
     let info = track_info_from_path(&decode_path);
-    decode_player.play_file(&decode_path).map(|()| info)
+    restage(&decode_player, &decode_path, resume).map(|()| info)
   })
   .await;
 
@@ -395,20 +407,20 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
         .set_status_message(format!("\u{266a} {display_name}"), 4);
     }
     Ok(Err(e)) => {
-      // `play_file` clears the sink before any fallible step, so on a normal
+      // `stage_file` clears the sink before any fallible step, so on a normal
       // decode/open error the sink is already empty and the runner tick
       // auto-advances past this bad track. Stop the player anyway as
       // defense-in-depth: it is idempotent and guarantees no stale audio even if
-      // the blocking closure failed *before* reaching `play_file`.
-      player.stop();
+      // the blocking closure failed *before* reaching `stage_file`.
+      Arc::clone(&player).stop_detached();
       fail_index(app, target, format!("Cannot play local file: {e}")).await;
     }
     Err(e) => {
       // The blocking task panicked (e.g. inside the tag read) *before*
-      // `play_file` could clear the sink, so the old track may still be playing.
+      // `stage_file` could clear the sink, so the old track may still be playing.
       // Stop it explicitly so the empty sink lets the tick auto-advance instead
       // of dead-ending on a stale track with a silently moved index.
-      player.stop();
+      Arc::clone(&player).stop_detached();
       fail_index(app, target, format!("Local playback task failed: {e}")).await;
     }
   }
@@ -468,7 +480,7 @@ async fn fail_index(app: &Arc<Mutex<App>>, target: usize, msg: String) {
 
   match exhausted {
     Some(local) => {
-      local.player.stop();
+      Arc::clone(&local.player).stop_detached_holding(local);
       set_error(app, format!("{msg} — no playable tracks left, stopping")).await;
     }
     None => set_error(app, msg).await,
@@ -499,10 +511,12 @@ async fn acquire_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
 
 /// End the local session, releasing the output device.
 async fn teardown_local(app: &Arc<Mutex<App>>) {
-  if let Some(local) = app.lock().await.local_playback.take() {
-    local.player.stop();
-    // `local` is dropped here; if it held the last reference the keepalive
-    // thread exits and the output device is released.
+  // Take under the lock, stop off it: a sink clear waits for the audio thread.
+  let session = app.lock().await.local_playback.take();
+  if let Some(local) = session {
+    // If `local` held the last reference the keepalive thread exits and the
+    // output device is released.
+    Arc::clone(&local.player).stop_detached_holding(local);
   }
 }
 

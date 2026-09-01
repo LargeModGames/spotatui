@@ -57,7 +57,8 @@ pub struct QobuzPlaybackState {
   pub shuffle_backup: Option<crate::infra::queue::ShuffleBackup>,
   /// Stamp of the download in flight; a finished download with another stamp is dropped.
   pub fetch_id: u64,
-  /// A seek and pause to apply when the pending download plays (session restore).
+  /// A seek and pause to apply when the next track is staged (session restore,
+  /// device recovery, the native queue's resume).
   pub resume_at: Option<ResumePoint>,
   /// The download task in flight; aborted when the session is replaced or restamped.
   pub fetch: Option<tokio::task::AbortHandle>,
@@ -71,12 +72,7 @@ impl Drop for QobuzPlaybackState {
   }
 }
 
-/// Where a restored session continues once its first download plays.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ResumePoint {
-  pub position_ms: u64,
-  pub paused: bool,
-}
+pub use crate::infra::queue::ResumePoint;
 
 impl QobuzPlaybackState {
   /// The currently playing track, if `index` is in range.

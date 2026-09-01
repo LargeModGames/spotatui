@@ -60,7 +60,7 @@ use std::io::BufReader;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rodio::{Decoder, Player};
@@ -77,6 +77,39 @@ pub struct LocalPlayer {
   /// The last percent handed to [`set_volume`](LocalPlayer::set_volume),
   /// re-applied to a reopened sink so a device change is not also a volume jump.
   volume_percent: AtomicU8,
+  /// The cached answer of the default-output compare in
+  /// [`device_lost`](LocalPlayer::device_lost).
+  device_check: Mutex<Option<DeviceCheck>>,
+  /// Reopen attempts since the device was lost.
+  reopen: Mutex<ReopenState>,
+}
+
+/// One default-output read, keyed on the name the sink opened so a swapped
+/// sink is never answered from the old sink's cache.
+struct DeviceCheck {
+  checked_at: Instant,
+  opened: String,
+  moved: bool,
+}
+
+#[derive(Default)]
+struct ReopenState {
+  attempts: u8,
+  last_attempt: Option<Instant>,
+}
+
+/// What [`LocalPlayer::recover_device`] did this call.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Reopen {
+  /// A fresh sink is in place, paused and empty: restage onto it.
+  Reopened,
+  /// An attempt just failed; another follows after [`DEVICE_REOPEN_RETRY_AFTER`].
+  Retrying,
+  /// Nothing happened: the next attempt is not due yet, or the device was
+  /// already given up on.
+  Waiting,
+  /// The last attempt failed. Reported once; the caller ends the session.
+  GaveUp,
 }
 
 /// One open output: rodio's control handle, the audio thread's keepalive, and
@@ -112,6 +145,23 @@ const AUDIO_THREAD_CEILING: Duration = Duration::from_secs(90);
 /// milliseconds; this is a backstop, not a deadline anybody should reach.
 const DEVICE_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How often [`LocalPlayer::device_lost`] re-reads the default output device.
+/// The tick asks on every frame, and the read is a full device enumeration.
+const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The spacing between reopen attempts, and how many are made before the
+/// device is given up on. A Bluetooth output takes a few seconds to negotiate
+/// after it comes back, so one failed open is not the answer.
+const DEVICE_REOPEN_RETRY_AFTER: Duration = Duration::from_secs(2);
+const DEVICE_REOPEN_ATTEMPTS: u8 = 5;
+
+/// Whether another reopen attempt is due: not within
+/// [`DEVICE_REOPEN_RETRY_AFTER`] of the last one, and never past
+/// [`DEVICE_REOPEN_ATTEMPTS`].
+fn reopen_due(attempts: u8, since_last: Option<Duration>) -> bool {
+  attempts < DEVICE_REOPEN_ATTEMPTS && since_last.is_none_or(|d| d >= DEVICE_REOPEN_RETRY_AFTER)
+}
+
 /// A decoded stream, ready for [`LocalPlayer::play_prepared`].
 #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
 pub struct PreparedStream(Box<dyn rodio::Source + Send>);
@@ -121,7 +171,7 @@ impl LocalPlayer {
   ///
   /// **Blocking:** waits for the audio thread to open the device. Call once at
   /// setup, off any latency-sensitive path. Returns an error if no output
-  /// device is available (e.g. headless CI) or on macOS (see module docs).
+  /// device is available (e.g. headless CI).
   pub fn new() -> Result<Self> {
     let sink = open_sink()?;
     // Start silent; nothing is queued until the first `play_file`.
@@ -129,6 +179,8 @@ impl LocalPlayer {
     Ok(Self {
       sink: Mutex::new(sink),
       volume_percent: AtomicU8::new(100),
+      device_check: Mutex::new(None),
+      reopen: Mutex::new(ReopenState::default()),
     })
   }
 
@@ -153,6 +205,15 @@ impl LocalPlayer {
   /// DAC pulled), as against the OS merely moving its default output somewhere
   /// else. Recovery pauses only for removal — that is what macOS itself does,
   /// and a device the user just *plugged in* should keep playing.
+  #[cfg_attr(
+    not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    )),
+    allow(dead_code)
+  )]
   pub fn device_removed(&self) -> bool {
     self.sink.lock().unwrap().lost.load(Ordering::Relaxed)
   }
@@ -163,18 +224,35 @@ impl LocalPlayer {
   /// Two ways to fail (see module docs): the device was removed and cpal told
   /// us, or the OS quietly moved its default output elsewhere and nobody did.
   pub fn device_lost(&self) -> bool {
-    let sink = self.sink.lock().unwrap();
-    if sink.lost.load(Ordering::Relaxed) {
+    // Read the sink's answer and release its lock: the default-output read
+    // below enumerates devices, and the render path waits on this mutex.
+    let (removed, opened) = {
+      let sink = self.sink.lock().unwrap();
+      (sink.lost.load(Ordering::Relaxed), sink.device_name.clone())
+    };
+    if removed {
       return true;
     }
     // Only a name read successfully on *both* sides is evidence: a missing one
     // means "cannot tell", which must not read as "changed" — mid-switch there
     // is briefly no default device at all, and tearing playback down for that
     // would be worse than the silence this exists to catch.
-    match (&sink.device_name, default_output_name()) {
-      (Some(opened), Some(current)) => *opened != current,
-      _ => false,
+    let Some(opened) = opened else {
+      return false;
+    };
+    let mut check = self.device_check.lock().unwrap();
+    if let Some(cached) = check.as_ref() {
+      if cached.opened == opened && cached.checked_at.elapsed() < DEVICE_CHECK_INTERVAL {
+        return cached.moved;
+      }
     }
+    let moved = default_output_name().is_some_and(|current| current != opened);
+    *check = Some(DeviceCheck {
+      checked_at: Instant::now(),
+      opened,
+      moved,
+    });
+    moved
   }
 
   /// Wait on the audio thread, but never forever.
@@ -250,7 +328,52 @@ impl LocalPlayer {
       .player
       .set_volume(volume_gain(self.volume_percent.load(Ordering::Relaxed)));
     *self.sink.lock().unwrap() = fresh;
+    *self.device_check.lock().unwrap() = None;
     Ok(())
+  }
+
+  /// [`reopen`](Self::reopen) with retries, for the driver's tick: an attempt
+  /// every [`DEVICE_REOPEN_RETRY_AFTER`] up to [`DEVICE_REOPEN_ATTEMPTS`], so a
+  /// device that is still negotiating gets its chance, and one that never
+  /// comes back is given up on exactly once.
+  ///
+  /// **Blocking:** an attempt opens a device, like [`new`](Self::new).
+  ///
+  /// Radio has no track to restage, so a build with just `internet-radio`
+  /// never recovers a device.
+  #[cfg_attr(
+    not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    )),
+    allow(dead_code)
+  )]
+  pub fn recover_device(&self) -> Reopen {
+    let attempts = {
+      let mut state = self.reopen.lock().unwrap();
+      if !reopen_due(state.attempts, state.last_attempt.map(|t| t.elapsed())) {
+        return Reopen::Waiting;
+      }
+      state.attempts += 1;
+      state.last_attempt = Some(Instant::now());
+      state.attempts
+    };
+    match self.reopen() {
+      Ok(()) => {
+        *self.reopen.lock().unwrap() = ReopenState::default();
+        Reopen::Reopened
+      }
+      Err(e) => {
+        log::warn!("[audio] reopen attempt {attempts}: {e:#}");
+        if attempts >= DEVICE_REOPEN_ATTEMPTS {
+          Reopen::GaveUp
+        } else {
+          Reopen::Retrying
+        }
+      }
+    }
   }
 
   /// Decode the file at `path` and play it, replacing whatever was playing.
@@ -261,12 +384,25 @@ impl LocalPlayer {
   ///
   /// Only the tempfile-based sources play files; a build with just
   /// `internet-radio` uses [`prepare_stream`](Self::prepare_stream) plus
-  /// [`play_prepared`](Self::play_prepared) instead.
+  /// [`play_prepared`](Self::play_prepared) instead, and Qobuz stages.
+  #[cfg_attr(
+    not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+    allow(dead_code)
+  )]
+  pub fn play_file(&self, path: &Path) -> Result<()> {
+    self.stage_file(path)?;
+    self.resume();
+    Ok(())
+  }
+
+  /// [`play_file`](Self::play_file) without the final play: the track is
+  /// queued and the sink left paused, so a caller that must seek first, or
+  /// stay paused, never plays a burst of the track's start.
   #[cfg_attr(
     not(any(feature = "local-files", feature = "subsonic", feature = "qobuz")),
     allow(dead_code)
   )]
-  pub fn play_file(&self, path: &Path) -> Result<()> {
+  pub fn stage_file(&self, path: &Path) -> Result<()> {
     let sink = self.live_player()?;
     // Stop whatever is currently playing *before* any fallible step (open or
     // decode), so a failure here can never leave the previous track audible. A
@@ -293,8 +429,8 @@ impl LocalPlayer {
       anyhow::bail!("audio output device changed while decoding");
     }
 
+    // The clear above paused the sink; `append` leaves it so.
     sink.append(decoder);
-    sink.play();
     Ok(())
   }
 
@@ -337,16 +473,31 @@ impl LocalPlayer {
 
   /// Play a prepared stream, replacing whatever was playing. The clear waits
   /// for the audio thread to drop the previous source: call it off the `App`
-  /// lock (see `stop_detached`). A no-op once the device is gone.
+  /// lock (see `stop_detached`). Fails once the device is gone.
   #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
-  pub fn play_prepared(&self, stream: PreparedStream) {
-    let Ok(sink) = self.live_player() else { return };
+  #[cfg_attr(not(feature = "internet-radio"), allow(dead_code))]
+  pub fn play_prepared(&self, stream: PreparedStream) -> Result<()> {
+    self.stage_prepared(stream)?;
+    self.resume();
+    Ok(())
+  }
+
+  /// [`play_prepared`](Self::play_prepared) without the final play, like
+  /// [`stage_file`](Self::stage_file).
+  #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+  pub fn stage_prepared(&self, stream: PreparedStream) -> Result<()> {
+    let sink = self.live_player()?;
     let clearing = Arc::clone(&sink);
     if self.bounded(move || clearing.clear()).is_none() {
-      return;
+      anyhow::bail!("audio output device stopped responding");
+    }
+    // Reopened under the clear: the stream would play into a discarded sink,
+    // and nothing would notice, since the fresh one reports no lost device.
+    if !Arc::ptr_eq(&sink, &self.player()) {
+      anyhow::bail!("audio output device changed");
     }
     sink.append(stream.0);
-    sink.play();
+    Ok(())
   }
 
   /// Pause playback, keeping the current position.
@@ -377,6 +528,16 @@ impl LocalPlayer {
   /// thread, which a stalled network source holds until its stall timeout.
   pub fn stop_detached(self: std::sync::Arc<Self>) {
     tokio::task::spawn_blocking(move || self.stop());
+  }
+
+  /// [`stop_detached`](Self::stop_detached) with `session` kept alive until
+  /// the stop returns, so a tempfile the sink still reads is not deleted
+  /// under it.
+  pub fn stop_detached_holding<S: Send + 'static>(self: std::sync::Arc<Self>, session: S) {
+    tokio::task::spawn_blocking(move || {
+      self.stop();
+      drop(session);
+    });
   }
 
   /// Set the output volume from the user's percent, on the same logarithmic
@@ -559,6 +720,24 @@ mod tests {
       "50% is about -30 dB: {at_50}"
     );
     assert!(volume_gain(20) < at_50 && at_50 < at_80);
+  }
+
+  #[test]
+  fn the_first_reopen_is_due_at_once() {
+    assert!(reopen_due(0, None));
+  }
+
+  #[test]
+  fn reopens_are_spaced_out() {
+    assert!(!reopen_due(1, Some(DEVICE_REOPEN_RETRY_AFTER / 2)));
+    assert!(reopen_due(1, Some(DEVICE_REOPEN_RETRY_AFTER)));
+  }
+
+  #[test]
+  fn reopens_stop_after_the_attempt_budget() {
+    let long_ago = Some(Duration::from_secs(60));
+    assert!(reopen_due(DEVICE_REOPEN_ATTEMPTS - 1, long_ago));
+    assert!(!reopen_due(DEVICE_REOPEN_ATTEMPTS, long_ago));
   }
   use std::io::Write;
 

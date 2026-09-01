@@ -8,7 +8,7 @@
 //! the choice as the active source, and collects any source-specific config.
 //!
 //! Only sources whose Cargo feature is compiled in are offered. A build with just
-//! Spotify (slim / current macOS release) shows no picker and keeps the original
+//! Spotify (the slim build) shows no picker and keeps the original
 //! behavior.
 //!
 //! This module is the selection *logic*; all presentation goes through the
@@ -52,8 +52,8 @@ pub async fn run_first_run_picker(
 
   let options = compiled_in_sources();
 
-  // Only Spotify available (slim build / macOS release without the source
-  // features): keep today's behavior and let `load_config` run the wizard.
+  // Only Spotify available (the slim build): keep today's behavior and let
+  // `load_config` run the wizard.
   if options.len() == 1 {
     return Ok(());
   }

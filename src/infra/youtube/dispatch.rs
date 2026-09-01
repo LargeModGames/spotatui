@@ -542,6 +542,7 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
         advancing: false,
         tempfile: tmp,
         shuffle_backup: None,
+        resume_at: None,
       };
       // Honor the player-global decoded shuffle for the freshly-built queue.
       if guard.decoded_shuffle {
@@ -590,15 +591,24 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
 /// an empty sink that would re-fire replay every tick). Returns `true` if
 /// YouTube owns the session.
 async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
-  let (player, path) = {
+  let (player, path, resume) = {
     let mut guard = app.lock().await;
     let Some(s) = guard.youtube_playback.as_mut() else {
       return false; // not ours
     };
     s.advancing = true;
-    (Arc::clone(&s.player), s.tempfile.path().to_path_buf())
+    (
+      Arc::clone(&s.player),
+      s.tempfile.path().to_path_buf(),
+      s.resume_at
+        .take()
+        .or(Some(crate::infra::queue::ResumePoint {
+          position_ms: 0,
+          paused: s.player.is_paused(),
+        })),
+    )
   };
-  if replay_file(player, path).await {
+  if replay_file(player, path, resume).await {
     if let Some(s) = app.lock().await.youtube_playback.as_mut() {
       s.advancing = false;
     }
@@ -686,8 +696,20 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
     }
   };
   let path = tmp.path().to_path_buf();
+  // Taken after the download: a device recovery during it leaves the pause
+  // to apply here.
+  let resume = {
+    let mut guard = app.lock().await;
+    guard
+      .youtube_playback
+      .as_mut()
+      .and_then(|s| s.resume_at.take())
+  };
   let decode_player = Arc::clone(&player);
-  let result = tokio::task::spawn_blocking(move || decode_player.play_file(&path)).await;
+  let result = tokio::task::spawn_blocking(move || {
+    crate::infra::queue::restage(&decode_player, &path, resume)
+  })
+  .await;
 
   match result {
     Ok(Ok(())) => commit_index(app, target, tmp).await,
@@ -724,10 +746,12 @@ async fn commit_index(app: &Arc<Mutex<App>>, target: usize, tmp: NamedTempFile) 
 /// End the YouTube session, releasing the output device and cleaning up the
 /// current tempfile.
 pub async fn teardown_youtube(app: &Arc<Mutex<App>>) {
-  if let Some(s) = app.lock().await.youtube_playback.take() {
-    s.player.stop();
+  // Take under the lock, stop off it: a sink clear waits for the audio thread.
+  let session = app.lock().await.youtube_playback.take();
+  if let Some(s) = session {
     // Dropping `s` drops the tempfile (cleanup) and, if it held the last
     // reference, the keepalive thread exits and the device is released.
+    Arc::clone(&s.player).stop_detached_holding(s);
   }
 }
 

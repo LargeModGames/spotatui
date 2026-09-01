@@ -476,16 +476,25 @@ working in those directories.
   the device every 3s rather than timing out blind - a dead device and a source
   stalled on the network are indistinguishable from the caller's side, and
   Qobuz's stream stall alone is 60s.
-  The driver's tick polls `device_lost()`, calls `LocalPlayer::reopen()` to
-  rebuild on the new default device, and restages the track (replay + seek,
-  then pause only when `device_removed()` says cpal saw a *removal* or the
-  session was already paused - a default that merely moved means the user
-  plugged something in and keeps playing). That recovery must stay *before*
+  The driver's tick polls `device_lost()` (one device read a second), calls
+  `LocalPlayer::recover_device()` to rebuild on the new default device (a
+  spaced, bounded retry - a Bluetooth output takes seconds to come back), and
+  restages the track: it sets the session's `resume_at` (the seek, and paused
+  only when `device_removed()` says cpal saw a *removal* or the session was
+  already paused - a default that merely moved means the user plugged
+  something in and keeps playing) and dispatches `ReplayCurrentTrack`. The
+  path that stages the track applies `resume_at` itself
+  (`infra::queue::restage`), so no `Seek` or `PausePlayback` is ever queued
+  blind behind work that ends in `play()`. That recovery must stay *before*
   every advance block: a dead sink never drains, so `is_finished()` is false
   and would otherwise read as a still-playing track. The queue slot has no
-  replay event, so it settles its pause state *after* the advance block has
-  dispatched, and a reopen that fails hands the slot to `FinishNativeQueue`
-  (the same teardown a drained queue runs) rather than dropping `queue_now`.
+  replay event: a removal clears `queue_slot_desired_playing`, which the
+  paths that stage the next item and the suspended context's resume read,
+  and a device given up on hands the slot to `FinishNativeQueue` (the same
+  teardown a drained queue runs) rather than dropping `queue_now`. Every
+  `LocalPlayer` wait runs off the `App` lock (`stop_detached`,
+  `stop_detached_holding`, `spawn_blocking`): the runner takes that lock on
+  every frame.
 - Repeat/shuffle for decoded sources live in the pure module
   `src/infra/queue/mod.rs` (`advance_decision`, `resume_index_after_queue`, …);
   state is player-global on `App` (`decoded_repeat`, `decoded_shuffle`).

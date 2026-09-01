@@ -66,6 +66,9 @@ pub struct LocalPlaybackState {
   /// user skipping back and forth across the same two bad tracks, tearing down a
   /// session whose remaining tracks play fine.
   pub failed_since_played: std::collections::HashSet<usize>,
+  /// A seek and pause to apply when the next track is staged (device
+  /// recovery, the native queue's resume).
+  pub resume_at: Option<crate::infra::queue::ResumePoint>,
 }
 
 impl LocalPlaybackState {

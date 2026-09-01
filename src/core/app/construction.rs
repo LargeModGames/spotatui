@@ -67,7 +67,13 @@ impl Default for App {
       queue_now: None,
       #[cfg(feature = "streaming")]
       spotify_queue_guard_reloads: 0,
-      #[cfg(feature = "streaming")]
+      #[cfg(any(
+        feature = "streaming",
+        feature = "local-files",
+        feature = "subsonic",
+        feature = "qobuz",
+        feature = "youtube"
+      ))]
       queue_slot_desired_playing: true,
       playlist_offset: 0,
       playlist_tracks: None,
