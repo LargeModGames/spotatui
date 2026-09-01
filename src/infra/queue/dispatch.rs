@@ -613,12 +613,14 @@ async fn publish_pending_decoded(
 }
 
 /// Complete a background queue fetch: if the slot still carries `fetch_id`,
-/// play the downloaded file and finalize the slot (with the delivered format
+/// stage the downloaded file and finalize the slot (with the delivered format
 /// label, when the source reports one); otherwise (skipped, torn down, or
 /// replaced meanwhile) drop the result silently. On a download or decode
 /// failure the queue advances past the item, exactly like the old inline
-/// path. Play + finalize happen under one `App` lock so a concurrent advance
-/// (which pops under the same lock) can never interleave.
+/// path. The stage runs off the `App` lock (its clear waits on the audio
+/// thread, and the runner takes the lock on every frame); the slot is
+/// re-checked before the finalize, and a stage that a newer fetch superseded
+/// is left paused in the sink for that fetch's own stage to clear.
 #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
 async fn finish_decoded_fetch(
   app: &Arc<Mutex<App>>,
@@ -642,10 +644,18 @@ async fn finish_decoded_fetch(
   };
   let path = tmp.path().to_path_buf();
   let decode_player = Arc::clone(&player);
+  drop(guard);
   let staged = tokio::task::spawn_blocking(move || decode_player.stage_file(&path))
     .await
     .map(|r| r.map_err(|e| e.to_string()))
     .unwrap_or_else(|e| Err(e.to_string()));
+  let mut guard = app.lock().await;
+  if !matches!(
+    guard.queue_now.as_ref(),
+    Some(QueueNowPlaying::Decoded(d)) if d.fetch_id == fetch_id
+  ) {
+    return;
+  }
   if let Err(e) = staged {
     guard.set_status_message(format!("Cannot play {track_name}: {e}"), 4);
     guard.dispatch(IoEvent::AdvanceNativeQueue);
@@ -952,12 +962,12 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       if let Some(player) = queue_player {
         player.stop();
       }
-      // A station cannot resume paused: after a device removal it stays off.
+      // A station cannot resume paused, so it stays off.
       if !playing {
         app
           .lock()
           .await
-          .set_status_message("Audio device changed - radio not resumed.".to_string(), 8);
+          .set_status_message("Playback is paused - radio not resumed.".to_string(), 8);
       } else if let Some(uri) = station.uri.clone() {
         let mut guard = app.lock().await;
         // Seed the browse table so the radio start path resolves the station.
