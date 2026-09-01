@@ -628,6 +628,8 @@ fn collect_audio_dirs(
   if audio_count > 0 {
     out.push((dir.to_path_buf(), audio_count));
   }
+  // Sorted, so a folder and a link to it dedupe on the same path every run.
+  subdirs.sort();
   if depth < MAX_SCAN_DEPTH {
     for sub in subdirs {
       collect_audio_dirs(&sub, depth + 1, seen, out);

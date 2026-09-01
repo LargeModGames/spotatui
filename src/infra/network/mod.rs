@@ -1851,6 +1851,16 @@ mod tests {
     );
   }
 
+  /// The queue router consumes both native-queue control events before the
+  /// network sees them, so neither is classified as a bypass or a lane move.
+  #[test]
+  fn native_queue_control_events_stay_serial_and_behind_the_auth_gate() {
+    for event in [IoEvent::AdvanceNativeQueue, IoEvent::FinishNativeQueue] {
+      assert!(!Network::runs_on_service_lane(&event));
+      assert!(!Network::event_bypasses_spotify_auth(&event));
+    }
+  }
+
   #[tokio::test]
   async fn pre_event_auth_failure_clears_loading_state() {
     let expired_token_without_refresh = Token {
