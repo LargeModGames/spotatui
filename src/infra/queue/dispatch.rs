@@ -186,7 +186,9 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       guard.set_native_playback_intent(true);
       Some(true)
     }
+    // A skip while paused plays the next item, decoded or not.
     IoEvent::NextTrack => {
+      app.lock().await.queue_slot_desired_playing = true;
       advance_native_queue(app).await;
       Some(true)
     }
