@@ -544,7 +544,7 @@ async fn music_root(app: &Arc<Mutex<App>>) -> Option<String> {
   root
 }
 
-/// Scan the music root's immediate subdirectories into `app.local_playlists`.
+/// Scan the music root's folders into `app.local_playlists`.
 ///
 /// `LocalSource`'s methods are async but do blocking filesystem I/O, so they run
 /// on the blocking pool (via `block_on`) rather than stalling the executor.

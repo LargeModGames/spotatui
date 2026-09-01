@@ -233,7 +233,7 @@ pub enum IoEvent {
   /// Add a friend by their 6-character friend code
   AddFriendByCode(String),
   /// Add a friend by their spotatui.com user ID
-  AddFriendByUserId(String),
+  AddFriendById(String),
   /// Unfollow a friend by their spotatui.com user ID
   UnfollowFriend(String),
   /// Search spotatui.com users by display name or friend code
@@ -525,7 +525,7 @@ impl Network {
         | IoEvent::GetFriendCode
         | IoEvent::GetFriends
         | IoEvent::AddFriendByCode(_)
-        | IoEvent::AddFriendByUserId(_)
+        | IoEvent::AddFriendById(_)
         | IoEvent::UnfollowFriend(_)
         | IoEvent::SearchFriendUsers(_)
         | IoEvent::LoadListeningStats(_)
@@ -586,7 +586,7 @@ impl Network {
         | IoEvent::GetFriendCode
         | IoEvent::GetFriends
         | IoEvent::AddFriendByCode(_)
-        | IoEvent::AddFriendByUserId(_)
+        | IoEvent::AddFriendById(_)
         | IoEvent::UnfollowFriend(_)
         | IoEvent::SearchFriendUsers(_)
         | IoEvent::LoadListeningStats(_)
@@ -987,7 +987,7 @@ impl Network {
       IoEvent::AddFriendByCode(code) => {
         friends::handle_add_friend_by_code(self, code).await;
       }
-      IoEvent::AddFriendByUserId(user_id) => {
+      IoEvent::AddFriendById(user_id) => {
         friends::handle_add_friend_by_user_id(self, user_id).await;
       }
       IoEvent::UnfollowFriend(user_id) => {
@@ -1783,7 +1783,7 @@ mod tests {
       IoEvent::GetFriendCode,
       IoEvent::GetFriends,
       IoEvent::AddFriendByCode(String::new()),
-      IoEvent::AddFriendByUserId(String::new()),
+      IoEvent::AddFriendById(String::new()),
       IoEvent::UnfollowFriend(String::new()),
       IoEvent::SearchFriendUsers(String::new()),
       IoEvent::LoadListeningStats(RecapPeriod::SevenDays),

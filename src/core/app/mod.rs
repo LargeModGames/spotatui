@@ -306,7 +306,7 @@ pub struct App {
   pub selected_show_simplified: Option<SelectedShow>,
   pub selected_show_full: Option<SelectedFullShow>,
   pub user: Option<UserInfo>,
-  /// Folders (one per subdirectory of the configured music dir) shown by the
+  /// Folders under the configured music dir that hold audio, shown by the
   /// Local Files browser. Its cursor is `view.local_playlists_index`.
   pub local_playlists: Vec<PlaylistInfo>,
   /// The user's Subsonic server playlists shown by the Subsonic browser.
