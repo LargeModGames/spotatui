@@ -530,6 +530,46 @@ async fn commit_fetch(
   {
     return;
   }
+  // Claim the session under the lock, stage off it: the clear inside
+  // `stage_prepared` waits on the audio thread, and the runner takes this
+  // lock on every frame.
+  let (resume, volume) = {
+    let mut guard = app.lock().await;
+    let volume = guard.runtime_state.volume_percent;
+    let Some(s) = guard
+      .qobuz_playback
+      .as_mut()
+      .filter(|s| s.fetch_id == fetch_id)
+    else {
+      return;
+    };
+    s.tempfile = Some(tmp);
+    s.quality = Some(quality);
+    s.fetch = None;
+    (s.resume_at.take(), volume)
+  };
+  let paused = was_paused || resume.is_some_and(|r| r.paused);
+  let stage_player = Arc::clone(&player);
+  let staged = tokio::task::spawn_blocking(move || {
+    stage_player.stage_prepared(prepared)?;
+    stage_player.set_volume(volume);
+    if !paused {
+      stage_player.resume();
+    }
+    Ok::<(), anyhow::Error>(())
+  })
+  .await;
+  let staged = match staged {
+    Ok(Ok(())) => true,
+    Ok(Err(e)) => {
+      log::warn!("[qobuz] stage: {e:#}");
+      false
+    }
+    Err(e) => {
+      log::warn!("[qobuz] stage task: {e}");
+      false
+    }
+  };
   let mut guard = app.lock().await;
   let Some(s) = guard
     .qobuz_playback
@@ -538,18 +578,18 @@ async fn commit_fetch(
   else {
     return;
   };
-  s.tempfile = Some(tmp);
-  s.quality = Some(quality);
-  s.advancing = false;
-  s.fetch = None;
-  let resume = s.resume_at.take();
-  let display = s.current().map(|t| t.name.clone());
-  // The sink is empty after the stop, so this clear returns at once.
-  player.play_prepared(prepared);
-  player.set_volume(guard.runtime_state.volume_percent);
-  if was_paused || resume.is_some_and(|r| r.paused) {
-    player.pause();
+  if !staged {
+    // The device went under the stage. Replay the retained file instead,
+    // with the same pause; the advance latch stays on until it does.
+    s.resume_at = Some(ResumePoint {
+      position_ms: resume.map_or(0, |r| r.position_ms),
+      paused,
+    });
+    guard.dispatch(IoEvent::ReplayCurrentTrack);
+    return;
   }
+  s.advancing = false;
+  let display = s.current().map(|t| t.name.clone());
   if let Some(display) = display {
     guard.set_status_message(format!("\u{266a} {display}"), 4);
   }
@@ -643,7 +683,7 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
     advance_index(s.index, s.tracks.len(), mode, forward)
   };
   match target {
-    Some(idx) => play_index(app, idx).await,
+    Some(idx) => play_index(app, idx, None).await,
     None => {
       // Queue boundary: clear the guard so auto-advance is not wedged off. A
       // pending first download keeps it (the sink is still empty).
@@ -666,15 +706,24 @@ async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
       return false;
     };
     s.advancing = true;
-    s.tempfile
-      .as_ref()
-      .map(|t| (Arc::clone(&s.player), t.path().to_path_buf()))
+    match s.tempfile.as_ref() {
+      Some(t) => Some((
+        Arc::clone(&s.player),
+        t.path().to_path_buf(),
+        s.resume_at.take().or(Some(ResumePoint {
+          position_ms: 0,
+          paused: s.player.is_paused(),
+        })),
+      )),
+      // Still downloading: the commit applies `resume_at`, clears `advancing`
+      // and starts playback.
+      None => None,
+    }
   };
-  let Some((player, path)) = replay else {
-    // Still downloading: the commit clears `advancing` and starts playback.
+  let Some((player, path, resume)) = replay else {
     return true;
   };
-  if replay_file(player, path).await {
+  if replay_file(player, path, resume).await {
     if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
       s.advancing = false;
     }
@@ -687,8 +736,9 @@ async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
 
 /// Play the queued track at `target` in the published session: the index moves
 /// at once and the download runs off the pump. Used by Next/Previous, the tick's
-/// auto-advance, and the native queue's resume.
-pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
+/// auto-advance, and the native queue's resume, which passes how the track
+/// starts as `resume`.
+pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize, resume: Option<ResumePoint>) {
   let mut guard = app.lock().await;
   let quality = guard.user_config.behavior.qobuz_quality;
   let Some(s) = guard.qobuz_playback.as_mut() else {
@@ -714,7 +764,7 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
   }
   s.tempfile = None;
   s.quality = None;
-  s.resume_at = None;
+  s.resume_at = resume;
   s.index = target;
   s.advancing = true;
   s.fetch_id = next_fetch_id();
@@ -726,7 +776,7 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
 async fn teardown_qobuz(app: &Arc<Mutex<App>>) {
   let session = app.lock().await.qobuz_playback.take();
   if let Some(s) = session {
-    Arc::clone(&s.player).stop_detached();
+    Arc::clone(&s.player).stop_detached_holding(s);
   }
 }
 

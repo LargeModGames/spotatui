@@ -151,7 +151,7 @@ Or if you use pipewire:
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
-> **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz`.
+> **Which build has which sources?** The prebuilt Linux, macOS, and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz. A plain `cargo install --locked spotatui` does not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz`.
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
@@ -207,7 +207,7 @@ spotatui is a general music player, not just a Spotify client. Press `d` to open
 
 **Resuming your last session:** quit while playing from a non-Spotify source and spotatui restores that track and its position on the next launch, following the `startup_behavior` setting (`continue`, `play`, or `pause`).
 
-**Availability:** included in the Linux and Windows release binaries. Not yet on macOS (the shared audio output path is disabled there pending a fix; contributions welcome). When building from source, enable them with cargo features:
+**Availability:** included in the Linux, macOS, and Windows release binaries. When building from source, enable them with cargo features:
 
 ```bash
 cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz

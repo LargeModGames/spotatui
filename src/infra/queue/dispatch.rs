@@ -56,6 +56,13 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     return true;
   }
 
+  // The slot is done, with the rest of the queue left where it is: the driver's
+  // tick sends this when the slot's device died and would not reopen.
+  if let IoEvent::FinishNativeQueue = event {
+    resume_or_finish(app).await;
+    return true;
+  }
+
   #[cfg(feature = "streaming")]
   if let IoEvent::ReplayPublishedSpotifyQueueSlot = event {
     if replay_published_spotify_slot(app).await {
@@ -110,11 +117,13 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
   match event {
     IoEvent::PausePlayback => {
       player.pause();
+      app.lock().await.queue_slot_desired_playing = false;
       Some(true)
     }
     // Bare "resume current" while the queue owns playback resumes the queue slot.
     IoEvent::StartPlayback(None, None, None) => {
       player.resume();
+      app.lock().await.queue_slot_desired_playing = true;
       Some(true)
     }
     IoEvent::Seek(position_ms) => {
@@ -130,9 +139,11 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
       ));
       Some(true)
     }
-    // Skip the queued track: advance to the next queued item (or resume).
+    // Skip the queued track: advance to the next queued item (or resume). A
+    // skip while paused plays the next item, like the Spotify slot.
     IoEvent::NextTrack => {
       drop(player);
+      app.lock().await.queue_slot_desired_playing = true;
       advance_native_queue(app).await;
       Some(true)
     }
@@ -175,7 +186,9 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       guard.set_native_playback_intent(true);
       Some(true)
     }
+    // A skip while paused plays the next item, decoded or not.
     IoEvent::NextTrack => {
+      app.lock().await.queue_slot_desired_playing = true;
       advance_native_queue(app).await;
       Some(true)
     }
@@ -202,6 +215,8 @@ async fn clear_queue_playback(app: &Arc<Mutex<App>>) {
     let player = {
       let mut guard = app.lock().await;
       guard.queue_suspended = None;
+      // The slot's desired play state belongs to the episode that just ended.
+      guard.queue_slot_desired_playing = true;
       guard.take_queue_now_decoded_player()
     };
     if let Some(player) = player {
@@ -325,7 +340,7 @@ async fn play_queued_local(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) 
     return false;
   };
   let _ = publish_pending_decoded(app, &player, track).await;
-  match crate::infra::local::dispatch::play_single_file(&player, uri).await {
+  match crate::infra::local::dispatch::stage_single_file(&player, uri).await {
     Ok(_info) => {
       apply_volume(app, &player).await;
       publish_decoded(app, player, track.clone(), None).await;
@@ -600,12 +615,14 @@ async fn publish_pending_decoded(
 }
 
 /// Complete a background queue fetch: if the slot still carries `fetch_id`,
-/// play the downloaded file and finalize the slot (with the delivered format
+/// stage the downloaded file and finalize the slot (with the delivered format
 /// label, when the source reports one); otherwise (skipped, torn down, or
 /// replaced meanwhile) drop the result silently. On a download or decode
 /// failure the queue advances past the item, exactly like the old inline
-/// path. Play + finalize happen under one `App` lock so a concurrent advance
-/// (which pops under the same lock) can never interleave.
+/// path. The stage runs off the `App` lock (its clear waits on the audio
+/// thread, and the runner takes the lock on every frame); the slot is
+/// re-checked before the finalize, and a stage that a newer fetch superseded
+/// is left paused in the sink for that fetch's own stage to clear.
 #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
 async fn finish_decoded_fetch(
   app: &Arc<Mutex<App>>,
@@ -629,16 +646,28 @@ async fn finish_decoded_fetch(
   };
   let path = tmp.path().to_path_buf();
   let decode_player = Arc::clone(&player);
-  let played = tokio::task::spawn_blocking(move || decode_player.play_file(&path))
+  drop(guard);
+  let staged = tokio::task::spawn_blocking(move || decode_player.stage_file(&path))
     .await
     .map(|r| r.map_err(|e| e.to_string()))
     .unwrap_or_else(|e| Err(e.to_string()));
-  if let Err(e) = played {
+  let mut guard = app.lock().await;
+  if !matches!(
+    guard.queue_now.as_ref(),
+    Some(QueueNowPlaying::Decoded(d)) if d.fetch_id == fetch_id
+  ) {
+    return;
+  }
+  if let Err(e) = staged {
     guard.set_status_message(format!("Cannot play {track_name}: {e}"), 4);
     guard.dispatch(IoEvent::AdvanceNativeQueue);
     return;
   }
   player.set_volume(guard.runtime_state.volume_percent);
+  // A user pause, or a device removal, holds the next item paused.
+  if guard.queue_slot_desired_playing {
+    player.resume();
+  }
   if let Some(QueueNowPlaying::Decoded(d)) = guard.queue_now.as_mut() {
     d.tempfile = Some(tmp);
     d.quality = quality;
@@ -667,6 +696,10 @@ async fn publish_decoded(
   use crate::infra::queue::{DecodedQueuePlayback, QueueNowPlaying};
   let name = track.name.clone();
   let mut guard = app.lock().await;
+  // A user pause, or a device removal, holds the next item paused.
+  if guard.queue_slot_desired_playing {
+    player.resume();
+  }
   guard.queue_now = Some(QueueNowPlaying::Decoded(DecodedQueuePlayback {
     player,
     track,
@@ -803,6 +836,26 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
   use crate::core::queue::SuspendedContext;
 
   let suspended = { app.lock().await.queue_suspended.take() };
+  // The slot's desired play state carries into the resume, then resets: a
+  // device removal that paused the slot keeps the context paused, and the
+  // next queue episode starts playing.
+  #[cfg(any(
+    feature = "streaming",
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
+  let playing = std::mem::replace(&mut app.lock().await.queue_slot_desired_playing, true);
+  #[cfg(not(any(
+    feature = "streaming",
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  )))]
+  #[allow(unused_variables)]
+  let playing = true;
 
   // The slot can still be a *playing* Spotify track when the drain came from a
   // mid-play skip (only unplayable items were left); silence it before anything
@@ -843,6 +896,23 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
     app.lock().await.queue_now = None;
   }
 
+  // The slot gave its device up (see the driver's tick): a decoded context
+  // sharing that player cannot restage onto it either. End it with the device
+  // error instead of a failed track.
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
+  if let Some(dead) = queue_player.as_ref().filter(|p| p.device_lost()) {
+    let mut guard = app.lock().await;
+    if drop_context_sharing(&mut guard, suspended.as_ref(), dead) {
+      guard.set_status_message("Audio output device disconnected.".to_string(), 8);
+      return;
+    }
+  }
+
   match suspended {
     None => {
       // Nothing was suspended: the queue was playing over an idle app (or a
@@ -865,22 +935,22 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
     Some(SuspendedContext::Local {
       resume_index,
       resume_position_ms,
-    }) => resume_local(app, resume_index, resume_position_ms, queue_player).await,
+    }) => resume_local(app, resume_index, resume_position_ms, queue_player, playing).await,
     #[cfg(feature = "subsonic")]
     Some(SuspendedContext::Subsonic {
       resume_index,
       resume_position_ms,
-    }) => resume_subsonic(app, resume_index, resume_position_ms, queue_player).await,
+    }) => resume_subsonic(app, resume_index, resume_position_ms, queue_player, playing).await,
     #[cfg(feature = "qobuz")]
     Some(SuspendedContext::Qobuz {
       resume_index,
       resume_position_ms,
-    }) => resume_qobuz(app, resume_index, resume_position_ms, queue_player).await,
+    }) => resume_qobuz(app, resume_index, resume_position_ms, queue_player, playing).await,
     #[cfg(feature = "youtube")]
     Some(SuspendedContext::YouTube {
       resume_index,
       resume_position_ms,
-    }) => resume_youtube(app, resume_index, resume_position_ms, queue_player).await,
+    }) => resume_youtube(app, resume_index, resume_position_ms, queue_player, playing).await,
     #[cfg(feature = "internet-radio")]
     Some(SuspendedContext::Radio { station }) => {
       // Radio uses its own fresh player, so always stop the queue slot. A
@@ -894,7 +964,13 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       if let Some(player) = queue_player {
         player.stop();
       }
-      if let Some(uri) = station.uri.clone() {
+      // A station cannot resume paused, so it stays off.
+      if !playing {
+        app
+          .lock()
+          .await
+          .set_status_message("Playback is paused - radio not resumed.".to_string(), 8);
+      } else if let Some(uri) = station.uri.clone() {
         let mut guard = app.lock().await;
         // Seed the browse table so the radio start path resolves the station.
         guard.track_table.tracks = vec![station];
@@ -919,13 +995,16 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       if let Some(player) = queue_player {
         player.stop();
       }
-      app
-        .lock()
-        .await
-        .dispatch(IoEvent::ResumeNativeShuffleSession(
-          resume_index,
-          generation,
-        ));
+      let mut guard = app.lock().await;
+      guard.dispatch(IoEvent::ResumeNativeShuffleSession(
+        resume_index,
+        generation,
+      ));
+      // Lands behind the resume on the serial pump, so the reloaded session
+      // pauses instead of playing over a device the user just left.
+      if !playing {
+        guard.dispatch(IoEvent::PausePlayback);
+      }
     }
     #[cfg(feature = "streaming")]
     Some(SuspendedContext::Spotify {
@@ -943,10 +1022,11 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       if let Some(player) = queue_player {
         player.stop();
       }
-      app
-        .lock()
-        .await
-        .dispatch(IoEvent::ResumeSpotifyContext(context_uri, resume_track_uri));
+      let mut guard = app.lock().await;
+      guard.dispatch(IoEvent::ResumeSpotifyContext(context_uri, resume_track_uri));
+      if !playing {
+        guard.dispatch(IoEvent::PausePlayback);
+      }
     }
     // In slim builds `SuspendedContext` is uninhabited, so every arm above is
     // cfg'd out and only `None` is reachable.
@@ -966,17 +1046,58 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
   }
 }
 
+/// Drop the suspended decoded context whose player is `dead` (the queue slot
+/// shared it), returning whether there was one.
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
+fn drop_context_sharing(
+  app: &mut App,
+  suspended: Option<&crate::core::queue::SuspendedContext>,
+  dead: &Arc<LocalPlayer>,
+) -> bool {
+  use crate::core::queue::SuspendedContext;
+  match suspended {
+    #[cfg(feature = "local-files")]
+    Some(SuspendedContext::Local { .. }) => app
+      .local_playback
+      .take_if(|s| Arc::ptr_eq(&s.player, dead))
+      .is_some(),
+    #[cfg(feature = "subsonic")]
+    Some(SuspendedContext::Subsonic { .. }) => app
+      .subsonic_playback
+      .take_if(|s| Arc::ptr_eq(&s.player, dead))
+      .is_some(),
+    #[cfg(feature = "qobuz")]
+    Some(SuspendedContext::Qobuz { .. }) => app
+      .qobuz_playback
+      .take_if(|s| Arc::ptr_eq(&s.player, dead))
+      .is_some(),
+    #[cfg(feature = "youtube")]
+    Some(SuspendedContext::YouTube { .. }) => app
+      .youtube_playback
+      .take_if(|s| Arc::ptr_eq(&s.player, dead))
+      .is_some(),
+    _ => false,
+  }
+}
+
 #[cfg(feature = "local-files")]
 async fn resume_local(
   app: &Arc<Mutex<App>>,
   resume_index: Option<usize>,
   resume_position_ms: u64,
   queue_player: Option<Arc<LocalPlayer>>,
+  playing: bool,
 ) {
   let Some(index) = resume_index else {
     // Context exhausted: tear it down and stop the queue slot.
-    if let Some(local) = app.lock().await.local_playback.take() {
-      local.player.stop();
+    let ended = app.lock().await.local_playback.take();
+    if let Some(local) = ended {
+      Arc::clone(&local.player).stop_detached_holding(local);
     }
     if let Some(player) = queue_player {
       player.stop();
@@ -994,6 +1115,12 @@ async fn resume_local(
           .is_some_and(|qp| Arc::ptr_eq(qp, &local.player));
         local.index = index;
         local.advancing = true;
+        // Local has no retained tempfile; play_index re-reads from disk and
+        // applies this seek and pause to the restarted track.
+        local.resume_at = Some(super::ResumePoint {
+          position_ms: resume_position_ms,
+          paused: !playing,
+        });
         shared
       }
       None => false,
@@ -1004,15 +1131,7 @@ async fn resume_local(
       player.stop();
     }
   }
-  // Local has no retained tempfile; play_index re-reads from disk (restarting
-  // the track), then we seek to the saved position for a mid-track resume.
   crate::infra::local::dispatch::play_index(app, index).await;
-  if resume_position_ms > 0 {
-    let guard = app.lock().await;
-    if let Some(local) = guard.local_playback.as_ref() {
-      let _ = local.player.seek(Duration::from_millis(resume_position_ms));
-    }
-  }
 }
 
 #[cfg(feature = "subsonic")]
@@ -1021,15 +1140,21 @@ async fn resume_subsonic(
   resume_index: Option<usize>,
   resume_position_ms: u64,
   queue_player: Option<Arc<LocalPlayer>>,
+  playing: bool,
 ) {
   let Some(index) = resume_index else {
-    if let Some(s) = app.lock().await.subsonic_playback.take() {
-      s.player.stop();
+    let ended = app.lock().await.subsonic_playback.take();
+    if let Some(s) = ended {
+      Arc::clone(&s.player).stop_detached_holding(s);
     }
     if let Some(player) = queue_player {
       player.stop();
     }
     return;
+  };
+  let resume = super::ResumePoint {
+    position_ms: resume_position_ms,
+    paused: !playing,
   };
   // Same track and its tempfile is still loaded (mid-track Enter-jump): replay
   // the retained tempfile and seek, avoiding a re-download. Otherwise re-download
@@ -1044,6 +1169,7 @@ async fn resume_subsonic(
       Some(s) => {
         s.index = index;
         s.advancing = true;
+        s.resume_at = Some(resume);
         None
       }
       None => None,
@@ -1054,18 +1180,11 @@ async fn resume_subsonic(
   let _ = queue_player;
   match replay {
     Some((player, path)) => {
-      let decode_player = Arc::clone(&player);
-      let ok = tokio::task::spawn_blocking(move || decode_player.play_file(&path))
-        .await
-        .map(|r| r.is_ok())
-        .unwrap_or(false);
+      super::replay_file(player, path, Some(resume)).await;
       // Clear the latch either way: on failure the sink is empty, so leaving
       // `advancing = true` would wedge the runner tick's advance off forever.
       if let Some(s) = app.lock().await.subsonic_playback.as_mut() {
         s.advancing = false;
-      }
-      if ok && resume_position_ms > 0 {
-        let _ = player.seek(Duration::from_millis(resume_position_ms));
       }
     }
     None => crate::infra::subsonic::dispatch::play_index(app, index).await,
@@ -1078,17 +1197,22 @@ async fn resume_qobuz(
   resume_index: Option<usize>,
   resume_position_ms: u64,
   queue_player: Option<Arc<LocalPlayer>>,
+  playing: bool,
 ) {
   let Some(index) = resume_index else {
     // Take under the lock, stop off it: a sink clear waits for the audio thread.
     let session = app.lock().await.qobuz_playback.take();
     if let Some(s) = session {
-      Arc::clone(&s.player).stop_detached();
+      Arc::clone(&s.player).stop_detached_holding(s);
     }
     if let Some(player) = queue_player {
       player.stop();
     }
     return;
+  };
+  let resume = super::ResumePoint {
+    position_ms: resume_position_ms,
+    paused: !playing,
   };
   // Same track with its tempfile still on disk: replay it and seek, with no
   // second download. Otherwise re-download the target through play_index.
@@ -1109,15 +1233,12 @@ async fn resume_qobuz(
   let _ = queue_player;
   match replay {
     Some((player, path)) => {
-      let ok = super::replay_file(Arc::clone(&player), path).await;
+      super::replay_file(player, path, Some(resume)).await;
       if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
         s.advancing = false;
       }
-      if ok && resume_position_ms > 0 {
-        let _ = player.seek(Duration::from_millis(resume_position_ms));
-      }
     }
-    None => crate::infra::qobuz::dispatch::play_index(app, index).await,
+    None => crate::infra::qobuz::dispatch::play_index(app, index, Some(resume)).await,
   }
 }
 
@@ -1127,15 +1248,21 @@ async fn resume_youtube(
   resume_index: Option<usize>,
   resume_position_ms: u64,
   queue_player: Option<Arc<LocalPlayer>>,
+  playing: bool,
 ) {
   let Some(index) = resume_index else {
-    if let Some(s) = app.lock().await.youtube_playback.take() {
-      s.player.stop();
+    let ended = app.lock().await.youtube_playback.take();
+    if let Some(s) = ended {
+      Arc::clone(&s.player).stop_detached_holding(s);
     }
     if let Some(player) = queue_player {
       player.stop();
     }
     return;
+  };
+  let resume = super::ResumePoint {
+    position_ms: resume_position_ms,
+    paused: !playing,
   };
   let replay = {
     let mut guard = app.lock().await;
@@ -1147,6 +1274,7 @@ async fn resume_youtube(
       Some(s) => {
         s.index = index;
         s.advancing = true;
+        s.resume_at = Some(resume);
         None
       }
       None => None,
@@ -1155,18 +1283,11 @@ async fn resume_youtube(
   let _ = queue_player;
   match replay {
     Some((player, path)) => {
-      let decode_player = Arc::clone(&player);
-      let ok = tokio::task::spawn_blocking(move || decode_player.play_file(&path))
-        .await
-        .map(|r| r.is_ok())
-        .unwrap_or(false);
+      super::replay_file(player, path, Some(resume)).await;
       // Clear the latch either way: on failure the sink is empty, so leaving
       // `advancing = true` would wedge the runner tick's advance off forever.
       if let Some(s) = app.lock().await.youtube_playback.as_mut() {
         s.advancing = false;
-      }
-      if ok && resume_position_ms > 0 {
-        let _ = player.seek(Duration::from_millis(resume_position_ms));
       }
     }
     None => crate::infra::youtube::dispatch::play_index(app, index).await,

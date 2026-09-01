@@ -388,6 +388,166 @@ impl Driver {
       }
     }
 
+    // Output device lost mid-track (Bluetooth headphones disconnected, a USB
+    // DAC unplugged). cpal pauses the stream and reports it, after which no
+    // audio callback runs again: `LocalPlayer` then refuses the transport calls
+    // that would wait on one, so nothing hangs, but the session sits silent and
+    // still looks like it is playing (`is_finished` stays false — the source is
+    // queued on a sink that will never drain it). That is why this runs before
+    // every advance block below: a dead device must not read as end-of-track.
+    //
+    // Rebuild the output on the new default device (with retries: a Bluetooth
+    // output takes seconds to come back) and restage the track there, at the
+    // position it stopped. Whether it stays paused depends on which of the
+    // two shapes this was: cpal reporting the device *removed* (headphones
+    // out) pauses, like macOS itself does — nobody wants the music jumping to
+    // the laptop speakers. A default that merely moved (headphones *in*) keeps
+    // whatever play/pause state the session had. The seek and the pause ride
+    // on the session as `resume_at`, applied by the path that stages the
+    // track, never as events queued behind it.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
+    macro_rules! decoded_device_recovery {
+      ($app:ident, $playback:ident) => {
+        // Not while the queue owns the sink: the session below is suspended, and
+        // its player is the *same* handle the queue slot is using (see
+        // `suspended_context_player`). The queue branch further down recovers it.
+        if !$app.queue_owns_playback()
+          && $app
+            .$playback
+            .as_ref()
+            .is_some_and(|s| s.player.device_lost())
+        {
+          use crate::infra::audio::Reopen;
+          // Read before the reopen: it swaps in a fresh sink that is paused,
+          // empty, and reports no removal. A change already in flight stages a
+          // different track, so its position is the top.
+          let (position_ms, paused) = $app.$playback.as_ref().map_or((0, false), |s| {
+            (
+              if s.advancing {
+                0
+              } else {
+                s.player.position().as_millis() as u64
+              },
+              s.player.device_removed() || s.player.is_paused(),
+            )
+          });
+          match $app.$playback.as_ref().map(|s| s.player.recover_device()) {
+            Some(Reopen::Reopened) => {
+              // The fresh sink is empty, so `is_finished()` is true from here
+              // on: hold the advance latch or the block below would read that
+              // as end-of-track and skip a song while the replay is in flight.
+              if let Some(s) = $app.$playback.as_mut() {
+                s.advancing = true;
+                s.resume_at = Some(crate::infra::queue::ResumePoint {
+                  position_ms,
+                  paused,
+                });
+              }
+              $app.dispatch(IoEvent::ReplayCurrentTrack);
+              $app.set_status_message(
+                if paused {
+                  "Audio device changed - playback paused here."
+                } else {
+                  "Audio device changed - playback moved to it."
+                },
+                8,
+              );
+            }
+            Some(Reopen::Retrying) => {
+              $app.set_status_message("Audio output device lost - waiting for a new one.", 8);
+            }
+            Some(Reopen::GaveUp) => {
+              $app.$playback = None;
+              $app.set_status_message("Audio output device disconnected.", 8);
+            }
+            Some(Reopen::Waiting) | None => {}
+          }
+        }
+      };
+    }
+    #[cfg(feature = "local-files")]
+    decoded_device_recovery!(app, local_playback);
+    #[cfg(feature = "subsonic")]
+    decoded_device_recovery!(app, subsonic_playback);
+    #[cfg(feature = "qobuz")]
+    decoded_device_recovery!(app, qobuz_playback);
+    #[cfg(feature = "youtube")]
+    decoded_device_recovery!(app, youtube_playback);
+
+    // Radio has no track to restage: a station is an infinite stream with no
+    // position, and pausing one only stalls its ring buffer. Drop the session
+    // and say so, rather than leave a dead player behind the playbar.
+    #[cfg(feature = "internet-radio")]
+    if app
+      .radio_playback
+      .as_ref()
+      .is_some_and(|s| s.player.device_lost())
+    {
+      app.radio_playback = None;
+      app.set_status_message("Audio output device disconnected - radio stopped.", 8);
+    }
+
+    // The native queue slot's own sink. There is no "replay this queued item"
+    // event, so recovery here reopens the device and lets the advance block
+    // below take it from the top of the next item: the interrupted queued track
+    // is skipped rather than restaged. Same split as the context path above:
+    // a removal clears the slot's desired play state, which every path that
+    // stages the next item (and the suspended context's resume) reads, so the
+    // queue does not play out loud on a device the user just left.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "youtube"
+    ))]
+    {
+      use crate::infra::audio::Reopen;
+      use crate::infra::queue::QueueNowPlaying;
+      let lost = match app.queue_now.as_ref() {
+        Some(QueueNowPlaying::Decoded(d)) if d.player.device_lost() => Some((
+          Arc::clone(&d.player),
+          d.player.device_removed() || d.player.is_paused(),
+        )),
+        _ => None,
+      };
+      if let Some((player, paused)) = lost {
+        match player.recover_device() {
+          Reopen::Reopened => {
+            if paused {
+              app.queue_slot_desired_playing = false;
+            }
+            app.set_status_message(
+              if paused {
+                "Audio device changed - playback paused here."
+              } else {
+                "Audio device changed - playback moved to it."
+              },
+              8,
+            );
+          }
+          Reopen::Retrying => {
+            app.set_status_message("Audio output device lost - waiting for a new one.", 8);
+          }
+          // No device to play on. Hand the slot to the same teardown a drained
+          // queue uses: clearing `queue_now` here would strand the suspended
+          // context (latched `advancing`) and the remaining queued items.
+          Reopen::GaveUp => {
+            if paused {
+              app.queue_slot_desired_playing = false;
+            }
+            app.dispatch(IoEvent::FinishNativeQueue);
+            app.set_status_message("Audio output device disconnected.", 8);
+          }
+          Reopen::Waiting => {}
+        }
+      }
+    }
+
     // Native queue slot: when the queued track finishes, advance the queue
     // (play the next queued item, or resume the suspended context). Runs
     // before the per-source blocks so it takes precedence over them.

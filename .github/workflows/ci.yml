@@ -226,6 +226,42 @@ jobs:
           command: clippy
           args: ${{ matrix.args }} -- -D warnings
 
+  # macOS is the one platform the seven Linux legs above cannot speak for: it
+  # picks a different playback backend (portaudio, not alsa/rodio), a different
+  # OS integration (`macos-media`, not `mpris`), a different visualizer capture
+  # (`audio-viz-cpal`, not the PipeWire `audio-viz`), and it is the only place
+  # the `#[cfg(target_os = "macos")]` arms are compiled at all. The decoded
+  # sources ship there now, so a break in any of that reaches users.
+  #
+  # Check and clippy only, like `headless-streaming`: what actually risks
+  # breaking here is a target-gated arm or a feature that does not exist on
+  # macOS, and the test suite is platform-independent logic the Linux legs
+  # already run. The device tests that would exercise the audio path are
+  # `#[ignore]`d — GitHub runners have no audio output — so a `test` job would
+  # buy nothing for the extra runner time. One job rather than two so the
+  # slow part, spinning up a macOS runner, happens once.
+  #
+  # Keep the feature list in sync with cd.yml's macOS rows, the same way the
+  # `all-sources` leg tracks its Linux row.
+  macos:
+    name: macOS (check + clippy)
+    runs-on: macos-latest
+    needs: prepare
+    env:
+      FEATURES: "telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz"
+    steps:
+      - uses: actions/checkout@master
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install system dependencies
+        run: brew install openssl@3 portaudio
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --locked --no-default-features --features "$FEATURES"
+      - name: Clippy
+        run: cargo clippy --locked --no-default-features --features "$FEATURES" -- -D warnings
+
   # The src/gates.rs test pins tools/gates.count to the measured counters; this
   # job closes the remaining hole by comparing the file against the merge-base,
   # so a PR cannot raise a coupling baseline or lower the test floor alongside

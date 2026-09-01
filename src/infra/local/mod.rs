@@ -67,6 +67,9 @@ pub struct LocalPlaybackState {
   /// user skipping back and forth across the same two bad tracks, tearing down a
   /// session whose remaining tracks play fine.
   pub failed_since_played: std::collections::HashSet<usize>,
+  /// A seek and pause to apply when the next track is staged (device
+  /// recovery, the native queue's resume).
+  pub resume_at: Option<crate::infra::queue::ResumePoint>,
 }
 
 impl LocalPlaybackState {
@@ -625,6 +628,8 @@ fn collect_audio_dirs(
   if audio_count > 0 {
     out.push((dir.to_path_buf(), audio_count));
   }
+  // Sorted, so a folder and a link to it dedupe on the same path every run.
+  subdirs.sort();
   if depth < MAX_SCAN_DEPTH {
     for sub in subdirs {
       collect_audio_dirs(&sub, depth + 1, seen, out);

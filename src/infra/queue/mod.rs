@@ -373,11 +373,57 @@ fn restore_in_place<T>(items: &mut Vec<T>, backup: &ShuffleBackup, current: usiz
 pub async fn replay_file(
   player: std::sync::Arc<crate::infra::audio::LocalPlayer>,
   path: std::path::PathBuf,
+  resume: Option<ResumePoint>,
 ) -> bool {
   matches!(
-    tokio::task::spawn_blocking(move || player.play_file(&path)).await,
+    tokio::task::spawn_blocking(move || restage(&player, &path, resume)).await,
     Ok(Ok(()))
   )
+}
+
+/// How the next staged track starts: seek here, and stay paused or not.
+///
+/// Set by the driver's device recovery and by the native queue's resume, and
+/// taken by whichever path stages the track (a replay, a `play_index`, or a
+/// download's commit), so the seek and the pause are applied to the track
+/// they belong to, and never as events that race it.
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ResumePoint {
+  pub position_ms: u64,
+  pub paused: bool,
+}
+
+/// Stage `path` on `player` and apply `resume`: seek, then play unless it
+/// says paused. Pause-before-play is what keeps a paused restage silent.
+///
+/// **Blocking:** the stage clears the sink and decodes; call it off the async
+/// runtime and off the `App` lock.
+#[cfg(any(
+  feature = "local-files",
+  feature = "subsonic",
+  feature = "qobuz",
+  feature = "youtube"
+))]
+pub fn restage(
+  player: &crate::infra::audio::LocalPlayer,
+  path: &std::path::Path,
+  resume: Option<ResumePoint>,
+) -> anyhow::Result<()> {
+  player.stage_file(path)?;
+  let point = resume.unwrap_or_default();
+  if point.position_ms > 0 {
+    let _ = player.seek(std::time::Duration::from_millis(point.position_ms));
+  }
+  if !point.paused {
+    player.resume();
+  }
+  Ok(())
 }
 
 /// A queued *decoded* track playing through the shared [`LocalPlayer`] sink

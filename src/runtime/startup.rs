@@ -339,13 +339,10 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
 
   // Initialize macOS Now Playing integration for media key control
   // This registers with MPRemoteCommandCenter for media key events
-  // Gated on whether streaming will be attempted (the player itself now
-  // initializes in the background): registering media keys for a session
-  // whose native init later fails is harmless — the handlers just no-op.
-  // macOS plays no decoded source, so without native streaming the keys would
-  // only be taken away from the other players.
+  // Registered without a Spotify session, like MPRIS and SMTC, so decoded
+  // sources get media keys too; the handlers no-op while nothing plays.
   #[cfg(all(feature = "macos-media", target_os = "macos"))]
-  let macos_media_manager: Option<Arc<macos_media::MacMediaManager>> = if streaming_attempted {
+  let macos_media_manager: Option<Arc<macos_media::MacMediaManager>> =
     match macos_media::MacMediaManager::new() {
       Ok(mgr) => {
         info!("macos now playing interface registered - media keys enabled");
@@ -358,10 +355,7 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
         );
         None
       }
-    }
-  } else {
-    None
-  };
+    };
 
   // Registered without a Spotify session, like MPRIS, so decoded sources get media keys too.
   #[cfg(all(feature = "windows-media", target_os = "windows"))]

@@ -104,6 +104,9 @@ pub struct SubsonicPlaybackState {
   /// order). Set by [`set_shuffle(true)`](Self::set_shuffle); restored exactly by
   /// `set_shuffle(false)`.
   pub shuffle_backup: Option<crate::infra::queue::ShuffleBackup>,
+  /// A seek and pause to apply when the next track is staged (device
+  /// recovery, the native queue's resume).
+  pub resume_at: Option<crate::infra::queue::ResumePoint>,
 }
 
 impl SubsonicPlaybackState {

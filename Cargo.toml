@@ -85,10 +85,10 @@ icy-metadata = { version = "0.6", optional = true, default-features = false }
 symphonia = { version = "0.6", features = ["mp3", "flac", "ogg", "wav", "aiff", "isomp4", "mkv", "pcm", "vorbis"], optional = true, default-features = false }
 lofty = { version = "0.24", optional = true }
 # Local-files audio output. Defaults pull in cpal `playback` plus the common
-# codecs (flac/mp3/mp4-aac/vorbis/wav) via symphonia. Project-validated on
-# Linux and Windows (librespot uses rodio-backend on both); the macOS output
-# path is gated off in `LocalPlayer` because rodio crashes on CoreAudio/
-# Bluetooth (see the portaudio note above and issues #9/#20).
+# codecs (flac/mp3/mp4-aac/vorbis/wav) via symphonia. Drives the default device
+# on all three platforms; the macOS gate in `LocalPlayer` is gone since rodio
+# 0.22 / cpal 0.17 were measured on CoreAudio. Unrelated to librespot's own
+# rodio-backend, which is why librespot keeps portaudio-backend on macOS.
 rodio = { version = "0.22", optional = true }
 
 # Streaming dependencies: our maintained librespot fork, published on crates.io

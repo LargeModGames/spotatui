@@ -29,8 +29,8 @@ cargo test --no-default-features --features telemetry,tui
 ```
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
-(`.github/workflows/ci.yml`, on `ubuntu-latest`) runs `check`, `test`, and `clippy`
-across a **seven-leg** feature matrix:
+(`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` on `ubuntu-latest`
+across a **seven-leg** feature matrix, plus one `macos-latest` job (below):
 
 | Leg | Features |
 |-----|----------|
@@ -57,7 +57,15 @@ across a **seven-leg** feature matrix:
   test-only helper whose production caller is compiled out on some leg needs
   `#[allow(dead_code)]`.
 - The `all-sources` leg must stay in sync with `cd.yml`'s Linux release row
-  (macOS releases ship a smaller set - no decoded sources).
+  (macOS releases ship the same five sources but a different
+  backend/OS-integration set).
+- One further job, `macos`, runs `check` + `clippy` (no `test`) on
+  `macos-latest` with cd.yml's macOS release feature set. It is the only leg
+  that compiles the `#[cfg(target_os = "macos")]` arms, the portaudio playback
+  backend, `macos-media`, and `audio-viz-cpal` - none of which the Linux legs
+  can speak for. No `test`: the suite is platform-independent logic the Linux
+  legs already run, and the device tests are `#[ignore]`d (CI runners have no
+  audio output). Keep its feature list in sync with cd.yml's macOS rows.
 - A pull_request-only `Gates ratchet` job diffs `tools/gates.count` against the
   merge-base (`tools/check_gates_ratchet.sh`): coupling counters may only fall;
   the two adoption counters (`test_attribute_total`,
@@ -451,9 +459,42 @@ working in those directories.
   tested. The three web-player constants are scraped at runtime (`auth.rs`),
   cached in `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars;
   they are never embedded. Failures are status messages, never `handle_error`.
-- macOS cannot play any decoded source: `LocalPlayer::new()` bails there because
-  rodio SIGSEGVs on CoreAudio/Bluetooth (#9/#20) - which is why macOS releases
-  exclude the source features.
+- All three platforms play decoded sources. macOS was gated off in
+  `LocalPlayer` until rodio 0.22 / cpal 0.17 were measured on CoreAudio; the
+  SIGSEGVs behind that gate (#9/#20) were librespot's own rodio-backend, which
+  is why librespot still uses portaudio-backend there and this player does not.
+- Losing the output device has **two** shapes and only one is an error. cpal
+  reports the device being *removed* (`DeviceNotAvailable`); it cannot report the
+  common case - the OS moving its **default output** elsewhere (headphones out,
+  AirPods in the case), which leaves the stream bound to a device nobody hears.
+  So `LocalPlayer` both raises a `lost` flag from its own cpal error callback
+  *and* remembers the device name it opened, comparing it against the current
+  default in `device_lost()`. It then *refuses* `play_file`/`play_prepared`/
+  `stop`/`seek`: those wait on rodio's audio callback with no timeout, and they
+  run on the serial pump, so blocking one wedges the whole app rather than just
+  falling silent. Every such wait also goes through `bounded()`, which re-asks
+  the device every 3s rather than timing out blind - a dead device and a source
+  stalled on the network are indistinguishable from the caller's side, and
+  Qobuz's stream stall alone is 60s.
+  The driver's tick polls `device_lost()` (one device read a second), calls
+  `LocalPlayer::recover_device()` to rebuild on the new default device (a
+  spaced, bounded retry - a Bluetooth output takes seconds to come back), and
+  restages the track: it sets the session's `resume_at` (the seek, and paused
+  only when `device_removed()` says cpal saw a *removal* or the session was
+  already paused - a default that merely moved means the user plugged
+  something in and keeps playing) and dispatches `ReplayCurrentTrack`. The
+  path that stages the track applies `resume_at` itself
+  (`infra::queue::restage`), so no `Seek` or `PausePlayback` is ever queued
+  blind behind work that ends in `play()`. That recovery must stay *before*
+  every advance block: a dead sink never drains, so `is_finished()` is false
+  and would otherwise read as a still-playing track. The queue slot has no
+  replay event: a removal clears `queue_slot_desired_playing`, which the
+  paths that stage the next item and the suspended context's resume read,
+  and a device given up on hands the slot to `FinishNativeQueue` (the same
+  teardown a drained queue runs) rather than dropping `queue_now`. Every
+  `LocalPlayer` wait runs off the `App` lock (`stop_detached`,
+  `stop_detached_holding`, `spawn_blocking`): the runner takes that lock on
+  every frame.
 - Repeat/shuffle for decoded sources live in the pure module
   `src/infra/queue/mod.rs` (`advance_decision`, `resume_index_after_queue`, …);
   state is player-global on `App` (`decoded_repeat`, `decoded_shuffle`).
@@ -471,6 +512,21 @@ working in those directories.
 - OS integrations (MPRIS, SMTC, macOS Now Playing, Discord RPC, window title) all
   read one `PlaybackSnapshot` from `infra/media_metadata.rs`, which checks
   decoded sources first so the paused Spotify track is not published.
+- Radio tune-in has **three** unbounded steps, all on the serial pump, and all
+  three are capped in `infra/radio/stream.rs`: connect (`CONNECT_TIMEOUT`),
+  response headers (`HEADER_TIMEOUT`), and the format probe (`PROBE_TIMEOUT`).
+  The probe is the subtle one - rodio's symphonia scans for a start-of-stream
+  marker and a live stream never ends, so a codec it does not register scans
+  forever. Its `AdtsReader` claims only MPEG-4 ADTS (`ff f1`), not MPEG-2
+  (`ff f9`), which much European radio uses. On timeout the fix is to call
+  `OpenedStream::cancel` - stopping the *download*, not the reader: a probe
+  waiting for bytes parks inside `read`, so a flag checked between reads is
+  never seen, while cancelling marks the stream done, wakes every waiter, and
+  lets the probe thread and its download go. Only `prepare_stream` runs inside
+  the timed closure: `timeout` abandons a `spawn_blocking` closure but cannot
+  stop it, and the radio player is shared, so a probe that matched just after
+  the deadline would otherwise append the new station to the live sink. The
+  `play_prepared` happens after the timeout check.
 - YouTube is unofficial-fragile by design: when it breaks, the fix is a newer
   `yt-dlp`, not a spotatui release. One in-repo mitigation: a failed download
   retries once through the embedded player clients (`web_embedded,tv_embedded`),
