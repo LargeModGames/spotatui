@@ -10,7 +10,8 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    # nixpkgs 26.11 dropped x86_64-darwin; Intel Macs use the release tarball.
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
       system:
       let
         pkgs = import nixpkgs {

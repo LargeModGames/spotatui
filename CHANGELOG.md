@@ -30,6 +30,8 @@
 
 - **Spamming Previous on the first track no longer bricks native streaming**: under native streaming, pressing Previous within the first 3 seconds of the first track of a context (or after skipping back through every earlier track) told librespot to go to a track that does not exist, and librespot answered by *stopping* playback: audio went silent, the progress bar froze, and Play, Pause, and Seek could not bring it back until a track was started by hand or playback was transferred from another device. That is upstream librespot behaviour, so the fix lives in our maintained fork (0.8.2): Previous with nothing before it now restarts the current track, the way Spotify's own clients do, and a seek made on the player also updates the position librespot uses for its 3-second rule, so a second press right after a restart goes to the previous track instead of restarting again ([#366](https://github.com/LargeModGames/spotatui/issues/366)).
 
+- **`nix build` and `nix run` download crates again**: since 2026-08-27 every crate fetch in the flake build failed with HTTP 403, on released tags too. crates.io now refuses the deprecated `api/v1/crates/<name>/<version>/download` endpoint to the fetcher nixpkgs uses, and the nixpkgs revision pinned in `flake.lock` (March 2026) downloaded every crate through it. The pin moves to current `nixos-unstable`, whose `importCargoLock` fetches from `static.crates.io` instead, and the Nix toolchain goes from Rust 1.93 to 1.97 with it. That nixpkgs (26.11) also dropped x86_64-darwin, so the flake no longer declares that system; Intel Mac users keep the release tarball, which is still built ([#493](https://github.com/LargeModGames/spotatui/issues/493)).
+
 ## [v0.41.0] 2026-08-10
 
 ### Added
