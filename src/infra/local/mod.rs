@@ -10,6 +10,7 @@
 
 pub mod dispatch;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -129,9 +130,11 @@ fn is_audio_file(path: &Path) -> bool {
 
 /// A media source that exposes local audio files rooted at a directory.
 ///
-/// Each immediate subdirectory of `root` becomes a playlist. When audio files
-/// sit directly in `root`, a synthetic `"(root)"` playlist is also returned as
-/// the first entry so those loose files are browsable.
+/// Every folder at or below `root` that directly holds audio becomes a
+/// playlist, named by its path relative to `root`, down to [`MAX_SCAN_DEPTH`]
+/// levels. When audio files sit directly in `root`, a synthetic `"(root)"`
+/// playlist is also returned as the first entry so those loose files are
+/// browsable.
 pub struct LocalSource {
   root: PathBuf,
 }
@@ -174,38 +177,32 @@ impl MediaSource for LocalSource {
   /// The playlist `uri` is `file://<abs-path>`, the `name` is the directory's
   /// path relative to `root` joined with `/` (`"Jamendo/Playlist - Fresh & New"`),
   /// and `track_count` is the number of audio files directly inside that
-  /// directory. Directories that only *contain* other directories are not
-  /// listed — there is nothing to play in them.
+  /// directory, counted by the rule [`tracks`](Self::tracks) lists them by
+  /// (see [`classify`]). Directories that only *contain* other directories are
+  /// not listed — there is nothing to play in them.
+  ///
+  /// The walk stops [`MAX_SCAN_DEPTH`] levels below `root`. A linked folder is
+  /// walked once, and a folder that cannot be read is skipped with a warning.
+  /// Only an unreadable `root` is an error.
   ///
   /// The `"(root)"` entry, when present, is always placed first so loose files
-  /// at the root are easy to find. Its count stays non-recursive so it matches
-  /// what [`tracks`](Self::tracks) returns for the same URI.
+  /// at the root are easy to find.
   ///
   /// TODO(multi-source): move std::fs::read_dir calls into tokio::task::spawn_blocking
   ///   or tokio::fs before wiring — blocking I/O on the async executor stalls
   ///   the Tokio runtime under slow/remote filesystems.
   async fn playlists(&self) -> Result<Vec<PlaylistInfo>> {
-    let entries = std::fs::read_dir(&self.root)
-      .with_context(|| format!("reading music root {:?}", self.root))?;
+    // An unreadable root stays fatal; the walk skips unreadable folders.
+    std::fs::read_dir(&self.root).with_context(|| format!("reading music root {:?}", self.root))?;
 
     let mut dirs: Vec<(PathBuf, u32)> = Vec::new();
-    // Count loose audio files directly in root in the same pass that walks the
-    // subdirectories, so we avoid a second read_dir call on the same path.
-    let mut root_audio_count: u32 = 0;
-    for entry in entries.flatten() {
-      if is_hidden(&entry) {
-        continue;
-      }
-      let Ok(file_type) = entry.file_type() else {
-        continue;
-      };
-      let path = entry.path();
-      if file_type.is_dir() {
-        collect_audio_dirs(&path, 1, &mut dirs);
-      } else if file_type.is_file() && is_audio_file(&path) {
-        root_audio_count += 1;
-      }
-    }
+    collect_audio_dirs(&self.root, 0, &mut HashSet::new(), &mut dirs);
+
+    // The root's own entry becomes the synthetic "(root)" sentinel below.
+    let root_audio_count = dirs
+      .iter()
+      .position(|(path, _)| path == &self.root)
+      .map_or(0, |i| dirs.remove(i).1);
 
     let mut playlists: Vec<PlaylistInfo> = dirs
       .into_iter()
@@ -271,13 +268,9 @@ impl MediaSource for LocalSource {
     let mut tracks = Vec::new();
     for entry in entries {
       let entry = entry.context("reading directory entry")?;
-      let path = entry.path();
-      if !path.is_file() || !is_audio_file(&path) {
-        continue;
+      if let Some(ScanEntry::Audio(path)) = classify(&entry) {
+        tracks.push(track_info_from_path(&path));
       }
-
-      let info = track_info_from_path(&path);
-      tracks.push(info);
     }
 
     // Sort by track_number, then by name.
@@ -524,16 +517,47 @@ pub(crate) fn extract_embedded_cover(path: &Path) -> Result<image::DynamicImage>
   image::load_from_memory(picture.data()).context("decoding embedded cover art")
 }
 
-/// How many directory levels below the music root the scan descends.
-///
-// ponytail: a depth cap rather than a visited-inode set; raise it if someone
-// keeps their library deeper than Artist/Album/Disc.
+/// How many directory levels below the music root the scan descends: the
+/// backstop behind the visited set in [`collect_audio_dirs`].
 const MAX_SCAN_DEPTH: usize = 8;
 
-/// Whether a directory entry is hidden (`.Trash`, `.DS_Store`, …) and should be
-/// skipped by the scan.
+/// Whether a directory entry is hidden (`.Trash`, `.DS_Store`, an AppleDouble
+/// `._track.mp3`) and should be skipped by the scan.
 fn is_hidden(entry: &std::fs::DirEntry) -> bool {
   entry.file_name().to_string_lossy().starts_with('.')
+}
+
+/// What the scan makes of one directory entry.
+enum ScanEntry {
+  /// A playable file, linked or not.
+  Audio(PathBuf),
+  /// A folder, linked or not.
+  Dir(PathBuf),
+}
+
+/// The one entry policy shared by the listing and the track table, so a
+/// folder's `track_count` always matches the rows `tracks` returns for it:
+/// hidden entries are skipped, and a symlink or junction is looked through
+/// once, so a linked track plays and a linked folder is walked.
+fn classify(entry: &std::fs::DirEntry) -> Option<ScanEntry> {
+  if is_hidden(entry) {
+    return None;
+  }
+  let file_type = entry.file_type().ok()?;
+  let path = entry.path();
+  let (is_dir, is_file) = if file_type.is_symlink() {
+    let target = std::fs::metadata(&path).ok()?;
+    (target.is_dir(), target.is_file())
+  } else {
+    (file_type.is_dir(), file_type.is_file())
+  };
+  if is_dir {
+    Some(ScanEntry::Dir(path))
+  } else if is_file && is_audio_file(&path) {
+    Some(ScanEntry::Audio(path))
+  } else {
+    None
+  }
 }
 
 /// A directory's path relative to `root`, joined with `/` for display
@@ -552,29 +576,49 @@ fn relative_display_name(root: &Path, path: &Path) -> String {
 /// Walk `dir` and everything below it, pushing `(path, count)` for every
 /// directory that directly contains at least one audio file.
 ///
-/// Symlinked directories are **not** followed: `DirEntry::file_type` does not
-/// dereference, so `is_dir()` is false for a symlink and a link loop cannot hang
-/// the scan. A directory that cannot be read (permissions) is skipped rather
-/// than failing the whole scan — one unreadable folder must not hide the rest of
-/// the library.
-fn collect_audio_dirs(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u32)>) {
-  let Ok(entries) = std::fs::read_dir(dir) else {
+/// A linked folder is walked like any other: `seen` holds the canonical path
+/// of every folder visited, so a link loop is walked once, and
+/// [`MAX_SCAN_DEPTH`] bounds the descent. A folder that cannot be read is
+/// skipped with a warning rather than failing the whole scan: one unreadable
+/// folder must not hide the rest of the library.
+fn collect_audio_dirs(
+  dir: &Path,
+  depth: usize,
+  seen: &mut HashSet<PathBuf>,
+  out: &mut Vec<(PathBuf, u32)>,
+) {
+  let canonical = match std::fs::canonicalize(dir) {
+    Ok(canonical) => canonical,
+    Err(e) => {
+      log::warn!("[local] skipping folder {}: {e}", dir.display());
+      return;
+    }
+  };
+  if !seen.insert(canonical) {
     return;
+  }
+  let entries = match std::fs::read_dir(dir) {
+    Ok(entries) => entries,
+    Err(e) => {
+      log::warn!("[local] skipping unreadable folder {}: {e}", dir.display());
+      return;
+    }
   };
 
   let mut audio_count = 0u32;
   let mut subdirs = Vec::new();
-  for entry in entries.flatten() {
-    if is_hidden(&entry) {
-      continue;
-    }
-    let Ok(file_type) = entry.file_type() else {
-      continue;
+  for entry in entries {
+    let entry = match entry {
+      Ok(entry) => entry,
+      Err(e) => {
+        log::warn!("[local] skipping an entry of {}: {e}", dir.display());
+        continue;
+      }
     };
-    if file_type.is_dir() {
-      subdirs.push(entry.path());
-    } else if file_type.is_file() && is_audio_file(&entry.path()) {
-      audio_count += 1;
+    match classify(&entry) {
+      Some(ScanEntry::Audio(_)) => audio_count += 1,
+      Some(ScanEntry::Dir(path)) => subdirs.push(path),
+      None => {}
     }
   }
 
@@ -583,8 +627,13 @@ fn collect_audio_dirs(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u32)>) {
   }
   if depth < MAX_SCAN_DEPTH {
     for sub in subdirs {
-      collect_audio_dirs(&sub, depth + 1, out);
+      collect_audio_dirs(&sub, depth + 1, seen, out);
     }
+  } else if !subdirs.is_empty() {
+    log::warn!(
+      "[local] not scanning below {}: it is {MAX_SCAN_DEPTH} levels under the music root",
+      dir.display()
+    );
   }
 }
 
@@ -1046,6 +1095,113 @@ mod tests {
       "a folder below the depth cap must not be scanned; got {:?}",
       playlists.iter().map(|p| &p.name).collect::<Vec<_>>()
     );
+  }
+
+  fn list(root: &Path) -> Vec<PlaylistInfo> {
+    tokio::runtime::Runtime::new()
+      .unwrap()
+      .block_on(LocalSource::new(root).playlists())
+      .unwrap()
+  }
+
+  fn rows(root: &Path, dir: &Path) -> Vec<TrackInfo> {
+    tokio::runtime::Runtime::new()
+      .unwrap()
+      .block_on(LocalSource::new(root).tracks(&path_to_file_uri(dir)))
+      .unwrap()
+  }
+
+  /// A folder link: a symlink on Unix, a junction on Windows (no privilege needed).
+  fn link_dir(link: &Path, target: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+      // `cmd` reads a `/` inside a path as a switch.
+      let backslashed = |path: &Path| path.to_string_lossy().replace('/', "\\");
+      let output = std::process::Command::new("cmd")
+        .args([
+          "/C",
+          "mklink",
+          "/J",
+          &backslashed(link),
+          &backslashed(target),
+        ])
+        .output()
+        .unwrap();
+      assert!(output.status.success(), "mklink /J failed: {output:?}");
+    }
+  }
+
+  #[test]
+  fn hidden_entries_are_skipped_by_the_count_and_the_track_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("Album")).unwrap();
+    write_wav(&root.join("Album/track.wav"), 44100, 100);
+    // An exFAT drive's AppleDouble sibling, and a hidden folder.
+    write_wav(&root.join("Album/._track.wav"), 44100, 100);
+    std::fs::create_dir(root.join(".Trash")).unwrap();
+    write_wav(&root.join(".Trash/gone.wav"), 44100, 100);
+
+    let playlists = list(root);
+    let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["Album"]);
+    assert_eq!(playlists[0].track_count, 1);
+    assert_eq!(rows(root, &root.join("Album")).len(), 1);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_linked_track_counts_and_lists_like_a_real_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let elsewhere = tempfile::tempdir().unwrap();
+    write_wav(&elsewhere.path().join("far.wav"), 44100, 100);
+    std::fs::create_dir(root.join("Album")).unwrap();
+    write_wav(&root.join("Album/near.wav"), 44100, 100);
+    std::os::unix::fs::symlink(elsewhere.path().join("far.wav"), root.join("Album/far.wav"))
+      .unwrap();
+
+    let playlists = list(root);
+    assert_eq!(playlists[0].track_count, 2);
+    assert_eq!(rows(root, &root.join("Album")).len(), 2);
+  }
+
+  #[test]
+  fn a_linked_folder_is_walked_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let nas = tempfile::tempdir().unwrap();
+    std::fs::create_dir(nas.path().join("Album")).unwrap();
+    write_wav(&nas.path().join("Album/track.wav"), 44100, 100);
+    link_dir(&root.join("NAS"), nas.path());
+    // A loop back into the linked tree: walked once, never forever.
+    link_dir(&nas.path().join("Album/loop"), nas.path());
+
+    let playlists = list(root);
+    let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["NAS/Album"]);
+    assert_eq!(playlists[0].track_count, 1);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn an_unreadable_folder_is_skipped_not_fatal() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("Album")).unwrap();
+    write_wav(&root.join("Album/track.wav"), 44100, 100);
+    std::fs::create_dir(root.join("Locked")).unwrap();
+    write_wav(&root.join("Locked/track.wav"), 44100, 100);
+    std::fs::set_permissions(root.join("Locked"), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let playlists = list(root);
+    // Restore before the tempdir is removed.
+    std::fs::set_permissions(root.join("Locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["Album"]);
   }
 
   #[test]
