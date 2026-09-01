@@ -58,7 +58,7 @@
 
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,10 @@ pub struct LocalPlayer {
   device_check: Mutex<Option<DeviceCheck>>,
   /// Reopen attempts since the device was lost.
   reopen: Mutex<ReopenState>,
+  /// Bumped when a stage starts, so a stage that a later one overtook never
+  /// appends after it: two fetches can share one player and finish in the
+  /// wrong order.
+  stage_generation: AtomicU64,
 }
 
 /// One default-output read, keyed on the name the sink opened so a swapped
@@ -181,7 +185,18 @@ impl LocalPlayer {
       volume_percent: AtomicU8::new(100),
       device_check: Mutex::new(None),
       reopen: Mutex::new(ReopenState::default()),
+      stage_generation: AtomicU64::new(0),
     })
+  }
+
+  /// Start a stage: the generation it must still hold at its append.
+  fn begin_stage(&self) -> u64 {
+    self.stage_generation.fetch_add(1, Ordering::SeqCst) + 1
+  }
+
+  /// Whether a later stage started since `stage` began.
+  fn stage_superseded(&self, stage: u64) -> bool {
+    self.stage_generation.load(Ordering::SeqCst) != stage
   }
 
   /// The rodio handle, for the calls that cannot block (they only touch
@@ -403,6 +418,7 @@ impl LocalPlayer {
     allow(dead_code)
   )]
   pub fn stage_file(&self, path: &Path) -> Result<()> {
+    let stage = self.begin_stage();
     let sink = self.live_player()?;
     // Stop whatever is currently playing *before* any fallible step (open or
     // decode), so a failure here can never leave the previous track audible. A
@@ -424,9 +440,13 @@ impl LocalPlayer {
       .with_context(|| format!("decoding audio file {}", path.display()))?;
 
     // The decode is long enough for the driver's tick to have reopened the
-    // device under us; appending to the old sink would play into nothing.
+    // device under us, or for a later stage to have cleared the sink for its
+    // own track; appending now would play into nothing, or play stale audio.
     if !Arc::ptr_eq(&sink, &self.player()) {
       anyhow::bail!("audio output device changed while decoding");
+    }
+    if self.stage_superseded(stage) {
+      anyhow::bail!("superseded by a later track");
     }
 
     // The clear above paused the sink; `append` leaves it so.
@@ -486,6 +506,7 @@ impl LocalPlayer {
   /// [`stage_file`](Self::stage_file).
   #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
   pub fn stage_prepared(&self, stream: PreparedStream) -> Result<()> {
+    let stage = self.begin_stage();
     let sink = self.live_player()?;
     let clearing = Arc::clone(&sink);
     if self.bounded(move || clearing.clear()).is_none() {
@@ -495,6 +516,9 @@ impl LocalPlayer {
     // and nothing would notice, since the fresh one reports no lost device.
     if !Arc::ptr_eq(&sink, &self.player()) {
       anyhow::bail!("audio output device changed");
+    }
+    if self.stage_superseded(stage) {
+      anyhow::bail!("superseded by a later track");
     }
     sink.append(stream.0);
     Ok(())
