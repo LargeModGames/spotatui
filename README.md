@@ -149,6 +149,8 @@ Or if you use pipewire:
    ```
 
 
+The flake provides `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. nixpkgs 26.11 dropped Intel Macs (`x86_64-darwin`), so on those use the Homebrew formula, the one-line installer, or the release tarball below.
+
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
 > **Which build has which sources?** The prebuilt Linux and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz. macOS builds and a plain `cargo install --locked spotatui` do not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz`.
