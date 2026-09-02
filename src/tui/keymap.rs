@@ -889,18 +889,32 @@ mod tests {
     }
   }
 
-  /// `source` without its test items and comment lines: rustfmt puts a
-  /// `#[cfg(test)]` attribute and the closing brace of its item at column 0.
+  /// `source` without its test items and comment lines: a gated block item
+  /// runs to its column-0 `}` (rustfmt's shape), a braceless one to its `;`.
   fn production_half(source: &str) -> String {
     let mut out = String::new();
-    let mut skipping = false;
+    let mut gated = false;
+    let mut in_block = false;
+    let mut in_item = false;
     for line in source.lines() {
-      if skipping {
-        skipping = line != "}";
+      if in_block {
+        in_block = line != "}";
+        continue;
+      }
+      if in_item {
+        in_item = !line.ends_with(';');
+        continue;
+      }
+      if gated {
+        gated = line.starts_with("#[");
+        if !gated {
+          in_block = line.ends_with('{');
+          in_item = !in_block && !line.ends_with(';') && !line.ends_with('}');
+        }
         continue;
       }
       if line.starts_with("#[cfg(test)]") || line.starts_with("#[cfg(all(test") {
-        skipping = true;
+        gated = true;
         continue;
       }
       if line.trim_start().starts_with("//") {
@@ -1249,6 +1263,11 @@ mod tests {
       /// through the shared `Action::Pause` vocabulary\n\
       #[cfg(test)]\n\
       mod tests {\n  Action::Back\n}\n\
+      #[cfg(test)]\n\
+      const HIDDEN: Option<Action> = Some(\n  Action::Notify(String::new(), 0),\n);\n\
+      #[cfg(test)]\n\
+      #[allow(dead_code)]\n\
+      fn probe() -> Action { Action::Play }\n\
       let seek = Action::Search(query);\n";
     let expected: BTreeSet<String> = ["PlayUris", "Search"]
       .into_iter()
