@@ -1144,7 +1144,7 @@ mod tests {
 
   #[test]
   fn click_search_input_focuses_input() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,

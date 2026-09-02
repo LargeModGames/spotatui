@@ -7,10 +7,10 @@
 # the two adoption counters may only rise.
 
 crate_tui_refs_outside_tui = 2         # target 0
-app_field_writes_in_tui_handlers = 317 # target 0 (writes into app.view do not count)
+app_field_writes_in_tui_handlers = 315 # target 0 (writes into app.view do not count)
 ioevent_refs_in_tui = 51               # target 0
 synthetic_keys_in_mouse_handler = 3    # target 0 (the content-table re-entries through handle_block_events)
 wildcard_arms_in_action_tree = 0       # target 0, must stay 0
 view_writes_outside_tui = 12           # target 0 (producers outside tui/ and core/app/ writing App::view)
 action_refs_in_tui_handlers = 173      # adoption: may only rise
-test_attribute_total = 1795            # adoption: may only rise
+test_attribute_total = 1800            # adoption: may only rise

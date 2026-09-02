@@ -74,6 +74,20 @@ pub fn handler(key: Key, app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::app::RouteId;
+  use crate::core::source::Source;
+
+  #[test]
+  fn up_and_left_reach_the_library_under_a_free_source() {
+    let mut app = App::default().under_source(Source::Local);
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
+
+    handler(Key::Up, &mut app);
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+
+    app.set_current_route_state(None, Some(ActiveBlock::AlbumTracks));
+    handler(Key::Left, &mut app);
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+  }
 
   #[test]
   fn on_enter() {
