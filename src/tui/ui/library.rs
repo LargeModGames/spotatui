@@ -1,4 +1,4 @@
-use crate::core::app::{library_options, ActiveBlock, App};
+use crate::core::app::{ActiveBlock, App};
 use crate::core::source::Source;
 use crate::tui::layout::{is_wide_layout, library_constraints, split_input_help_and_settings};
 use ratatui::{
@@ -14,14 +14,19 @@ pub fn draw_library_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.active_block == ActiveBlock::Library,
     current_route.hovered_block == ActiveBlock::Library,
   );
+  let rows: Vec<&str> = app
+    .library_rows()
+    .iter()
+    .map(|target| target.name())
+    .collect();
   draw_selectable_list(
     f,
     app,
     layout_chunk,
     "Library",
-    library_options(),
+    &rows,
     highlight_state,
-    Some(app.library.selected_index),
+    Some(app.library_cursor()),
   );
 }
 
@@ -205,39 +210,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 }
 
 pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  // Local Files has no saved library and no search, so the local-folder list
-  // fills the whole sidebar — no input box, no Library panel.
-  if app.active_source == Source::Local {
-    draw_playlist_block(f, app, layout_chunk);
-    return;
-  }
-
-  // Subsonic, Qobuz, Radio and YouTube support search but have no Spotify-style
-  // saved library, so keep the search input and show the source's list, but
-  // hide the Library panel.
-  if app.active_source == Source::Subsonic
-    || app.active_source == Source::Qobuz
-    || app.active_source == Source::Radio
-    || app.active_source == Source::YouTube
-  {
-    if is_wide_layout(app) {
-      let [input_area, playlist_area] = layout_chunk.layout(&Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(0),
-      ]));
-      let [input_text_area, help_area, settings_area] =
-        split_input_help_and_settings(app, input_area);
-      draw_input_and_help_box(f, app, input_text_area, help_area, settings_area);
-      draw_playlist_block(f, app, playlist_area);
-    } else {
-      draw_playlist_block(f, app, layout_chunk);
-    }
-    return;
-  }
-
-  // Check for width to make a responsive layout
+  let lib_constraints = library_constraints(&app.runtime_state);
   if is_wide_layout(app) {
-    let lib_constraints = library_constraints(&app.runtime_state);
     let [input_area, library_area, playlist_area] = layout_chunk.layout(&Layout::vertical([
       Constraint::Length(3),
       lib_constraints[0],
@@ -251,10 +225,7 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     draw_library_block(f, app, library_area);
     draw_playlist_block(f, app, playlist_area);
   } else {
-    let [library_area, playlist_area] =
-      layout_chunk.layout(&Layout::vertical(library_constraints(&app.runtime_state)));
-
-    // Search input and help
+    let [library_area, playlist_area] = layout_chunk.layout(&Layout::vertical(lib_constraints));
     draw_library_block(f, app, library_area);
     draw_playlist_block(f, app, playlist_area);
   }
@@ -291,8 +262,8 @@ mod tests {
   }
 
   #[test]
-  fn local_source_sidebar_lists_folders_and_hides_library() {
-    let mut app = App::default();
+  fn local_source_sidebar_lists_folders_below_the_free_library_rows() {
+    let mut app = App::default_connected();
     app.active_source = Source::Local;
     app.local_playlists = vec![folder("Jazz")];
     let content = rendered(&app, Rect::new(0, 0, 32, 40));
@@ -305,6 +276,10 @@ mod tests {
       "panel title should be Local Files: {content}"
     );
     assert!(
+      content.contains("Stats"),
+      "the free library rows stay under Local: {content}"
+    );
+    assert!(
       !content.contains("Liked Songs"),
       "Spotify library entries must be hidden under Local: {content}"
     );
@@ -312,11 +287,25 @@ mod tests {
 
   #[test]
   fn spotify_source_sidebar_shows_library() {
-    let app = App::default(); // Spotify is the default source
+    let app = App::default_connected(); // Spotify is the default source
     let content = rendered(&app, Rect::new(0, 0, 32, 40));
     assert!(
       content.contains("Liked Songs"),
       "Spotify library entries should render: {content}"
+    );
+  }
+
+  #[test]
+  fn spotify_scope_without_a_session_keeps_only_the_free_library_rows() {
+    let app = App::default();
+    let content = rendered(&app, Rect::new(0, 0, 32, 40));
+    assert!(
+      content.contains("Stats") && content.contains("Friends"),
+      "Friends and Stats need no session: {content}"
+    );
+    assert!(
+      !content.contains("Liked Songs"),
+      "Spotify rows need a session: {content}"
     );
   }
 

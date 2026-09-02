@@ -37,6 +37,8 @@ pub mod persisted_playback;
 pub mod plugin_api;
 pub mod queue;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod requirement;
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod sort;
 pub mod source;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]

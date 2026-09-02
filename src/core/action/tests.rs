@@ -2134,22 +2134,56 @@ fn open_library_liked_songs_resets_the_cache_and_fetches() {
 }
 
 #[test]
-fn library_target_names_round_trip_and_cover_every_sidebar_row() {
+fn every_library_target_has_one_sidebar_row_with_a_distinct_label() {
+  let rows = crate::core::app::library_row_requirements();
+  let mut labels = Vec::new();
+  for (target, _) in rows {
+    let label = target.name();
+    assert!(!labels.contains(&label), "duplicate label {label}");
+    labels.push(label);
+  }
+  let has_row = |target: LibraryTarget| rows.iter().any(|(row, _)| *row == target);
   for target in LibraryTarget::ALL {
-    assert_eq!(LibraryTarget::from_name(target.name()), Some(target));
+    let expected = match target {
+      LibraryTarget::LocalFiles => cfg!(feature = "local-files"),
+      LibraryTarget::AiDj => cfg!(feature = "ai-dj"),
+      LibraryTarget::Discover
+      | LibraryTarget::RecentlyPlayed
+      | LibraryTarget::Friends
+      | LibraryTarget::Stats
+      | LibraryTarget::LikedSongs
+      | LibraryTarget::Albums
+      | LibraryTarget::Artists
+      | LibraryTarget::Podcasts => true,
+    };
+    assert_eq!(has_row(target), expected, "{}", target.name());
   }
-  // Every sidebar label resolves to a DISTINCT target: this is the
-  // load-bearing invariant (name() must equal the library_options()
-  // strings, or the handler's name resolution remaps rows).
-  let options = crate::core::app::library_options();
-  let mut resolved = Vec::new();
-  for label in options {
-    let target = LibraryTarget::from_name(label)
-      .unwrap_or_else(|| panic!("sidebar row {label} has no LibraryTarget"));
-    assert!(!resolved.contains(&target), "duplicate label {label}");
-    resolved.push(target);
-  }
-  assert_eq!(LibraryTarget::from_name("no such row"), None);
+}
+
+#[test]
+fn library_rows_drop_the_spotify_rows_without_a_session() {
+  let (app, _rx) = session_free_app_with_channel();
+  let rows = app.library_rows();
+  assert!(rows.contains(&LibraryTarget::Friends));
+  assert!(rows.contains(&LibraryTarget::Stats));
+  assert!(!rows.contains(&LibraryTarget::LikedSongs));
+
+  let (app, _rx) = app_with_channel();
+  assert_eq!(
+    app.library_rows().len(),
+    crate::core::app::library_row_requirements().len()
+  );
+}
+
+#[test]
+fn library_rows_drop_the_spotify_rows_under_a_free_scope() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  app.apply(Action::SelectSource(Source::Local));
+  let rows = app.library_rows();
+  assert!(!rows.contains(&LibraryTarget::Discover));
+  assert!(rows.contains(&LibraryTarget::Stats));
 }
 
 // --- SelectSource ---

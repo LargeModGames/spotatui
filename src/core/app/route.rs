@@ -151,6 +151,14 @@ impl RouteId {
     RouteId::Stats,
   ];
 
+  /// What a startup route needs before its screen opens populated.
+  pub(crate) fn startup_requirement(&self) -> Requirement {
+    match self {
+      RouteId::Home | RouteId::Stats => Requirement::None,
+      _ => Requirement::SpotifySession,
+    }
+  }
+
   /// Parse a `startup_route` config token. Unknown / non-context-free strings
   /// return `None` (the caller logs a warning and falls back to Home).
   pub fn from_config_str(s: &str) -> Option<RouteId> {
@@ -233,6 +241,11 @@ impl App {
       return;
     }
     self.persist_active_source();
+  }
+
+  /// Whether the active browse scope and the session can serve a row or key.
+  pub(crate) fn availability(&self, requirement: Requirement) -> Availability {
+    availability(requirement, self.active_source, self.spotify_connected)
   }
 
   /// Write the current browse scope to `state.yml`.

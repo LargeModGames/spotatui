@@ -867,19 +867,17 @@ impl Driver {
     // handlers that normally fetch a screen's data on navigation — kick
     // off that fetch here or the screen renders empty until re-entered.
     // (Home needs nothing extra; Discover fetches from within its menu.)
-    // Spotify-backed screens are gated on a connected session; Stats reads
-    // local history so it always fetches.
-    match app.get_current_route().id {
-      RouteId::RecentlyPlayed if app.spotify_connected => app.dispatch(IoEvent::GetRecentlyPlayed),
-      RouteId::AlbumList if app.spotify_connected => {
-        app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None))
+    // The fetch is gated on the route's startup requirement.
+    let needs = app.get_current_route().id.startup_requirement();
+    if app.availability(needs).is_available() {
+      match app.get_current_route().id {
+        RouteId::RecentlyPlayed => app.dispatch(IoEvent::GetRecentlyPlayed),
+        RouteId::AlbumList => app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None)),
+        RouteId::Artists => app.dispatch(IoEvent::GetFollowedArtists(None)),
+        RouteId::Podcasts => app.dispatch(IoEvent::GetCurrentUserSavedShows(None)),
+        RouteId::Stats => app.reload_stats(),
+        _ => {}
       }
-      RouteId::Artists if app.spotify_connected => app.dispatch(IoEvent::GetFollowedArtists(None)),
-      RouteId::Podcasts if app.spotify_connected => {
-        app.dispatch(IoEvent::GetCurrentUserSavedShows(None))
-      }
-      RouteId::Stats => app.reload_stats(),
-      _ => {}
     }
     // A persisted non-Spotify active source needs its sidebar data loaded
     // too (all of these are inert no-ops when the feature is off).

@@ -37,7 +37,7 @@ impl Default for App {
         saved_shows: ScrollableResultPages::new(),
         saved_artists: ScrollableResultPages::new(),
         show_episodes: ScrollableResultPages::new(),
-        selected_index: 0,
+        selected: LibraryTarget::Discover,
       },
       liked_song_ids_set: HashSet::new(),
       liked_lookup_pending: HashSet::new(),

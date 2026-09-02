@@ -492,8 +492,8 @@ pub enum LibraryTarget {
 }
 
 impl LibraryTarget {
-  /// Every target, in the stable subset order of `library_options()`
-  /// (feature-gated rows are appended there and matched by name).
+  /// Every target, in the order of `library_row_requirements()`.
+  #[cfg(test)]
   pub const ALL: [LibraryTarget; 10] = [
     LibraryTarget::Discover,
     LibraryTarget::RecentlyPlayed,
@@ -507,7 +507,7 @@ impl LibraryTarget {
     LibraryTarget::AiDj,
   ];
 
-  /// The exact `library_options()` sidebar label for this target.
+  /// The sidebar label for this target.
   pub fn name(self) -> &'static str {
     match self {
       LibraryTarget::Discover => "Discover",
@@ -521,11 +521,6 @@ impl LibraryTarget {
       LibraryTarget::LocalFiles => "Local Files",
       LibraryTarget::AiDj => "AI DJ",
     }
-  }
-
-  /// Look up a target by sidebar label; `None` for unknown names.
-  pub fn from_name(name: &str) -> Option<LibraryTarget> {
-    LibraryTarget::ALL.into_iter().find(|t| t.name() == name)
   }
 }
 

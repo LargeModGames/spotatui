@@ -5,6 +5,11 @@ help menu, press the search key (`/` by default) to filter rows by key,
 description, or context; matching text is highlighted in the visible rows.
 Press `Enter` to apply the filter and `Esc` to clear it.
 
+The menu lists what the active source and your Spotify session can do. A
+rebindable key that needs more stays listed with a suffix such as
+`(needs Spotify)` or `(not for Local Files)`; a fixed key of a screen the
+source cannot reach is left out until you switch source or log in.
+
 The same search key filters the Settings screen, so you can jump to a setting
 instead of scrolling for it. The query is fuzzy: its characters only have to
 appear in order, so `volinc` finds **Volume Increment** and `skms` finds
@@ -28,7 +33,7 @@ one query can be walked across tabs.
 | `a`         | Jump to album             |
 | `A`         | Jump to artist's albums   |
 | `o`         | Jump to context           |
-| `d`         | Manage devices            |
+| `d`         | Switch music source       |
 | `c`         | Copy song URL             |
 | `C`         | Copy album URL            |
 | `Ctrl-r`    | Toggle repeat mode        |

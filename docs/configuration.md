@@ -51,17 +51,20 @@ behavior:
 
 `startup_route` picks which screen opens at launch. Its data is fetched automatically, so the screen arrives populated. Only context-free screens are valid (nothing that needs an album id, artist id, or search query):
 
-| Value | Screen | Alias |
-|---|---|---|
-| `home` (default) | Home | |
-| `recently_played` | Recently Played | `recent` |
-| `podcasts` | Podcasts | |
-| `discover` | Discover | |
-| `artists` | Followed Artists | `library` |
-| `album_list` | Saved Albums | `albums` |
-| `stats` | Stats | |
+| Value | Screen | Alias | Needs Spotify |
+|---|---|---|---|
+| `home` (default) | Home | | no |
+| `recently_played` | Recently Played | `recent` | yes |
+| `podcasts` | Podcasts | | yes |
+| `discover` | Discover | | yes |
+| `artists` | Followed Artists | `library` | yes |
+| `album_list` | Saved Albums | `albums` | yes |
+| `stats` | Stats | | no |
 
-Unknown values fall back to `home` with a warning.
+Unknown values fall back to `home` with a warning. Without a Spotify session
+the Settings screen offers only `home` and `stats`, unless `config.yml` already
+names a Spotify screen, which then stays selectable. A Spotify screen still
+opens without a session, but empty.
 
 ## Default sorting
 

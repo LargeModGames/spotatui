@@ -1,40 +1,58 @@
 use super::*;
 
-/// Sidebar library entries.
-///
-/// Built at first use rather than declared as a `const` per feature combination.
-/// Feature-gated rows ("Local Files", "AI DJ") used to mean one `#[cfg]` arm per
-/// combination, which is a cartesian product that doubles with every new gated
-/// row; composing the list instead stays linear. Callers should look entries up
-/// by name (`iter().position(...)`) rather than by index, since the index depends
-/// on which features are built in.
-pub fn library_options() -> &'static [&'static str] {
-  static OPTIONS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
-  OPTIONS.get_or_init(|| {
-    // `mut` is only used by the gated pushes below, so a build with neither
-    // feature would otherwise warn.
-    #[allow(unused_mut)]
-    let mut options = vec![
-      "Discover",
-      "Recently Played",
-      "Friends",
-      "Stats",
-      "Liked Songs",
-      "Albums",
-      "Artists",
-      "Podcasts",
-    ];
+/// Every sidebar row with what it needs; `App::library_rows` is the filtered list.
+pub(crate) fn library_row_requirements() -> &'static [(LibraryTarget, Requirement)] {
+  &[
+    (
+      LibraryTarget::Discover,
+      Requirement::Source(Source::Spotify),
+    ),
+    (
+      LibraryTarget::RecentlyPlayed,
+      Requirement::Source(Source::Spotify),
+    ),
+    (LibraryTarget::Friends, Requirement::None),
+    (LibraryTarget::Stats, Requirement::None),
+    (
+      LibraryTarget::LikedSongs,
+      Requirement::Source(Source::Spotify),
+    ),
+    (LibraryTarget::Albums, Requirement::Source(Source::Spotify)),
+    (LibraryTarget::Artists, Requirement::Source(Source::Spotify)),
+    (
+      LibraryTarget::Podcasts,
+      Requirement::Source(Source::Spotify),
+    ),
     #[cfg(feature = "local-files")]
-    options.push("Local Files");
+    (LibraryTarget::LocalFiles, Requirement::None),
     #[cfg(feature = "ai-dj")]
-    options.push("AI DJ");
-    options
-  })
+    (LibraryTarget::AiDj, Requirement::None),
+  ]
+}
+
+impl App {
+  /// The sidebar rows the active source and the session can serve.
+  pub(crate) fn library_rows(&self) -> Vec<LibraryTarget> {
+    library_row_requirements()
+      .iter()
+      .filter(|(_, needs)| self.availability(*needs).is_available())
+      .map(|(target, _)| *target)
+      .collect()
+  }
+
+  /// Where the selected row sits among the rows offered now; the top row when it is hidden.
+  pub(crate) fn library_cursor(&self) -> usize {
+    self
+      .library_rows()
+      .iter()
+      .position(|row| *row == self.library.selected)
+      .unwrap_or(0)
+  }
 }
 
 #[derive(Clone)]
 pub struct Library {
-  pub selected_index: usize,
+  pub selected: LibraryTarget,
   pub saved_tracks: ScrollableResultPages<Paged<TrackInfo>>,
   pub saved_albums: ScrollableResultPages<Paged<SavedAlbumInfo>>,
   pub saved_shows: ScrollableResultPages<Paged<ShowInfo>>,
@@ -269,8 +287,7 @@ impl App {
   /// library row (fetches, route pushes, bookkeeping), moved verbatim from
   /// the library handler so every frontend fires the same sequence through
   /// `Action::OpenLibrary`.
-  pub fn open_library_section(&mut self, target: crate::core::action::LibraryTarget) {
-    use crate::core::action::LibraryTarget;
+  pub fn open_library_section(&mut self, target: LibraryTarget) {
     match target {
       LibraryTarget::Discover => {
         self.push_navigation_stack(RouteId::Discover, ActiveBlock::Discover);

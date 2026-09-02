@@ -116,9 +116,10 @@ impl Source {
     matches!(self, Source::Spotify)
   }
 
-  /// Whether this source can mutate playlists (implements [`PlaylistWriter`]).
+  /// Whether this source can mutate playlists: Spotify through the Web API,
+  /// YouTube through its local playlist file.
   pub fn supports_playlist_write(&self) -> bool {
-    matches!(self, Source::Spotify)
+    matches!(self, Source::Spotify | Source::YouTube)
   }
 
   /// Whether this source supports liking / saving the currently-playing track
@@ -180,12 +181,12 @@ mod tests {
   }
 
   #[test]
-  fn youtube_supports_search_only() {
-    // yt-dlp searches the catalog; there is no library, no writable playlists,
-    // and no like/star concept without a Google account.
+  fn youtube_supports_search_and_its_local_playlists() {
+    // yt-dlp searches the catalog and playlists live in a local file; there is
+    // no library and no like/star concept without a Google account.
     assert!(Source::YouTube.supports_search());
     assert!(!Source::YouTube.supports_library());
-    assert!(!Source::YouTube.supports_playlist_write());
+    assert!(Source::YouTube.supports_playlist_write());
     assert!(!Source::YouTube.supports_like());
   }
 

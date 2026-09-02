@@ -43,7 +43,10 @@ mod stats;
 mod track_table;
 
 use crate::core::action::{Action, CopyTarget, NavTarget};
-use crate::core::app::{ActiveBlock, App, ArtistBlock, InputContext, RouteId, SearchResultBlock};
+use crate::core::app::{
+  ActiveBlock, App, ArtistBlock, InputContext, PlaybackOwner, RouteId, SearchResultBlock,
+  NOTHING_PLAYING_STATUS,
+};
 use crate::core::source::Source;
 use crate::tui::event::Key;
 
@@ -194,9 +197,7 @@ pub fn handle_app(key: Key, app: &mut App) {
     _ if key == app.user_config.keys.jump_to_context => {
       app.apply(Action::JumpToContext);
     }
-    // Reachable from anywhere, including sources whose sidebar has no Library
-    // panel (only Spotify draws one), which is why a global binding exists at all
-    // and not just the sidebar row.
+    // Reachable from anywhere, without a trip through the sidebar row.
     #[cfg(feature = "ai-dj")]
     _ if key == app.user_config.keys.dj_open => {
       ai_dj::open(app);
@@ -269,29 +270,13 @@ pub fn handle_app(key: Key, app: &mut App) {
       app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
     }
     _ if key == app.user_config.keys.search => {
-      // Search is gated on the active source's capability (no `Searcher` impl
-      // for Local Files), so it's a no-op with a hint there.
-      if app.active_source.supports_search() {
-        focus_global_search(app);
-      } else {
-        app.set_status_message(
-          format!("Search isn't available for {}", app.active_source.label()),
-          4,
-        );
-      }
+      open_global_search(app);
     }
     _ if key == app.user_config.keys.copy_song_url => {
-      if app.active_source.supports_library() {
-        app.apply(Action::CopyUrl(CopyTarget::CurrentSong));
-      } else {
-        app.set_status_message(
-          format!("Copy URL isn't available for {}", app.active_source.label()),
-          4,
-        );
-      }
+      copy_url(app, Action::CopyUrl(CopyTarget::CurrentSong));
     }
     _ if key == app.user_config.keys.copy_album_url => {
-      app.apply(Action::CopyUrl(CopyTarget::CurrentAlbum));
+      copy_url(app, Action::CopyUrl(CopyTarget::CurrentAlbum));
     }
     _ if key == app.user_config.keys.audio_analysis => {
       app.apply(Action::Navigate(NavTarget::Analysis));
@@ -412,6 +397,33 @@ pub(super) fn focus_global_search(app: &mut App) {
   }
   app.view.input_context = InputContext::GlobalSearch;
   app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
+}
+
+/// Focuses the search input, or reports why the active source has none.
+pub(super) fn open_global_search(app: &mut App) -> bool {
+  if app.active_source.supports_search() {
+    focus_global_search(app);
+    true
+  } else {
+    app.set_status_message(
+      format!("Search isn't available for {}", app.active_source.label()),
+      4,
+    );
+    false
+  }
+}
+
+/// The copy keys read the Spotify playback, so they need Spotify to own it.
+fn copy_url(app: &mut App, copy: Action) {
+  match app.playback_owner() {
+    PlaybackOwner::Spotify | PlaybackOwner::NativeSpotify => {
+      app.apply(copy);
+    }
+    PlaybackOwner::None => app.set_status_message(NOTHING_PLAYING_STATUS, 4),
+    PlaybackOwner::Queue | PlaybackOwner::Decoded => {
+      app.set_status_message("Copy URL needs a Spotify track playing", 4)
+    }
+  }
 }
 
 fn is_input_mode(app: &App) -> bool {
@@ -1083,17 +1095,24 @@ mod tests {
   }
 
   #[test]
-  fn copy_song_url_shows_hint_when_local_source() {
+  fn copy_url_keys_follow_the_playback_owner_not_the_browse_scope() {
     let mut app = App::default();
     app.active_source = Source::Local;
     app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
 
     handle_app(app.user_config.keys.copy_song_url, &mut app);
+    assert_eq!(app.status_message.as_deref(), Some("Nothing is playing"));
 
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some("Copy URL isn't available for Local Files")
-    );
+    app.set_status_message("cleared", 1);
+    handle_app(app.user_config.keys.copy_album_url, &mut app);
+    assert_eq!(app.status_message.as_deref(), Some("Nothing is playing"));
+
+    // A session under the Local scope still owns the Spotify playback.
+    let mut app = App::default_connected();
+    app.active_source = Source::Local;
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+    handle_app(app.user_config.keys.copy_album_url, &mut app);
+    assert_eq!(app.status_message, None);
   }
 
   /// The DJ's own tests all call `ai_dj::handler` directly, which is the branch
