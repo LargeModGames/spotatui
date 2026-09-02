@@ -21,13 +21,19 @@
 //! - Playback starts go through `App::start_playback_uris` /
 //!   `App::start_playback_context`; no arm builds a `StartPlayback` event
 //!   by hand.
-//! - Matches in this module are exhaustive. The
-//!   `wildcard_arms_in_action_tree` gate keeps the catch-all arm count at
-//!   zero, tests included.
+//! - Matches in this module are exhaustive: the deny below refuses a
+//!   catch-all arm, and the `wildcard_arms_in_action_tree` gate keeps the
+//!   count at zero, tests included.
 //! - Address by identity (URIs, ids, names), never by list ordinal.
 //!
 //! The serde derives are the wire shape for future frontend codegen; they
 //! are deliberately in place before any second frontend consumes them.
+
+// The compiler half of the catch-all gate: a new variant must be placed.
+#![deny(
+  clippy::wildcard_enum_match_arm,
+  clippy::match_wildcard_for_single_variants
+)]
 
 use serde::{Deserialize, Serialize};
 
