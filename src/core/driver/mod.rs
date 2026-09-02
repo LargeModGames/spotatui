@@ -154,6 +154,22 @@ pub struct Driver {
   radio_stream_started: bool,
 }
 
+/// The startup route's data fetch, gated on what the route needs.
+fn fetch_startup_route(app: &mut App) {
+  let route = app.get_current_route().id.clone();
+  if !app.availability(route.startup_requirement()).is_available() {
+    return;
+  }
+  match route {
+    RouteId::RecentlyPlayed => app.dispatch(IoEvent::GetRecentlyPlayed),
+    RouteId::AlbumList => app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None)),
+    RouteId::Artists => app.dispatch(IoEvent::GetFollowedArtists(None)),
+    RouteId::Podcasts => app.dispatch(IoEvent::GetCurrentUserSavedShows(None)),
+    RouteId::Stats => app.reload_stats(),
+    _ => {}
+  }
+}
+
 impl Driver {
   pub fn new(
     shared_position: Option<Arc<AtomicU64>>,
@@ -867,20 +883,7 @@ impl Driver {
     // handlers that normally fetch a screen's data on navigation — kick
     // off that fetch here or the screen renders empty until re-entered.
     // (Home needs nothing extra; Discover fetches from within its menu.)
-    // Spotify-backed screens are gated on a connected session; Stats reads
-    // local history so it always fetches.
-    match app.get_current_route().id {
-      RouteId::RecentlyPlayed if app.spotify_connected => app.dispatch(IoEvent::GetRecentlyPlayed),
-      RouteId::AlbumList if app.spotify_connected => {
-        app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None))
-      }
-      RouteId::Artists if app.spotify_connected => app.dispatch(IoEvent::GetFollowedArtists(None)),
-      RouteId::Podcasts if app.spotify_connected => {
-        app.dispatch(IoEvent::GetCurrentUserSavedShows(None))
-      }
-      RouteId::Stats => app.reload_stats(),
-      _ => {}
-    }
+    fetch_startup_route(app);
     // A persisted non-Spotify active source needs its sidebar data loaded
     // too (all of these are inert no-ops when the feature is off).
     app.load_source_sidebar(app.active_source);
@@ -939,5 +942,55 @@ impl Driver {
     if let Some(ref manager) = self.discord_rpc_manager {
       manager.clear();
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::ActiveBlock;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::{channel, Receiver};
+  use std::time::SystemTime;
+
+  fn app_on(route: RouteId, block: ActiveBlock, connected: bool) -> (App, Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), connected.then(SystemTime::now));
+    app.push_navigation_stack(route, block);
+    (app, rx)
+  }
+
+  #[test]
+  fn a_spotify_startup_route_fetches_nothing_without_a_session() {
+    let (mut app, rx) = app_on(RouteId::AlbumList, ActiveBlock::AlbumList, false);
+
+    fetch_startup_route(&mut app);
+
+    assert!(!rx
+      .try_iter()
+      .any(|event| matches!(event, IoEvent::GetCurrentUserSavedAlbums(_))));
+  }
+
+  #[test]
+  fn a_spotify_startup_route_fetches_its_data_with_a_session() {
+    let (mut app, rx) = app_on(RouteId::AlbumList, ActiveBlock::AlbumList, true);
+
+    fetch_startup_route(&mut app);
+
+    assert!(rx
+      .try_iter()
+      .any(|event| matches!(event, IoEvent::GetCurrentUserSavedAlbums(_))));
+  }
+
+  #[test]
+  fn the_stats_startup_route_loads_without_a_session() {
+    let (mut app, rx) = app_on(RouteId::Stats, ActiveBlock::Stats, false);
+
+    fetch_startup_route(&mut app);
+
+    assert!(app.stats_loading);
+    assert!(rx
+      .try_iter()
+      .any(|event| matches!(event, IoEvent::LoadListeningStats(_))));
   }
 }

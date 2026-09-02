@@ -374,7 +374,20 @@ Check `app.user_config.keys.<action>` instead of hard-coding key literals for
 global actions (`handle_app` in `src/tui/handlers/mod.rs`);
 `common_key_events::{up,down,left,right}_event` extend this to per-screen
 navigation. Adding a binding means fields on both `KeyBindings` and
-`KeyBindingsString` in `src/core/user_config.rs` plus a `get_help_docs` row.
+`KeyBindingsString` in `src/core/user_config.rs` plus a `help_entries` row in
+`src/tui/keymap.rs` with its `Requirement`.
+
+### Requirements
+
+`core/requirement.rs` says what a row or key needs (`Requirement::{None,
+SpotifySession, Capability(_), Source(_), AnyOf(_)}`) and `App::availability(req)`
+answers for the active source and the session. Three tables carry it: the
+sidebar (`library_row_requirements()` in `core/app/library.rs`), the help menu
+(`help_entries()` in `tui/keymap.rs`) and the settings rows
+(`setting_requirement(id)` in `core/app/settings_schema.rs`). The rule on every
+surface: a row with a rebindable key stays visible with the `hint()` as a
+suffix, a row with a fixed key or a sidebar row is hidden. Gate a key on the
+same predicate the row uses, so the two cannot disagree.
 
 ### Config & on-disk files
 
@@ -400,7 +413,8 @@ never config:
   (`BehaviorConfigString`, `BehaviorConfig`, `UserConfig::new`,
   `load_behaviorconfig`, `save_config`) **plus** matching arms in
   `core/app/settings_schema.rs` and `settings_apply.rs`, coupled only by the raw
-  `"behavior.<name>"` string id - a typo silently drops the write.
+  `"behavior.<name>"` string id - a typo silently drops the write. A row that
+  only works with Spotify also needs a `setting_requirement` arm.
 
 ### Feature flags
 

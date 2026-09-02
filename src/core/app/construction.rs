@@ -37,7 +37,7 @@ impl Default for App {
         saved_shows: ScrollableResultPages::new(),
         saved_artists: ScrollableResultPages::new(),
         show_episodes: ScrollableResultPages::new(),
-        selected_index: 0,
+        selected: LibraryTarget::Discover,
       },
       liked_song_ids_set: HashSet::new(),
       liked_lookup_pending: HashSet::new(),
@@ -244,12 +244,26 @@ impl Default for App {
 impl App {
   /// `App::default()` with a Spotify session, for tests that need one without
   /// an `IoEvent` channel.
-  #[cfg(all(test, feature = "tui"))]
+  #[cfg(test)]
   pub(crate) fn default_connected() -> App {
     App {
       spotify_connected: true,
       ..App::default()
     }
+  }
+
+  /// This app under a browse scope, for tests.
+  #[cfg(all(test, feature = "tui"))]
+  pub(crate) fn under_source(mut self, source: Source) -> App {
+    self.active_source = source;
+    self
+  }
+
+  /// This app with a Spotify playback context, for tests.
+  #[cfg(all(test, feature = "tui"))]
+  pub(crate) fn with_playback(mut self, context: CurrentPlaybackContext) -> App {
+    self.current_playback_context = Some(context);
+    self
   }
 
   #[cfg(test)]

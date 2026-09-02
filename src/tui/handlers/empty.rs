@@ -1,7 +1,6 @@
 use super::common_key_events;
 use crate::{
   core::app::{ActiveBlock, App},
-  core::source::Source,
   tui::event::Key,
 };
 
@@ -35,10 +34,7 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       match app.get_current_route().hovered_block {
-        // Under any non-Spotify source (Local, Subsonic) the Library list is
-        // hidden, so MyPlaylists is already the top sidebar block — pressing up
-        // should stay put rather than jump to a block that isn't rendered.
-        ActiveBlock::MyPlaylists if app.active_source == Source::Spotify => {
+        ActiveBlock::MyPlaylists => {
           app.set_current_route_state(None, Some(ActiveBlock::Library));
         }
         ActiveBlock::PlayBar => {
@@ -59,8 +55,7 @@ pub fn handler(key: Key, app: &mut App) {
         | ActiveBlock::Discover
         | ActiveBlock::RecentlyPlayed
         | ActiveBlock::TrackTable => {
-          let top = common_key_events::sidebar_top_block(app);
-          app.set_current_route_state(None, Some(top));
+          app.set_current_route_state(None, Some(ActiveBlock::Library));
         }
         _ => {}
       }
@@ -79,6 +74,20 @@ pub fn handler(key: Key, app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::app::RouteId;
+  use crate::core::source::Source;
+
+  #[test]
+  fn up_and_left_reach_the_library_under_a_free_source() {
+    let mut app = App::default().under_source(Source::Local);
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
+
+    handler(Key::Up, &mut app);
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+
+    app.set_current_route_state(None, Some(ActiveBlock::AlbumTracks));
+    handler(Key::Left, &mut app);
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+  }
 
   #[test]
   fn on_enter() {

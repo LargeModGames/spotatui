@@ -3,7 +3,7 @@ use super::filter_input::{self, FilterEdit};
 use crate::{
   core::action::{Action, NavTarget},
   core::app::App,
-  tui::{event::Key, ui::help::get_filtered_help_docs},
+  tui::event::Key,
 };
 
 #[derive(PartialEq)]
@@ -20,7 +20,7 @@ pub(super) fn open(app: &mut App) {
 pub(super) fn clear_filter(app: &mut App) {
   app.view.help_filter.clear();
   app.view.help_filter_editing = false;
-  refresh_filtered_rows(app);
+  reset_page(app);
 }
 
 pub fn handler(key: Key, app: &mut App) {
@@ -51,7 +51,7 @@ pub fn handler(key: Key, app: &mut App) {
 fn begin_filter(app: &mut App) {
   app.view.help_filter.clear();
   app.view.help_filter_editing = true;
-  refresh_filtered_rows(app);
+  reset_page(app);
 }
 
 fn handle_filter_input(key: Key, app: &mut App) {
@@ -65,14 +65,9 @@ fn handle_filter_input(key: Key, app: &mut App) {
         reset_page(app);
       }
     }
-    FilterEdit::Changed => refresh_filtered_rows(app),
+    FilterEdit::Changed => reset_page(app),
     FilterEdit::Ignored => {}
   }
-}
-
-fn refresh_filtered_rows(app: &mut App) {
-  app.view.help_docs_size = get_filtered_help_docs(app).len() as u32;
-  reset_page(app);
 }
 
 fn reset_page(app: &mut App) {
@@ -97,7 +92,7 @@ mod tests {
   use crate::{
     core::app::{ActiveBlock, RouteId},
     core::source::Source,
-    tui::{handlers::handle_app, ui::help::get_help_docs},
+    tui::{handlers::handle_app, keymap::help_rows, ui::ensure_help_menu_model},
   };
 
   #[test]
@@ -197,13 +192,16 @@ mod tests {
   fn confirmed_filter_stays_applied_until_escape_clears_it() {
     let mut app = App::default();
     handle_app(app.user_config.keys.help, &mut app);
-    let unfiltered_size = get_help_docs(&app).len() as u32;
+    let unfiltered_size = help_rows(&app).len() as u32;
 
     handle_app(app.user_config.keys.search, &mut app);
     for c in "volume".chars() {
       handle_app(Key::Char(c), &mut app);
     }
 
+    // The frame that follows a keystroke rebuilds the help model, which
+    // owns the row count the pager reads.
+    ensure_help_menu_model(&mut app);
     assert!(app.view.help_filter_editing);
     assert!(app.view.help_docs_size > 0);
     assert!(app.view.help_docs_size < unfiltered_size);
@@ -213,6 +211,7 @@ mod tests {
     assert_eq!(app.view.help_filter, "volume");
 
     handle_app(Key::Esc, &mut app);
+    ensure_help_menu_model(&mut app);
     assert_eq!(app.get_current_route().id, RouteId::HelpMenu);
     assert!(app.view.help_filter.is_empty());
     assert_eq!(app.view.help_docs_size, unfiltered_size);

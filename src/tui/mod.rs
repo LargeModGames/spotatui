@@ -4,6 +4,7 @@ pub mod event;
 pub mod first_run;
 pub mod fuzzy;
 pub mod handlers;
+pub mod keymap;
 pub mod layout;
 pub mod onboarding;
 pub mod runner;

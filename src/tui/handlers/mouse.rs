@@ -1,8 +1,6 @@
 use super::{common_key_events, library, lyrics_view, playbar, playlist, settings};
 use crate::core::action::{Action, NavTarget};
-use crate::core::app::{
-  library_options, ActiveBlock, App, RouteId, SettingValue, SettingsCategory,
-};
+use crate::core::app::{ActiveBlock, App, RouteId, SettingValue, SettingsCategory};
 use crate::tui::event::Key;
 use crate::tui::layout::{
   compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
@@ -197,8 +195,9 @@ fn handle_input_mouse(mouse: MouseEvent, input_area: Rect, app: &mut App) {
     return;
   }
 
-  super::focus_global_search(app);
-  set_input_cursor_from_column(input_area, mouse.column, app);
+  if super::open_global_search(app) {
+    set_input_cursor_from_column(input_area, mouse.column, app);
+  }
 }
 
 fn handle_help_mouse(mouse: MouseEvent, app: &mut App) {
@@ -483,8 +482,8 @@ fn set_input_cursor_from_column(input_area: Rect, mouse_column: u16, app: &mut A
 }
 
 fn select_clicked_library_item(mouse_row: u16, list_area: Rect, app: &mut App) {
-  let item_count = library_options().len();
-  let selected_index = app.library.selected_index.min(item_count.saturating_sub(1));
+  let item_count = app.library_rows().len();
+  let selected_index = app.library_cursor();
 
   let Some(clicked_index) =
     list_item_index_from_click(list_area, mouse_row, selected_index, item_count)
@@ -492,8 +491,8 @@ fn select_clicked_library_item(mouse_row: u16, list_area: Rect, app: &mut App) {
     return;
   };
 
-  let was_selected = app.library.selected_index == clicked_index;
-  app.library.selected_index = clicked_index;
+  let was_selected = selected_index == clicked_index;
+  library::select_row(app, clicked_index);
 
   if was_selected {
     library::activate_selected(app);
@@ -1145,7 +1144,7 @@ mod tests {
 
   #[test]
   fn click_search_input_focuses_input() {
-    let mut app = App::default();
+    let mut app = App::default_connected();
     app.view.size = Viewport {
       width: 160,
       height: 50,
@@ -1634,7 +1633,11 @@ mod tests {
       .expect("selected setting should be boolean");
 
     let areas = settings_layout_areas(&app).expect("settings layout areas");
-    let y = areas.list.y + 1 + bool_index as u16;
+    let drawn_row = filtered_setting_indices(&app)
+      .iter()
+      .position(|index| *index == bool_index)
+      .expect("the boolean row is drawn");
+    let y = areas.list.y + 1 + drawn_row as u16;
     handler(
       mouse_event(MouseEventKind::Down(MouseButton::Left), areas.list.x + 2, y),
       &mut app,
@@ -2032,17 +2035,17 @@ mod tests {
       height: 50,
     };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
-    app.library.selected_index = 0;
+    assert_eq!(app.library_cursor(), 0);
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.library.x + 1;
     let y = areas.library.y + 1;
 
     handler(mouse_event(MouseEventKind::ScrollDown, x, y), &mut app);
-    assert_eq!(app.library.selected_index, 1);
+    assert_eq!(app.library_cursor(), 1);
 
     handler(mouse_event(MouseEventKind::ScrollUp, x, y), &mut app);
-    assert_eq!(app.library.selected_index, 0);
+    assert_eq!(app.library_cursor(), 0);
 
     let current_route = app.get_current_route();
     assert_eq!(current_route.active_block, ActiveBlock::Library);
@@ -2056,9 +2059,10 @@ mod tests {
       height: 50,
     };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
-    let stats_index = library_options()
+    let stats_index = app
+      .library_rows()
       .iter()
-      .position(|option| *option == "Stats")
+      .position(|row| *row == crate::core::action::LibraryTarget::Stats)
       .expect("a Stats row");
 
     let areas = main_layout_areas(&app).expect("layout areas");
@@ -2069,7 +2073,7 @@ mod tests {
       mouse_event(MouseEventKind::Down(MouseButton::Left), x, y),
       &mut app,
     );
-    assert_eq!(app.library.selected_index, stats_index);
+    assert_eq!(app.library_cursor(), stats_index);
     assert_eq!(
       app.get_current_route().id,
       RouteId::Home,

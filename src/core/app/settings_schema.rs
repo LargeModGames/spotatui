@@ -72,6 +72,34 @@ const STARTUP_ROUTE_SETTING_OPTIONS: &[&str] = &[
   "stats",
 ];
 
+/// The startup routes that open populated without a Spotify session.
+const STARTUP_ROUTE_SESSION_FREE_OPTIONS: &[&str] = &["home", "stats"];
+
+/// What a settings row needs; an unmet key row stays with a hint, any other unmet row is hidden.
+pub(crate) fn setting_requirement(id: &str) -> Requirement {
+  match id {
+    "behavior.playback_poll_seconds"
+    | "behavior.default_sort_saved_albums"
+    | "behavior.default_sort_saved_artists"
+    | "behavior.default_sort_recently_played"
+    | "behavior.pin_community_playlist"
+    | "behavior.liked_icon"
+    | "behavior.episode_played_icon"
+    | "keys.jump_to_album"
+    | "keys.jump_to_artist_album"
+    | "keys.jump_to_context"
+    | "keys.copy_song_url"
+    | "keys.copy_album_url" => Requirement::SpotifySession,
+    // The like key favorites the station under Radio.
+    "keys.like_track" => Requirement::AnyOf(&[
+      Requirement::Capability(Capability::Like),
+      Requirement::Source(Source::Radio),
+    ]),
+    "keys.search" => Requirement::Capability(Capability::Search),
+    _ => Requirement::None,
+  }
+}
+
 const PLAYLIST_TRACK_SORT_SETTING_OPTIONS: &[&str] = &[
   "default",
   "name",
@@ -305,7 +333,7 @@ impl App {
           description: "Screen shown when spotatui starts".to_string(),
           value: SettingValue::Cycle(
             self.user_config.behavior.startup_route.clone(),
-            STARTUP_ROUTE_SETTING_OPTIONS,
+            self.startup_route_options(),
           ),
         },
         SettingItem {
@@ -667,8 +695,8 @@ impl App {
         },
         SettingItem {
           id: "keys.manage_devices".to_string(),
-          name: "Manage Devices".to_string(),
-          description: "Open device selection".to_string(),
+          name: "Switch Music Source".to_string(),
+          description: "Open the source and device picker".to_string(),
           value: SettingValue::Key(key_to_string(&self.user_config.keys.manage_devices)),
         },
         SettingItem {
@@ -880,10 +908,32 @@ impl App {
         ]
       }
     };
-    self.view.settings_selected_index = 0;
+    self.view.settings_selected_index = self
+      .settings_items
+      .iter()
+      .position(|item| self.setting_offered(item))
+      .unwrap_or(0);
     self.settings_saved_items = self.settings_items.clone();
     self.view.settings_unsaved_prompt_visible = false;
     self.view.settings_unsaved_prompt_save_selected = true;
+  }
+
+  /// Whether a row is drawn now: key rows always, other rows only when their requirement is met.
+  pub(crate) fn setting_offered(&self, item: &SettingItem) -> bool {
+    matches!(item.value, SettingValue::Key(_))
+      || self
+        .availability(setting_requirement(&item.id))
+        .is_available()
+  }
+
+  /// The startup routes the cycle offers; a stored Spotify route stays in it so the cycle cannot strand it.
+  fn startup_route_options(&self) -> &'static [&'static str] {
+    let current = self.user_config.behavior.startup_route.as_str();
+    if self.spotify_connected || !STARTUP_ROUTE_SESSION_FREE_OPTIONS.contains(&current) {
+      STARTUP_ROUTE_SETTING_OPTIONS
+    } else {
+      STARTUP_ROUTE_SESSION_FREE_OPTIONS
+    }
   }
 
   /// Enter the Settings screen on a fresh, unfiltered view of the current
@@ -927,5 +977,73 @@ mod tests {
       .map(|route| route.to_config_str())
       .collect();
     assert_eq!(STARTUP_ROUTE_SETTING_OPTIONS, expected.as_slice());
+  }
+
+  #[test]
+  fn session_free_startup_routes_are_the_routes_with_no_startup_requirement() {
+    let expected: Vec<&str> = RouteId::STARTUP_OPTIONS
+      .iter()
+      .filter(|route| route.startup_requirement() == Requirement::None)
+      .map(|route| route.to_config_str())
+      .collect();
+    assert_eq!(STARTUP_ROUTE_SESSION_FREE_OPTIONS, expected.as_slice());
+  }
+
+  #[test]
+  fn the_startup_cycle_narrows_without_a_session_unless_the_stored_route_needs_one() {
+    let mut app = App::default();
+    assert_eq!(
+      app.startup_route_options(),
+      STARTUP_ROUTE_SESSION_FREE_OPTIONS
+    );
+    app.user_config.behavior.startup_route = "discover".to_string();
+    assert_eq!(app.startup_route_options(), STARTUP_ROUTE_SETTING_OPTIONS);
+    app.spotify_connected = true;
+    app.user_config.behavior.startup_route = "home".to_string();
+    assert_eq!(app.startup_route_options(), STARTUP_ROUTE_SETTING_OPTIONS);
+  }
+
+  fn offered(app: &App, id: &str) -> bool {
+    let item = app
+      .settings_items
+      .iter()
+      .find(|item| item.id == id)
+      .unwrap_or_else(|| panic!("no row {id}"));
+    app.setting_offered(item)
+  }
+
+  #[test]
+  fn without_a_session_the_spotify_rows_are_hidden_and_the_key_rows_stay() {
+    let mut app = App::default();
+    app.load_settings_for_category();
+    assert!(!offered(&app, "behavior.default_sort_saved_albums"));
+    assert!(offered(&app, "behavior.default_sort_playlist_tracks"));
+    assert!(app.setting_offered(&app.settings_items[app.view.settings_selected_index]));
+
+    app.view.settings_category = SettingsCategory::Keybindings;
+    app.load_settings_for_category();
+    assert!(offered(&app, "keys.like_track"));
+
+    // The rows follow the session live, without a reload.
+    app.view.settings_category = SettingsCategory::Behavior;
+    app.load_settings_for_category();
+    app.spotify_connected = true;
+    assert!(offered(&app, "behavior.default_sort_saved_albums"));
+  }
+
+  #[test]
+  fn the_like_key_row_is_offered_under_radio() {
+    let mut app = App::default_connected();
+    app.view.settings_category = SettingsCategory::Keybindings;
+    app.load_settings_for_category();
+    app.active_source = Source::Radio;
+    assert!(offered(&app, "keys.like_track"));
+    assert!(app
+      .availability(setting_requirement("keys.like_track"))
+      .is_available());
+    app.active_source = Source::Local;
+    assert!(!app
+      .availability(setting_requirement("keys.like_track"))
+      .is_available());
   }
 }

@@ -1,4 +1,4 @@
-use crate::core::app::{App, SettingItem, SettingValue, SettingsCategory};
+use crate::core::app::{setting_requirement, App, SettingItem, SettingValue, SettingsCategory};
 use crate::tui::fuzzy::fuzzy_match;
 use crate::tui::theme::{EmphasisExt, ThemeExt};
 use crate::tui::ui::popups::highlighted_spans;
@@ -40,16 +40,16 @@ pub type FilteredSetting = (usize, Vec<(usize, usize)>);
 /// is every row in schema order.
 pub fn filtered_settings(app: &App) -> Vec<FilteredSetting> {
   let query = app.view.settings_filter.trim();
-  if query.is_empty() {
-    return (0..app.settings_items.len())
-      .map(|index| (index, Vec::new()))
-      .collect();
-  }
-
-  let mut scored: Vec<(i32, FilteredSetting)> = app
+  let offered = app
     .settings_items
     .iter()
     .enumerate()
+    .filter(|(_, setting)| app.setting_offered(setting));
+  if query.is_empty() {
+    return offered.map(|(index, _)| (index, Vec::new())).collect();
+  }
+
+  let mut scored: Vec<(i32, FilteredSetting)> = offered
     .filter_map(|(index, setting)| {
       setting_score(setting, query).map(|(score, ranges)| (score, (index, ranges)))
     })
@@ -228,6 +228,12 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
       let mut spans = highlighted_spans(&setting.name, name_ranges, name_style, match_style);
       spans.push(Span::styled(": ", name_style));
       spans.push(Span::styled(value_str, value_style));
+      if let Some(hint) = app.availability(setting_requirement(&setting.id)).hint() {
+        spans.push(Span::styled(
+          format!("  ({hint})"),
+          Style::default().fg(app.user_config.theme.inactive.into()),
+        ));
+      }
 
       ListItem::new(Line::from(spans))
     })
@@ -450,6 +456,40 @@ mod tests {
     // actually reach.
     app.view.settings_selected_index = filtered_setting_indices(&app).first().copied().unwrap_or(0);
     app
+  }
+
+  #[test]
+  fn a_session_gained_while_settings_is_open_reveals_the_spotify_rows_at_once() {
+    let mut app = filtered_app("", false);
+    let ids = |app: &App| -> Vec<String> {
+      filtered_setting_indices(app)
+        .into_iter()
+        .map(|index| app.settings_items[index].id.clone())
+        .collect()
+    };
+    assert!(!ids(&app).contains(&"behavior.default_sort_saved_albums".to_string()));
+    assert!(ids(&app).contains(&"behavior.default_sort_playlist_tracks".to_string()));
+
+    app.spotify_connected = true;
+    assert!(ids(&app).contains(&"behavior.default_sort_saved_albums".to_string()));
+  }
+
+  #[test]
+  fn a_spotify_only_key_row_carries_a_hint_without_a_session() {
+    let mut app = filtered_app("", false);
+    app.view.settings_category = SettingsCategory::Keybindings;
+    app.load_settings_for_category();
+    app.view.settings_selected_index = app
+      .settings_items
+      .iter()
+      .position(|item| item.id == "keys.like_track")
+      .expect("the like row");
+    let rendered = rendered(&app);
+    assert!(
+      rendered.contains("Like Track: [F]  (needs Spotify)"),
+      "{rendered}"
+    );
+    assert!(!rendered.contains("Back: [q]  ("), "{rendered}");
   }
 
   fn rendered(app: &App) -> String {

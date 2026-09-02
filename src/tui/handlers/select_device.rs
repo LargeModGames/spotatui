@@ -1,6 +1,6 @@
 use super::common_key_events;
 use crate::core::action::Action;
-use crate::core::app::{ActiveBlock, App, SourceFocus};
+use crate::core::app::{App, SourceFocus};
 use crate::core::source::Source;
 use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
@@ -116,15 +116,6 @@ fn select_source(app: &mut App) {
   }
   app.set_status_message(format!("Source: {}", source.label()), 4);
   app.pop_navigation_stack();
-
-  // If focus landed on a block the new source hides (the Library list under any
-  // non-Spotify source), move it to the Playlists block so input isn't lost.
-  if source != Source::Spotify {
-    let route = app.get_current_route();
-    if route.active_block == ActiveBlock::Library || route.hovered_block == ActiveBlock::Library {
-      app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
-    }
-  }
 }
 
 /// Existing behaviour: transfer Spotify playback to the highlighted device.

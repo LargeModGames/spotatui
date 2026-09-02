@@ -583,10 +583,6 @@ pub async fn start_ui(
     if is_first_render {
       let mut app = app.lock().await;
       driver.dispatch_startup(&mut app);
-      // The formatted Help row count is frontend presentation, so it stays
-      // out of the driver's startup dispatch.
-      app.view.help_docs_size = ui::help::get_help_docs(&app).len() as u32;
-
       is_first_render = false;
     }
   }

@@ -92,9 +92,9 @@ at all, which is [why some installs never see it](#it-never-asked-me).
 
 All five are rebindable, see [`docs/keybindings.md`](keybindings.md).
 
-The DJ is also reachable from the **AI DJ** row in the sidebar. The global key
-exists because the sidebar's Library panel is only drawn for the Spotify source,
-so the row alone would make the DJ unreachable on YouTube.
+The DJ is also reachable from the **AI DJ** row in the sidebar, which is offered
+under every source. The global key opens the screen from anywhere without a
+trip through the sidebar.
 
 ### Continuous auto-queue
 

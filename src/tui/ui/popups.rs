@@ -24,12 +24,19 @@ pub fn ensure_help_menu_model(app: &mut App) {
   // Mirrors draw_help_menu's layout: a margin of 2 on each side of the frame.
   let total_width = (app.view.size.width as usize).saturating_sub(4);
   let stale = app.view.help_menu_model.as_ref().is_none_or(|m| {
-    m.width != total_width || m.keys != app.user_config.keys || m.filter != app.view.help_filter
+    m.width != total_width
+      || m.keys != app.user_config.keys
+      || m.source != app.active_source
+      || m.spotify_connected != app.spotify_connected
+      || m.filter != app.view.help_filter
   });
   if !stale {
     return;
   }
   let (header, rows) = build_help_rows(app, total_width);
+  // The pager counts the rows built here, so a source or session change
+  // while Help is open cannot leave it paging over a stale count.
+  app.view.help_docs_size = rows.len() as u32;
   let match_ranges = rows
     .iter()
     .map(|row| help_match_ranges(row, &app.view.help_filter))
@@ -37,6 +44,8 @@ pub fn ensure_help_menu_model(app: &mut App) {
   app.view.help_menu_model = Some(HelpMenuModel {
     width: total_width,
     keys: app.user_config.keys.clone(),
+    source: app.active_source,
+    spotify_connected: app.spotify_connected,
     filter: app.view.help_filter.clone(),
     header,
     rows,
@@ -238,6 +247,28 @@ mod help_menu_tests {
       })
       .collect::<Vec<_>>()
       .join("\n")
+  }
+
+  #[test]
+  fn help_model_is_rebuilt_when_the_source_or_the_session_changes() {
+    let mut app = App::default_connected();
+    ensure_help_menu_model(&mut app);
+    let connected = app.view.help_menu_model.as_ref().unwrap().rows.len();
+
+    app.active_source = crate::core::source::Source::Local;
+    ensure_help_menu_model(&mut app);
+    let local = app.view.help_menu_model.as_ref().unwrap().rows.len();
+    assert!(
+      local < connected,
+      "{local} rows under Local, {connected} connected"
+    );
+    assert_eq!(app.view.help_docs_size as usize, local);
+
+    app.active_source = crate::core::source::Source::Spotify;
+    app.spotify_connected = false;
+    ensure_help_menu_model(&mut app);
+    let free = app.view.help_menu_model.as_ref().unwrap().rows.len();
+    assert!(free < connected, "{free} rows without a session");
   }
 
   #[test]
