@@ -176,7 +176,7 @@ pub fn handle_app(key: Key, app: &mut App) {
   if key_matches_open_settings_binding(key, app.user_config.keys.open_settings)
     || key_matches_open_settings_binding(key, effective_open_settings)
   {
-    app.open_settings_screen();
+    app.apply(Action::Navigate(NavTarget::Settings));
     return;
   }
 
