@@ -71,6 +71,18 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     return true;
   }
 
+  // Repeat has no meaning for the queue slot, which plays an explicit list over
+  // a suspended context. Consume it so a plugin's request never cycles repeat
+  // on the user's real Spotify device with nothing on screen to show for it;
+  // the keyboard and MPRIS paths already refuse (#376).
+  if let IoEvent::Repeat(_) = event {
+    let mut guard = app.lock().await;
+    if guard.queue_owns_playback() {
+      guard.set_status_message("Repeat does not apply to this source", 2);
+      return true;
+    }
+  }
+
   // Transport for the queue slot's own player (Pause / Seek / Volume / Next /
   // bare-resume). Only meaningful when a decoded queued track owns the sink;
   // compiles out entirely without a queueable decoded source.
@@ -1406,6 +1418,26 @@ mod tests {
     let app = test_app();
     assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
     assert!(app.lock().await.native_queue.is_empty());
+  }
+
+  /// A plugin's `set_repeat` while the queue slot owns playback must be
+  /// refused, not forwarded to Spotify (#376). Without a slot it falls through.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn repeat_is_refused_while_the_queue_slot_owns_playback() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    let repeat = IoEvent::Repeat(rspotify::model::enums::RepeatState::Off);
+    assert!(!route_queue_event(&app, &repeat).await);
+
+    app.lock().await.queue_now = Some(QueueNowPlaying::Spotify {
+      track: track("spotify:track:queued", "Queued"),
+    });
+    assert!(route_queue_event(&app, &repeat).await);
+    assert_eq!(
+      app.lock().await.status_message.as_deref(),
+      Some("Repeat does not apply to this source")
+    );
   }
 
   #[cfg(feature = "streaming")]
