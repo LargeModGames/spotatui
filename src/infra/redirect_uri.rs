@@ -237,4 +237,11 @@ mod tests {
     let url = result.expect("server should return Ok(url)");
     assert!(url.contains("code=realcode456"), "unexpected url: {url}");
   }
+
+  #[tokio::test]
+  async fn a_busy_port_reports_a_failed_bind() {
+    let holder = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = holder.local_addr().unwrap().port();
+    assert!(bind_callback_listener(port).await.is_err());
+  }
 }
