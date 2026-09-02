@@ -93,6 +93,28 @@ impl Default for ForcedRefreshGate {
   }
 }
 
+/// A non-2xx answer from Spotify, with the status kept so a caller can tell a
+/// rejected token from a request that merely failed. `Display` is the plain
+/// text every other caller already matches on.
+#[derive(Debug)]
+pub struct SpotifyApiError {
+  pub status: reqwest::StatusCode,
+  pub(crate) body: String,
+  pub(crate) detail: Option<String>,
+}
+
+impl std::fmt::Display for SpotifyApiError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "Spotify API {} failed: {}", self.status, self.body)?;
+    match &self.detail {
+      Some(detail) => write!(f, " ({detail})"),
+      None => Ok(()),
+    }
+  }
+}
+
+impl std::error::Error for SpotifyApiError {}
+
 /// The process-wide gate used by every real Spotify request (one Spotify
 /// session per process). Tests drive the base helper with their own instance.
 fn shared_forced_refresh_gate() -> &'static ForcedRefreshGate {
@@ -358,19 +380,24 @@ where
             continue;
           }
           Ok(None) => {
-            return Err(anyhow!(
-              "Spotify API {} failed: {} (token refresh unavailable for this request)",
-              status,
-              body
-            ));
+            return Err(
+              SpotifyApiError {
+                status,
+                body,
+                detail: Some("token refresh unavailable for this request".to_string()),
+              }
+              .into(),
+            );
           }
           Err(refresh_err) => {
-            return Err(anyhow!(
-              "Spotify API {} failed: {} (token refresh failed: {})",
-              status,
-              body,
-              refresh_err
-            ));
+            return Err(
+              SpotifyApiError {
+                status,
+                body,
+                detail: Some(format!("token refresh failed: {refresh_err}")),
+              }
+              .into(),
+            );
           }
         }
       }
@@ -390,7 +417,14 @@ where
       continue;
     }
 
-    return Err(anyhow!("Spotify API {} failed: {}", status, body));
+    return Err(
+      SpotifyApiError {
+        status,
+        body,
+        detail: None,
+      }
+      .into(),
+    );
   }
 }
 
@@ -571,6 +605,37 @@ pub async fn spotify_get_typed_compat_for_with_refresh<T: DeserializeOwned>(
     None,
     token_cache_path,
     app,
+  )
+  .await?;
+  normalize_spotify_payload(&mut value);
+  Ok(serde_json::from_value(value)?)
+}
+
+/// The boot-time token check: the same pacing, `Retry-After` retries, and 401
+/// recovery as every other call, for the one request made before an `App`
+/// exists to report refresh state to.
+pub async fn spotify_get_typed_before_app<T: DeserializeOwned>(
+  spotify: &AuthCodePkceSpotify,
+  path: &str,
+  token_cache_path: &Path,
+) -> anyhow::Result<T> {
+  let mut value = spotify_api_request_json_for_base_with_refresh(
+    spotify,
+    SpotifyApiRequest {
+      base_url: SPOTIFY_API_BASE_URL,
+      method: Method::GET,
+      path,
+      query: &[],
+      body: None,
+    },
+    |force| async move {
+      auth::refresh_token_and_cache(spotify, token_cache_path, force)
+        .await
+        .map(Some)
+    },
+    // Its own gate: nothing else uses this client yet, and a fallback
+    // candidate must not inherit the previous candidate's 401 cooldown.
+    &ForcedRefreshGate::default(),
   )
   .await?;
   normalize_spotify_payload(&mut value);

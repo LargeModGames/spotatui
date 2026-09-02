@@ -5,7 +5,7 @@ pub fn handler(key: Key, app: &mut App) {
   match key {
     Key::Enter | Key::Char('o') => {
       if let Some(prompt) = app.recap_prompt.take() {
-        if let Err(e) = open::that(&prompt.path) {
+        if let Err(e) = open::that_detached(&prompt.path) {
           log::warn!("failed to open recap in browser: {}", e);
           app.set_status_message(
             format!(

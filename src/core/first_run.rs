@@ -216,7 +216,7 @@ async fn configure_qobuz(onboarding: &dyn Onboarding) -> Result<()> {
   let url = attempt.url();
   onboarding.info("\nAttempting to open this URL in your browser:");
   onboarding.info(&format!("{url}\n"));
-  if let Err(e) = open::that(&url) {
+  if let Err(e) = open::that_detached(&url) {
     onboarding.info(&format!("Failed to open browser automatically: {e}"));
     onboarding.info("Please manually open the URL above in your browser.");
   }
