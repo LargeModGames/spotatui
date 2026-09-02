@@ -1,6 +1,7 @@
 use crate::core::config::{ClientConfig, ConfigPaths, NCSPOT_CLIENT_ID};
 use crate::core::onboarding::Onboarding;
-use crate::infra::redirect_uri::redirect_uri_web_server_async;
+use crate::infra::network::requests;
+use crate::infra::redirect_uri::{bind_callback_listener, serve_spotify_callback};
 use anyhow::{anyhow, Result};
 use log::{info, warn};
 use rspotify::{
@@ -209,6 +210,19 @@ fn auth_port_from_redirect_uri(redirect_uri: &str) -> u16 {
     .unwrap_or(8888)
 }
 
+/// Whether a failed `/me` means Spotify rejected the token itself, so the
+/// cache is stale and the user has to log in again. Anything else (a rate
+/// limit, an outage, no network) says nothing about the token.
+fn spotify_rejected_token(err_text: &str) -> bool {
+  let err_text = err_text.to_lowercase();
+  err_text.contains("401")
+    || err_text.contains("unauthorized")
+    || err_text.contains("400 bad request")
+    || err_text.contains("status code 400")
+    || err_text.contains("invalid_grant")
+    || err_text.contains("token expired")
+}
+
 fn build_pkce_spotify_client(
   client_id: &str,
   redirect_uri: String,
@@ -346,33 +360,31 @@ async fn ensure_auth_token(
 
   let mut validated_me = None;
   if !needs_auth {
-    match spotify.me().await {
+    match requests::spotify_get_typed_before_app::<rspotify::model::PrivateUser>(
+      spotify,
+      "me",
+      token_cache_path,
+    )
+    .await
+    {
       Ok(user) => validated_me = Some(user),
-      Err(e) => {
-        let err_text = e.to_string();
-        let err_text_lower = err_text.to_lowercase();
-        let should_reauth = err_text_lower.contains("401")
-          || err_text_lower.contains("unauthorized")
-          || err_text_lower.contains("status code 400")
-          || err_text_lower.contains("invalid_grant")
-          || err_text_lower.contains("access token expired")
-          || err_text_lower.contains("token expired");
-
-        if should_reauth {
-          info!("cached authentication token is invalid, re-authentication required");
-          if token_cache_path.exists() {
-            if let Err(remove_err) = fs::remove_file(token_cache_path) {
-              info!(
-                "failed to remove stale token cache {}: {}",
-                token_cache_path.display(),
-                remove_err
-              );
-            }
+      Err(e) if spotify_rejected_token(&e.to_string()) => {
+        info!("cached authentication token is invalid, re-authentication required");
+        if token_cache_path.exists() {
+          if let Err(remove_err) = fs::remove_file(token_cache_path) {
+            info!(
+              "failed to remove stale token cache {}: {}",
+              token_cache_path.display(),
+              remove_err
+            );
           }
-          needs_auth = true;
-        } else {
-          return Err(anyhow!(e));
         }
+        needs_auth = true;
+      }
+      Err(e) => {
+        // A rate limit that outlasted the retries, an outage, or no network:
+        // none of these rejected the token, so the session keeps it (#504).
+        warn!("could not verify the cached token against /me, keeping it: {e:#}");
       }
     }
   }
@@ -391,23 +403,32 @@ async fn ensure_auth_token(
     info!("starting spotify authentication flow on port {}", auth_port);
     let auth_url = spotify.get_authorize_url(None)?;
 
+    // Bound before the browser opens, see `bind_callback_listener`.
+    let listener = bind_callback_listener(auth_port).await;
+
     onboarding.info("\nAttempting to open this URL in your browser:");
     onboarding.info(&format!("{}\n", auth_url));
 
-    if let Err(e) = open::that(&auth_url) {
+    if let Err(e) = open::that_detached(&auth_url) {
       onboarding.info(&format!("Failed to open browser automatically: {}", e));
       onboarding.info("Please manually open the URL above in your browser.");
     }
 
-    onboarding.info(&format!(
-      "Waiting for authorization callback on http://127.0.0.1:{}...\n",
-      auth_port
-    ));
-
     // Async server, same as the in-TUI login path: the blocking variant used
     // to park a tokio worker thread in a std accept() loop with no timeout,
     // which could hang the whole login on startup (#364).
-    match redirect_uri_web_server_async(auth_port).await {
+    let callback_url = match listener {
+      Ok(listener) => {
+        onboarding.info(&format!(
+          "Waiting for authorization callback on http://127.0.0.1:{}...\n",
+          auth_port
+        ));
+        serve_spotify_callback(listener).await
+      }
+      Err(()) => Err(()),
+    };
+
+    match callback_url {
       Ok(url) => {
         if let Some(code) = spotify.parse_response_code(&url) {
           info!("authorization code received, requesting access token");
@@ -977,5 +998,32 @@ mod tests {
       !should_refresh,
       "Token without expires_at should not trigger refresh"
     );
+  }
+
+  /// The reporter's exact line: rspotify's wording for a 429 on `/me` (#504).
+  #[test]
+  fn a_rate_limited_me_does_not_mean_the_token_was_rejected() {
+    assert!(!spotify_rejected_token(
+      "http error: status code 429 Too Many Requests"
+    ));
+    assert!(!spotify_rejected_token(
+      "Spotify API 429 Too Many Requests failed: {\"error\":{\"status\":429}}"
+    ));
+    assert!(!spotify_rejected_token(
+      "Spotify API request failed: error sending request for url (https://api.spotify.com/v1/me)"
+    ));
+  }
+
+  #[test]
+  fn a_401_or_invalid_grant_on_me_means_log_in_again() {
+    assert!(spotify_rejected_token(
+      "Spotify API 401 Unauthorized failed: {\"error\":{\"status\":401,\"message\":\"The access token expired\"}}"
+    ));
+    assert!(spotify_rejected_token(
+      "Spotify API 401 Unauthorized failed: {} (token refresh failed: invalid_grant)"
+    ));
+    assert!(spotify_rejected_token(
+      "http error: status code 400 Bad Request"
+    ));
   }
 }

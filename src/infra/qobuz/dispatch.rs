@@ -258,7 +258,7 @@ async fn begin_login(app: &Arc<Mutex<App>>) {
   let url = attempt.url();
   {
     let mut guard = app.lock().await;
-    if let Err(e) = open::that(&url) {
+    if let Err(e) = open::that_detached(&url) {
       log::warn!("[qobuz] failed to open browser automatically: {e}");
       guard.set_status_message(
         format!("Open this URL in your browser to log in to Qobuz: {url}"),

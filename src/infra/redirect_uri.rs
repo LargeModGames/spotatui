@@ -29,17 +29,23 @@ fn spotify_callback(path: &str) -> bool {
   path.contains("code=")
 }
 
-/// OAuth callback server, used by both the pre-TUI startup login and the
+/// Bind the OAuth callback listener. Callers bind *before* opening the browser:
+/// a launcher can wait for the browser to exit (xdg-open with no Firefox
+/// running does), and a redirect that arrives before the bind is refused.
+pub async fn bind_callback_listener(port: u16) -> Result<tokio::net::TcpListener, ()> {
+  tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
+    .await
+    .map_err(|e| log::warn!("[login] failed to bind callback server on port {port}: {e}"))
+}
+
+/// The Spotify callback server, used by both the pre-TUI startup login and the
 /// in-TUI login flow: it never blocks the caller's thread (the old blocking
 /// variant parked a tokio worker in a std accept() loop with no timeout and
 /// could hang the startup login entirely, #364). Returns the callback URL, or
-/// `Err(())` on bind/accept failure. Callers that need an overall timeout
-/// (e.g. the in-TUI flow) apply it via `tokio::time::timeout` so an abandoned
-/// login doesn't leak the listener.
-pub async fn redirect_uri_web_server_async(port: u16) -> Result<String, ()> {
-  let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
-    .await
-    .map_err(|e| log::warn!("[login] failed to bind callback server on port {port}: {e}"))?;
+/// `Err(())` on accept failure. Callers that need an overall timeout (e.g. the
+/// in-TUI flow) apply it via `tokio::time::timeout` so an abandoned login
+/// doesn't leak the listener.
+pub async fn serve_spotify_callback(listener: tokio::net::TcpListener) -> Result<String, ()> {
   run_accept_loop(listener, spotify_callback).await
 }
 

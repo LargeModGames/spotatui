@@ -19,7 +19,7 @@ use crate::core::app::{App, SPOTIFY_NOT_CONNECTED_STATUS};
 use crate::core::auth;
 use crate::core::config::ClientConfig;
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
-use crate::infra::redirect_uri::redirect_uri_web_server_async;
+use crate::infra::redirect_uri::{bind_callback_listener, serve_spotify_callback};
 use anyhow::anyhow;
 use rspotify::model::{
   album::SimplifiedAlbum,
@@ -1102,7 +1102,7 @@ impl Network {
 
     match result {
       Ok((output_path, count)) => {
-        if let Err(e) = open::that(&output_path) {
+        if let Err(e) = open::that_detached(&output_path) {
           log::warn!("failed to open recap in browser: {}", e);
         }
         let mut app = self.app.lock().await;
@@ -1201,7 +1201,21 @@ impl Network {
         }
       };
 
-    if let Err(e) = open::that(&authorize_url) {
+    // Bound before the browser opens, see `bind_callback_listener`.
+    let Ok(listener) = bind_callback_listener(port).await else {
+      self
+        .show_status_message(
+          format!(
+            "Spotify login failed: could not listen on 127.0.0.1:{port} for the browser callback"
+          ),
+          8,
+        )
+        .await;
+      return;
+    };
+
+    log::info!("[login] authorize URL: {authorize_url}");
+    if let Err(e) = open::that_detached(&authorize_url) {
       log::warn!("[login] failed to open browser automatically: {e}");
       self
         .show_status_message(
@@ -1223,19 +1237,19 @@ impl Network {
     });
 
     // Drive the callback server off a spawned task so the pump/UI stay responsive.
-    // The task carries only the sender + port, never the client.
+    // The task carries only the sender + listener, never the client.
     let io_tx = self.app.lock().await.io_tx_clone();
     let Some(io_tx) = io_tx else {
       return;
     };
     tokio::spawn(async move {
       let overall_timeout = Duration::from_secs(180);
-      match tokio::time::timeout(overall_timeout, redirect_uri_web_server_async(port)).await {
+      match tokio::time::timeout(overall_timeout, serve_spotify_callback(listener)).await {
         Ok(Ok(url)) => {
           let _ = io_tx.send(IoEvent::CompleteSpotifyLogin(url));
         }
         Ok(Err(())) => {
-          log::warn!("[login] callback server failed to start");
+          log::warn!("[login] callback server failed");
           let _ = io_tx.send(IoEvent::CancelSpotifyLogin);
         }
         Err(_) => {

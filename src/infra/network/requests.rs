@@ -577,6 +577,35 @@ pub async fn spotify_get_typed_compat_for_with_refresh<T: DeserializeOwned>(
   Ok(serde_json::from_value(value)?)
 }
 
+/// The boot-time token check: the same pacing, `Retry-After` retries, and 401
+/// recovery as every other call, for the one request made before an `App`
+/// exists to report refresh state to.
+pub async fn spotify_get_typed_before_app<T: DeserializeOwned>(
+  spotify: &AuthCodePkceSpotify,
+  path: &str,
+  token_cache_path: &Path,
+) -> anyhow::Result<T> {
+  let mut value = spotify_api_request_json_for_base_with_refresh(
+    spotify,
+    SpotifyApiRequest {
+      base_url: SPOTIFY_API_BASE_URL,
+      method: Method::GET,
+      path,
+      query: &[],
+      body: None,
+    },
+    |force| async move {
+      auth::refresh_token_and_cache(spotify, token_cache_path, force)
+        .await
+        .map(Some)
+    },
+    shared_forced_refresh_gate(),
+  )
+  .await?;
+  normalize_spotify_payload(&mut value);
+  Ok(serde_json::from_value(value)?)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
