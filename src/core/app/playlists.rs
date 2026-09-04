@@ -231,7 +231,7 @@ impl App {
   }
 
   pub fn begin_add_track_to_playlist_flow_from_selection(&mut self) {
-    let Some(track) = self.track_table.tracks.get(self.track_table.selected_index) else {
+    let Some(track) = self.track_table.tracks.get(self.view.track_table_index) else {
       return;
     };
     let track_id = track.id.clone();
@@ -281,7 +281,7 @@ impl App {
         .find(|p| p.uri == playlist_uri)
         .map(|p| p.name.clone())
         .unwrap_or_else(|| "YouTube playlist".to_string());
-      let Some(track) = self.track_table.tracks.get(self.track_table.selected_index) else {
+      let Some(track) = self.track_table.tracks.get(self.view.track_table_index) else {
         return;
       };
       let Some(track_id) = track.id.clone() else {
@@ -315,7 +315,7 @@ impl App {
       }
     };
 
-    let track = match self.track_table.tracks.get(self.track_table.selected_index) {
+    let track = match self.track_table.tracks.get(self.view.track_table_index) {
       Some(track) => track,
       None => return,
     };
@@ -332,7 +332,7 @@ impl App {
     let position = match self
       .playlist_track_positions
       .as_ref()
-      .and_then(|positions| positions.get(self.track_table.selected_index))
+      .and_then(|positions| positions.get(self.view.track_table_index))
       .copied()
     {
       Some(position) => position,
@@ -401,7 +401,7 @@ impl App {
   /// The highlighted search-result playlist's Spotify id.
   pub fn selected_search_result_playlist_id(&self) -> Option<String> {
     let playlists = self.search_results.playlists.as_ref()?;
-    let selected_index = self.search_results.selected_playlists_index?;
+    let selected_index = self.view.search_selected_playlists_index?;
     playlists.items.get(selected_index)?.id.clone()
   }
 }
@@ -526,7 +526,7 @@ mod tests {
       total: 2,
       ..Default::default()
     });
-    app.search_results.selected_playlists_index = Some(1);
+    app.view.search_selected_playlists_index = Some(1);
 
     assert_eq!(
       app.selected_search_result_playlist_id().as_deref(),

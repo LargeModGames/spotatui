@@ -18,7 +18,6 @@ use rspotify::model::{
 use rspotify::model::{enums::DeviceType, Device};
 use rspotify::prelude::*;
 use serde::Deserialize;
-use std::time::{Duration, Instant};
 
 #[derive(Deserialize)]
 struct ArtistTopTracksResponse {
@@ -97,10 +96,10 @@ impl UserNetwork for Network {
         let err = anyhow!(e);
         if is_rate_limited_error(&err) {
           let mut app = self.app.lock().await;
-          app.status_message = Some(
-            "Spotify rate limit hit while loading profile. Retrying automatically.".to_string(),
+          app.set_status_message(
+            "Spotify rate limit hit while loading profile. Retrying automatically.",
+            6,
           );
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(6));
           return;
         }
         self.handle_error(err).await;
@@ -270,7 +269,7 @@ impl UserNetwork for Network {
         if !track_check.is_empty() {
           app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));
         }
-        app.recently_played.result = Some(domain_page);
+        app.recently_played = Some(domain_page);
         app.sort_recently_played_items();
         app
           .plugin_data_generations

@@ -201,9 +201,6 @@ mod tests {
 
     handler(Key::Char('w'), &mut app);
 
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some("No track currently playing")
-    );
+    assert_eq!(app.status_message(), Some("No track currently playing"));
   }
 }

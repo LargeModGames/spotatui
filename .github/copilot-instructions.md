@@ -158,10 +158,10 @@ worth knowing before adding an event:
 
 ### The `core/app/` module folder
 
-`App` was one 10,920-line file; it is now 35 files. The struct stays **flat** - all
-~168 fields declared once in `src/core/app/mod.rs` (26 of them feature-gated), plus
-the 70 presentation fields grouped in `App.view` - and its ~250 methods are split
-across 34 sibling modules by concern, each with its own `impl App` block. The
+`App` was one 10,920-line file; it is now 37 files. The struct stays **flat** - all
+171 fields declared once in `src/core/app/mod.rs` (27 of them feature-gated), plus
+the 81 presentation fields grouped in `App.view` - and its ~270 methods are split
+across 36 sibling modules by concern, each with its own `impl App` block. The
 boundaries are organizational, not architectural.
 
 Rules when working in here:
@@ -176,18 +176,25 @@ Rules when working in here:
 - **A private helper called from a sibling module needs `pub(super)`**; one reached
   from `tui/` or `infra/` needs `pub(crate)`. Private *fields* need nothing - they
   are declared in `mod.rs` and visible to all descendants.
+- **A field with no writer outside `core/app/` is private.** `pub_fields_on_app`
+  counts the `pub` ones and may only fall. An outside reader gets an intent-named
+  getter (`status_message()`, `api_error()`); a handler mutates shared state only
+  through an `App` method or `app.apply(Action::…)`, never through a field write.
 - **Feature-gate the method body, not the call site**, when a predicate must exist
   in every build: `#[cfg(any(...))] { … } #[cfg(not(any(...)))] { false }` inside
   one ungated `fn` (see `queue_owns_playback`), so callers never need their own `#[cfg]`.
 - New `impl App` methods go to the concern module that owns that state, not `mod.rs`.
 - **Presentation state lives in `App.view: ViewState`** (`core/app/view.rs`): cursor
-  and selection indices, scroll offsets, edit buffers, focus, popup flags, the help
+  and selection indices (the track table, search, Recently Played and sidebar
+  cursors included), scroll offsets, edit buffers, focus, popup flags, the help
   pager, the terminal viewport. Handlers and draw functions write `app.view.<field>`
   freely and the handler-write ratchet skips those chains. A producer outside `tui/`
   and `core/app/` (a network or source handler, a script effect, the CLI) that
   resets or clamps a cursor is counted by `view_writes_outside_tui`, which may only
-  fall. A new field goes in `view` only if it is presentation state; a pending
-  operation, or anything a second frontend would also need, stays on `App`.
+  fall: a producer that replaces a list resets its cursor through an `App` method
+  (`set_track_table`, `clamp_search_cursors`), never by writing `view` itself. A
+  new field goes in `view` only if it is presentation state; a pending operation,
+  or anything a second frontend would also need, stays on `App`.
 - `dispatch` pins the global loading spinner; long work with its own progress
   surface uses `dispatch_without_spinner`.
 
@@ -339,8 +346,9 @@ In sync handlers/UI use `app.set_status_message(msg, ttl_secs)`, or
 `app.set_error_status_message(...)` for errors - errors block normal messages
 until they expire, so use the right one. TTLs are seconds, scaled by the user's
 `status_message_ttl_percent`. In the async network layer use
-`self.show_status_message(msg, ttl_secs).await`; be aware it bypasses the
-error-priority guard. Never write `app.status_message` directly.
+`self.show_status_message(msg, ttl_secs).await`, which takes the `App` lock and
+calls `set_status_message`. The message fields are private: `status_message()`
+and `status_message_is_error()` read them.
 
 
 ### Errors

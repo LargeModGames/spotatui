@@ -1,6 +1,4 @@
 use crate::core::app::App;
-use crate::core::limits::MAX_PLAYBAR_ROWS;
-use crate::core::state::{PersistedRuntimeState, RuntimeState};
 
 const SIDEBAR_STEP: u8 = 5;
 const PLAYBAR_STEP: u16 = 1;
@@ -8,104 +6,68 @@ const LIBRARY_STEP: u8 = 5;
 
 /// Decrease sidebar width by SIDEBAR_STEP percent (minimum 0%).
 pub fn decrease_sidebar_width(app: &mut App) {
-  app.runtime_state.sidebar_width_percent = app
+  let percent = app
     .runtime_state
     .sidebar_width_percent
     .saturating_sub(SIDEBAR_STEP);
-  app.schedule_state_save(PersistedRuntimeState::sidebar_width_percent(
-    app.runtime_state.sidebar_width_percent,
-  ));
+  app.set_sidebar_width_percent(percent);
 }
 
 /// Increase sidebar width by SIDEBAR_STEP percent (maximum 100%).
 pub fn increase_sidebar_width(app: &mut App) {
-  app.runtime_state.sidebar_width_percent = app
+  let percent = app
     .runtime_state
     .sidebar_width_percent
-    .saturating_add(SIDEBAR_STEP)
-    .min(100);
-  app.schedule_state_save(PersistedRuntimeState::sidebar_width_percent(
-    app.runtime_state.sidebar_width_percent,
-  ));
+    .saturating_add(SIDEBAR_STEP);
+  app.set_sidebar_width_percent(percent);
 }
 
 /// Decrease playbar height by PLAYBAR_STEP rows (minimum 0 = hidden).
 pub fn decrease_playbar_height(app: &mut App) {
-  app.runtime_state.playbar_height_rows = app
+  let rows = app
     .runtime_state
     .playbar_height_rows
     .saturating_sub(PLAYBAR_STEP);
-  app.schedule_state_save(PersistedRuntimeState::playbar_height_rows(
-    app.runtime_state.playbar_height_rows,
-  ));
+  app.set_playbar_height_rows(rows);
 }
 
 /// Increase playbar height by PLAYBAR_STEP rows (capped at MAX_PLAYBAR_ROWS).
 pub fn increase_playbar_height(app: &mut App) {
-  app.runtime_state.playbar_height_rows = app
+  let rows = app
     .runtime_state
     .playbar_height_rows
-    .saturating_add(PLAYBAR_STEP)
-    .min(MAX_PLAYBAR_ROWS);
-  app.schedule_state_save(PersistedRuntimeState::playbar_height_rows(
-    app.runtime_state.playbar_height_rows,
-  ));
+    .saturating_add(PLAYBAR_STEP);
+  app.set_playbar_height_rows(rows);
 }
 
 /// Decrease the library section height within the sidebar (minimum 0% = hidden).
 pub fn decrease_library_height(app: &mut App) {
-  app.runtime_state.library_height_percent = app
+  let percent = app
     .runtime_state
     .library_height_percent
     .saturating_sub(LIBRARY_STEP);
-  app.schedule_state_save(PersistedRuntimeState::library_height_percent(
-    app.runtime_state.library_height_percent,
-  ));
+  app.set_library_height_percent(percent);
 }
 
 /// Increase the library section height within the sidebar (maximum 100%).
 pub fn increase_library_height(app: &mut App) {
-  app.runtime_state.library_height_percent = app
+  let percent = app
     .runtime_state
     .library_height_percent
-    .saturating_add(LIBRARY_STEP)
-    .min(100);
-  app.schedule_state_save(PersistedRuntimeState::library_height_percent(
-    app.runtime_state.library_height_percent,
-  ));
+    .saturating_add(LIBRARY_STEP);
+  app.set_library_height_percent(percent);
 }
 
 /// Reset all pane sizes to configured defaults, or runtime defaults.
 pub fn reset_layout(app: &mut App) {
-  let defaults = RuntimeState::default();
-  app.runtime_state.sidebar_width_percent = app
-    .user_config
-    .behavior
-    .sidebar_width_percent
-    .unwrap_or(defaults.sidebar_width_percent)
-    .min(100);
-  app.runtime_state.playbar_height_rows = app
-    .user_config
-    .behavior
-    .playbar_height_rows
-    .unwrap_or(defaults.playbar_height_rows)
-    .min(MAX_PLAYBAR_ROWS);
-  app.runtime_state.library_height_percent = app
-    .user_config
-    .behavior
-    .library_height_percent
-    .unwrap_or(defaults.library_height_percent)
-    .min(100);
-  app.schedule_state_save(PersistedRuntimeState::layout(
-    app.runtime_state.sidebar_width_percent,
-    app.runtime_state.playbar_height_rows,
-    app.runtime_state.library_height_percent,
-  ));
+  app.reset_layout();
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::limits::MAX_PLAYBAR_ROWS;
+  use crate::core::state::RuntimeState;
 
   #[test]
   fn decrease_sidebar_reduces_width_by_step() {

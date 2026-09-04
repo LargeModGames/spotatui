@@ -20,7 +20,9 @@ use rspotify::model::{
 };
 use rspotify::prelude::*;
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
+#[cfg(feature = "streaming")]
+use std::time::Duration;
+use std::time::Instant;
 
 #[cfg(feature = "streaming")]
 use librespot_connect::{
@@ -1246,11 +1248,10 @@ impl PlaybackNetwork for Network {
           || err.to_string().contains("Too Many Requests")
           || err.to_string().contains("Too many requests")
         {
-          app.status_message = Some(
-            "Spotify rate limit hit. Retrying automatically; please wait a few seconds."
-              .to_string(),
+          app.set_status_message(
+            "Spotify rate limit hit. Retrying automatically; please wait a few seconds.",
+            6,
           );
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(6));
           app.instant_since_last_current_playback_poll = Instant::now();
           return;
         }
@@ -1265,11 +1266,10 @@ impl PlaybackNetwork for Network {
           || err.to_string().contains("temporary failure")
           || err.to_string().contains("dns")
         {
-          app.status_message = Some(
-            "Temporary Spotify network error while polling playback; retrying automatically."
-              .to_string(),
+          app.set_status_message(
+            "Temporary Spotify network error while polling playback; retrying automatically.",
+            5,
           );
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(5));
           app.instant_since_last_current_playback_poll = Instant::now();
           return;
         }
@@ -1281,10 +1281,10 @@ impl PlaybackNetwork for Network {
           || err.to_string().contains("Service Unavailable")
           || err.to_string().contains("Bad Gateway")
         {
-          app.status_message = Some(
-            "Spotify server temporarily unavailable (5xx); retrying automatically.".to_string(),
+          app.set_status_message(
+            "Spotify server temporarily unavailable (5xx); retrying automatically.",
+            10,
           );
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(10));
           app.instant_since_last_current_playback_poll = Instant::now();
           return;
         }
@@ -2659,8 +2659,7 @@ impl PlaybackNetwork for Network {
     {
       Ok(_) => {
         let mut app = self.app.lock().await;
-        app.status_message = Some("Added to queue".to_string());
-        app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(3));
+        app.set_status_message("Added to queue".to_string(), 3);
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
@@ -2702,8 +2701,7 @@ impl PlaybackNetwork for Network {
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::Queue);
-        app.status_message = Some("Could not load queue (no active device?)".to_string());
-        app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(3));
+        app.set_status_message("Could not load queue (no active device?)".to_string(), 3);
         log::warn!("get_queue failed: {}", e);
       }
     }
@@ -3468,6 +3466,6 @@ mod tests {
     network.resume_spotify_context(None, None).await;
 
     let guard = app.lock().await;
-    assert_eq!(guard.status_message.as_deref(), Some("Queue finished"));
+    assert_eq!(guard.status_message(), Some("Queue finished"));
   }
 }

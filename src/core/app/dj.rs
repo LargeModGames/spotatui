@@ -287,6 +287,57 @@ impl App {
     self.focus_dj_screen();
     self.dj.setup = Some(DjSetup::new(&self.user_config.behavior));
   }
+
+  /// Close the picker without changing the brain, and record that the question
+  /// was answered: `open_ai_dj_screen` re-checks `dj_is_configured()` on every
+  /// entry, so a picker that recorded nothing on Esc would reappear every time.
+  #[cfg(feature = "ai-dj")]
+  pub(crate) fn dismiss_dj_setup(&mut self) {
+    self.dj.close_setup();
+    self.user_config.behavior.dj_configured = Some(true);
+    self.persist_dj_setup("keeping the current DJ brain");
+  }
+
+  /// Apply the finished picker to the config, close it, and persist the choice.
+  #[cfg(feature = "ai-dj")]
+  pub(crate) fn commit_dj_setup(&mut self) {
+    use crate::infra::dj::setup::{apply_choice, DjSetup};
+    use crate::infra::dj::DjLine;
+    let Some(choice) = self.dj.setup.as_ref().and_then(DjSetup::choice) else {
+      return;
+    };
+    apply_choice(&mut self.user_config.behavior, &choice);
+    self.user_config.behavior.dj_configured = Some(true);
+    self.dj.close_setup();
+    // A batch already in flight came from the backend the user just replaced.
+    self.dj.bump_generation();
+    self
+      .dj
+      .push_line(DjLine::system(format!("DJ brain: {}", choice.describe())));
+    // The picker is already closed by the time this shows, so the "not ready"
+    // case repeats what to do about it rather than pointing at a hidden row.
+    let message = if choice.ready {
+      format!("DJ brain: {}", choice.describe())
+    } else {
+      format!(
+        "DJ brain: {} (not usable yet: install it, or set its API key)",
+        choice.describe()
+      )
+    };
+    self.persist_dj_setup(&message);
+  }
+
+  /// Write the config and say so. Surfaced rather than logged: a picker whose
+  /// job is to stop re-prompting has to say when the marker did not reach disk.
+  /// Not `handle_error`, which would push a modal error page over the DJ.
+  #[cfg(feature = "ai-dj")]
+  fn persist_dj_setup(&mut self, ok_message: &str) {
+    if let Err(e) = self.user_config.save_config() {
+      self.set_error_status_message(format!("DJ: could not save that choice: {e}"), 8);
+      return;
+    }
+    self.set_status_message(ok_message.to_string(), 5);
+  }
 }
 
 #[cfg(all(test, feature = "dj-core"))]

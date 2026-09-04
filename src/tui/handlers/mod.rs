@@ -163,7 +163,7 @@ pub fn handle_app(key: Key, app: &mut App) {
 
   if app.maybe_activate_open_settings_fallback(key) {
     app.open_settings_screen();
-    if app.pending_keybinding_persist.is_some() {
+    if app.pending_keybinding_persist_key().is_some() {
       app.push_navigation_stack(
         RouteId::Dialog,
         ActiveBlock::Dialog(crate::core::app::DialogContext::PersistKeybindingFallback),
@@ -595,7 +595,7 @@ fn handle_escape(app: &mut App) {
     #[cfg(feature = "ai-dj")]
     ActiveBlock::AiDj => ai_dj::handler(Key::Esc, app),
     ActiveBlock::SearchResultBlock => {
-      app.search_results.selected_block = SearchResultBlock::Empty;
+      app.view.search_selected_block = SearchResultBlock::Empty;
     }
     ActiveBlock::ArtistBlock => {
       if let Some(artist) = &mut app.artist {
@@ -659,8 +659,7 @@ fn handle_escape(app: &mut App) {
     }
     // "[ESC] Later" on the recap popup: dismiss without opening.
     ActiveBlock::RecapPrompt => {
-      app.recap_prompt = None;
-      app.pop_navigation_stack();
+      app.apply(Action::DismissRecapPrompt);
     }
     // Esc keeps the pin but still marks the prompt shown so it never re-nags.
     ActiveBlock::CommunityPinPrompt => {
@@ -711,7 +710,7 @@ mod tests {
     assert_ne!(route.id, RouteId::Error, "the error frame must not survive");
     assert_eq!(route.active_block, ActiveBlock::Input);
     assert!(
-      app.api_error.is_empty(),
+      app.api_error().is_empty(),
       "the dismissal drops the message with the frame"
     );
 
@@ -729,10 +728,7 @@ mod tests {
 
     handle_app(Key::Char('W'), &mut app);
 
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some("No track currently playing")
-    );
+    assert_eq!(app.status_message(), Some("No track currently playing"));
   }
 
   #[test]
@@ -743,7 +739,7 @@ mod tests {
     handle_app(Key::Char('W'), &mut app);
 
     assert_eq!(app.view.input, vec!['W']);
-    assert!(app.status_message.is_none());
+    assert!(app.status_message().is_none());
   }
 
   #[test]
@@ -804,7 +800,7 @@ mod tests {
       ActiveBlock::SelectDevice
     );
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Switching playback to Desk Speaker")
     );
   }
@@ -902,10 +898,7 @@ mod tests {
 
     handle_app(Key::Char('c'), &mut app);
 
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some("Clipboard not available")
-    );
+    assert_eq!(app.status_message(), Some("Clipboard not available"));
     assert!(!app.view.friend_add_dialog_visible);
   }
 
@@ -919,7 +912,7 @@ mod tests {
 
     assert_eq!(app.view.friend_search_input, vec!['j', 'a', 'c']);
     assert!(!app.view.friend_add_dialog_visible);
-    assert!(app.status_message.is_none());
+    assert!(app.status_message().is_none());
   }
 
   #[test]
@@ -947,7 +940,7 @@ mod tests {
 
     assert!(app.view.friend_add_dialog_visible);
     assert_eq!(app.view.friend_add_input, vec!['c']);
-    assert!(app.status_message.is_none());
+    assert!(app.status_message().is_none());
   }
 
   #[test]
@@ -1011,7 +1004,7 @@ mod tests {
       app.get_current_route().active_block,
       ActiveBlock::Dialog(crate::core::app::DialogContext::PersistKeybindingFallback)
     );
-    assert!(app.status_message.is_some());
+    assert!(app.status_message().is_some());
   }
 
   #[cfg(target_os = "macos")]
@@ -1039,7 +1032,7 @@ mod tests {
     handle_app(app.user_config.keys.like_track, &mut app);
 
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Like isn't available for Local Files")
     );
   }
@@ -1056,7 +1049,7 @@ mod tests {
     // No playback context, so toggle_like returns early with a different message
     // (or nothing). The important thing is it's NOT the Local-gate message.
     assert_ne!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Like isn't available for Local Files")
     );
   }
@@ -1093,7 +1086,7 @@ mod tests {
       total: 1,
       ..Default::default()
     });
-    app.search_results.selected_tracks_index = Some(0);
+    app.view.search_selected_tracks_index = Some(0);
     app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
 
     let favorite_key = app.user_config.keys.like_track;
@@ -1105,7 +1098,7 @@ mod tests {
       "https://example.com/stream"
     );
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Favorited radio station: Example FM")
     );
   }
@@ -1142,17 +1135,17 @@ mod tests {
     app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
 
     handle_app(app.user_config.keys.copy_song_url, &mut app);
-    assert_eq!(app.status_message.as_deref(), Some("Nothing is playing"));
+    assert_eq!(app.status_message(), Some("Nothing is playing"));
 
     app.set_status_message("cleared", 1);
     handle_app(app.user_config.keys.copy_album_url, &mut app);
-    assert_eq!(app.status_message.as_deref(), Some("Nothing is playing"));
+    assert_eq!(app.status_message(), Some("Nothing is playing"));
 
     // An idle session is not a playing track.
     let mut app = App::default_connected().under_source(Source::Local);
     app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
     handle_app(app.user_config.keys.copy_album_url, &mut app);
-    assert_eq!(app.status_message.as_deref(), Some("Nothing is playing"));
+    assert_eq!(app.status_message(), Some("Nothing is playing"));
 
     // A Spotify track playing under the Local scope still copies; with no
     // clipboard in a test App the copy exits without a message.
@@ -1161,7 +1154,7 @@ mod tests {
       .with_playback(spotify_track_context());
     app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
     handle_app(app.user_config.keys.copy_album_url, &mut app);
-    assert_eq!(app.status_message, None);
+    assert_eq!(app.status_message(), None);
   }
 
   #[test]
@@ -1172,10 +1165,7 @@ mod tests {
     handle_app(app.user_config.keys.search, &mut app);
 
     assert_ne!(app.get_current_route().active_block, ActiveBlock::Input);
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some("Search needs a Spotify session")
-    );
+    assert_eq!(app.status_message(), Some("Search needs a Spotify session"));
   }
 
   /// The DJ's own tests all call `ai_dj::handler` directly, which is the branch
@@ -1209,7 +1199,7 @@ mod tests {
     handle_app(app.user_config.keys.copy_song_url, &mut app);
 
     assert_ne!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Copy URL isn't available for Local Files")
     );
   }

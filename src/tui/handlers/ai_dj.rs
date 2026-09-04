@@ -11,8 +11,7 @@
 use super::common_key_events;
 use crate::core::action::{Action, LibraryTarget};
 use crate::core::app::App;
-use crate::infra::dj::setup::{DjSetup, DjSetupChoice, DjSetupStep};
-use crate::infra::dj::DjLine;
+use crate::infra::dj::setup::{DjSetup, DjSetupStep};
 use crate::tui::event::Key;
 use unicode_width::UnicodeWidthChar;
 
@@ -297,10 +296,11 @@ fn apply_setup_intent(intent: SetupIntent, app: &mut App) {
       }
     }
     SetupIntent::Dismiss => {
-      dismiss_setup(app);
-      persist_dj_setup(app, "keeping the current DJ brain");
+      app.apply(Action::DismissDjSetup);
     }
-    SetupIntent::CommitCustom => commit(app),
+    SetupIntent::CommitCustom => {
+      app.apply(Action::CommitDjSetup);
+    }
     SetupIntent::Push(c) => {
       if let Some(setup) = app.dj.setup.as_mut() {
         setup.custom.push(c);
@@ -343,72 +343,13 @@ fn advance(app: &mut App) {
           setup.enter_custom_step(&app.user_config.behavior);
         }
       } else {
-        commit(app);
+        app.apply(Action::CommitDjSetup);
       }
     }
-    DjSetupStep::Custom => commit(app),
+    DjSetupStep::Custom => {
+      app.apply(Action::CommitDjSetup);
+    }
   }
-}
-
-/// Close the picker without changing the brain, and record that the question was
-/// answered.
-///
-/// **Writes nothing to disk**, so the tests can call it. Dismissing has to count as
-/// an answer: `open` re-checks `dj_is_configured()` on every entry, so a picker that
-/// wrote nothing on Esc would reappear on every single DJ open, which is worse than
-/// the problem this change fixes. The reopen key makes it reversible.
-fn dismiss_setup(app: &mut App) {
-  app.dj.close_setup();
-  app.user_config.behavior.dj_configured = Some(true);
-}
-
-/// Apply the finished picker to in-memory config and close it. **Writes nothing to
-/// disk**, which is what makes it safe for the handler tests to call.
-///
-/// Returns the choice so the caller can report it.
-fn apply_setup_choice(app: &mut App) -> Option<DjSetupChoice> {
-  let choice = app.dj.setup.as_ref().and_then(DjSetup::choice)?;
-  crate::infra::dj::setup::apply_choice(&mut app.user_config.behavior, &choice);
-  app.user_config.behavior.dj_configured = Some(true);
-  app.dj.close_setup();
-  // A batch already in flight came from the backend the user just replaced.
-  app.dj.bump_generation();
-  app
-    .dj
-    .push_line(DjLine::system(format!("DJ brain: {}", choice.describe())));
-  Some(choice)
-}
-
-/// Write the config, and say so. The only function here that touches the
-/// filesystem, so it is the only one the tests avoid.
-///
-/// Surfaced rather than logged: a picker whose whole job is to stop re-prompting has
-/// to say when the marker did not reach disk, because the next launch will ask
-/// again. Not `handle_error`, which would push a modal error page over the DJ.
-fn persist_dj_setup(app: &mut App, ok_message: &str) {
-  if let Err(e) = app.user_config.save_config() {
-    app.set_error_status_message(format!("DJ: could not save that choice: {e}"), 8);
-    return;
-  }
-  app.set_status_message(ok_message.to_string(), 5);
-}
-
-/// The key path: decide, then persist.
-fn commit(app: &mut App) {
-  let Some(choice) = apply_setup_choice(app) else {
-    return;
-  };
-  // The picker is already closed by the time this shows, so the "not ready" case
-  // repeats what to do about it rather than pointing back at a row nobody can see.
-  let message = if choice.ready {
-    format!("DJ brain: {}", choice.describe())
-  } else {
-    format!(
-      "DJ brain: {} (not usable yet: install it, or set its API key)",
-      choice.describe()
-    )
-  };
-  persist_dj_setup(app, &message);
 }
 
 #[cfg(test)]
@@ -416,7 +357,7 @@ mod tests {
   use super::*;
   use crate::core::app::{ActiveBlock, RouteId};
   use crate::core::user_config::{UserConfig, UserConfigPaths};
-  use crate::infra::dj::TurnKind;
+  use crate::infra::dj::{DjLine, TurnKind};
   use crate::infra::network::IoEvent;
   use std::sync::mpsc::{channel, Receiver};
   use std::time::SystemTime;
@@ -563,7 +504,7 @@ mod tests {
     type_text(&mut app, "again");
     handler(Key::Enter, &mut app);
     assert!(rx.try_recv().is_err(), "must not stack a second turn");
-    assert!(app.status_message.is_some());
+    assert!(app.status_message().is_some());
     // Refusing the turn *and* eating the request is the worst of both: the user
     // spent a minute typing it and has nothing to resend.
     assert_eq!(
@@ -746,8 +687,7 @@ mod tests {
     assert!(!app.dj.thinking);
     assert!(
       app
-        .status_message
-        .as_deref()
+        .status_message()
         .is_some_and(|message| message.contains("another Spotify device")),
       "and the pause is said out loud, or auto-queue just looks broken"
     );
@@ -1044,11 +984,8 @@ mod tests {
     // `persist_dj_setup` write `status_message`, and only `status_message_is_error`
     // tells them apart. `status_message.is_some()` alone would hold even with the
     // error guard deleted outright.
-    assert!(!app.status_message_is_error);
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some("keeping the current DJ brain")
-    );
+    assert!(!app.status_message_is_error());
+    assert_eq!(app.status_message(), Some("keeping the current DJ brain"));
     assert!(
       dir.path().join("config.yml").exists(),
       "and the marker actually landed, which is the only reason to persist"
@@ -1077,12 +1014,11 @@ mod tests {
 
     assert!(app.dj.setup.is_none(), "the picker still closes");
     assert!(
-      app.status_message_is_error,
+      app.status_message_is_error(),
       "a save that never landed must be surfaced, not logged"
     );
     assert!(app
-      .status_message
-      .as_deref()
+      .status_message()
       .is_some_and(|message| message.starts_with("DJ: could not save that choice")));
   }
 
@@ -1198,10 +1134,9 @@ mod tests {
     app.apply(Action::OpenDjSetup);
     handler(Key::Enter, &mut app);
 
-    // `apply_setup_choice`, never `commit`: only `persist_dj_setup` touches the
-    // filesystem and no handler test has business there.
-    let choice = apply_setup_choice(&mut app).expect("a model row is selected");
-    assert_eq!(choice.describe(), "claude/haiku");
+    // No config path is seeded, so the save fails into a status message and
+    // never touches the filesystem.
+    app.apply(Action::CommitDjSetup);
     let behavior = &app.user_config.behavior;
     assert_eq!(behavior.dj_backend, "agent_cli");
     assert_eq!(behavior.dj_agent_command, vec!["claude".to_string()]);
@@ -1219,7 +1154,7 @@ mod tests {
   fn dismissing_the_picker_marks_the_dj_configured_so_it_does_not_reappear() {
     let (mut app, _rx) = dj_app();
     app.apply(Action::OpenDjSetup);
-    dismiss_setup(&mut app);
+    app.apply(Action::DismissDjSetup);
     assert!(app.dj.setup.is_none());
     assert_eq!(app.user_config.behavior.dj_configured, Some(true));
 
@@ -1241,7 +1176,7 @@ mod tests {
     app.apply(Action::OpenDjSetup);
     handler(Key::Enter, &mut app);
     let before = app.dj.generation;
-    apply_setup_choice(&mut app);
+    app.apply(Action::CommitDjSetup);
     assert_ne!(
       app.dj.generation, before,
       "a batch in flight came from the backend just replaced"

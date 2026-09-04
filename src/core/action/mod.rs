@@ -325,6 +325,17 @@ pub enum Action {
   SaveSettings,
   /// Cycle the visualizer style and persist it.
   CycleVisualizerStyle,
+  /// Answer the community-playlist pin prompt: keep the pin, or hide it and
+  /// persist that. Either way the prompt never asks again.
+  AnswerCommunityPinPrompt {
+    keep: bool,
+  },
+  /// Open the monthly recap in the browser and close its popup.
+  OpenRecap,
+  /// Close the recap popup without opening the recap.
+  DismissRecapPrompt,
+  /// Close the recap popup and switch the monthly prompt off in `config.yml`.
+  DisableRecapPrompt,
   /// Publish (retained) content for a registered plugin screen.
   SetScreenContent {
     name: String,
@@ -359,6 +370,13 @@ pub enum Action {
   /// configured flag.
   #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   OpenDjSetup,
+  /// Close the DJ brain picker without changing the brain, and persist the
+  /// "answered" marker so it does not reappear.
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  DismissDjSetup,
+  /// Apply the finished DJ brain picker, close it, and persist the choice.
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  CommitDjSetup,
 }
 
 /// What applying an [`Action`] produced, beyond the state change itself.
@@ -481,8 +499,9 @@ pub enum OpenTarget {
 /// Deliberately NOT advertised through the Lua `navigate()` API (unlike
 /// [`NavTarget`]): adding rows there would expand the published plugin
 /// surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum LibraryTarget {
+  #[default]
   Discover,
   RecentlyPlayed,
   Friends,

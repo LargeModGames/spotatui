@@ -173,25 +173,9 @@ impl SearchNetwork for Network {
       .map(|p| map_page(p, |s| ShowInfo::from(s)));
 
     // A replaced page can be shorter than the previous one (or empty), which
-    // would otherwise leave a stale selected-index pointing past the end of
-    // the new results (panic-1: unchecked `.items[selected_index]` indexing
-    // downstream). Clamp/reset every selected-index field to stay in range of
-    // its freshly-replaced sibling page. Each page length is read first (ending
-    // the shared borrow) so the mutable index borrow that follows doesn't
-    // overlap it through the `App` guard's `Deref`.
-    let tracks_len = page_len(&app.search_results.tracks);
-    let artists_len = page_len(&app.search_results.artists);
-    let albums_len = page_len(&app.search_results.albums);
-    let playlists_len = page_len(&app.search_results.playlists);
-    let shows_len = page_len(&app.search_results.shows);
-    clamp_selected_index(&mut app.search_results.selected_tracks_index, tracks_len);
-    clamp_selected_index(&mut app.search_results.selected_artists_index, artists_len);
-    clamp_selected_index(&mut app.search_results.selected_album_index, albums_len);
-    clamp_selected_index(
-      &mut app.search_results.selected_playlists_index,
-      playlists_len,
-    );
-    clamp_selected_index(&mut app.search_results.selected_shows_index, shows_len);
+    // would otherwise leave a stale cursor pointing past the end of the new
+    // results (panic-1: unchecked `.items[selected_index]` indexing downstream).
+    app.clamp_search_cursors();
     app
       .plugin_data_generations
       .bump(crate::core::app::PluginDataKind::Search);
@@ -225,78 +209,5 @@ impl SearchNetwork for Network {
     let mut app = self.app.lock().await;
     app.create_playlist_search_results = tracks;
     app.view.create_playlist_selected_result = 0;
-  }
-}
-
-/// Keep a `search_results.selected_*_index` field in range of its
-/// freshly-replaced sibling page. A new search page can be shorter than (or
-/// empty relative to) the page it replaces; without this, a stale index can
-/// point past the end of the new `items` Vec, which panics wherever a caller
-/// indexes directly (panic-1: `src/tui/handlers/search_results.rs`, the `D`
-/// / unfollow-playlist handler).
-fn page_len<T>(page: &Option<crate::core::pagination::Paged<T>>) -> usize {
-  page.as_ref().map(|p| p.items.len()).unwrap_or(0)
-}
-
-fn clamp_selected_index(index: &mut Option<usize>, len: usize) {
-  *index = match (*index, len) {
-    (_, 0) => None,
-    (Some(i), len) => Some(i.min(len - 1)),
-    (None, _) => None,
-  };
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::core::pagination::Paged;
-
-  fn page_of(len: usize) -> Option<Paged<u32>> {
-    Some(Paged {
-      items: (0..len as u32).collect(),
-      total: len as u32,
-      ..Default::default()
-    })
-  }
-
-  /// Replacing a long page (e.g. 21 playlists, selected index 20) with a
-  /// shorter one (e.g. 2 playlists) must clamp the selected index into range
-  /// instead of leaving it pointing past the end — this is the root cause of
-  /// panic-1 (unchecked `.items[selected_index]` indexing downstream).
-  #[test]
-  fn clamp_selects_last_valid_index_when_new_page_is_shorter() {
-    let mut index = Some(20);
-    let new_page = page_of(2);
-    clamp_selected_index(&mut index, page_len(&new_page));
-    assert_eq!(index, Some(1));
-  }
-
-  #[test]
-  fn clamp_resets_to_none_when_new_page_is_empty() {
-    let mut index = Some(20);
-    let empty_page: Option<Paged<u32>> = page_of(0);
-    clamp_selected_index(&mut index, page_len(&empty_page));
-    assert_eq!(index, None);
-
-    let mut index = Some(0);
-    let none_page: Option<Paged<u32>> = None;
-    clamp_selected_index(&mut index, page_len(&none_page));
-    assert_eq!(index, None);
-  }
-
-  #[test]
-  fn clamp_leaves_in_range_index_untouched() {
-    let mut index = Some(1);
-    let new_page = page_of(5);
-    clamp_selected_index(&mut index, page_len(&new_page));
-    assert_eq!(index, Some(1));
-  }
-
-  #[test]
-  fn clamp_leaves_none_as_none_when_page_is_nonempty() {
-    let mut index = None;
-    let new_page = page_of(5);
-    clamp_selected_index(&mut index, page_len(&new_page));
-    assert_eq!(index, None);
   }
 }

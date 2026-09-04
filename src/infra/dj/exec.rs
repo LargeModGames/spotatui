@@ -158,6 +158,6 @@ mod tests {
       })
       .await;
     assert!(!outcome.is_error);
-    assert!(app.lock().await.status_message.is_none());
+    assert!(app.lock().await.status_message().is_none());
   }
 }

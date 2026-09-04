@@ -251,6 +251,10 @@ impl App {
         };
       }
       Action::CycleVisualizerStyle => self.cycle_visualizer_style(),
+      Action::AnswerCommunityPinPrompt { keep } => self.answer_community_pin_prompt(keep),
+      Action::OpenRecap => self.open_recap(),
+      Action::DismissRecapPrompt => self.dismiss_recap_prompt(),
+      Action::DisableRecapPrompt => self.disable_recap_prompt(),
       Action::SetScreenContent { name, content } => {
         self.plugin_screens.insert(name, content);
       }
@@ -314,6 +318,14 @@ impl App {
       Action::OpenDjSetup => {
         #[cfg(feature = "ai-dj")]
         self.open_dj_setup();
+      }
+      Action::DismissDjSetup => {
+        #[cfg(feature = "ai-dj")]
+        self.dismiss_dj_setup();
+      }
+      Action::CommitDjSetup => {
+        #[cfg(feature = "ai-dj")]
+        self.commit_dj_setup();
       }
     }
     ActionOutcome::Applied

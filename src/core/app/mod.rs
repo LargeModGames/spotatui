@@ -88,6 +88,7 @@ mod dj;
 mod friends;
 mod help;
 mod keybindings;
+mod layout;
 mod library;
 mod lyrics;
 mod models;
@@ -104,6 +105,7 @@ mod playlists;
 mod plugins;
 mod queue;
 mod queue_suspend;
+mod recap;
 mod route;
 mod scrollable_pages;
 mod seek;
@@ -170,10 +172,10 @@ pub struct App {
   /// none. The `RouteId::Error` frame raised alongside it is a presentation
   /// *hint*, not the state: a frontend may draw it full-screen, render this
   /// string as a toast, or ignore it. Dismiss via [`App::clear_api_error`].
-  pub api_error: String,
+  api_error: String,
   /// When the live `api_error` stops being current. Stamped by `handle_error`,
   /// consumed by `App::expire_api_error` on the tick. `None` means none is live.
-  pub api_error_expires_at: Option<Instant>,
+  api_error_expires_at: Option<Instant>,
   pub current_playback_context: Option<CurrentPlaybackContext>,
   pub last_track_id: Option<String>,
   /// Set to true when a track ends naturally and stop_after_current_track is enabled.
@@ -237,13 +239,13 @@ pub struct App {
   /// Adaptive Theme is off, so toggling it on recolors immediately without a
   /// refetch. Cleared together with the art itself.
   #[cfg(feature = "art-decode")]
-  pub cover_art_palette: Option<crate::core::cover_theme::AlbumPalette>,
+  cover_art_palette: Option<crate::core::cover_theme::AlbumPalette>,
   /// Whether an album-derived theme is applied, and the user theme to restore.
   #[cfg(feature = "art-decode")]
-  pub cover_theme_state: crate::core::cover_theme::CoverThemeState,
+  cover_theme_state: crate::core::cover_theme::CoverThemeState,
   /// In-flight fade of the live theme, advanced by `update_on_tick`.
   #[cfg(feature = "art-decode")]
-  pub theme_transition: Option<crate::core::cover_theme::ThemeTransition>,
+  theme_transition: Option<crate::core::cover_theme::ThemeTransition>,
   /// AI DJ session state: transcript, auto-queue toggle, vibe, and the
   /// generation counter that invalidates in-flight background work.
   #[cfg(feature = "dj-core")]
@@ -274,36 +276,34 @@ pub struct App {
   pub active_playlist_track_filter: Option<String>,
   pub pending_playlist_track_search: Option<String>,
   pub playlists: Option<Paged<PlaylistInfo>>,
-  pub recently_played: SpotifyResultAndSelectedIndex<
+  /// The Recently Played page. Its cursor is `view.recently_played_index`.
+  pub recently_played:
     Option<crate::core::pagination::CursorPaged<crate::core::plugin_api::TrackInfo>>,
-  >,
   pub recommendations_seed: String,
   pub recommendations_context: Option<RecommendationsContext>,
   pub search_results: SearchResult,
   pub selected_album_simplified: Option<SelectedAlbum>,
   pub selected_album_full: Option<SelectedFullAlbum>,
-  #[allow(dead_code)]
-  pub small_search_limit: u32,
   pub song_progress_ms: u128,
   /// When `update_on_tick` last ran. Every frontend must drive the tick (see
   /// `core::driver`); `playback_position_ms` reports stale past 2s so one
   /// that stops ticking shows a loud error instead of a frozen playbar.
-  pub last_tick_at: Instant,
+  last_tick_at: Instant,
   pub seek_ms: Option<u128>,
   /// Last time a native seek was actually sent to the player (for throttling)
   #[cfg(feature = "streaming")]
   pub last_native_seek: Option<Instant>,
   /// Pending seek position to send to player (throttled to avoid overwhelming librespot)
   #[cfg(feature = "streaming")]
-  pub pending_native_seek: Option<u32>,
+  pending_native_seek: Option<u32>,
   /// Last time an API seek was sent (for throttling external device control)
-  pub last_api_seek: Option<Instant>,
+  last_api_seek: Option<Instant>,
   /// Pending seek position for API (throttled to avoid overwhelming Spotify API)
-  pub pending_api_seek: Option<u32>,
+  pending_api_seek: Option<u32>,
   /// Last time a decoded-source seek was dispatched (for throttling drags)
-  pub last_source_seek: Option<Instant>,
+  last_source_seek: Option<Instant>,
   /// Pending decoded-source seek position (throttled; drags coalesce to the last target)
-  pub pending_source_seek: Option<u32>,
+  pending_source_seek: Option<u32>,
   pub track_table: TrackTable,
   pub episode_table_context: EpisodeTableContext,
   pub selected_show_simplified: Option<SelectedShow>,
@@ -347,11 +347,11 @@ pub struct App {
   /// free-source launch doesn't spam "connect Spotify" messages.
   pub spotify_connected: bool,
   pub auth_refresh_in_progress: bool,
-  pub pending_keybinding_persist: Option<PendingKeybindingPersist>,
+  pending_keybinding_persist: Option<PendingKeybindingPersist>,
   pub keybinding_runtime: KeybindingRuntimeState,
 
   pub active_announcement: Option<Announcement>,
-  pub pending_announcements: Vec<Announcement>,
+  pending_announcements: Vec<Announcement>,
   pub lyrics: Option<Vec<(u128, String)>>,
   pub lyrics_status: LyricsStatus,
   /// Title/artist pair whose lyrics response is currently desired. Detached
@@ -364,7 +364,7 @@ pub struct App {
   pub global_song_count_failed: bool,
   // Settings screen state
   pub settings_items: Vec<SettingItem>,
-  pub settings_saved_items: Vec<SettingItem>,
+  settings_saved_items: Vec<SettingItem>,
   /// Immediate track info from native player for instant UI updates
   pub native_track_info: Option<NativeTrackInfo>,
   /// Whether native streaming is active (disables API-based progress calculation)
@@ -388,9 +388,9 @@ pub struct App {
   /// Monotonic generation for [`Self::native_spotify_shuffle`]; bumped on every
   /// session create/clear so stale background fetches are discarded.
   #[cfg(feature = "streaming")]
-  pub native_shuffle_generation: u64,
+  native_shuffle_generation: u64,
   /// Prevent idle/sleep during playback
-  pub keepawake: Option<keepawake::KeepAwake>,
+  keepawake: Option<keepawake::KeepAwake>,
   /// Timestamp of the last native device activation
   #[allow(dead_code)]
   pub last_device_activation: Option<Instant>,
@@ -412,26 +412,27 @@ pub struct App {
   /// Cached listening streak summary (Home strip + Stats screen)
   pub listening_streaks: Option<StreakSummary>,
   /// Pending monthly recap popup (path + listen count)
-  pub recap_prompt: Option<RecapPromptState>,
+  recap_prompt: Option<RecapPromptState>,
   /// Current sort state per context
   pub playlist_sort: SortState,
-  pub album_sort: SortState,
+  album_sort: SortState,
   pub artist_sort: SortState,
-  pub recently_played_sort: SortState,
+  recently_played_sort: SortState,
   /// Last time the listening party host broadcast playback state.
-  pub last_party_sync_at: Instant,
-  /// Ephemeral status message shown in the playbar
-  pub status_message: Option<String>,
+  last_party_sync_at: Instant,
+  /// Ephemeral status message shown in the playbar. Read through
+  /// [`App::status_message`]; every writer is a setter in `status.rs`.
+  status_message: Option<String>,
   /// When to clear the status message
-  pub status_message_expires_at: Option<Instant>,
+  status_message_expires_at: Option<Instant>,
   /// True when the current status message is an error (blocks normal message overwrites)
-  pub status_message_is_error: bool,
+  status_message_is_error: bool,
   /// Listening party status
   pub party_status: PartyStatus,
   /// Active listening party session data
   pub party_session: Option<PartySession>,
   /// Pending track table selection to apply when new page loads
-  pub pending_track_table_selection: Option<PendingTrackSelection>,
+  pending_track_table_selection: Option<PendingTrackSelection>,
   /// Maps visible track table rows to source playlist item positions.
   /// Used to remove a single selected playlist occurrence safely.
   pub playlist_track_positions: Option<Vec<usize>>,
@@ -448,7 +449,7 @@ pub struct App {
   /// Backing storage for the injected community-playlist pin so display methods
   /// can hand out a `&PlaylistFolderItem`. Never stored in
   /// `playlist_folder_items`.
-  pub community_pin_item: PlaylistFolderItem,
+  community_pin_item: PlaylistFolderItem,
   /// Current folder ID being viewed (0 = root)
   pub current_playlist_folder_id: usize,
   /// Incremented every time playlists are refreshed to guard stale background tasks
@@ -472,15 +473,15 @@ pub struct App {
   pub is_volume_change_in_flight: bool,
   /// Deadline for a debounced state save scheduled by auto-repeating runtime
   /// state changes such as volume and shuffle.
-  pub state_save_due: Option<Instant>,
+  state_save_due: Option<Instant>,
   /// Runtime-state patch waiting for the next debounced save.
-  pub pending_state_save_patch: PersistedRuntimeState,
+  pending_state_save_patch: PersistedRuntimeState,
   /// Whether the current run of state-save failures has already been reported.
   /// A failed flush re-arms its own deadline, so the tick retries twice a
   /// second; without this latch the report would re-fire at that rate and pin
   /// the status bar into error mode, where `set_status_message` refuses to
   /// overwrite it and every ordinary message is dropped for the rest of the run.
-  pub state_save_error_reported: bool,
+  state_save_error_reported: bool,
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
@@ -568,7 +569,7 @@ pub struct App {
   /// Results from searching users by name
   pub friend_user_search_results: Vec<FriendSearchResult>,
   /// Timestamp of the last time friends were refreshed (for periodic polling)
-  pub last_friends_refresh_at: Instant,
+  last_friends_refresh_at: Instant,
 
   // Create Playlist form state
   pub create_playlist_tracks: Vec<TrackInfo>,

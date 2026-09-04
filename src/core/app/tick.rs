@@ -109,9 +109,7 @@ impl App {
 
     if let Some(expires_at) = self.status_message_expires_at {
       if Instant::now() >= expires_at {
-        self.status_message = None;
-        self.status_message_expires_at = None;
-        self.status_message_is_error = false;
+        self.clear_status_message();
       }
     }
 

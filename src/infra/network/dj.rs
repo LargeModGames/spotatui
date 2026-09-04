@@ -1160,7 +1160,7 @@ mod in_tui {
         "{transcript:?}"
       );
       assert!(
-        app.status_message_is_error,
+        app.status_message_is_error(),
         "and it is reported as a failure"
       );
     }

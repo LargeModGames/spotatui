@@ -474,8 +474,8 @@ pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
   let (offset, visible) = visible_window_anchored(
     app,
     layout_chunk,
-    app.track_table.selected_index,
-    &app.track_table.scroll_offset,
+    app.view.track_table_index,
+    &app.view.track_table_scroll_offset,
     &app.track_table.tracks,
   );
   let items = visible
@@ -500,7 +500,7 @@ pub fn draw_recommendations_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
     layout_chunk,
     (&recommendations_ui[..], &header),
     &items,
-    app.track_table.selected_index,
+    app.view.track_table_index,
     offset,
     highlight_state,
   )
@@ -519,8 +519,8 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let (offset, visible) = visible_window_anchored(
     app,
     layout_chunk,
-    app.track_table.selected_index,
-    &app.track_table.scroll_offset,
+    app.view.track_table_index,
+    &app.view.track_table_scroll_offset,
     &app.track_table.tracks,
   );
   let items = visible
@@ -548,7 +548,7 @@ pub fn draw_song_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     layout_chunk,
     (&title, &header),
     &items,
-    app.track_table.selected_index,
+    app.view.track_table_index,
     offset,
     highlight_state,
   )
@@ -649,7 +649,7 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
   let columns = table_columns(app, TableColumnSet::RecentlyPlayed, layout_chunk.width);
   let header = table_header(TableId::RecentlyPlayed, &columns);
 
-  if let Some(recently_played) = &app.recently_played.result {
+  if let Some(recently_played) = &app.recently_played {
     let current_route = app.get_current_route();
 
     let highlight_state = (
@@ -657,7 +657,7 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
       current_route.hovered_block == ActiveBlock::RecentlyPlayed,
     );
 
-    let selected_song_index = app.recently_played.index;
+    let selected_song_index = app.view.recently_played_index;
 
     let (offset, visible) = visible_window(
       app,
@@ -851,7 +851,7 @@ mod tests {
   fn song_table_fills_rows_below_scroll_padding() {
     let mut app = App::default();
     app.track_table.tracks = (0..30).map(track).collect();
-    app.track_table.selected_index = 15;
+    app.view.track_table_index = 15;
 
     // Height 12 with the default scroll padding of 5: the scroll offset math
     // treats 7 rows as visible, but the drawable area holds 9 data rows
@@ -894,7 +894,7 @@ mod tests {
 
     // Scroll down to row 15: with height 12 and default padding 5 the offset
     // math treats 7 rows as visible, so the view lands at offset 9.
-    app.track_table.selected_index = 15;
+    app.view.track_table_index = 15;
     terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
     assert!(
       first_data_row(&terminal).contains("Track 9"),
@@ -902,7 +902,7 @@ mod tests {
     );
 
     // Moving the cursor back up within the window must NOT move the view.
-    app.track_table.selected_index = 12;
+    app.view.track_table_index = 12;
     terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
     assert!(
       first_data_row(&terminal).contains("Track 9"),
@@ -910,7 +910,7 @@ mod tests {
     );
 
     // At the top visible row the view still holds...
-    app.track_table.selected_index = 9;
+    app.view.track_table_index = 9;
     terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
     assert!(
       first_data_row(&terminal).contains("Track 9"),
@@ -918,7 +918,7 @@ mod tests {
     );
 
     // ...and only going past it scrolls the view up.
-    app.track_table.selected_index = 8;
+    app.view.track_table_index = 8;
     terminal.draw(|f| draw_song_table(f, &app, area)).unwrap();
     assert!(
       first_data_row(&terminal).contains("Track 8"),

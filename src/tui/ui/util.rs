@@ -17,9 +17,9 @@ pub fn get_search_results_highlight_state(
 ) -> (bool, bool) {
   let current_route = app.get_current_route();
   (
-    app.search_results.selected_block == block_to_match,
+    app.view.search_selected_block == block_to_match,
     current_route.hovered_block == ActiveBlock::SearchResultBlock
-      && app.search_results.hovered_block == block_to_match,
+      && app.view.search_hovered_block == block_to_match,
   )
 }
 

@@ -317,9 +317,7 @@ async fn load_qobuz_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
   match source.tracks(playlist_uri).await {
     Ok(tracks) => {
       let mut app = app.lock().await;
-      app.track_table.tracks = tracks;
-      app.track_table.selected_index = 0;
-      app.track_table.context = Some(TrackTableContext::QobuzPlaylist);
+      app.set_track_table(tracks, TrackTableContext::QobuzPlaylist);
     }
     Err(e) => report(app, "tracks", e).await,
   }

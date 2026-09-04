@@ -278,19 +278,6 @@ impl PersistedRuntimeState {
     }
   }
 
-  pub fn layout(
-    sidebar_width_percent: u8,
-    playbar_height_rows: u16,
-    library_height_percent: u8,
-  ) -> Self {
-    Self {
-      sidebar_width_percent: Some(sidebar_width_percent.min(100)),
-      playbar_height_rows: Some(playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
-      library_height_percent: Some(library_height_percent.min(100)),
-      ..Default::default()
-    }
-  }
-
   pub fn radio_station(radio_station: RadioStationConfig) -> Self {
     Self {
       radio_stations: Some(vec![radio_station]),

@@ -854,8 +854,8 @@ mod drain_tests {
     );
     engine.drain_effects(&mut app);
 
-    assert_eq!(app.status_message.as_deref(), Some("plugin crashed"));
-    assert!(app.status_message_is_error);
+    assert_eq!(app.status_message(), Some("plugin crashed"));
+    assert!(app.status_message_is_error());
   }
 
   #[test]
@@ -867,8 +867,8 @@ mod drain_tests {
     push_effect(&engine, Action::Notify("normal msg".to_string(), 4));
     engine.drain_effects(&mut app);
 
-    assert_eq!(app.status_message.as_deref(), Some("error msg"));
-    assert!(app.status_message_is_error);
+    assert_eq!(app.status_message(), Some("error msg"));
+    assert!(app.status_message_is_error());
   }
 }
 
@@ -942,7 +942,7 @@ mod command_tests {
     let (mut app, _rx) = make_app();
     app.queue_plugin_command("greet".to_string());
     engine.run_pending_commands(&mut app);
-    assert_eq!(app.status_message.as_deref(), Some("hello"));
+    assert_eq!(app.status_message(), Some("hello"));
   }
 
   #[test]
@@ -951,12 +951,8 @@ mod command_tests {
     let (mut app, _rx) = make_app();
     app.queue_plugin_command("nonexistent".to_string());
     engine.run_pending_commands(&mut app);
-    assert!(app.status_message_is_error);
-    assert!(app
-      .status_message
-      .as_deref()
-      .unwrap_or("")
-      .contains("nonexistent"));
+    assert!(app.status_message_is_error());
+    assert!(app.status_message().unwrap_or("").contains("nonexistent"));
   }
 
   #[test]
@@ -971,15 +967,14 @@ mod command_tests {
     let (mut app, _rx) = make_app();
     app.queue_plugin_command("boom".to_string());
     engine.run_pending_commands(&mut app);
-    assert!(app.status_message_is_error);
+    assert!(app.status_message_is_error());
 
     // Second invocation: command must still be registered (not removed).
     app.pending_plugin_commands.clear();
-    app.status_message = None;
-    app.status_message_is_error = false;
+    app.clear_status_message();
     app.queue_plugin_command("boom".to_string());
     engine.run_pending_commands(&mut app);
-    assert!(app.status_message_is_error);
+    assert!(app.status_message_is_error());
   }
 
   #[test]
@@ -996,7 +991,7 @@ mod command_tests {
     let (mut app, _rx) = make_app();
     app.queue_plugin_command("check_plugin".to_string());
     engine.run_pending_commands(&mut app);
-    assert_eq!(app.status_message.as_deref(), Some("ok"));
+    assert_eq!(app.status_message(), Some("ok"));
     // current_plugin is cleared after the call
     assert!(engine.shared.current_plugin.borrow().is_empty());
   }
@@ -1640,7 +1635,7 @@ mod action_tests {
     engine.drain_effects(&mut app);
 
     assert!(rx.try_recv().is_err(), "no IoEvent expected");
-    assert!(app.status_message_is_error);
+    assert!(app.status_message_is_error());
   }
 }
 
@@ -2681,7 +2676,7 @@ mod state_event_tests {
     app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
     engine.run_pending_commands(&mut app);
 
-    assert_eq!(app.status_message.as_deref(), Some("now at queue"));
+    assert_eq!(app.status_message(), Some("now at queue"));
   }
 
   #[test]
@@ -2761,7 +2756,7 @@ mod state_event_tests {
     };
     app.devices = Some(payload);
     engine.on_tick(&mut app);
-    assert_eq!(app.status_message.as_deref(), Some("devices moved"));
+    assert_eq!(app.status_message(), Some("devices moved"));
   }
 }
 
@@ -3126,7 +3121,7 @@ mod screen_tests {
       .push(("stats".to_string(), "ctrl-x".to_string()));
     engine.run_pending_commands(&mut app);
 
-    assert_eq!(app.status_message.as_deref(), Some("key: ctrl-x"));
+    assert_eq!(app.status_message(), Some("key: ctrl-x"));
   }
 
   #[test]
@@ -3144,21 +3139,16 @@ mod screen_tests {
       .pending_plugin_screen_keys
       .push(("boom".to_string(), "a".to_string()));
     engine.run_pending_commands(&mut app);
-    assert!(app.status_message_is_error);
-    assert!(app
-      .status_message
-      .as_deref()
-      .unwrap_or("")
-      .contains("kaput"));
+    assert!(app.status_message_is_error());
+    assert!(app.status_message().unwrap_or("").contains("kaput"));
 
     // Second key: the erroring on_key was removed, nothing fires.
-    app.status_message = None;
-    app.status_message_is_error = false;
+    app.clear_status_message();
     app
       .pending_plugin_screen_keys
       .push(("boom".to_string(), "a".to_string()));
     engine.run_pending_commands(&mut app);
-    assert!(app.status_message.is_none());
+    assert!(app.status_message().is_none());
   }
 
   #[test]
@@ -3175,11 +3165,11 @@ mod screen_tests {
       .unwrap();
     engine.drain_effects(&mut app);
     engine.run_pending_commands(&mut app);
-    assert_eq!(app.status_message.as_deref(), Some("opened"));
+    assert_eq!(app.status_message(), Some("opened"));
 
     app.pop_navigation_stack();
     engine.run_pending_commands(&mut app);
-    assert_eq!(app.status_message.as_deref(), Some("closed"));
+    assert_eq!(app.status_message(), Some("closed"));
   }
 
   /// The shipped example is the reference for the v6 widget API, so it is

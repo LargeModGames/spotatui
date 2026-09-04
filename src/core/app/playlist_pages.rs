@@ -156,9 +156,9 @@ impl App {
     self.search_results.artists = None;
     self.search_results.playlists = None;
     self.search_results.shows = None;
-    self.search_results.selected_tracks_index = Some(0);
-    self.search_results.hovered_block = SearchResultBlock::SongSearch;
-    self.search_results.selected_block = SearchResultBlock::Empty;
+    self.view.search_selected_tracks_index = Some(0);
+    self.view.search_hovered_block = SearchResultBlock::SongSearch;
+    self.view.search_selected_block = SearchResultBlock::Empty;
   }
 
   pub fn reset_playlist_tracks_view(
@@ -176,7 +176,7 @@ impl App {
     self.playlist_tracks = None;
     self.playlist_offset = 0;
     self.pending_track_table_selection = None;
-    self.track_table.selected_index = 0;
+    self.view.track_table_index = 0;
     self.track_table.tracks.clear();
     self.track_table.context = Some(context);
     self.playlist_track_positions = None;
@@ -192,7 +192,7 @@ impl App {
     self.view.input_context = InputContext::GlobalSearch;
     if self.playlist_track_pages.pages.is_empty() {
       self.track_table.tracks.clear();
-      self.track_table.selected_index = 0;
+      self.view.track_table_index = 0;
       self.playlist_track_positions = None;
       return;
     }
@@ -223,7 +223,7 @@ impl App {
 
     self.active_playlist_track_filter = Some(query);
     self.pending_playlist_track_search = None;
-    self.track_table.selected_index = 0;
+    self.view.track_table_index = 0;
     self.track_table.tracks = tracks;
     self.playlist_track_positions = Some(positions);
     self.dispatch(IoEvent::CurrentUserSavedTracksContains(track_ids));
@@ -306,7 +306,7 @@ impl App {
     self
       .playlist_track_positions
       .as_ref()
-      .and_then(|positions| positions.get(self.track_table.selected_index))
+      .and_then(|positions| positions.get(self.view.track_table_index))
       .copied()
   }
 
@@ -353,7 +353,7 @@ impl App {
 
     let tracks = tracks.iter().map(TrackInfo::from).collect();
     self.replace_track_table_tracks(tracks);
-    self.track_table.selected_index = 0;
+    self.view.track_table_index = 0;
     true
   }
 }
@@ -424,7 +424,7 @@ mod tests {
       .upsert_page_by_offset(empty_playlist_page(0, 40, 20, true));
     app.playlist_tracks = Some(empty_playlist_page(0, 40, 20, true));
     app.playlist_offset = 20;
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.track_table.tracks = vec![
       TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
       TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
@@ -438,7 +438,7 @@ mod tests {
     assert!(app.playlist_tracks.is_none());
     assert_eq!(app.playlist_offset, 0);
     assert!(app.track_table.tracks.is_empty());
-    assert_eq!(app.track_table.selected_index, 0);
+    assert_eq!(app.view.track_table_index, 0);
     assert_eq!(
       app.track_table.context,
       Some(TrackTableContext::MyPlaylists)
@@ -572,13 +572,13 @@ mod tests {
       TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
       TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.pending_track_table_selection = Some(PendingTrackSelection::Index(2));
 
     app.get_playlist_tracks_next();
 
     assert_eq!(app.track_table.tracks.len(), 4);
-    assert_eq!(app.track_table.selected_index, 2);
+    assert_eq!(app.view.track_table_index, 2);
     assert_eq!(app.playlist_track_positions, Some(vec![0, 1, 2, 3]));
   }
 

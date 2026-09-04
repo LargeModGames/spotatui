@@ -116,7 +116,7 @@ mod tests {
     let (mut app, rx) = app_with_track(None);
     handler(Key::Enter, &mut app);
     assert!(rx.try_recv().is_err());
-    assert!(app.status_message.is_some());
+    assert!(app.status_message().is_some());
   }
 
   #[test]

@@ -1,6 +1,6 @@
 use super::common_key_events;
 use crate::core::action::{Action, ListTarget};
-use crate::core::app::{App, PendingTrackSelection, TrackTable, TrackTableContext};
+use crate::core::app::{App, TrackTable, TrackTableContext};
 use crate::tui::event::Key;
 use rspotify::prelude::Id;
 
@@ -10,7 +10,7 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      let current_index = app.track_table.selected_index;
+      let current_index = app.view.track_table_index;
       let tracks_len = app.track_table.tracks.len();
 
       if tracks_len == 0 {
@@ -22,11 +22,11 @@ pub fn handler(key: Key, app: &mut App) {
         match &app.track_table.context {
           Some(TrackTableContext::MyPlaylists) | Some(TrackTableContext::PlaylistSearch) => {
             if app.current_playlist_has_more_tracks() {
-              app.pending_track_table_selection = Some(PendingTrackSelection::Index(tracks_len));
+              app.select_row_when_next_page_lands(tracks_len);
               app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
               return;
             }
-            app.track_table.selected_index = 0;
+            app.view.track_table_index = 0;
             return;
           }
           Some(TrackTableContext::DiscoverPlaylist) => {
@@ -34,11 +34,11 @@ pub fn handler(key: Key, app: &mut App) {
           }
           Some(TrackTableContext::SavedTracks) => {
             if app.current_saved_tracks_has_more_tracks() {
-              app.pending_track_table_selection = Some(PendingTrackSelection::Index(tracks_len));
+              app.select_row_when_next_page_lands(tracks_len);
               app.apply(Action::LoadMore(ListTarget::SavedTracks));
               return;
             }
-            app.track_table.selected_index = 0;
+            app.view.track_table_index = 0;
             return;
           }
           _ => {}
@@ -47,9 +47,9 @@ pub fn handler(key: Key, app: &mut App) {
 
       let next_index = common_key_events::on_down_press_handler(
         &app.track_table.tracks,
-        Some(app.track_table.selected_index),
+        Some(app.view.track_table_index),
       );
-      app.track_table.selected_index = next_index;
+      app.view.track_table_index = next_index;
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       if app.track_table.tracks.is_empty() {
@@ -58,21 +58,21 @@ pub fn handler(key: Key, app: &mut App) {
 
       let next_index = common_key_events::on_up_press_handler(
         &app.track_table.tracks,
-        Some(app.track_table.selected_index),
+        Some(app.view.track_table_index),
       );
-      app.track_table.selected_index = next_index;
+      app.view.track_table_index = next_index;
     }
     k if common_key_events::high_event(k) => {
       let next_index = common_key_events::on_high_press_handler();
-      app.track_table.selected_index = next_index;
+      app.view.track_table_index = next_index;
     }
     k if common_key_events::middle_event(k) => {
       let next_index = common_key_events::on_middle_press_handler(&app.track_table.tracks);
-      app.track_table.selected_index = next_index;
+      app.view.track_table_index = next_index;
     }
     k if common_key_events::low_event(k) => {
       let next_index = common_key_events::on_low_press_handler(&app.track_table.tracks);
-      app.track_table.selected_index = next_index;
+      app.view.track_table_index = next_index;
     }
     Key::Enter => {
       on_enter(app);
@@ -104,11 +104,11 @@ pub fn handler(key: Key, app: &mut App) {
       if let Some(context) = &app.track_table.context {
         match context {
           TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch => {
-            app.track_table.selected_index = 0;
+            app.view.track_table_index = 0;
           }
           TrackTableContext::RecommendedTracks => {}
           TrackTableContext::SavedTracks => {
-            app.track_table.selected_index = 0;
+            app.view.track_table_index = 0;
           }
           TrackTableContext::AlbumSearch => {}
           TrackTableContext::DiscoverPlaylist => {}
@@ -147,7 +147,7 @@ pub fn handler(key: Key, app: &mut App) {
 }
 
 fn handle_save_track_event(app: &mut App) {
-  if let Some(track) = app.track_table.tracks.get(app.track_table.selected_index) {
+  if let Some(track) = app.track_table.tracks.get(app.view.track_table_index) {
     if let Some(playable_id) = track.uri.clone() {
       app.apply(Action::ToggleSaveTrack(playable_id));
     }
@@ -158,7 +158,7 @@ fn handle_recommended_tracks(app: &mut App) {
   if let Some(track) = app
     .track_table
     .tracks
-    .get(app.track_table.selected_index)
+    .get(app.view.track_table_index)
     .cloned()
   {
     app.apply(Action::RecommendFromTrack(track));
@@ -267,17 +267,13 @@ fn play_random_song(app: &mut App) {
 
 fn jump_to_end(app: &mut App) {
   if !app.track_table.tracks.is_empty() {
-    app.track_table.selected_index = app.track_table.tracks.len() - 1;
+    app.view.track_table_index = app.track_table.tracks.len() - 1;
   }
 }
 
 fn on_enter(app: &mut App) {
-  let TrackTable {
-    context,
-    selected_index,
-    tracks,
-    ..
-  } = &app.track_table;
+  let TrackTable { context, tracks } = &app.track_table;
+  let selected_index = &app.view.track_table_index;
   if let Some(context) = &context {
     match context {
       TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch => {
@@ -372,7 +368,7 @@ fn on_queue(app: &mut App) {
   if let Some(track) = app
     .track_table
     .tracks
-    .get(app.track_table.selected_index)
+    .get(app.view.track_table_index)
     .cloned()
   {
     app.apply(Action::QueueTrack(track));
@@ -380,7 +376,7 @@ fn on_queue(app: &mut App) {
 }
 
 fn jump_to_start(app: &mut App) {
-  app.track_table.selected_index = 0;
+  app.view.track_table_index = 0;
 }
 
 /// The active playlist's `spotify:playlist:` context URI, for `StartPlayback`.
@@ -395,7 +391,7 @@ fn current_playlist_total_tracks(app: &App) -> Option<u32> {
 fn saved_tracks_playback_request(app: &App) -> Option<(Vec<String>, usize)> {
   let (uris, offset) = common_key_events::uri_playback_request(
     app.track_table.tracks.iter().map(|track| track.uri.clone()),
-    app.track_table.selected_index,
+    app.view.track_table_index,
   );
   offset.map(|offset| (uris, offset))
 }
@@ -403,6 +399,7 @@ fn saved_tracks_playback_request(app: &App) -> Option<(Vec<String>, usize)> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::app::PendingTrackSelection;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{PlayableInfo, TrackInfo};
   use crate::core::test_helpers::full_track;
@@ -502,7 +499,7 @@ mod tests {
       ],
       false,
     );
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.track_table.tracks = page.items.iter().cloned().collect();
     app.library.saved_tracks.upsert_page_by_offset(page);
     app.library.saved_tracks.index = 0;
@@ -536,7 +533,7 @@ mod tests {
       .saved_tracks
       .upsert_page_by_offset(second_page.clone());
     app.library.saved_tracks.index = 1;
-    app.track_table.selected_index = 3;
+    app.view.track_table_index = 3;
     app.track_table.tracks = first_page
       .items
       .iter()
@@ -573,7 +570,7 @@ mod tests {
       .saved_tracks
       .upsert_page_by_offset(second_page.clone());
     app.library.saved_tracks.index = 1;
-    app.track_table.selected_index = 3;
+    app.view.track_table_index = 3;
     app.track_table.tracks = first_page
       .items
       .iter()
@@ -603,7 +600,7 @@ mod tests {
     );
     app.library.saved_tracks.upsert_page_by_offset(page.clone());
     app.library.saved_tracks.index = 0;
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.track_table.tracks = page.items.to_vec();
     // Simulate controlling an external Spotify Connect device: any Spotify
     // context with no native streaming device counts as external in the slim
@@ -672,11 +669,11 @@ mod tests {
       TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
       TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
 
     handler(Key::Down, &mut app);
 
-    assert_eq!(app.track_table.selected_index, 0);
+    assert_eq!(app.view.track_table_index, 0);
     assert!(rx.try_recv().is_err());
   }
 
@@ -724,7 +721,7 @@ mod tests {
       &["0000000000000000000001", "0000000000000000000002"],
       false,
     );
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.track_table.tracks = page.items.iter().cloned().collect();
     app.library.saved_tracks.upsert_page_by_offset(page);
     app.library.saved_tracks.index = 0;
@@ -744,11 +741,11 @@ mod tests {
   fn empty_track_table_down_event_does_not_panic() {
     let (mut app, _rx) = app_with_saved_tracks();
     app.track_table.tracks.clear();
-    app.track_table.selected_index = 0;
+    app.view.track_table_index = 0;
 
     handler(Key::Down, &mut app);
 
-    assert_eq!(app.track_table.selected_index, 0);
+    assert_eq!(app.view.track_table_index, 0);
   }
 
   #[test]
@@ -759,7 +756,7 @@ mod tests {
       &["0000000000000000000001", "0000000000000000000002"],
       true,
     );
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.track_table.tracks = page.items.iter().cloned().collect();
     app.library.saved_tracks.upsert_page_by_offset(page);
     app.library.saved_tracks.index = 0;
@@ -767,7 +764,7 @@ mod tests {
     handler(Key::Down, &mut app);
 
     assert_eq!(
-      app.pending_track_table_selection,
+      app.pending_track_table_selection(),
       Some(PendingTrackSelection::Index(2))
     );
     match rx.recv().unwrap() {
@@ -789,7 +786,7 @@ mod tests {
     app.library.saved_tracks.upsert_page_by_offset(page);
     app.set_saved_tracks_to_table_continuous();
     handler(Key::Down, &mut app);
-    assert_eq!(app.track_table.selected_index, 1);
+    assert_eq!(app.view.track_table_index, 1);
     assert!(rx.try_recv().is_err(), "a mid-list Down fetches nothing");
 
     handler(Key::Ctrl('d'), &mut app);
@@ -797,12 +794,12 @@ mod tests {
     // next_page fetches but does NOT set pending selection: the cursor
     // clamps into the loaded rows instead of following into the new page
     // (that follow is the down-at-last-row path's behavior).
-    assert_eq!(app.pending_track_table_selection, None);
+    assert_eq!(app.pending_track_table_selection(), None);
     match rx.recv().unwrap() {
       IoEvent::GetCurrentSavedTracks(Some(offset)) => assert_eq!(offset, 2),
       other => panic!("unexpected event: {:?}", event_name(&other)),
     }
-    assert_eq!(app.track_table.selected_index, 1);
+    assert_eq!(app.view.track_table_index, 1);
   }
 
   #[test]
@@ -814,14 +811,14 @@ mod tests {
       false,
       2,
     );
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.track_table.tracks = page.items.to_vec();
     app.library.saved_tracks.upsert_page_by_offset(page);
     app.library.saved_tracks.index = 0;
 
     handler(Key::Down, &mut app);
 
-    assert_eq!(app.track_table.selected_index, 0);
+    assert_eq!(app.view.track_table_index, 0);
     assert!(rx.try_recv().is_err());
   }
 
@@ -833,14 +830,14 @@ mod tests {
       &["0000000000000000000001", "0000000000000000000002"],
       true,
     );
-    app.track_table.selected_index = 0;
+    app.view.track_table_index = 0;
     app.track_table.tracks = page.items.to_vec();
     app.library.saved_tracks.upsert_page_by_offset(page);
     app.library.saved_tracks.index = 0;
 
     handler(Key::Up, &mut app);
 
-    assert_eq!(app.track_table.selected_index, 1);
+    assert_eq!(app.view.track_table_index, 1);
   }
 
   #[test]
@@ -852,12 +849,12 @@ mod tests {
       TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
       TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
-    app.track_table.selected_index = 0;
+    app.view.track_table_index = 0;
     app.playlist_offset = 0;
 
     handler(Key::Up, &mut app);
 
-    assert_eq!(app.track_table.selected_index, 1);
+    assert_eq!(app.view.track_table_index, 1);
   }
 
   #[test]
@@ -871,7 +868,7 @@ mod tests {
     app.library.saved_tracks.add_pages(page.clone());
     app.library.saved_tracks.add_pages(page);
     app.library.saved_tracks.index = 0;
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
     app.track_table.tracks = app.library.saved_tracks.pages[0].items.to_vec();
 
     let (uris, offset) = saved_tracks_playback_request(&app).unwrap();

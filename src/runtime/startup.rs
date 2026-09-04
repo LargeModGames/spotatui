@@ -230,7 +230,7 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   // the first key press reaches the auth gate.
   {
     let mut app_mut = app.lock().await;
-    if app_mut.status_message.is_none() {
+    if app_mut.status_message().is_none() {
       if let Some(message) = client_id_notice_message {
         app_mut.set_status_message(message, 15);
       } else if spotify.is_none() && app_mut.active_source == crate::core::source::Source::Spotify {
@@ -258,7 +258,7 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
         Some(io_tx) => match crate::infra::mcp::spawn_listener(Arc::clone(&app), io_tx).await {
           Ok(port) => {
             let mut app_mut = app.lock().await;
-            if app_mut.status_message.is_none() {
+            if app_mut.status_message().is_none() {
               app_mut.set_status_message(format!("MCP server listening on 127.0.0.1:{port}"), 6);
             }
           }

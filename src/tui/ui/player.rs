@@ -1081,8 +1081,8 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     title,
     get_color(highlight_state, app.user_config.theme),
   )];
-  if let Some(message) = app.status_message.as_ref() {
-    let msg_style = if app.status_message_is_error {
+  if let Some(message) = app.status_message() {
+    let msg_style = if app.status_message_is_error() {
       Style::default().fg(app.user_config.theme.error_text.into())
     } else {
       get_color(highlight_state, app.user_config.theme)
@@ -1361,8 +1361,8 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         title,
         get_color(highlight_state, app.user_config.theme),
       )];
-      if let Some(message) = app.status_message.as_ref() {
-        let msg_style = if app.status_message_is_error {
+      if let Some(message) = app.status_message() {
+        let msg_style = if app.status_message_is_error() {
           Style::default().fg(app.user_config.theme.error_text.into())
         } else {
           get_color(highlight_state, app.user_config.theme)
@@ -1564,8 +1564,8 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         title,
         get_color(highlight_state, app.user_config.theme),
       )];
-      if let Some(message) = app.status_message.as_ref() {
-        let msg_style = if app.status_message_is_error {
+      if let Some(message) = app.status_message() {
+        let msg_style = if app.status_message_is_error() {
           Style::default().fg(app.user_config.theme.error_text.into())
         } else {
           get_color(highlight_state, app.user_config.theme)
@@ -1592,8 +1592,8 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   }
 
   if !drew_playbar {
-    if let Some(message) = app.status_message.as_ref() {
-      let msg_style = if app.status_message_is_error {
+    if let Some(message) = app.status_message() {
+      let msg_style = if app.status_message_is_error() {
         Style::default().fg(app.user_config.theme.error_text.into())
       } else {
         Style::default().fg(app.user_config.theme.playbar_text.into())

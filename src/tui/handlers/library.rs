@@ -33,7 +33,7 @@ pub fn handler(key: Key, app: &mut App) {
 /// Moves the highlight to the row at `index` among the rows offered now.
 pub(super) fn select_row(app: &mut App, index: usize) {
   if let Some(target) = app.library_rows().get(index) {
-    app.library.selected = *target;
+    app.view.library_selected = *target;
   }
 }
 
@@ -99,7 +99,7 @@ mod tests {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), session);
     assert!(app.library_rows().contains(&target), "the row is offered");
-    app.library.selected = target;
+    app.view.library_selected = target;
     (app, rx)
   }
 

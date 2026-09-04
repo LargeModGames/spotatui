@@ -617,7 +617,7 @@ pub fn draw_error_screen(f: &mut Frame<'_>, app: &App) {
     Line::from(vec![
       Span::raw("Api response: "),
       Span::styled(
-        &app.api_error,
+        app.api_error(),
         Style::default().fg(app.user_config.theme.error_text.into()),
       ),
     ]),
@@ -704,12 +704,12 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
       }
     }
     DialogContext::PersistKeybindingFallback => {
-      if let Some(persist) = app.pending_keybinding_persist.as_ref() {
+      if let Some(open_settings_key) = app.pending_keybinding_persist_key() {
         let text = vec![
           Line::from(Span::raw("Ctrl+, is not reported by this terminal stack.")),
           Line::from(Span::raw("Use fallback shortcut for Open Settings?")),
           Line::from(Span::styled(
-            format!("Save as: {}", persist.open_settings_key),
+            format!("Save as: {}", open_settings_key),
             Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
           )),
         ];
@@ -965,7 +965,7 @@ pub fn draw_announcement_prompt(f: &mut Frame<'_>, app: &App) {
 }
 
 pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
-  let Some(prompt) = &app.recap_prompt else {
+  let Some(prompt) = app.recap_prompt() else {
     return;
   };
 

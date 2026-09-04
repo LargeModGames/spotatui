@@ -162,7 +162,7 @@ fn draw_radio_station_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) 
     "Radio Stations",
     &stations,
     get_search_results_highlight_state(app, SearchResultBlock::SongSearch),
-    app.search_results.selected_tracks_index,
+    app.view.search_selected_tracks_index,
   );
 }
 
@@ -226,7 +226,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Songs",
       &songs,
       get_search_results_highlight_state(app, SearchResultBlock::SongSearch),
-      app.search_results.selected_tracks_index,
+      app.view.search_selected_tracks_index,
     );
 
     let artists = match &app.search_results.artists {
@@ -254,7 +254,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Artists",
       &artists,
       get_search_results_highlight_state(app, SearchResultBlock::ArtistSearch),
-      app.search_results.selected_artists_index,
+      app.view.search_selected_artists_index,
     );
   }
 
@@ -294,7 +294,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Albums",
       &albums,
       get_search_results_highlight_state(app, SearchResultBlock::AlbumSearch),
-      app.search_results.selected_album_index,
+      app.view.search_selected_album_index,
     );
 
     let playlists = match &app.search_results.playlists {
@@ -335,7 +335,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         "Playlists",
         &playlists,
         get_search_results_highlight_state(app, SearchResultBlock::PlaylistSearch),
-        app.search_results.selected_playlists_index,
+        app.view.search_selected_playlists_index,
       );
     }
   }
@@ -364,7 +364,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         None => vec![],
       },
       get_search_results_highlight_state(app, SearchResultBlock::ShowSearch),
-      app.search_results.selected_shows_index,
+      app.view.search_selected_shows_index,
     );
   }
 }

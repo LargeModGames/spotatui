@@ -282,7 +282,7 @@ fn next_track_without_a_session_reports_nothing_playing() {
   app.apply(Action::NextTrack);
 
   assert!(rx.try_recv().is_err());
-  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  assert_eq!(app.status_message(), Some(NOTHING_PLAYING_STATUS));
 }
 
 #[test]
@@ -292,7 +292,7 @@ fn toggle_playback_without_a_session_reports_nothing_playing() {
   app.apply(Action::TogglePlayback);
 
   assert!(rx.try_recv().is_err());
-  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  assert_eq!(app.status_message(), Some(NOTHING_PLAYING_STATUS));
 }
 
 #[test]
@@ -303,7 +303,7 @@ fn volume_down_without_a_session_leaves_no_latch() {
   app.apply(Action::VolumeDown);
 
   assert!(rx.try_recv().is_err());
-  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  assert_eq!(app.status_message(), Some(NOTHING_PLAYING_STATUS));
   assert!(!app.is_volume_change_in_flight);
   assert!(app.pending_volume.is_none());
 }
@@ -315,7 +315,7 @@ fn set_repeat_without_a_session_reports_nothing_playing() {
   app.apply(Action::SetRepeat(RepeatSetting::Track));
 
   assert!(rx.try_recv().is_err());
-  assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  assert_eq!(app.status_message(), Some(NOTHING_PLAYING_STATUS));
 }
 
 #[test]
@@ -683,9 +683,9 @@ fn unfollow_playlist_without_a_user_sets_an_error_status() {
   app.apply(Action::UnfollowPlaylist("p1".to_string()));
 
   assert!(rx.try_recv().is_err(), "no IoEvent expected");
-  assert!(app.status_message_is_error);
+  assert!(app.status_message_is_error());
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Cannot unfollow: user profile not loaded yet")
   );
 }
@@ -747,8 +747,8 @@ fn notify_sets_a_status_message() {
 
   app.apply(Action::Notify("hello".to_string(), 4));
 
-  assert_eq!(app.status_message.as_deref(), Some("hello"));
-  assert!(!app.status_message_is_error);
+  assert_eq!(app.status_message(), Some("hello"));
+  assert!(!app.status_message_is_error());
 }
 
 #[test]
@@ -758,8 +758,8 @@ fn notify_error_blocks_a_following_notify() {
   app.apply(Action::NotifyError("boom".to_string(), 6));
   app.apply(Action::Notify("normal".to_string(), 4));
 
-  assert_eq!(app.status_message.as_deref(), Some("boom"));
-  assert!(app.status_message_is_error);
+  assert_eq!(app.status_message(), Some("boom"));
+  assert!(app.status_message_is_error());
 }
 
 // --- navigation ---
@@ -1257,12 +1257,12 @@ fn load_more_does_not_touch_pending_track_table_selection() {
   let (mut app, rx) = app_with_channel();
   let page = track_page(0, &["0000000000000000000001"], false);
   app.library.saved_tracks.upsert_page_by_offset(page);
-  app.pending_track_table_selection = Some(PendingTrackSelection::Index(9));
+  app.select_row_when_next_page_lands(9);
 
   app.apply(Action::LoadMore(ListTarget::SavedTracks));
 
   assert_eq!(
-    app.pending_track_table_selection,
+    app.pending_track_table_selection(),
     Some(PendingTrackSelection::Index(9)),
     "the cursor-follow side effect belongs to the caller, not to LoadMore"
   );
@@ -1664,7 +1664,7 @@ fn search_playlist_tracks_records_the_pending_search_and_dispatches() {
     Some("queen rock")
   );
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Searching playlist for \"queen rock\"...")
   );
   match rx.try_recv() {
@@ -1827,7 +1827,7 @@ fn open_add_track_dialog_stages_the_selected_row_for_the_picker() {
     ..playlist_info("y1", "Local List", "owner", false)
   }];
   app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
-  app.track_table.selected_index = 0;
+  app.select_track_row(0);
 
   app.apply(Action::OpenAddTrackDialog);
 
@@ -1851,7 +1851,7 @@ fn open_add_track_dialog_without_destinations_requests_them() {
   let (mut app, rx) = app_with_channel();
   app.active_source = Source::Spotify;
   app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
-  app.track_table.selected_index = 0;
+  app.select_track_row(0);
 
   app.apply(Action::OpenAddTrackDialog);
 
@@ -1911,7 +1911,7 @@ fn open_add_track_dialog_for_a_track_without_an_id_reports_it() {
   });
 
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Track cannot be added to playlist")
   );
   assert!(app.pending_playlist_track_add.is_none());
@@ -1934,7 +1934,7 @@ fn open_remove_track_dialog_stages_the_spotify_removal_with_position() {
     false,
   )];
   app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
-  app.track_table.selected_index = 0;
+  app.select_track_row(0);
   app.playlist_track_positions = Some(vec![7]);
 
   app.apply(Action::OpenRemoveTrackDialog);
@@ -1969,12 +1969,12 @@ fn open_remove_track_dialog_without_a_position_reports_an_error() {
     false,
   )];
   app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
-  app.track_table.selected_index = 0;
+  app.select_track_row(0);
 
   app.apply(Action::OpenRemoveTrackDialog);
 
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Cannot resolve track position for removal"),
   );
   assert!(app.pending_playlist_track_removal.is_none());
@@ -1991,7 +1991,7 @@ fn open_remove_track_dialog_youtube_routes_the_local_edit() {
     ..playlist_info("y1", "Local List", "owner", false)
   }];
   app.track_table.tracks = vec![track("0000000000000000000001", "Track 1")];
-  app.track_table.selected_index = 0;
+  app.select_track_row(0);
 
   app.apply(Action::OpenRemoveTrackDialog);
 
@@ -2296,7 +2296,7 @@ fn toggle_save_current_item_without_playback_is_a_noop() {
 
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
   assert!(
-    app.status_message.is_none(),
+    app.status_message().is_none(),
     "nothing playing falls through silently"
   );
 }
@@ -2307,10 +2307,7 @@ fn open_add_playing_track_dialog_without_playback_reports_no_track() {
 
   app.apply(Action::OpenAddPlayingTrackDialog);
 
-  assert_eq!(
-    app.status_message.as_deref(),
-    Some("No track currently playing")
-  );
+  assert_eq!(app.status_message(), Some("No track currently playing"));
   assert!(rx.try_recv().is_err());
   assert!(app.pending_playlist_track_add.is_none());
 }
@@ -2351,7 +2348,7 @@ fn copy_url_without_playback_is_a_silent_noop() {
 
   // No clipboard assertion: a headless runner has no clipboard.
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
-  assert!(app.api_error.is_empty(), "no failure is reported");
+  assert!(app.api_error().is_empty(), "no failure is reported");
 }
 
 // --- the listening party family ---
@@ -2456,7 +2453,7 @@ fn radio_station_row(name: &str, url: &str) -> TrackInfo {
 fn open_source_playlist_local_clears_the_table_and_fetches() {
   let (mut app, rx) = app_with_channel();
   app.track_table.tracks = vec![track("0000000000000000000002", "Stale")];
-  app.track_table.selected_index = 1;
+  app.select_track_row(1);
   app.playlist_track_positions = Some(vec![7]);
 
   app.apply(Action::Open(OpenTarget::SourcePlaylist(
@@ -2464,7 +2461,7 @@ fn open_source_playlist_local_clears_the_table_and_fetches() {
   )));
 
   assert!(app.track_table.tracks.is_empty());
-  assert_eq!(app.track_table.selected_index, 0);
+  assert_eq!(app.view.track_table_index, 0);
   assert_eq!(
     app.track_table.context,
     Some(crate::core::app::TrackTableContext::LocalPlaylist)
@@ -2621,7 +2618,7 @@ fn remove_radio_station_removes_the_saved_copy_and_reports_it() {
   assert!(app.runtime_state.radio_stations.is_empty());
   assert!(app.radio_stations.is_empty(), "the sidebar row goes too");
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Removed saved radio station: Groove Salad")
   );
 }
@@ -2646,7 +2643,7 @@ fn remove_radio_station_reports_a_config_owned_station_without_removing() {
 
   assert_eq!(app.radio_stations.len(), 1);
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Radio station is configured in config.yml: Configured Groove")
   );
 }
@@ -2677,7 +2674,7 @@ fn remove_radio_station_removes_only_the_saved_copy_of_a_configured_station() {
   // Config still supplies the row, so the sidebar keeps it.
   assert_eq!(app.radio_stations.len(), 1);
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Removed saved radio station: Runtime Duplicate")
   );
 }
@@ -2698,7 +2695,7 @@ fn remove_radio_station_reports_an_unfavorited_station() {
 
   assert_eq!(app.radio_stations.len(), 1);
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Radio station is not favorited: Groove Salad")
   );
 }
@@ -2717,7 +2714,7 @@ fn remove_radio_station_without_a_stream_url_reports_it() {
 
   assert_eq!(app.radio_stations.len(), 1);
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Radio station has no stream URL")
   );
 }
@@ -2741,7 +2738,7 @@ fn favorite_radio_station_persists_it_and_lists_it_in_the_sidebar() {
   );
   assert_eq!(app.radio_stations.len(), 1);
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Favorited radio station: Groove Salad")
   );
 }
@@ -2760,7 +2757,7 @@ fn favorite_radio_station_without_a_stream_url_reports_it() {
   assert!(app.runtime_state.radio_stations.is_empty());
   assert!(app.radio_stations.is_empty(), "no sidebar row is added");
   assert_eq!(
-    app.status_message.as_deref(),
+    app.status_message(),
     Some("Radio station has no stream URL")
   );
 }
@@ -2979,10 +2976,7 @@ fn queue_track_without_a_uri_reports_it() {
   app.apply(Action::QueueTrack(uri_less));
 
   assert!(app.native_queue.is_empty());
-  assert_eq!(
-    app.status_message.as_deref(),
-    Some("Cannot queue: track has no URI")
-  );
+  assert_eq!(app.status_message(), Some("Cannot queue: track has no URI"));
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
 }
 
@@ -2996,10 +2990,7 @@ fn queue_track_rejects_a_radio_stream() {
   )));
 
   assert!(app.native_queue.is_empty());
-  assert_eq!(
-    app.status_message.as_deref(),
-    Some("Radio stations can't be queued")
-  );
+  assert_eq!(app.status_message(), Some("Radio stations can't be queued"));
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
 }
 
@@ -3022,7 +3013,7 @@ fn open_discover_artists_mix_shows_the_cache_when_loaded() {
   let (mut app, rx) = app_with_channel();
   app.discover_artists_mix = vec![track("0000000000000000000001", "One")];
   // A stale in-range cursor must be reset to the top, not clamped.
-  app.track_table.selected_index = 4;
+  app.select_track_row(4);
 
   app.apply(Action::OpenDiscover(DiscoverTarget::ArtistsMix));
 
@@ -3031,7 +3022,7 @@ fn open_discover_artists_mix_shows_the_cache_when_loaded() {
     app.track_table.context,
     Some(TrackTableContext::DiscoverPlaylist)
   );
-  assert_eq!(app.track_table.selected_index, 0);
+  assert_eq!(app.view.track_table_index, 0);
   assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   assert!(rx.try_recv().is_err(), "a cached mix needs no fetch");
 }
@@ -3054,7 +3045,7 @@ fn open_discover_top_tracks_carries_the_time_range() {
 fn open_discover_top_tracks_shows_the_cache_when_loaded() {
   let (mut app, rx) = app_with_channel();
   app.discover_top_tracks = vec![track("0000000000000000000001", "One")];
-  app.track_table.selected_index = 4;
+  app.select_track_row(4);
 
   app.apply(Action::OpenDiscover(DiscoverTarget::TopTracks(
     DiscoverTimeRange::Short,
@@ -3065,7 +3056,7 @@ fn open_discover_top_tracks_shows_the_cache_when_loaded() {
     app.track_table.context,
     Some(TrackTableContext::DiscoverPlaylist)
   );
-  assert_eq!(app.track_table.selected_index, 0);
+  assert_eq!(app.view.track_table_index, 0);
   assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   assert!(rx.try_recv().is_err(), "a cached page needs no fetch");
 }
@@ -3227,7 +3218,7 @@ fn save_settings_writes_the_config_and_reports_success() {
   let outcome = app.apply(Action::SaveSettings);
 
   assert_eq!(outcome, ActionOutcome::SettingsSaved { saved: true });
-  assert!(app.settings_saved_items == app.settings_items);
+  assert!(!app.has_unsaved_settings_changes());
   assert!(dir.path().join("config.yml").exists());
 }
 
@@ -3238,7 +3229,7 @@ fn save_settings_without_a_config_path_reports_failure_and_raises_the_error_fram
   let outcome = app.apply(Action::SaveSettings);
 
   assert_eq!(outcome, ActionOutcome::SettingsSaved { saved: false });
-  assert!(!app.api_error.is_empty());
+  assert!(!app.api_error().is_empty());
   assert_eq!(app.get_current_route().id, RouteId::Error);
 }
 
@@ -3476,7 +3467,7 @@ mod dj_screen_actions {
     assert_eq!(app.dj.generation, generation);
     assert!(app.dj.transcript.is_empty());
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("The DJ is still working on the last request")
     );
   }
@@ -3527,7 +3518,7 @@ mod dj_screen_actions {
 
     assert!(rx.try_recv().is_err());
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("The DJ is already working on something")
     );
   }
