@@ -122,9 +122,7 @@ impl App {
     tracks: Vec<TrackInfo>,
     context: TrackTableContext,
   ) {
-    self.track_table.tracks = tracks;
-    self.track_table.context = Some(context);
-    self.track_table.selected_index = 0;
+    self.set_track_table(tracks, context);
     self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
   }
 }

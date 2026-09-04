@@ -10,7 +10,10 @@ use super::*;
 /// replace a list (the network layer, a source dispatcher, a script effect)
 /// still reset or clamp a few of these cursors directly; the
 /// `view_writes_outside_tui` ratchet in `src/gates.rs` counts those writes and
-/// exists to burn them down to zero.
+/// exists to burn them down to zero. The table cursors (`track_table_index`, the
+/// `search_*` fields, `recently_played_index`, `library_selected`) are reset
+/// through `App` methods such as `set_track_table` and `clamp_search_cursors`,
+/// so a producer never writes them.
 ///
 /// Add a field here only when it is presentation state. A pending operation or
 /// a value another frontend would also need belongs on `App` itself.
@@ -48,6 +51,28 @@ pub struct ViewState {
   pub queue_selected_index: usize,
   /// Cursor in the Local Files folder list.
   pub local_playlists_index: usize,
+
+  // Table cursors. A producer that replaces a list resets or clamps these
+  // through an `App` method (`set_track_table`, `clamp_search_cursors`, ...),
+  // never directly.
+  /// The row under the cursor in the shared track table.
+  pub track_table_index: usize,
+  /// First row the track table shows. Persisted across frames so the cursor
+  /// can move inside the visible window without dragging the view; updated
+  /// during draw, hence `Cell`.
+  pub track_table_scroll_offset: Cell<usize>,
+  /// The sidebar row the cursor is on, by identity.
+  pub library_selected: LibraryTarget,
+  /// The row under the cursor in the Recently Played table.
+  pub recently_played_index: usize,
+  // The search screen: one cursor per result block, plus its focus.
+  pub search_selected_album_index: Option<usize>,
+  pub search_selected_artists_index: Option<usize>,
+  pub search_selected_playlists_index: Option<usize>,
+  pub search_selected_tracks_index: Option<usize>,
+  pub search_selected_shows_index: Option<usize>,
+  pub search_hovered_block: SearchResultBlock,
+  pub search_selected_block: SearchResultBlock,
 
   // The `d` device/source picker
   pub selected_device_index: Option<usize>,

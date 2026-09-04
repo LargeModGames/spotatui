@@ -146,7 +146,7 @@ pub async fn handle_matches(
   };
 
   // Check if there was an error
-  let api_error = cli.net.app.lock().await.api_error.clone();
+  let api_error = cli.net.app.lock().await.api_error().to_owned();
   if api_error.is_empty() {
     output
   } else {

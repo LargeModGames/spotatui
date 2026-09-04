@@ -45,14 +45,13 @@ impl App {
     self
       .library_rows()
       .iter()
-      .position(|row| *row == self.library.selected)
+      .position(|row| *row == self.view.library_selected)
       .unwrap_or(0)
   }
 }
 
 #[derive(Clone)]
 pub struct Library {
-  pub selected: LibraryTarget,
   pub saved_tracks: ScrollableResultPages<Paged<TrackInfo>>,
   pub saved_albums: ScrollableResultPages<Paged<SavedAlbumInfo>>,
   pub saved_shows: ScrollableResultPages<Paged<ShowInfo>>,
@@ -120,7 +119,7 @@ impl App {
     if sort_state.field == SortField::Default {
       return;
     }
-    if let Some(page) = self.recently_played.result.as_mut() {
+    if let Some(page) = self.recently_played.as_mut() {
       use crate::core::sort::sort_by_key_with_order;
       match sort_state.field {
         SortField::Name => {
@@ -278,7 +277,7 @@ impl App {
     self.saved_tracks_prefetch_in_flight.clear();
     self.library.saved_tracks.clear();
     self.pending_track_table_selection = None;
-    self.track_table.selected_index = 0;
+    self.view.track_table_index = 0;
     self.track_table.tracks.clear();
     self.track_table.context = Some(TrackTableContext::SavedTracks);
   }
@@ -642,7 +641,7 @@ mod tests {
     assert_eq!(app.recently_played_sort.field, SortField::Name);
     assert_eq!(app.recently_played_sort.order, SortOrder::Descending);
 
-    app.recently_played.result = Some(crate::core::pagination::CursorPaged {
+    app.recently_played = Some(crate::core::pagination::CursorPaged {
       items: vec![
         queue_track(None, "Alpha"),
         queue_track(None, "Charlie"),
@@ -658,7 +657,6 @@ mod tests {
 
     let names: Vec<_> = app
       .recently_played
-      .result
       .as_ref()
       .unwrap()
       .items
@@ -687,14 +685,14 @@ mod tests {
       TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
       TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
-    app.track_table.selected_index = 1;
+    app.view.track_table_index = 1;
 
     app.reset_saved_tracks_view();
 
     assert_eq!(app.saved_tracks_prefetch_generation, 8);
     assert!(app.library.saved_tracks.pages.is_empty());
     assert!(app.track_table.tracks.is_empty());
-    assert_eq!(app.track_table.selected_index, 0);
+    assert_eq!(app.view.track_table_index, 0);
     assert_eq!(
       app.track_table.context,
       Some(TrackTableContext::SavedTracks)

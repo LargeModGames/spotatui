@@ -73,6 +73,28 @@ impl App {
     dismissed_id
   }
 
+  /// The status-bar message that is live now, if any.
+  pub fn status_message(&self) -> Option<&str> {
+    self.status_message.as_deref()
+  }
+
+  /// Whether the live status message is an error.
+  pub fn status_message_is_error(&self) -> bool {
+    self.status_message_is_error
+  }
+
+  /// The live error text, or empty when none is live. The CLI's exit gate.
+  pub fn api_error(&self) -> &str {
+    &self.api_error
+  }
+
+  /// Drop the live status message and its error priority.
+  pub(crate) fn clear_status_message(&mut self) {
+    self.status_message = None;
+    self.status_message_expires_at = None;
+    self.status_message_is_error = false;
+  }
+
   pub fn set_status_message(&mut self, message: impl Into<String>, ttl_secs: u64) {
     // A live error message blocks normal messages from overwriting it.
     if self.status_message_is_error {

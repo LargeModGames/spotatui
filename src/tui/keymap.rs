@@ -510,6 +510,7 @@ pub enum Exposure<S> {
 }
 
 const ENTER: &str = "<Enter>";
+const ESC: &str = "<Esc>";
 const PLUGIN_ONLY: &str = "plugin-only: the scripting engine is its only producer";
 #[cfg(not(feature = "ai-dj"))]
 const NO_AI_DJ: Exposure<TuiSurface> =
@@ -738,6 +739,31 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
         NO_AI_DJ
       }
     }
+    Action::DismissDjSetup => {
+      #[cfg(feature = "ai-dj")]
+      {
+        literal(ESC, "AI DJ")
+      }
+      #[cfg(not(feature = "ai-dj"))]
+      {
+        NO_AI_DJ
+      }
+    }
+    Action::CommitDjSetup => {
+      #[cfg(feature = "ai-dj")]
+      {
+        literal(ENTER, "AI DJ")
+      }
+      #[cfg(not(feature = "ai-dj"))]
+      {
+        NO_AI_DJ
+      }
+    }
+    Action::AnswerCommunityPinPrompt { keep: false } => literal("h", "Community pin prompt"),
+    Action::AnswerCommunityPinPrompt { keep: true } => literal(ENTER, "Community pin prompt"),
+    Action::OpenRecap => literal(ENTER, "Recap prompt"),
+    Action::DismissRecapPrompt => literal(ESC, "Recap prompt"),
+    Action::DisableRecapPrompt => literal("d", "Recap prompt"),
   }
 }
 
@@ -863,6 +889,8 @@ mod tests {
   #[cfg(not(feature = "ai-dj"))]
   const FEATURE_UNBOUND: &[&str] = &[
     "AskDj",
+    "CommitDjSetup",
+    "DismissDjSetup",
     "DjVibeShift",
     "OpenDjSetup",
     "ToggleDjAutoQueue",
@@ -1141,6 +1169,10 @@ mod tests {
       Action::SetTheme(vec![(ThemeField::Active, Color::Reset)]),
       Action::SaveSettings,
       Action::CycleVisualizerStyle,
+      Action::AnswerCommunityPinPrompt { keep: false },
+      Action::OpenRecap,
+      Action::DismissRecapPrompt,
+      Action::DisableRecapPrompt,
       Action::SetScreenContent {
         name: text(),
         content: PluginScreenContent::default(),
@@ -1154,6 +1186,8 @@ mod tests {
       Action::ToggleDjAutoQueue,
       Action::ToggleDjFreshOnly,
       Action::OpenDjSetup,
+      Action::DismissDjSetup,
+      Action::CommitDjSetup,
     ]
   }
 

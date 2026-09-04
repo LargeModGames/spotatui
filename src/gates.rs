@@ -3,7 +3,8 @@
 //! can share the core (`crate::tui` imports outside `tui/`, direct `App`
 //! field writes in handlers, raw `IoEvent` dispatch from the TUI, mouse
 //! handling that synthesizes keystrokes, wildcard arms in the action tree,
-//! producers outside the TUI that write its `App::view` presentation state).
+//! producers outside the TUI that write its `App::view` presentation state,
+//! `App` fields any module can still write).
 //!
 //! `tools/gates.count` holds the measured baselines, and the test below pins
 //! every counter to its baseline exactly, so a PR that moves a number must
@@ -165,6 +166,48 @@ fn count_production_action_refs(source: &str) -> usize {
     .count()
 }
 
+/// Counts the fields of `pub struct App` that any module can write: `pub` and
+/// `pub(crate)`. A `pub(super)` or private field is reached only through `App`
+/// methods. The body is brace-matched from the struct header; a field is a
+/// two-space-indented `[pub[(crate)] ]name:` line, with no space required
+/// after the colon, because a field whose type wraps to the next line ends
+/// at the colon.
+fn count_public_app_fields(source: &str) -> usize {
+  let header = "pub struct App {";
+  let start = source
+    .find(header)
+    .expect("src/core/app/mod.rs declares `pub struct App {`");
+  let body = &source[start + header.len()..];
+  let mut depth = 1usize;
+  let mut end = body.len();
+  for (index, byte) in body.bytes().enumerate() {
+    match byte {
+      b'{' => depth += 1,
+      b'}' => {
+        depth -= 1;
+        if depth == 0 {
+          end = index;
+          break;
+        }
+      }
+      _ => {}
+    }
+  }
+  body[..end]
+    .lines()
+    .filter_map(|line| line.strip_prefix("  "))
+    .filter(|rest| !rest.starts_with(' '))
+    .filter(|rest| {
+      let name = rest
+        .strip_prefix("pub(crate) ")
+        .or_else(|| rest.strip_prefix("pub "))
+        .unwrap_or("");
+      let name_len = name.bytes().take_while(|byte| is_ident_byte(*byte)).count();
+      name_len > 0 && name.as_bytes().get(name_len) == Some(&b':')
+    })
+    .count()
+}
+
 fn load_baselines() -> BTreeMap<String, usize> {
   let path = repo_root().join("tools").join("gates.count");
   let text = read_source(&path);
@@ -240,7 +283,9 @@ fn ratchet_counters_match_the_checked_in_baselines() {
   // (name, measured value). Every counter must match its baseline exactly;
   // the direction a baseline may move is enforced against the merge base by
   // tools/check_gates_ratchet.sh.
-  let measured: [(&str, usize); 8] = [
+  let public_app_fields = count_public_app_fields(&read_source(&root.join("src/core/app/mod.rs")));
+
+  let measured: [(&str, usize); 9] = [
     ("crate_tui_refs_outside_tui", crate_tui_refs),
     ("app_field_writes_in_tui_handlers", app_field_writes),
     (
@@ -262,6 +307,7 @@ fn ratchet_counters_match_the_checked_in_baselines() {
       count_occurrences(&["src/core/action"], &[], "_ =>"),
     ),
     ("view_writes_outside_tui", view_writes),
+    ("pub_fields_on_app", public_app_fields),
     ("action_refs_in_tui_handlers", action_refs),
     ("test_attribute_total", test_attribute_total),
   ];
@@ -324,6 +370,25 @@ fn view_write_matcher_needs_a_receiver_and_an_assignment() {
              let s = \".view.x = 1\";\n\
              foo(app.view.x);\n";
   assert_eq!(count_view_field_writes(src), 2);
+}
+
+#[test]
+fn public_field_matcher_counts_pub_and_pub_crate_fields_only() {
+  let src = "pub struct App {\n\
+             \x20 pub a: u8,\n\
+             \x20 pub(crate) b: u8,\n\
+             \x20 pub(super) c: u8,\n\
+             \x20 d: u8,\n\
+             \x20 /// pub e: u8 in a doc comment\n\
+             \x20 #[cfg(feature = \"x\")]\n\
+             \x20 pub wrapped:\n\
+             \x20   Option<u8>,\n\
+             \x20 pub view: ViewState,\n\
+             }\n\
+             pub struct Other {\n\
+             \x20 pub z: u8,\n\
+             }\n";
+  assert_eq!(count_public_app_fields(src), 4);
 }
 
 #[test]

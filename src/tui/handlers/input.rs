@@ -381,7 +381,7 @@ mod tests {
       Some("queen rock".to_string())
     );
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Searching playlist for \"queen rock\"...")
     );
   }

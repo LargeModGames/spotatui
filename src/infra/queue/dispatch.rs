@@ -1379,11 +1379,10 @@ mod tests {
     assert!(guard.native_queue.is_empty(), "the item is consumed");
     assert!(
       guard
-        .status_message
-        .as_deref()
+        .status_message()
         .is_some_and(|m| m.contains("Qobuz playback isn't available in this build")),
       "expected an unavailable-source message, got {:?}",
-      guard.status_message
+      guard.status_message()
     );
   }
 
@@ -1403,11 +1402,10 @@ mod tests {
     assert!(guard.native_queue.is_empty(), "the item is consumed");
     assert!(
       guard
-        .status_message
-        .as_deref()
+        .status_message()
         .is_some_and(|m| m.contains("isn't available in this build")),
       "expected an unavailable-source message, got {:?}",
-      guard.status_message
+      guard.status_message()
     );
   }
 
@@ -1435,7 +1433,7 @@ mod tests {
     });
     assert!(route_queue_event(&app, &repeat).await);
     assert_eq!(
-      app.lock().await.status_message.as_deref(),
+      app.lock().await.status_message(),
       Some("Repeat does not apply to this source")
     );
   }
@@ -1560,8 +1558,7 @@ mod tests {
       app
         .lock()
         .await
-        .status_message
-        .as_deref()
+        .status_message()
         .is_some_and(|message| message.contains("Native streaming isn't connected")),
       "a playing slot should take the play path"
     );
@@ -1584,7 +1581,7 @@ mod tests {
 
     assert!(!replay_published_spotify_slot(&app).await);
     assert!(
-      app.lock().await.status_message.is_none(),
+      app.lock().await.status_message().is_none(),
       "a paused slot must not take the play path"
     );
   }

@@ -542,7 +542,7 @@ fn select_clicked_content_table_item(
   // can sit anywhere in the window), so clicks must use that offset instead of
   // re-deriving one from the selection.
   let anchored_offset = match active_block {
-    ActiveBlock::TrackTable => Some(app.track_table.scroll_offset.get()),
+    ActiveBlock::TrackTable => Some(app.view.track_table_scroll_offset.get()),
     _ => None,
   };
 
@@ -586,7 +586,6 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
     },
     ActiveBlock::RecentlyPlayed => app
       .recently_played
-      .result
       .as_ref()
       .map(|recently_played| recently_played.items.len())
       .unwrap_or(0),
@@ -615,7 +614,7 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
 fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
   match active_block {
     ActiveBlock::AlbumList => app.view.album_list_index,
-    ActiveBlock::TrackTable => app.track_table.selected_index,
+    ActiveBlock::TrackTable => app.view.track_table_index,
     ActiveBlock::AlbumTracks => match app.album_table_context {
       crate::core::app::AlbumTableContext::Full => app.view.saved_album_tracks_index,
       crate::core::app::AlbumTableContext::Simplified => app
@@ -624,7 +623,7 @@ fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
         .map(|album| album.selected_index)
         .unwrap_or(0),
     },
-    ActiveBlock::RecentlyPlayed => app.recently_played.index,
+    ActiveBlock::RecentlyPlayed => app.view.recently_played_index,
     ActiveBlock::Artists => app.view.artists_list_index,
     ActiveBlock::Podcasts => app.view.shows_list_index,
     ActiveBlock::EpisodeTable => app.view.episode_list_index,
@@ -635,7 +634,7 @@ fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
 fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app: &mut App) {
   match active_block {
     ActiveBlock::AlbumList => app.view.album_list_index = index,
-    ActiveBlock::TrackTable => app.track_table.selected_index = index,
+    ActiveBlock::TrackTable => app.view.track_table_index = index,
     ActiveBlock::AlbumTracks => match app.album_table_context {
       crate::core::app::AlbumTableContext::Full => app.view.saved_album_tracks_index = index,
       crate::core::app::AlbumTableContext::Simplified => {
@@ -644,7 +643,7 @@ fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app
         }
       }
     },
-    ActiveBlock::RecentlyPlayed => app.recently_played.index = index,
+    ActiveBlock::RecentlyPlayed => app.view.recently_played_index = index,
     ActiveBlock::Artists => app.view.artists_list_index = index,
     ActiveBlock::Podcasts => app.view.shows_list_index = index,
     ActiveBlock::EpisodeTable => app.view.episode_list_index = index,
@@ -1875,7 +1874,7 @@ mod tests {
       crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
       crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
     ];
-    app.track_table.selected_index = 0;
+    app.view.track_table_index = 0;
 
     let areas = main_layout_areas(&app).expect("layout areas");
     let x = areas.content.x + 1;
@@ -1886,7 +1885,7 @@ mod tests {
       &mut app,
     );
 
-    assert_eq!(app.track_table.selected_index, 1);
+    assert_eq!(app.view.track_table_index, 1);
     assert!(!app.is_loading);
 
     handler(
@@ -1894,7 +1893,7 @@ mod tests {
       &mut app,
     );
 
-    assert_eq!(app.track_table.selected_index, 1);
+    assert_eq!(app.view.track_table_index, 1);
     assert!(app.is_loading);
   }
 
@@ -1928,7 +1927,7 @@ mod tests {
     let mut app = App::default();
     app.view.album_list_index = 2;
     app.view.saved_album_tracks_index = 3;
-    app.recently_played.index = 4;
+    app.view.recently_played_index = 4;
     app.view.artists_list_index = 5;
     app.view.shows_list_index = 6;
     app.view.episode_list_index = 7;
@@ -1961,7 +1960,7 @@ mod tests {
 
     assert_eq!(app.view.album_list_index, 8);
     assert_eq!(app.view.saved_album_tracks_index, 9);
-    assert_eq!(app.recently_played.index, 10);
+    assert_eq!(app.view.recently_played_index, 10);
     assert_eq!(app.view.artists_list_index, 11);
     assert_eq!(app.view.shows_list_index, 12);
     assert_eq!(app.view.episode_list_index, 13);
@@ -2120,7 +2119,7 @@ mod tests {
 
     crate::tui::handlers::focus_global_search(&mut app);
 
-    assert!(app.api_error.is_empty());
+    assert!(app.api_error().is_empty());
     let route = app.get_current_route();
     assert_ne!(route.id, RouteId::Error);
     assert_eq!(route.active_block, ActiveBlock::Input);

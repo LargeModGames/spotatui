@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, App, RecapPromptState, RouteId};
+use crate::core::app::{ActiveBlock, App, RecapPromptState};
 use crate::infra::media_metadata::{
   current_playback_snapshot, PlaybackItemKind, PlaybackSnapshot, PlaybackSource,
 };
@@ -622,11 +622,10 @@ async fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
             10,
           );
         } else {
-          app_guard.recap_prompt = Some(RecapPromptState {
+          app_guard.show_recap_prompt(RecapPromptState {
             path: output_path,
             listens: count,
           });
-          app_guard.push_navigation_stack(RouteId::RecapPrompt, ActiveBlock::RecapPrompt);
         }
       }
     }

@@ -78,6 +78,32 @@ impl App {
       && !self.follows_community_playlist()
   }
 
+  /// Record in `state.yml` that the pin prompt was shown, so it never asks again.
+  pub(crate) fn mark_community_pin_prompt_shown(&mut self) {
+    self.runtime_state.community_pin_prompt_shown = true;
+    if let Err(e) =
+      self.save_runtime_state(&PersistedRuntimeState::community_pin_prompt_shown(true))
+    {
+      log::warn!("failed to persist community pin prompt state: {}", e);
+    }
+  }
+
+  /// Answer the pin prompt: hide the pin (persisted) or keep it, then close it.
+  pub(crate) fn answer_community_pin_prompt(&mut self, keep: bool) {
+    if !keep {
+      self.user_config.behavior.pin_community_playlist = false;
+      if let Err(e) = self.user_config.save_config() {
+        log::warn!("failed to persist community playlist pin setting: {}", e);
+      }
+      self.set_status_message(
+        "Community playlist pin hidden (re-enable in Settings)".to_string(),
+        6,
+      );
+    }
+    self.mark_community_pin_prompt_shown();
+    self.pop_navigation_stack();
+  }
+
   /// Get the number of items visible in the current folder level.
   pub fn get_playlist_display_count(&self) -> usize {
     self.get_playlist_display_items().len()

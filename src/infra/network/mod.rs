@@ -32,7 +32,7 @@ use rspotify::clients::OAuthClient;
 use rspotify::AuthCodePkceSpotify;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 // Re-export traits
@@ -1123,12 +1123,7 @@ impl Network {
   }
 
   async fn show_status_message(&self, message: String, ttl_secs: u64) {
-    let mut app = self.app.lock().await;
-    // Scale by status_message_ttl_percent, matching App::set_status_message.
-    let pct = app.user_config.behavior.status_message_ttl_percent as u64;
-    let ttl = ((ttl_secs * pct + 50) / 100).max(1);
-    app.status_message = Some(message);
-    app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl));
+    self.app.lock().await.set_status_message(message, ttl_secs);
   }
 
   async fn refresh_authentication(&mut self) {
@@ -1553,8 +1548,7 @@ impl Network {
               session.guests.push(name.clone());
             }
           }
-          app.status_message = Some(format!("{} joined the party", name));
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(3));
+          app.set_status_message(format!("{} joined the party", name), 3);
         }
         sync::SyncMessage::GuestLeft { name } => {
           let mut app = self.app.lock().await;
@@ -1563,8 +1557,7 @@ impl Network {
               session.guests.remove(pos);
             }
           }
-          app.status_message = Some(format!("{} left the party", name));
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(3));
+          app.set_status_message(format!("{} left the party", name), 3);
         }
         sync::SyncMessage::SetControlMode { control_mode } => {
           let mut app = self.app.lock().await;
@@ -1593,8 +1586,7 @@ impl Network {
           let mut app = self.app.lock().await;
           app.party_status = sync::PartyStatus::Disconnected;
           app.party_session = None;
-          app.status_message = Some("Party ended".to_string());
-          app.status_message_expires_at = Some(Instant::now() + Duration::from_secs(5));
+          app.set_status_message("Party ended".to_string(), 5);
         }
         sync::SyncMessage::Error { message } => {
           self.party_connection = None;
@@ -1952,10 +1944,7 @@ mod tests {
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
     assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some(SPOTIFY_NOT_CONNECTED_STATUS)
-    );
+    assert_eq!(app.status_message(), Some(SPOTIFY_NOT_CONNECTED_STATUS));
   }
 
   #[tokio::test]
@@ -1971,10 +1960,7 @@ mod tests {
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
     assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
-    assert_eq!(
-      app.status_message.as_deref(),
-      Some(SPOTIFY_NOT_CONNECTED_STATUS)
-    );
+    assert_eq!(app.status_message(), Some(SPOTIFY_NOT_CONNECTED_STATUS));
   }
 
   #[tokio::test]

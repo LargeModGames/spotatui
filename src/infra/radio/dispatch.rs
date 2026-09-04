@@ -509,7 +509,7 @@ mod tests {
       "nothing decodable, so no session may be published"
     );
     assert!(
-      guard.api_error.contains("radio stream") || guard.status_message.is_some(),
+      guard.api_error().contains("radio stream") || guard.status_message().is_some(),
       "the user has to be told why nothing played"
     );
   }

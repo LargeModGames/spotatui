@@ -1,35 +1,19 @@
+use crate::core::action::Action;
 use crate::core::app::App;
-use crate::core::state::PersistedRuntimeState;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
     // Hide the pin: turn the setting off (persisted) and never nag again.
     Key::Char('h') | Key::Char('H') => {
-      app.user_config.behavior.pin_community_playlist = false;
-      if let Err(e) = app.user_config.save_config() {
-        log::warn!("failed to persist community playlist pin setting: {}", e);
-      }
-      app.set_status_message(
-        "Community playlist pin hidden (re-enable in Settings)".to_string(),
-        6,
-      );
-      mark_shown_and_dismiss(app);
+      app.apply(Action::AnswerCommunityPinPrompt { keep: false });
     }
     // Keep it pinned (Enter) or dismiss with Esc: either way, don't ask again.
     Key::Enter | Key::Esc => {
-      mark_shown_and_dismiss(app);
+      app.apply(Action::AnswerCommunityPinPrompt { keep: true });
     }
     _ => {}
   }
-}
-
-fn mark_shown_and_dismiss(app: &mut App) {
-  app.runtime_state.community_pin_prompt_shown = true;
-  if let Err(e) = app.save_runtime_state(&PersistedRuntimeState::community_pin_prompt_shown(true)) {
-    log::warn!("failed to persist community pin prompt state: {}", e);
-  }
-  app.pop_navigation_stack();
 }
 
 #[cfg(test)]

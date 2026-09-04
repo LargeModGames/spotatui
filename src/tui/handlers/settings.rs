@@ -134,7 +134,7 @@ pub(super) fn confirm_edit(app: &mut App) {
 }
 
 fn request_exit_settings(app: &mut App) {
-  if has_unsaved_settings_changes(app) {
+  if app.has_unsaved_settings_changes() {
     app.view.settings_unsaved_prompt_visible = true;
     app.view.settings_unsaved_prompt_save_selected = true;
     app.view.settings_edit_mode = false;
@@ -151,10 +151,6 @@ pub(super) fn close_settings(app: &mut App) {
   app.view.settings_edit_buffer.clear();
   app.clear_settings_filter();
   app.pop_navigation_stack();
-}
-
-fn has_unsaved_settings_changes(app: &App) -> bool {
-  app.settings_items != app.settings_saved_items
 }
 
 fn handle_edit_mode(key: Key, app: &mut App) {

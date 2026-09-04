@@ -238,9 +238,7 @@ async fn load_playlist_tracks(app: &Arc<Mutex<App>>, uri: &str) {
     .map(super::playlists::stored_to_track_info)
     .collect();
   let mut guard = app.lock().await;
-  guard.track_table.tracks = rows;
-  guard.track_table.selected_index = 0;
-  guard.track_table.context = Some(crate::core::app::TrackTableContext::YouTubePlaylist);
+  guard.set_track_table(rows, crate::core::app::TrackTableContext::YouTubePlaylist);
   guard.youtube_open_playlist = Some(uri.to_string());
 }
 
@@ -374,10 +372,8 @@ async fn remove_track_from_playlist(app: &Arc<Mutex<App>>, playlist_ref: &str, v
       let mut guard = app.lock().await;
       // Keep the open track table in sync with the file.
       if guard.youtube_open_playlist.as_deref() == Some(playlist_ref) {
-        let len = remaining.len();
         guard.track_table.tracks = remaining;
-        guard.track_table.selected_index =
-          guard.track_table.selected_index.min(len.saturating_sub(1));
+        guard.clamp_track_table_cursor();
       }
       guard.set_status_message(format!("Removed \"{title}\" from playlist"), 4);
     }
@@ -860,11 +856,10 @@ mod tests {
     assert!(guard.youtube_playback.is_none(), "no session published");
     assert!(
       guard
-        .status_message
-        .as_deref()
+        .status_message()
         .is_some_and(|m| m.contains("Live streams")),
       "user gets an actionable message, got {:?}",
-      guard.status_message
+      guard.status_message()
     );
   }
 

@@ -502,7 +502,7 @@ mod tests {
     assert_eq!(app.radio_stations[0].name, "Secret Agent");
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Removed saved radio station: Groove Salad")
     );
   }
@@ -534,7 +534,7 @@ mod tests {
     assert_eq!(app.radio_stations.len(), 1);
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Radio station is configured in config.yml: Configured Groove")
     );
   }
@@ -571,7 +571,7 @@ mod tests {
     assert_eq!(app.radio_stations[0].name, "Configured Groove");
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
-      app.status_message.as_deref(),
+      app.status_message(),
       Some("Removed saved radio station: Runtime Duplicate")
     );
   }

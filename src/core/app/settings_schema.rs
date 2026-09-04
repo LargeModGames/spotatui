@@ -945,6 +945,11 @@ impl App {
     self.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
   }
 
+  /// Whether the Settings screen holds staged edits that were not saved.
+  pub fn has_unsaved_settings_changes(&self) -> bool {
+    self.settings_items != self.settings_saved_items
+  }
+
   /// Open the settings row filter on a fresh, empty query.
   pub fn begin_settings_filter(&mut self) {
     self.view.settings_filter.clear();

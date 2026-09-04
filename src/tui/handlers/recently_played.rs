@@ -10,39 +10,39 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      if let Some(recently_played_result) = &app.recently_played.result {
+      if let Some(recently_played_result) = &app.recently_played {
         let next_index = common_key_events::on_down_press_handler(
           &recently_played_result.items,
-          Some(app.recently_played.index),
+          Some(app.view.recently_played_index),
         );
-        app.recently_played.index = next_index;
+        app.view.recently_played_index = next_index;
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      if let Some(recently_played_result) = &app.recently_played.result {
+      if let Some(recently_played_result) = &app.recently_played {
         let next_index = common_key_events::on_up_press_handler(
           &recently_played_result.items,
-          Some(app.recently_played.index),
+          Some(app.view.recently_played_index),
         );
-        app.recently_played.index = next_index;
+        app.view.recently_played_index = next_index;
       }
     }
     k if common_key_events::high_event(k) => {
-      if let Some(_recently_played_result) = &app.recently_played.result {
+      if let Some(_recently_played_result) = &app.recently_played {
         let next_index = common_key_events::on_high_press_handler();
-        app.recently_played.index = next_index;
+        app.view.recently_played_index = next_index;
       }
     }
     k if common_key_events::middle_event(k) => {
-      if let Some(recently_played_result) = &app.recently_played.result {
+      if let Some(recently_played_result) = &app.recently_played {
         let next_index = common_key_events::on_middle_press_handler(&recently_played_result.items);
-        app.recently_played.index = next_index;
+        app.view.recently_played_index = next_index;
       }
     }
     k if common_key_events::low_event(k) => {
-      if let Some(recently_played_result) = &app.recently_played.result {
+      if let Some(recently_played_result) = &app.recently_played {
         let next_index = common_key_events::on_low_press_handler(&recently_played_result.items);
-        app.recently_played.index = next_index;
+        app.view.recently_played_index = next_index;
       }
     }
     Key::Char('s') => {
@@ -61,8 +61,8 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     Key::Enter => {
-      let selected = app.recently_played.index;
-      let request = app.recently_played.result.as_ref().map(|page| {
+      let selected = app.view.recently_played_index;
+      let request = app.recently_played.as_ref().map(|page| {
         common_key_events::uri_playback_request(
           page.items.iter().map(|track| track.uri.clone()),
           selected,
@@ -82,9 +82,8 @@ pub fn handler(key: Key, app: &mut App) {
     _ if key == app.user_config.keys.add_item_to_queue => {
       let track = app
         .recently_played
-        .result
         .as_ref()
-        .and_then(|r| r.items.get(app.recently_played.index).cloned());
+        .and_then(|r| r.items.get(app.view.recently_played_index).cloned());
       if let Some(track) = track {
         app.apply(Action::QueueTrack(track));
       }
@@ -97,10 +96,9 @@ pub fn handler(key: Key, app: &mut App) {
 fn selected_recent_track(app: &App) -> Option<&TrackInfo> {
   app
     .recently_played
-    .result
     .as_ref()?
     .items
-    .get(app.recently_played.index)
+    .get(app.view.recently_played_index)
 }
 
 #[cfg(test)]
@@ -136,7 +134,7 @@ mod tests {
 
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.recently_played.result = Some(CursorPaged {
+    app.recently_played = Some(CursorPaged {
       items: vec![
         recent(Some("spotify:track:one"), "One"),
         recent(None, "Local"),
@@ -144,7 +142,7 @@ mod tests {
       ],
       ..Default::default()
     });
-    app.recently_played.index = 2;
+    app.view.recently_played_index = 2;
 
     handler(Key::Enter, &mut app);
 

@@ -49,6 +49,13 @@ impl App {
     self.user_config.keys.save_settings
   }
 
+  /// The Open Settings key that waits for the persist prompt's answer.
+  pub fn pending_keybinding_persist_key(&self) -> Option<Key> {
+    self
+      .pending_keybinding_persist
+      .map(|persist| persist.open_settings_key)
+  }
+
   #[cfg(target_os = "macos")]
   fn allow_plain_comma_open_settings_fallback(&self) -> bool {
     !matches!(

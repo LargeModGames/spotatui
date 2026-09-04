@@ -702,7 +702,6 @@ pub fn saved_shows_snapshot(app: &App) -> Vec<ShowInfo> {
 pub fn recently_played_snapshot(app: &App) -> Vec<TrackInfo> {
   app
     .recently_played
-    .result
     .as_ref()
     .map(|page| page.items.clone())
     .unwrap_or_default()

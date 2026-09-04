@@ -9,7 +9,6 @@ use crate::core::app::{
 };
 use crate::core::plugin_api::{PlaylistInfo, ShowInfo, TrackInfo};
 use crate::core::source::Source;
-use crate::core::state::PersistedRuntimeState;
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
@@ -719,11 +718,7 @@ fn maybe_prompt_community_pin(app: &mut App) {
     // Mark shown at push time, not only on dismiss, so paths that close the
     // prompt without going through its handler (the back key, mouse-interactive
     // layout dismissal) can never make it reappear.
-    app.runtime_state.community_pin_prompt_shown = true;
-    if let Err(e) = app.save_runtime_state(&PersistedRuntimeState::community_pin_prompt_shown(true))
-    {
-      log::warn!("failed to persist community pin prompt state: {}", e);
-    }
+    app.mark_community_pin_prompt_shown();
     app.push_navigation_stack(RouteId::CommunityPinPrompt, ActiveBlock::CommunityPinPrompt);
   }
 }
