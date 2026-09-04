@@ -412,6 +412,13 @@ pub struct Network {
   artist_cache: metadata::MetadataTtlCache<metadata::CachedArtistData>,
   album_cache: metadata::MetadataTtlCache<rspotify::model::album::FullAlbum>,
   album_tracks_cache: metadata::MetadataTtlCache<Vec<rspotify::model::track::SimplifiedTrack>>,
+  /// The `Retry-After` window every Spotify call checks: the shared gate in
+  /// production, a private one in tests.
+  rate_gate: requests::ForcedRefreshGate,
+  /// Spotify-bound events held back while that window is open. Only the pump
+  /// sets `defers_rate_limited`; the CLI has no pump to block and waits inline.
+  deferred: Vec<IoEvent>,
+  pub(crate) defers_rate_limited: bool,
 }
 
 impl Network {
@@ -437,6 +444,9 @@ impl Network {
       artist_cache: Default::default(),
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
+      rate_gate: requests::shared_forced_refresh_gate().clone(),
+      deferred: Vec::new(),
+      defers_rate_limited: false,
     }
   }
 
@@ -461,6 +471,9 @@ impl Network {
       artist_cache: Default::default(),
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
+      rate_gate: requests::shared_forced_refresh_gate().clone(),
+      deferred: Vec::new(),
+      defers_rate_limited: false,
     }
   }
 
@@ -622,6 +635,19 @@ impl Network {
           app.pending_playlist_open = None;
         }
         return;
+      }
+      if let Some(left) = self.rate_gate.rate_limit_remaining().await {
+        if self.defers_rate_limited {
+          if self.deferred.is_empty() {
+            let secs = left.as_secs().max(1);
+            self
+              .show_status_message(format!("Spotify rate limit: waiting {secs}s"), secs)
+              .await;
+          }
+          self.deferred.push(io_event);
+          return;
+        }
+        tokio::time::sleep(left).await;
       }
       if !self.ensure_authentication_fresh(false).await {
         if let Some(id) = pending_playlist_id.as_deref() {
@@ -1048,7 +1074,30 @@ impl Network {
 
   async fn handle_error(&mut self, e: anyhow::Error) {
     let mut app = self.app.lock().await;
+    // The first hit of a window under the pump: every later event is held
+    // back, so a status message is enough. The CLI keeps its exit signal.
+    if self.defers_rate_limited && requests::is_rate_limited_error(&e) {
+      app.set_error_status_message(e.to_string(), 8);
+      return;
+    }
     app.handle_error(e);
+  }
+
+  /// When the pump must flush the held-back events: the window's end.
+  pub(crate) async fn deferred_deadline(&self) -> Option<std::time::Instant> {
+    if self.deferred.is_empty() {
+      return None;
+    }
+    let left = self.rate_gate.rate_limit_remaining().await;
+    Some(std::time::Instant::now() + left.unwrap_or_default())
+  }
+
+  /// Run the held-back events in their original order. A window that reopens
+  /// mid-flush holds the rest back again.
+  pub(crate) async fn flush_deferred(&mut self) {
+    for event in std::mem::take(&mut self.deferred) {
+      self.handle_network_event(event).await;
+    }
   }
 
   /// Aggregate local listening history for the Stats screen. Reads the
@@ -1926,6 +1975,72 @@ mod tests {
 
   fn session_free_network(app: &Arc<Mutex<App>>) -> Network {
     Network::new(None, ClientConfig::new(), app, temp_token_cache_path())
+  }
+
+  /// A pump-mode network with a session and a private, open rate-limit window.
+  async fn rate_limited_pump_network(app: &Arc<Mutex<App>>) -> Network {
+    let mut network = session_free_network(app);
+    network.spotify = Some(AuthCodePkceSpotify::new(
+      Credentials::default(),
+      OAuth::default(),
+    ));
+    network.defers_rate_limited = true;
+    network.rate_gate = requests::ForcedRefreshGate::default();
+    network
+      .rate_gate
+      .rate_limit_for(Duration::from_secs(30))
+      .await;
+    network
+  }
+
+  #[tokio::test]
+  async fn a_rate_limit_window_holds_spotify_bound_events_back_in_order() {
+    let app = app_without_a_session();
+    let mut network = rate_limited_pump_network(&app).await;
+
+    network.handle_network_event(IoEvent::GetPlaylists).await;
+    network.handle_network_event(IoEvent::GetUser).await;
+    network.flush_deferred().await;
+
+    assert!(matches!(
+      network.deferred.as_slice(),
+      [IoEvent::GetPlaylists, IoEvent::GetUser]
+    ));
+    assert!(network.deferred_deadline().await.is_some());
+    let app = app.lock().await;
+    assert!(app
+      .status_message()
+      .is_some_and(|m| m.contains("rate limit")));
+  }
+
+  #[tokio::test]
+  async fn a_rate_limit_error_under_the_pump_is_a_status_message_not_the_error_page() {
+    let app = app_without_a_session();
+    let mut network = rate_limited_pump_network(&app).await;
+
+    network
+      .handle_error(anyhow!(
+        "Spotify API 429 Too Many Requests failed: retry in 17s"
+      ))
+      .await;
+
+    let app = app.lock().await;
+    assert!(app.api_error().is_empty());
+    assert!(app.status_message_is_error());
+  }
+
+  #[tokio::test]
+  async fn a_rate_limit_error_without_the_pump_keeps_the_cli_exit_signal() {
+    let app = app_without_a_session();
+    let mut network = session_free_network(&app);
+
+    network
+      .handle_error(anyhow!(
+        "Spotify API 429 Too Many Requests failed: retry in 17s"
+      ))
+      .await;
+
+    assert!(!app.lock().await.api_error().is_empty());
   }
 
   fn app_without_a_session() -> Arc<Mutex<App>> {
