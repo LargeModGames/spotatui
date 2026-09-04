@@ -45,6 +45,10 @@ const FORCED_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
 /// identically, turning a recoverable blip into a surfaced error.
 const UNAUTHORIZED_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
+/// Longest `Retry-After` honored: a bound on the window, so a bogus header
+/// value can neither park the app for a day nor overflow the deadline.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
+
 /// Longest response body echoed into the diagnostics log.
 const MAX_LOGGED_BODY_CHARS: usize = 512;
 
@@ -76,8 +80,12 @@ impl ForcedRefreshGate {
     until.checked_duration_since(Instant::now())
   }
 
+  /// Open (or extend) the window: a shorter `Retry-After` that lands during a
+  /// longer one must not cut the longer one short.
   pub(crate) async fn rate_limit_for(&self, window: Duration) {
-    *self.rate_limited_until.lock().await = Some(Instant::now() + window);
+    let until = Instant::now() + window.min(MAX_RETRY_AFTER);
+    let mut slot = self.rate_limited_until.lock().await;
+    *slot = Some(slot.map_or(until, |current| current.max(until)));
   }
 
   /// Claims the right to force a refresh now. Returns `false` when one already
@@ -440,7 +448,7 @@ where
     }
 
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-      let window = retry_after_secs.max(1);
+      let window = retry_after_secs.max(1).min(MAX_RETRY_AFTER.as_secs());
       forced_refresh_gate
         .rate_limit_for(Duration::from_secs(window))
         .await;
@@ -1148,5 +1156,53 @@ mod tests {
     assert!(is_rate_limited_error(&first));
     assert!(is_rate_limited_error(&second));
     assert!(second.to_string().contains("retry in"), "{second}");
+  }
+
+  #[tokio::test]
+  async fn a_shorter_window_never_cuts_a_longer_one_short() {
+    let gate = ForcedRefreshGate::default();
+    gate.rate_limit_for(Duration::from_secs(30)).await;
+    gate.rate_limit_for(Duration::from_secs(1)).await;
+
+    let left = gate.rate_limit_remaining().await.unwrap();
+    assert!(left > Duration::from_secs(20), "{left:?}");
+  }
+
+  #[tokio::test]
+  async fn an_extreme_retry_after_is_bounded_and_does_not_panic() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      let response = format!(
+        "HTTP/1.1 429 Too Many Requests\r\nretry-after: {}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        u64::MAX
+      );
+      stream.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let spotify = spotify_with_access_token("access").await;
+    let gate = ForcedRefreshGate::default();
+    let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
+    let error = spotify_api_request_json_for_base_with_refresh(
+      &spotify,
+      SpotifyApiRequest {
+        base_url: &base_url,
+        method: Method::GET,
+        path: "me/player",
+        query: &[],
+        body: None,
+      },
+      refresh,
+      &gate,
+    )
+    .await
+    .unwrap_err();
+    server.await.unwrap();
+
+    assert!(is_rate_limited_error(&error));
+    let left = gate.rate_limit_remaining().await.unwrap();
+    assert!(left <= MAX_RETRY_AFTER, "{left:?}");
   }
 }
