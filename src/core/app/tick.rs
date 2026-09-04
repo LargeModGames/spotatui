@@ -36,7 +36,9 @@ impl App {
     // No Spotify session (free-source launch): the poll would hit the auth gate
     // and re-flash a "connect Spotify" status message every interval. Free
     // sources drive their own playback state, so skip the Spotify poll entirely.
-    if !self.spotify_connected {
+    // A decoded source that owns the sink has paused Spotify: the poll would
+    // only spend rate limit and pump time on a context nothing renders.
+    if !self.spotify_connected || self.active_decoded_source() {
       return;
     }
 

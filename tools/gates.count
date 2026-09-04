@@ -14,4 +14,4 @@ wildcard_arms_in_action_tree = 0       # target 0, must stay 0
 view_writes_outside_tui = 12           # target 0 (producers outside tui/ and core/app/ writing App::view)
 pub_fields_on_app = 139                # target 1 (App.view stays public for the frontend; the rest go through App methods)
 action_refs_in_tui_handlers = 183      # adoption: may only rise
-test_attribute_total = 1810            # adoption: may only rise
+test_attribute_total = 1814            # adoption: may only rise

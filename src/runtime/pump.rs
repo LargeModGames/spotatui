@@ -77,7 +77,12 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
   let mut party_poll = tokio::time::interval(std::time::Duration::from_millis(25));
   party_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+  // Spotify-bound events that meet a rate limit are held back on the
+  // `Network` and flushed here when the window ends, so the pump never sleeps.
+  network.defers_rate_limited = true;
+
   loop {
+    let deferred_deadline = network.deferred_deadline().await;
     let io_event = tokio::select! {
       maybe_event = bridge_rx.recv() => match maybe_event {
         Some(io_event) => io_event,
@@ -85,6 +90,12 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       },
       _ = party_poll.tick(), if network.party_incoming_rx.is_some() => {
         network.process_party_messages().await;
+        continue;
+      }
+      _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+        deferred_deadline.unwrap_or_else(std::time::Instant::now)
+      )), if deferred_deadline.is_some() => {
+        network.flush_deferred().await;
         continue;
       }
     };
