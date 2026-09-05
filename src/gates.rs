@@ -116,22 +116,31 @@ fn chain_is_written(source: &str, chain_start: usize) -> bool {
 }
 
 /// Counts reads of `App::current_playback_context`: a `.current_playback_context`
-/// access not followed on the same line by an assignment operator, so the
+/// access outside a line comment that is not a whole-value assignment, so the
 /// `= Some(..)` seeds in tests and the producers' whole-value writes do not
-/// count (a `&mut` borrow through the field does, as does an assignment
-/// rustfmt wrapped onto the next line; none exists today).
+/// count. A nested write (`.is_playing = false`) and a `&mut` borrow through
+/// the field do count: both reach into the cached context. A whole-value
+/// assignment rustfmt wrapped onto the next line would count too; none
+/// exists today. String literals are not stripped (no other counter does).
 /// The cached context names the *suspended* Spotify track while a decoded
 /// source or the native queue slot owns the sink, so every reader outside
 /// the ownership resolver (`core/app/playback_routing.rs`), the snapshot
 /// builder (`infra/media_metadata.rs`) and this file is a candidate for
 /// reading the wrong track. No `#[cfg(test)]` cut: `tui/runner.rs` has production reads after
-/// its test module, and every test occurrence is a write anyway. A doc
-/// comment that spells the field with its dot counts (`core/plugin_api.rs`).
+/// its test module, and every test occurrence is a write anyway.
 fn count_playback_context_reads(source: &str) -> usize {
   let needle = concat!(".current_", "playback_context");
   source
-    .match_indices(needle)
-    .filter(|&(start, _)| !chain_is_written(source, start + 1))
+    .lines()
+    .filter(|line| !line.trim_start().starts_with("//"))
+    .flat_map(|line| {
+      line.match_indices(needle).filter(move |&(start, needle)| {
+        // A whole-value assignment is a write; anything deeper (`.item`,
+        // `.as_ref()`, `.is_playing = ..`) reads through the field.
+        line.as_bytes().get(start + needle.len()) == Some(&b'.')
+          || !chain_is_written(line, start + 1)
+      })
+    })
     .count()
 }
 
@@ -410,13 +419,15 @@ fn view_write_matcher_needs_a_receiver_and_an_assignment() {
 }
 
 #[test]
-fn playback_context_read_matcher_skips_writes() {
+fn playback_context_read_matcher_skips_whole_value_writes_and_comments() {
   let src = "let item = self.current_playback_context.as_ref();\n\
              app.current_playback_context = Some(ctx);\n\
              if let Some(c) = &app.current_playback_context {}\n\
              ctx.current_playback_context.is_playing = false;\n\
+             app.current_playback_context.item = None;\n\
+             /// reads `app.current_playback_context` in a doc comment\n\
              let current_playback_context = None;\n";
-  assert_eq!(count_playback_context_reads(src), 2);
+  assert_eq!(count_playback_context_reads(src), 4);
 }
 
 #[test]
