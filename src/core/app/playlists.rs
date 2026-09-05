@@ -239,25 +239,28 @@ impl App {
     self.begin_add_track_to_playlist_flow(track_id, track_name);
   }
 
-  /// Open the add-to-playlist picker for the item playing now. Reads only
-  /// `current_playback_context`, so a native queue slot stages the suspended
-  /// context's track.
+  /// Open the add-to-playlist picker for the item playing now, through the
+  /// ownership order. A queued Spotify track stages the slot's own track.
   pub fn begin_add_playing_track_to_playlist_flow(&mut self) {
-    match self
-      .current_playback_context
-      .as_ref()
-      .and_then(|context| context.item.as_ref())
-    {
-      Some(PlayableItem::Track(track)) => {
+    match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => {
         let track_id = track.id.as_ref().map(|id| id.uri());
         let name = track.name.clone();
         self.begin_add_track_to_playlist_flow(track_id, name);
       }
-      Some(PlayableItem::Episode(_)) => {
+      PlayingItem::Spotify(PlayableItem::Episode(_)) => {
         self.set_status_message("Only tracks can be added to playlists".to_string(), 4);
       }
-      Some(_) => {}
-      None => {
+      PlayingItem::Spotify(_) => {}
+      PlayingItem::QueuedSpotify(track) => {
+        let track_id = track.uri.clone();
+        let name = track.name.clone();
+        self.begin_add_track_to_playlist_flow(track_id, name);
+      }
+      PlayingItem::NotSpotify => {
+        self.set_status_message("Add to playlist needs a Spotify track playing", 4);
+      }
+      PlayingItem::Nothing => {
         self.set_status_message("No track currently playing".to_string(), 4);
       }
     }
@@ -409,6 +412,36 @@ impl App {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn add_playing_track_stages_the_queued_track_not_the_suspended_one() {
+    use crate::core::app::test_support::*;
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.active_source = Source::YouTube;
+    app.youtube_playlists = vec![PlaylistInfo {
+      uri: "youtube:playlist:y1".to_string(),
+      ..playlist_info("y1", "Local List", "owner", false)
+    }];
+    app.current_playback_context = Some(playing_track_context(full_track(
+      "0000000000000000000001",
+      "Suspended",
+    )));
+    app.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+      track: queue_track(Some("spotify:track:queued"), "Queued"),
+    });
+
+    app.begin_add_playing_track_to_playlist_flow();
+
+    let pending = app
+      .pending_playlist_track_add
+      .as_ref()
+      .expect("staged for the picker");
+    assert_eq!(pending.track_id, "spotify:track:queued");
+    assert_eq!(pending.track_name, "Queued");
+    assert!(rx.try_recv().is_err());
+  }
 
   #[test]
   fn editable_playlists_include_owned_and_collaborative_only() {

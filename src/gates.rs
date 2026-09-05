@@ -4,7 +4,8 @@
 //! field writes in handlers, raw `IoEvent` dispatch from the TUI, mouse
 //! handling that synthesizes keystrokes, wildcard arms in the action tree,
 //! producers outside the TUI that write its `App::view` presentation state,
-//! `App` fields any module can still write).
+//! `App` fields any module can still write, reads of the cached Spotify
+//! playback context that bypass the ownership resolver).
 //!
 //! `tools/gates.count` holds the measured baselines, and the test below pins
 //! every counter to its baseline exactly, so a PR that moves a number must
@@ -112,6 +113,35 @@ fn chain_is_written(source: &str, chain_start: usize) -> bool {
     Some(b'=') => !matches!(bytes.get(pos + 1), Some(b'=') | Some(b'>')),
     _ => false,
   }
+}
+
+/// Counts reads of `App::current_playback_context`: a `.current_playback_context`
+/// access outside a line comment that is not a whole-value assignment, so the
+/// `= Some(..)` seeds in tests and the producers' whole-value writes do not
+/// count. A nested write (`.is_playing = false`) and a `&mut` borrow through
+/// the field do count: both reach into the cached context. A whole-value
+/// assignment rustfmt wrapped onto the next line would count too; none
+/// exists today. String literals are not stripped (no other counter does).
+/// The cached context names the *suspended* Spotify track while a decoded
+/// source or the native queue slot owns the sink, so every reader outside
+/// the ownership resolver (`core/app/playback_routing.rs`), the snapshot
+/// builder (`infra/media_metadata.rs`) and this file is a candidate for
+/// reading the wrong track. No `#[cfg(test)]` cut: `tui/runner.rs` has production reads after
+/// its test module, and every test occurrence is a write anyway.
+fn count_playback_context_reads(source: &str) -> usize {
+  let needle = concat!(".current_", "playback_context");
+  source
+    .lines()
+    .filter(|line| !line.trim_start().starts_with("//"))
+    .flat_map(|line| {
+      line.match_indices(needle).filter(move |&(start, needle)| {
+        // A whole-value assignment is a write; anything deeper (`.item`,
+        // `.as_ref()`, `.is_playing = ..`) reads through the field.
+        line.as_bytes().get(start + needle.len()) == Some(&b'.')
+          || !chain_is_written(line, start + 1)
+      })
+    })
+    .count()
 }
 
 /// Counts direct `App` field writes: `app.<field>` (optionally a deeper
@@ -285,7 +315,22 @@ fn ratchet_counters_match_the_checked_in_baselines() {
   // tools/check_gates_ratchet.sh.
   let public_app_fields = count_public_app_fields(&read_source(&root.join("src/core/app/mod.rs")));
 
-  let measured: [(&str, usize); 9] = [
+  // Every Rust file under `src/` except the two that resolve playback from the
+  // raw field on purpose, and this file (its matcher test spells the needle).
+  let resolver_files = [
+    app_dir.join("playback_routing.rs"),
+    root.join("src").join("infra").join("media_metadata.rs"),
+    gates_file.clone(),
+  ];
+  let mut playback_reader_files = Vec::new();
+  collect_rs_files(&root.join("src"), &mut playback_reader_files);
+  playback_reader_files.retain(|path| !resolver_files.contains(path));
+  let playback_context_reads = playback_reader_files
+    .iter()
+    .map(|path| count_playback_context_reads(&read_source(path)))
+    .sum();
+
+  let measured: [(&str, usize); 10] = [
     ("crate_tui_refs_outside_tui", crate_tui_refs),
     ("app_field_writes_in_tui_handlers", app_field_writes),
     (
@@ -308,6 +353,7 @@ fn ratchet_counters_match_the_checked_in_baselines() {
     ),
     ("view_writes_outside_tui", view_writes),
     ("pub_fields_on_app", public_app_fields),
+    ("direct_playback_context_reads", playback_context_reads),
     ("action_refs_in_tui_handlers", action_refs),
     ("test_attribute_total", test_attribute_total),
   ];
@@ -370,6 +416,18 @@ fn view_write_matcher_needs_a_receiver_and_an_assignment() {
              let s = \".view.x = 1\";\n\
              foo(app.view.x);\n";
   assert_eq!(count_view_field_writes(src), 2);
+}
+
+#[test]
+fn playback_context_read_matcher_skips_whole_value_writes_and_comments() {
+  let src = "let item = self.current_playback_context.as_ref();\n\
+             app.current_playback_context = Some(ctx);\n\
+             if let Some(c) = &app.current_playback_context {}\n\
+             ctx.current_playback_context.is_playing = false;\n\
+             app.current_playback_context.item = None;\n\
+             /// reads `app.current_playback_context` in a doc comment\n\
+             let current_playback_context = None;\n";
+  assert_eq!(count_playback_context_reads(src), 4);
 }
 
 #[test]

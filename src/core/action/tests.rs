@@ -345,12 +345,13 @@ fn jump_to_album_opens_the_current_tracks_album() {
 }
 
 #[test]
-fn jump_to_album_without_playback_is_a_noop() {
+fn jump_to_album_without_playback_reports_nothing_playing() {
   let (mut app, rx) = app_with_channel();
 
   app.apply(Action::JumpToAlbum);
 
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+  assert_eq!(app.status_message(), Some(NOTHING_PLAYING_STATUS));
 }
 
 #[test]

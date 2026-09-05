@@ -259,19 +259,20 @@ pub enum Action {
     track_id: Option<String>,
     track_name: String,
   },
-  /// The picker for the item playing now, resolved at apply time.
+  /// The picker for the item playing now, resolved through the ownership
+  /// order at apply time.
   OpenAddPlayingTrackDialog,
   /// Stage a remove-track-from-playlist confirmation for the track table's
   /// current selection; resolved from the selection at apply time.
   OpenRemoveTrackDialog,
-  /// Open the album page of the item that is playing now; resolved from the
-  /// current playback context at apply time (episodes open their show).
+  /// Open the album page of the item that is playing now; resolved through
+  /// the ownership order at apply time (episodes open their show).
   JumpToAlbum,
   /// Open the album list of the first artist of the track that is playing
-  /// now; resolved from the current playback context at apply time.
+  /// now; resolved through the ownership order at apply time.
   JumpToArtist,
   /// Open the context (album/artist/playlist) that playback runs in;
-  /// resolved from the current playback context at apply time.
+  /// resolved through the ownership order at apply time.
   JumpToContext,
   /// Copy a share URL for the item playing now to the clipboard; a silent
   /// no-op without playback or a clipboard.
