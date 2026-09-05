@@ -130,16 +130,35 @@ pub(crate) fn write_private_file_atomic(path: &Path, contents: &[u8]) -> Result<
     };
     target = target.parent().unwrap_or(Path::new("")).join(link);
   }
+  if fs::read_link(&target).is_ok() {
+    return Err(anyhow!(
+      "{} is a symlink loop or chain too long",
+      path.display()
+    ));
+  }
   let tmp = unique_temp_path(&target);
   // Clean up on either failure (write or rename). Each attempt uses a fresh
   // unique name, so a leaked temp from a partial write would otherwise persist.
-  if let Err(error) =
-    write_private_file(&tmp, contents).and_then(|()| std::fs::rename(&tmp, &target))
+  if let Err(error) = create_private_file_exclusive(&tmp)
+    .and_then(|mut file| std::io::Write::write_all(&mut file, contents))
+    .and_then(|()| std::fs::rename(&tmp, &target))
   {
     let _ = std::fs::remove_file(&tmp);
     return Err(error.into());
   }
   Ok(())
+}
+
+/// Create a new private file; an existing path, a symlink included, is refused.
+fn create_private_file_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
+  let mut options = std::fs::OpenOptions::new();
+  options.write(true).create_new(true);
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
+  }
+  options.open(path)
 }
 
 /// A temporary sibling of `path` that no other process (or concurrent save in
@@ -1137,5 +1156,30 @@ mod tests {
       use std::os::unix::fs::PermissionsExt;
       fs::set_permissions(store, fs::Permissions::from_mode(0o700)).unwrap();
     }
+  }
+
+  #[test]
+  fn atomic_write_into_a_symlink_loop_fails_and_keeps_both_links() {
+    let Some((_root, target, link)) = linked_config(None) else {
+      return;
+    };
+    symlink_file(&link, &target).unwrap();
+
+    assert!(write_private_file_atomic(&link, b"new").is_err());
+
+    assert!(is_symlink(&link));
+    assert!(is_symlink(&target));
+  }
+
+  #[test]
+  fn an_exclusive_create_refuses_a_planted_symlink() {
+    let Some((_root, target, link)) = linked_config(None) else {
+      return;
+    };
+
+    let error = create_private_file_exclusive(&link).unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(!target.exists());
   }
 }

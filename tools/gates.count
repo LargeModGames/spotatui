@@ -15,4 +15,4 @@ view_writes_outside_tui = 12           # target 0 (producers outside tui/ and co
 pub_fields_on_app = 139                # target 1 (App.view stays public for the frontend; the rest go through App methods)
 direct_playback_context_reads = 92     # target 0 (readers of App::current_playback_context outside the ownership resolver and the snapshot builder, which are excluded)
 action_refs_in_tui_handlers = 183      # adoption: may only rise
-test_attribute_total = 1830            # adoption: may only rise
+test_attribute_total = 1833            # adoption: may only rise
