@@ -252,7 +252,19 @@ fn prompt_global_song_count_opt_in(
 
   user_config.behavior.enable_global_song_count = enable;
 
-  persist_global_song_count(&config_paths.config_file_path, enable)?;
+  if let Err(e) = persist_global_song_count(&config_paths.config_file_path, enable) {
+    log::warn!(
+      "could not save the global song counter answer to {}: {e}",
+      config_paths.config_file_path.display()
+    );
+    if interactive {
+      onboarding.info(&format!(
+        "Could not save your answer to {} (read-only config?). Set `enable_global_song_count` under `behavior:` there to stop this prompt.\n",
+        config_paths.config_file_path.display()
+      ));
+    }
+    return Ok(());
+  }
 
   if interactive {
     if enable {
@@ -328,7 +340,8 @@ fn ask_auth_setup_migration(onboarding: &dyn Onboarding) -> Result<bool> {
 
 /// Merge `enable` into the `behavior` section of `config.yml`, creating the file
 /// when absent. Sibling keys are preserved; this hand-patch bypasses
-/// `UserConfig::save_config` on purpose (it runs before that config is loaded).
+/// `UserConfig::save_config` on purpose: a full save writes every default back
+/// into a config that predates the setting, and a written key reads as chosen.
 fn persist_global_song_count(config_file_path: &Path, enable: bool) -> Result<()> {
   let config_yml = if config_file_path.exists() {
     fs::read_to_string(config_file_path).unwrap_or_default()
@@ -356,7 +369,7 @@ fn persist_global_song_count(config_file_path: &Path, enable: bool) -> Result<()
   }
 
   let updated_config = serde_yaml::to_string(&config)?;
-  fs::write(config_file_path, updated_config)?;
+  auth::write_private_file_atomic(config_file_path, updated_config.as_bytes())?;
 
   Ok(())
 }
@@ -912,6 +925,25 @@ mod tests {
     assert!(persisted.contains("enable_global_song_count: false"));
     assert!(!onboarding.saw("\nWould you like to participate? (Y/n): "));
     assert!(!onboarding.saw("Opted out. You can change this anytime in Settings -> Behavior.\n"));
+    assert!(!onboarding.saw("Thank you for participating!\n"));
+  }
+
+  #[test]
+  fn a_failed_global_song_counter_write_does_not_abort_boot() {
+    let dir = tempfile::tempdir().unwrap();
+    // A missing parent fails the write on every platform, root included.
+    let config_path = dir.path().join("no-such-directory").join("config.yml");
+    let mut user_config = user_config_at(config_path.clone());
+    let onboarding = ScriptedOnboarding::with_answers(&["y"]);
+
+    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+
+    assert!(user_config.behavior.enable_global_song_count);
+    assert!(!config_path.exists());
+    assert!(onboarding.saw(&format!(
+      "Could not save your answer to {} (read-only config?). Set `enable_global_song_count` under `behavior:` there to stop this prompt.\n",
+      config_path.display()
+    )));
     assert!(!onboarding.saw("Thank you for participating!\n"));
   }
 
