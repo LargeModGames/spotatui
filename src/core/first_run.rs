@@ -23,7 +23,6 @@ use crate::core::user_config::UserConfig;
 use anyhow::anyhow;
 use anyhow::Result;
 
-#[cfg(any(feature = "subsonic", feature = "youtube", feature = "local-files"))]
 fn config_file_path_display(user_config: &UserConfig) -> String {
   user_config
     .path_to_config
@@ -32,6 +31,20 @@ fn config_file_path_display(user_config: &UserConfig) -> String {
     .or_else(|| crate::core::paths::app_config_dir().map(|dir| dir.join("config.yml")))
     .map(|path| path.display().to_string())
     .unwrap_or_else(|| "config.yml".to_string())
+}
+
+/// A config that cannot be written (a read-only dotfiles link) does not abort
+/// the picker; `false` when the save failed.
+fn save_config_or_warn(user_config: &UserConfig, onboarding: &dyn Onboarding) -> bool {
+  match user_config.save_config() {
+    Ok(()) => true,
+    Err(e) => {
+      let path = config_file_path_display(user_config);
+      log::warn!("could not save {path}: {e}");
+      onboarding.info(&format!("Could not save {path}: {e}"));
+      false
+    }
+  }
 }
 
 /// Run the interactive first-run source picker. A no-op after the first launch
@@ -102,7 +115,7 @@ async fn apply_selections(
   // The global song counter opt-in is asked before this picker runs, so the
   // user's choice already sits on `user_config`; save_config persists it here.
   // The active source is runtime state, so save it separately.
-  user_config.save_config()?;
+  save_config_or_warn(user_config, onboarding);
   let state_path = crate::core::state::default_state_path()?;
   crate::core::state::save(
     &state_path,
@@ -260,7 +273,7 @@ async fn configure_subsonic(
   user_config.behavior.subsonic_url = Some(url.clone());
   user_config.behavior.subsonic_username = Some(username.clone());
   user_config.behavior.subsonic_password = Some(password.clone());
-  user_config.save_config()?;
+  let saved = save_config_or_warn(user_config, onboarding);
 
   // Best-effort connectivity check: a failure is not fatal (the server may just
   // be temporarily down), the details are already saved.
@@ -270,10 +283,14 @@ async fn configure_subsonic(
     Ok(()) => onboarding.info("OK"),
     Err(e) => {
       onboarding.info(&format!("failed: {e}"));
-      onboarding.info(&format!(
-        "Saved anyway. Fix the details in {} and relaunch if needed.",
-        config_file_path_display(user_config)
-      ));
+      if saved {
+        onboarding.info(&format!(
+          "Saved anyway. Fix the details in {} and relaunch if needed.",
+          config_file_path_display(user_config)
+        ));
+      } else {
+        onboarding.info("The details are kept for this session only.");
+      }
     }
   }
 
@@ -343,5 +360,33 @@ fn prompt_required(onboarding: &dyn Onboarding, label: &str) -> Result<String> {
     if retries >= MAX_RETRIES {
       return Err(anyhow!("Maximum retries ({MAX_RETRIES}) exceeded."));
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::test_helpers::ScriptedOnboarding;
+
+  #[test]
+  fn a_failed_config_save_warns_and_continues() {
+    let dir = tempfile::tempdir().unwrap();
+    // A missing parent fails the write on every platform, root included.
+    let config_path = dir.path().join("no-such-directory").join("config.yml");
+    let mut user_config = UserConfig::new();
+    user_config
+      .path_to_config
+      .replace(crate::core::user_config::UserConfigPaths {
+        config_file_path: config_path.clone(),
+      });
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    assert!(!save_config_or_warn(&user_config, &onboarding));
+
+    assert!(!config_path.exists());
+    let shown = onboarding.shown.lock().unwrap();
+    assert!(shown
+      .iter()
+      .any(|line| line.starts_with(&format!("Could not save {}: ", config_path.display()))));
   }
 }
