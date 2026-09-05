@@ -23,7 +23,6 @@ use crate::core::user_config::UserConfig;
 use anyhow::anyhow;
 use anyhow::Result;
 
-#[cfg(any(feature = "subsonic", feature = "youtube", feature = "local-files"))]
 fn config_file_path_display(user_config: &UserConfig) -> String {
   user_config
     .path_to_config
@@ -32,6 +31,16 @@ fn config_file_path_display(user_config: &UserConfig) -> String {
     .or_else(|| crate::core::paths::app_config_dir().map(|dir| dir.join("config.yml")))
     .map(|path| path.display().to_string())
     .unwrap_or_else(|| "config.yml".to_string())
+}
+
+/// A config that cannot be written (a read-only dotfiles link) does not abort
+/// the picker.
+fn save_config_or_warn(user_config: &UserConfig, onboarding: &dyn Onboarding) {
+  if let Err(e) = user_config.save_config() {
+    let path = config_file_path_display(user_config);
+    log::warn!("could not save {path}: {e}");
+    onboarding.info(&format!("Could not save {path}: {e}"));
+  }
 }
 
 /// Run the interactive first-run source picker. A no-op after the first launch
@@ -102,7 +111,7 @@ async fn apply_selections(
   // The global song counter opt-in is asked before this picker runs, so the
   // user's choice already sits on `user_config`; save_config persists it here.
   // The active source is runtime state, so save it separately.
-  user_config.save_config()?;
+  save_config_or_warn(user_config, onboarding);
   let state_path = crate::core::state::default_state_path()?;
   crate::core::state::save(
     &state_path,
@@ -260,7 +269,7 @@ async fn configure_subsonic(
   user_config.behavior.subsonic_url = Some(url.clone());
   user_config.behavior.subsonic_username = Some(username.clone());
   user_config.behavior.subsonic_password = Some(password.clone());
-  user_config.save_config()?;
+  save_config_or_warn(user_config, onboarding);
 
   // Best-effort connectivity check: a failure is not fatal (the server may just
   // be temporarily down), the details are already saved.
