@@ -112,3 +112,13 @@ pub(super) fn session_free_app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
   let (tx, rx) = channel();
   (App::new(tx, UserConfig::new(), None), rx)
 }
+
+/// A playback context whose item is `track`: the suspended Spotify track the
+/// queue-slot tests seed under the slot.
+#[cfg(feature = "streaming")]
+pub(super) fn playing_track_context(track: FullTrack) -> CurrentPlaybackContext {
+  CurrentPlaybackContext {
+    item: Some(PlayableItem::Track(track)),
+    ..make_external_context()
+  }
+}

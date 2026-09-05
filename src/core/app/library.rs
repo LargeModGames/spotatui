@@ -490,42 +490,18 @@ impl App {
 
   /// Save or unsave the item playing right now, through the ownership order.
   pub fn toggle_save_current_item(&mut self) {
-    let queue_now_is_spotify = self.queue_now_is_spotify();
-    let queued_spotify_track_uri = queue_now_is_spotify
-      .then(|| self.queue_now_spotify_track_uri())
-      .flatten();
-
-    if spotify_context_is_suspended(
-      self.queue_owns_playback(),
-      queue_now_is_spotify,
-      self.active_decoded_source(),
-    ) {
-      self.set_status_message("The current playback source cannot be liked", 4);
-      return;
-    }
-
-    // A queued Spotify track plays via a direct `player.load` outside the Spirc
-    // context, so the cached playback context still names the suspended context's
-    // track — resolve the queue slot's own track instead of falling through.
-    if queue_now_is_spotify {
-      match queued_spotify_track_uri {
-        Some(uri) => self.dispatch(IoEvent::ToggleSaveTrack(uri)),
-        None => self.set_status_message("The current playback source cannot be liked", 4),
-      }
-      return;
-    }
-
-    let uri = match self
-      .current_playback_context
-      .as_ref()
-      .and_then(|context| context.item.as_ref())
-    {
-      Some(PlayableItem::Track(track)) => track.id.as_ref().map(|id| id.uri()),
-      Some(PlayableItem::Episode(episode)) => Some(episode.id.uri()),
-      _ => None,
+    const REFUSED: &str = "The current playback source cannot be liked";
+    let uri = match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => Ok(track.id.as_ref().map(|id| id.uri())),
+      PlayingItem::Spotify(PlayableItem::Episode(episode)) => Ok(Some(episode.id.uri())),
+      PlayingItem::Spotify(_) | PlayingItem::Nothing => Ok(None),
+      PlayingItem::QueuedSpotify(track) => track.uri.clone().ok_or(REFUSED).map(Some),
+      PlayingItem::NotSpotify => Err(REFUSED),
     };
-    if let Some(uri) = uri {
-      self.dispatch(IoEvent::ToggleSaveTrack(uri));
+    match uri {
+      Ok(Some(uri)) => self.dispatch(IoEvent::ToggleSaveTrack(uri)),
+      Ok(None) => {}
+      Err(status) => self.set_status_message(status, 4),
     }
   }
 
@@ -615,18 +591,6 @@ impl App {
   }
 }
 
-/// Whether Like must not consult the cached Spotify playback context. A queue
-/// slot playing a *decoded* item (or any decoded per-source playback) suspends
-/// the context; a queue slot playing a *Spotify* track stays eligible — it is
-/// liked via the slot's own track, never the cached context.
-fn spotify_context_is_suspended(
-  queue_owns_playback: bool,
-  queue_now_is_spotify: bool,
-  decoded_source_active: bool,
-) -> bool {
-  (queue_owns_playback && !queue_now_is_spotify) || decoded_source_active
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -697,17 +661,6 @@ mod tests {
       app.track_table.context,
       Some(TrackTableContext::SavedTracks)
     );
-  }
-
-  #[test]
-  fn non_spotify_playback_cannot_use_cached_spotify_item_for_like() {
-    // A decoded queue slot or any decoded per-source playback suspends Like.
-    assert!(spotify_context_is_suspended(true, false, false));
-    assert!(spotify_context_is_suspended(false, false, true));
-    // A queue slot playing a *Spotify* track stays eligible.
-    assert!(!spotify_context_is_suspended(true, true, false));
-    // Plain Spotify context playback.
-    assert!(!spotify_context_is_suspended(false, false, false));
   }
 
   #[cfg(feature = "streaming")]

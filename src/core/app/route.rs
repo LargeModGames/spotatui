@@ -367,54 +367,84 @@ impl App {
     // Spectrum data will be updated by the audio capture system on each tick
   }
 
-  /// Open the album page of the item that is playing now (episodes open
-  /// their show). A no-op without a playback context.
+  /// Open the album page of the item playing now, through the ownership
+  /// order (episodes open their show). A queued Spotify track resolves through
+  /// the slot; any other owner answers with a status message.
   pub(crate) fn jump_to_album(&mut self) {
     // Build the event under the borrow so only the payload is cloned, never
     // the whole playback context.
-    let event = match self
-      .current_playback_context
-      .as_ref()
-      .and_then(|playback| playback.item.as_ref())
-    {
-      Some(PlayableItem::Track(track)) => {
-        Some(IoEvent::GetAlbumTracks(Box::new(track.album.clone())))
+    let event = match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => {
+        Ok(IoEvent::GetAlbumTracks(Box::new(track.album.clone())))
       }
-      Some(PlayableItem::Episode(episode)) => Some(IoEvent::GetShowEpisodes(Box::new(
-        crate::core::plugin_api::ShowInfo::from(&episode.show),
-      ))),
-      _ => None,
+      PlayingItem::Spotify(PlayableItem::Episode(episode)) => Ok(IoEvent::GetShowEpisodes(
+        Box::new(crate::core::plugin_api::ShowInfo::from(&episode.show)),
+      )),
+      PlayingItem::Spotify(_) => return,
+      // A track listed from an album page carries no album id of its own; the
+      // track lookup finds the album from the track instead.
+      PlayingItem::QueuedSpotify(track) => {
+        match (&track.album_id, track.id.as_ref().or(track.uri.as_ref())) {
+          (Some(album_id), _) => Ok(IoEvent::GetAlbum(album_id.clone())),
+          (None, Some(track_id)) => Ok(IoEvent::GetAlbumForTrack(track_id.clone())),
+          (None, None) => Err("The queued track has no album id"),
+        }
+      }
+      PlayingItem::NotSpotify => Err("Jump to album needs a Spotify track playing"),
+      PlayingItem::Nothing => Err(NOTHING_PLAYING_STATUS),
     };
-    if let Some(event) = event {
-      self.dispatch(event);
+    match event {
+      Ok(event) => self.dispatch(event),
+      Err(status) => self.set_status_message(status, 4),
     }
   }
 
-  // NOTE: this only finds the first artist of the song and jumps to their albums
+  /// Open the album list of the first artist of the track playing now,
+  /// through the ownership order. Episodes have no artist page.
   pub(crate) fn jump_to_artist_album(&mut self) {
-    let artist = match self
-      .current_playback_context
-      .as_ref()
-      .and_then(|playback| playback.item.as_ref())
-    {
-      Some(PlayableItem::Track(track)) => track.artists.first().and_then(|artist| {
-        artist
-          .id
-          .as_ref()
-          .map(|id| (id.id().to_string(), artist.name.clone()))
-      }),
-      // Episodes have no artist page to jump to (yet!)
-      _ => None,
+    let artist = match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => track
+        .artists
+        .first()
+        .and_then(|artist| {
+          artist
+            .id
+            .as_ref()
+            .map(|id| (id.id().to_string(), artist.name.clone()))
+        })
+        .ok_or("The playing track has no artist id"),
+      PlayingItem::Spotify(_) => return,
+      PlayingItem::QueuedSpotify(track) => track
+        .artist_refs
+        .first()
+        .and_then(|artist| artist.id.clone().map(|id| (id, artist.name.clone())))
+        .ok_or("The queued track has no artist id"),
+      PlayingItem::NotSpotify => Err("Jump to artist needs a Spotify track playing"),
+      PlayingItem::Nothing => Err(NOTHING_PLAYING_STATUS),
     };
-    if let Some((artist_id, artist_name)) = artist {
-      self.get_artist(artist_id, artist_name);
+    match artist {
+      Ok((artist_id, artist_name)) => self.get_artist(artist_id, artist_name),
+      Err(status) => self.set_status_message(status, 4),
     }
   }
 
-  /// Open the context (album/artist/playlist) that playback runs in. A no-op
-  /// without a playback context.
+  /// Open the context (album/artist/playlist) that playback runs in, through
+  /// the ownership order. The queue slot plays outside any context, so a
+  /// queued track answers with a status message. A context with no item (an
+  /// ad plays) still opens.
   pub(crate) fn jump_to_context(&mut self) {
-    let Some((context_type, playlist)) = self
+    match self.playing_item() {
+      PlayingItem::Spotify(_) | PlayingItem::Nothing => {}
+      PlayingItem::QueuedSpotify(_) => {
+        self.set_status_message("The queue slot has no play context", 4);
+        return;
+      }
+      PlayingItem::NotSpotify => {
+        self.set_status_message("Jump to context needs a Spotify track playing", 4);
+        return;
+      }
+    }
+    let context = self
       .current_playback_context
       .as_ref()
       .and_then(|playback| playback.context.as_ref())
@@ -423,8 +453,9 @@ impl App {
           context._type.clone(),
           crate::infra::network::ids::playlist_id(&context.uri),
         )
-      })
-    else {
+      });
+    let Some((context_type, playlist)) = context else {
+      self.set_status_message(NOTHING_PLAYING_STATUS, 4);
       return;
     };
     match context_type {
@@ -448,5 +479,153 @@ impl App {
       RecapPeriod::ThirtyDays
     };
     self.dispatch(IoEvent::GenerateRecap(period));
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::test_support::*;
+
+  /// A Spotify session whose cached context names a track with an artist id.
+  #[cfg(feature = "streaming")]
+  fn app_with_suspended_context() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut track = full_track("0000000000000000000001", "Suspended");
+    track.artists[0].id = Some(
+      rspotify::model::idtypes::ArtistId::from_id("0OdUWJ0sBjDrqHygGUXeCF")
+        .unwrap()
+        .into_static(),
+    );
+    app.current_playback_context = Some(playing_track_context(track));
+    (app, rx)
+  }
+
+  #[cfg(feature = "streaming")]
+  fn queue_spotify_track(app: &mut App, track: TrackInfo) {
+    app.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify { track });
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn jump_to_album_opens_the_queued_tracks_album_not_the_suspended_one() {
+    let (mut app, rx) = app_with_suspended_context();
+    let mut track = queue_track(Some("spotify:track:queued"), "Queued");
+    track.album_id = Some("queuedalbum".to_string());
+    queue_spotify_track(&mut app, track);
+
+    app.jump_to_album();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetAlbum(id)) if id == "queuedalbum"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn jump_to_album_reports_a_queued_track_without_an_album_id() {
+    let (mut app, rx) = app_with_suspended_context();
+    queue_spotify_track(&mut app, queue_track(None, "Queued"));
+
+    app.jump_to_album();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+      app.status_message(),
+      Some("The queued track has no album id")
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn jump_to_artist_album_opens_the_queued_tracks_artist() {
+    let (mut app, rx) = app_with_suspended_context();
+    let mut track = queue_track(Some("spotify:track:queued"), "Queued");
+    track.artist_refs = vec![crate::core::plugin_api::ArtistRef {
+      id: Some("queuedartist".to_string()),
+      name: "Queued Artist".to_string(),
+    }];
+    queue_spotify_track(&mut app, track);
+
+    app.jump_to_artist_album();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetArtist(id, name, _)) if id == "queuedartist" && name == "Queued Artist"
+    ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn jump_to_context_refuses_the_queue_slot() {
+    let (mut app, rx) = app_with_suspended_context();
+    queue_spotify_track(
+      &mut app,
+      queue_track(Some("spotify:track:queued"), "Queued"),
+    );
+
+    app.jump_to_context();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+      app.status_message(),
+      Some("The queue slot has no play context")
+    );
+  }
+
+  #[test]
+  fn jump_to_album_reports_nothing_playing_without_a_session() {
+    let (mut app, rx) = session_free_app();
+
+    app.jump_to_album();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some(NOTHING_PLAYING_STATUS));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn jump_to_album_looks_the_album_up_from_a_queued_track_without_an_album_id() {
+    let (mut app, rx) = app_with_suspended_context();
+    let mut track = queue_track(Some("spotify:track:queued"), "Queued");
+    track.id = Some("queuedtrack".to_string());
+    queue_spotify_track(&mut app, track);
+
+    app.jump_to_album();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetAlbumForTrack(id)) if id == "queuedtrack"));
+  }
+
+  #[test]
+  fn jump_to_context_reports_nothing_playing_without_a_context() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(make_external_context());
+
+    app.jump_to_context();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some(NOTHING_PLAYING_STATUS));
+  }
+
+  #[test]
+  fn jump_to_context_opens_the_context_when_no_item_plays() {
+    use rspotify::model::{context::Context, enums::Type};
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut context = make_external_context();
+    context.context = Some(Context {
+      uri: "spotify:playlist:37i9dQZF1DX4WYpdgoIcn6".to_string(),
+      href: String::new(),
+      external_urls: std::collections::HashMap::new(),
+      _type: Type::Playlist,
+    });
+    app.current_playback_context = Some(context);
+
+    app.jump_to_context();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetPlaylistItems(id, _)) if id == "37i9dQZF1DX4WYpdgoIcn6"
+    ));
   }
 }

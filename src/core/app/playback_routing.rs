@@ -22,7 +22,55 @@ pub enum PlaybackOwner {
   None,
 }
 
+/// The item a track-level action on "what is playing now" can act on.
+pub(super) enum PlayingItem<'a> {
+  /// Spotify owns playback and the cached context names the item. Under
+  /// native streaming it lags the player after a skip until the next poll.
+  Spotify(&'a PlayableItem),
+  /// A Spotify track plays through the native queue slot; the cached context
+  /// names the suspended context's track, so the slot's own track is the item.
+  QueuedSpotify(&'a TrackInfo),
+  /// A decoded source or a decoded queue item owns the sink.
+  NotSpotify,
+  /// No owner, or a Spotify owner with no item.
+  Nothing,
+}
+
+/// The pure half of [`App::playing_item`], so every owner is testable without
+/// an audio device.
+fn resolve_playing_item<'a>(
+  owner: PlaybackOwner,
+  slot_track: Option<&'a TrackInfo>,
+  slot_is_spotify: bool,
+  cached_item: Option<&'a PlayableItem>,
+) -> PlayingItem<'a> {
+  match owner {
+    PlaybackOwner::Queue => match slot_track {
+      Some(track) if slot_is_spotify => PlayingItem::QueuedSpotify(track),
+      _ => PlayingItem::NotSpotify,
+    },
+    PlaybackOwner::Decoded => PlayingItem::NotSpotify,
+    PlaybackOwner::NativeSpotify | PlaybackOwner::Spotify => {
+      cached_item.map_or(PlayingItem::Nothing, PlayingItem::Spotify)
+    }
+    PlaybackOwner::None => PlayingItem::Nothing,
+  }
+}
+
 impl App {
+  /// Resolve the item playing now through the ownership order.
+  pub(super) fn playing_item(&self) -> PlayingItem<'_> {
+    resolve_playing_item(
+      self.playback_owner(),
+      self.queue_now_track(),
+      self.queue_now_is_spotify(),
+      self
+        .current_playback_context
+        .as_ref()
+        .and_then(|context| context.item.as_ref()),
+    )
+  }
+
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {
     if self.queue_owns_playback() {
       return PlaybackOwner::Queue;
@@ -394,6 +442,37 @@ mod tests {
     });
 
     assert!(app.active_decoded_player().is_none());
+  }
+
+  #[test]
+  fn playing_item_follows_the_owner() {
+    let slot = queue_track(Some("spotify:track:queued"), "Queued");
+    let cached = PlayableItem::Track(full_track("0000000000000000000001", "Cached"));
+
+    assert!(matches!(
+      resolve_playing_item(PlaybackOwner::Decoded, None, false, Some(&cached)),
+      PlayingItem::NotSpotify
+    ));
+    assert!(matches!(
+      resolve_playing_item(PlaybackOwner::Queue, Some(&slot), false, Some(&cached)),
+      PlayingItem::NotSpotify
+    ));
+    assert!(matches!(
+      resolve_playing_item(PlaybackOwner::Queue, Some(&slot), true, Some(&cached)),
+      PlayingItem::QueuedSpotify(track) if track.name == "Queued"
+    ));
+    assert!(matches!(
+      resolve_playing_item(PlaybackOwner::Spotify, None, false, Some(&cached)),
+      PlayingItem::Spotify(PlayableItem::Track(track)) if track.name == "Cached"
+    ));
+    assert!(matches!(
+      resolve_playing_item(PlaybackOwner::NativeSpotify, None, false, None),
+      PlayingItem::Nothing
+    ));
+    assert!(matches!(
+      resolve_playing_item(PlaybackOwner::None, None, false, Some(&cached)),
+      PlayingItem::Nothing
+    ));
   }
 
   #[test]

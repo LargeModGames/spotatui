@@ -219,8 +219,12 @@ session exists.
   librespot - the native flag stays true, so driving librespot directly resumes
   the wrong player.
 - While the native queue slot owns the sink, `current_playback_context` names the
-  *suspended* context's track; resolve track-level actions through
-  `queue_now_spotify_track_uri()` / `queue_now_track()`.
+  *suspended* context's track. Inside `core/app/`, resolve the playing *track*
+  through `App::playing_item()` (`core/app/playback_routing.rs`): it answers
+  with the slot's `TrackInfo` (`uri`, `album_id`, `artist_refs`; a slot has
+  no play context) and refuses a decoded owner. Outside `core/app/` read the
+  `PlaybackSnapshot` (`infra/media_metadata.rs`), never the field:
+  `direct_playback_context_reads` counts every other reader and may only fall.
 - Radio is in `active_decoded_source` but deliberately out of
   `active_queueable_decoded_source` (repeat/shuffle) and
   `active_source_position_ms` (seek).
