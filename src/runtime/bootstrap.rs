@@ -184,14 +184,17 @@ fn name_client_id(client_id: &str) -> String {
   }
 }
 
-/// Phrase an [`auth::ClientIdNotice`] for the user. Both variants are
-/// informational: neither means anything is broken, and neither should read as
-/// if the user misconfigured something.
+/// Phrase an [`auth::ClientIdNotice`] for the user. It is informational:
+/// nothing is broken, and it must not read as if the user misconfigured
+/// something.
 fn describe_client_id_notice(notice: auth::ClientIdNotice) -> String {
   match notice {
-    auth::ClientIdNotice::SharedWhilePersonalConfigured { personal_client_id } => format!(
-      "Spotify signed in with the shared ncspot client ID. Your own app ({}) is set as the fallback, so it is only used if the shared one stops working.",
-      short_client_id(&personal_client_id)
+    auth::ClientIdNotice::FellBack {
+      from_client_id,
+      to_client_id,
+    } if to_client_id == crate::core::config::NCSPOT_CLIENT_ID => format!(
+      "No usable Spotify session for {}; signed in with the shared ncspot client ID, whose Spotify rate limit every user shares. Run `spotatui --reconfigure-auth` and choose 2 to sign in with your own app.",
+      name_client_id(&from_client_id)
     ),
     auth::ClientIdNotice::FellBack {
       from_client_id,
@@ -756,9 +759,11 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 mod tests {
   use super::{
     apply_configured_runtime_defaults, ask_auth_setup_migration, auth_setup_migration_prompt,
-    global_song_counter_prompt, persist_global_song_count, prompt_global_song_count_opt_in,
-    should_prompt_global_song_count, spotify_auth_mode, SpotifyAuthMode,
+    describe_client_id_notice, global_song_counter_prompt, persist_global_song_count,
+    prompt_global_song_count_opt_in, should_prompt_global_song_count, spotify_auth_mode,
+    SpotifyAuthMode,
   };
+  use crate::core::auth;
   use crate::core::limits::MAX_PLAYBAR_ROWS;
   use crate::core::onboarding::OnboardingPrompt;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
@@ -973,6 +978,25 @@ mod tests {
 
     assert!(!ask_auth_setup_migration(&onboarding).unwrap());
     assert!(onboarding.saw("Would you like to run the new auth setup wizard now? (Y/n): "));
+  }
+
+  #[test]
+  fn a_fallback_to_the_shared_id_names_the_way_out() {
+    let own = "0123456789abcdef0123456789abcdef";
+    let shared = crate::core::config::NCSPOT_CLIENT_ID;
+    let to_shared = describe_client_id_notice(auth::ClientIdNotice::FellBack {
+      from_client_id: own.to_string(),
+      to_client_id: shared.to_string(),
+    });
+    assert!(to_shared.starts_with("No usable Spotify session for your own app (01234567…)"));
+    assert!(to_shared.contains("--reconfigure-auth"));
+
+    let to_own = describe_client_id_notice(auth::ClientIdNotice::FellBack {
+      from_client_id: shared.to_string(),
+      to_client_id: own.to_string(),
+    });
+    assert!(to_own.starts_with("No usable Spotify session for the shared ncspot client ID"));
+    assert!(!to_own.contains("--reconfigure-auth"));
   }
 
   #[test]
