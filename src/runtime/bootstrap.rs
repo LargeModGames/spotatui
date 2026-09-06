@@ -759,9 +759,11 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 mod tests {
   use super::{
     apply_configured_runtime_defaults, ask_auth_setup_migration, auth_setup_migration_prompt,
-    global_song_counter_prompt, persist_global_song_count, prompt_global_song_count_opt_in,
-    should_prompt_global_song_count, spotify_auth_mode, SpotifyAuthMode,
+    describe_client_id_notice, global_song_counter_prompt, persist_global_song_count,
+    prompt_global_song_count_opt_in, should_prompt_global_song_count, spotify_auth_mode,
+    SpotifyAuthMode,
   };
+  use crate::core::auth;
   use crate::core::limits::MAX_PLAYBAR_ROWS;
   use crate::core::onboarding::OnboardingPrompt;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
