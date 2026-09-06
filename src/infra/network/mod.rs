@@ -1507,7 +1507,7 @@ impl Network {
       };
       let Some(track_uri) = snapshot
         .item_uri
-        .filter(|uri| ids::playable_id(uri).is_some())
+        .and_then(|uri| ids::playable_id(&uri).map(|id| id.uri()))
       else {
         return;
       };
