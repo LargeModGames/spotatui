@@ -193,7 +193,7 @@ fn describe_client_id_notice(notice: auth::ClientIdNotice) -> String {
       from_client_id,
       to_client_id,
     } if to_client_id == crate::core::config::NCSPOT_CLIENT_ID => format!(
-      "No login yet for {}; signed in with the shared ncspot client ID, whose Spotify rate limit every user shares. Run `spotatui --reconfigure-auth` and choose 2 to sign in with your own app.",
+      "No usable Spotify session for {}; signed in with the shared ncspot client ID, whose Spotify rate limit every user shares. Run `spotatui --reconfigure-auth` and choose 2 to sign in with your own app.",
       name_client_id(&from_client_id)
     ),
     auth::ClientIdNotice::FellBack {
@@ -976,6 +976,25 @@ mod tests {
 
     assert!(!ask_auth_setup_migration(&onboarding).unwrap());
     assert!(onboarding.saw("Would you like to run the new auth setup wizard now? (Y/n): "));
+  }
+
+  #[test]
+  fn a_fallback_to_the_shared_id_names_the_way_out() {
+    let own = "0123456789abcdef0123456789abcdef";
+    let shared = crate::core::config::NCSPOT_CLIENT_ID;
+    let to_shared = describe_client_id_notice(auth::ClientIdNotice::FellBack {
+      from_client_id: own.to_string(),
+      to_client_id: shared.to_string(),
+    });
+    assert!(to_shared.starts_with("No usable Spotify session for your own app (01234567…)"));
+    assert!(to_shared.contains("--reconfigure-auth"));
+
+    let to_own = describe_client_id_notice(auth::ClientIdNotice::FellBack {
+      from_client_id: shared.to_string(),
+      to_client_id: own.to_string(),
+    });
+    assert!(to_own.starts_with("No usable Spotify session for the shared ncspot client ID"));
+    assert!(!to_own.contains("--reconfigure-auth"));
   }
 
   #[test]
