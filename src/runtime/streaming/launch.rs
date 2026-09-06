@@ -9,7 +9,7 @@ use crate::core::user_config::StartupBehavior;
 use crate::infra::macos_media;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::infra::mpris;
-use crate::infra::network::requests::spotify_get_typed_compat_for_with_refresh;
+use crate::infra::network::requests::{self, spotify_get_typed_compat_for_with_refresh};
 use crate::infra::network::IoEvent;
 use crate::infra::player;
 use log::{info, warn};
@@ -26,28 +26,59 @@ fn subscription_level_label(level: rspotify::model::SubscriptionLevel) -> &'stat
   }
 }
 
+/// The wait before the next plan check after a rate limit; `None` after the
+/// last attempt, or for a window too long to hold startup for.
+fn plan_check_retry_delay(attempt: u32, window: Option<Duration>) -> Option<Duration> {
+  const ATTEMPTS: u32 = 3;
+  const MAX_WAIT: Duration = Duration::from_secs(60);
+  let delay = window
+    .unwrap_or_default()
+    .saturating_add(Duration::from_secs(1));
+  (attempt < ATTEMPTS && delay <= MAX_WAIT).then_some(delay)
+}
+
 /// Can run with the UI already up, so outcomes are reported through `info!` and
 /// the returned status message only, never `println!`, which would corrupt the
 /// TUI. Reuses the `/me` captured during token validation when available
-/// instead of paying a second round trip.
+/// instead of paying a second round trip. With `wait_out_rate_limit`, a 429
+/// waits for the window and asks again instead of disabling streaming.
 async fn account_supports_native_streaming(
   spotify: &AuthCodePkceSpotify,
   cached_me: Option<PrivateUser>,
   token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
+  wait_out_rate_limit: bool,
 ) -> (bool, Option<&'static str>) {
+  let mut attempt = 0;
   let user_result = match cached_me {
     Some(user) => Ok(user),
-    None => {
-      spotify_get_typed_compat_for_with_refresh::<PrivateUser>(
+    None => loop {
+      let result = spotify_get_typed_compat_for_with_refresh::<PrivateUser>(
         spotify,
         "me",
         &[],
         token_cache_path,
         app,
       )
-      .await
-    }
+      .await;
+      match result {
+        Err(e) if wait_out_rate_limit && requests::is_rate_limited_error(&e) => {
+          attempt += 1;
+          let window = requests::shared_forced_refresh_gate()
+            .rate_limit_remaining()
+            .await;
+          let Some(delay) = plan_check_retry_delay(attempt, window) else {
+            break Err(e);
+          };
+          info!(
+            "spotify plan check rate limited; asking again in {}s",
+            delay.as_secs()
+          );
+          tokio::time::sleep(delay).await;
+        }
+        result => break result,
+      }
+    },
   };
   match user_result {
     #[allow(deprecated)]
@@ -103,7 +134,8 @@ pub(crate) async fn cache_streaming_credentials(
     return;
   };
   let (supported, status_message) =
-    account_supports_native_streaming(spotify, cached_me.cloned(), token_cache_path, app).await;
+    account_supports_native_streaming(spotify, cached_me.cloned(), token_cache_path, app, false)
+      .await;
   if let Some(message) = status_message {
     app.lock().await.set_status_message(message, 12);
   }
@@ -236,9 +268,14 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
     windows_media_manager: ctx.windows_media_manager.clone(),
   });
 
-  let (supported, status_message) =
-    account_supports_native_streaming(&ctx.spotify, ctx.cached_me, &ctx.token_cache_path, &ctx.app)
-      .await;
+  let (supported, status_message) = account_supports_native_streaming(
+    &ctx.spotify,
+    ctx.cached_me,
+    &ctx.token_cache_path,
+    &ctx.app,
+    true,
+  )
+  .await;
   if let Some(message) = status_message {
     ctx.app.lock().await.set_status_message(message, 12);
   }
@@ -375,5 +412,35 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   }
   if let Some(event) = startup_decision.event {
     app_mut.dispatch(event.into_io_event());
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::plan_check_retry_delay;
+  use std::time::Duration;
+
+  #[test]
+  fn plan_check_waits_out_the_window_plus_a_second() {
+    assert_eq!(
+      plan_check_retry_delay(1, Some(Duration::from_secs(17))),
+      Some(Duration::from_secs(18))
+    );
+    assert_eq!(
+      plan_check_retry_delay(2, None),
+      Some(Duration::from_secs(1))
+    );
+  }
+
+  #[test]
+  fn plan_check_gives_up_on_a_long_window_or_after_three_attempts() {
+    assert_eq!(
+      plan_check_retry_delay(1, Some(Duration::from_secs(600))),
+      None
+    );
+    assert_eq!(
+      plan_check_retry_delay(3, Some(Duration::from_secs(5))),
+      None
+    );
   }
 }

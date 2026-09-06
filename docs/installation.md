@@ -147,13 +147,16 @@ If you installed via a package manager (AUR, cargo, etc.), update through there 
 
 ## Connecting to Spotify
 
-spotatui needs to connect to Spotify's API. Instructions are shown when you first run the app.
+spotatui talks to Spotify's Web API through a Spotify app. The first run asks which app to use:
 
-1. Go to the [Spotify Dashboard](https://developer.spotify.com/dashboard/applications)
-2. Click **Create an app**
-3. Note your `Client ID` and `Client Secret`
-4. Click **Edit Settings**
-5. Add these Redirect URIs:
-   - `http://127.0.0.1:8888/callback` (API authentication)
-   - `http://127.0.0.1:8989/login` (native streaming)
-6. Save and run `spotatui`
+1. **The shared ncspot client ID.** No dashboard needed. Spotify counts every ncspot and spotatui user against this one app, so it is often rate limited: playlists load slowly or not at all, and the status bar says so.
+2. **Your own Spotify app** (recommended). Spotify gives each app a rate limit of its own.
+
+To use your own app:
+
+1. Go to the [Spotify Dashboard](https://developer.spotify.com/dashboard/applications) and click **Create app**.
+2. Add `http://127.0.0.1:8888/callback` to the Redirect URIs. The wizard asks for the port; 8888 is the default.
+3. Copy the `Client ID`. No client secret is needed.
+4. Run `spotatui --reconfigure-auth`, choose option 2, and paste the id. The browser opens once to sign in.
+
+The wizard keeps the shared id as `fallback_client_id` in `client.yml`, for a login that fails on your own app. A `client.yml` from an older version, with the shared id as `client_id` and your app as `fallback_client_id`, is read the other way round: your app leads. Your app still has no login of its own, so the first launch after the upgrade runs on the shared id and the status bar says so; run `spotatui --reconfigure-auth` once, choose 2, and paste the id. Native streaming signs in on its own and needs no dashboard entry.

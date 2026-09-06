@@ -156,6 +156,7 @@ impl ClientConfig {
       self.streaming_device_name = config_yml.streaming_device_name;
       self.streaming_bitrate = config_yml.streaming_bitrate;
       self.streaming_audio_cache = config_yml.streaming_audio_cache;
+      self.prefer_own_app();
 
       Ok(false)
     } else {
@@ -173,6 +174,20 @@ impl ClientConfig {
 
   pub fn needs_auth_setup_migration(&self) -> bool {
     self.setup_version < AUTH_SETUP_VERSION
+  }
+
+  /// An older wizard wrote the shared id as primary and the user's own app as
+  /// the fallback; the own app leads, since its rate limit is the reason to
+  /// have one, and the shared id becomes the fallback.
+  fn prefer_own_app(&mut self) {
+    if self.client_id != NCSPOT_CLIENT_ID {
+      return;
+    }
+    if let Some(own_app) = self.fallback_client_id.take_if(|fallback| {
+      fallback != NCSPOT_CLIENT_ID && ClientConfig::validate_client_key(fallback).is_ok()
+    }) {
+      self.fallback_client_id = Some(std::mem::replace(&mut self.client_id, own_app));
+    }
   }
 
   pub fn reconfigure_auth(&mut self, onboarding: &dyn Onboarding) -> Result<()> {
@@ -199,47 +214,42 @@ impl ClientConfig {
 
   fn run_auth_setup_wizard(&mut self, onboarding: &dyn Onboarding) -> Result<()> {
     onboarding.info("\nClient setup options:\n");
-    onboarding
-      .info("  1) Use ncspot client ID (quick setup, may break if Spotify revokes shared access)");
-    onboarding
-      .info("  2) Use ncspot client ID + your own fallback app ID (recommended for resilience)");
+    onboarding.info(
+      "  1) Use the shared ncspot client ID (quick start; its Spotify rate limit is shared by every ncspot and spotatui user)",
+    );
+    onboarding.info(
+      "  2) Use your own Spotify app, with the shared ID as a fallback (recommended: a rate limit of your own)",
+    );
 
     let setup_option = ClientConfig::get_setup_option(onboarding)?;
 
-    let (client_id, fallback_client_id) = match setup_option {
+    let (client_id, fallback_client_id, port) = match setup_option {
       1 => {
         onboarding.info("\nUsing ncspot redirect URI: http://127.0.0.1:8989/login");
-        (NCSPOT_CLIENT_ID.to_string(), None)
+        (NCSPOT_CLIENT_ID.to_string(), None, 8989)
       }
       2 => {
-        onboarding.info("\nCreate your fallback Spotify app:\n");
+        // The port comes first so the Redirect URI below names the real one.
+        let port = onboarding.prompt_line(&format!(
+          "\nEnter port of your app's redirect uri (default {}): \n",
+          DEFAULT_PORT
+        ))?;
+        let port = port.trim().parse::<u16>().unwrap_or(DEFAULT_PORT);
+        onboarding.info("\nCreate your Spotify app:\n");
         let instructions = [
           "Go to https://developer.spotify.com/dashboard/applications",
           "Click `Create app` and add your own name and description",
-          &format!(
-            "Add `http://127.0.0.1:{}/callback` to Redirect URIs",
-            DEFAULT_PORT
-          ),
+          &format!("Add `http://127.0.0.1:{port}/callback` to Redirect URIs"),
         ];
 
         for (number, item) in instructions.iter().enumerate() {
           onboarding.info(&format!("  {}. {}", number + 1, item));
         }
 
-        let fallback = ClientConfig::get_client_key_from_input("Fallback Client ID", onboarding)?;
-        (NCSPOT_CLIENT_ID.to_string(), Some(fallback))
+        let own_app = ClientConfig::get_client_key_from_input("Client ID", onboarding)?;
+        (own_app, Some(NCSPOT_CLIENT_ID.to_string()), port)
       }
       _ => unreachable!(),
-    };
-
-    let port = if setup_option == 1 {
-      8989
-    } else {
-      let port = onboarding.prompt_line(&format!(
-        "\nEnter port of fallback redirect uri (default {}): \n",
-        DEFAULT_PORT
-      ))?;
-      port.trim().parse::<u16>().unwrap_or(DEFAULT_PORT)
     };
 
     self.client_id = client_id;
@@ -370,6 +380,40 @@ mod tests {
   use crate::core::test_helpers::ScriptedOnboarding;
 
   #[test]
+  fn prefer_own_app_swaps_a_shared_primary_with_a_personal_fallback() {
+    let own = "0123456789abcdef0123456789abcdef";
+    let mut config = ClientConfig::new();
+    config.client_id = NCSPOT_CLIENT_ID.to_string();
+    config.fallback_client_id = Some(own.to_string());
+
+    config.prefer_own_app();
+
+    assert_eq!(config.client_id, own);
+    assert_eq!(config.fallback_client_id.as_deref(), Some(NCSPOT_CLIENT_ID));
+  }
+
+  #[test]
+  fn prefer_own_app_leaves_other_layouts_alone() {
+    let own = "0123456789abcdef0123456789abcdef";
+    for (primary, fallback) in [
+      (NCSPOT_CLIENT_ID, None),
+      (NCSPOT_CLIENT_ID, Some(NCSPOT_CLIENT_ID)),
+      (NCSPOT_CLIENT_ID, Some("not-a-client-id")),
+      (own, Some(NCSPOT_CLIENT_ID)),
+      (own, None),
+    ] {
+      let mut config = ClientConfig::new();
+      config.client_id = primary.to_string();
+      config.fallback_client_id = fallback.map(str::to_string);
+
+      config.prefer_own_app();
+
+      assert_eq!(config.client_id, primary);
+      assert_eq!(config.fallback_client_id.as_deref(), fallback);
+    }
+  }
+
+  #[test]
   fn setup_option_accepts_a_valid_choice_after_garbage() {
     let onboarding = ScriptedOnboarding::with_answers(&["x", "2"]);
     assert_eq!(ClientConfig::get_setup_option(&onboarding).unwrap(), 2);
@@ -387,10 +431,10 @@ mod tests {
     let valid = "0123456789abcdef0123456789abcdef";
     let onboarding = ScriptedOnboarding::with_answers(&["tooshort", valid]);
     assert_eq!(
-      ClientConfig::get_client_key_from_input("Fallback Client ID", &onboarding).unwrap(),
+      ClientConfig::get_client_key_from_input("Client ID", &onboarding).unwrap(),
       valid
     );
-    assert!(onboarding.saw("\nEnter your Fallback Client ID: \n"));
+    assert!(onboarding.saw("\nEnter your Client ID: \n"));
   }
 
   #[test]

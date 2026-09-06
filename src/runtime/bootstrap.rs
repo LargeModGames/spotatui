@@ -184,14 +184,17 @@ fn name_client_id(client_id: &str) -> String {
   }
 }
 
-/// Phrase an [`auth::ClientIdNotice`] for the user. Both variants are
-/// informational: neither means anything is broken, and neither should read as
-/// if the user misconfigured something.
+/// Phrase an [`auth::ClientIdNotice`] for the user. It is informational:
+/// nothing is broken, and it must not read as if the user misconfigured
+/// something.
 fn describe_client_id_notice(notice: auth::ClientIdNotice) -> String {
   match notice {
-    auth::ClientIdNotice::SharedWhilePersonalConfigured { personal_client_id } => format!(
-      "Spotify signed in with the shared ncspot client ID. Your own app ({}) is set as the fallback, so it is only used if the shared one stops working.",
-      short_client_id(&personal_client_id)
+    auth::ClientIdNotice::FellBack {
+      from_client_id,
+      to_client_id,
+    } if to_client_id == crate::core::config::NCSPOT_CLIENT_ID => format!(
+      "No login yet for {}; signed in with the shared ncspot client ID, whose Spotify rate limit every user shares. Run `spotatui --reconfigure-auth` and choose 2 to sign in with your own app.",
+      name_client_id(&from_client_id)
     ),
     auth::ClientIdNotice::FellBack {
       from_client_id,

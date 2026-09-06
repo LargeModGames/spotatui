@@ -362,6 +362,8 @@ Spotify is different: it uses the [Web API](https://developer.spotify.com/docume
 
 Playing Spotify tracks requires a **Premium** account. With a free Spotify account spotatui can authenticate and browse your library/search results, but playback actions (play/pause/seek/transfer) will not work in either native streaming or Web API playback control mode.
 
+Spotify rate limits are per app. The shared ncspot client ID from the quick setup is shared by every ncspot and spotatui user and is often rate limited; your own Spotify app gets a limit of its own. Run `spotatui --reconfigure-auth` and choose option 2, see [Connecting to Spotify](docs/installation.md#connecting-to-spotify).
+
 ### Deprecated Spotify API Features
 
 As of November 2024, Spotify removed access to certain API endpoints for new applications. The following features **only work if your Spotify Developer application was created before November 27, 2024**:

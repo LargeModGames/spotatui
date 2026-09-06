@@ -17,7 +17,7 @@ pub mod utils;
 
 use crate::core::app::{App, SPOTIFY_NOT_CONNECTED_STATUS};
 use crate::core::auth;
-use crate::core::config::ClientConfig;
+use crate::core::config::{ClientConfig, NCSPOT_CLIENT_ID};
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use crate::infra::redirect_uri::{bind_callback_listener, serve_spotify_callback};
 use anyhow::anyhow;
@@ -1073,10 +1073,18 @@ impl Network {
   }
 
   async fn handle_error(&mut self, e: anyhow::Error) {
+    let rate_limited = requests::is_rate_limited_error(&e);
+    // The shared client id's window is shared by every user; only an app of
+    // the user's own gets out of it.
+    let e = if rate_limited && self.client_config.client_id == NCSPOT_CLIENT_ID {
+      anyhow!("{e}. Shared client ID: run spotatui --reconfigure-auth to use your own app")
+    } else {
+      e
+    };
     let mut app = self.app.lock().await;
     // The first hit of a window under the pump: every later event is held
     // back, so a status message is enough. The CLI keeps its exit signal.
-    if self.defers_rate_limited && requests::is_rate_limited_error(&e) {
+    if self.defers_rate_limited && rate_limited {
       app.set_error_status_message(e.to_string(), 8);
       return;
     }
@@ -2027,6 +2035,24 @@ mod tests {
     let app = app.lock().await;
     assert!(app.api_error().is_empty());
     assert!(app.status_message_is_error());
+  }
+
+  #[tokio::test]
+  async fn a_rate_limit_on_the_shared_client_id_names_the_way_out() {
+    let app = app_without_a_session();
+    let mut network = rate_limited_pump_network(&app).await;
+    network.client_config.client_id = NCSPOT_CLIENT_ID.to_string();
+
+    network
+      .handle_error(anyhow!(
+        "Spotify API 429 Too Many Requests failed: retry in 17s"
+      ))
+      .await;
+
+    let app = app.lock().await;
+    assert!(app
+      .status_message()
+      .is_some_and(|m| m.contains("retry in 17s") && m.contains("--reconfigure-auth")));
   }
 
   #[tokio::test]
