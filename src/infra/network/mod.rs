@@ -1684,7 +1684,7 @@ impl Network {
       0
     };
     let compensated_position = if is_playing {
-      position_ms + transit_ms
+      position_ms.saturating_add(transit_ms)
     } else {
       position_ms
     };
@@ -1730,7 +1730,9 @@ impl Network {
     let drift = current_progress.abs_diff(compensated_position);
 
     if drift > 3000 && !switched_track {
-      app.dispatch(IoEvent::Seek(compensated_position as u32));
+      if let Ok(position_ms) = u32::try_from(compensated_position) {
+        app.dispatch(IoEvent::Seek(position_ms));
+      }
     }
   }
 
@@ -1752,7 +1754,11 @@ impl Network {
       sync::PlaybackAction::Pause => app.dispatch(IoEvent::PausePlayback),
       sync::PlaybackAction::NextTrack => app.dispatch(IoEvent::NextTrack),
       sync::PlaybackAction::PrevTrack => app.dispatch(IoEvent::PreviousTrack),
-      sync::PlaybackAction::Seek { position_ms } => app.dispatch(IoEvent::Seek(position_ms as u32)),
+      sync::PlaybackAction::Seek { position_ms } => {
+        if let Ok(position_ms) = u32::try_from(position_ms) {
+          app.dispatch(IoEvent::Seek(position_ms));
+        }
+      }
       sync::PlaybackAction::PlayTrack { uri } => {
         if ids::playable_id(&uri).is_some() {
           app.start_playback_uris(vec![uri], None);
@@ -2175,6 +2181,45 @@ mod tests {
     }
     relay(&mut network, state).await;
 
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn an_oversized_party_seek_is_dropped() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Host).await;
+
+    relay(
+      &mut network,
+      sync::SyncMessage::PlaybackCommand {
+        action: sync::PlaybackAction::Seek {
+          position_ms: u64::MAX,
+        },
+        from: None,
+      },
+    )
+    .await;
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SyncPlayback)));
+    assert!(rx.try_recv().is_err());
+
+    app.lock().await.party_session.as_mut().unwrap().role = sync::PartyRole::Guest;
+    let mut state = host_state();
+    if let sync::SyncMessage::SyncState {
+      position_ms,
+      timestamp,
+      ..
+    } = &mut state
+    {
+      *position_ms = u64::MAX;
+      *timestamp = 0;
+    }
+    relay(&mut network, state).await;
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, Some(_), None))
+    ));
     assert!(rx.try_recv().is_err());
   }
 

@@ -1915,6 +1915,10 @@ impl PlaybackNetwork for Network {
 
   #[cfg(feature = "streaming")]
   async fn restore_native_playback(&mut self, generation: u64) {
+    if decoded_source_owns_playback(self).await {
+      warn!("native restore {generation} skipped: a decoded source owns playback");
+      return;
+    }
     let (player, snapshot) = {
       let mut app = self.app.lock().await;
       if app.pending_start_playback.is_some() {
