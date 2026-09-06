@@ -422,6 +422,17 @@ fn is_no_active_device_error(e: &anyhow::Error) -> bool {
   text.contains("no_active_device") || text.contains("no active device")
 }
 
+/// A decoded source (or a decoded queue item) owns the sink: every Spotify
+/// transport call is refused, since the paused librespot and the Web API
+/// device are both the wrong player. A queued Spotify track keeps Native.
+async fn decoded_source_owns_playback(network: &Network) -> bool {
+  let refused = network.app.lock().await.active_decoded_source();
+  if refused {
+    log::debug!("Spotify transport refused: a decoded source owns playback");
+  }
+  refused
+}
+
 /// Whether a native backend is positioned to claim a failed player command:
 /// an available player (`start_playback` activates it on `NO_ACTIVE_DEVICE`),
 /// or a backend/activation still materializing (the `suppressed_*` handlers
@@ -1427,6 +1438,9 @@ impl PlaybackNetwork for Network {
     uris: Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
   ) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     let (uris, offset) = if context_id.is_none() {
       match uris {
         Some(track_uris) => {
@@ -1901,6 +1915,10 @@ impl PlaybackNetwork for Network {
 
   #[cfg(feature = "streaming")]
   async fn restore_native_playback(&mut self, generation: u64) {
+    if decoded_source_owns_playback(self).await {
+      warn!("native restore {generation} skipped: a decoded source owns playback");
+      return;
+    }
     let (player, snapshot) = {
       let mut app = self.app.lock().await;
       if app.pending_start_playback.is_some() {
@@ -1988,6 +2006,9 @@ impl PlaybackNetwork for Network {
   }
 
   async fn pause_playback(&mut self) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     {
       let mut app = self.app.lock().await;
@@ -2029,6 +2050,9 @@ impl PlaybackNetwork for Network {
   }
 
   async fn next_track(&mut self) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     {
       let mut app = self.app.lock().await;
@@ -2054,6 +2078,9 @@ impl PlaybackNetwork for Network {
   }
 
   async fn previous_track(&mut self) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     {
       let mut app = self.app.lock().await;
@@ -2080,6 +2107,9 @@ impl PlaybackNetwork for Network {
   }
 
   async fn force_previous_track(&mut self) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.prev();
@@ -2123,6 +2153,9 @@ impl PlaybackNetwork for Network {
   }
 
   async fn seek(&mut self, position_ms: u32) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.seek(position_ms);
@@ -2153,6 +2186,9 @@ impl PlaybackNetwork for Network {
   }
 
   async fn shuffle(&mut self, shuffle_state: bool) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       let _ = player.set_shuffle(shuffle_state);
@@ -2199,6 +2235,9 @@ impl PlaybackNetwork for Network {
   }
 
   async fn repeat(&mut self, repeat_state: RepeatState) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       let _ = player.set_repeat(repeat_state);
@@ -2247,6 +2286,9 @@ impl PlaybackNetwork for Network {
   /// On error we bail and clear everything so the UI falls back to whatever
   /// the API last reported.
   async fn change_volume(&mut self, volume: u8) {
+    if decoded_source_owns_playback(self).await {
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.set_volume(volume);
@@ -2304,12 +2346,23 @@ impl PlaybackNetwork for Network {
   }
 
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
+    #[cfg(feature = "streaming")]
+    let backend = transfer_playback_backend(self, &device_id).await;
+    // Only the hand-over to librespot touches the local sink; an external
+    // device stays a valid target.
+    #[cfg(feature = "streaming")]
+    if matches!(backend, PlaybackBackend::Native(_)) && decoded_source_owns_playback(self).await {
+      self
+        .show_status_message("Another source owns playback".to_string(), 4)
+        .await;
+      return;
+    }
     // A device change moves playback off the session's `from_tracks` load;
     // the app-owned shuffle order no longer describes what plays.
     #[cfg(feature = "streaming")]
     self.app.lock().await.clear_native_shuffle_session();
     #[cfg(feature = "streaming")]
-    if let PlaybackBackend::Native(player) = transfer_playback_backend(self, &device_id).await {
+    if let PlaybackBackend::Native(player) = backend {
       let activation_time = Instant::now();
       let native_device_id = player.device_id();
       let _ = player.transfer(None);
@@ -2799,21 +2852,7 @@ mod tests {
 
   #[cfg(feature = "streaming")]
   fn queued_track(uri: &str) -> crate::core::plugin_api::TrackInfo {
-    crate::core::plugin_api::TrackInfo {
-      uri: Some(uri.to_string()),
-      name: "Queued".to_string(),
-      artists: vec!["Artist".to_string()],
-      album: "Album".to_string(),
-      duration_ms: 180_000,
-      id: None,
-      album_id: None,
-      artist_refs: Vec::new(),
-      is_playable: true,
-      is_local: false,
-      track_number: 1,
-      explicit: false,
-      image_url: None,
-    }
+    crate::core::test_helpers::queued_track(uri, "Queued")
   }
 
   #[test]

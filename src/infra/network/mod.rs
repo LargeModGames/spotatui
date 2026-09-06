@@ -15,7 +15,7 @@ pub mod sync;
 pub mod user;
 pub mod utils;
 
-use crate::core::app::{App, SPOTIFY_NOT_CONNECTED_STATUS};
+use crate::core::app::{App, PlaybackOwner, SPOTIFY_NOT_CONNECTED_STATUS};
 use crate::core::auth;
 use crate::core::config::{ClientConfig, NCSPOT_CLIENT_ID};
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
@@ -24,7 +24,6 @@ use anyhow::anyhow;
 use rspotify::model::{
   album::SimplifiedAlbum,
   enums::{Country, RepeatState},
-  idtypes::{EpisodeId, PlayableId, TrackId},
 };
 use rspotify::prelude::Id;
 // `parse_response_code` / `request_token` for the in-TUI login live on this trait.
@@ -1498,25 +1497,25 @@ impl Network {
         _ => return,
       };
       let _ = session;
-
-      let (track_uri, is_playing) = match &app.current_playback_context {
-        Some(ctx) => {
-          let uri = match &ctx.item {
-            Some(rspotify::model::PlayableItem::Track(t)) => {
-              t.id.as_ref().map(|id| id.uri()).unwrap_or_default()
-            }
-            Some(rspotify::model::PlayableItem::Episode(e)) => e.id.uri(),
-            Some(_) | None => return,
-          };
-          (uri, ctx.is_playing)
-        }
-        None => return,
+      // Publish only what a guest can follow: the same owner rule as the
+      // command relay, and a Spotify URI (a native `spotify:local:` track has none).
+      if party_yields_to_local_playback(&app) {
+        return;
+      }
+      let Some(snapshot) = crate::infra::media_metadata::current_playback_snapshot(&app) else {
+        return;
+      };
+      let Some(track_uri) = snapshot
+        .item_uri
+        .and_then(|uri| ids::playable_id(&uri).map(|id| id.uri()))
+      else {
+        return;
       };
 
       sync::SyncMessage::SyncState {
         track_uri,
-        position_ms: app.song_progress_ms as u64,
-        is_playing,
+        position_ms: snapshot.progress_ms as u64,
+        is_playing: snapshot.is_playing,
         timestamp: sync::now_ms(),
       }
     };
@@ -1584,6 +1583,7 @@ impl Network {
       }
     };
 
+    let mut latest_state = None;
     for msg in messages {
       match msg {
         sync::SyncMessage::RoomCreated { code, .. } => {
@@ -1625,16 +1625,9 @@ impl Network {
             };
           }
         }
-        sync::SyncMessage::SyncState {
-          track_uri,
-          position_ms,
-          is_playing,
-          timestamp,
-        } => {
-          self
-            .handle_incoming_sync_state(track_uri, position_ms, is_playing, timestamp)
-            .await;
-        }
+        // Only the newest host state in a drain counts: each earlier one
+        // would start the track again before the pump ran the first start.
+        state @ sync::SyncMessage::SyncState { .. } => latest_state = Some(state),
         sync::SyncMessage::PlaybackCommand { action, .. } => {
           self.handle_incoming_playback_command(action).await;
         }
@@ -1656,6 +1649,17 @@ impl Network {
         _ => {}
       }
     }
+    if let Some(sync::SyncMessage::SyncState {
+      track_uri,
+      position_ms,
+      is_playing,
+      timestamp,
+    }) = latest_state
+    {
+      self
+        .handle_incoming_sync_state(track_uri, position_ms, is_playing, timestamp)
+        .await;
+    }
   }
 
   async fn handle_incoming_sync_state(
@@ -1665,14 +1669,17 @@ impl Network {
     is_playing: bool,
     timestamp: u64,
   ) {
-    let is_guest = {
-      let app = self.app.lock().await;
-      matches!(
-        &app.party_session,
-        Some(s) if s.role == sync::PartyRole::Guest
-      )
+    // The canonical URI: a bare id would compare unequal to the current
+    // track's URI and restart it on every state.
+    let Some(track_uri) = ids::playable_id(&track_uri).map(|id| id.uri()) else {
+      return;
     };
-    if !is_guest {
+    let mut app = self.app.lock().await;
+    let follows_host = matches!(
+      &app.party_session,
+      Some(s) if s.role == sync::PartyRole::Guest
+    ) && !party_yields_to_local_playback(&app);
+    if !follows_host {
       return;
     }
 
@@ -1684,13 +1691,12 @@ impl Network {
       0
     };
     let compensated_position = if is_playing {
-      position_ms + transit_ms
+      position_ms.saturating_add(transit_ms)
     } else {
       position_ms
     };
 
     let (current_uri, current_is_playing, current_progress) = {
-      let app = self.app.lock().await;
       let uri = match &app.current_playback_context {
         Some(ctx) => match &ctx.item {
           Some(rspotify::model::PlayableItem::Track(t)) => {
@@ -1710,25 +1716,10 @@ impl Network {
       (uri, playing, progress)
     };
 
-    let mut switched_track = false;
-
     // Track change takes priority
-    if current_uri != track_uri && !track_uri.is_empty() {
-      let playable: Option<PlayableId<'static>> = if let Ok(id) = TrackId::from_uri(&track_uri) {
-        let p: PlayableId<'_> = id.into();
-        Some(p.into_static())
-      } else if let Ok(id) = EpisodeId::from_uri(&track_uri) {
-        let p: PlayableId<'_> = id.into();
-        Some(p.into_static())
-      } else {
-        None
-      };
-      if let Some(playable_id) = playable {
-        self
-          .start_playback(None, Some(vec![playable_id]), None)
-          .await;
-        switched_track = true;
-      }
+    let switched_track = current_uri != track_uri;
+    if switched_track {
+      app.start_playback_uris(vec![track_uri], None);
     }
 
     // Play/pause sync
@@ -1736,69 +1727,65 @@ impl Network {
     // begin playing even when host is paused.
     if (switched_track && !is_playing) || (!switched_track && current_is_playing != is_playing) {
       if is_playing {
-        self.start_playback(None, None, None).await;
+        app.dispatch(IoEvent::StartPlayback(None, None, None));
       } else {
-        self.pause_playback().await;
+        app.dispatch(IoEvent::PausePlayback);
       }
     }
 
     // Position drift correction (>3s triggers seek)
     let drift = current_progress.abs_diff(compensated_position);
 
-    if drift > 3000 && current_uri == track_uri {
-      self.seek(compensated_position as u32).await;
+    if drift > 3000 && !switched_track {
+      if let Ok(position_ms) = u32::try_from(compensated_position) {
+        app.dispatch(IoEvent::Seek(position_ms));
+      }
     }
   }
 
   async fn handle_incoming_playback_command(&mut self, action: sync::PlaybackAction) {
-    let is_host = {
-      let app = self.app.lock().await;
-      matches!(
-        &app.party_session,
-        Some(s) if s.role == sync::PartyRole::Host
-      )
-    };
-    if !is_host {
+    let mut app = self.app.lock().await;
+    let relays = matches!(
+      &app.party_session,
+      Some(s) if s.role == sync::PartyRole::Host
+    ) && !party_yields_to_local_playback(&app);
+    if !relays {
       return;
     }
 
+    // Plain Spotify events, not the `App` key chains: a host's Next through
+    // `App::next_track` would hand the sink to its own queue and lock the
+    // party out.
     match action {
-      sync::PlaybackAction::Play => {
-        self.start_playback(None, None, None).await;
-      }
-      sync::PlaybackAction::Pause => {
-        self.pause_playback().await;
-      }
-      sync::PlaybackAction::NextTrack => {
-        self.next_track().await;
-      }
-      sync::PlaybackAction::PrevTrack => {
-        self.previous_track().await;
-      }
+      sync::PlaybackAction::Play => app.dispatch(IoEvent::StartPlayback(None, None, None)),
+      sync::PlaybackAction::Pause => app.dispatch(IoEvent::PausePlayback),
+      sync::PlaybackAction::NextTrack => app.dispatch(IoEvent::NextTrack),
+      sync::PlaybackAction::PrevTrack => app.dispatch(IoEvent::PreviousTrack),
       sync::PlaybackAction::Seek { position_ms } => {
-        self.seek(position_ms as u32).await;
+        if let Ok(position_ms) = u32::try_from(position_ms) {
+          app.dispatch(IoEvent::Seek(position_ms));
+        }
       }
       sync::PlaybackAction::PlayTrack { uri } => {
-        let playable: Option<PlayableId<'static>> = if let Ok(id) = TrackId::from_uri(&uri) {
-          let p: PlayableId<'_> = id.into();
-          Some(p.into_static())
-        } else if let Ok(id) = EpisodeId::from_uri(&uri) {
-          let p: PlayableId<'_> = id.into();
-          Some(p.into_static())
-        } else {
-          None
-        };
-        if let Some(playable_id) = playable {
-          self
-            .start_playback(None, Some(vec![playable_id]), None)
-            .await;
+        if let Some(uri) = ids::playable_id(&uri).map(|id| id.uri()) {
+          app.start_playback_uris(vec![uri], None);
         }
       }
     }
 
-    // After executing, broadcast updated state
-    self.sync_playback().await;
+    // Queued behind the command on the serial pump; the 2 s tick repeats it.
+    app.dispatch(IoEvent::SyncPlayback);
   }
+}
+
+/// The party follows Spotify transport only. Coarser than the transport
+/// guard on purpose: a queued Spotify track keeps librespot, but a guest must
+/// not drive the host's queue slot.
+fn party_yields_to_local_playback(app: &App) -> bool {
+  matches!(
+    app.playback_owner(),
+    PlaybackOwner::Decoded | PlaybackOwner::Queue
+  )
 }
 
 #[cfg(test)]
@@ -2113,13 +2100,7 @@ mod tests {
     {
       let mut app = app.lock().await;
       app.party_status = sync::PartyStatus::Hosting;
-      app.party_session = Some(sync::PartySession {
-        role: sync::PartyRole::Host,
-        code: "ABC123".to_string(),
-        guests: Vec::new(),
-        control_mode: sync::ControlMode::HostOnly,
-        host_name: "Host".to_string(),
-      });
+      app.party_session = Some(party_session(sync::PartyRole::Host));
     }
 
     network.process_party_messages().await;
@@ -2128,5 +2109,194 @@ mod tests {
     let app = app.lock().await;
     assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
     assert!(app.party_session.is_none());
+  }
+
+  fn party_session(role: sync::PartyRole) -> sync::PartySession {
+    sync::PartySession {
+      role,
+      code: "ABC123".to_string(),
+      guests: Vec::new(),
+      control_mode: sync::ControlMode::HostOnly,
+      host_name: "Host".to_string(),
+    }
+  }
+
+  fn app_with_a_session() -> (Arc<Mutex<App>>, std::sync::mpsc::Receiver<IoEvent>) {
+    let (io_tx, io_rx) = std::sync::mpsc::channel();
+    let app = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    (Arc::new(Mutex::new(app)), io_rx)
+  }
+
+  /// A party member whose Spotify client is never called: the relay dispatches.
+  async fn party_network(app: &Arc<Mutex<App>>, role: sync::PartyRole) -> Network {
+    let mut network = session_free_network(app);
+    network.spotify = Some(AuthCodePkceSpotify::new(
+      Credentials::default(),
+      OAuth::default(),
+    ));
+    app.lock().await.party_session = Some(party_session(role));
+    network
+  }
+
+  async fn relay(network: &mut Network, message: sync::SyncMessage) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tx.send(message).unwrap();
+    network.party_incoming_rx = Some(rx);
+    network.process_party_messages().await;
+  }
+
+  const HOST_TRACK: &str = "spotify:track:0000000000000000000001";
+
+  fn host_state() -> sync::SyncMessage {
+    sync::SyncMessage::SyncState {
+      track_uri: HOST_TRACK.to_string(),
+      position_ms: 0,
+      is_playing: true,
+      timestamp: sync::now_ms(),
+    }
+  }
+
+  fn guest_pause() -> sync::SyncMessage {
+    sync::SyncMessage::PlaybackCommand {
+      action: sync::PlaybackAction::Pause,
+      from: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn a_guest_follows_the_host_through_a_dispatched_start() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Guest).await;
+
+    relay(&mut network, host_state()).await;
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, Some(uris), None)) if uris == [HOST_TRACK]
+    ));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn a_bare_track_id_from_the_host_starts_the_full_uri() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Guest).await;
+
+    let mut state = host_state();
+    if let sync::SyncMessage::SyncState { track_uri, .. } = &mut state {
+      *track_uri = "0000000000000000000001".to_string();
+    }
+    relay(&mut network, state).await;
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, Some(uris), None)) if uris == [HOST_TRACK]
+    ));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn two_host_states_in_one_drain_start_the_track_once() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Guest).await;
+
+    let (tx, incoming) = tokio::sync::mpsc::unbounded_channel();
+    tx.send(host_state()).unwrap();
+    let mut newest = host_state();
+    if let sync::SyncMessage::SyncState { track_uri, .. } = &mut newest {
+      *track_uri = "spotify:track:0000000000000000000002".to_string();
+    }
+    tx.send(newest).unwrap();
+    network.party_incoming_rx = Some(incoming);
+    network.process_party_messages().await;
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, Some(uris), None))
+        if uris == ["spotify:track:0000000000000000000002"]
+    ));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn a_guest_ignores_a_host_state_it_cannot_play() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Guest).await;
+
+    let mut state = host_state();
+    if let sync::SyncMessage::SyncState { track_uri, .. } = &mut state {
+      *track_uri = "qobuz:track:1".to_string();
+    }
+    relay(&mut network, state).await;
+
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn an_oversized_party_seek_is_dropped() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Host).await;
+
+    relay(
+      &mut network,
+      sync::SyncMessage::PlaybackCommand {
+        action: sync::PlaybackAction::Seek {
+          position_ms: u64::MAX,
+        },
+        from: None,
+      },
+    )
+    .await;
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SyncPlayback)));
+    assert!(rx.try_recv().is_err());
+
+    app.lock().await.party_session.as_mut().unwrap().role = sync::PartyRole::Guest;
+    let mut state = host_state();
+    if let sync::SyncMessage::SyncState {
+      position_ms,
+      timestamp,
+      ..
+    } = &mut state
+    {
+      *position_ms = u64::MAX;
+      *timestamp = 0;
+    }
+    relay(&mut network, state).await;
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, Some(_), None))
+    ));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn a_host_relays_a_guest_command_then_broadcasts() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Host).await;
+
+    relay(&mut network, guest_pause()).await;
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SyncPlayback)));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn the_relay_yields_to_the_native_queue_slot() {
+    let (app, rx) = app_with_a_session();
+    app.lock().await.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+      track: crate::core::test_helpers::queued_track("spotify:track:queued", "Queued"),
+    });
+    let mut network = party_network(&app, sync::PartyRole::Guest).await;
+
+    relay(&mut network, host_state()).await;
+    assert!(rx.try_recv().is_err());
+
+    app.lock().await.party_session.as_mut().unwrap().role = sync::PartyRole::Host;
+    relay(&mut network, guest_pause()).await;
+    assert!(rx.try_recv().is_err());
   }
 }

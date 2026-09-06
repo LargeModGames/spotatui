@@ -2,6 +2,8 @@
 
 use crate::core::app::UserInfo;
 use crate::core::plugin_api::PlaylistInfo;
+#[cfg(feature = "streaming")]
+use crate::core::plugin_api::TrackInfo;
 use chrono::Duration;
 use rspotify::model::{
   idtypes::{PlaylistId, UserId},
@@ -11,6 +13,26 @@ use rspotify::model::{
   SimplifiedAlbum, SimplifiedArtist, SimplifiedPlaylist, TrackId,
 };
 use std::collections::HashMap;
+
+/// A queue-slot [`TrackInfo`] with only its `uri` and `name` set.
+#[cfg(feature = "streaming")]
+pub fn queued_track(uri: &str, name: &str) -> TrackInfo {
+  TrackInfo {
+    uri: Some(uri.to_string()),
+    name: name.to_string(),
+    artists: vec!["Artist".to_string()],
+    album: "Album".to_string(),
+    duration_ms: 180_000,
+    id: None,
+    album_id: None,
+    artist_refs: Vec::new(),
+    is_playable: true,
+    is_local: false,
+    track_number: 1,
+    explicit: false,
+    image_url: None,
+  }
+}
 
 /// Domain [`UserInfo`] for tests. `display_name` mirrors `private_user`.
 pub fn user_info(id: &str) -> UserInfo {
