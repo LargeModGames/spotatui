@@ -1583,6 +1583,7 @@ impl Network {
       }
     };
 
+    let mut latest_state = None;
     for msg in messages {
       match msg {
         sync::SyncMessage::RoomCreated { code, .. } => {
@@ -1624,16 +1625,9 @@ impl Network {
             };
           }
         }
-        sync::SyncMessage::SyncState {
-          track_uri,
-          position_ms,
-          is_playing,
-          timestamp,
-        } => {
-          self
-            .handle_incoming_sync_state(track_uri, position_ms, is_playing, timestamp)
-            .await;
-        }
+        // Only the newest host state in a drain counts: each earlier one
+        // would start the track again before the pump ran the first start.
+        state @ sync::SyncMessage::SyncState { .. } => latest_state = Some(state),
         sync::SyncMessage::PlaybackCommand { action, .. } => {
           self.handle_incoming_playback_command(action).await;
         }
@@ -1655,6 +1649,17 @@ impl Network {
         _ => {}
       }
     }
+    if let Some(sync::SyncMessage::SyncState {
+      track_uri,
+      position_ms,
+      is_playing,
+      timestamp,
+    }) = latest_state
+    {
+      self
+        .handle_incoming_sync_state(track_uri, position_ms, is_playing, timestamp)
+        .await;
+    }
   }
 
   async fn handle_incoming_sync_state(
@@ -1664,9 +1669,11 @@ impl Network {
     is_playing: bool,
     timestamp: u64,
   ) {
-    if ids::playable_id(&track_uri).is_none() {
+    // The canonical URI: a bare id would compare unequal to the current
+    // track's URI and restart it on every state.
+    let Some(track_uri) = ids::playable_id(&track_uri).map(|id| id.uri()) else {
       return;
-    }
+    };
     let mut app = self.app.lock().await;
     let follows_host = matches!(
       &app.party_session,
@@ -1760,7 +1767,7 @@ impl Network {
         }
       }
       sync::PlaybackAction::PlayTrack { uri } => {
-        if ids::playable_id(&uri).is_some() {
+        if let Some(uri) = ids::playable_id(&uri).map(|id| id.uri()) {
           app.start_playback_uris(vec![uri], None);
         }
       }
@@ -2166,6 +2173,47 @@ mod tests {
     assert!(matches!(
       rx.try_recv(),
       Ok(IoEvent::StartPlayback(None, Some(uris), None)) if uris == [HOST_TRACK]
+    ));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn a_bare_track_id_from_the_host_starts_the_full_uri() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Guest).await;
+
+    let mut state = host_state();
+    if let sync::SyncMessage::SyncState { track_uri, .. } = &mut state {
+      *track_uri = "0000000000000000000001".to_string();
+    }
+    relay(&mut network, state).await;
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, Some(uris), None)) if uris == [HOST_TRACK]
+    ));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn two_host_states_in_one_drain_start_the_track_once() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Guest).await;
+
+    let (tx, incoming) = tokio::sync::mpsc::unbounded_channel();
+    tx.send(host_state()).unwrap();
+    let mut newest = host_state();
+    if let sync::SyncMessage::SyncState { track_uri, .. } = &mut newest {
+      *track_uri = "spotify:track:0000000000000000000002".to_string();
+    }
+    tx.send(newest).unwrap();
+    network.party_incoming_rx = Some(incoming);
+    network.process_party_messages().await;
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, Some(uris), None))
+        if uris == ["spotify:track:0000000000000000000002"]
     ));
     assert!(rx.try_recv().is_err());
   }
