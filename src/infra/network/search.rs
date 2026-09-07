@@ -37,8 +37,9 @@ struct ShowSearchResponse {
   shows: Page<SimplifiedShow>,
 }
 
-/// The `limit` ceiling of the search endpoint for Development Mode apps since
-/// February 2026. The library endpoints still take 50.
+/// The `limit` ceiling of the search endpoint for Development Mode apps: new
+/// apps since February 2026, existing apps since March 2026. The library
+/// endpoints still take 50.
 pub(crate) const SPOTIFY_SEARCH_LIMIT: u32 = 10;
 
 fn search_limit(requested: u32) -> String {

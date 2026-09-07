@@ -84,7 +84,7 @@ pub const TOOLS: &[ToolSpec] = &[
         "type": "object",
         "properties": {
           "query": {"type": "string", "description": "Free-text search, e.g. 'radiohead weird fishes'."},
-          "limit": {"type": "integer", "minimum": 1, "maximum": SPOTIFY_SEARCH_LIMIT, "description": "Maximum results. Defaults to 10."}
+          "limit": {"type": "integer", "minimum": 1, "maximum": SPOTIFY_SEARCH_LIMIT, "description": format!("Maximum results. Defaults to {SPOTIFY_SEARCH_LIMIT}.")}
         },
         "required": ["query"],
         "additionalProperties": false
@@ -324,7 +324,7 @@ pub fn parse_call(name: &str, args: &Value) -> Result<DjToolCall, ToolCallError>
         return Err(invalid("query must not be empty"));
       }
       let limit = match get("limit") {
-        None | Some(Value::Null) => 10,
+        None | Some(Value::Null) => SPOTIFY_SEARCH_LIMIT as usize,
         Some(value) => value
           .as_u64()
           .filter(|n| (1..=u64::from(SPOTIFY_SEARCH_LIMIT)).contains(n))
@@ -734,7 +734,11 @@ mod tests {
   fn search_validates_query_and_limit() {
     assert!(parse_call("search_tracks", &json!({"query": "   "})).is_err());
     assert!(parse_call("search_tracks", &json!({"query": "a", "limit": 0})).is_err());
-    assert!(parse_call("search_tracks", &json!({"query": "a", "limit": 11})).is_err());
+    assert!(parse_call(
+      "search_tracks",
+      &json!({"query": "a", "limit": SPOTIFY_SEARCH_LIMIT + 1})
+    )
+    .is_err());
     let call = parse_call("search_tracks", &json!({"query": " nude ", "limit": 3})).unwrap();
     assert_eq!(
       call,

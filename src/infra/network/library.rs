@@ -27,8 +27,8 @@ use tokio::sync::Mutex;
 #[cfg(feature = "streaming")]
 use crate::infra::player::StreamingPlayer;
 
-// Spotify's `me/library/contains` endpoint accepts at most 40 uris per
-// request; anything larger fails with a 400 "Too many uris".
+// Spotify's `me/library` endpoints (contains, save, remove) accept at most 40
+// uris per request; anything larger fails with a 400 "Too many uris".
 const LIBRARY_CONTAINS_MAX_URIS: usize = 40;
 
 #[cfg(test)]
@@ -325,40 +325,36 @@ impl Network {
   }
 
   pub(super) async fn library_save_uris(&self, uris: &[String]) -> anyhow::Result<()> {
-    if uris.is_empty() {
-      return Ok(());
+    for batch in uri_batches(uris) {
+      let query = vec![("uris", batch.join(","))];
+      spotify_api_request_json_for_with_refresh(
+        self.spotify(),
+        Method::PUT,
+        "me/library",
+        &query,
+        Some(json!({ "uris": batch })),
+        &self.token_cache_path,
+        &self.app,
+      )
+      .await?;
     }
-
-    let query = vec![("uris", uris.join(","))];
-    spotify_api_request_json_for_with_refresh(
-      self.spotify(),
-      Method::PUT,
-      "me/library",
-      &query,
-      Some(json!({ "uris": uris })),
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await?;
     Ok(())
   }
 
   pub(super) async fn library_remove_uris(&self, uris: &[String]) -> anyhow::Result<()> {
-    if uris.is_empty() {
-      return Ok(());
+    for batch in uri_batches(uris) {
+      let query = vec![("uris", batch.join(","))];
+      spotify_api_request_json_for_with_refresh(
+        self.spotify(),
+        Method::DELETE,
+        "me/library",
+        &query,
+        Some(json!({ "uris": batch })),
+        &self.token_cache_path,
+        &self.app,
+      )
+      .await?;
     }
-
-    let query = vec![("uris", uris.join(","))];
-    spotify_api_request_json_for_with_refresh(
-      self.spotify(),
-      Method::DELETE,
-      "me/library",
-      &query,
-      Some(json!({ "uris": uris })),
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await?;
     Ok(())
   }
 
