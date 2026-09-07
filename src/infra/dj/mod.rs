@@ -59,7 +59,7 @@ pub const MAX_LIBRARY_TRACKS: usize = 20_000;
 
 /// What the listener already has, for the avoid-library filter.
 ///
-/// Playlists only. Liked Songs are deliberately absent: `me/tracks/contains`
+/// Playlists only. Liked Songs are deliberately absent: `me/library/contains`
 /// answers that question exactly, for a whole batch in one call, so caching it
 /// would add staleness for nothing. See [`library`].
 #[derive(Clone, Debug, Default)]

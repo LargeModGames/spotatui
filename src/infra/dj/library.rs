@@ -2,8 +2,8 @@
 //!
 //! The two halves are deliberately asymmetric, because the API is:
 //!
-//! * **Liked Songs** — `me/tracks/contains` answers exactly, for up to 50 IDs per
-//!   call. A DJ batch is at most [`MAX_BATCH`](super::MAX_BATCH) tracks, so one
+//! * **Liked Songs** — `me/library/contains` answers exactly, for up to 40 URIs
+//!   per call. A DJ batch is at most [`MAX_BATCH`](super::MAX_BATCH) tracks, so one
 //!   call per turn against the canonical truth. Nothing cached, nothing stale.
 //! * **Playlists** — no `contains` equivalent exists, so the only way to know is
 //!   to crawl every playlist and keep the answer. Hence [`build_index`] and the
@@ -22,8 +22,6 @@ use std::collections::HashSet;
 const PLAYLIST_PAGE: usize = 50;
 /// Tracks per page. Also the maximum.
 const TRACK_PAGE: usize = 100;
-/// IDs per `contains` call. A hard API limit, not a tuning choice.
-const CONTAINS_CHUNK: usize = 50;
 
 #[derive(Deserialize)]
 struct PlaylistPage {
@@ -57,7 +55,7 @@ struct TrackPage {
 
 #[derive(Deserialize)]
 struct TrackItem {
-  /// `playlists/{id}/tracks` returns `track`; the newer item shape returns `item`,
+  /// `playlists/{id}/items` returns `item`; the older `tracks` path returned `track`,
   /// and `normalize_spotify_payload` only rewrites that when `added_at` is present
   /// — which the `fields` filter below strips. Accept both rather than depend on
   /// which one arrives.
@@ -179,7 +177,7 @@ async fn collect_playlist(
   playlist_id: &str,
   library: &mut DjLibrary,
 ) -> anyhow::Result<()> {
-  let path = format!("playlists/{playlist_id}/tracks");
+  let path = format!("playlists/{playlist_id}/items");
   let mut offset = 0usize;
   loop {
     let page = net
@@ -190,7 +188,7 @@ async fn collect_playlist(
           // size, and the crawl pays that per 100 tracks.
           (
             "fields",
-            "items(track(id,name,artists(name))),next".to_string(),
+            "items(item(id,name,artists(name))),next".to_string(),
           ),
           ("limit", TRACK_PAGE.to_string()),
           ("offset", offset.to_string()),
@@ -234,27 +232,23 @@ async fn collect_playlist(
 
 /// Which of these track IDs are in the listener's Liked Songs.
 ///
-/// Fails **open**: a check that errors returns no IDs for that chunk, so the
-/// tracks are kept. Dropping a good recommendation because a lookup failed is the
-/// worse outcome — the user asked for music, not for an empty queue.
+/// Fails **open**: a check that errors returns no IDs, so the tracks are kept.
+/// Dropping a good recommendation because a lookup failed is the worse outcome:
+/// the user asked for music, not for an empty queue.
 pub async fn liked_among(net: &Network, ids: &[String]) -> HashSet<String> {
-  let mut liked = HashSet::new();
-  for chunk in ids.chunks(CONTAINS_CHUNK) {
-    match net
-      .spotify_get_typed::<Vec<bool>>("me/tracks/contains", &[("ids", chunk.join(","))])
-      .await
-    {
-      Ok(flags) => {
-        for (id, is_liked) in chunk.iter().zip(flags) {
-          if is_liked {
-            liked.insert(id.clone());
-          }
-        }
-      }
-      Err(e) => log::debug!("DJ: Liked Songs check failed, keeping the batch: {e}"),
+  let uris: Vec<String> = ids.iter().map(|id| format!("spotify:track:{id}")).collect();
+  match net.library_contains_uris(&uris).await {
+    Ok(flags) => ids
+      .iter()
+      .zip(flags)
+      .filter(|(_, is_liked)| *is_liked)
+      .map(|(id, _)| id.clone())
+      .collect(),
+    Err(e) => {
+      log::debug!("DJ: Liked Songs check failed, keeping the batch: {e}");
+      HashSet::new()
     }
   }
-  liked
 }
 
 #[cfg(test)]
@@ -322,12 +316,6 @@ mod tests {
     // Empty always stops, even with `next` set — the backstop against a `next`
     // chain that never terminates.
     assert!(is_last_page(0, 50, true));
-  }
-
-  #[test]
-  fn the_contains_chunk_matches_the_api_limit() {
-    // Not a tuning knob: 51 IDs is a 400 from Spotify.
-    assert_eq!(CONTAINS_CHUNK, 50);
   }
 
   #[test]

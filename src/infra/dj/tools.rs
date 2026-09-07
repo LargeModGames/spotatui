@@ -14,6 +14,7 @@
 use super::{brief, DjSuggestion, MAX_BATCH};
 use crate::core::action::Action;
 use crate::core::app::App;
+use crate::infra::network::search::SPOTIFY_SEARCH_LIMIT;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -83,7 +84,7 @@ pub const TOOLS: &[ToolSpec] = &[
         "type": "object",
         "properties": {
           "query": {"type": "string", "description": "Free-text search, e.g. 'radiohead weird fishes'."},
-          "limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum results. Defaults to 10."}
+          "limit": {"type": "integer", "minimum": 1, "maximum": SPOTIFY_SEARCH_LIMIT, "description": "Maximum results. Defaults to 10."}
         },
         "required": ["query"],
         "additionalProperties": false
@@ -326,9 +327,12 @@ pub fn parse_call(name: &str, args: &Value) -> Result<DjToolCall, ToolCallError>
         None | Some(Value::Null) => 10,
         Some(value) => value
           .as_u64()
-          .filter(|n| (1..=20).contains(n))
-          .ok_or_else(|| invalid("limit must be an integer between 1 and 20"))?
-          as usize,
+          .filter(|n| (1..=u64::from(SPOTIFY_SEARCH_LIMIT)).contains(n))
+          .ok_or_else(|| {
+            invalid(&format!(
+              "limit must be an integer between 1 and {SPOTIFY_SEARCH_LIMIT}"
+            ))
+          })? as usize,
       };
       Ok(DjToolCall::SearchTracks { query, limit })
     }
@@ -730,7 +734,7 @@ mod tests {
   fn search_validates_query_and_limit() {
     assert!(parse_call("search_tracks", &json!({"query": "   "})).is_err());
     assert!(parse_call("search_tracks", &json!({"query": "a", "limit": 0})).is_err());
-    assert!(parse_call("search_tracks", &json!({"query": "a", "limit": 99})).is_err());
+    assert!(parse_call("search_tracks", &json!({"query": "a", "limit": 11})).is_err());
     let call = parse_call("search_tracks", &json!({"query": " nude ", "limit": 3})).unwrap();
     assert_eq!(
       call,

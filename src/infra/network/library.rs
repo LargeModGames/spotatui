@@ -280,7 +280,7 @@ pub trait LibraryNetwork {
 
 // Private helper methods
 impl Network {
-  async fn library_contains_uris(&self, uris: &[String]) -> anyhow::Result<Vec<bool>> {
+  pub(crate) async fn library_contains_uris(&self, uris: &[String]) -> anyhow::Result<Vec<bool>> {
     if uris.is_empty() {
       return Ok(Vec::new());
     }
@@ -324,7 +324,7 @@ impl Network {
     Ok(())
   }
 
-  async fn library_save_uris(&self, uris: &[String]) -> anyhow::Result<()> {
+  pub(super) async fn library_save_uris(&self, uris: &[String]) -> anyhow::Result<()> {
     if uris.is_empty() {
       return Ok(());
     }
@@ -343,7 +343,7 @@ impl Network {
     Ok(())
   }
 
-  async fn library_remove_uris(&self, uris: &[String]) -> anyhow::Result<()> {
+  pub(super) async fn library_remove_uris(&self, uris: &[String]) -> anyhow::Result<()> {
     if uris.is_empty() {
       return Ok(());
     }
@@ -1265,7 +1265,7 @@ impl LibraryNetwork for Network {
     position: usize,
   ) {
     let body = json!({
-        "tracks": [{
+        "items": [{
             "uri": format!("spotify:track:{}", track_id.id()),
             "positions": [position]
         }]
@@ -1274,7 +1274,7 @@ impl LibraryNetwork for Network {
     match spotify_api_request_json_for_with_refresh(
       self.spotify(),
       Method::DELETE,
-      &format!("playlists/{}/tracks", playlist_id.id()),
+      &format!("playlists/{}/items", playlist_id.id()),
       &[],
       Some(body),
       &self.token_cache_path,
@@ -1373,25 +1373,8 @@ impl LibraryNetwork for Network {
   }
 
   async fn create_new_playlist(&mut self, name: String, track_ids: Vec<TrackId<'static>>) {
-    let user_id = {
-      let app = self.app.lock().await;
-      app.user.as_ref().map(|u| u.id.clone())
-    };
-
-    let user_id = match user_id {
-      Some(id) => id,
-      None => {
-        self
-          .show_status_message("Cannot create playlist: not logged in".to_string(), 4)
-          .await;
-        return;
-      }
-    };
-
     // Use raw API call to avoid rspotify deserializing FullPlaylist, which crashes when
     // Spotify returns a duplicate "items" key in the response (known API migration bug).
-    let user_id_str = user_id;
-    let create_path = format!("users/{}/playlists", user_id_str);
     let create_body = json!({
       "name": name,
       "public": false,
@@ -1401,7 +1384,7 @@ impl LibraryNetwork for Network {
     let playlist_value = match spotify_api_request_json_for_with_refresh(
       self.spotify(),
       Method::POST,
-      &create_path,
+      "me/playlists",
       &[],
       Some(create_body),
       &self.token_cache_path,

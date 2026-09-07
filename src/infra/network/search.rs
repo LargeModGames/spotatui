@@ -37,6 +37,14 @@ struct ShowSearchResponse {
   shows: Page<SimplifiedShow>,
 }
 
+/// The `limit` ceiling of the search endpoint for Development Mode apps since
+/// February 2026. The library endpoints still take 50.
+pub(crate) const SPOTIFY_SEARCH_LIMIT: u32 = 10;
+
+fn search_limit(requested: u32) -> String {
+  requested.min(SPOTIFY_SEARCH_LIMIT).to_string()
+}
+
 pub trait SearchNetwork {
   async fn get_search_results(&mut self, search_term: String, country: Option<Country>);
   async fn search_tracks_for_playlist(&mut self, search_term: String);
@@ -53,7 +61,7 @@ impl SearchNetwork for Network {
       vec![
         ("q", search_term.clone()),
         ("type", search_type.to_string()),
-        ("limit", self.small_search_limit.to_string()),
+        ("limit", search_limit(self.small_search_limit)),
         ("offset", "0".to_string()),
       ]
     };
@@ -65,7 +73,7 @@ impl SearchNetwork for Network {
     let artist_query = vec![
       ("q", search_term.clone()),
       ("type", "artist".to_string()),
-      ("limit", self.small_search_limit.to_string()),
+      ("limit", search_limit(self.small_search_limit)),
       ("offset", "0".to_string()),
     ];
 
@@ -185,7 +193,7 @@ impl SearchNetwork for Network {
     let query = vec![
       ("q", search_term),
       ("type", "track".to_string()),
-      ("limit", self.large_search_limit.to_string()),
+      ("limit", search_limit(self.large_search_limit)),
       ("offset", "0".to_string()),
     ];
 
@@ -209,5 +217,16 @@ impl SearchNetwork for Network {
     let mut app = self.app.lock().await;
     app.create_playlist_search_results = tracks;
     app.view.create_playlist_selected_result = 0;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_tall_terminal_search_limit_is_capped_at_the_spotify_ceiling() {
+    assert_eq!(search_limit(50), "10");
+    assert_eq!(search_limit(4), "4");
   }
 }

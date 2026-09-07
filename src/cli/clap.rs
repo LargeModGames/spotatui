@@ -333,7 +333,7 @@ pub fn search_subcommand() -> Command {
     .long_about(
       "This will search for something on spotify and displays you the items. The output \
 format can be changed with the `--format` flag and the limit can be changed with \
-the `--limit` flag (between 1 and 50). The type can't be inferred, so you have to \
+the `--limit` flag (between 1 and 10). The type can't be inferred, so you have to \
 specify it.",
     )
     .visible_alias("s")
@@ -389,7 +389,7 @@ specify it.",
     .arg(
       Arg::new("limit")
         .long("limit")
-        .help("Specifies the maximum number of results (1 - 50)"),
+        .help("Specifies the maximum number of results (1 - 10)"),
     )
     .group(
       ArgGroup::new("searchable")

@@ -143,14 +143,13 @@ impl CliApp {
   }
 
   // spt query ... --limit LIMIT (set max search limit)
-  pub async fn update_query_limits(&mut self, max: String) -> Result<()> {
+  pub async fn update_query_limits(&mut self, max: String, ceiling: u32) -> Result<()> {
     let num = max
       .parse::<u32>()
-      .map_err(|_e| anyhow!("limit must be between 1 and 50"))?;
+      .map_err(|_e| anyhow!("limit must be between 1 and {ceiling}"))?;
 
-    // 50 seems to be the maximum limit
-    if num > 50 || num == 0 {
-      return Err(anyhow!("limit must be between 1 and 50"));
+    if num > ceiling || num == 0 {
+      return Err(anyhow!("limit must be between 1 and {ceiling}"));
     };
 
     self
