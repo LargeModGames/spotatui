@@ -1,5 +1,5 @@
 use crate::core::user_config::UserConfig;
-use crate::infra::network::{IoEvent, Network};
+use crate::infra::network::{search::SPOTIFY_SEARCH_LIMIT, IoEvent, Network};
 
 use super::{
   util::{Flag, JumpDirection, Type},
@@ -114,7 +114,7 @@ pub async fn handle_matches(
       // I think the small and big search limits are very confusing
       // so I just set them both to max, is this okay?
       if let Some(max) = matches.get_one::<String>("limit") {
-        cli.update_query_limits(max.to_string()).await?;
+        cli.update_query_limits(max.to_string(), 50).await?;
       }
 
       let category = Type::list_from_matches(matches);
@@ -127,7 +127,9 @@ pub async fn handle_matches(
       // I think the small and big search limits are very confusing
       // so I just set them both to max, is this okay?
       if let Some(max) = matches.get_one::<String>("limit") {
-        cli.update_query_limits(max.to_string()).await?;
+        cli
+          .update_query_limits(max.to_string(), SPOTIFY_SEARCH_LIMIT)
+          .await?;
       }
 
       let category = Type::search_from_matches(matches);

@@ -17,17 +17,11 @@ use crate::infra::dj::MAX_BATCH;
 use crate::infra::dj::{library, DjLibrary, DjLine, DjSuggestion};
 use crate::infra::network::IoEvent;
 use rspotify::model::track::FullTrack;
-use serde::Deserialize;
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use serde_json::json;
 use std::collections::HashSet;
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use tokio::sync::oneshot;
-
-#[derive(Deserialize, Debug)]
-struct TracksResponse {
-  tracks: Vec<FullTrack>,
-}
 
 /// The tool handlers behind `DjToolCall`, shared by both front doors.
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
@@ -359,7 +353,7 @@ impl Network {
   /// Whether the listener already has each of these search results.
   ///
   /// The two halves cost wildly different amounts, so they are treated
-  /// differently. Liked Songs is one exact `me/tracks/contains` for the whole
+  /// differently. Liked Songs is one exact `me/library/contains` for the whole
   /// page, so it is always checked. Playlists have no such lookup — the only way
   /// to know is the crawl — so this reads the cached index and, when it is cold,
   /// *asks* for the crawl as its own event instead of running it here.
@@ -488,15 +482,24 @@ impl Network {
       .collect();
 
     if !spotify_ids.is_empty() {
-      let ids = spotify_ids.join(",");
-      match self
-        .spotify_get_typed::<TracksResponse>("tracks", &[("ids", ids)])
-        .await
+      // One `tracks/{id}` per track: the batch `tracks?ids=` endpoint is gone
+      // for Development Mode apps.
+      let this: &Self = self;
+      let lookups = spotify_ids.iter().map(|id| async move {
+        this
+          .spotify_get_typed::<FullTrack>(&format!("tracks/{id}"), &[])
+          .await
+      });
+      for (id, result) in spotify_ids
+        .iter()
+        .zip(futures::future::join_all(lookups).await)
       {
-        Ok(response) => resolved.extend(response.tracks.iter().map(TrackInfo::from)),
-        Err(e) => {
-          log::debug!("DJ: batch track lookup failed: {e}");
-          missing.extend(spotify_ids.iter().map(|id| format!("spotify:track:{id}")));
+        match result {
+          Ok(track) => resolved.push(TrackInfo::from(&track)),
+          Err(e) => {
+            log::debug!("DJ: track lookup failed for {id}: {e}");
+            missing.push(format!("spotify:track:{id}"));
+          }
         }
       }
     }
@@ -655,7 +658,7 @@ impl Network {
   /// This is the exact gate, and it catches what the name-based one cannot: the
   /// title was written differently enough to normalise apart, but search landed
   /// on the very copy sitting in their playlist. Two sources of truth: the
-  /// crawled playlist IDs, and one `me/tracks/contains` call for Liked Songs,
+  /// crawled playlist IDs, and one `me/library/contains` call for Liked Songs,
   /// which needs no index at all.
   async fn reject_owned_tracks(&mut self, report: &mut ResolveReport) {
     let ids: Vec<String> = report

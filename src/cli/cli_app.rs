@@ -143,15 +143,8 @@ impl CliApp {
   }
 
   // spt query ... --limit LIMIT (set max search limit)
-  pub async fn update_query_limits(&mut self, max: String) -> Result<()> {
-    let num = max
-      .parse::<u32>()
-      .map_err(|_e| anyhow!("limit must be between 1 and 50"))?;
-
-    // 50 seems to be the maximum limit
-    if num > 50 || num == 0 {
-      return Err(anyhow!("limit must be between 1 and 50"));
-    };
+  pub async fn update_query_limits(&mut self, max: String, ceiling: u32) -> Result<()> {
+    let num = parse_query_limit(&max, ceiling)?;
 
     self
       .net
@@ -706,5 +699,27 @@ impl CliApp {
       // Enforced by clap
       _ => unreachable!(),
     }
+  }
+}
+
+fn parse_query_limit(max: &str, ceiling: u32) -> Result<u32> {
+  match max.parse::<u32>() {
+    Ok(num) if (1..=ceiling).contains(&num) => Ok(num),
+    _ => Err(anyhow!("limit must be between 1 and {ceiling}")),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::parse_query_limit;
+
+  #[test]
+  fn a_query_limit_is_accepted_only_within_its_ceiling() {
+    assert_eq!(parse_query_limit("50", 50).unwrap(), 50);
+    assert_eq!(parse_query_limit("10", 10).unwrap(), 10);
+    assert!(parse_query_limit("51", 50).is_err());
+    assert!(parse_query_limit("11", 10).is_err());
+    assert!(parse_query_limit("0", 10).is_err());
+    assert!(parse_query_limit("ten", 10).is_err());
   }
 }

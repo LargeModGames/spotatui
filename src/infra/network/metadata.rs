@@ -6,7 +6,6 @@ use crate::core::app::{
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
 use crate::infra::network::mapping::map_page;
 use anyhow::anyhow;
-use reqwest::Method;
 use rspotify::model::{
   album::{FullAlbum, SimplifiedAlbum},
   artist::FullArtist,
@@ -477,78 +476,33 @@ impl MetadataNetwork for Network {
   }
 
   async fn user_unfollow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>) {
-    let ids = artist_ids
-      .iter()
-      .map(|id| id.id().to_string())
-      .collect::<Vec<_>>()
-      .join(",");
-    match self
-      .spotify_api_request_json(
-        Method::DELETE,
-        "me/following",
-        &[("type", "artist".to_string()), ("ids", ids)],
-        None,
-      )
-      .await
-    {
-      Ok(_) => {
-        // Handled
-      }
-      Err(e) => self.handle_error(anyhow!(e)).await,
+    let uris: Vec<String> = artist_ids.iter().map(|id| id.uri()).collect();
+    if let Err(e) = self.library_remove_uris(&uris).await {
+      self.handle_error(e).await;
     }
   }
 
   async fn user_follow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>) {
-    let ids = artist_ids
-      .iter()
-      .map(|id| id.id().to_string())
-      .collect::<Vec<_>>()
-      .join(",");
-    match self
-      .spotify_api_request_json(
-        Method::PUT,
-        "me/following",
-        &[("type", "artist".to_string()), ("ids", ids)],
-        None,
-      )
-      .await
-    {
-      Ok(_) => {
-        // Handled
-      }
-      Err(e) => self.handle_error(anyhow!(e)).await,
+    let uris: Vec<String> = artist_ids.iter().map(|id| id.uri()).collect();
+    if let Err(e) = self.library_save_uris(&uris).await {
+      self.handle_error(e).await;
     }
   }
 
   async fn user_artist_check_follow(&mut self, artist_ids: Vec<ArtistId<'static>>) {
-    match self
-      .spotify_get_typed::<Vec<bool>>(
-        "me/following/contains",
-        &[
-          ("type", "artist".to_string()),
-          (
-            "ids",
-            artist_ids
-              .iter()
-              .map(|id| id.id().to_string())
-              .collect::<Vec<_>>()
-              .join(","),
-          ),
-        ],
-      )
-      .await
-    {
+    let uris: Vec<String> = artist_ids.iter().map(|id| id.uri()).collect();
+    match self.library_contains_uris(&uris).await {
       Ok(is_following) => {
         let mut app = self.app.lock().await;
-        for (i, is_following) in is_following.iter().enumerate() {
-          if *is_following {
-            app
-              .followed_artist_ids_set
-              .insert(artist_ids[i].id().to_string());
+        for (id, is_following) in artist_ids.iter().zip(is_following) {
+          if is_following {
+            app.followed_artist_ids_set.insert(id.id().to_string());
           }
         }
       }
-      Err(e) => self.handle_error(anyhow!(e)).await,
+      // Bookkeeping for the follow marker: a failed check must not take over
+      // the screen.
+      Err(e) => log::debug!("artist follow check failed: {e}"),
     }
   }
 
