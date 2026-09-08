@@ -267,6 +267,12 @@ depends = "$auto"
 suggests = "yt-dlp, ffmpeg"
 section = "utils"
 priority = "optional"
+# cargo-deb packages every [[bin]] by default, and spotatui-gui only exists
+# in a `gui` build, so the assets are listed explicitly.
+assets = [
+  ["target/release/spotatui", "usr/bin/", "755"],
+  ["README.md", "usr/share/doc/spotatui/README", "644"],
+]
 
 # cargo-binstall: fetch the prebuilt release binaries instead of compiling.
 #   cargo binstall spotatui
