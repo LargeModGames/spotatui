@@ -14,6 +14,14 @@ impl App {
     }
   }
 
+  /// A volume change never reached Spotify (a failed request, a replay the
+  /// owner change dropped): release the latches so the next one can go.
+  pub(crate) fn cancel_volume_change(&mut self) {
+    self.is_volume_change_in_flight = false;
+    self.pending_volume = None;
+    self.last_dispatched_volume = None;
+  }
+
   pub fn flush_pending_volume(&mut self) {
     if self.pending_volume.is_some() && self.playback_owner() == PlaybackOwner::None {
       self.pending_volume = None;

@@ -1422,6 +1422,7 @@ async fn handle_windows_media_events(
         if let Some(player) = &player_opt {
           if is_native_loaded {
             player.pause();
+            app.lock().await.set_native_playback_intent(false);
             continue;
           }
         }

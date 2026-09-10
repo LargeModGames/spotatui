@@ -1162,7 +1162,11 @@ impl Network {
     for Deferred { event, owner } in std::mem::take(&mut self.deferred) {
       if Self::event_is_transport(&event) && !owner_still_owns(owner, owner_now) {
         log::debug!("deferred transport event dropped: the sink changed hands");
-        self.app.lock().await.is_loading = false;
+        let mut app = self.app.lock().await;
+        app.is_loading = false;
+        if matches!(event, IoEvent::ChangeVolume(_)) {
+          app.cancel_volume_change();
+        }
         continue;
       }
       let _ = io_tx.send(event);
@@ -2107,6 +2111,33 @@ mod tests {
     assert!(matches!(io_rx.try_recv(), Ok(IoEvent::ToggleSaveTrack(_))));
     assert!(io_rx.try_recv().is_err());
     assert!(!app.lock().await.is_loading);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_dropped_volume_change_releases_the_volume_latches() {
+    let (app, io_rx) = app_with_a_session_and_channel();
+    let mut network = rate_limited_pump_network(&app).await;
+    {
+      let mut app = app.lock().await;
+      app.pending_volume = Some(50);
+      app.last_dispatched_volume = Some(50);
+      app.is_volume_change_in_flight = true;
+    }
+
+    network
+      .handle_network_event(IoEvent::ChangeVolume(50))
+      .await;
+    app.lock().await.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+      track: crate::core::test_helpers::queued_track("spotify:track:queued", "Queued"),
+    });
+    network.flush_deferred().await;
+
+    assert!(io_rx.try_recv().is_err());
+    let app = app.lock().await;
+    assert!(!app.is_volume_change_in_flight);
+    assert!(app.pending_volume.is_none());
+    assert!(app.last_dispatched_volume.is_none());
   }
 
   #[test]

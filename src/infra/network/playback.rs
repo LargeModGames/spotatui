@@ -2135,7 +2135,7 @@ impl PlaybackNetwork for Network {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let still_owns = {
           let app = app.lock().await;
-          !app.active_decoded_source()
+          app.playback_owner() == PlaybackOwner::NativeSpotify
             && app
               .streaming_player
               .as_ref()
@@ -2359,12 +2359,7 @@ impl PlaybackNetwork for Network {
         // Keep pending_volume set — cleared when get_current_playback confirms
       }
       Err(e) => {
-        {
-          let mut app = self.app.lock().await;
-          app.is_volume_change_in_flight = false;
-          app.pending_volume = None;
-          app.last_dispatched_volume = None;
-        }
+        self.app.lock().await.cancel_volume_change();
         #[cfg(feature = "streaming")]
         if suppressed_transient_native_command_error(self, &e).await {
           return;
