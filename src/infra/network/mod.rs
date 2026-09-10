@@ -416,8 +416,26 @@ pub struct Network {
   rate_gate: requests::ForcedRefreshGate,
   /// Spotify-bound events held back while that window is open. Only the pump
   /// sets `defers_rate_limited`; the CLI has no pump to block and waits inline.
-  deferred: Vec<IoEvent>,
+  deferred: Vec<Deferred>,
   pub(crate) defers_rate_limited: bool,
+}
+
+/// A held-back event and the playback owner it was addressed to.
+struct Deferred {
+  event: IoEvent,
+  owner: PlaybackOwner,
+}
+
+/// Whether `queued`, the owner at deferral time, still holds the sink under
+/// `now`. librespot and an external device are one Spotify owner: a poll can
+/// flip between them inside one window.
+fn owner_still_owns(queued: PlaybackOwner, now: PlaybackOwner) -> bool {
+  use PlaybackOwner::{NativeSpotify, Spotify};
+  queued == now
+    || matches!(
+      (queued, now),
+      (Spotify | NativeSpotify, Spotify | NativeSpotify)
+    )
 }
 
 impl Network {
@@ -606,6 +624,32 @@ impl Network {
     )
   }
 
+  /// Events that drive whoever owns the sink. One held back by a rate-limit
+  /// window is dropped at the flush when the owner changed meanwhile: replayed,
+  /// it would reach the player that owned the sink when it was queued. A new
+  /// transport event goes here too.
+  pub fn event_is_transport(io_event: &IoEvent) -> bool {
+    matches!(
+      io_event,
+      IoEvent::StartPlayback(..)
+        | IoEvent::PausePlayback
+        | IoEvent::NextTrack
+        | IoEvent::PreviousTrack
+        | IoEvent::ForcePreviousTrack
+        | IoEvent::Seek(_)
+        | IoEvent::Shuffle(_)
+        | IoEvent::Repeat(_)
+        | IoEvent::ChangeVolume(_)
+        | IoEvent::EnsurePlaybackContinues(_)
+        | IoEvent::ResumeSpotifyContext(..)
+        | IoEvent::TransferPlaybackToDevice(..)
+        | IoEvent::AutoSelectStreamingDevice(..)
+        | IoEvent::ToggleNativeShuffleSession(_)
+        | IoEvent::ReshuffleNativeShuffleLap
+        | IoEvent::ResumeNativeShuffleSession(..)
+    )
+  }
+
   #[allow(clippy::cognitive_complexity)]
   pub async fn handle_network_event(&mut self, io_event: IoEvent) {
     let pending_playlist_id = match &io_event {
@@ -643,7 +687,11 @@ impl Network {
               .show_status_message(format!("Spotify rate limit: waiting {secs}s"), secs)
               .await;
           }
-          self.deferred.push(io_event);
+          let owner = self.app.lock().await.playback_owner();
+          self.deferred.push(Deferred {
+            event: io_event,
+            owner,
+          });
           return;
         }
         tokio::time::sleep(left).await;
@@ -1099,11 +1147,29 @@ impl Network {
     Some(std::time::Instant::now() + left.unwrap_or_default())
   }
 
-  /// Run the held-back events in their original order. A window that reopens
-  /// mid-flush holds the rest back again.
+  /// Re-send the held-back events on the pump's channel in their original
+  /// order, so the claim gate and the source routers see them; a window that
+  /// is still open holds them back again. A transport event whose owner
+  /// changed since it was queued is dropped instead.
   pub(crate) async fn flush_deferred(&mut self) {
-    for event in std::mem::take(&mut self.deferred) {
-      self.handle_network_event(event).await;
+    let (io_tx, owner_now) = {
+      let app = self.app.lock().await;
+      (app.io_tx_clone(), app.playback_owner())
+    };
+    let Some(io_tx) = io_tx else {
+      return;
+    };
+    for Deferred { event, owner } in std::mem::take(&mut self.deferred) {
+      if Self::event_is_transport(&event) && !owner_still_owns(owner, owner_now) {
+        log::debug!("deferred transport event dropped: the sink changed hands");
+        let mut app = self.app.lock().await;
+        app.is_loading = false;
+        if matches!(event, IoEvent::ChangeVolume(_)) {
+          app.cancel_volume_change();
+        }
+        continue;
+      }
+      let _ = io_tx.send(event);
     }
   }
 
@@ -1182,8 +1248,11 @@ impl Network {
     self.app.lock().await.set_status_message(message, ttl_secs);
   }
 
+  /// The timed refresh. It fires inside the refresh margin, so `force` is not
+  /// needed; a stale timer event after another path refreshed is a no-op
+  /// instead of a second rotation.
   async fn refresh_authentication(&mut self) {
-    self.ensure_authentication_fresh(true).await;
+    self.ensure_authentication_fresh(false).await;
   }
 
   async fn ensure_authentication_fresh(&mut self, force: bool) -> bool {
@@ -1201,6 +1270,7 @@ impl Network {
         let mut app = self.app.lock().await;
         app.spotify_token_expiry = Some(expiry);
         app.auth_refresh_in_progress = false;
+        app.note_spotify_refresh_succeeded();
         true
       }
       Err(e) => {
@@ -1208,6 +1278,7 @@ impl Network {
           let mut app = self.app.lock().await;
           app.auth_refresh_in_progress = false;
           app.is_loading = false;
+          app.note_spotify_refresh_failed();
         }
         self.handle_error(anyhow!(e)).await;
         false
@@ -1988,24 +2059,95 @@ mod tests {
     network
   }
 
+  /// An app with a session whose pump channel the test can read.
+  fn app_with_a_session_and_channel() -> (Arc<Mutex<App>>, std::sync::mpsc::Receiver<IoEvent>) {
+    let (io_tx, io_rx) = std::sync::mpsc::channel();
+    let app = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    (Arc::new(Mutex::new(app)), io_rx)
+  }
+
   #[tokio::test]
   async fn a_rate_limit_window_holds_spotify_bound_events_back_in_order() {
-    let app = app_without_a_session();
+    let (app, io_rx) = app_with_a_session_and_channel();
     let mut network = rate_limited_pump_network(&app).await;
 
     network.handle_network_event(IoEvent::GetPlaylists).await;
     network.handle_network_event(IoEvent::GetUser).await;
+    assert!(network.deferred_deadline().await.is_some());
     network.flush_deferred().await;
 
-    assert!(matches!(
-      network.deferred.as_slice(),
-      [IoEvent::GetPlaylists, IoEvent::GetUser]
-    ));
-    assert!(network.deferred_deadline().await.is_some());
+    assert!(network.deferred.is_empty());
+    assert!(matches!(io_rx.try_recv(), Ok(IoEvent::GetPlaylists)));
+    assert!(matches!(io_rx.try_recv(), Ok(IoEvent::GetUser)));
+    assert!(io_rx.try_recv().is_err());
     let app = app.lock().await;
     assert!(app
       .status_message()
       .is_some_and(|m| m.contains("rate limit")));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_held_back_transport_event_is_dropped_when_the_sink_changed_hands() {
+    let (app, io_rx) = app_with_a_session_and_channel();
+    let mut network = rate_limited_pump_network(&app).await;
+
+    network
+      .handle_network_event(IoEvent::StartPlayback(
+        Some("spotify:album:parked".to_string()),
+        None,
+        None,
+      ))
+      .await;
+    network.handle_network_event(IoEvent::Seek(5_000)).await;
+    network
+      .handle_network_event(IoEvent::ToggleSaveTrack("t".to_string()))
+      .await;
+    app.lock().await.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+      track: crate::core::test_helpers::queued_track("spotify:track:queued", "Queued"),
+    });
+    network.flush_deferred().await;
+
+    assert!(matches!(io_rx.try_recv(), Ok(IoEvent::ToggleSaveTrack(_))));
+    assert!(io_rx.try_recv().is_err());
+    assert!(!app.lock().await.is_loading);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_dropped_volume_change_releases_the_volume_latches() {
+    let (app, io_rx) = app_with_a_session_and_channel();
+    let mut network = rate_limited_pump_network(&app).await;
+    {
+      let mut app = app.lock().await;
+      app.pending_volume = Some(50);
+      app.last_dispatched_volume = Some(50);
+      app.is_volume_change_in_flight = true;
+    }
+
+    network
+      .handle_network_event(IoEvent::ChangeVolume(50))
+      .await;
+    app.lock().await.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+      track: crate::core::test_helpers::queued_track("spotify:track:queued", "Queued"),
+    });
+    network.flush_deferred().await;
+
+    assert!(io_rx.try_recv().is_err());
+    let app = app.lock().await;
+    assert!(!app.is_volume_change_in_flight);
+    assert!(app.pending_volume.is_none());
+    assert!(app.last_dispatched_volume.is_none());
+  }
+
+  #[test]
+  fn librespot_and_an_external_device_are_one_spotify_owner_for_the_replay() {
+    use PlaybackOwner::{Decoded, NativeSpotify, Queue, Spotify};
+    assert!(owner_still_owns(Spotify, NativeSpotify));
+    assert!(owner_still_owns(NativeSpotify, Spotify));
+    assert!(owner_still_owns(Queue, Queue));
+    assert!(!owner_still_owns(Spotify, Queue));
+    assert!(!owner_still_owns(Spotify, Decoded));
   }
 
   #[tokio::test]

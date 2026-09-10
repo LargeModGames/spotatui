@@ -260,6 +260,8 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
     }
   };
 
+  app.lock().await.claim_decoded_sink(Source::Local);
+
   // Pause native Spotify so librespot releases the output device.
   #[cfg(feature = "streaming")]
   {

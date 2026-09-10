@@ -113,6 +113,14 @@ impl App {
       return;
     }
 
+    // A decoded start in flight, or a source that lost its sink: nothing to
+    // toggle, and the paused librespot underneath is not the player the user
+    // means.
+    if self.decoded_sink_claimed() {
+      self.set_status_message(NOTHING_PLAYING_STATUS, 4);
+      return;
+    }
+
     // Use native streaming player for instant control (bypasses event channel latency)
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
@@ -542,5 +550,18 @@ mod tests {
       matches!(rx.recv().unwrap(), IoEvent::PreviousTrack),
       "expected PreviousTrack to be dispatched for the queue router"
     );
+  }
+
+  #[cfg(feature = "youtube")]
+  #[test]
+  fn toggle_under_a_claim_with_no_session_dispatches_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_decoded_sink(Source::YouTube);
+
+    app.toggle_playback();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
   }
 }

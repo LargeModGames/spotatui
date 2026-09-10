@@ -14,6 +14,14 @@ impl App {
     }
   }
 
+  /// A volume change never reached Spotify (a failed request, a replay the
+  /// owner change dropped): release the latches so the next one can go.
+  pub(crate) fn cancel_volume_change(&mut self) {
+    self.is_volume_change_in_flight = false;
+    self.pending_volume = None;
+    self.last_dispatched_volume = None;
+  }
+
   pub fn flush_pending_volume(&mut self) {
     if self.pending_volume.is_some() && self.playback_owner() == PlaybackOwner::None {
       self.pending_volume = None;
@@ -21,8 +29,12 @@ impl App {
     }
     // A decoded source took the value in its own branch; a Web API call here
     // would only latch `is_volume_change_in_flight` with no Spotify reply to
-    // clear it.
+    // clear it. Drop the latch so the value does not replay at Spotify when
+    // the sink changes hands; `desired_volume` reads the decoded volume from
+    // the runtime state meanwhile.
     if self.active_decoded_source() {
+      self.pending_volume = None;
+      self.last_dispatched_volume = None;
       return;
     }
     if self.is_volume_change_in_flight {
@@ -45,6 +57,11 @@ impl App {
   /// see the percentage jump back to the old value for a split second before
   /// correcting — especially noticeable when spamming volume up/down.
   pub fn desired_volume(&self) -> u32 {
+    // A decoded owner's volume is the one its setters wrote; the pending value
+    // and the Spotify device volume both describe the other player.
+    if self.active_decoded_source() {
+      return self.runtime_state.volume_percent as u32;
+    }
     if let Some(pending) = self.pending_volume {
       return pending as u32;
     }
@@ -235,5 +252,25 @@ mod tests {
       42,
       "with no device volume and no pending volume, base volume must come from config, not 0"
     );
+  }
+
+  #[cfg(feature = "youtube")]
+  #[test]
+  fn a_volume_set_under_a_decoded_owner_does_not_replay_at_spotify() {
+    use super::*;
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_decoded_sink(Source::YouTube);
+    app.current_playback_context = Some(make_external_context());
+    app.runtime_state.volume_percent = 60;
+    app.pending_volume = Some(60);
+
+    app.flush_pending_volume();
+    assert_eq!(app.desired_volume(), 60);
+    assert!(app.pending_volume.is_none());
+
+    app.release_decoded_sink_claim();
+    app.flush_pending_volume();
+    assert!(rx.try_recv().is_err());
   }
 }

@@ -1107,7 +1107,11 @@ async fn resume_local(
 ) {
   let Some(index) = resume_index else {
     // Context exhausted: tear it down and stop the queue slot.
-    let ended = app.lock().await.local_playback.take();
+    let ended = {
+      let mut guard = app.lock().await;
+      guard.release_decoded_sink_claim();
+      guard.local_playback.take()
+    };
     if let Some(local) = ended {
       Arc::clone(&local.player).stop_detached_holding(local);
     }
@@ -1155,7 +1159,11 @@ async fn resume_subsonic(
   playing: bool,
 ) {
   let Some(index) = resume_index else {
-    let ended = app.lock().await.subsonic_playback.take();
+    let ended = {
+      let mut guard = app.lock().await;
+      guard.release_decoded_sink_claim();
+      guard.subsonic_playback.take()
+    };
     if let Some(s) = ended {
       Arc::clone(&s.player).stop_detached_holding(s);
     }
@@ -1213,7 +1221,11 @@ async fn resume_qobuz(
 ) {
   let Some(index) = resume_index else {
     // Take under the lock, stop off it: a sink clear waits for the audio thread.
-    let session = app.lock().await.qobuz_playback.take();
+    let session = {
+      let mut guard = app.lock().await;
+      guard.release_decoded_sink_claim();
+      guard.qobuz_playback.take()
+    };
     if let Some(s) = session {
       Arc::clone(&s.player).stop_detached_holding(s);
     }
@@ -1263,7 +1275,11 @@ async fn resume_youtube(
   playing: bool,
 ) {
   let Some(index) = resume_index else {
-    let ended = app.lock().await.youtube_playback.take();
+    let ended = {
+      let mut guard = app.lock().await;
+      guard.release_decoded_sink_claim();
+      guard.youtube_playback.take()
+    };
     if let Some(s) = ended {
       Arc::clone(&s.player).stop_detached_holding(s);
     }

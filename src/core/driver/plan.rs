@@ -14,7 +14,30 @@ use crate::core::art::CoverArtStatus;
   feature = "youtube"
 ))]
 use crate::infra::queue::{advance_decision, Decision, RepeatMode};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+/// Whether the tick dispatches a token refresh now. Not while one is in
+/// flight, not while a failed attempt backs off, and not while a decoded
+/// source owns the sink: the next Spotify request refreshes lazily on its own.
+pub(super) fn oauth_refresh_due(
+  expiry: Option<SystemTime>,
+  wall_now: SystemTime,
+  in_progress: bool,
+  decoded_owns_sink: bool,
+  retry_at: Option<Instant>,
+  now: Instant,
+) -> bool {
+  let Some(expiry) = expiry else {
+    return false;
+  };
+  if in_progress || decoded_owns_sink {
+    return false;
+  }
+  if retry_at.is_some_and(|at| now < at) {
+    return false;
+  }
+  crate::core::auth::should_refresh_token_at(expiry, wall_now)
+}
 
 /// How often the active non-Spotify playback session is persisted to
 /// `last_session.yml` while it keeps playing.
@@ -163,6 +186,63 @@ pub(super) fn cover_art_action(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn inside_the_margin() -> (Option<SystemTime>, SystemTime) {
+    let now = SystemTime::now();
+    (Some(now + Duration::from_secs(30)), now)
+  }
+
+  #[test]
+  fn a_token_inside_the_margin_refreshes_under_a_spotify_owner() {
+    let (expiry, wall_now) = inside_the_margin();
+    assert!(oauth_refresh_due(
+      expiry,
+      wall_now,
+      false,
+      false,
+      None,
+      Instant::now()
+    ));
+  }
+
+  #[test]
+  fn a_decoded_owner_skips_the_timed_refresh() {
+    let (expiry, wall_now) = inside_the_margin();
+    assert!(!oauth_refresh_due(
+      expiry,
+      wall_now,
+      false,
+      true,
+      None,
+      Instant::now()
+    ));
+  }
+
+  #[test]
+  fn a_failed_refresh_does_not_re_dispatch_before_the_backoff_ends() {
+    let (expiry, wall_now) = inside_the_margin();
+    let now = Instant::now();
+    let retry_at = Some(now + Duration::from_secs(15));
+    assert!(!oauth_refresh_due(
+      expiry, wall_now, false, false, retry_at, now
+    ));
+    assert!(oauth_refresh_due(
+      expiry,
+      wall_now,
+      false,
+      false,
+      retry_at,
+      now + Duration::from_secs(15)
+    ));
+  }
+
+  #[test]
+  fn no_expiry_and_a_refresh_in_flight_both_wait() {
+    let (expiry, wall_now) = inside_the_margin();
+    let now = Instant::now();
+    assert!(!oauth_refresh_due(None, wall_now, false, false, None, now));
+    assert!(!oauth_refresh_due(expiry, wall_now, true, false, None, now));
+  }
 
   #[test]
   fn first_tick_with_a_session_saves_immediately() {

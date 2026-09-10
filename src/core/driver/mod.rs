@@ -21,7 +21,6 @@ mod plan;
 mod presence;
 
 use crate::core::app::{App, RouteId};
-use crate::core::auth;
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 use crate::infra::audio;
 #[cfg(feature = "discord-rpc")]
@@ -263,11 +262,16 @@ impl Driver {
     // token expiry and must not schedule refreshes. This lives on the tick so
     // every frontend gets it: one that skipped it would work for exactly one
     // token lifetime and then 401 forever.
-    if let Some(expiry) = app.spotify_token_expiry {
-      if auth::should_refresh_token_at(expiry, SystemTime::now()) && !app.auth_refresh_in_progress {
-        app.auth_refresh_in_progress = true;
-        app.dispatch(IoEvent::RefreshAuthentication);
-      }
+    if plan::oauth_refresh_due(
+      app.spotify_token_expiry,
+      SystemTime::now(),
+      app.auth_refresh_in_progress,
+      app.active_decoded_source(),
+      app.spotify_refresh_retry_at(),
+      env.now,
+    ) {
+      app.auth_refresh_in_progress = true;
+      app.dispatch(IoEvent::RefreshAuthentication);
     }
 
     app.update_on_tick(elapsed);
@@ -663,7 +667,10 @@ impl Driver {
               );
               $app.dispatch(IoEvent::AdvanceNativeQueue);
             }
-            Some(plan::DecodedAdvance::Teardown) => $app.$playback = None,
+            Some(plan::DecodedAdvance::Teardown) => {
+              $app.$playback = None;
+              $app.release_decoded_sink_claim();
+            }
             Some(plan::DecodedAdvance::None) | None => {}
           }
         }
@@ -702,6 +709,7 @@ impl Driver {
           self.radio_stream_started = true;
         } else if self.radio_stream_started {
           app.radio_playback = None;
+          app.release_decoded_sink_claim();
           self.radio_stream_started = false;
           app.set_status_message("Radio stream ended", 4);
         }

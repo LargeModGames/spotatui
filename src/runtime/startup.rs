@@ -948,7 +948,7 @@ async fn handle_mpris_events(
       MprisEvent::Stop => {
         #[cfg(feature = "streaming")]
         if let Some(ref player) = current_player {
-          player.stop();
+          player.pause();
           app.lock().await.set_native_playback_intent(false);
           continue;
         }
@@ -1129,8 +1129,11 @@ async fn route_decoded_mpris_event(
 
   // Read the live source-player state up front, then drop the borrow so the
   // immutable read does not conflict with the `&mut self` dispatch calls below.
+  // A decoded claim with no player (a start in flight, a lost output device)
+  // consumes the event: nothing can serve it, and librespot must not. Volume
+  // still falls through to `set_volume_percent`, which is owner-aware.
   let Some(player) = app_lock.active_decoded_player() else {
-    return false;
+    return !matches!(event, MprisEvent::SetVolume(_)) && app_lock.active_decoded_source();
   };
   let is_paused = player.is_paused();
   let position_ms = player.position().as_millis() as i64;
@@ -1284,7 +1287,8 @@ async fn handle_macos_media_events(
         app.lock().await.previous_track();
       }
       MacMediaEvent::Stop => {
-        player.stop();
+        player.pause();
+        app.lock().await.set_native_playback_intent(false);
       }
     }
   }
@@ -1319,8 +1323,10 @@ async fn route_decoded_macos_event(
   let mut app_lock = app.lock().await;
   // Read the live source-player state up front, then drop the borrow so the
   // immutable read does not conflict with the `&mut self` dispatch calls below.
+  // A decoded claim with no player (a start in flight, a lost output device)
+  // consumes the event: nothing can serve it, and librespot must not.
   let Some(player) = app_lock.active_decoded_player() else {
-    return false;
+    return app_lock.active_decoded_source();
   };
   let is_paused = player.is_paused();
 
@@ -1414,13 +1420,16 @@ async fn handle_windows_media_events(
       }
       WindowsMediaEvent::Stop => {
         if let Some(player) = &player_opt {
-          player.stop();
-        } else {
-          app
-            .lock()
-            .await
-            .dispatch_spotify_fallback(IoEvent::PausePlayback);
+          if is_native_loaded {
+            player.pause();
+            app.lock().await.set_native_playback_intent(false);
+            continue;
+          }
         }
+        app
+          .lock()
+          .await
+          .dispatch_spotify_fallback(IoEvent::PausePlayback);
       }
       WindowsMediaEvent::SetPosition(pos) => {
         if let Some(player) = &player_opt {
@@ -1466,8 +1475,10 @@ async fn route_decoded_windows_event(
   let mut app_lock = app.lock().await;
   // Only consume the event while a decoded source owns the session; otherwise
   // fall through to the streaming-player branches for Spotify/librespot.
+  // A decoded claim with no player (a start in flight, a lost output device)
+  // consumes the event: nothing can serve it, and librespot must not.
   if app_lock.active_decoded_player().is_none() {
-    return false;
+    return app_lock.active_decoded_source();
   }
 
   match event {
