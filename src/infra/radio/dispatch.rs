@@ -239,6 +239,7 @@ async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
   };
 
   // Only one backend owns the device at a time.
+  app.lock().await.claim_decoded_sink(Source::Radio);
   release_other_backends(app).await;
 
   let Some(player) = acquire_player(app).await else {

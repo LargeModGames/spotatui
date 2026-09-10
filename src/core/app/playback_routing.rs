@@ -88,6 +88,56 @@ impl App {
     PlaybackOwner::None
   }
 
+  /// Record that `source` took the audio sink; its start path calls this
+  /// before it pauses librespot.
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  pub(crate) fn claim_decoded_sink(&mut self, source: Source) {
+    self.decoded_sink_claim = Some(source);
+  }
+
+  /// Spotify takes the sink back: an explicit Spotify start reached the
+  /// network layer.
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  pub(crate) fn release_decoded_sink_claim(&mut self) {
+    self.decoded_sink_claim = None;
+  }
+
+  /// Whether a decoded source holds the sink claim, session or not.
+  pub(crate) fn decoded_sink_claimed(&self) -> bool {
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "internet-radio",
+      feature = "youtube"
+    ))]
+    {
+      self.decoded_sink_claim.is_some()
+    }
+    #[cfg(not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "internet-radio",
+      feature = "youtube"
+    )))]
+    {
+      false
+    }
+  }
+
   /// The last arm of a transport chain: the Web API when a session exists,
   /// otherwise a source-neutral status instead of the "not connected" nag.
   pub(crate) fn dispatch_spotify_fallback(&mut self, event: IoEvent) {
@@ -222,6 +272,18 @@ impl App {
     // `*_playback` below is a suspended context, not the active source.
     if self.queue_now_is_spotify() {
       return false;
+    }
+    // A decoded start in flight, or a source whose session died with nothing to
+    // replace it, still owns the sink: librespot is paused underneath.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "internet-radio",
+      feature = "youtube"
+    ))]
+    if self.decoded_sink_claim.is_some() {
+      return true;
     }
     #[cfg(feature = "local-files")]
     if self.local_playback.is_some() {
@@ -505,5 +567,43 @@ mod tests {
     app.dispatch_spotify_fallback(IoEvent::NextTrack);
 
     assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
+  }
+
+  #[cfg(feature = "youtube")]
+  #[test]
+  fn a_claimed_decoded_sink_owns_playback_without_a_session() {
+    let mut app = make_app_simple();
+    app.claim_decoded_sink(Source::YouTube);
+
+    assert!(app.active_decoded_source());
+    assert!(app.decoded_sink_claimed());
+    assert_eq!(app.playback_owner(), PlaybackOwner::Decoded);
+    assert!(!app.active_queueable_decoded_source());
+    assert!(app.active_source_position_ms().is_none());
+  }
+
+  #[cfg(feature = "youtube")]
+  #[test]
+  fn releasing_the_claim_hands_the_sink_back_to_spotify() {
+    let mut app = make_app_simple();
+    app.claim_decoded_sink(Source::YouTube);
+    app.release_decoded_sink_claim();
+
+    assert!(!app.active_decoded_source());
+    assert_eq!(app.playback_owner(), PlaybackOwner::Spotify);
+  }
+
+  #[cfg(all(feature = "streaming", feature = "youtube"))]
+  #[test]
+  fn a_spotify_queue_slot_shadows_the_claim() {
+    use crate::infra::queue::QueueNowPlaying;
+    let mut app = make_app_simple();
+    app.claim_decoded_sink(Source::YouTube);
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queue_track(Some("spotify:track:queued"), "Queued"),
+    });
+
+    assert!(!app.active_decoded_source());
+    assert_eq!(app.playback_owner(), PlaybackOwner::Queue);
   }
 }

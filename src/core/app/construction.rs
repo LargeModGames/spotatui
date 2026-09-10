@@ -110,6 +110,7 @@ impl Default for App {
       spotify_token_expiry: None,
       spotify_connected: false,
       auth_refresh_in_progress: false,
+      spotify_refresh_retry_at: None,
       pending_keybinding_persist: None,
       keybinding_runtime: KeybindingRuntimeState::default(),
 
@@ -183,6 +184,14 @@ impl Default for App {
       radio_playback: None,
       #[cfg(feature = "youtube")]
       youtube_playback: None,
+      #[cfg(any(
+        feature = "local-files",
+        feature = "subsonic",
+        feature = "qobuz",
+        feature = "internet-radio",
+        feature = "youtube"
+      ))]
+      decoded_sink_claim: None,
       #[cfg(feature = "streaming")]
       streaming_recovery_tx: None,
       #[cfg(feature = "streaming")]

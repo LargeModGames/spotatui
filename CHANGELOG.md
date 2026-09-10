@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Spotify can no longer take over during a source's start, or after its output device is gone**: a Local Files, Subsonic, Internet Radio, YouTube or Qobuz start pauses Spotify first and publishes its session only when the download, the stream probe or the decode succeeds, which is seconds to minutes. In that window, and after the source lost its output device, spotatui believed nothing owned the output: a media key or Space resumed the paused Spotify track on top of the incoming one, and a rate-limited Spotify command that had waited out its window ran against whoever played by then. A source now claims the output before it pauses Spotify, keeps the claim through a failed start or a lost device, and releases it when its queue runs out or when you start a Spotify track or context yourself; until then media keys, Space and the Spotify transport do nothing to Spotify. Commands held back by a rate limit remember who was playing and are dropped when that changed, a queued seek is dropped when its player is gone instead of hitting the next one, a volume change made under another source no longer replays at Spotify later, a seek under a queued Spotify track measures against that track, the media Stop key pauses Spotify instead of unloading it, and the token refresh timer stays quiet while another source plays and backs off for 15 s after a failure instead of retrying every tick and pinning an error page over the playback.
+
 ## [v0.42.0] 2026-09-08
 
 ### Changed

@@ -6,24 +6,24 @@ pub const SEEK_POSITION_IGNORE_MS: u128 = 500;
 
 impl App {
   pub(super) fn apply_seek(&mut self, seek_ms: u32) {
-    if let Some(CurrentPlaybackContext {
-      item: Some(item), ..
-    }) = &self.current_playback_context
-    {
-      let duration_ms = match item {
-        PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
-        PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
-        _ => return,
-      };
+    // The audible track's duration decides between a seek and a skip; a
+    // decoded owner seeks through its own latch and gets nothing here.
+    let duration_ms = match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => track.duration.num_milliseconds() as u32,
+      PlayingItem::Spotify(PlayableItem::Episode(episode)) => {
+        episode.duration.num_milliseconds() as u32
+      }
+      PlayingItem::QueuedSpotify(track) => u32::try_from(track.duration_ms).unwrap_or(u32::MAX),
+      PlayingItem::Spotify(_) | PlayingItem::NotSpotify | PlayingItem::Nothing => return,
+    };
 
-      let event = if seek_ms < duration_ms {
-        IoEvent::Seek(seek_ms)
-      } else {
-        IoEvent::NextTrack
-      };
+    let event = if seek_ms < duration_ms {
+      IoEvent::Seek(seek_ms)
+    } else {
+      IoEvent::NextTrack
+    };
 
-      self.dispatch(event);
-    }
+    self.dispatch(event);
   }
 
   pub fn seek_forwards(&mut self) {
@@ -233,6 +233,12 @@ impl App {
 
   /// Flush any pending decoded-source seek (called from tick loop)
   pub fn flush_pending_source_seek(&mut self) {
+    // Queued for a decoded owner; once that owner is gone the value would
+    // reach whoever holds the sink now.
+    if self.pending_source_seek.is_some() && !self.active_decoded_source() {
+      self.pending_source_seek = None;
+      return;
+    }
     if let Some(position) = self.pending_source_seek {
       const SOURCE_SEEK_THROTTLE_MS: u128 = 50;
       let should_flush = self
@@ -284,6 +290,12 @@ impl App {
 
   /// Flush any pending API seek (called from tick loop)
   pub fn flush_pending_api_seek(&mut self) {
+    // Queued for an external Connect device; under any other owner the Web
+    // API seek would land on a device that is not the audible one.
+    if self.pending_api_seek.is_some() && self.playback_owner() != PlaybackOwner::Spotify {
+      self.pending_api_seek = None;
+      return;
+    }
     if let Some(position) = self.pending_api_seek {
       const API_SEEK_THROTTLE_MS: u128 = 200;
       let should_flush = self
@@ -316,6 +328,12 @@ impl App {
   /// Flush any pending native seek (called from tick loop)
   #[cfg(feature = "streaming")]
   pub fn flush_pending_native_seek(&mut self) {
+    // Queued for librespot; a decoded source that took the sink since leaves
+    // librespot paused, and a seek would move the wrong player.
+    if self.pending_native_seek.is_some() && self.active_decoded_source() {
+      self.pending_native_seek = None;
+      return;
+    }
     if let Some(position) = self.pending_native_seek {
       // Only flush if enough time has passed since last seek
       const SEEK_THROTTLE_MS: u128 = 50;
@@ -327,5 +345,65 @@ impl App {
         self.execute_native_seek(position);
       }
     }
+  }
+}
+
+#[cfg(all(test, feature = "streaming"))]
+mod tests {
+  use super::*;
+  use crate::core::app::test_support::*;
+  use crate::infra::queue::QueueNowPlaying;
+
+  fn app_with_spotify_queue_slot() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queue_track(Some("spotify:track:queued"), "Queued"),
+    });
+    (app, rx)
+  }
+
+  #[test]
+  fn an_api_seek_queued_under_spotify_is_dropped_once_the_queue_slot_owns_playback() {
+    let (mut app, rx) = app_with_spotify_queue_slot();
+    app.pending_api_seek = Some(5_000);
+
+    app.flush_pending_api_seek();
+
+    assert!(app.pending_api_seek.is_none());
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_source_seek_is_dropped_without_a_decoded_owner() {
+    let (mut app, rx) = app_with_spotify_queue_slot();
+    app.pending_source_seek = Some(5_000);
+
+    app.flush_pending_source_seek();
+
+    assert!(app.pending_source_seek.is_none());
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_native_seek_survives_under_a_spotify_queue_slot() {
+    let (mut app, _rx) = app_with_spotify_queue_slot();
+    app.pending_native_seek = Some(5_000);
+
+    app.flush_pending_native_seek();
+
+    // No player is attached, so the value waits; the point is that it is kept.
+    assert_eq!(app.pending_native_seek, Some(5_000));
+  }
+
+  #[test]
+  fn apply_seek_under_a_spotify_queue_slot_uses_the_slot_track_duration() {
+    let (mut app, rx) = app_with_spotify_queue_slot();
+    app.current_playback_context = Some(playing_track_context(full_track("ctx", "Context")));
+
+    // Past the slot track's 1000 ms but inside the suspended context's track.
+    app.apply_seek(2_000);
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
   }
 }

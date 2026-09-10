@@ -1,4 +1,5 @@
 use super::{IoEvent, Network};
+use crate::core::app::PlaybackOwner;
 #[cfg(feature = "streaming")]
 use crate::core::{
   app::{App, NativePlaybackOrigin, NativePlaybackRecoverySnapshot},
@@ -28,7 +29,6 @@ use std::time::Instant;
 use librespot_connect::{
   LoadContextOptions, LoadRequest, LoadRequestOptions, Options as LoadOptions, PlayingTrack,
 };
-#[cfg(feature = "streaming")]
 use std::sync::Arc;
 
 const MAX_API_PLAYBACK_URIS: usize = 100;
@@ -1438,6 +1438,19 @@ impl PlaybackNetwork for Network {
     uris: Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
   ) {
+    // An explicit Spotify start that reached this handler passed every source
+    // router and the pump's prelude: Spotify takes the sink, so the decoded
+    // claim ends here. A bare resume never releases it.
+    #[cfg(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "qobuz",
+      feature = "internet-radio",
+      feature = "youtube"
+    ))]
+    if context_id.is_some() || uris.is_some() {
+      self.app.lock().await.release_decoded_sink_claim();
+    }
     if decoded_source_owns_playback(self).await {
       return;
     }
@@ -2115,10 +2128,22 @@ impl PlaybackNetwork for Network {
       player.prev();
       // The second prev (which actually skips back once the position has reset
       // to 0) runs on a detached task so the intentional 500ms gap doesn't
-      // block every other IoEvent on the serial pump.
+      // block every other IoEvent on the serial pump. It re-checks that the
+      // same librespot still owns the sink after the gap.
+      let app = Arc::clone(&self.app);
       tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        player.prev();
+        let still_owns = {
+          let app = app.lock().await;
+          !app.active_decoded_source()
+            && app
+              .streaming_player
+              .as_ref()
+              .is_some_and(|current| Arc::ptr_eq(current, &player))
+        };
+        if still_owns {
+          player.prev();
+        }
       });
       return;
     }
@@ -2143,10 +2168,15 @@ impl PlaybackNetwork for Network {
     // pump: a plain PreviousTrack with the position back at 0 skips to the
     // previous track, which is exactly the second half of the double-press
     // semantics.
-    let io_tx = self.app.lock().await.io_tx_clone();
+    // The re-send is dropped when the sink changed hands during the gap.
+    let app = Arc::clone(&self.app);
     tokio::spawn(async move {
       tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-      if let Some(io_tx) = io_tx {
+      let app = app.lock().await;
+      if app.playback_owner() != PlaybackOwner::Spotify {
+        return;
+      }
+      if let Some(io_tx) = app.io_tx_clone() {
         let _ = io_tx.send(IoEvent::PreviousTrack);
       }
     });

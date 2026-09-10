@@ -347,6 +347,9 @@ pub struct App {
   /// free-source launch doesn't spam "connect Spotify" messages.
   pub spotify_connected: bool,
   pub auth_refresh_in_progress: bool,
+  /// Earliest instant the timed token refresh may run again after a failure,
+  /// so a failing refresh backs off instead of re-arming on every tick.
+  spotify_refresh_retry_at: Option<Instant>,
   pending_keybinding_persist: Option<PendingKeybindingPersist>,
   pub keybinding_runtime: KeybindingRuntimeState,
 
@@ -524,6 +527,19 @@ pub struct App {
   /// [`subsonic_playback`](Self::subsonic_playback).
   #[cfg(feature = "youtube")]
   pub youtube_playback: Option<crate::infra::youtube::YouTubePlaybackState>,
+  /// The decoded source that claimed the audio sink: set when its start path
+  /// pauses librespot, kept when the session dies with nothing to replace it
+  /// (a failed start, a lost output device), cleared when an explicit Spotify
+  /// start takes the sink. Covers the window in which every `*_playback` field
+  /// is `None` for a source the user asked for.
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  decoded_sink_claim: Option<Source>,
   /// Sender used to recover native streaming when a stale/disconnected player is detected.
   #[cfg(feature = "streaming")]
   pub streaming_recovery_tx:

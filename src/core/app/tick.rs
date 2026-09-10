@@ -3,6 +3,10 @@ use super::*;
 /// Grace window after the last tick before playback-position reads go stale.
 const STALE_TICK_AFTER: Duration = Duration::from_secs(2);
 
+/// How long the timed token refresh waits after a failed attempt. A token
+/// inside the 60 s refresh margin gets a few tries, then a steady retry.
+const SPOTIFY_REFRESH_RETRY_BACKOFF: Duration = Duration::from_secs(15);
+
 // The window must cover at least two of the slowest allowed ticks, so one
 // missed frame can never read as stale. The tick rate is bounded on every
 // path (config load rejects out-of-range values, the settings screen clamps),
@@ -23,6 +27,21 @@ fn playing_for_keepawake(
 }
 
 impl App {
+  /// A token refresh failed: hold the timed refresh back for the backoff.
+  pub(crate) fn note_spotify_refresh_failed(&mut self) {
+    self.spotify_refresh_retry_at = Some(Instant::now() + SPOTIFY_REFRESH_RETRY_BACKOFF);
+  }
+
+  /// A token refresh succeeded: the timer runs on the expiry again.
+  pub(crate) fn note_spotify_refresh_succeeded(&mut self) {
+    self.spotify_refresh_retry_at = None;
+  }
+
+  /// Earliest instant the timed refresh may run again, if one failed.
+  pub(crate) fn spotify_refresh_retry_at(&self) -> Option<Instant> {
+    self.spotify_refresh_retry_at
+  }
+
   /// Milliseconds into the current track, or `None` when no tick has run for
   /// over [`STALE_TICK_AFTER`]. A frontend that stops driving
   /// `core::driver::Driver::tick` (or never starts) would otherwise show a

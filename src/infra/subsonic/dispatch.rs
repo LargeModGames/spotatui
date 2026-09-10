@@ -334,6 +334,7 @@ async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx:
   let source = Arc::new(source);
 
   // Only one backend owns the device at a time.
+  app.lock().await.claim_decoded_sink(Source::Subsonic);
   release_other_backends(app).await;
 
   let Some(player) = acquire_player(app).await else {

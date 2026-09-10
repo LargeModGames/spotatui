@@ -144,7 +144,12 @@ worth knowing before adding an event:
   pump. The service lane's `Network` is built with **no Spotify client** - adding a
   `self.spotify()` call to a service-lane handler panics.
 - **Auth gate**: `Network::event_bypasses_spotify_auth` lists events whose handlers
-  never need a Spotify session. A new IoEvent must be classified against both lists.
+  never need a Spotify session.
+- **Replay**: `Network::event_is_transport` lists events that drive whoever owns
+  the sink. One held back by a rate-limit window is stamped with the
+  `PlaybackOwner` at deferral time, dropped at the flush when the owner changed,
+  and otherwise re-sent on the pump's channel so the routers see it.
+  A new IoEvent must be classified against all three lists.
 
 ### Navigation / routing
 
@@ -218,6 +223,14 @@ session exists.
 - Starting a decoded source (Local/Subsonic/Qobuz/Radio/YouTube) only **pauses**
   librespot - the native flag stays true, so driving librespot directly resumes
   the wrong player.
+- A decoded start claims the sink (`App::claim_decoded_sink`) before it pauses
+  librespot, and `active_decoded_source()` reads the claim: the owner is
+  `Decoded` from the first line of the start, through a failed start or a lost
+  output device, until the source's queue runs out (the driver's teardown, the
+  queue's exhausted-context resume) or an explicit Spotify start (a URI or a
+  context) reaches `Network::start_playback`, which releases it. A bare resume
+  never releases it, so a media key or Space during a download cannot resume
+  librespot.
 - While the native queue slot owns the sink, `current_playback_context` names the
   *suspended* context's track. Inside `core/app/`, resolve the playing *track*
   through `App::playing_item()` (`core/app/playback_routing.rs`): it answers
