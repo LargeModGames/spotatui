@@ -186,10 +186,10 @@ scripting = ["dep:mlua"]
 audio-decode = ["dep:rodio"]
 # Meta-feature, this ensures at least one source that supports queues and needs
 # decoding is enabled.
-audio-decode-queue = ["queue"]
 # Meta-feature, this ensures onboarding is compiled only if there's at least one
 # feature needing it.
 onboarding = []
+audio-decode-queue = []
 # Meta-feature, this ensures at least one source with queue support.
 # Namely: `audio-decode-queue` + `streaming`
 queue = []
@@ -202,17 +202,17 @@ queue-download = []
 # adding them to `default` would pull lofty/symphonia/md-5/stream-download into
 # every plain `cargo build`.
 all-sources = ["local-files", "subsonic", "internet-radio", "youtube", "qobuz"]
-local-files = ["audio-decode", "audio-decode-queue", "onboarding", "dep:lofty", "dep:symphonia"]
-subsonic = ["dep:md-5", "audio-decode", "audio-decode-queue", "onboarding", "queue-download", "dep:tempfile", "reqwest/stream"]
+local-files = ["audio-decode", "audio-decode-queue", "queue", "onboarding", "dep:lofty", "dep:symphonia"]
+subsonic = ["dep:md-5", "audio-decode", "audio-decode-queue", "queue", "onboarding", "queue-download", "dep:tempfile", "reqwest/stream"]
 internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
 # YouTube via an external `yt-dlp` binary (no new crates): search with
 # `--flat-playlist --dump-json`, download the AAC/M4A audio (format 140, which
 # rodio's default `mp4` feature decodes) to a tempfile, play through the shared
 # LocalPlayer. Unofficial-fragile by design — see plan-multi-source.md.
-youtube = ["audio-decode", "audio-decode-queue", "onboarding", "queue-download", "dep:tempfile"]
+youtube = ["audio-decode", "audio-decode-queue", "queue", "onboarding", "queue-download", "dep:tempfile"]
 # Qobuz through its encrypted CMAF stream: each track is decrypted and rebuilt
 # as a FLAC tempfile while it plays through the shared LocalPlayer.
-qobuz = ["audio-decode", "audio-decode-queue", "queue-download", "dep:tempfile", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
+qobuz = ["audio-decode", "audio-decode-queue", "queue", "queue-download", "dep:tempfile", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
 
 # --- AI DJ / MCP -------------------------------------------------------------
 # Shared tool layer behind both front doors: the taste brief built from the local
