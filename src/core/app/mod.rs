@@ -32,10 +32,7 @@ use std::sync::mpsc::Sender;
 // Bare `Arc` here is only ever named by the streaming player, the MPRIS manager,
 // and the decoded queue-slot accessors below (whose gate is the queueable
 // sources, not `audio-decode` — a radio-only build has no queue slot).
-#[cfg(any(
-  feature = "queue",
-  all(feature = "mpris", target_os = "linux")
-))]
+#[cfg(any(feature = "queue", all(feature = "mpris", target_os = "linux")))]
 use std::sync::Arc;
 use std::{
   cmp::{max, min},

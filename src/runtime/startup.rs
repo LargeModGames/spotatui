@@ -1071,11 +1071,7 @@ async fn handle_mpris_events(
 /// source is actually audible instead of the paused librespot session.
 /// Non-transport events (shuffle/loop) return `false` so existing behaviour is
 /// preserved.
-#[cfg(all(
-  feature = "mpris",
-  target_os = "linux",
-  feature = "audio-decode",
-))]
+#[cfg(all(feature = "mpris", target_os = "linux", feature = "audio-decode",))]
 async fn route_decoded_mpris_event(
   event: &mpris::MprisEvent,
   app: &Arc<Mutex<App>>,
@@ -1279,11 +1275,7 @@ async fn handle_macos_media_events(
 /// `IoEvent`s the keyboard uses; the per-source `route_*_event` dispatchers
 /// intercept them before the Spotify network, so the control lands on whichever
 /// source is actually audible instead of the paused librespot session.
-#[cfg(all(
-  feature = "macos-media",
-  target_os = "macos",
-  feature = "audio-decode",
-))]
+#[cfg(all(feature = "macos-media", target_os = "macos", feature = "audio-decode",))]
 async fn route_decoded_macos_event(
   event: &macos_media::MacMediaEvent,
   app: &Arc<Mutex<App>>,

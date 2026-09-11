@@ -255,10 +255,7 @@ impl LocalPlayer {
   /// DAC pulled), as against the OS merely moving its default output somewhere
   /// else. Recovery pauses only for removal — that is what macOS itself does,
   /// and a device the user just *plugged in* should keep playing.
-  #[cfg_attr(
-    not(feature = "audio-decode-queue"),
-    allow(dead_code)
-  )]
+  #[cfg_attr(not(feature = "audio-decode-queue"), allow(dead_code))]
   pub fn device_removed(&self) -> bool {
     self.sink.lock().unwrap().lost.load(Ordering::Relaxed)
   }
@@ -386,10 +383,7 @@ impl LocalPlayer {
   ///
   /// Radio has no track to restage, so a build with just `internet-radio`
   /// never recovers a device.
-  #[cfg_attr(
-    not(feature = "audio-decode-queue"),
-    allow(dead_code)
-  )]
+  #[cfg_attr(not(feature = "audio-decode-queue"), allow(dead_code))]
   pub fn recover_device(&self) -> Reopen {
     let attempts = {
       let mut state = self.reopen.lock().unwrap();

@@ -12,10 +12,7 @@ impl App {
   /// [`crate::infra::queue::resume_index_after_queue`].
   pub(crate) fn suspend_active_decoded_context_for_skip(
     &mut self,
-    #[cfg_attr(
-      not(feature = "audio-decode-queue"),
-      allow(unused_variables)
-    )]
+    #[cfg_attr(not(feature = "audio-decode-queue"), allow(unused_variables))]
     cause: crate::infra::queue::SuspendCause,
   ) {
     // `resume_index_after_queue` applies the per-mode wrap/clamp: Repeat All
@@ -23,10 +20,7 @@ impl App {
     // first one rather than reading as exhausted (`None`); Repeat One resumes
     // the *same* track on an auto-advance (a queued song must not consume the
     // repeat) but advances on a manual skip; Off clamps to `None` at the boundary.
-    #[cfg_attr(
-      not(feature = "audio-decode-queue"),
-      allow(unused_variables)
-    )]
+    #[cfg_attr(not(feature = "audio-decode-queue"), allow(unused_variables))]
     let repeat = self.decoded_repeat;
     #[cfg(feature = "local-files")]
     #[allow(clippy::needless_return)]

@@ -436,10 +436,7 @@ pub struct DecodedQueuePlayback {
   /// one, and the stale result is silently discarded. Only *read* by the
   /// Subsonic/YouTube fetch-completion path, so a build with neither (e.g. a
   /// local-files-only build) writes it without reading it.
-  #[cfg_attr(
-    not(feature = "queue-download"),
-    allow(dead_code)
-  )]
+  #[cfg_attr(not(feature = "queue-download"), allow(dead_code))]
   pub fetch_id: u64,
   /// The tempfile backing a downloaded track (Subsonic / YouTube). `None` for a
   /// local file, which is played straight from disk. Held purely to keep the

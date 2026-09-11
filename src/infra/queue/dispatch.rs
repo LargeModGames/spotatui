@@ -204,10 +204,7 @@ async fn clear_queue_playback(app: &Arc<Mutex<App>>) {
       player.stop();
     }
   }
-  #[cfg(all(
-    feature = "streaming",
-    not(feature = "audio-decode-queue")
-  ))]
+  #[cfg(all(feature = "streaming", not(feature = "audio-decode-queue")))]
   {
     let mut guard = app.lock().await;
     guard.queue_suspended = None;
@@ -587,10 +584,7 @@ async fn finish_decoded_fetch(
     Some(QueueNowPlaying::Decoded(d)) if d.fetch_id == fetch_id => Arc::clone(&d.player),
     _ => return, // superseded — the tempfile drops here
   };
-  #[cfg_attr(
-    not(feature = "tui"),
-    allow(unused_variables)
-  )]
+  #[cfg_attr(not(feature = "tui"), allow(unused_variables))]
   let (tmp, quality) = match result {
     Ok(fetched) => fetched,
     Err(e) => {
@@ -644,12 +638,8 @@ async fn publish_decoded(
   app: &Arc<Mutex<App>>,
   player: Arc<LocalPlayer>,
   track: TrackInfo,
-  #[cfg(feature = "queue-download")] tempfile: Option<
-    tempfile::NamedTempFile,
-  >,
-  #[cfg(not(feature = "queue-download"))] _tempfile: Option<
-    (),
-  >,
+  #[cfg(feature = "queue-download")] tempfile: Option<tempfile::NamedTempFile>,
+  #[cfg(not(feature = "queue-download"))] _tempfile: Option<()>,
 ) {
   use crate::infra::queue::{DecodedQueuePlayback, QueueNowPlaying};
   let name = track.name.clone();
@@ -769,10 +759,7 @@ async fn apply_volume(app: &Arc<Mutex<App>>, player: &Arc<LocalPlayer>) {
 /// suspended. The queue slot's player is stopped only when it is **not** shared
 /// with the context being resumed (`Arc::ptr_eq`).
 async fn resume_or_finish(app: &Arc<Mutex<App>>) {
-  #[cfg(any(
-    feature = "queue",
-    feature = "internet-radio"
-  ))]
+  #[cfg(any(feature = "queue", feature = "internet-radio"))]
   use crate::core::queue::SuspendedContext;
 
   let suspended = { app.lock().await.queue_suspended.take() };
@@ -806,10 +793,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
   // Take the queue slot's player so we can decide whether to stop it.
   #[cfg(feature = "audio-decode-queue")]
   let queue_player = { app.lock().await.take_queue_now_decoded_player() };
-  #[cfg(all(
-    feature = "streaming",
-    not(feature = "audio-decode-queue")
-  ))]
+  #[cfg(all(feature = "streaming", not(feature = "audio-decode-queue")))]
   {
     app.lock().await.queue_now = None;
   }
@@ -1205,8 +1189,8 @@ mod tests {
   use std::time::SystemTime;
 
   #[cfg(any(
-      feature = "streaming",
-      not(all(feature = "qobuz", feature = "subsonic"))
+    feature = "streaming",
+    not(all(feature = "qobuz", feature = "subsonic"))
   ))]
   fn track(uri: &str, name: &str) -> TrackInfo {
     TrackInfo {

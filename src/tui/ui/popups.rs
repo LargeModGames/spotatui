@@ -412,10 +412,7 @@ fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
   };
 
   // 1. A suspended context is authoritative: the queue is draining over it.
-  #[cfg(any(
-    feature = "queue",
-    feature = "internet-radio"
-  ))]
+  #[cfg(any(feature = "queue", feature = "internet-radio"))]
   if let Some(ctx) = app.queue_suspended.as_ref() {
     use crate::core::queue::SuspendedContext;
     return match ctx {

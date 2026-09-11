@@ -902,8 +902,7 @@ mod tests {
     eprintln!("decoder ready after {:?}", started.elapsed());
 
     let player = LocalPlayer::new().expect("open default output device");
-    player.play_prepared(prepared)
-    .unwrap();
+    player.play_prepared(prepared).unwrap();
     eprintln!("playing after {:?}", started.elapsed());
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(

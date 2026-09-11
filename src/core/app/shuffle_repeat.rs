@@ -7,10 +7,7 @@ impl App {
   /// is unaffected (it stays at the front), so audio continues uninterrupted.
   /// Call only when [`active_queueable_decoded_source`](Self::active_queueable_decoded_source)
   /// holds, so exactly one branch applies.
-  #[cfg_attr(
-    not(feature = "audio-decode-queue"),
-    allow(unused_variables)
-  )]
+  #[cfg_attr(not(feature = "audio-decode-queue"), allow(unused_variables))]
   fn apply_decoded_shuffle(&mut self) {
     let on = self.decoded_shuffle;
     // While a track change is in flight (`advancing`), an async `play_index`
@@ -129,11 +126,7 @@ impl App {
   /// client's property instead, because reaching this method at all means a
   /// decoded source (radio, or the queue slot) owns playback and the Spotify
   /// context is not what the user is listening to.
-  #[cfg(all(
-    feature = "mpris",
-    target_os = "linux",
-    feature = "audio-decode",
-  ))]
+  #[cfg(all(feature = "mpris", target_os = "linux", feature = "audio-decode",))]
   pub fn set_decoded_shuffle(&mut self, on: bool) -> bool {
     if !self.active_queueable_decoded_source() {
       return false;
@@ -148,11 +141,7 @@ impl App {
   /// Set the decoded repeat mode to an explicit value from an external media
   /// controller (MPRIS). Returns whether a queueable decoded source consumed it
   /// (see [`set_decoded_shuffle`](Self::set_decoded_shuffle)).
-  #[cfg(all(
-    feature = "mpris",
-    target_os = "linux",
-    feature = "audio-decode"
-  ))]
+  #[cfg(all(feature = "mpris", target_os = "linux", feature = "audio-decode"))]
   pub fn set_decoded_repeat(&mut self, mode: RepeatMode) -> bool {
     if !self.active_queueable_decoded_source() {
       return false;

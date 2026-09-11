@@ -147,10 +147,7 @@ async fn apply_selections(
 /// Spotify is always present.
 fn compiled_in_sources() -> Vec<Source> {
   // `mut` is unused in a Spotify-only (slim) build where every push is cfg'd out.
-  #[cfg_attr(
-    not(feature = "audio-decode"),
-    allow(unused_mut)
-  )]
+  #[cfg_attr(not(feature = "audio-decode"), allow(unused_mut))]
   let mut options = vec![Source::Spotify];
   #[cfg(feature = "youtube")]
   options.push(Source::YouTube);
@@ -167,10 +164,7 @@ fn compiled_in_sources() -> Vec<Source> {
 
 // `user_config` and `onboarding` are only read by credential/config-collecting
 // sources; a build with none of them (slim, or Qobuz alone) leaves them unused.
-#[cfg_attr(
-  not(feature = "onboarding"),
-  allow(unused_variables)
-)]
+#[cfg_attr(not(feature = "onboarding"), allow(unused_variables))]
 async fn configure_source(
   source: Source,
   user_config: &mut UserConfig,
