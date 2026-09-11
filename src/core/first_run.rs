@@ -147,16 +147,7 @@ async fn apply_selections(
 /// Spotify is always present.
 fn compiled_in_sources() -> Vec<Source> {
   // `mut` is unused in a Spotify-only (slim) build where every push is cfg'd out.
-  #[cfg_attr(
-    not(any(
-      feature = "youtube",
-      feature = "subsonic",
-      feature = "internet-radio",
-      feature = "local-files",
-      feature = "qobuz"
-    )),
-    allow(unused_mut)
-  )]
+  #[cfg_attr(not(feature = "audio-decode"), allow(unused_mut))]
   let mut options = vec![Source::Spotify];
   #[cfg(feature = "youtube")]
   options.push(Source::YouTube);

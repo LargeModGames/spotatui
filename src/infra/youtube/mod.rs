@@ -107,6 +107,7 @@ pub struct YouTubePlaybackState {
 
 impl YouTubePlaybackState {
   /// The currently playing video, if `index` is in range.
+  #[cfg(feature = "tui")]
   pub fn current(&self) -> Option<&TrackInfo> {
     self.tracks.get(self.index)
   }

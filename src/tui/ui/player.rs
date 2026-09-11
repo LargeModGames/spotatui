@@ -549,13 +549,7 @@ fn playbar_controls_available(app: &App) -> bool {
 /// all-sources build.
 fn non_spotify_source_playback_active(app: &App) -> bool {
   // Slim builds (no source features) never reference `app` below.
-  #[cfg(not(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  )))]
+  #[cfg(not(feature = "audio-decode"))]
   let _ = app;
 
   #[cfg(feature = "local-files")]
@@ -839,15 +833,7 @@ fn extract_track_info(app: &App) -> (Option<String>, Option<String>) {
 /// of plain values and can be unit-tested with `TestBackend` (no audio device).
 /// Gated to every build that can render one: the decoded sources plus the
 /// native queue slot (`streaming` covers a queued Spotify track).
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "internet-radio",
-  feature = "youtube",
-  feature = "streaming",
-  feature = "audio-decode"
-))]
+#[cfg(any(feature = "streaming", feature = "audio-decode"))]
 struct LocalPlaybarView {
   /// Source name shown in the playbar title, e.g. `"Local"` or `"Subsonic"`.
   source_label: &'static str,
@@ -1011,15 +997,7 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   render_local_playbar(f, app, layout_chunk, &view);
 }
 
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "internet-radio",
-  feature = "youtube",
-  feature = "streaming",
-  feature = "audio-decode"
-))]
+#[cfg(any(feature = "streaming", feature = "audio-decode"))]
 fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: &LocalPlaybarView) {
   let playbar_areas = playbar_layout_areas(app, layout_chunk);
 
@@ -1186,12 +1164,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // suspended context (whose `*_playback` is still `Some`) and not the stale
   // Spotify context (still cached when a Spotify context was suspended).
   // Checked first so the playbar always shows what is actually audible.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let source_label = d
       .track
@@ -1220,6 +1193,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       // The native queue ignores the decoded shuffle/repeat modes (they belong
       // to the suspended source resumed once the queue drains), so hide them.
       show_modes: false,
+      #[cfg(any(feature = "queue-download", feature = "local-files"))]
       quality: d.quality.clone(),
     };
     render_local_playbar(f, app, layout_chunk, &view);

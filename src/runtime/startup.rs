@@ -663,13 +663,7 @@ async fn restore_playback_session(
   session: crate::core::persisted_playback::PersistedPlayback,
   startup_behavior: StartupBehavior,
 ) {
-  #[cfg(any(
-    feature = "youtube",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "local-files",
-    feature = "internet-radio"
-  ))]
+  #[cfg(feature = "audio-decode")]
   use crate::core::persisted_playback::PersistedPlayback;
 
   // Resolve whether the restored track should end up paused.
@@ -874,13 +868,7 @@ async fn handle_mpris_events(
     // Spotify network) so media keys follow the audible source instead of
     // librespot. This must run *before* the streaming-player branches below,
     // since librespot is initialized even while a decoded source is playing.
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode")]
     if route_decoded_mpris_event(&event, &app, &mpris_manager).await {
       continue;
     }
@@ -1083,17 +1071,7 @@ async fn handle_mpris_events(
 /// source is actually audible instead of the paused librespot session.
 /// Non-transport events (shuffle/loop) return `false` so existing behaviour is
 /// preserved.
-#[cfg(all(
-  feature = "mpris",
-  target_os = "linux",
-  any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  )
-))]
+#[cfg(all(feature = "mpris", target_os = "linux", feature = "audio-decode",))]
 async fn route_decoded_mpris_event(
   event: &mpris::MprisEvent,
   app: &Arc<Mutex<App>>,
@@ -1248,13 +1226,7 @@ async fn handle_macos_media_events(
     // Spotify network) so media keys follow the audible source instead of
     // librespot. This must run *before* `active_streaming_player` below, since
     // librespot stays active even while a decoded source is playing.
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode")]
     if route_decoded_macos_event(&event, &app).await {
       continue;
     }
@@ -1303,17 +1275,7 @@ async fn handle_macos_media_events(
 /// `IoEvent`s the keyboard uses; the per-source `route_*_event` dispatchers
 /// intercept them before the Spotify network, so the control lands on whichever
 /// source is actually audible instead of the paused librespot session.
-#[cfg(all(
-  feature = "macos-media",
-  target_os = "macos",
-  any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  )
-))]
+#[cfg(all(feature = "macos-media", target_os = "macos", feature = "audio-decode",))]
 async fn route_decoded_macos_event(
   event: &macos_media::MacMediaEvent,
   app: &Arc<Mutex<App>>,
@@ -1372,13 +1334,7 @@ async fn handle_windows_media_events(
     // Spotify network) so SMTC controls follow the audible source instead of
     // librespot. This must run *before* the streaming-player branches below,
     // since librespot stays active even while a decoded source is playing.
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode")]
     if route_decoded_windows_event(&event, &app).await {
       continue;
     }
@@ -1458,13 +1414,7 @@ async fn handle_windows_media_events(
 #[cfg(all(
   feature = "windows-media",
   target_os = "windows",
-  any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  )
+  feature = "audio-decode",
 ))]
 async fn route_decoded_windows_event(
   event: &smtc_tokio::WindowsMediaEvent,

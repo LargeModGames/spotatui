@@ -369,7 +369,7 @@ fn queue_item_line(item: &PlayableInfo) -> String {
 /// tracks. Rows read from the still-alive per-source `*_playback` state.
 fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
   // Format the upcoming rows of a Subsonic/YouTube `TrackInfo` context list.
-  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+  #[cfg(feature = "queue-download")]
   fn track_rows(
     tracks: &[crate::core::plugin_api::TrackInfo],
     start: usize,
@@ -412,14 +412,7 @@ fn context_preview_lines(app: &App, max: usize) -> Vec<String> {
   };
 
   // 1. A suspended context is authoritative: the queue is draining over it.
-  #[cfg(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube",
-    feature = "internet-radio"
-  ))]
+  #[cfg(any(feature = "queue", feature = "internet-radio"))]
   if let Some(ctx) = app.queue_suspended.as_ref() {
     use crate::core::queue::SuspendedContext;
     return match ctx {

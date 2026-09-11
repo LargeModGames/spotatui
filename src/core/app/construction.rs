@@ -58,23 +58,11 @@ impl Default for App {
       queue: None,
       native_queue: Vec::new(),
       queue_suspended: None,
-      #[cfg(any(
-        feature = "streaming",
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "queue")]
       queue_now: None,
       #[cfg(feature = "streaming")]
       spotify_queue_guard_reloads: 0,
-      #[cfg(any(
-        feature = "streaming",
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "queue")]
       queue_slot_desired_playing: true,
       playlist_offset: 0,
       playlist_tracks: None,
@@ -184,13 +172,7 @@ impl Default for App {
       radio_playback: None,
       #[cfg(feature = "youtube")]
       youtube_playback: None,
-      #[cfg(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "internet-radio",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "audio-decode")]
       decoded_sink_claim: None,
       #[cfg(feature = "streaming")]
       streaming_recovery_tx: None,

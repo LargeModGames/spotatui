@@ -16,32 +16,16 @@ use tokio::sync::Mutex;
 
 use crate::core::app::App;
 use crate::core::plugin_api::TrackInfo;
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube",
-  feature = "streaming"
-))]
+#[cfg(feature = "queue")]
 use crate::core::queue::QueueItemSource;
 use crate::core::queue::{queue_item_source, source_available, source_label};
 use crate::infra::network::IoEvent;
 
 // The decoded queue slot exists only for the sources that own a finite track
 // list; internet radio enables `audio-decode` but is never queueable.
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 use crate::infra::audio::LocalPlayer;
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 use std::time::Duration;
 
 /// Intercept queue-owned events before the per-source dispatchers.
@@ -86,12 +70,7 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
   // Transport for the queue slot's own player (Pause / Seek / Volume / Next /
   // bare-resume). Only meaningful when a decoded queued track owns the sink;
   // compiles out entirely without a queueable decoded source.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   if let Some(handled) = route_queue_transport(app, event).await {
     return handled;
   }
@@ -115,12 +94,7 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
 /// Transport controls for the queue slot's player, when a decoded queued track
 /// owns the sink. Returns `Some(true)` when consumed, `None` when this event is
 /// not a queue-slot transport control (so the caller falls through).
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option<bool> {
   let player = {
     let guard = app.lock().await;
@@ -217,12 +191,7 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
 /// Drop the queue slot (stopping its player) and forget any suspended context,
 /// but keep the queued items. Called when the user starts an unrelated playback.
 async fn clear_queue_playback(app: &Arc<Mutex<App>>) {
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   {
     let player = {
       let mut guard = app.lock().await;
@@ -235,15 +204,7 @@ async fn clear_queue_playback(app: &Arc<Mutex<App>>) {
       player.stop();
     }
   }
-  #[cfg(all(
-    feature = "streaming",
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))
-  ))]
+  #[cfg(all(feature = "streaming", not(feature = "audio-decode-queue")))]
   {
     let mut guard = app.lock().await;
     guard.queue_suspended = None;
@@ -252,13 +213,7 @@ async fn clear_queue_playback(app: &Arc<Mutex<App>>) {
   // No queueable source at all (includes a radio-only build): there is no queue
   // slot to clear, and `queue_suspended` is only ever set by a source that can
   // be suspended *under* the queue.
-  #[cfg(not(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  )))]
+  #[cfg(not(feature = "queue"))]
   {
     let _ = app;
   }
@@ -463,12 +418,7 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
   // its player for resume) is paused — resume reloads its sink either way.
   // Both lookups only ever see the queueable sources (radio is torn down at
   // suspension rather than kept for reuse), so this compiles out without them.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   {
     if let Some(p) = { app.lock().await.take_queue_now_decoded_player() } {
       p.stop();
@@ -573,20 +523,10 @@ fn preload_next_queued_spotify(app: &App) {
 }
 
 /// Monotonic source for [`DecodedQueuePlayback::fetch_id`] stamps.
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 static QUEUE_FETCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 fn next_fetch_id() -> u64 {
   QUEUE_FETCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
@@ -600,12 +540,7 @@ fn next_fetch_id() -> u64 {
 /// which re-suspended the context and dispatched a second advance — dropping
 /// one queued item on the floor. Returns the slot's fetch stamp, which a
 /// background fetch passes back to [`finish_decoded_fetch`].
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 async fn publish_pending_decoded(
   app: &Arc<Mutex<App>>,
   player: &Arc<LocalPlayer>,
@@ -619,8 +554,9 @@ async fn publish_pending_decoded(
     track: track.clone(),
     advancing: true,
     fetch_id,
-    #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+    #[cfg(feature = "queue-download")]
     tempfile: None,
+    #[cfg(feature = "tui")]
     quality: None,
   }));
   fetch_id
@@ -635,7 +571,7 @@ async fn publish_pending_decoded(
 /// thread, and the runner takes the lock on every frame); the slot is
 /// re-checked before the finalize, and a stage that a newer fetch superseded
 /// is left paused in the sink for that fetch's own stage to clear.
-#[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+#[cfg(feature = "queue-download")]
 async fn finish_decoded_fetch(
   app: &Arc<Mutex<App>>,
   fetch_id: u64,
@@ -648,6 +584,7 @@ async fn finish_decoded_fetch(
     Some(QueueNowPlaying::Decoded(d)) if d.fetch_id == fetch_id => Arc::clone(&d.player),
     _ => return, // superseded — the tempfile drops here
   };
+  #[cfg_attr(not(feature = "tui"), allow(unused_variables))]
   let (tmp, quality) = match result {
     Ok(fetched) => fetched,
     Err(e) => {
@@ -682,7 +619,10 @@ async fn finish_decoded_fetch(
   }
   if let Some(QueueNowPlaying::Decoded(d)) = guard.queue_now.as_mut() {
     d.tempfile = Some(tmp);
-    d.quality = quality;
+    #[cfg(feature = "tui")]
+    {
+      d.quality = quality;
+    }
     d.advancing = false;
   }
   guard.set_status_message(format!("\u{266a} {track_name} (queue)"), 4);
@@ -698,12 +638,8 @@ async fn publish_decoded(
   app: &Arc<Mutex<App>>,
   player: Arc<LocalPlayer>,
   track: TrackInfo,
-  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))] tempfile: Option<
-    tempfile::NamedTempFile,
-  >,
-  #[cfg(not(any(feature = "subsonic", feature = "qobuz", feature = "youtube")))] _tempfile: Option<
-    (),
-  >,
+  #[cfg(feature = "queue-download")] tempfile: Option<tempfile::NamedTempFile>,
+  #[cfg(not(feature = "queue-download"))] _tempfile: Option<()>,
 ) {
   use crate::infra::queue::{DecodedQueuePlayback, QueueNowPlaying};
   let name = track.name.clone();
@@ -717,8 +653,9 @@ async fn publish_decoded(
     track,
     advancing: false,
     fetch_id: next_fetch_id(),
-    #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+    #[cfg(feature = "queue-download")]
     tempfile,
+    #[cfg(feature = "tui")]
     quality: None,
   }));
   guard.set_status_message(format!("\u{266a} {name} (queue)"), 4);
@@ -735,12 +672,7 @@ async fn publish_decoded(
 /// fresh-device path: the outgoing queue slot can be a still-playing Spotify
 /// track (mid-track skip / Enter-jump), and on the reuse paths nothing else
 /// silences it — it would keep playing under the whole download window.
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 async fn acquire_queue_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
   if let Some(p) = {
     let guard = app.lock().await;
@@ -771,12 +703,7 @@ async fn acquire_queue_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>>
 /// That exclusion is exactly why this is gated on the three queueable sources
 /// rather than `audio-decode` — under radio alone every arm below is cfg'd out
 /// and the function is unreachable.
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 async fn suspended_context_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
   let guard = app.lock().await;
   #[cfg(feature = "local-files")]
@@ -803,12 +730,7 @@ async fn suspended_context_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlay
 /// still-playing queued Spotify track that is being skipped mid-play. Called
 /// unconditionally at the top of every decoded queue-play path — a Spirc pause
 /// on an already-paused or idle librespot is a no-op.
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 async fn release_librespot(app: &Arc<Mutex<App>>) {
   #[cfg(feature = "streaming")]
   {
@@ -837,35 +759,16 @@ async fn apply_volume(app: &Arc<Mutex<App>>, player: &Arc<LocalPlayer>) {
 /// suspended. The queue slot's player is stopped only when it is **not** shared
 /// with the context being resumed (`Arc::ptr_eq`).
 async fn resume_or_finish(app: &Arc<Mutex<App>>) {
-  #[cfg(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube",
-    feature = "internet-radio"
-  ))]
+  #[cfg(any(feature = "queue", feature = "internet-radio"))]
   use crate::core::queue::SuspendedContext;
 
   let suspended = { app.lock().await.queue_suspended.take() };
   // The slot's desired play state carries into the resume, then resets: a
   // device removal that paused the slot keeps the context paused, and the
   // next queue episode starts playing.
-  #[cfg(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "queue")]
   let playing = std::mem::replace(&mut app.lock().await.queue_slot_desired_playing, true);
-  #[cfg(not(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  )))]
+  #[cfg(not(feature = "queue"))]
   #[allow(unused_variables)]
   let playing = true;
 
@@ -888,22 +791,9 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
   }
 
   // Take the queue slot's player so we can decide whether to stop it.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   let queue_player = { app.lock().await.take_queue_now_decoded_player() };
-  #[cfg(all(
-    feature = "streaming",
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))
-  ))]
+  #[cfg(all(feature = "streaming", not(feature = "audio-decode-queue")))]
   {
     app.lock().await.queue_now = None;
   }
@@ -911,12 +801,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
   // The slot gave its device up (see the driver's tick): a decoded context
   // sharing that player cannot restage onto it either. End it with the device
   // error instead of a failed track.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   if let Some(dead) = queue_player.as_ref().filter(|p| p.device_lost()) {
     let mut guard = app.lock().await;
     if drop_context_sharing(&mut guard, suspended.as_ref(), dead) {
@@ -929,12 +814,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
     None => {
       // Nothing was suspended: the queue was playing over an idle app (or a
       // context finished before the queue started). Stop the slot and note it.
-      #[cfg(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "audio-decode-queue")]
       if let Some(player) = queue_player {
         player.stop();
         app
@@ -967,12 +847,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
     Some(SuspendedContext::Radio { station }) => {
       // Radio uses its own fresh player, so always stop the queue slot. A
       // radio-only build has no queueable source, hence no slot to stop.
-      #[cfg(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "audio-decode-queue")]
       if let Some(player) = queue_player {
         player.stop();
       }
@@ -998,12 +873,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
       // The network handler reloads the session's app-owned track list at the
       // resume index — same order, no refetch, no reshuffle. Stop the decoded
       // queue slot if one exists.
-      #[cfg(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "audio-decode-queue")]
       if let Some(player) = queue_player {
         player.stop();
       }
@@ -1025,12 +895,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
     }) => {
       // The network handler re-loads the Spotify context (offset by the resume
       // track) on the native device. Stop the decoded queue slot if one exists.
-      #[cfg(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "audio-decode-queue")]
       if let Some(player) = queue_player {
         player.stop();
       }
@@ -1045,12 +910,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
     #[allow(unreachable_patterns)]
     _ =>
     {
-      #[cfg(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "audio-decode-queue")]
       if let Some(player) = queue_player {
         player.stop();
       }
@@ -1060,12 +920,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
 
 /// Drop the suspended decoded context whose player is `dead` (the queue slot
 /// shared it), returning whether there was one.
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode-queue")]
 fn drop_context_sharing(
   app: &mut App,
   suspended: Option<&crate::core::queue::SuspendedContext>,
@@ -1333,6 +1188,10 @@ mod tests {
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
+  #[cfg(any(
+    feature = "streaming",
+    not(all(feature = "qobuz", feature = "subsonic"))
+  ))]
   fn track(uri: &str, name: &str) -> TrackInfo {
     TrackInfo {
       uri: Some(uri.to_string()),

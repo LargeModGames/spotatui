@@ -149,29 +149,13 @@ pub enum IoEvent {
   /// `infra::queue::dispatch::route_queue_event`; it never reaches the Spotify
   /// network handler. Only the decoded queue slot can lose a device, so in a
   /// build without a queueable decoded source nothing dispatches it.
-  #[cfg_attr(
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    )),
-    allow(dead_code)
-  )]
+  #[cfg_attr(not(feature = "audio-decode-queue"), allow(dead_code))]
   FinishNativeQueue,
   /// Replay the current track of the active decoded source (repeat-one). Consumed
   /// by the per-source routers (`route_local_event` / `route_subsonic_event` /
   /// `route_youtube_event`); it never reaches the Spotify network handler. Only
   /// dispatched by the runner tick under a decoded source feature.
-  #[cfg_attr(
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "youtube",
-      feature = "qobuz"
-    )),
-    allow(dead_code)
-  )]
+  #[cfg_attr(not(feature = "audio-decode-queue"), allow(dead_code))]
   ReplayCurrentTrack,
   /// Resume a suspended native-streaming Spotify context after the native queue
   /// drains (context URI, resume-track URI). Re-loads the context on the native
