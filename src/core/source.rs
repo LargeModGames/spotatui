@@ -128,6 +128,14 @@ impl Source {
   pub fn supports_like(&self) -> bool {
     matches!(self, Source::Spotify)
   }
+
+  /// Whether playlists of this source can take part in a cross-source mirror.
+  pub fn supports_playlist_sync(&self) -> bool {
+    matches!(
+      self,
+      Source::Spotify | Source::Subsonic | Source::YouTube | Source::Qobuz
+    )
+  }
 }
 
 #[cfg(test)]
@@ -198,6 +206,16 @@ mod tests {
     assert!(!Source::Qobuz.supports_library());
     assert!(!Source::Qobuz.supports_playlist_write());
     assert!(!Source::Qobuz.supports_like());
+  }
+
+  #[test]
+  fn playlist_sync_is_on_for_the_four_writable_sources() {
+    assert!(Source::Spotify.supports_playlist_sync());
+    assert!(Source::Subsonic.supports_playlist_sync());
+    assert!(Source::YouTube.supports_playlist_sync());
+    assert!(Source::Qobuz.supports_playlist_sync());
+    assert!(!Source::Local.supports_playlist_sync());
+    assert!(!Source::Radio.supports_playlist_sync());
   }
 
   #[test]

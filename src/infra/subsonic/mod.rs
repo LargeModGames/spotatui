@@ -38,7 +38,7 @@ use reqwest::Client;
 use crate::core::plugin_api::{
   AlbumInfo, ArtistInfo, ArtistRef, PlaylistInfo, SearchResults, TrackInfo,
 };
-use crate::core::source::{MediaSource, Searcher};
+use crate::core::source::{MediaSource, PlaylistWriter, Searcher};
 use crate::infra::audio::LocalPlayer;
 
 use types::{SubsonicEnvelope, SubsonicResponse};
@@ -52,6 +52,8 @@ const CLIENT_NAME: &str = "spotatui";
 
 const PLAYLIST_PREFIX: &str = "subsonic:playlist:";
 const TRACK_PREFIX: &str = "subsonic:track:";
+/// Repeated params per `updatePlaylist` call; they all ride in one request line.
+const WRITE_CHUNK: usize = 50;
 
 /// Cap on establishing the TCP+TLS connection. A server that never completes the
 /// handshake (captive portal, half-open TCP) fails fast instead of hanging the
@@ -357,6 +359,21 @@ fn playlist_id_from_uri(uri: &str) -> Result<&str> {
     .ok_or_else(|| anyhow!("Not a subsonic playlist URI: {}", uri))
 }
 
+/// A `subsonic:track:<id>` URI or a bare id.
+fn track_id_of(uri: &str) -> &str {
+  uri.strip_prefix(TRACK_PREFIX).unwrap_or(uri)
+}
+
+/// The positions of `track_ids` in the playlist, ascending.
+fn song_indices_for(entries: &[types::SubsonicSong], track_ids: &[&str]) -> Vec<usize> {
+  entries
+    .iter()
+    .enumerate()
+    .filter(|(_, s)| track_ids.contains(&s.id.as_str()))
+    .map(|(index, _)| index)
+    .collect()
+}
+
 impl From<&types::SubsonicPlaylist> for PlaylistInfo {
   fn from(p: &types::SubsonicPlaylist) -> Self {
     PlaylistInfo {
@@ -463,6 +480,77 @@ fn artist_to_artist_info(a: &types::SubsonicArtist) -> ArtistInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Playlist writes
+// ---------------------------------------------------------------------------
+
+impl SubsonicSource {
+  /// Create a playlist and return its new id.
+  pub async fn create_playlist(&self, name: &str) -> Result<String> {
+    let url = Self::append_param(
+      &self.endpoint_url("createPlaylist.view"),
+      "name",
+      &url_encode(name),
+    );
+    let created = self.fetch(&url).await?.playlist.ok_or_else(|| {
+      anyhow!("createPlaylist returned no id; the playlist itself may have been created")
+    })?;
+    Ok(created.id)
+  }
+}
+
+impl PlaylistWriter for SubsonicSource {
+  /// Append tracks, [`WRITE_CHUNK`] `songIdToAdd` params per call.
+  async fn add_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    for chunk in track_uris.chunks(WRITE_CHUNK) {
+      let mut url = Self::append_param(
+        &self.endpoint_url("updatePlaylist.view"),
+        "playlistId",
+        &url_encode(id),
+      );
+      for uri in chunk {
+        url = Self::append_param(&url, "songIdToAdd", &url_encode(track_id_of(uri)));
+      }
+      self.fetch(&url).await?;
+    }
+    Ok(())
+  }
+
+  /// Remove tracks by position, highest first so earlier ones never shift.
+  async fn remove_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    if track_uris.is_empty() {
+      return Ok(());
+    }
+    let read = Self::append_param(
+      &self.endpoint_url("getPlaylist.view"),
+      "id",
+      &url_encode(id),
+    );
+    let detail = self
+      .fetch(&read)
+      .await?
+      .playlist
+      .ok_or_else(|| anyhow!("No playlist in getPlaylist response"))?;
+    let wanted: Vec<&str> = track_uris.iter().map(|uri| track_id_of(uri)).collect();
+    let mut indices = song_indices_for(&detail.entry, &wanted);
+    indices.reverse();
+    for chunk in indices.chunks(WRITE_CHUNK) {
+      let mut url = Self::append_param(
+        &self.endpoint_url("updatePlaylist.view"),
+        "playlistId",
+        &url_encode(id),
+      );
+      for index in chunk {
+        url = Self::append_param(&url, "songIndexToRemove", &index.to_string());
+      }
+      self.fetch(&url).await?;
+    }
+    Ok(())
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Trait implementations
 // ---------------------------------------------------------------------------
 
@@ -555,6 +643,54 @@ fn url_encode(s: &str) -> String {
 mod tests {
   use super::*;
   use crate::infra::subsonic::types::SubsonicEnvelope;
+  use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+  use tokio::net::TcpListener;
+
+  /// Serve `responses` in order, collecting each request target. Subsonic
+  /// writes carry everything in the query string, so no body is read.
+  async fn serve(
+    responses: Vec<(&'static str, &'static str)>,
+  ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let handle = tokio::spawn(async move {
+      let mut seen = Vec::new();
+      for (status, payload) in responses {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (read_half, mut write_half) = stream.split();
+        let mut reader = BufReader::new(read_half);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).await.unwrap();
+        loop {
+          let mut line = String::new();
+          reader.read_line(&mut line).await.unwrap();
+          if line == "\r\n" || line.is_empty() {
+            break;
+          }
+        }
+        seen.push(
+          request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("")
+            .to_string(),
+        );
+        write_half
+          .write_all(
+            format!(
+              "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+              payload.len()
+            )
+            .as_bytes(),
+          )
+          .await
+          .unwrap();
+        write_half.flush().await.unwrap();
+      }
+      seen
+    });
+    (base, handle)
+  }
 
   /// Live end-to-end smoke test against the public Navidrome demo server.
   /// Ignored by default (hits the network); run with:
@@ -727,7 +863,8 @@ mod tests {
             "album": "Weightless",
             "albumId": "alb1",
             "duration": 469,
-            "trackNumber": 1
+            "trackNumber": 1,
+            "isrc": ["GBAYE0601498"]
           },
           {
             "id": "102",
@@ -781,6 +918,49 @@ mod tests {
       }
     }
   }"#;
+
+  const SCALAR_ISRC: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": {
+        "id": "7",
+        "name": "Mirror",
+        "songCount": 1,
+        "entry": [{ "id": "101", "title": "A", "isrc": "GBAYE0601498" }]
+      }
+    }
+  }"#;
+
+  const DUPLICATE_ENTRIES: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": {
+        "id": "7",
+        "name": "Mirror",
+        "songCount": 3,
+        "entry": [
+          { "id": "101", "title": "A" },
+          { "id": "102", "title": "B" },
+          { "id": "101", "title": "A" }
+        ]
+      }
+    }
+  }"#;
+
+  const CREATE_PLAYLIST: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": { "id": "42", "name": "Road Trip", "owner": "alice", "songCount": 0 }
+    }
+  }"#;
+
+  const UPDATE_OK: &str = r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
 
   // -------------------------------------------------------------------------
   // JSON parsing tests
@@ -925,5 +1105,86 @@ mod tests {
     let salt = src.generate_salt();
     assert_eq!(salt.len(), 12);
     assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
+  }
+
+  #[test]
+  fn songs_carry_isrc_when_the_server_is_opensubsonic() {
+    let envelope: SubsonicEnvelope = serde_json::from_str(GET_PLAYLIST).unwrap();
+    let entries = envelope.response.playlist.unwrap().entry;
+    assert_eq!(entries[0].isrc, vec!["GBAYE0601498".to_string()]);
+    assert!(entries[1].isrc.is_empty());
+  }
+
+  #[test]
+  fn a_scalar_isrc_parses_instead_of_killing_the_response() {
+    let envelope: SubsonicEnvelope = serde_json::from_str(SCALAR_ISRC).unwrap();
+    let entries = envelope.response.playlist.unwrap().entry;
+    assert_eq!(entries[0].isrc, vec!["GBAYE0601498".to_string()]);
+  }
+
+  #[test]
+  fn song_indices_map_ids_to_every_position() {
+    let envelope: SubsonicEnvelope = serde_json::from_str(DUPLICATE_ENTRIES).unwrap();
+    let entries = envelope.response.playlist.unwrap().entry;
+    assert_eq!(song_indices_for(&entries, &["101"]), vec![0, 2]);
+    assert_eq!(song_indices_for(&entries, &["102"]), vec![1]);
+    assert!(song_indices_for(&entries, &["999"]).is_empty());
+  }
+
+  #[tokio::test]
+  async fn create_playlist_encodes_the_name_and_returns_the_new_id() {
+    let (base, server) = serve(vec![("200 OK", CREATE_PLAYLIST)]).await;
+    let id = SubsonicSource::new(base, "u", "p")
+      .create_playlist("Road Trip")
+      .await
+      .unwrap();
+    assert_eq!(id, "42");
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/createPlaylist.view?"));
+    assert!(seen[0].contains("u=u&t="));
+    assert!(seen[0].contains("&name=Road+Trip"));
+  }
+
+  #[tokio::test]
+  async fn add_tracks_sends_one_song_id_to_add_per_track() {
+    let (base, server) = serve(vec![("200 OK", UPDATE_OK)]).await;
+    SubsonicSource::new(base, "u", "p")
+      .add_tracks(
+        "subsonic:playlist:7",
+        &["subsonic:track:101".to_string(), "102".to_string()],
+      )
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/updatePlaylist.view?"));
+    assert!(seen[0].contains("&playlistId=7"));
+    assert!(seen[0].contains("&songIdToAdd=101"));
+    assert!(seen[0].contains("&songIdToAdd=102"));
+  }
+
+  #[tokio::test]
+  async fn remove_tracks_reads_the_playlist_then_removes_the_highest_index_first() {
+    let (base, server) = serve(vec![("200 OK", DUPLICATE_ENTRIES), ("200 OK", UPDATE_OK)]).await;
+    SubsonicSource::new(base, "u", "p")
+      .remove_tracks("subsonic:playlist:7", &["subsonic:track:101".to_string()])
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen[0].starts_with("/rest/getPlaylist.view?"));
+    assert!(seen[0].contains("&id=7"));
+    assert!(seen[1].starts_with("/rest/updatePlaylist.view?"));
+    assert!(seen[1].contains("&playlistId=7"));
+    assert!(seen[1].contains("&songIndexToRemove=2&songIndexToRemove=0"));
+  }
+
+  #[tokio::test]
+  async fn adding_no_tracks_makes_no_request() {
+    SubsonicSource::new("http://127.0.0.1:1", "u", "p")
+      .add_tracks("subsonic:playlist:7", &[])
+      .await
+      .unwrap();
   }
 }
