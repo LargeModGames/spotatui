@@ -164,7 +164,10 @@ fn compiled_in_sources() -> Vec<Source> {
 
 // `user_config` and `onboarding` are only read by credential/config-collecting
 // sources; a build with none of them (slim, or Qobuz alone) leaves them unused.
-#[cfg_attr(not(feature = "onboarding"), allow(unused_variables))]
+#[cfg_attr(
+  not(any(feature = "subsonic", feature = "youtube", feature = "local-files")),
+  allow(unused_variables)
+)]
 async fn configure_source(
   source: Source,
   user_config: &mut UserConfig,
