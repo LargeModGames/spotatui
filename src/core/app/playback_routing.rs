@@ -90,49 +90,25 @@ impl App {
 
   /// Record that `source` took the audio sink; its start path calls this
   /// before it pauses librespot.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode")]
   pub(crate) fn claim_decoded_sink(&mut self, source: Source) {
     self.decoded_sink_claim = Some(source);
   }
 
   /// Spotify takes the sink back: an explicit Spotify start reached the
   /// network layer.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode")]
   pub(crate) fn release_decoded_sink_claim(&mut self) {
     self.decoded_sink_claim = None;
   }
 
   /// Whether a decoded source holds the sink claim, session or not.
   pub(crate) fn decoded_sink_claimed(&self) -> bool {
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode")]
     {
       self.decoded_sink_claim.is_some()
     }
-    #[cfg(not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    )))]
+    #[cfg(not(feature = "audio-decode"))]
     {
       false
     }
@@ -151,23 +127,11 @@ impl App {
   /// `Some(true)` when a decoded source owns the sink and plays, `Some(false)`
   /// when it owns the sink and is paused, `None` when none owns it.
   pub(crate) fn decoded_playing_state(&self) -> Option<bool> {
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode")]
     {
       self.active_decoded_player().map(|p| !p.is_paused())
     }
-    #[cfg(not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    )))]
+    #[cfg(not(feature = "audio-decode"))]
     {
       None
     }
@@ -259,12 +223,7 @@ impl App {
   pub(crate) fn active_decoded_source(&self) -> bool {
     // The native queue slot playing a decoded track owns the sink even when no
     // per-source `*_playback` context is set (e.g. queueing from an idle app).
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode-queue")]
     if self.queue_now_decoded_player().is_some() {
       return true;
     }
@@ -275,13 +234,7 @@ impl App {
     }
     // A decoded start in flight, or a source whose session died with nothing to
     // replace it, still owns the sink: librespot is paused underneath.
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode")]
     if self.decoded_sink_claim.is_some() {
       return true;
     }
@@ -344,13 +297,7 @@ impl App {
   /// Take every decoded session except `keep`'s, so one backend can own the
   /// output device, and return their players. Stop them off the `App` lock: a
   /// sink clear waits for the audio thread.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode")]
   pub(crate) fn take_decoded_sessions_except(
     &mut self,
     keep: crate::core::source::Source,
@@ -386,20 +333,9 @@ impl App {
   /// Spotify (or nothing) owns it. All five decode through the same `LocalPlayer`
   /// sink, so a single accessor covers transport/seek routing for every one.
   /// Ordering mirrors [`Self::active_decoded_source`].
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode")]
   pub fn active_decoded_player(&self) -> Option<&std::sync::Arc<crate::infra::audio::LocalPlayer>> {
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode-queue")]
     if let Some(p) = self.queue_now_decoded_player() {
       return Some(p);
     }
@@ -439,12 +375,7 @@ impl App {
   /// and seek keys become correct no-ops for radio. In a build with all seekable
   /// source features off this reduces to `None`.
   pub(super) fn active_source_position_ms(&self) -> Option<u128> {
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode-queue")]
     if let Some(p) = self.queue_now_decoded_player() {
       return Some(p.position().as_millis());
     }

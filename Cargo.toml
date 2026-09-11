@@ -158,7 +158,7 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:tui-bar-graph", "dep:colorgrad"]
 # plumbing); the frontend itself has not landed yet.
 gui = []
 self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
-streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf"]
+streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf", "queue"]
 # Audio backend features
 alsa-backend = ["streaming", "librespot-playback/alsa-backend"]
 pulseaudio-backend = ["streaming", "librespot-playback/pulseaudio-backend"]
@@ -184,23 +184,35 @@ scripting = ["dep:mlua"]
 # Shared audio decode/output engine (rodio bundles symphonia). Pulled by any
 # source that plays decoded audio through the local sink (local files, Subsonic, Qobuz).
 audio-decode = ["dep:rodio"]
+# Meta-feature, this ensures at least one source that supports queues and needs
+# decoding is enabled.
+audio-decode-queue = ["queue"]
+# Meta-feature, this ensures onboarding is compiled only if there's at least one
+# feature needing it.
+onboarding = []
+# Meta-feature, this ensures at least one source with queue support.
+# Namely: `audio-decode-queue` + `streaming`
+queue = []
+# Meta-feature, this ensures at least one source that supports queues and needs
+# track download / track info fetching.
+queue-download = []
 # Convenience alias to pull in every alternative (non-Spotify) source at once,
 # e.g. `cargo run --features all-sources`. Deliberately NOT part of `default`:
 # the release binaries enable these explicitly (see .github/workflows/cd.yml) and
 # adding them to `default` would pull lofty/symphonia/md-5/stream-download into
 # every plain `cargo build`.
 all-sources = ["local-files", "subsonic", "internet-radio", "youtube", "qobuz"]
-local-files = ["audio-decode", "dep:lofty", "dep:symphonia"]
-subsonic = ["dep:md-5", "audio-decode", "dep:tempfile", "reqwest/stream"]
+local-files = ["audio-decode", "audio-decode-queue", "onboarding", "dep:lofty", "dep:symphonia"]
+subsonic = ["dep:md-5", "audio-decode", "audio-decode-queue", "onboarding", "queue-download", "dep:tempfile", "reqwest/stream"]
 internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
 # YouTube via an external `yt-dlp` binary (no new crates): search with
 # `--flat-playlist --dump-json`, download the AAC/M4A audio (format 140, which
 # rodio's default `mp4` feature decodes) to a tempfile, play through the shared
 # LocalPlayer. Unofficial-fragile by design — see plan-multi-source.md.
-youtube = ["audio-decode", "dep:tempfile"]
+youtube = ["audio-decode", "audio-decode-queue", "onboarding", "queue-download", "dep:tempfile"]
 # Qobuz through its encrypted CMAF stream: each track is decrypted and rebuilt
 # as a FLAC tempfile while it plays through the shared LocalPlayer.
-qobuz = ["audio-decode", "dep:tempfile", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
+qobuz = ["audio-decode", "audio-decode-queue", "queue-download", "dep:tempfile", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
 
 # --- AI DJ / MCP -------------------------------------------------------------
 # Shared tool layer behind both front doors: the taste brief built from the local

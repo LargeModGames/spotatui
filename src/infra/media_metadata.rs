@@ -64,13 +64,7 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // MPRIS/macOS fallback path) would keep showing the stale paused Spotify
   // track. Progress and play-state are read live from the owning source's
   // player, so they stay correct regardless of librespot's frozen position.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode")]
   if let Some(snapshot) = source_playback_snapshot(app) {
     return Some(snapshot);
   }
@@ -174,23 +168,12 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
 /// currently owns playback (at most one `*_playback` is `Some`). Metadata comes
 /// from the source's stored track info; progress and play-state are read live
 /// from its player. Returns `None` when no such source is active.
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "internet-radio",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode")]
 fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // The native queue slot playing a decoded track wins over every per-source
   // context: it is what is actually audible, and it drives the playbar / MPRIS /
   // cover art / lyrics via the shared track-change detector.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let mut snapshot = source_snapshot(
       d.track.name.clone(),
@@ -325,13 +308,7 @@ fn source_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
 /// embedded art fetched separately; radio has none). Sources are always treated
 /// as a single track; shuffle/repeat come from the player-global decoded state
 /// (the radio caller overrides them since a live stream has no queue).
-#[cfg(any(
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "internet-radio",
-  feature = "youtube"
-))]
+#[cfg(feature = "audio-decode")]
 #[allow(clippy::too_many_arguments)]
 fn source_snapshot(
   title: String,

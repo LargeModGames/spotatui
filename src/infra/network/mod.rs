@@ -150,12 +150,7 @@ pub enum IoEvent {
   /// network handler. Only the decoded queue slot can lose a device, so in a
   /// build without a queueable decoded source nothing dispatches it.
   #[cfg_attr(
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    )),
+    not(feature = "audio-decode-queue"),
     allow(dead_code)
   )]
   FinishNativeQueue,
@@ -164,12 +159,7 @@ pub enum IoEvent {
   /// `route_youtube_event`); it never reaches the Spotify network handler. Only
   /// dispatched by the runner tick under a decoded source feature.
   #[cfg_attr(
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "youtube",
-      feature = "qobuz"
-    )),
+    not(feature = "audio-decode-queue"),
     allow(dead_code)
   )]
   ReplayCurrentTrack,

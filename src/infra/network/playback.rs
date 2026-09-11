@@ -1441,13 +1441,7 @@ impl PlaybackNetwork for Network {
     // An explicit Spotify start that reached this handler passed every source
     // router and the pump's prelude: Spotify takes the sink, so the decoded
     // claim ends here. A bare resume never releases it.
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode")]
     if context_id.is_some() || uris.is_some() {
       self.app.lock().await.release_decoded_sink_claim();
     }

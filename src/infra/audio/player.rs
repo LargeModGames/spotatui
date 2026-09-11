@@ -256,12 +256,7 @@ impl LocalPlayer {
   /// else. Recovery pauses only for removal — that is what macOS itself does,
   /// and a device the user just *plugged in* should keep playing.
   #[cfg_attr(
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    )),
+    not(feature = "audio-decode-queue"),
     allow(dead_code)
   )]
   pub fn device_removed(&self) -> bool {
@@ -392,12 +387,7 @@ impl LocalPlayer {
   /// Radio has no track to restage, so a build with just `internet-radio`
   /// never recovers a device.
   #[cfg_attr(
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    )),
+    not(feature = "audio-decode-queue"),
     allow(dead_code)
   )]
   pub fn recover_device(&self) -> Reopen {

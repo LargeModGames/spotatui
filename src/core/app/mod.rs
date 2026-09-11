@@ -15,13 +15,7 @@ use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds
 use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
 use crate::infra::network::sync::{ControlMode, PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
-#[cfg(any(
-  feature = "streaming",
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube"
-))]
+#[cfg(feature = "queue")]
 use crate::infra::queue::QueueNowPlaying;
 use anyhow::anyhow;
 use rspotify::{
@@ -39,11 +33,7 @@ use std::sync::mpsc::Sender;
 // and the decoded queue-slot accessors below (whose gate is the queueable
 // sources, not `audio-decode` — a radio-only build has no queue slot).
 #[cfg(any(
-  feature = "streaming",
-  feature = "local-files",
-  feature = "subsonic",
-  feature = "qobuz",
-  feature = "youtube",
+  feature = "queue",
   all(feature = "mpris", target_os = "linux")
 ))]
 use std::sync::Arc;
@@ -197,13 +187,7 @@ pub struct App {
   /// track — i.e. native streaming or a source with a finite track list, which
   /// excludes internet radio — and every read goes through the unconditional
   /// [`Self::queue_owns_playback`] accessor.
-  #[cfg(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "queue")]
   pub queue_now: Option<crate::infra::queue::QueueNowPlaying>,
   /// Bounded retry guard for the native-Spotify queue slot. When a queued
   /// Spotify track is playing via a direct `player.load` (no Spirc context) and
@@ -218,13 +202,7 @@ pub struct App {
   /// decoded item and by the suspended context's resume. Unlike
   /// `native_is_playing` this survives a backend teardown, so a recovery
   /// replay of the slot can honor a user's pause.
-  #[cfg(any(
-    feature = "streaming",
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "queue")]
   pub queue_slot_desired_playing: bool,
   /// Decoded cover art for the current track plus its load status. The TUI
   /// renderer (`tui::cover_art`) caches its terminal protocols on this
@@ -532,13 +510,7 @@ pub struct App {
   /// (a failed start, a lost output device), cleared when an explicit Spotify
   /// start takes the sink. Covers the window in which every `*_playback` field
   /// is `None` for a source the user asked for.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "internet-radio",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode")]
   decoded_sink_claim: Option<Source>,
   /// Sender used to recover native streaming when a stale/disconnected player is detected.
   #[cfg(feature = "streaming")]

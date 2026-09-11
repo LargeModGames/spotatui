@@ -68,7 +68,7 @@ pub trait Onboarding: Send + Sync {
   // Only the source-configuration flows emit progress fragments; builds
   // without those sources have no caller.
   #[cfg_attr(
-    not(any(feature = "subsonic", feature = "qobuz", feature = "youtube")),
+    not(feature = "onboarding"),
     allow(dead_code)
   )]
   fn progress(&self, text: &str);
