@@ -766,6 +766,8 @@ async fn publish_decoded(
     fetch_id: next_fetch_id(),
     #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
     tempfile,
+    #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+    abort_handle: None,
     quality: None,
   }));
   guard.set_status_message(format!("\u{266a} {name} (queue)"), 4);
