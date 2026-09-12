@@ -434,6 +434,16 @@ pub fn restage(
 /// [`dispatch::try_play_queued`] can play. Internet radio pulls `audio-decode`
 /// in as well, but a live stream is never a queue item, so a radio-only build
 /// can never construct this.
+
+#[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+pub struct DownloadAbortHandle(pub tokio::task::AbortHandle);
+
+#[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+impl Drop for DownloadAbortHandle {
+  fn drop(&mut self) {
+    self.0.abort();
+  }
+}
 #[cfg(any(
   feature = "local-files",
   feature = "subsonic",
@@ -468,6 +478,11 @@ pub struct DecodedQueuePlayback {
   #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
   #[allow(dead_code)]
   pub tempfile: Option<tempfile::NamedTempFile>,
+  /// The handle to abort the background download task if the slot is cleared
+  /// or replaced before the download completes.
+  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+  #[allow(dead_code)]
+  pub abort_handle: Option<DownloadAbortHandle>,
   /// The delivered audio format of a downloaded track (Qobuz, e.g.
   /// `FLAC 24/96`), shown after the artists in the playbar.
   pub quality: Option<String>,

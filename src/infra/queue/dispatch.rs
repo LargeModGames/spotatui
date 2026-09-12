@@ -377,15 +377,30 @@ async fn play_queued_subsonic(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &st
   let fetch_id = publish_pending_decoded(app, &player, track).await;
   // Fetch off the IoEvent pump: awaiting the download here would freeze every
   // other event (skips included, for every source) for its whole duration.
-  let app = Arc::clone(app);
+  let app_clone = Arc::clone(app);
   let uri = uri.to_string();
   let name = track.name.clone();
-  tokio::spawn(async move {
+  let handle = tokio::spawn(async move {
     let result = crate::infra::subsonic::dispatch::download_for_queue(&source, &uri)
       .await
       .map(|tmp| (tmp, None));
-    finish_decoded_fetch(&app, fetch_id, result, &name).await;
+    finish_decoded_fetch(&app_clone, fetch_id, result, &name).await;
   });
+  
+  let abort_handle = handle.abort_handle();
+  {
+    let mut guard = app.lock().await;
+    let mut injected = false;
+    if let Some(crate::infra::queue::QueueNowPlaying::Decoded(ref mut d)) = guard.queue_now {
+      if d.fetch_id == fetch_id {
+        d.abort_handle = Some(crate::infra::queue::DownloadAbortHandle(abort_handle.clone()));
+        injected = true;
+      }
+    }
+    if !injected {
+      abort_handle.abort();
+    }
+  }
   true
 }
 
@@ -401,15 +416,30 @@ async fn play_queued_qobuz(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) 
   let fetch_id = publish_pending_decoded(app, &player, track).await;
   let quality = app.lock().await.user_config.behavior.qobuz_quality;
   // Fetch off the IoEvent pump, like Subsonic: a Qobuz track is a long download.
-  let app = Arc::clone(app);
+  let app_clone = Arc::clone(app);
   let uri = uri.to_string();
   let name = track.name.clone();
-  tokio::spawn(async move {
+  let handle = tokio::spawn(async move {
     let result = crate::infra::qobuz::dispatch::download_for_queue(&source, &uri, quality)
       .await
       .map(|(tmp, label)| (tmp, Some(label)));
-    finish_decoded_fetch(&app, fetch_id, result, &name).await;
+    finish_decoded_fetch(&app_clone, fetch_id, result, &name).await;
   });
+  
+  let abort_handle = handle.abort_handle();
+  {
+    let mut guard = app.lock().await;
+    let mut injected = false;
+    if let Some(crate::infra::queue::QueueNowPlaying::Decoded(ref mut d)) = guard.queue_now {
+      if d.fetch_id == fetch_id {
+        d.abort_handle = Some(crate::infra::queue::DownloadAbortHandle(abort_handle.clone()));
+        injected = true;
+      }
+    }
+    if !injected {
+      abort_handle.abort();
+    }
+  }
   true
 }
 
@@ -427,15 +457,30 @@ async fn play_queued_youtube(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
   let source = crate::infra::youtube::dispatch::build_source(app).await;
   // Fetch off the IoEvent pump: awaiting yt-dlp here would freeze every other
   // event (skips included, for every source) for its whole duration.
-  let app = Arc::clone(app);
+  let app_clone = Arc::clone(app);
   let uri = uri.to_string();
   let name = track.name.clone();
-  tokio::spawn(async move {
+  let handle = tokio::spawn(async move {
     let result = crate::infra::youtube::dispatch::download_for_queue(&source, &uri)
       .await
       .map(|tmp| (tmp, None));
-    finish_decoded_fetch(&app, fetch_id, result, &name).await;
+    finish_decoded_fetch(&app_clone, fetch_id, result, &name).await;
   });
+  
+  let abort_handle = handle.abort_handle();
+  {
+    let mut guard = app.lock().await;
+    let mut injected = false;
+    if let Some(crate::infra::queue::QueueNowPlaying::Decoded(ref mut d)) = guard.queue_now {
+      if d.fetch_id == fetch_id {
+        d.abort_handle = Some(crate::infra::queue::DownloadAbortHandle(abort_handle.clone()));
+        injected = true;
+      }
+    }
+    if !injected {
+      abort_handle.abort();
+    }
+  }
   true
 }
 
@@ -621,6 +666,8 @@ async fn publish_pending_decoded(
     fetch_id,
     #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
     tempfile: None,
+    #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+    abort_handle: None,
     quality: None,
   }));
   fetch_id
@@ -719,6 +766,8 @@ async fn publish_decoded(
     fetch_id: next_fetch_id(),
     #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
     tempfile,
+    #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+    abort_handle: None,
     quality: None,
   }));
   guard.set_status_message(format!("\u{266a} {name} (queue)"), 4);
@@ -1729,5 +1778,45 @@ mod tests {
       guard.queue_owns_playback(),
       "the queue slot now owns playback"
     );
+  }
+
+  #[cfg(any(feature = "subsonic", feature = "qobuz", feature = "youtube"))]
+  #[tokio::test]
+  async fn test_queue_skip_aborts_pending_download() {
+    let app = test_app();
+    let track_info = track("subsonic:track:1", "Track 1");
+    let player = Arc::new(crate::infra::audio::LocalPlayer::new().unwrap());
+
+    // 1. Publish the slot
+    let fetch_id = publish_pending_decoded(&app, &player, &track_info).await;
+
+    // 2. Spawn a dummy sleeping task
+    let handle = tokio::spawn(async move {
+      tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    });
+
+    // 3. Inject abort handle
+    let abort_handle = handle.abort_handle();
+    {
+      let mut guard = app.lock().await;
+      if let Some(crate::infra::queue::QueueNowPlaying::Decoded(ref mut d)) = guard.queue_now {
+        if d.fetch_id == fetch_id {
+          d.abort_handle = Some(crate::infra::queue::DownloadAbortHandle(abort_handle.clone()));
+        }
+      }
+    }
+
+    // Verify the task is alive
+    assert!(!handle.is_finished());
+
+    // 4. Simulate a skip by clearing the slot
+    {
+      app.lock().await.queue_now = None;
+    }
+
+    // 5. Wait a beat and verify the task was aborted
+    let result = handle.await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().is_cancelled());
   }
 }
