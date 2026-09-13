@@ -447,7 +447,7 @@ pub struct DecodedQueuePlayback {
   pub tempfile: Option<tempfile::NamedTempFile>,
   /// The delivered audio format of a downloaded track (Qobuz, e.g.
   /// `FLAC 24/96`), shown after the artists in the playbar.
-  #[cfg(feature = "tui")]
+  #[cfg_attr(not(feature = "tui"), allow(dead_code))]
   pub quality: Option<String>,
 }
 

@@ -556,7 +556,6 @@ async fn publish_pending_decoded(
     fetch_id,
     #[cfg(feature = "queue-download")]
     tempfile: None,
-    #[cfg(feature = "tui")]
     quality: None,
   }));
   fetch_id
@@ -584,7 +583,6 @@ async fn finish_decoded_fetch(
     Some(QueueNowPlaying::Decoded(d)) if d.fetch_id == fetch_id => Arc::clone(&d.player),
     _ => return, // superseded — the tempfile drops here
   };
-  #[cfg_attr(not(feature = "tui"), allow(unused_variables))]
   let (tmp, quality) = match result {
     Ok(fetched) => fetched,
     Err(e) => {
@@ -619,10 +617,7 @@ async fn finish_decoded_fetch(
   }
   if let Some(QueueNowPlaying::Decoded(d)) = guard.queue_now.as_mut() {
     d.tempfile = Some(tmp);
-    #[cfg(feature = "tui")]
-    {
-      d.quality = quality;
-    }
+    d.quality = quality;
     d.advancing = false;
   }
   guard.set_status_message(format!("\u{266a} {track_name} (queue)"), 4);
@@ -655,7 +650,6 @@ async fn publish_decoded(
     fetch_id: next_fetch_id(),
     #[cfg(feature = "queue-download")]
     tempfile,
-    #[cfg(feature = "tui")]
     quality: None,
   }));
   guard.set_status_message(format!("\u{266a} {name} (queue)"), 4);
