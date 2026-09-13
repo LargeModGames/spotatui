@@ -186,7 +186,7 @@ scripting = ["dep:mlua"]
 audio-decode = ["dep:rodio"]
 # Meta-feature (only used by sources), this ensures at least one source that supports
 # queues and needs decoding is enabled.
-audio-decode-queue = ["audio-decode"]
+audio-decode-queue = ["audio-decode", "queue"]
 # Meta-feature (only used by sources), this ensures at least one source with queue
 # support. Namely: `audio-decode-queue` + `streaming`
 queue = []
