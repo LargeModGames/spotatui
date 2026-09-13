@@ -184,14 +184,14 @@ scripting = ["dep:mlua"]
 # Shared audio decode/output engine (rodio bundles symphonia). Pulled by any
 # source that plays decoded audio through the local sink (local files, Subsonic, Qobuz).
 audio-decode = ["dep:rodio"]
-# Meta-feature, this ensures at least one source that supports queues and needs
-# decoding is enabled.
+# Meta-feature (only used by sources), this ensures at least one source that supports
+# queues and needs decoding is enabled.
 audio-decode-queue = ["audio-decode"]
-# Meta-feature, this ensures at least one source with queue support.
-# Namely: `audio-decode-queue` + `streaming`
+# Meta-feature (only used by sources), this ensures at least one source with queue
+# support. Namely: `audio-decode-queue` + `streaming`
 queue = []
-# Meta-feature, this ensures at least one source that supports queues and needs
-# track download / track info fetching.
+# Meta-feature (only used by sources), this ensures at least one source that supports
+# queues and needs track download / track info fetching.
 queue-download = ["audio-decode-queue", "dep:tempfile"]
 # Convenience alias to pull in every alternative (non-Spotify) source at once,
 # e.g. `cargo run --features all-sources`. Deliberately NOT part of `default`:
