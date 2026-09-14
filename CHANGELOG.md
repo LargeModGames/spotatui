@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Optional theme-aware cover-art dithering** (`cover-art` builds): Enable it in Settings or with `behavior.cover_art_dither: true` to render two-color art in the playbar, full-screen view, and plugin widgets. Stucki is the default algorithm; Bayer 8×8 and Atkinson are also available, with a pixel scale from 1 to 3. The accent follows the current theme by default, or can be set independently with `theme.cover_art_dither_color`. Terminal cover-art requirements still apply.
+
 ### Fixed
 
 - **Spotify can no longer take over during a source's start, or after its output device is gone**: a Local Files, Subsonic, Internet Radio, YouTube or Qobuz start pauses Spotify first and publishes its session only when the download, the stream probe or the decode succeeds, which is seconds to minutes. In that window, and after the source lost its output device, spotatui believed nothing owned the output: a media key or Space resumed the paused Spotify track on top of the incoming one, and a rate-limited Spotify command that had waited out its window ran against whoever played by then. A source now claims the output before it pauses Spotify, keeps the claim through a failed start or a lost device, and releases it when its queue runs out or when you start a Spotify track or context yourself; until then media keys, Space and the Spotify transport do nothing to Spotify. Commands held back by a rate limit remember who was playing and are dropped when that changed, a queued seek is dropped when its player is gone instead of hitting the next one, a volume change made under another source no longer replays at Spotify later, a seek under a queued Spotify track measures against that track, the media Stop key pauses Spotify instead of unloading it, and the token refresh timer stays quiet while another source plays and backs off for 15 s after a failure instead of retrying every tick and pinning an error page over the playback.

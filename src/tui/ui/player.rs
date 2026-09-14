@@ -768,7 +768,7 @@ fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
       .unwrap_or(available_image_size);
   let centered_area = center_rect_within(image_bounds, fitted_image_size);
 
-  crate::tui::cover_art::render_fullscreen(f, centered_area, &app.cover_art);
+  crate::tui::cover_art::render_fullscreen(f, centered_area, &app.cover_art, &app.user_config);
 
   // Draw song info below the cover art
   if let Some(name) = track_name {
@@ -1155,7 +1155,7 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
   // a blank indent where the image belongs (Spotify's path does the same).
   #[cfg(feature = "cover-art")]
   if let Some(cover_art) = playbar_areas.cover_art {
-    crate::tui::cover_art::render(f, cover_art, &app.cover_art);
+    crate::tui::cover_art::render(f, cover_art, &app.cover_art, &app.user_config);
   }
 }
 
@@ -1501,7 +1501,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
       #[cfg(feature = "cover-art")]
       if let Some(cover_art) = playbar_areas.cover_art {
-        crate::tui::cover_art::render(f, cover_art, &app.cover_art);
+        crate::tui::cover_art::render(f, cover_art, &app.cover_art, &app.user_config);
       }
 
       drew_playbar = true;

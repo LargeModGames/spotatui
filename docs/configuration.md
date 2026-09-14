@@ -47,6 +47,22 @@ behavior:
                                    #   height so huge values cannot break scrolling
 ```
 
+## Cover art dithering
+
+Build with `--features cover-art` to show the cover-art settings. Dithering is off by default and does not turn on cover art where terminal support has disabled it; `draw_cover_art_forced` still controls the basic-terminal fallback.
+
+```yaml
+behavior:
+  cover_art_dither: true
+  cover_art_dither_algorithm: stucki   # default; also bayer8x8 or atkinson
+  cover_art_dither_pixel_scale: 1      # 1..=3; higher means larger visual pixels
+theme:
+  cover_art_dither_color: auto         # follows live playbar_progress
+  # cover_art_dither_color: '120, 160, 220' # exact RGB override
+```
+
+The color override can also be a named theme color such as `LightBlue`. It survives theme-preset changes, and setting it back to `auto` clears it. Dithered art uses that accent with the surface's current background. Every slot, including a small playbar, makes its mask from the original decoded image at its own output resolution. Scale `1` uses every output pixel on graphics terminals or every Braille dot on basic terminals; higher values make larger visual pixels. The slot stays clear while a new dither is prepared, so the first artwork shown is already dithered. The basic-terminal grid has fewer dots than a graphics protocol, so its smallest images retain less detail. To give playbar art more room, increase `behavior.playbar_cover_art_size_percent` (up to `200`); the available playbar height still limits the final size.
+
 ## Startup route
 
 `startup_route` picks which screen opens at launch. Its data is fetched automatically, so the screen arrives populated. Only context-free screens are valid (nothing that needs an album id, artist id, or search query):

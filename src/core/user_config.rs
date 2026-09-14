@@ -26,6 +26,20 @@ pub fn clamp_playbar_cover_art_size_percent(value: u16) -> u16 {
   )
 }
 
+#[cfg(feature = "cover-art")]
+pub fn normalize_cover_art_dither_algorithm(value: &str) -> &'static str {
+  match value {
+    "bayer8x8" => "bayer8x8",
+    "atkinson" => "atkinson",
+    _ => "stucki",
+  }
+}
+
+#[cfg(feature = "cover-art")]
+pub(crate) fn normalize_cover_art_dither_pixel_scale(value: i64) -> u8 {
+  value.clamp(1, 3) as u8
+}
+
 // Only the settings arm for the playbar size (a render-side setting) calls
 // this, so it follows `cover-art` while its `clamp` sibling stays with the
 // decode half for config loading.
@@ -135,6 +149,9 @@ pub(crate) fn default_app_config_dir() -> Option<PathBuf> {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct UserTheme {
   pub preset: Option<String>,
+  #[cfg(feature = "cover-art")]
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub cover_art_dither_color: Option<String>,
   pub active: Option<String>,
   pub banner: Option<String>,
   pub error_border: Option<String>,
@@ -503,6 +520,12 @@ pub struct BehaviorConfigString {
   pub playbar_cover_art_size_percent: Option<u16>,
   #[cfg(feature = "art-decode")]
   pub cover_art_theme: Option<bool>,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_dither: Option<bool>,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_dither_algorithm: Option<String>,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_dither_pixel_scale: Option<i64>,
   #[cfg(feature = "mcp-server")]
   pub mcp_enabled: Option<bool>,
   #[cfg(feature = "ai-dj")]
@@ -622,6 +645,12 @@ pub struct BehaviorConfig {
   /// track change. Off by default so a chosen preset stays untouched.
   #[cfg(feature = "art-decode")]
   pub cover_art_theme: bool,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_dither: bool,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_dither_algorithm: String,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_dither_pixel_scale: u8,
   /// Whether to open the local MCP control socket so `spotatui mcp` (and through
   /// it Claude Code, Codex, or any MCP client) can drive playback.
   ///
@@ -933,6 +962,8 @@ pub struct UserConfig {
   pub theme: Theme,
   pub current_preset: ThemePreset,
   pub custom_theme: Theme,
+  #[cfg(feature = "cover-art")]
+  pub cover_art_dither_color: Option<crate::core::theme::Color>,
   pub behavior: BehaviorConfig,
   pub path_to_config: Option<UserConfigPaths>,
   /// Keybindings for plugin commands: key -> command name.
@@ -962,6 +993,8 @@ impl UserConfig {
       theme: Default::default(),
       current_preset: ThemePreset::Default,
       custom_theme: Default::default(),
+      #[cfg(feature = "cover-art")]
+      cover_art_dither_color: None,
       keys: KeyBindings {
         back: Key::Char('q'),
         move_up: Key::Char('k'),
@@ -1069,6 +1102,12 @@ impl UserConfig {
         playbar_cover_art_size_percent: 100,
         #[cfg(feature = "art-decode")]
         cover_art_theme: false,
+        #[cfg(feature = "cover-art")]
+        cover_art_dither: false,
+        #[cfg(feature = "cover-art")]
+        cover_art_dither_algorithm: "stucki".to_string(),
+        #[cfg(feature = "cover-art")]
+        cover_art_dither_pixel_scale: 1,
         #[cfg(feature = "mcp-server")]
         mcp_enabled: false,
         #[cfg(feature = "ai-dj")]
@@ -1256,6 +1295,14 @@ impl UserConfig {
   }
 
   pub fn load_theme(&mut self, theme: UserTheme) -> Result<()> {
+    #[cfg(feature = "cover-art")]
+    {
+      self.cover_art_dither_color = match theme.cover_art_dither_color.as_deref() {
+        None => None,
+        Some(value) if value.trim().eq_ignore_ascii_case("auto") => None,
+        Some(value) => Some(parse_theme_item(value)?),
+      };
+    }
     // Individual color fields populate the custom_theme — they only
     // become the active theme when current_preset is Custom.
     macro_rules! to_theme_item {
@@ -1525,6 +1572,19 @@ impl UserConfig {
     #[cfg(feature = "art-decode")]
     if let Some(cover_art_theme) = behavior_config.cover_art_theme {
       self.behavior.cover_art_theme = cover_art_theme;
+    }
+    #[cfg(feature = "cover-art")]
+    {
+      if let Some(value) = behavior_config.cover_art_dither {
+        self.behavior.cover_art_dither = value;
+      }
+      if let Some(value) = behavior_config.cover_art_dither_algorithm {
+        self.behavior.cover_art_dither_algorithm =
+          normalize_cover_art_dither_algorithm(&value).to_string();
+      }
+      if let Some(value) = behavior_config.cover_art_dither_pixel_scale {
+        self.behavior.cover_art_dither_pixel_scale = normalize_cover_art_dither_pixel_scale(value);
+      }
     }
     #[cfg(feature = "mcp-server")]
     if let Some(mcp_enabled) = behavior_config.mcp_enabled {
@@ -2107,6 +2167,14 @@ impl UserConfig {
       playbar_cover_art_size_percent: Some(self.behavior.playbar_cover_art_size_percent),
       #[cfg(feature = "art-decode")]
       cover_art_theme: Some(self.behavior.cover_art_theme),
+      #[cfg(feature = "cover-art")]
+      cover_art_dither: Some(self.behavior.cover_art_dither),
+      #[cfg(feature = "cover-art")]
+      cover_art_dither_algorithm: Some(self.behavior.cover_art_dither_algorithm.clone()),
+      #[cfg(feature = "cover-art")]
+      cover_art_dither_pixel_scale: Some(i64::from(normalize_cover_art_dither_pixel_scale(
+        i64::from(self.behavior.cover_art_dither_pixel_scale),
+      ))),
       #[cfg(feature = "mcp-server")]
       mcp_enabled: Some(self.behavior.mcp_enabled),
       #[cfg(feature = "ai-dj")]
@@ -2265,6 +2333,8 @@ impl UserConfig {
     // Helper to build theme config from current values
     let build_theme = || UserTheme {
       preset: Some(self.current_preset.name().to_string()),
+      #[cfg(feature = "cover-art")]
+      cover_art_dither_color: self.cover_art_dither_color.map(color_to_string),
       active: Some(color_to_string(self.custom_theme.active)),
       banner: Some(color_to_string(self.custom_theme.banner)),
       error_border: Some(color_to_string(self.custom_theme.error_border)),
@@ -2624,6 +2694,86 @@ mod tests {
       assert_eq!(parse_theme_item(&color_to_string(color)).unwrap(), color);
     }
     assert_eq!(color_to_string(Color::Indexed(42)), "Reset");
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn dither_behavior_loads_clamps_and_round_trips() {
+    use super::{BehaviorConfigString, UserConfig, UserConfigPaths, UserConfigString};
+    let mut config = UserConfig::new();
+    assert!(!config.behavior.cover_art_dither);
+    assert_eq!(config.behavior.cover_art_dither_algorithm, "stucki");
+    assert_eq!(config.behavior.cover_art_dither_pixel_scale, 1);
+    assert_eq!(
+      super::normalize_cover_art_dither_algorithm("bayer8x8"),
+      "bayer8x8"
+    );
+    assert_eq!(
+      super::normalize_cover_art_dither_algorithm("unknown"),
+      "stucki"
+    );
+    let explicit_bayer: BehaviorConfigString =
+      serde_yaml::from_str("cover_art_dither_algorithm: bayer8x8").unwrap();
+    config.load_behaviorconfig(explicit_bayer).unwrap();
+    assert_eq!(config.behavior.cover_art_dither_algorithm, "bayer8x8");
+    let behavior: BehaviorConfigString = serde_yaml::from_str(
+      "cover_art_dither: true\ncover_art_dither_algorithm: stucki\ncover_art_dither_pixel_scale: 4\n",
+    ).unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert!(config.behavior.cover_art_dither);
+    assert_eq!(config.behavior.cover_art_dither_algorithm, "stucki");
+    assert_eq!(config.behavior.cover_art_dither_pixel_scale, 3);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yml");
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: path.clone(),
+    });
+    config.behavior.cover_art_dither_pixel_scale = 4;
+    config.save_config().unwrap();
+    let saved: UserConfigString =
+      serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let behavior = saved.behavior.unwrap();
+    assert_eq!(behavior.cover_art_dither, Some(true));
+    assert_eq!(
+      behavior.cover_art_dither_algorithm.as_deref(),
+      Some("stucki")
+    );
+    assert_eq!(behavior.cover_art_dither_pixel_scale, Some(3));
+    let low: BehaviorConfigString =
+      serde_yaml::from_str("cover_art_dither_pixel_scale: -3").unwrap();
+    config.load_behaviorconfig(low).unwrap();
+    assert_eq!(config.behavior.cover_art_dither_pixel_scale, 1);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn dithering_does_not_bypass_terminal_cover_art_requirement() {
+    use super::UserConfig;
+    let mut config = UserConfig::new();
+    config.behavior.cover_art_dither = true;
+    assert!(!config.do_draw_cover_art(false));
+    config.behavior.draw_cover_art_forced = true;
+    assert!(config.do_draw_cover_art(false));
+    config.behavior.draw_cover_art = false;
+    assert!(!config.do_draw_cover_art(false));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn dither_color_is_independent_of_theme_preset_and_auto_clears_it() {
+    use super::{ThemePreset, UserConfig, UserTheme};
+    use crate::core::theme::Color;
+    let mut config = UserConfig::new();
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Nord\ncover_art_dither_color: '12, 34, 56'\n").unwrap();
+    config.load_theme(theme).unwrap();
+    assert_eq!(config.current_preset, ThemePreset::Nord);
+    assert_eq!(config.cover_art_dither_color, Some(Color::Rgb(12, 34, 56)));
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Gruvbox Light\ncover_art_dither_color: auto\n").unwrap();
+    config.load_theme(theme).unwrap();
+    assert_eq!(config.current_preset, ThemePreset::GruvboxLight);
+    assert_eq!(config.cover_art_dither_color, None);
   }
 
   #[test]

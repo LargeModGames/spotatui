@@ -6,7 +6,7 @@
 
 use anyhow::anyhow;
 use log::{debug, info};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// Cap on a cover-art response body, checked against both the declared and
 /// the actual size. Real covers are a few hundred KiB; the cap only exists so
@@ -158,7 +158,7 @@ fn decode_bounded(bytes: &[u8]) -> anyhow::Result<image::DynamicImage> {
 /// them only when the key changes.
 #[derive(Default)]
 pub struct CoverArtStore {
-  art: Option<(String, image::DynamicImage)>,
+  art: Option<(String, Arc<image::DynamicImage>)>,
   /// Status of the current track's cover art, driving the placeholder message.
   pub status: CoverArtStatus,
 }
@@ -175,7 +175,12 @@ impl CoverArtStore {
   /// fetches art solely for the adaptive theme and has no reader.
   #[cfg_attr(not(feature = "cover-art"), allow(dead_code))]
   pub fn image(&self) -> Option<&image::DynamicImage> {
-    self.art.as_ref().map(|(_, image)| image)
+    self.art.as_ref().map(|(_, image)| image.as_ref())
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub fn image_shared(&self) -> Option<Arc<image::DynamicImage>> {
+    self.art.as_ref().map(|(_, image)| Arc::clone(image))
   }
 
   pub fn available(&self) -> bool {
@@ -187,7 +192,7 @@ impl CoverArtStore {
   /// off the `App` lock.
   pub fn store_decoded(&mut self, key: String, image: image::DynamicImage) {
     info!("got new cover art: {key}");
-    self.art = Some((key, image));
+    self.art = Some((key, Arc::new(image)));
   }
 
   /// Drop any stored cover art so the pane renders nothing. Used when

@@ -206,7 +206,7 @@ fn draw_cover_art(f: &mut Frame<'_>, app: &App, area: Rect, fit: PluginCoverArtF
     Block::default().style(app.user_config.theme.base_style()),
     area,
   );
-  crate::tui::cover_art::render_plugin(f, target, fit, &app.cover_art);
+  crate::tui::cover_art::render_plugin(f, target, fit, &app.cover_art, &app.user_config);
 }
 
 #[cfg(not(feature = "cover-art"))]

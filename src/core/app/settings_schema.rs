@@ -491,6 +491,30 @@ impl App {
             self.user_config.behavior.playbar_cover_art_size_percent as i64,
           ),
         },
+        #[cfg(feature = "cover-art")]
+        SettingItem {
+          id: "behavior.cover_art_dither".to_string(),
+          name: "Dither Cover Art".to_string(),
+          description: "Dither all cover-art sizes in two theme-aware colors".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.cover_art_dither),
+        },
+        #[cfg(feature = "cover-art")]
+        SettingItem {
+          id: "behavior.cover_art_dither_algorithm".to_string(),
+          name: "Cover Art Dither Algorithm".to_string(),
+          description: "Stucki, ordered Bayer, or Atkinson dithering".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.cover_art_dither_algorithm.clone(),
+            &["stucki", "bayer8x8", "atkinson"],
+          ),
+        },
+        #[cfg(feature = "cover-art")]
+        SettingItem {
+          id: "behavior.cover_art_dither_pixel_scale".to_string(),
+          name: "Cover Art Dither Pixel Scale".to_string(),
+          description: "Visual pixel size (1-3)".to_string(),
+          value: SettingValue::Number(self.user_config.behavior.cover_art_dither_pixel_scale as i64),
+        },
       ],
       SettingsCategory::Icons => vec![
         SettingItem {
@@ -874,6 +898,15 @@ impl App {
             name: "Playbar Progress".to_string(),
             description: "Color for playbar progress".to_string(),
             value: SettingValue::Color(color_to_string(user_theme.playbar_progress)),
+          },
+          #[cfg(feature = "cover-art")]
+          SettingItem {
+            id: "theme.cover_art_dither_color".to_string(),
+            name: "Cover Art Dither Color".to_string(),
+            description: "Accent color for dithered art; auto follows live playbar progress".to_string(),
+            value: SettingValue::Color(
+              self.user_config.cover_art_dither_color.map(color_to_string).unwrap_or_else(|| "auto".to_string()),
+            ),
           },
           SettingItem {
             id: "theme.playbar_progress_text".to_string(),

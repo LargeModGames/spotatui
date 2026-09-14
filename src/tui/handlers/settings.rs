@@ -198,7 +198,7 @@ fn handle_number_edit(key: Key, app: &mut App) {
       // Parse and apply the edited number
       if let Ok(num) = app.view.settings_edit_buffer.parse::<i64>() {
         if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
-          setting.value = SettingValue::Number(num);
+          setting.value = SettingValue::Number(normalize_number_setting(&setting.id, num));
         }
       }
       app.view.settings_edit_mode = false;
@@ -218,7 +218,7 @@ fn handle_number_edit(key: Key, app: &mut App) {
       // Increment value
       if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
         if let SettingValue::Number(v) = setting.value {
-          let new_val = v + 1;
+          let new_val = normalize_number_setting(&setting.id, v.saturating_add(1));
           setting.value = SettingValue::Number(new_val);
           app.view.settings_edit_buffer = new_val.to_string();
         }
@@ -228,7 +228,7 @@ fn handle_number_edit(key: Key, app: &mut App) {
       // Decrement value
       if let Some(setting) = app.settings_items.get_mut(app.view.settings_selected_index) {
         if let SettingValue::Number(v) = setting.value {
-          let new_val = v - 1;
+          let new_val = normalize_number_setting(&setting.id, v.saturating_sub(1));
           setting.value = SettingValue::Number(new_val);
           app.view.settings_edit_buffer = new_val.to_string();
         }
@@ -236,6 +236,16 @@ fn handle_number_edit(key: Key, app: &mut App) {
     }
     _ => {}
   }
+}
+
+fn normalize_number_setting(id: &str, value: i64) -> i64 {
+  #[cfg(feature = "cover-art")]
+  if id == "behavior.cover_art_dither_pixel_scale" {
+    return i64::from(crate::core::user_config::normalize_cover_art_dither_pixel_scale(value));
+  }
+  #[cfg(not(feature = "cover-art"))]
+  let _ = id;
+  value
 }
 
 fn handle_string_edit(key: Key, app: &mut App) {
@@ -253,7 +263,8 @@ fn handle_string_edit(key: Key, app: &mut App) {
           }
         }
 
-        let is_color_edit = matches!(setting.value, SettingValue::Color(_));
+        let is_color_edit = matches!(setting.value, SettingValue::Color(_))
+          && setting.id != "theme.cover_art_dither_color";
         match &setting.value {
           SettingValue::String(_) => {
             setting.value = SettingValue::String(new_value);
@@ -635,6 +646,64 @@ mod tests {
     // Terminal (ANSI) -> Pookie Pink: gradient default restored
     handler(Key::Enter, &mut app);
     assert!(banner_gradient(&app));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn dither_color_edit_keeps_preset_and_auto_clears_override() {
+    use crate::core::theme::Color;
+    use crate::core::user_config::ThemePreset;
+    let mut app = App::default();
+    app.view.settings_category = SettingsCategory::Theme;
+    open_settings(&mut app);
+    app.view.settings_selected_index = setting_index(&app, "theme.cover_art_dither_color");
+    handler(Key::Enter, &mut app);
+    app.view.settings_edit_buffer = "1, 2, 3".to_string();
+    handler(Key::Enter, &mut app);
+    assert_eq!(
+      app.settings_items[setting_index(&app, "theme.preset")].value,
+      SettingValue::Preset(ThemePreset::Default.name().to_string())
+    );
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.current_preset, ThemePreset::Default);
+    assert_eq!(
+      app.user_config.cover_art_dither_color,
+      Some(Color::Rgb(1, 2, 3))
+    );
+    app.view.settings_selected_index = setting_index(&app, "theme.cover_art_dither_color");
+    handler(Key::Enter, &mut app);
+    app.view.settings_edit_buffer = " AUTO ".to_string();
+    handler(Key::Enter, &mut app);
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.cover_art_dither_color, None);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn dither_behavior_rows_apply_and_clamp_on_save() {
+    let mut app = App::default();
+    open_settings(&mut app);
+    let enabled = setting_index(&app, "behavior.cover_art_dither");
+    app.settings_items[enabled].value = SettingValue::Bool(true);
+    let algorithm = setting_index(&app, "behavior.cover_art_dither_algorithm");
+    app.settings_items[algorithm].value =
+      SettingValue::Cycle("atkinson".into(), &["stucki", "bayer8x8", "atkinson"]);
+    let scale = setting_index(&app, "behavior.cover_art_dither_pixel_scale");
+    app.view.settings_selected_index = scale;
+    app.settings_items[scale].value = SettingValue::Number(3);
+    handle_number_edit(Key::Char('k'), &mut app);
+    assert_eq!(app.settings_items[scale].value, SettingValue::Number(3));
+    app.view.settings_edit_buffer = "4".to_string();
+    handle_number_edit(Key::Enter, &mut app);
+    assert_eq!(app.settings_items[scale].value, SettingValue::Number(3));
+    app.settings_items[scale].value = SettingValue::Number(100);
+    app.apply_settings_changes();
+    assert!(app.user_config.behavior.cover_art_dither);
+    assert_eq!(
+      app.user_config.behavior.cover_art_dither_algorithm,
+      "atkinson"
+    );
+    assert_eq!(app.user_config.behavior.cover_art_dither_pixel_scale, 3);
   }
 
   #[test]
