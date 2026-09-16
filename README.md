@@ -63,6 +63,10 @@ It prefers `$XDG_STATE_HOME/degen-radio/state.yml` and falls back to the previou
 
 Favorites added from search are written to `$XDG_STATE_HOME/degen-radio/state.yml` and immediately become available to the Omarchy tray plugin.
 
+## Omarchy tray plugin
+
+The companion [Degen Radio for Omarchy](https://github.com/ethereumdegen/omarchy-degen-radio-plugin) repository provides the bar widget, now-playing popup, playback controls, and saved-station picker.
+
 ## External control
 
 List saved stations as JSON:
