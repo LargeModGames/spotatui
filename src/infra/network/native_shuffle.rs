@@ -21,7 +21,9 @@ use super::requests::spotify_get_typed_compat_for_with_refresh;
 #[cfg(feature = "streaming")]
 use super::Network;
 #[cfg(feature = "streaming")]
-use crate::core::app::{App, NativeSpotifyShuffleSession, TrackTableContext};
+use crate::core::app::{
+  App, NativeSpotifyShuffleSession, PendingNativeShuffleReload, TrackTableContext,
+};
 #[cfg(feature = "streaming")]
 use crate::infra::player::StreamingPlayer;
 #[cfg(feature = "streaming")]
@@ -156,6 +158,11 @@ pub(crate) fn same_track_multiset(a: &[String], b: &[String]) -> bool {
   a == b
 }
 
+#[cfg_attr(not(feature = "streaming"), allow(dead_code))]
+fn full_fetch_reload_seek_ms(observed_progress_ms: u128, pending_seek_ms: Option<u32>) -> u32 {
+  pending_seek_ms.unwrap_or_else(|| u32::try_from(observed_progress_ms).unwrap_or(u32::MAX))
+}
+
 /// Load the session's play order into Spirc as a flat track list. Spirc-side
 /// shuffle is forced off first: the list itself carries the order, and a
 /// `shuffling_context` Spirc would re-shuffle it on load. `start_playing`
@@ -187,7 +194,7 @@ fn load_session_tracks(
 #[cfg(feature = "streaming")]
 async fn clear_pending_reload(app: &Arc<Mutex<App>>) {
   if let Some(session) = app.lock().await.native_spotify_shuffle.as_mut() {
-    session.pending_reload_index = None;
+    session.pending_reload = None;
   }
 }
 
@@ -317,7 +324,10 @@ impl Network {
         fetch_failed: false,
         generation,
         // The load below plays index 0; confirm that on the first TrackChanged.
-        pending_reload_index: Some(0),
+        pending_reload: Some(PendingNativeShuffleReload {
+          index: 0,
+          seek_ms: 0,
+        }),
         pending_manual_skip: None,
       });
       // Park the ORIGINAL request so zombie-session recovery replays it
@@ -382,12 +392,6 @@ impl Network {
         if session.shuffled == on {
           Action::Nothing
         } else if !session.fetch_complete {
-          // The full context is still being fetched, so the app-owned
-          // `original` is incomplete: reordering now would truncate playback to
-          // the handful of loaded tracks. Flip the flag and let the
-          // fetch-completion path apply it against the whole context. Leave
-          // `pending_reload_index` intact — the initial load's confirmation may
-          // still be in flight, and this path issues no new reload.
           session.shuffled = on;
           Action::Nothing
         } else {
@@ -409,7 +413,10 @@ impl Network {
           session.shuffled = on;
           match player {
             Some(player) => {
-              session.pending_reload_index = Some(session.index);
+              session.pending_reload = Some(PendingNativeShuffleReload {
+                index: session.index,
+                seek_ms,
+              });
               Action::Reload(
                 player,
                 session.order.clone(),
@@ -497,7 +504,7 @@ impl Network {
             fetch_failed: false,
             generation,
             // No reload here: Spirc keeps playing its own context.
-            pending_reload_index: None,
+            pending_reload: None,
             pending_manual_skip: None,
           });
           generation
@@ -527,6 +534,8 @@ impl Network {
           let mut app = self.app.lock().await;
           let generation = app.next_native_shuffle_generation();
           let order = shuffled_order(uris.clone(), first);
+          let seek_ms = u32::try_from(app.song_progress_ms).unwrap_or(u32::MAX);
+          let is_playing = app.native_shuffle_is_playing();
           app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
             order: order.clone(),
             original: uris,
@@ -536,11 +545,9 @@ impl Network {
             fetch_failed: false,
             generation,
             // The reload below plays index 0.
-            pending_reload_index: Some(0),
+            pending_reload: Some(PendingNativeShuffleReload { index: 0, seek_ms }),
             pending_manual_skip: None,
           });
-          let seek_ms = u32::try_from(app.song_progress_ms).unwrap_or(u32::MAX);
-          let is_playing = app.native_shuffle_is_playing();
           app
             .streaming_player
             .clone()
@@ -587,7 +594,7 @@ impl Network {
         .unwrap_or(0);
       session.order = shuffled_order(session.original.clone(), first);
       session.index = 0;
-      session.pending_reload_index = Some(0);
+      session.pending_reload = Some(PendingNativeShuffleReload { index: 0, seek_ms });
       player.map(|p| (p, session.order.clone(), seek_ms, is_playing))
     };
     if let Some((player, order, seek_ms, is_playing)) = reload {
@@ -620,7 +627,7 @@ impl Network {
           match guard.native_spotify_shuffle.as_mut() {
             Some(session) if index < session.order.len() => {
               session.index = index;
-              session.pending_reload_index = Some(index);
+              session.pending_reload = Some(PendingNativeShuffleReload { index, seek_ms: 0 });
               player.map(|p| (p, session.order.clone(), index))
             }
             _ => {
@@ -814,7 +821,7 @@ async fn finish_full_context_fetch(
   let reload = {
     let mut guard = app.lock().await;
     let player = guard.streaming_player.clone();
-    let seek_ms = u32::try_from(guard.song_progress_ms).unwrap_or(u32::MAX);
+    let observed_progress_ms = guard.song_progress_ms;
     let start_playing = guard.native_shuffle_is_playing();
     // The session may be suspended behind a queued track; folding the context
     // in is fine, but reloading Spirc would hijack the sink from the queue.
@@ -837,13 +844,17 @@ async fn finish_full_context_fetch(
     // resume into the seed-only order and must be converted to the context
     // route (mirror of the suspend-time fallback).
     let mut convert_suspend_to_context = false;
+    let pending_seek_ms = match guard.native_spotify_shuffle.as_ref() {
+      Some(session) if session.generation == generation => {
+        session.pending_reload.map(|pending| pending.seek_ms)
+      }
+      _ => return,
+    };
+    let seek_ms = full_fetch_reload_seek_ms(observed_progress_ms, pending_seek_ms);
     let reload = {
       let Some(session) = guard.native_spotify_shuffle.as_mut() else {
         return;
       };
-      if session.generation != generation {
-        return;
-      }
       session.fetch_complete = true;
       match result {
         Err(e) => {
@@ -884,7 +895,10 @@ async fn finish_full_context_fetch(
               resume_update = Some(resume);
               None
             } else {
-              session.pending_reload_index = Some(new_index);
+              session.pending_reload = Some(PendingNativeShuffleReload {
+                index: new_index,
+                seek_ms,
+              });
               Some((session.order.clone(), new_index))
             }
           }
@@ -927,7 +941,7 @@ async fn finish_full_context_fetch(
             session.order = fetched;
             session.index = index;
             if changed {
-              session.pending_reload_index = Some(index);
+              session.pending_reload = Some(PendingNativeShuffleReload { index, seek_ms });
               Some((session.order.clone(), index))
             } else {
               None
@@ -951,7 +965,7 @@ async fn finish_full_context_fetch(
                 "Large context: shuffling the first {MAX_NATIVE_SHUFFLE_TRACKS} tracks"
               ));
             }
-            session.pending_reload_index = Some(index);
+            session.pending_reload = Some(PendingNativeShuffleReload { index, seek_ms });
             Some((session.order.clone(), index))
           }
         }
@@ -1022,7 +1036,7 @@ mod tests {
         fetch_complete: false,
         fetch_failed: false,
         generation: 9,
-        pending_reload_index: None,
+        pending_reload: None,
         pending_manual_skip: None,
       });
       // The suspend computed from the seed-only order: an exhausted resume.
@@ -1142,5 +1156,20 @@ mod tests {
     ));
     assert!(!same_track_multiset(&uris(&["a", "b"]), &uris(&["a", "a"])));
     assert!(!same_track_multiset(&uris(&["a"]), &uris(&["a", "a"])));
+  }
+
+  #[test]
+  fn pending_new_track_reload_starts_at_zero_instead_of_stale_progress() {
+    assert_eq!(full_fetch_reload_seek_ms(80_000, Some(0)), 0);
+  }
+
+  #[test]
+  fn confirmed_track_reload_preserves_observed_progress() {
+    assert_eq!(full_fetch_reload_seek_ms(2_500, None), 2_500);
+  }
+
+  #[test]
+  fn pending_mid_track_reload_preserves_its_captured_position() {
+    assert_eq!(full_fetch_reload_seek_ms(81_000, Some(80_000)), 80_000);
   }
 }

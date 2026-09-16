@@ -1,5 +1,12 @@
 use super::*;
 
+#[cfg(feature = "streaming")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PendingNativeShuffleReload {
+  pub index: usize,
+  pub seek_ms: u32,
+}
+
 /// App-owned play order for native-Spotify shuffle. When shuffle is on and a
 /// Spotify context (playlist/album/Liked Songs) starts on the native streaming
 /// device, the app builds this session and loads a flat, pre-shuffled URI list
@@ -27,11 +34,7 @@ pub struct NativeSpotifyShuffleSession {
   pub fetch_failed: bool,
   /// Stamp guarding stale background fetches from writing into a newer session.
   pub generation: u64,
-  /// Set to the index we just loaded into Spirc whenever the session issues a
-  /// `from_tracks` reload; consumed by the next `TrackChanged` so a reload is
-  /// confirmed in place rather than mistaken for a forward advance (which would
-  /// mis-map a duplicate track id onto a later occurrence).
-  pub pending_reload_index: Option<usize>,
+  pub pending_reload: Option<PendingNativeShuffleReload>,
   /// Set when the user issues a manual skip so the next `TrackChanged` is read
   /// as an explicit advance in that direction (`Some(true)` = Next, `Some(false)`
   /// = Previous) rather than a repeat-one auto replay, which stays put.
@@ -208,9 +211,11 @@ impl App {
       // wrong occurrence of the *same* track, negligible in practice (a human
       // skip lands well after the reload event) and self-correcting on the next
       // non-duplicate transition — so it is not worth sub-event bookkeeping.
-      if let Some(k) = session.pending_reload_index.take() {
-        if k < len && uri_matches_base62_id(&session.order[k], playing_base62_id) {
-          session.index = k;
+      if let Some(pending) = session.pending_reload.take() {
+        if pending.index < len
+          && uri_matches_base62_id(&session.order[pending.index], playing_base62_id)
+        {
+          session.index = pending.index;
           return;
         }
       }
@@ -362,7 +367,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 1,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
 
@@ -371,5 +376,32 @@ mod tests {
     app.sync_native_shuffle_index(base62_id_of(&playing_uri));
 
     assert_eq!(app.native_spotify_shuffle.as_ref().unwrap().index, 1);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn sync_native_shuffle_index_confirms_the_pending_reload_and_its_seek() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+      order: vec!["spotify:track:a".to_string(), "spotify:track:b".to_string()],
+      original: Vec::new(),
+      index: 0,
+      shuffled: true,
+      fetch_complete: true,
+      fetch_failed: false,
+      generation: 1,
+      pending_reload: Some(PendingNativeShuffleReload {
+        index: 1,
+        seek_ms: 80_000,
+      }),
+      pending_manual_skip: None,
+    });
+
+    app.sync_native_shuffle_index("b");
+
+    let session = app.native_spotify_shuffle.as_ref().unwrap();
+    assert_eq!(session.index, 1);
+    assert_eq!(session.pending_reload, None);
   }
 }

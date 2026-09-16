@@ -453,7 +453,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 42,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     };
 
@@ -514,7 +514,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 7,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
 
@@ -549,7 +549,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: true,
       generation: 1,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
 
@@ -580,7 +580,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 2,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
 
@@ -613,7 +613,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 5,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
     // The suspension carries the context captured when it was created; by
