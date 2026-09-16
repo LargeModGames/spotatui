@@ -26,22 +26,13 @@ struct Behavior {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ThemeSettings {
-  #[serde(alias = "active")]
-  pub focused_border: String,
-  #[serde(alias = "header")]
-  pub now_playing: String,
-  #[serde(alias = "selected")]
-  pub selection: String,
-  pub favorite: String,
+  pub preset: String,
 }
 
 impl Default for ThemeSettings {
   fn default() -> Self {
     Self {
-      focused_border: "Cyan".to_owned(),
-      now_playing: "Green".to_owned(),
-      selection: "Cyan".to_owned(),
-      favorite: "Magenta".to_owned(),
+      preset: "Tokyo Night".to_owned(),
     }
   }
 }

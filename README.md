@@ -35,18 +35,18 @@ cargo install --path . --force
 | `Right` / `l` | Focus directory results |
 | `Enter` | Play selected station |
 | `s` / `/` | Focus station search |
-| `,` | Open color theme settings |
+| `x` | Open or close settings |
 | `f` | Add selected search result to favorites |
 | `d` / `D` | Remove selected station from favorites |
 | `r` | Focus saved stations |
 | `Esc` | Focus saved stations, then quit |
 | `Space` | Pause or resume |
 | `+` / `-` | Adjust volume |
-| `x` | Stop |
+| `X` | Stop |
 | `q` | Quit |
 | Mouse click | Focus search, saved stations, or directory results |
 
-Color settings are editable inside Degen Radio: press `,` or click **Color Settings**, select a color role with `Up`/`Down`, then change it with `Left`/`Right` or `Enter`. Changes are saved to `$XDG_STATE_HOME/degen-radio/state.yml`.
+Theme presets live inside the Degen Radio settings menu: press `x` or click **Settings**, choose with `Up`/`Down`, then press `Enter`. The six bundled Omarchy-inspired presets are Tokyo Night, Catppuccin, Osaka Jade, Gruvbox, Nord, and Rose Pine. The selected preset is saved to `$XDG_STATE_HOME/degen-radio/state.yml`.
 
 ## Station storage
 

@@ -64,6 +64,7 @@ impl State {
     } else {
       "S Search stations  Enter Play  F Favorite  Space Pause  Q Quit".to_owned()
     };
+    let settings_selected = theme_preset_index(&theme.preset);
     Self {
       stations: Vec::new(),
       saved_stations: stations,
@@ -71,7 +72,7 @@ impl State {
       result_selected: 0,
       active_panel: Panel::Saved,
       theme,
-      settings_selected: 0,
+      settings_selected,
       volume,
       status,
       search_input: None,
@@ -236,10 +237,11 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     ])
     .split(area);
 
-  let focus_color = parse_color(&state.theme.focused_border, Color::Cyan);
-  let playing_color = parse_color(&state.theme.now_playing, Color::Green);
-  let selection_color = parse_color(&state.theme.selection, focus_color);
-  let favorite_color = parse_color(&state.theme.favorite, Color::Magenta);
+  let palette = theme_palette(&state.theme.preset);
+  let focus_color = palette.focused_border;
+  let playing_color = palette.now_playing;
+  let selection_color = palette.selection;
+  let favorite_color = palette.favorite;
 
   let title = state
     .session
@@ -297,7 +299,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
 
   let settings_focused = state.search_input.is_none() && state.active_panel == Panel::Settings;
   frame.render_widget(
-    Paragraph::new("Click or press ,").block(
+    Paragraph::new("Click or press x").block(
       Block::default()
         .borders(Borders::ALL)
         .border_style(if settings_focused {
@@ -305,7 +307,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
         } else {
           Style::default()
         })
-        .title("Color Settings"),
+        .title("Settings"),
     ),
     state.settings_area,
   );
@@ -357,15 +359,20 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     Style::default()
   };
   if state.active_panel == Panel::Settings {
-    let settings = [
-      format!("Focused border: {}", state.theme.focused_border),
-      format!("Now playing: {}", state.theme.now_playing),
-      format!("Selection: {}", state.theme.selection),
-      format!("Favorite: {}", state.theme.favorite),
-    ]
-    .into_iter()
-    .map(ListItem::new)
-    .collect::<Vec<_>>();
+    let settings = THEME_PRESETS
+      .iter()
+      .map(|preset| {
+        let marker = if preset.name.eq_ignore_ascii_case(&state.theme.preset) {
+          "● "
+        } else {
+          "  "
+        };
+        ListItem::new(Line::styled(
+          format!("{marker}{}", preset.name),
+          Style::default().fg(preset.palette.focused_border),
+        ))
+      })
+      .collect::<Vec<_>>();
     let mut settings_state = ListState::default().with_selected(Some(state.settings_selected));
     frame.render_stateful_widget(
       List::new(settings)
@@ -373,7 +380,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
           Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(focus_color))
-            .title("Color Theme — ←/→ change  Enter next  Esc close"),
+            .title("Settings › Theme Presets — ↑/↓ choose  Enter apply  Esc close"),
         )
         .highlight_symbol("▶ ")
         .highlight_style(
@@ -452,7 +459,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     Paragraph::new(footer).block(
       Block::default()
         .borders(Borders::ALL)
-        .title("S Search  , Colors  ←/→ Focus  Enter Play  F Favorite  D Unfavorite  Q Quit"),
+        .title("S Search  x Settings  ←/→ Focus  Enter Play  F Favorite  D Unfavorite  Q Quit"),
     ),
     chunks[3],
   );
@@ -500,10 +507,7 @@ async fn handle_key(
     KeyCode::Esc if state.active_panel != Panel::Saved => state.show_saved_stations(),
     KeyCode::Esc => return Ok(true),
     KeyCode::Left | KeyCode::Char('h') if state.active_panel == Panel::Settings => {
-      adjust_theme(state, -1)
-    }
-    KeyCode::Right | KeyCode::Char('l') if state.active_panel == Panel::Settings => {
-      adjust_theme(state, 1)
+      state.show_saved_stations()
     }
     KeyCode::Left | KeyCode::Char('h') => state.active_panel = Panel::Saved,
     KeyCode::Right | KeyCode::Char('l') if !state.stations.is_empty() => {
@@ -511,10 +515,11 @@ async fn handle_key(
     }
     KeyCode::Up | KeyCode::Char('k') => select_previous(state),
     KeyCode::Down | KeyCode::Char('j') => select_next(state),
-    KeyCode::Enter if state.active_panel == Panel::Settings => adjust_theme(state, 1),
+    KeyCode::Enter if state.active_panel == Panel::Settings => apply_selected_theme(state),
     KeyCode::Enter => play_selected(state, player, tune_tx),
     KeyCode::Char('/') | KeyCode::Char('s') => state.search_input = Some(String::new()),
-    KeyCode::Char(',') => state.active_panel = Panel::Settings,
+    KeyCode::Char('x') if state.active_panel == Panel::Settings => state.show_saved_stations(),
+    KeyCode::Char('x') => open_settings(state),
     KeyCode::Char('f') | KeyCode::Char('F') => favorite_selected(state),
     KeyCode::Char('d') | KeyCode::Char('D') => unfavorite_selected(state),
     KeyCode::Char('r') => state.show_saved_stations(),
@@ -523,7 +528,7 @@ async fn handle_key(
       set_volume(state, player, state.volume.saturating_add(5), mpris)
     }
     KeyCode::Char('-') => set_volume(state, player, state.volume.saturating_sub(5), mpris),
-    KeyCode::Char('x') => {
+    KeyCode::Char('X') => {
       stop(state, player);
       mpris.set_stopped();
     }
@@ -585,7 +590,7 @@ fn handle_mouse(mouse: MouseEvent, state: &mut State) {
       if contains(state.search_area, mouse.column, mouse.row) {
         state.search_input = Some(String::new());
       } else if contains(state.settings_area, mouse.column, mouse.row) {
-        state.active_panel = Panel::Settings;
+        open_settings(state);
       } else if contains(state.saved_area, mouse.column, mouse.row) {
         state.active_panel = Panel::Saved;
         if let Some(index) = clicked_row(state.saved_area, mouse.row, state.saved_stations.len()) {
@@ -593,8 +598,9 @@ fn handle_mouse(mouse: MouseEvent, state: &mut State) {
         }
       } else if contains(state.results_area, mouse.column, mouse.row) {
         if state.active_panel == Panel::Settings {
-          if let Some(index) = clicked_row(state.results_area, mouse.row, 4) {
+          if let Some(index) = clicked_row(state.results_area, mouse.row, THEME_PRESETS.len()) {
             state.settings_selected = index;
+            apply_selected_theme(state);
           }
         } else {
           state.active_panel = Panel::Results;
@@ -638,82 +644,99 @@ fn clicked_row(area: Rect, row: u16, item_count: usize) -> Option<usize> {
   (index < item_count).then_some(index)
 }
 
-const COLOR_PALETTE: [&str; 16] = [
-  "Black",
-  "Red",
-  "Green",
-  "Yellow",
-  "Blue",
-  "Magenta",
-  "Cyan",
-  "Gray",
-  "DarkGray",
-  "LightRed",
-  "LightGreen",
-  "LightYellow",
-  "LightBlue",
-  "LightMagenta",
-  "LightCyan",
-  "White",
-];
-
-fn adjust_theme(state: &mut State, direction: isize) {
-  let current = match state.settings_selected {
-    0 => &state.theme.focused_border,
-    1 => &state.theme.now_playing,
-    2 => &state.theme.selection,
-    _ => &state.theme.favorite,
-  };
-  let current_index = COLOR_PALETTE
-    .iter()
-    .position(|color| color.eq_ignore_ascii_case(current))
-    .unwrap_or(0);
-  let next_index =
-    (current_index as isize + direction).rem_euclid(COLOR_PALETTE.len() as isize) as usize;
-  let next = COLOR_PALETTE[next_index].to_owned();
-  match state.settings_selected {
-    0 => state.theme.focused_border = next,
-    1 => state.theme.now_playing = next,
-    2 => state.theme.selection = next,
-    _ => state.theme.favorite = next,
-  }
-
-  match config::save_preferences(&state.saved_stations, state.volume, &state.theme) {
-    Ok(()) => state.status = "Color theme saved.".to_owned(),
-    Err(error) => state.status = format!("Could not save color theme: {error:#}"),
-  }
+#[derive(Clone, Copy)]
+struct ThemePalette {
+  focused_border: Color,
+  now_playing: Color,
+  selection: Color,
+  favorite: Color,
 }
 
-fn parse_color(value: &str, fallback: Color) -> Color {
-  match value.trim().to_ascii_lowercase().as_str() {
-    "reset" | "default" => Color::Reset,
-    "black" => Color::Black,
-    "red" => Color::Red,
-    "green" => Color::Green,
-    "yellow" => Color::Yellow,
-    "blue" => Color::Blue,
-    "magenta" => Color::Magenta,
-    "cyan" => Color::Cyan,
-    "gray" | "grey" => Color::Gray,
-    "darkgray" | "dark gray" | "darkgrey" | "dark grey" => Color::DarkGray,
-    "lightred" | "light red" => Color::LightRed,
-    "lightgreen" | "light green" => Color::LightGreen,
-    "lightyellow" | "light yellow" => Color::LightYellow,
-    "lightblue" | "light blue" => Color::LightBlue,
-    "lightmagenta" | "light magenta" => Color::LightMagenta,
-    "lightcyan" | "light cyan" => Color::LightCyan,
-    "white" => Color::White,
-    value => {
-      let channels = value
-        .split(',')
-        .map(str::trim)
-        .map(str::parse::<u8>)
-        .collect::<Result<Vec<_>, _>>();
-      match channels {
-        Ok(channels) if channels.len() == 3 => Color::Rgb(channels[0], channels[1], channels[2]),
-        _ => fallback,
-      }
-    }
+#[derive(Clone, Copy)]
+struct ThemePreset {
+  name: &'static str,
+  palette: ThemePalette,
+}
+
+const THEME_PRESETS: [ThemePreset; 6] = [
+  ThemePreset {
+    name: "Tokyo Night",
+    palette: ThemePalette {
+      focused_border: Color::Rgb(0x7a, 0xa2, 0xf7),
+      now_playing: Color::Rgb(0x9e, 0xce, 0x6a),
+      selection: Color::Rgb(0x7d, 0xa6, 0xff),
+      favorite: Color::Rgb(0xbb, 0x9a, 0xf7),
+    },
+  },
+  ThemePreset {
+    name: "Catppuccin",
+    palette: ThemePalette {
+      focused_border: Color::Rgb(0x89, 0xb4, 0xfa),
+      now_playing: Color::Rgb(0xa6, 0xe3, 0xa1),
+      selection: Color::Rgb(0x94, 0xe2, 0xd5),
+      favorite: Color::Rgb(0xf5, 0xc2, 0xe7),
+    },
+  },
+  ThemePreset {
+    name: "Osaka Jade",
+    palette: ThemePalette {
+      focused_border: Color::Rgb(0x50, 0x94, 0x75),
+      now_playing: Color::Rgb(0x63, 0xb0, 0x7a),
+      selection: Color::Rgb(0x2d, 0xd5, 0xb7),
+      favorite: Color::Rgb(0xd2, 0x68, 0x9c),
+    },
+  },
+  ThemePreset {
+    name: "Gruvbox",
+    palette: ThemePalette {
+      focused_border: Color::Rgb(0x7d, 0xae, 0xa3),
+      now_playing: Color::Rgb(0xa9, 0xb6, 0x65),
+      selection: Color::Rgb(0xd8, 0xa6, 0x57),
+      favorite: Color::Rgb(0xd3, 0x86, 0x9b),
+    },
+  },
+  ThemePreset {
+    name: "Nord",
+    palette: ThemePalette {
+      focused_border: Color::Rgb(0x81, 0xa1, 0xc1),
+      now_playing: Color::Rgb(0xa3, 0xbe, 0x8c),
+      selection: Color::Rgb(0x88, 0xc0, 0xd0),
+      favorite: Color::Rgb(0xb4, 0x8e, 0xad),
+    },
+  },
+  ThemePreset {
+    name: "Rose Pine",
+    palette: ThemePalette {
+      focused_border: Color::Rgb(0x56, 0x94, 0x9f),
+      now_playing: Color::Rgb(0x28, 0x69, 0x83),
+      selection: Color::Rgb(0xd7, 0x82, 0x7e),
+      favorite: Color::Rgb(0x90, 0x7a, 0xa9),
+    },
+  },
+];
+
+fn theme_preset_index(name: &str) -> usize {
+  THEME_PRESETS
+    .iter()
+    .position(|preset| preset.name.eq_ignore_ascii_case(name))
+    .unwrap_or(0)
+}
+
+fn theme_palette(name: &str) -> ThemePalette {
+  THEME_PRESETS[theme_preset_index(name)].palette
+}
+
+fn open_settings(state: &mut State) {
+  state.settings_selected = theme_preset_index(&state.theme.preset);
+  state.active_panel = Panel::Settings;
+}
+
+fn apply_selected_theme(state: &mut State) {
+  let preset = THEME_PRESETS[state.settings_selected];
+  state.theme.preset = preset.name.to_owned();
+  match config::save_preferences(&state.saved_stations, state.volume, &state.theme) {
+    Ok(()) => state.status = format!("Theme set to {}.", preset.name),
+    Err(error) => state.status = format!("Could not save theme preset: {error:#}"),
   }
 }
 
@@ -830,7 +853,9 @@ fn select_next(state: &mut State) {
     Panel::Results if !state.stations.is_empty() => {
       state.result_selected = (state.result_selected + 1) % state.stations.len();
     }
-    Panel::Settings => state.settings_selected = (state.settings_selected + 1) % 4,
+    Panel::Settings => {
+      state.settings_selected = (state.settings_selected + 1) % THEME_PRESETS.len()
+    }
     _ => {}
   }
 }
@@ -845,7 +870,10 @@ fn select_previous(state: &mut State) {
       state.result_selected =
         (state.result_selected + state.stations.len() - 1) % state.stations.len();
     }
-    Panel::Settings => state.settings_selected = (state.settings_selected + 3) % 4,
+    Panel::Settings => {
+      state.settings_selected =
+        (state.settings_selected + THEME_PRESETS.len() - 1) % THEME_PRESETS.len()
+    }
     _ => {}
   }
 }
