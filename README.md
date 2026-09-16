@@ -35,6 +35,7 @@ cargo install --path . --force
 | `Right` / `l` | Focus directory results |
 | `Enter` | Play selected station |
 | `s` / `/` | Focus station search |
+| `,` | Open color theme settings |
 | `f` | Add selected search result to favorites |
 | `d` / `D` | Remove selected station from favorites |
 | `r` | Focus saved stations |
@@ -44,6 +45,8 @@ cargo install --path . --force
 | `x` | Stop |
 | `q` | Quit |
 | Mouse click | Focus search, saved stations, or directory results |
+
+Color settings are editable inside Degen Radio: press `,` or click **Color Settings**, select a color role with `Up`/`Down`, then change it with `Left`/`Right` or `Enter`. Changes are saved to `$XDG_STATE_HOME/degen-radio/state.yml`.
 
 ## Station storage
 

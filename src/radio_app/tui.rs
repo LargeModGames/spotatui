@@ -1,4 +1,4 @@
-use super::config::{self, Station};
+use super::config::{self, Station, ThemeSettings};
 use super::directory;
 use super::mpris;
 use super::{spawn_tune, LocalPlayer, PreparedTune, Session, TuneResult};
@@ -33,6 +33,7 @@ enum UiEvent {
 enum Panel {
   Saved,
   Results,
+  Settings,
 }
 
 pub(super) struct State {
@@ -41,6 +42,8 @@ pub(super) struct State {
   saved_selected: usize,
   result_selected: usize,
   active_panel: Panel,
+  theme: ThemeSettings,
+  settings_selected: usize,
   volume: u8,
   status: String,
   search_input: Option<String>,
@@ -49,12 +52,13 @@ pub(super) struct State {
   generation: u64,
   last_title: Option<String>,
   search_area: Rect,
+  settings_area: Rect,
   saved_area: Rect,
   results_area: Rect,
 }
 
 impl State {
-  pub(super) fn new(stations: Vec<Station>, volume: u8) -> Self {
+  pub(super) fn new(stations: Vec<Station>, volume: u8, theme: ThemeSettings) -> Self {
     let status = if stations.is_empty() {
       "No saved stations. Press S to search for a station.".to_owned()
     } else {
@@ -66,6 +70,8 @@ impl State {
       saved_selected: 0,
       result_selected: 0,
       active_panel: Panel::Saved,
+      theme,
+      settings_selected: 0,
       volume,
       status,
       search_input: None,
@@ -74,6 +80,7 @@ impl State {
       generation: 0,
       last_title: None,
       search_area: Rect::default(),
+      settings_area: Rect::default(),
       saved_area: Rect::default(),
       results_area: Rect::default(),
     }
@@ -83,6 +90,7 @@ impl State {
     match self.active_panel {
       Panel::Saved => self.saved_stations.get(self.saved_selected),
       Panel::Results => self.stations.get(self.result_selected),
+      Panel::Settings => None,
     }
     .cloned()
   }
@@ -228,6 +236,11 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     ])
     .split(area);
 
+  let focus_color = parse_color(&state.theme.focused_border, Color::Cyan);
+  let playing_color = parse_color(&state.theme.now_playing, Color::Green);
+  let selection_color = parse_color(&state.theme.selection, focus_color);
+  let favorite_color = parse_color(&state.theme.favorite, Color::Magenta);
+
   let title = state
     .session
     .as_ref()
@@ -241,14 +254,19 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     Paragraph::new(Line::styled(
       title,
       Style::default()
-        .fg(Color::Green)
+        .fg(playing_color)
         .add_modifier(Modifier::BOLD),
     ))
     .block(Block::default().borders(Borders::ALL).title("Now Playing")),
     chunks[0],
   );
 
-  state.search_area = chunks[1];
+  let controls = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Percentage(82), Constraint::Percentage(18)])
+    .split(chunks[1]);
+  state.search_area = controls[0];
+  state.settings_area = controls[1];
   let search_text = match &state.search_input {
     Some(input) => format!(
       "{input}{}",
@@ -262,7 +280,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
   };
   let search_style = if state.search_input.is_some() {
     Style::default()
-      .fg(Color::Cyan)
+      .fg(focus_color)
       .add_modifier(Modifier::BOLD)
   } else {
     Style::default()
@@ -271,9 +289,25 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     Paragraph::new(search_text).style(search_style).block(
       Block::default()
         .borders(Borders::ALL)
+        .border_style(search_style)
         .title("Search Radio Directory"),
     ),
     state.search_area,
+  );
+
+  let settings_focused = state.search_input.is_none() && state.active_panel == Panel::Settings;
+  frame.render_widget(
+    Paragraph::new("Click or press ,").block(
+      Block::default()
+        .borders(Borders::ALL)
+        .border_style(if settings_focused {
+          Style::default().fg(focus_color)
+        } else {
+          Style::default()
+        })
+        .title("Color Settings"),
+    ),
+    state.settings_area,
   );
 
   let body = Layout::default()
@@ -286,10 +320,15 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
   let saved_items = state
     .saved_stations
     .iter()
-    .map(|station| ListItem::new(format!("♥ {}", station.name)))
+    .map(|station| {
+      ListItem::new(Line::styled(
+        format!("♥ {}", station.name),
+        Style::default().fg(favorite_color),
+      ))
+    })
     .collect::<Vec<_>>();
-  let saved_border = if state.active_panel == Panel::Saved {
-    Style::default().fg(Color::Cyan)
+  let saved_border = if state.search_input.is_none() && state.active_panel == Panel::Saved {
+    Style::default().fg(focus_color)
   } else {
     Style::default()
   };
@@ -303,7 +342,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     .highlight_symbol("▶ ")
     .highlight_style(
       Style::default()
-        .fg(Color::Cyan)
+        .fg(selection_color)
         .add_modifier(Modifier::BOLD),
     );
   let mut saved_state = ListState::default().with_selected(
@@ -312,12 +351,40 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
   );
   frame.render_stateful_widget(saved_list, state.saved_area, &mut saved_state);
 
-  let results_border = if state.active_panel == Panel::Results {
-    Style::default().fg(Color::Cyan)
+  let results_border = if state.search_input.is_none() && state.active_panel == Panel::Results {
+    Style::default().fg(focus_color)
   } else {
     Style::default()
   };
-  if state.stations.is_empty() {
+  if state.active_panel == Panel::Settings {
+    let settings = [
+      format!("Focused border: {}", state.theme.focused_border),
+      format!("Now playing: {}", state.theme.now_playing),
+      format!("Selection: {}", state.theme.selection),
+      format!("Favorite: {}", state.theme.favorite),
+    ]
+    .into_iter()
+    .map(ListItem::new)
+    .collect::<Vec<_>>();
+    let mut settings_state = ListState::default().with_selected(Some(state.settings_selected));
+    frame.render_stateful_widget(
+      List::new(settings)
+        .block(
+          Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(focus_color))
+            .title("Color Theme — ←/→ change  Enter next  Esc close"),
+        )
+        .highlight_symbol("▶ ")
+        .highlight_style(
+          Style::default()
+            .fg(selection_color)
+            .add_modifier(Modifier::BOLD),
+        ),
+      state.results_area,
+      &mut settings_state,
+    );
+  } else if state.stations.is_empty() {
     frame.render_widget(
       Paragraph::new(
         "Find stations from the Radio Browser directory.\n\n\
@@ -343,11 +410,12 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
           .saved_stations
           .iter()
           .any(|saved| saved.url == station.url);
-        ListItem::new(format!(
-          "{}{}",
-          if favorite { "♥ " } else { "📻 " },
-          station.name
-        ))
+        let (marker, style) = if favorite {
+          ("♥ ", Style::default().fg(favorite_color))
+        } else {
+          ("📻 ", Style::default())
+        };
+        ListItem::new(Line::styled(format!("{marker}{}", station.name), style))
       })
       .collect::<Vec<_>>();
     let results = List::new(result_items)
@@ -360,7 +428,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
       .highlight_symbol("▶ ")
       .highlight_style(
         Style::default()
-          .fg(Color::Cyan)
+          .fg(selection_color)
           .add_modifier(Modifier::BOLD),
       );
     let mut result_state = ListState::default().with_selected(
@@ -370,12 +438,21 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
     frame.render_stateful_widget(results, state.results_area, &mut result_state);
   }
 
-  let footer = format!("{}  |  Volume {}%", state.status, state.volume);
+  let footer = state
+    .now_playing()
+    .or_else(|| {
+      state
+        .session
+        .as_ref()
+        .map(|session| session.station.name.clone())
+    })
+    .map(|track| format!("{track}  |  {}  |  Volume {}%", state.status, state.volume))
+    .unwrap_or_else(|| format!("{}  |  Volume {}%", state.status, state.volume));
   frame.render_widget(
     Paragraph::new(footer).block(
       Block::default()
         .borders(Borders::ALL)
-        .title("S Search  ←/→ Focus  Enter Play  F Favorite  D Unfavorite  Q Quit"),
+        .title("S Search  , Colors  ←/→ Focus  Enter Play  F Favorite  D Unfavorite  Q Quit"),
     ),
     chunks[3],
   );
@@ -420,16 +497,24 @@ async fn handle_key(
 
   match key.code {
     KeyCode::Char('q') => return Ok(true),
-    KeyCode::Esc if state.active_panel == Panel::Results => state.show_saved_stations(),
+    KeyCode::Esc if state.active_panel != Panel::Saved => state.show_saved_stations(),
     KeyCode::Esc => return Ok(true),
+    KeyCode::Left | KeyCode::Char('h') if state.active_panel == Panel::Settings => {
+      adjust_theme(state, -1)
+    }
+    KeyCode::Right | KeyCode::Char('l') if state.active_panel == Panel::Settings => {
+      adjust_theme(state, 1)
+    }
     KeyCode::Left | KeyCode::Char('h') => state.active_panel = Panel::Saved,
     KeyCode::Right | KeyCode::Char('l') if !state.stations.is_empty() => {
       state.active_panel = Panel::Results
     }
     KeyCode::Up | KeyCode::Char('k') => select_previous(state),
     KeyCode::Down | KeyCode::Char('j') => select_next(state),
+    KeyCode::Enter if state.active_panel == Panel::Settings => adjust_theme(state, 1),
     KeyCode::Enter => play_selected(state, player, tune_tx),
     KeyCode::Char('/') | KeyCode::Char('s') => state.search_input = Some(String::new()),
+    KeyCode::Char(',') => state.active_panel = Panel::Settings,
     KeyCode::Char('f') | KeyCode::Char('F') => favorite_selected(state),
     KeyCode::Char('d') | KeyCode::Char('D') => unfavorite_selected(state),
     KeyCode::Char('r') => state.show_saved_stations(),
@@ -458,7 +543,7 @@ fn favorite_selected(state: &mut State) {
 
   let mut favorites = state.saved_stations.clone();
   favorites.push(station.clone());
-  match config::save_favorites(&favorites, state.volume) {
+  match config::save_preferences(&favorites, state.volume, &state.theme) {
     Ok(()) => {
       state.saved_stations = favorites;
       state.status = format!("Added {} to favorites.", station.name);
@@ -482,7 +567,7 @@ fn unfavorite_selected(state: &mut State) {
 
   let mut favorites = state.saved_stations.clone();
   favorites.remove(index);
-  match config::save_favorites(&favorites, state.volume) {
+  match config::save_preferences(&favorites, state.volume, &state.theme) {
     Ok(()) => {
       state.saved_stations = favorites;
       state.saved_selected = state
@@ -499,15 +584,23 @@ fn handle_mouse(mouse: MouseEvent, state: &mut State) {
     MouseEventKind::Down(MouseButton::Left) => {
       if contains(state.search_area, mouse.column, mouse.row) {
         state.search_input = Some(String::new());
+      } else if contains(state.settings_area, mouse.column, mouse.row) {
+        state.active_panel = Panel::Settings;
       } else if contains(state.saved_area, mouse.column, mouse.row) {
         state.active_panel = Panel::Saved;
         if let Some(index) = clicked_row(state.saved_area, mouse.row, state.saved_stations.len()) {
           state.saved_selected = index;
         }
       } else if contains(state.results_area, mouse.column, mouse.row) {
-        state.active_panel = Panel::Results;
-        if let Some(index) = clicked_row(state.results_area, mouse.row, state.stations.len()) {
-          state.result_selected = index;
+        if state.active_panel == Panel::Settings {
+          if let Some(index) = clicked_row(state.results_area, mouse.row, 4) {
+            state.settings_selected = index;
+          }
+        } else {
+          state.active_panel = Panel::Results;
+          if let Some(index) = clicked_row(state.results_area, mouse.row, state.stations.len()) {
+            state.result_selected = index;
+          }
         }
       }
     }
@@ -526,7 +619,9 @@ fn handle_mouse(mouse: MouseEvent, state: &mut State) {
 fn focus_mouse_panel(mouse: MouseEvent, state: &mut State) {
   if contains(state.saved_area, mouse.column, mouse.row) {
     state.active_panel = Panel::Saved;
-  } else if contains(state.results_area, mouse.column, mouse.row) {
+  } else if contains(state.results_area, mouse.column, mouse.row)
+    && state.active_panel != Panel::Settings
+  {
     state.active_panel = Panel::Results;
   }
 }
@@ -541,6 +636,85 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 fn clicked_row(area: Rect, row: u16, item_count: usize) -> Option<usize> {
   let index = row.checked_sub(area.y.saturating_add(1))? as usize;
   (index < item_count).then_some(index)
+}
+
+const COLOR_PALETTE: [&str; 16] = [
+  "Black",
+  "Red",
+  "Green",
+  "Yellow",
+  "Blue",
+  "Magenta",
+  "Cyan",
+  "Gray",
+  "DarkGray",
+  "LightRed",
+  "LightGreen",
+  "LightYellow",
+  "LightBlue",
+  "LightMagenta",
+  "LightCyan",
+  "White",
+];
+
+fn adjust_theme(state: &mut State, direction: isize) {
+  let current = match state.settings_selected {
+    0 => &state.theme.focused_border,
+    1 => &state.theme.now_playing,
+    2 => &state.theme.selection,
+    _ => &state.theme.favorite,
+  };
+  let current_index = COLOR_PALETTE
+    .iter()
+    .position(|color| color.eq_ignore_ascii_case(current))
+    .unwrap_or(0);
+  let next_index =
+    (current_index as isize + direction).rem_euclid(COLOR_PALETTE.len() as isize) as usize;
+  let next = COLOR_PALETTE[next_index].to_owned();
+  match state.settings_selected {
+    0 => state.theme.focused_border = next,
+    1 => state.theme.now_playing = next,
+    2 => state.theme.selection = next,
+    _ => state.theme.favorite = next,
+  }
+
+  match config::save_preferences(&state.saved_stations, state.volume, &state.theme) {
+    Ok(()) => state.status = "Color theme saved.".to_owned(),
+    Err(error) => state.status = format!("Could not save color theme: {error:#}"),
+  }
+}
+
+fn parse_color(value: &str, fallback: Color) -> Color {
+  match value.trim().to_ascii_lowercase().as_str() {
+    "reset" | "default" => Color::Reset,
+    "black" => Color::Black,
+    "red" => Color::Red,
+    "green" => Color::Green,
+    "yellow" => Color::Yellow,
+    "blue" => Color::Blue,
+    "magenta" => Color::Magenta,
+    "cyan" => Color::Cyan,
+    "gray" | "grey" => Color::Gray,
+    "darkgray" | "dark gray" | "darkgrey" | "dark grey" => Color::DarkGray,
+    "lightred" | "light red" => Color::LightRed,
+    "lightgreen" | "light green" => Color::LightGreen,
+    "lightyellow" | "light yellow" => Color::LightYellow,
+    "lightblue" | "light blue" => Color::LightBlue,
+    "lightmagenta" | "light magenta" => Color::LightMagenta,
+    "lightcyan" | "light cyan" => Color::LightCyan,
+    "white" => Color::White,
+    value => {
+      let channels = value
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<u8>)
+        .collect::<Result<Vec<_>, _>>();
+      match channels {
+        Ok(channels) if channels.len() == 3 => Color::Rgb(channels[0], channels[1], channels[2]),
+        _ => fallback,
+      }
+    }
+  }
 }
 
 fn play_selected(
@@ -656,6 +830,7 @@ fn select_next(state: &mut State) {
     Panel::Results if !state.stations.is_empty() => {
       state.result_selected = (state.result_selected + 1) % state.stations.len();
     }
+    Panel::Settings => state.settings_selected = (state.settings_selected + 1) % 4,
     _ => {}
   }
 }
@@ -670,6 +845,7 @@ fn select_previous(state: &mut State) {
       state.result_selected =
         (state.result_selected + state.stations.len() - 1) % state.stations.len();
     }
+    Panel::Settings => state.settings_selected = (state.settings_selected + 3) % 4,
     _ => {}
   }
 }

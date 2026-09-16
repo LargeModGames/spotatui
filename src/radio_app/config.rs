@@ -13,6 +13,8 @@ pub struct Station {
 struct ConfigFile {
   #[serde(default)]
   behavior: Behavior,
+  #[serde(default)]
+  theme: ThemeSettings,
 }
 
 #[derive(Default, Deserialize)]
@@ -21,12 +23,37 @@ struct Behavior {
   radio_stations: Vec<Station>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ThemeSettings {
+  #[serde(alias = "active")]
+  pub focused_border: String,
+  #[serde(alias = "header")]
+  pub now_playing: String,
+  #[serde(alias = "selected")]
+  pub selection: String,
+  pub favorite: String,
+}
+
+impl Default for ThemeSettings {
+  fn default() -> Self {
+    Self {
+      focused_border: "Cyan".to_owned(),
+      now_playing: "Green".to_owned(),
+      selection: "Cyan".to_owned(),
+      favorite: "Magenta".to_owned(),
+    }
+  }
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct StateFile {
   #[serde(default = "default_volume")]
   volume_percent: u8,
   #[serde(default)]
   radio_stations: Vec<Station>,
+  #[serde(default)]
+  theme: Option<ThemeSettings>,
 }
 
 fn default_volume() -> u8 {
@@ -36,6 +63,7 @@ fn default_volume() -> u8 {
 pub struct LoadedConfig {
   pub stations: Vec<Station>,
   pub volume_percent: u8,
+  pub theme: ThemeSettings,
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -101,22 +129,33 @@ pub fn load(config_override: Option<&Path>) -> Result<LoadedConfig> {
   Ok(LoadedConfig {
     stations,
     volume_percent: state.volume_percent.min(100),
+    theme: state.theme.unwrap_or(config.theme),
   })
 }
 
-pub fn save_favorites(stations: &[Station], volume_percent: u8) -> Result<()> {
-  save_state_to(&default_state_path()?, stations, volume_percent)
+pub fn save_preferences(
+  stations: &[Station],
+  volume_percent: u8,
+  theme: &ThemeSettings,
+) -> Result<()> {
+  save_state_to(&default_state_path()?, stations, volume_percent, theme)
 }
 
-fn save_state_to(path: &Path, stations: &[Station], volume_percent: u8) -> Result<()> {
+fn save_state_to(
+  path: &Path,
+  stations: &[Station],
+  volume_percent: u8,
+  theme: &ThemeSettings,
+) -> Result<()> {
   if let Some(parent) = path.parent() {
     std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
   }
   let content = serde_yaml::to_string(&StateFile {
     volume_percent: volume_percent.min(100),
     radio_stations: stations.to_vec(),
+    theme: Some(theme.clone()),
   })
-  .context("serializing radio favorites")?;
+  .context("serializing radio preferences")?;
   let temporary = path.with_extension("yml.tmp");
   std::fs::write(&temporary, content)
     .with_context(|| format!("writing {}", temporary.display()))?;
@@ -163,10 +202,11 @@ mod tests {
       url: "https://example.com/live".to_owned(),
     }];
 
-    save_state_to(&path, &stations, 73).unwrap();
+    save_state_to(&path, &stations, 73, &ThemeSettings::default()).unwrap();
     let state: StateFile = read_yaml_if_present(&path).unwrap();
 
     assert_eq!(state.radio_stations, stations);
     assert_eq!(state.volume_percent, 73);
+    assert_eq!(state.theme, Some(ThemeSettings::default()));
   }
 }

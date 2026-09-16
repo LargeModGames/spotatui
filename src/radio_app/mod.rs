@@ -81,7 +81,7 @@ async fn run(config_path: Option<PathBuf>) -> Result<()> {
     .context("MPRIS event receiver already taken")?;
 
   let (tune_tx, tune_rx) = mpsc::unbounded_channel();
-  let state = tui::State::new(loaded.stations, loaded.volume_percent);
+  let state = tui::State::new(loaded.stations, loaded.volume_percent, loaded.theme);
   tui::run(state, player, tune_tx, tune_rx, mpris, mpris_rx).await
 }
 
