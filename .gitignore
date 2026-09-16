@@ -3,15 +3,7 @@
 
 .DS_store
 .env
-.spotify_token_cache.json
-.cached_device_id.txt
-spotify-tui.sketch
-
-spt*.txt
 *.snap
-.ci/lp-creds
-snapcraft-login
-secrets.tar
 
 *.swp
 tags
@@ -24,6 +16,4 @@ tags
 # Local cargo config (platform-specific settings)
 .cargo/
 
-# build artifacts from the worker-relay subproject
-worker-relay/node_modules/
 /result

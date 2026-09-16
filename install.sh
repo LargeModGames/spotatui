@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# spotatui installer for macOS, Linux, and WSL.
+# degen-radio installer for macOS, Linux, and WSL.
 #
-#   curl -fsSL https://spotatui.com/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ethereumdegen/degen-radio/main/install.sh | bash
 #
 # Environment overrides:
 #   SPOTATUI_VERSION      install a specific tag (e.g. v0.40.3); default: latest
 #   SPOTATUI_INSTALL_DIR  where to put the binary; default: $HOME/.local/bin
 set -euo pipefail
 
-REPO="LargeModGames/spotatui"
+REPO="ethereumdegen/degen-radio"
 BINARY="spotatui"
 INSTALL_DIR="${SPOTATUI_INSTALL_DIR:-$HOME/.local/bin}"
 

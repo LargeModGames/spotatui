@@ -1,5 +1,5 @@
 {
-  description = "A Spotify client for the terminal written in Rust, powered by Ratatui";
+  description = "An internet-radio terminal player with MPRIS control";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -55,8 +55,8 @@
             };
             inherit nativeBuildInputs buildInputs;
             meta = with pkgs.lib; {
-              description = "A Spotify client for the terminal written in Rust, powered by Ratatui";
-              homepage = "https://github.com/LargeModGames/spotatui";
+              description = "An internet-radio terminal player with MPRIS control";
+              homepage = "https://github.com/ethereumdegen/degen-radio";
               license = licenses.mit;
               mainProgram = "spotatui";
             };
@@ -65,7 +65,7 @@
           spotatui = self.packages.${system}.default;
         };
 
-        # Execute with `nix run github:LargeModGames/spotatui`
+        # Execute with `nix run github:ethereumdegen/degen-radio`
         apps = {
           default = {
             type = "app";

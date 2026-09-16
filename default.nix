@@ -2,7 +2,7 @@
 
   pkgs.rustPlatform.buildRustPackage rec {
     pname = "spotatui";
-    version = "0.34.3";
+    version = "0.43.0-radio.1";
 
   src = pkgs.lib.cleanSource ./.;
 
@@ -36,8 +36,8 @@
   '';
 
   meta = with pkgs.lib; {
-    description = "Terminal UI Spotify client";
-    homepage = "https://github.com/LargeModGames/spotatui";
+    description = "An internet-radio terminal player with MPRIS control";
+    homepage = "https://github.com/ethereumdegen/degen-radio";
     license = licenses.mit;
     mainProgram = "spotatui";
     platforms = platforms.linux;

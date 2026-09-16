@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-  spotatui installer for Windows.
+  degen-radio installer for Windows.
 
-  irm https://spotatui.com/install.ps1 | iex
+  irm https://raw.githubusercontent.com/ethereumdegen/degen-radio/main/install.ps1 | iex
 
   Environment overrides:
     SPOTATUI_VERSION        install a specific tag (e.g. v0.40.3); default: latest
@@ -11,7 +11,7 @@
 #>
 $ErrorActionPreference = 'Stop'
 
-$Repo   = 'LargeModGames/spotatui'
+$Repo   = 'ethereumdegen/degen-radio'
 $Binary = 'spotatui'
 $InstallDir = if ($env:SPOTATUI_INSTALL_DIR) { $env:SPOTATUI_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'spotatui\bin' }
 

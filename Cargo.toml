@@ -1,244 +1,48 @@
 [package]
 name = "spotatui"
-description = "A Spotify client for the terminal written in Rust, powered by Ratatui"
-homepage = "https://github.com/LargeModGames/spotatui"
-documentation = "https://github.com/LargeModGames/spotatui"
-repository = "https://github.com/LargeModGames/spotatui"
-keywords = ["spotify", "tui", "cli", "terminal"]
+description = "An internet-radio terminal player with MPRIS control"
+homepage = "https://github.com/ethereumdegen/degen-radio"
+documentation = "https://github.com/ethereumdegen/degen-radio"
+repository = "https://github.com/ethereumdegen/degen-radio"
+keywords = ["radio", "audio", "tui", "terminal"]
 categories = ["command-line-utilities"]
-version = "0.42.0"
-authors = ["LargeModGames <LargeModGames@gmail.com>"]
+version = "0.43.0-radio.1"
+authors = ["ethereumdegen"]
 edition = "2021"
 license = "MIT"
-# Two [[bin]] targets make a plain `cargo run` ambiguous; the console binary
-# stays the default.
 default-run = "spotatui"
-exclude = [
-    ".github/demo.gif",
-    ".github/workflows",
-    ".github/ISSUE_TEMPLATE",
-    "target/",
-    "snap/",
-]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest", "reqwest-rustls-tls"] }
+anyhow = "1.0.102"
+clap = { version = "4.6", features = ["cargo"] }
+crossterm = { version = "0.29", optional = true }
+dirs = "6.0"
+fern = "0.7.1"
+icy-metadata = { version = "0.6", optional = true, default-features = false }
+log = "0.4.32"
+rand = "0.10.2"
 ratatui = { version = "0.30", features = ["crossterm", "layout-cache"], default-features = false, optional = true }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+rodio = { version = "0.22", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-dirs = "6.0"
-clap = { version = "4.6", features = ["cargo"] }
-clap_complete = "4.6"
-unicode-width = "0.2.2"
-backtrace = "0.3.76"
-crossterm = { version = "0.29", optional = true }
-tui-bar-graph = { version = "0.3.3", optional = true }
-# Optional because the headless build needs neither half of it: `tui` pulls it
-# for the banner gradient and visualizer, `art-decode` for the HSV math in
-# `core/cover_theme.rs`.
-colorgrad = { version = "0.8.0", optional = true }
-tokio = { version = "1.52", features = ["full"] }
-rand = "0.10.2"
-anyhow = "1.0.102"
-chrono = "0.4.45"
-log = "0.4.32"
-fern = "0.7.1"
-open = "5.3"
-self_update = { version = "0.44", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"], optional = true }
-sha2 = { version = "0.11", optional = true }
-hex = { version = "0.4", optional = true }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
-openssl = { version = "0.10", optional = true }
-cpal = { version = "0.17", optional = true }
-realfft = { version = "3.4", optional = true }
-discord-rich-presence = { version = "1.1", optional = true }
-ratatui-image = { version = "11.0.4", optional = true, default-features = false, features = ["crossterm"] }
-image = { version = "0.25", optional = true }
-mlua = { version = "0.12", features = ["lua54", "vendored", "serde"], optional = true }
-md-5 = { version = "0.11", optional = true }
-# Subsonic, YouTube and Qobuz stream each track to a tempfile before playing it through the shared
-# rodio sink. Also a dev-dependency (used by tests across features).
-tempfile = { version = "3", optional = true }
-# Qobuz transport: the signed-request and key-derivation primitives plus the
-# bundle scrape. Same `cipher 0.4` line as librespot, so no graph fork.
-base64 = { version = "0.22", optional = true }
-regex = { version = "1", optional = true }
-aes = { version = "0.8", optional = true }
-cbc = { version = "0.1", optional = true }
-ctr = { version = "0.9", optional = true }
-hkdf = { version = "0.13", optional = true }
-# Qobuz progressive delivery: the chunk type of a stream-download source.
-bytes = { version = "1", optional = true }
-
-# stream-download buffers a byte stream behind a Read+Seek adapter that rodio
-# can decode while the download runs. Internet radio uses it on an infinite HTTP
-# (ICY) stream, without seeking; Qobuz uses it on its segment transport, with
-# seeking. icy-metadata parses in-band StreamTitle now-playing metadata and is
-# only compiled under the opt-in `internet-radio` feature.
 stream-download = { version = "0.24", optional = true, default-features = false, features = ["reqwest-rustls"] }
-icy-metadata = { version = "0.6", optional = true, default-features = false }
-
-# Local-files media source dependencies
-symphonia = { version = "0.6", features = ["mp3", "flac", "ogg", "wav", "aiff", "isomp4", "mkv", "pcm", "vorbis"], optional = true, default-features = false }
-lofty = { version = "0.24", optional = true }
-# Local-files audio output. Defaults pull in cpal `playback` plus the common
-# codecs (flac/mp3/mp4-aac/vorbis/wav) via symphonia. Drives the default device
-# on all three platforms; the macOS gate in `LocalPlayer` is gone since rodio
-# 0.22 / cpal 0.17 were measured on CoreAudio. Unrelated to librespot's own
-# rodio-backend, which is why librespot keeps portaudio-backend on macOS.
-rodio = { version = "0.22", optional = true }
-
-# Streaming dependencies: our maintained librespot fork, published on crates.io
-# as spotatui-librespot-* (upstream 0.8.0 + CDN 530 fallback for silent playback,
-# dealer reconnect/session-loss recovery, OAuth callback listener hardening,
-# previous-on-first-track restarting instead of stopping (#366), Spirc ignoring
-# play-request ids of direct `Player::load`s so a queued track's end cannot stop
-# the next one, and a fork-only session disconnect-reason API the app depends
-# on - upstream 0.8 cannot be substituted). The `package =` rename keeps `librespot_*` imports and
-# `librespot-*/feature` refs unchanged; `=`-pinned so all seven crates upgrade in
-# lockstep. See SPOTATUI_FORK.md in the fork repo for the carried patches.
-librespot-core = { version = "=0.8.3", package = "spotatui-librespot-core", optional = true }
-librespot-connect = { version = "=0.8.3", package = "spotatui-librespot-connect", optional = true }
-librespot-oauth = { version = "=0.8.3", package = "spotatui-librespot-oauth", optional = true }
-librespot-metadata = { version = "=0.8.3", package = "spotatui-librespot-metadata", optional = true }
-librespot-protocol = { version = "=0.8.3", package = "spotatui-librespot-protocol", optional = true, default-features = false }
-protobuf = { version = "3.7", optional = true }
-futures = "0.3.32"
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1.52", features = ["full"] }
 url = "2.5"
-keepawake = "0.6"
 
-[target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
-arboard = { version = "3.4", features = ["wayland-data-control"] }
-pipewire = { version = "0.10", optional = true }
-librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["alsa-backend"] }
-
-[target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
-arboard = { version = "3.4", features = ["wayland-data-control"] }
-librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-arboard = "3.4"
-# On Windows we default to rodio for audio output.
-# Without this, librespot-playback falls back to the `pipe` sink which writes raw audio bytes
-# to stdout (breaking the TUI and producing no audible output).
-librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
-smtc-tokio = { version = "0.1.0", optional = true }
-
-# MPRIS D-Bus support (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = { version = "0.10", optional = true }
 
-# macOS: librespot-playback + Now Playing / Media Key support
-# On macOS we use portaudio-backend by default to avoid the pipe sink fallback (which outputs to stdout).
-# Rodio has compatibility issues with macOS CoreAudio and Bluetooth devices (AirPods, etc.)
-# causing SIGSEGV crashes. See Issue #9 and #20.
-[target.'cfg(target_os = "macos")'.dependencies]
-arboard = "3.4"
-librespot-playback = { version = "=0.8.3", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["portaudio-backend"] }
-objc2-media-player = { version = "0.3", optional = true }
-objc2-foundation = { version = "0.3", optional = true }
-objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["NSImage"] }
-objc2 = { version = "0.6", optional = true }
-block2 = { version = "0.6", optional = true }
-
 [features]
-default = ["telemetry", "streaming", "audio-viz-cpal", "macos-media", "discord-rpc", "mpris", "self-update", "windows-media", "scripting", "tui"]
-telemetry = []
-# The terminal frontend: gates `mod tui` and owns the terminal-only crates.
-# The headless CI leg omits it, so any `crate::tui` import from core/infra/cli
-# is a compile error there - that is what keeps a second frontend from silently
-# re-coupling to the terminal one.
-tui = ["dep:ratatui", "dep:crossterm", "dep:tui-bar-graph", "dep:colorgrad"]
-# Reserved for the windowed frontend. Currently gates only the `spotatui-gui`
-# bin shim (which claims the binary name and the Windows console-attach
-# plumbing); the frontend itself has not landed yet.
-gui = []
-self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
-streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf", "queue"]
-# Audio backend features
-alsa-backend = ["streaming", "librespot-playback/alsa-backend"]
-pulseaudio-backend = ["streaming", "librespot-playback/pulseaudio-backend"]
-rodio-backend = ["streaming", "librespot-playback/rodio-backend"]
-portaudio-backend = ["streaming", "librespot-playback/portaudio-backend"]
-jackaudio-backend = ["streaming", "librespot-playback/jackaudio-backend"]
-rodiojack-backend = ["streaming", "librespot-playback/rodiojack-backend"]
-sdl-backend = ["streaming", "librespot-playback/sdl-backend"]
-gstreamer-backend = ["streaming", "librespot-playback/gstreamer-backend"]
-audio-viz = ["realfft", "pipewire"]
-audio-viz-cpal = ["realfft", "cpal"]  # Alternative for Windows/macOS or if pipewire issues
-mpris = ["mpris-server"]  # MPRIS D-Bus integration (Linux only)
-macos-media = ["objc2-media-player", "objc2-foundation", "objc2-app-kit", "objc2", "block2", "streaming"]  # macOS Now Playing integration
-windows-media = ["smtc-tokio", "streaming"] # windows SMTC integration
-discord-rpc = ["discord-rich-presence"]
-# The frontend-agnostic decode half of cover art: fetch + `image`-decode into
-# the store frontends render from (also feeds the adaptive theme's palette
-# extraction). Not meant to be enabled by hand: `cover-art` layers the
-# terminal rendering on top and keeps its pre-split meaning for users and CI.
-art-decode = ["dep:image", "dep:colorgrad"]
-cover-art = ["tui", "art-decode", "dep:ratatui-image"]
-scripting = ["dep:mlua"]
-# Shared audio decode/output engine (rodio bundles symphonia). Pulled by any
-# source that plays decoded audio through the local sink (local files, Subsonic, Qobuz).
+default = ["tui", "internet-radio", "mpris"]
+tui = ["dep:ratatui", "dep:crossterm"]
 audio-decode = ["dep:rodio"]
-# Meta-feature (only used by sources), this ensures at least one source that supports
-# queues and needs decoding is enabled.
-audio-decode-queue = ["audio-decode", "queue"]
-# Meta-feature (only used by sources), this ensures at least one source with queue
-# support. Namely: `audio-decode-queue` + `streaming`
-queue = []
-# Meta-feature (only used by sources), this ensures at least one source that supports
-# queues and needs track download / track info fetching.
-queue-download = ["audio-decode-queue", "dep:tempfile"]
-# Convenience alias to pull in every alternative (non-Spotify) source at once,
-# e.g. `cargo run --features all-sources`. Deliberately NOT part of `default`:
-# the release binaries enable these explicitly (see .github/workflows/cd.yml) and
-# adding them to `default` would pull lofty/symphonia/md-5/stream-download into
-# every plain `cargo build`.
-all-sources = ["local-files", "subsonic", "internet-radio", "youtube", "qobuz"]
-local-files = ["audio-decode-queue", "queue", "dep:lofty", "dep:symphonia"]
-subsonic = ["dep:md-5", "audio-decode-queue", "queue", "queue-download", "dep:tempfile", "reqwest/stream"]
 internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
-# YouTube via an external `yt-dlp` binary (no new crates): search with
-# `--flat-playlist --dump-json`, download the AAC/M4A audio (format 140, which
-# rodio's default `mp4` feature decodes) to a tempfile, play through the shared
-# LocalPlayer. Unofficial-fragile by design — see plan-multi-source.md.
-youtube = ["audio-decode-queue", "queue", "queue-download"]
-# Qobuz through its encrypted CMAF stream: each track is decrypted and rebuilt
-# as a FLAC tempfile while it plays through the shared LocalPlayer.
-qobuz = ["audio-decode-queue", "queue", "queue-download", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
-
-# --- AI DJ / MCP -------------------------------------------------------------
-# Shared tool layer behind both front doors: the taste brief built from the local
-# listening history, the name -> URI resolver, and the bulk enqueue. Pure logic,
-# no new crates (reqwest / tokio "full" / serde_json are already non-optional).
-# Pulled by `mcp-server` and `ai-dj` the same way `audio-decode` is pulled by the
-# media sources.
-dj-core = []
-# Expose the player and listening history as MCP tools over a `spotatui mcp`
-# stdio server, so Claude Code / Codex / any MCP client can drive playback. No
-# LLM client and no API key are compiled in: `--features mcp-server` alone is a
-# complete "drive it from your coding agent" build.
-mcp-server = ["dj-core"]
-# The in-TUI DJ: a DJ screen with a chat prompt, continuous auto-queue and a
-# vibe-shift key, backed by a locally-installed agent CLI, an API key, or a local
-# model. Deliberately not in `default`: it egresses to a third-party provider.
-ai-dj = ["dj-core"]
+mpris = ["dep:mpris-server"]
 
 [dev-dependencies]
 tempfile = "3"
-
-# Constraint-only pin (spotatui has no build script): vergen 9.1.0 breaks
-# librespot-core 0.8.0's build script on a fresh resolve (#350). Remove once
-# librespot ships a fix.
-[build-dependencies]
-vergen = { version = ">=9.0.6, <9.1", default-features = false }
-
-[target.'cfg(target_env = "musl")'.dependencies]
-openssl-sys = { version = "0.9", features = ["vendored"] }
 
 [lib]
 name = "spotatui"
@@ -249,64 +53,20 @@ bench = false
 path = "src/bin/spotatui.rs"
 name = "spotatui"
 
-# The windowed shim. A separate binary because `windows_subsystem` is a
-# crate-root attribute that cannot vary at runtime, and because flipping the
-# console binary would detach the stdout that `spotatui mcp` (JSON-RPC) and
-# `spotatui history recap` (HTML) treat as protocol. Never built unless `gui`
-# is enabled explicitly.
-[[bin]]
-bench = false
-path = "src/bin/spotatui-gui.rs"
-name = "spotatui-gui"
-required-features = ["gui"]
-
 [profile.release]
-codegen-units = 1  # Better optimization
-lto = true         # Link-time optimization
-opt-level = "s"    # Prioritize small binary size
-strip = true       # Remove debug symbols
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
 
 [package.metadata.deb]
-maintainer = "LargeModGames <LargeModGames@gmail.com>"
-copyright = "2025, LargeModGames"
+maintainer = "ethereumdegen"
+copyright = "2026 ethereumdegen"
 license-file = ["LICENSE", "4"]
 depends = "$auto"
-# The YouTube source shells out to yt-dlp at runtime (ffmpeg improves the
-# downloaded audio container); both are optional — spotatui works without them.
-suggests = "yt-dlp, ffmpeg"
-section = "utils"
+section = "sound"
 priority = "optional"
-# cargo-deb packages every [[bin]] by default, and spotatui-gui only exists
-# in a `gui` build, so the assets are listed explicitly.
 assets = [
   ["target/release/spotatui", "usr/bin/", "755"],
   ["README.md", "usr/share/doc/spotatui/README", "644"],
 ]
-
-# cargo-binstall: fetch the prebuilt release binaries instead of compiling.
-#   cargo binstall spotatui
-# Our release assets use friendly names (spotatui-<os>-<arch>) rather than the
-# Rust target triple, and the binary sits at the archive root, so every target
-# needs an explicit override with an archive-root bin-dir.
-[package.metadata.binstall]
-bin-dir = "{ bin }{ binary-ext }"
-
-[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
-pkg-url = "{ repo }/releases/download/v{ version }/spotatui-linux-x86_64.tar.gz"
-pkg-fmt = "tgz"
-
-[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
-pkg-url = "{ repo }/releases/download/v{ version }/spotatui-linux-aarch64.tar.gz"
-pkg-fmt = "tgz"
-
-[package.metadata.binstall.overrides.x86_64-apple-darwin]
-pkg-url = "{ repo }/releases/download/v{ version }/spotatui-macos-x86_64.tar.gz"
-pkg-fmt = "tgz"
-
-[package.metadata.binstall.overrides.aarch64-apple-darwin]
-pkg-url = "{ repo }/releases/download/v{ version }/spotatui-macos-aarch64.tar.gz"
-pkg-fmt = "tgz"
-
-[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
-pkg-url = "{ repo }/releases/download/v{ version }/spotatui-windows-x86_64.zip"
-pkg-fmt = "zip"
