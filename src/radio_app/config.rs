@@ -21,7 +21,7 @@ struct Behavior {
   radio_stations: Vec<Station>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 struct StateFile {
   #[serde(default = "default_volume")]
   volume_percent: u8,
@@ -40,22 +40,42 @@ pub struct LoadedConfig {
 
 pub fn default_config_path() -> Result<PathBuf> {
   dirs::config_dir()
-    .map(|dir| dir.join("spotatui/config.yml"))
+    .map(|dir| dir.join("degen-radio/config.yml"))
     .context("cannot resolve the user configuration directory")
 }
 
 pub fn default_state_path() -> Result<PathBuf> {
   dirs::state_dir()
+    .map(|dir| dir.join("degen-radio/state.yml"))
+    .context("cannot resolve the user state directory")
+}
+
+fn legacy_config_path() -> Result<PathBuf> {
+  dirs::config_dir()
+    .map(|dir| dir.join("spotatui/config.yml"))
+    .context("cannot resolve the user configuration directory")
+}
+
+fn legacy_state_path() -> Result<PathBuf> {
+  dirs::state_dir()
     .map(|dir| dir.join("spotatui/state.yml"))
     .context("cannot resolve the user state directory")
+}
+
+fn prefer_existing(primary: PathBuf, legacy: PathBuf) -> PathBuf {
+  if primary.exists() || !legacy.exists() {
+    primary
+  } else {
+    legacy
+  }
 }
 
 pub fn load(config_override: Option<&Path>) -> Result<LoadedConfig> {
   let config_path = match config_override {
     Some(path) => path.to_path_buf(),
-    None => default_config_path()?,
+    None => prefer_existing(default_config_path()?, legacy_config_path()?),
   };
-  let state_path = default_state_path()?;
+  let state_path = prefer_existing(default_state_path()?, legacy_state_path()?);
 
   let config: ConfigFile = read_yaml_if_present(&config_path)
     .with_context(|| format!("loading {}", config_path.display()))?;
@@ -82,6 +102,26 @@ pub fn load(config_override: Option<&Path>) -> Result<LoadedConfig> {
     stations,
     volume_percent: state.volume_percent.min(100),
   })
+}
+
+pub fn save_favorites(stations: &[Station], volume_percent: u8) -> Result<()> {
+  save_state_to(&default_state_path()?, stations, volume_percent)
+}
+
+fn save_state_to(path: &Path, stations: &[Station], volume_percent: u8) -> Result<()> {
+  if let Some(parent) = path.parent() {
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+  }
+  let content = serde_yaml::to_string(&StateFile {
+    volume_percent: volume_percent.min(100),
+    radio_stations: stations.to_vec(),
+  })
+  .context("serializing radio favorites")?;
+  let temporary = path.with_extension("yml.tmp");
+  std::fs::write(&temporary, content)
+    .with_context(|| format!("writing {}", temporary.display()))?;
+  std::fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
+  Ok(())
 }
 
 fn read_yaml_if_present<T>(path: &Path) -> Result<T>
@@ -112,5 +152,21 @@ mod tests {
 
     let parsed: ConfigFile = read_yaml_if_present(&config_path).unwrap();
     assert_eq!(parsed.behavior.radio_stations[0].name, "Configured");
+  }
+
+  #[test]
+  fn favorites_round_trip_through_state_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let stations = vec![Station {
+      name: "Saved FM".to_owned(),
+      url: "https://example.com/live".to_owned(),
+    }];
+
+    save_state_to(&path, &stations, 73).unwrap();
+    let state: StateFile = read_yaml_if_present(&path).unwrap();
+
+    assert_eq!(state.radio_stations, stations);
+    assert_eq!(state.volume_percent, 73);
   }
 }

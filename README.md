@@ -2,7 +2,7 @@
 
 A focused internet-radio terminal player derived from Spotatui. This fork contains no Spotify client, Spotify authentication flow, Spotify playback backend, YouTube integration, or YouTube downloader.
 
-The installed command remains `spotatui` so existing desktop entries, MPRIS integrations, and the Omarchy bar plugin continue to work.
+The installed command is `degen-radio`.
 
 ## Features
 
@@ -29,14 +29,21 @@ cargo install --path . --force
 
 | Key | Action |
 |---|---|
-| `j` / `Down` | Next station |
-| `k` / `Up` | Previous station |
+| `j` / `Down` | Next station in the focused panel |
+| `k` / `Up` | Previous station in the focused panel |
+| `Left` / `h` | Focus saved stations |
+| `Right` / `l` | Focus directory results |
 | `Enter` | Play selected station |
-| `/` | Search radio-browser.info |
+| `s` / `/` | Focus station search |
+| `f` | Add selected search result to favorites |
+| `d` / `D` | Remove selected station from favorites |
+| `r` | Focus saved stations |
+| `Esc` | Focus saved stations, then quit |
 | `Space` | Pause or resume |
 | `+` / `-` | Adjust volume |
-| `s` | Stop |
-| `q` / `Esc` | Quit |
+| `x` | Stop |
+| `q` | Quit |
+| Mouse click | Focus search, saved stations, or directory results |
 
 ## Station storage
 
@@ -49,20 +56,22 @@ behavior:
       url: https://ice1.somafm.com/groovesalad-128-mp3
 ```
 
-It also reads saved stations from `$XDG_STATE_HOME/spotatui/state.yml` (normally `~/.local/state/spotatui/state.yml`) to preserve existing radio favorites.
+It prefers `$XDG_STATE_HOME/degen-radio/state.yml` and falls back to the previous `~/.local/state/spotatui/state.yml` location so existing radio favorites are preserved.
+
+Favorites added from search are written to `$XDG_STATE_HOME/degen-radio/state.yml` and immediately become available to the Omarchy tray plugin.
 
 ## External control
 
 List saved stations as JSON:
 
 ```bash
-spotatui radio list --json
+degen-radio radio list --json
 ```
 
 Ask the running player to switch stations through MPRIS:
 
 ```bash
-spotatui radio play https://ice1.somafm.com/groovesalad-128-mp3
+degen-radio radio play https://ice1.somafm.com/groovesalad-128-mp3
 ```
 
 Repository: <https://github.com/ethereumdegen/degen-radio>

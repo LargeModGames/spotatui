@@ -6,7 +6,7 @@
 cargo check
 cargo test
 cargo run
-spotatui radio list --json
+degen-radio radio list --json
 ```
 
 ## Architecture
@@ -17,6 +17,6 @@ spotatui radio list --json
 - `src/radio_app/player.rs`: bounded decoded-audio output engine.
 - `src/radio_app/mpris.rs`: Linux MPRIS server and OpenUri client.
 - `src/radio_app/tui.rs`: terminal rendering, input, playback state, and MPRIS routing.
-- `src/radio_app/cli.rs`: `spotatui radio list|play` protocol used by the Omarchy plugin.
+- `src/radio_app/cli.rs`: `degen-radio radio list|play` protocol used by the Omarchy plugin.
 
 Keep stdout machine-readable for `radio list --json`. Diagnostics belong on stderr or in the state log.

@@ -614,6 +614,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
+name = "degen-radio"
+version = "0.43.0-radio.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "dirs",
+ "fern",
+ "icy-metadata",
+ "log",
+ "mpris-server",
+ "rand",
+ "ratatui",
+ "reqwest 0.12.28",
+ "rodio",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "stream-download",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2546,31 +2571,6 @@ checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "spotatui"
-version = "0.43.0-radio.1"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm",
- "dirs",
- "fern",
- "icy-metadata",
- "log",
- "mpris-server",
- "rand",
- "ratatui",
- "reqwest 0.12.28",
- "rodio",
- "serde",
- "serde_json",
- "serde_yaml",
- "stream-download",
- "tempfile",
- "tokio",
- "url",
 ]
 
 [[package]]

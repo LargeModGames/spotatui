@@ -46,7 +46,7 @@
         # Build dependencies for rust
         packages = rec {
           default = pkgs.rustPlatform.buildRustPackage {
-            pname = "spotatui";
+            pname = "degen-radio";
             version = "${cargoVersion}-${commitHash}";
             src = self;
 
@@ -58,18 +58,18 @@
               description = "An internet-radio terminal player with MPRIS control";
               homepage = "https://github.com/ethereumdegen/degen-radio";
               license = licenses.mit;
-              mainProgram = "spotatui";
+              mainProgram = "degen-radio";
             };
           };
-          # Alias to reference it with .spotatui instead of default
-          spotatui = self.packages.${system}.default;
+          # Alias to reference it with .degen-radio instead of default
+          degen-radio = self.packages.${system}.default;
         };
 
         # Execute with `nix run github:ethereumdegen/degen-radio`
         apps = {
           default = {
             type = "app";
-            program = "${self.packages.${system}.default}/bin/spotatui";
+            program = "${self.packages.${system}.default}/bin/degen-radio";
           };
         };
 

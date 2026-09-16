@@ -28,16 +28,16 @@ pub async fn run_cli() -> Result<()> {
   }
   #[cfg(not(feature = "tui"))]
   Err(anyhow!(
-    "this build has no terminal UI; use `spotatui radio`"
+    "this build has no terminal UI; use `degen-radio radio`"
   ))
 }
 
 fn setup_logging() -> Result<()> {
   let log_dir = dirs::state_dir()
     .context("cannot resolve the user state directory")?
-    .join("spotatui");
+    .join("degen-radio");
   std::fs::create_dir_all(&log_dir)?;
-  let log_file = fern::log_file(log_dir.join("spotatui.log"))?;
+  let log_file = fern::log_file(log_dir.join("degen-radio.log"))?;
   fern::Dispatch::new()
     .level(log::LevelFilter::Info)
     .chain(log_file)

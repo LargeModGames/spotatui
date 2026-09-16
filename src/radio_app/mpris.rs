@@ -40,9 +40,9 @@ impl Manager {
         .expect("failed to create MPRIS runtime");
       let local = tokio::task::LocalSet::new();
       local.block_on(&runtime, async move {
-        let player = match Player::builder("spotatui")
-          .identity("Spotatui Radio")
-          .desktop_entry("spotatui")
+        let player = match Player::builder("degen_radio")
+          .identity("Degen Radio")
+          .desktop_entry("degen-radio")
           .can_play(true)
           .can_pause(true)
           .can_go_next(true)
@@ -161,15 +161,15 @@ pub async fn open_uri(uri: &str) -> Result<()> {
     .context("connecting to the user D-Bus")?;
   let proxy = mpris_server::zbus::Proxy::new(
     &connection,
-    "org.mpris.MediaPlayer2.spotatui",
+    "org.mpris.MediaPlayer2.degen_radio",
     "/org/mpris/MediaPlayer2",
     "org.mpris.MediaPlayer2.Player",
   )
   .await
-  .context("connecting to the running Spotatui MPRIS service")?;
+  .context("connecting to the running Degen Radio MPRIS service")?;
   proxy
     .call_method("OpenUri", &(uri))
     .await
-    .context("requesting radio playback from Spotatui")?;
+    .context("requesting radio playback from Degen Radio")?;
   Ok(())
 }

@@ -101,7 +101,7 @@ pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
   let client = reqwest::Client::builder()
     // radio-browser.info asks clients to identify themselves; icecast servers
     // occasionally reject UA-less requests too.
-    .user_agent(concat!("spotatui/", env!("CARGO_PKG_VERSION")))
+    .user_agent(concat!("degen-radio/", env!("CARGO_PKG_VERSION")))
     .default_headers(headers)
     // Bound the connect phase so a station that never completes the handshake
     // fails fast. Deliberately NO blanket `.timeout()`: the audio body is an

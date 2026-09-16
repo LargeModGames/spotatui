@@ -4,13 +4,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/ethereumdegen/degen-radio/main/install.sh | bash
 #
 # Environment overrides:
-#   SPOTATUI_VERSION      install a specific tag (e.g. v0.40.3); default: latest
-#   SPOTATUI_INSTALL_DIR  where to put the binary; default: $HOME/.local/bin
+#   DEGEN_RADIO_VERSION      install a specific tag; default: latest
+#   DEGEN_RADIO_INSTALL_DIR  where to put the binary; default: $HOME/.local/bin
 set -euo pipefail
 
 REPO="ethereumdegen/degen-radio"
-BINARY="spotatui"
-INSTALL_DIR="${SPOTATUI_INSTALL_DIR:-$HOME/.local/bin}"
+BINARY="degen-radio"
+INSTALL_DIR="${DEGEN_RADIO_INSTALL_DIR:-$HOME/.local/bin}"
 
 # --- pretty output ---------------------------------------------------------
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -30,7 +30,7 @@ if command -v curl >/dev/null 2>&1; then
 elif command -v wget >/dev/null 2>&1; then
   dl() { wget -qO "$2" "$1"; }
 else
-  error "need curl or wget to download spotatui"
+  error "need curl or wget to download degen-radio"
 fi
 
 sha256_of() { # print the sha256 of file $1 using whatever tool is available
@@ -45,18 +45,18 @@ os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
   Linux)  platform_os="linux" ;;
   Darwin) platform_os="macos" ;;
-  *) error "unsupported OS '$os'. Build from source instead: ${BOLD}cargo install --locked spotatui${RESET}" ;;
+  *) error "unsupported OS '$os'. Build from source instead: ${BOLD}cargo install --locked degen-radio${RESET}" ;;
 esac
 case "$arch" in
   x86_64|amd64)  platform_arch="x86_64" ;;
   aarch64|arm64) platform_arch="aarch64" ;;
-  *) error "no prebuilt binary for '$arch'. Build from source instead: ${BOLD}cargo install --locked spotatui${RESET}" ;;
+  *) error "no prebuilt binary for '$arch'. Build from source instead: ${BOLD}cargo install --locked degen-radio${RESET}" ;;
 esac
 asset="${BINARY}-${platform_os}-${platform_arch}.tar.gz"
 
 # --- resolve version / URL -------------------------------------------------
-if [ -n "${SPOTATUI_VERSION:-}" ]; then
-  tag="${SPOTATUI_VERSION#v}"; tag="v${tag}"
+if [ -n "${DEGEN_RADIO_VERSION:-}" ]; then
+  tag="${DEGEN_RADIO_VERSION#v}"; tag="v${tag}"
   base="https://github.com/${REPO}/releases/download/${tag}"
   label="$tag"
 else
@@ -64,11 +64,11 @@ else
   label="latest"
 fi
 
-info "installing ${BOLD}spotatui${RESET} (${label}) for ${platform_os}/${platform_arch}"
+info "installing ${BOLD}degen-radio${RESET} (${label}) for ${platform_os}/${platform_arch}"
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 if ! dl "${base}/${asset}" "${tmp}/${asset}"; then
-  error "could not download ${asset}. That build may not exist yet for this release; try ${BOLD}cargo install --locked spotatui${RESET}"
+  error "could not download ${asset}. That build may not exist yet for this release; try ${BOLD}cargo install --locked degen-radio${RESET}"
 fi
 
 # --- verify checksum (best effort) -----------------------------------------
@@ -110,7 +110,7 @@ add_to_path() {
   esac
   [ -f "$PATH_RC" ] && grep -qF -- "$line" "$PATH_RC" 2>/dev/null && return 0  # already there
   mkdir -p "$(dirname "$PATH_RC")" 2>/dev/null || true
-  { printf '\n# Added by spotatui installer\n'; printf '%s\n' "$line"; } >> "$PATH_RC" 2>/dev/null || return 1
+  { printf '\n# Added by degen-radio installer\n'; printf '%s\n' "$line"; } >> "$PATH_RC" 2>/dev/null || return 1
   return 0
 }
 
@@ -124,7 +124,7 @@ case ":${PATH}:" in
     : # already on PATH, nothing to do
     ;;
   *)
-    if [ -n "${SPOTATUI_NO_MODIFY_PATH:-}" ]; then
+    if [ -n "${DEGEN_RADIO_NO_MODIFY_PATH:-}" ]; then
       manual_path_hint
     elif add_to_path "$INSTALL_DIR"; then
       ok "added ${INSTALL_DIR} to your PATH in ${BOLD}${PATH_RC}${RESET}"

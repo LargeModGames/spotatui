@@ -1,5 +1,5 @@
 [package]
-name = "spotatui"
+name = "degen-radio"
 description = "An internet-radio terminal player with MPRIS control"
 homepage = "https://github.com/ethereumdegen/degen-radio"
 documentation = "https://github.com/ethereumdegen/degen-radio"
@@ -10,7 +10,7 @@ version = "0.43.0-radio.1"
 authors = ["ethereumdegen"]
 edition = "2021"
 license = "MIT"
-default-run = "spotatui"
+default-run = "degen-radio"
 
 [dependencies]
 anyhow = "1.0.102"
@@ -45,13 +45,13 @@ mpris = ["dep:mpris-server"]
 tempfile = "3"
 
 [lib]
-name = "spotatui"
+name = "degen_radio"
 path = "src/lib.rs"
 
 [[bin]]
 bench = false
-path = "src/bin/spotatui.rs"
-name = "spotatui"
+path = "src/bin/degen-radio.rs"
+name = "degen-radio"
 
 [profile.release]
 codegen-units = 1
@@ -67,6 +67,6 @@ depends = "$auto"
 section = "sound"
 priority = "optional"
 assets = [
-  ["target/release/spotatui", "usr/bin/", "755"],
-  ["README.md", "usr/share/doc/spotatui/README", "644"],
+  ["target/release/degen-radio", "usr/bin/", "755"],
+  ["README.md", "usr/share/doc/degen-radio/README", "644"],
 ]

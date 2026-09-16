@@ -28,7 +28,7 @@ pub async fn search(query: &str) -> Result<Vec<Station>> {
   }
 
   let client = reqwest::Client::builder()
-    .user_agent(concat!("spotatui/", env!("CARGO_PKG_VERSION")))
+    .user_agent(concat!("degen-radio/", env!("CARGO_PKG_VERSION")))
     .timeout(TIMEOUT)
     .build()
     .context("building radio directory client")?;

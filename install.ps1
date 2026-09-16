@@ -5,15 +5,15 @@
   irm https://raw.githubusercontent.com/ethereumdegen/degen-radio/main/install.ps1 | iex
 
   Environment overrides:
-    SPOTATUI_VERSION        install a specific tag (e.g. v0.40.3); default: latest
-    SPOTATUI_INSTALL_DIR    where to put the binary; default: %LOCALAPPDATA%\spotatui\bin
-    SPOTATUI_NO_MODIFY_PATH set to any value to skip updating your user PATH
+    DEGEN_RADIO_VERSION        install a specific tag; default: latest
+    DEGEN_RADIO_INSTALL_DIR    where to put the binary; default: %LOCALAPPDATA%\degen-radio\bin
+    DEGEN_RADIO_NO_MODIFY_PATH set to any value to skip updating your user PATH
 #>
 $ErrorActionPreference = 'Stop'
 
 $Repo   = 'ethereumdegen/degen-radio'
-$Binary = 'spotatui'
-$InstallDir = if ($env:SPOTATUI_INSTALL_DIR) { $env:SPOTATUI_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'spotatui\bin' }
+$Binary = 'degen-radio'
+$InstallDir = if ($env:DEGEN_RADIO_INSTALL_DIR) { $env:DEGEN_RADIO_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'degen-radio\bin' }
 
 function Info($m) { Write-Host "· $m" -ForegroundColor DarkGray }
 function Ok($m)   { Write-Host "√ $m" -ForegroundColor Green }
@@ -26,14 +26,14 @@ if ($arch -ne 'AMD64') {
   if ($arch -eq 'ARM64') {
     Warn 'No native ARM64 Windows build yet; installing the x64 build (runs under emulation).'
   } else {
-    Fail "Unsupported architecture '$arch'. Build from source instead: cargo install --locked spotatui"
+    Fail "Unsupported architecture '$arch'. Build from source instead: cargo install --locked degen-radio"
   }
 }
 $asset = "$Binary-windows-x86_64.zip"
 
 # --- resolve version / URL -------------------------------------------------
-if ($env:SPOTATUI_VERSION) {
-  $tag = 'v' + ($env:SPOTATUI_VERSION -replace '^v', '')
+if ($env:DEGEN_RADIO_VERSION) {
+  $tag = 'v' + ($env:DEGEN_RADIO_VERSION -replace '^v', '')
   $base = "https://github.com/$Repo/releases/download/$tag"
   $label = $tag
 } else {
@@ -41,16 +41,16 @@ if ($env:SPOTATUI_VERSION) {
   $label = 'latest'
 }
 
-Info "installing spotatui ($label) for windows/x86_64"
+Info "installing degen-radio ($label) for windows/x86_64"
 
-$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("spotatui-" + [System.Guid]::NewGuid().ToString('N'))
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("degen-radio-" + [System.Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 try {
   $zip = Join-Path $tmp $asset
   try {
     Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip -UseBasicParsing
   } catch {
-    Fail "could not download $asset. That build may not exist yet for this release; try: cargo install --locked spotatui"
+    Fail "could not download $asset. That build may not exist yet for this release; try: cargo install --locked degen-radio"
   }
 
   # --- verify checksum (best effort) --------------------------------------
@@ -82,7 +82,7 @@ try {
   # --- add to user PATH ---------------------------------------------------
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if (($userPath -split ';') -notcontains $InstallDir) {
-    if ($env:SPOTATUI_NO_MODIFY_PATH) {
+    if ($env:DEGEN_RADIO_NO_MODIFY_PATH) {
       Warn "$InstallDir is not on your PATH. Add it for this session with:"
       Write-Host "    `$env:Path = `"$InstallDir;`$env:Path`""
     } else {

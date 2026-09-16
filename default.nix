@@ -1,7 +1,7 @@
 { pkgs ? import <nixpkgs> {} }:
 
   pkgs.rustPlatform.buildRustPackage rec {
-    pname = "spotatui";
+    pname = "degen-radio";
     version = "0.43.0-radio.1";
 
   src = pkgs.lib.cleanSource ./.;
@@ -32,14 +32,14 @@
       pkgs.dbus
       pkgs.pipewire
     ]}" \
-    $out/bin/spotatui
+    $out/bin/degen-radio
   '';
 
   meta = with pkgs.lib; {
     description = "An internet-radio terminal player with MPRIS control";
     homepage = "https://github.com/ethereumdegen/degen-radio";
     license = licenses.mit;
-    mainProgram = "spotatui";
+    mainProgram = "degen-radio";
     platforms = platforms.linux;
   };
 }

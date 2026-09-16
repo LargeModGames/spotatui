@@ -5,7 +5,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::path::PathBuf;
 
 pub fn build() -> Command {
-  Command::new("spotatui")
+  Command::new("degen-radio")
     .version(env!("CARGO_PKG_VERSION"))
     .author(env!("CARGO_PKG_AUTHORS"))
     .about("Internet radio for the terminal")
@@ -18,7 +18,7 @@ pub fn build() -> Command {
     )
     .subcommand(
       Command::new("radio")
-        .about("Lists stations or controls a running Spotatui instance")
+        .about("Lists stations or controls a running Degen Radio instance")
         .subcommand_required(true)
         .subcommand(
           Command::new("list")

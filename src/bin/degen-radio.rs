@@ -1,10 +1,10 @@
 use anyhow::Result;
 
-// macOS requires spotatui to run on the main thread for media keys.
+// macOS requires degen-radio to run on the main thread for media keys.
 #[cfg(target_os = "macos")]
 #[tokio::main]
 async fn main() -> Result<()> {
-  spotatui::run_cli().await
+  degen_radio::run_cli().await
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -21,7 +21,7 @@ fn main() -> Result<()> {
         .enable_all()
         .build()
         .expect("failed to build the tokio runtime")
-        .block_on(spotatui::run_cli())
+        .block_on(degen_radio::run_cli())
     })?;
   match handle.join() {
     Ok(result) => result,

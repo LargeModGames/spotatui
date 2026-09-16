@@ -1,15 +1,18 @@
-use super::config::Station;
+use super::config::{self, Station};
 use super::directory;
 use super::mpris;
 use super::{spawn_tune, LocalPlayer, PreparedTune, Session, TuneResult};
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+  self, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent,
+  KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
   disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -22,12 +25,22 @@ use tokio::sync::mpsc;
 
 enum UiEvent {
   Key(KeyEvent),
+  Mouse(MouseEvent),
   Search(Result<Vec<Station>, String>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Panel {
+  Saved,
+  Results,
 }
 
 pub(super) struct State {
   stations: Vec<Station>,
-  selected: usize,
+  saved_stations: Vec<Station>,
+  saved_selected: usize,
+  result_selected: usize,
+  active_panel: Panel,
   volume: u8,
   status: String,
   search_input: Option<String>,
@@ -35,18 +48,24 @@ pub(super) struct State {
   session: Option<Session>,
   generation: u64,
   last_title: Option<String>,
+  search_area: Rect,
+  saved_area: Rect,
+  results_area: Rect,
 }
 
 impl State {
   pub(super) fn new(stations: Vec<Station>, volume: u8) -> Self {
     let status = if stations.is_empty() {
-      "No saved stations. Press / to search the radio directory.".to_owned()
+      "No saved stations. Press S to search for a station.".to_owned()
     } else {
-      "Enter play  / search  Space pause  +/- volume  q quit".to_owned()
+      "S Search stations  Enter Play  F Favorite  Space Pause  Q Quit".to_owned()
     };
     Self {
-      stations,
-      selected: 0,
+      stations: Vec::new(),
+      saved_stations: stations,
+      saved_selected: 0,
+      result_selected: 0,
+      active_panel: Panel::Saved,
       volume,
       status,
       search_input: None,
@@ -54,11 +73,32 @@ impl State {
       session: None,
       generation: 0,
       last_title: None,
+      search_area: Rect::default(),
+      saved_area: Rect::default(),
+      results_area: Rect::default(),
     }
   }
 
   fn selected_station(&self) -> Option<Station> {
-    self.stations.get(self.selected).cloned()
+    match self.active_panel {
+      Panel::Saved => self.saved_stations.get(self.saved_selected),
+      Panel::Results => self.stations.get(self.result_selected),
+    }
+    .cloned()
+  }
+
+  fn selected_is_saved(&self) -> bool {
+    self.selected_station().is_some_and(|selected| {
+      self
+        .saved_stations
+        .iter()
+        .any(|station| station.url == selected.url)
+    })
+  }
+
+  fn show_saved_stations(&mut self) {
+    self.active_panel = Panel::Saved;
+    self.status = "Saved stations. Press S to search for a station.".to_owned();
   }
 
   fn now_playing(&self) -> Option<String> {
@@ -85,7 +125,7 @@ pub(super) async fn run(
 
   let result = async {
     loop {
-      terminal.draw(|frame| draw(frame, &state))?;
+      terminal.draw(|frame| draw(frame, &mut state))?;
       tokio::select! {
         _ = tick.tick() => {
           let title = state.now_playing();
@@ -108,15 +148,18 @@ pub(super) async fn run(
               break;
             }
           }
+          UiEvent::Mouse(mouse) => handle_mouse(mouse, &mut state),
           UiEvent::Search(result) => {
             state.searching = false;
+            state.search_input = None;
             match result {
               Ok(stations) if stations.is_empty() => state.status = "No stations found.".to_owned(),
               Ok(stations) => {
                 let count = stations.len();
                 state.stations = stations;
-                state.selected = 0;
-                state.status = format!("Found {count} stations. Enter plays the selection.");
+                state.result_selected = 0;
+                state.active_panel = Panel::Results;
+                state.status = format!("Found {count} stations. Enter plays; F adds a favorite.");
               }
               Err(message) => state.status = message,
             }
@@ -139,13 +182,19 @@ pub(super) async fn run(
 fn open_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
   enable_raw_mode().context("enabling terminal raw mode")?;
   let mut stdout = io::stdout();
-  execute!(stdout, EnterAlternateScreen).context("entering alternate screen")?;
+  execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+    .context("entering alternate screen")?;
   Terminal::new(CrosstermBackend::new(stdout)).context("creating terminal")
 }
 
 fn close_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
   disable_raw_mode().context("disabling terminal raw mode")?;
-  execute!(terminal.backend_mut(), LeaveAlternateScreen).context("leaving alternate screen")?;
+  execute!(
+    terminal.backend_mut(),
+    DisableMouseCapture,
+    LeaveAlternateScreen
+  )
+  .context("leaving alternate screen")?;
   terminal.show_cursor().context("showing cursor")
 }
 
@@ -153,21 +202,28 @@ fn spawn_input_thread(running: Arc<AtomicBool>, tx: mpsc::UnboundedSender<UiEven
   std::thread::spawn(move || {
     while running.load(Ordering::Relaxed) {
       if event::poll(Duration::from_millis(100)).unwrap_or(false) {
-        if let Ok(TerminalEvent::Key(key)) = event::read() {
-          let _ = tx.send(UiEvent::Key(key));
+        match event::read() {
+          Ok(TerminalEvent::Key(key)) => {
+            let _ = tx.send(UiEvent::Key(key));
+          }
+          Ok(TerminalEvent::Mouse(mouse)) => {
+            let _ = tx.send(UiEvent::Mouse(mouse));
+          }
+          _ => {}
         }
       }
     }
   });
 }
 
-fn draw(frame: &mut ratatui::Frame<'_>, state: &State) {
+fn draw(frame: &mut ratatui::Frame<'_>, state: &mut State) {
   let area = frame.area();
   let chunks = Layout::default()
     .direction(Direction::Vertical)
     .constraints([
       Constraint::Length(3),
-      Constraint::Min(4),
+      Constraint::Length(3),
+      Constraint::Min(7),
       Constraint::Length(3),
     ])
     .split(area);
@@ -180,7 +236,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &State) {
         .now_playing()
         .unwrap_or_else(|| format!("LIVE — {}", session.station.name))
     })
-    .unwrap_or_else(|| "Spotatui Radio".to_owned());
+    .unwrap_or_else(|| "Degen Radio".to_owned());
   frame.render_widget(
     Paragraph::new(Line::styled(
       title,
@@ -188,38 +244,140 @@ fn draw(frame: &mut ratatui::Frame<'_>, state: &State) {
         .fg(Color::Green)
         .add_modifier(Modifier::BOLD),
     ))
-    .block(Block::default().borders(Borders::ALL)),
+    .block(Block::default().borders(Borders::ALL).title("Now Playing")),
     chunks[0],
   );
 
-  let items = state
-    .stations
+  state.search_area = chunks[1];
+  let search_text = match &state.search_input {
+    Some(input) => format!(
+      "{input}{}",
+      if state.searching {
+        "  Searching…"
+      } else {
+        "_"
+      }
+    ),
+    None => "Click here or press S to search by station name".to_owned(),
+  };
+  let search_style = if state.search_input.is_some() {
+    Style::default()
+      .fg(Color::Cyan)
+      .add_modifier(Modifier::BOLD)
+  } else {
+    Style::default()
+  };
+  frame.render_widget(
+    Paragraph::new(search_text).style(search_style).block(
+      Block::default()
+        .borders(Borders::ALL)
+        .title("Search Radio Directory"),
+    ),
+    state.search_area,
+  );
+
+  let body = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+    .split(chunks[2]);
+  state.saved_area = body[0];
+  state.results_area = body[1];
+
+  let saved_items = state
+    .saved_stations
     .iter()
-    .map(|station| ListItem::new(station.name.clone()))
+    .map(|station| ListItem::new(format!("♥ {}", station.name)))
     .collect::<Vec<_>>();
-  let list = List::new(items)
-    .block(Block::default().borders(Borders::ALL).title("Stations"))
+  let saved_border = if state.active_panel == Panel::Saved {
+    Style::default().fg(Color::Cyan)
+  } else {
+    Style::default()
+  };
+  let saved_list = List::new(saved_items)
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .border_style(saved_border)
+        .title("Saved Radio Stations — D: unfavorite  →: results"),
+    )
     .highlight_symbol("▶ ")
     .highlight_style(
       Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD),
     );
-  let mut list_state =
-    ListState::default().with_selected((!state.stations.is_empty()).then_some(state.selected));
-  frame.render_stateful_widget(list, chunks[1], &mut list_state);
+  let mut saved_state = ListState::default().with_selected(
+    (state.active_panel == Panel::Saved && !state.saved_stations.is_empty())
+      .then_some(state.saved_selected),
+  );
+  frame.render_stateful_widget(saved_list, state.saved_area, &mut saved_state);
 
-  let footer = if let Some(input) = &state.search_input {
-    format!(
-      "Search: {input}{}",
-      if state.searching { " …" } else { "_" }
-    )
+  let results_border = if state.active_panel == Panel::Results {
+    Style::default().fg(Color::Cyan)
   } else {
-    format!("{}  |  Volume {}%", state.status, state.volume)
+    Style::default()
   };
+  if state.stations.is_empty() {
+    frame.render_widget(
+      Paragraph::new(
+        "Find stations from the Radio Browser directory.\n\n\
+         1. Click the search box or press S\n\
+         2. Type a station name and press Enter\n\
+         3. Select a result with ↑/↓ or the mouse\n\
+         4. Press Enter to play, F to favorite, or D to unfavorite",
+      )
+      .block(
+        Block::default()
+          .borders(Borders::ALL)
+          .border_style(results_border)
+          .title("Directory Results — ←: saved stations"),
+      ),
+      state.results_area,
+    );
+  } else {
+    let result_items = state
+      .stations
+      .iter()
+      .map(|station| {
+        let favorite = state
+          .saved_stations
+          .iter()
+          .any(|saved| saved.url == station.url);
+        ListItem::new(format!(
+          "{}{}",
+          if favorite { "♥ " } else { "📻 " },
+          station.name
+        ))
+      })
+      .collect::<Vec<_>>();
+    let results = List::new(result_items)
+      .block(
+        Block::default()
+          .borders(Borders::ALL)
+          .border_style(results_border)
+          .title("Directory Results — Enter: play  F: favorite  D: unfavorite  ←: saved"),
+      )
+      .highlight_symbol("▶ ")
+      .highlight_style(
+        Style::default()
+          .fg(Color::Cyan)
+          .add_modifier(Modifier::BOLD),
+      );
+    let mut result_state = ListState::default().with_selected(
+      (state.active_panel == Panel::Results && !state.stations.is_empty())
+        .then_some(state.result_selected),
+    );
+    frame.render_stateful_widget(results, state.results_area, &mut result_state);
+  }
+
+  let footer = format!("{}  |  Volume {}%", state.status, state.volume);
   frame.render_widget(
-    Paragraph::new(footer).block(Block::default().borders(Borders::ALL)),
-    chunks[2],
+    Paragraph::new(footer).block(
+      Block::default()
+        .borders(Borders::ALL)
+        .title("S Search  ←/→ Focus  Enter Play  F Favorite  D Unfavorite  Q Quit"),
+    ),
+    chunks[3],
   );
 }
 
@@ -261,23 +419,128 @@ async fn handle_key(
   }
 
   match key.code {
-    KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
+    KeyCode::Char('q') => return Ok(true),
+    KeyCode::Esc if state.active_panel == Panel::Results => state.show_saved_stations(),
+    KeyCode::Esc => return Ok(true),
+    KeyCode::Left | KeyCode::Char('h') => state.active_panel = Panel::Saved,
+    KeyCode::Right | KeyCode::Char('l') if !state.stations.is_empty() => {
+      state.active_panel = Panel::Results
+    }
     KeyCode::Up | KeyCode::Char('k') => select_previous(state),
     KeyCode::Down | KeyCode::Char('j') => select_next(state),
     KeyCode::Enter => play_selected(state, player, tune_tx),
-    KeyCode::Char('/') => state.search_input = Some(String::new()),
+    KeyCode::Char('/') | KeyCode::Char('s') => state.search_input = Some(String::new()),
+    KeyCode::Char('f') | KeyCode::Char('F') => favorite_selected(state),
+    KeyCode::Char('d') | KeyCode::Char('D') => unfavorite_selected(state),
+    KeyCode::Char('r') => state.show_saved_stations(),
     KeyCode::Char(' ') => toggle(state, player, mpris),
     KeyCode::Char('+') | KeyCode::Char('=') => {
       set_volume(state, player, state.volume.saturating_add(5), mpris)
     }
     KeyCode::Char('-') => set_volume(state, player, state.volume.saturating_sub(5), mpris),
-    KeyCode::Char('s') => {
+    KeyCode::Char('x') => {
       stop(state, player);
       mpris.set_stopped();
     }
     _ => {}
   }
   Ok(false)
+}
+
+fn favorite_selected(state: &mut State) {
+  let Some(station) = state.selected_station() else {
+    return;
+  };
+  if state.selected_is_saved() {
+    state.status = format!("{} is already a favorite.", station.name);
+    return;
+  }
+
+  let mut favorites = state.saved_stations.clone();
+  favorites.push(station.clone());
+  match config::save_favorites(&favorites, state.volume) {
+    Ok(()) => {
+      state.saved_stations = favorites;
+      state.status = format!("Added {} to favorites.", station.name);
+    }
+    Err(error) => state.status = format!("Could not save favorite: {error:#}"),
+  }
+}
+
+fn unfavorite_selected(state: &mut State) {
+  let Some(station) = state.selected_station() else {
+    return;
+  };
+  let Some(index) = state
+    .saved_stations
+    .iter()
+    .position(|saved| saved.url == station.url)
+  else {
+    state.status = format!("{} is not a favorite.", station.name);
+    return;
+  };
+
+  let mut favorites = state.saved_stations.clone();
+  favorites.remove(index);
+  match config::save_favorites(&favorites, state.volume) {
+    Ok(()) => {
+      state.saved_stations = favorites;
+      state.saved_selected = state
+        .saved_selected
+        .min(state.saved_stations.len().saturating_sub(1));
+      state.status = format!("Removed {} from favorites.", station.name);
+    }
+    Err(error) => state.status = format!("Could not remove favorite: {error:#}"),
+  }
+}
+
+fn handle_mouse(mouse: MouseEvent, state: &mut State) {
+  match mouse.kind {
+    MouseEventKind::Down(MouseButton::Left) => {
+      if contains(state.search_area, mouse.column, mouse.row) {
+        state.search_input = Some(String::new());
+      } else if contains(state.saved_area, mouse.column, mouse.row) {
+        state.active_panel = Panel::Saved;
+        if let Some(index) = clicked_row(state.saved_area, mouse.row, state.saved_stations.len()) {
+          state.saved_selected = index;
+        }
+      } else if contains(state.results_area, mouse.column, mouse.row) {
+        state.active_panel = Panel::Results;
+        if let Some(index) = clicked_row(state.results_area, mouse.row, state.stations.len()) {
+          state.result_selected = index;
+        }
+      }
+    }
+    MouseEventKind::ScrollDown => {
+      focus_mouse_panel(mouse, state);
+      select_next(state);
+    }
+    MouseEventKind::ScrollUp => {
+      focus_mouse_panel(mouse, state);
+      select_previous(state);
+    }
+    _ => {}
+  }
+}
+
+fn focus_mouse_panel(mouse: MouseEvent, state: &mut State) {
+  if contains(state.saved_area, mouse.column, mouse.row) {
+    state.active_panel = Panel::Saved;
+  } else if contains(state.results_area, mouse.column, mouse.row) {
+    state.active_panel = Panel::Results;
+  }
+}
+
+fn contains(area: Rect, column: u16, row: u16) -> bool {
+  column >= area.x
+    && column < area.x.saturating_add(area.width)
+    && row >= area.y
+    && row < area.y.saturating_add(area.height)
+}
+
+fn clicked_row(area: Rect, row: u16, item_count: usize) -> Option<usize> {
+  let index = row.checked_sub(area.y.saturating_add(1))? as usize;
+  (index < item_count).then_some(index)
 }
 
 fn play_selected(
@@ -386,14 +649,28 @@ fn set_volume(state: &mut State, player: &Arc<LocalPlayer>, percent: u8, mpris: 
 }
 
 fn select_next(state: &mut State) {
-  if !state.stations.is_empty() {
-    state.selected = (state.selected + 1) % state.stations.len();
+  match state.active_panel {
+    Panel::Saved if !state.saved_stations.is_empty() => {
+      state.saved_selected = (state.saved_selected + 1) % state.saved_stations.len();
+    }
+    Panel::Results if !state.stations.is_empty() => {
+      state.result_selected = (state.result_selected + 1) % state.stations.len();
+    }
+    _ => {}
   }
 }
 
 fn select_previous(state: &mut State) {
-  if !state.stations.is_empty() {
-    state.selected = (state.selected + state.stations.len() - 1) % state.stations.len();
+  match state.active_panel {
+    Panel::Saved if !state.saved_stations.is_empty() => {
+      state.saved_selected =
+        (state.saved_selected + state.saved_stations.len() - 1) % state.saved_stations.len();
+    }
+    Panel::Results if !state.stations.is_empty() => {
+      state.result_selected =
+        (state.result_selected + state.stations.len() - 1) % state.stations.len();
+    }
+    _ => {}
   }
 }
 
@@ -445,18 +722,24 @@ fn handle_mpris(
         .ok()
         .is_some_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
       {
-        let station = state
-          .stations
+        let station = if let Some(index) = state
+          .saved_stations
           .iter()
           .position(|station| station.url == url)
-          .map(|index| {
-            state.selected = index;
-            state.stations[index].clone()
-          })
-          .unwrap_or_else(|| Station {
+        {
+          state.active_panel = Panel::Saved;
+          state.saved_selected = index;
+          state.saved_stations[index].clone()
+        } else if let Some(index) = state.stations.iter().position(|station| station.url == url) {
+          state.active_panel = Panel::Results;
+          state.result_selected = index;
+          state.stations[index].clone()
+        } else {
+          Station {
             name: url.to_owned(),
             url: url.to_owned(),
-          });
+          }
+        };
         begin_tune(state, player, tx, station);
       } else {
         state.status = "MPRIS rejected a non-HTTP radio URI.".to_owned();

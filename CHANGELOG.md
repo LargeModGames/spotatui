@@ -6,4 +6,6 @@
 - Removed the Spotify playback, Web API, authentication, and login subsystems.
 - Removed the YouTube source and downloader integration.
 - Retained internet-radio playback, saved stations, directory search, ICY metadata, and MPRIS controls.
-- Added `spotatui radio list --json` and `spotatui radio play URL` for desktop integrations.
+- Added `degen-radio radio list --json` and `degen-radio radio play URL` for desktop integrations.
+- Restored the Spotatui-style radio page with a persistent directory search box, saved-station and result panels, mouse focus, and left/right panel navigation.
+- Added persistent favorite and unfavorite actions from either station panel.

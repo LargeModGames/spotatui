@@ -594,7 +594,7 @@ fn open_sink() -> Result<Sink> {
   let (keepalive_tx, keepalive_rx) = mpsc::channel::<()>();
 
   std::thread::Builder::new()
-    .name("spotatui-local-audio".to_string())
+    .name("degen-radio-audio".to_string())
     .spawn(move || {
       // `open_default_sink()` would install rodio's `eprintln!` callback and
       // pick the device itself, so build the same thing by hand: the default
