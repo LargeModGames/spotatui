@@ -1,5 +1,13 @@
 use anyhow::Result;
 
+// macOS requires spotatui to run on the main thread for media keys.
+#[cfg(target_os = "macos")]
+#[tokio::main]
+async fn main() -> Result<()> {
+  spotatui::run_cli().await
+}
+
+#[cfg(not(target_os = "macos"))]
 fn main() -> Result<()> {
   // Debug builds overflow the 1 MiB Windows main-thread stack: CLI mode
   // awaits the whole network future chain inline under `block_on`, and the

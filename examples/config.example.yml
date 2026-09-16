@@ -30,6 +30,12 @@ behavior:
   small_terminal_width: 150  # wide-layout breakpoint (columns)
   small_terminal_height: 45  # margin breakpoint (rows)
 
+  # --- Cover art (requires the cover-art build feature) ---
+  # draw_cover_art_forced: true # allow art on basic terminals
+  # cover_art_dither: true       # optional two-color theme-aware style
+  # cover_art_dither_algorithm: stucki   # default; stucki | bayer8x8 | atkinson
+  # cover_art_dither_pixel_scale: 1      # 1..=3; one output pixel/dot at 1
+
   # --- Icons ---
   # Fixed-cell icons (playing/gauge/episode/sort) must be exactly one terminal
   # column wide; invalid glyphs fall back to the defaults with a warning.
@@ -49,6 +55,12 @@ behavior:
   sort_ascending_icon: "↑"
   sort_descending_icon: "↓"
   list_highlight_icon: "▶"
+
+# The dither accent is independent of the preset. Omit or use auto to follow
+# the live playbar progress color, including adaptive-theme changes.
+# theme:
+#   cover_art_dither_color: auto
+#   cover_art_dither_color: '120, 160, 220' # exact RGB override
 
   # --- Playbar button labels (config-only) ---
   # All keys optional; omit (or set "") to keep a button's built-in label.

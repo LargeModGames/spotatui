@@ -108,23 +108,11 @@ impl App {
   /// where the slot cannot exist (slim, or one whose only decoded source is
   /// internet radio, which is never queueable).
   pub fn queue_owns_playback(&self) -> bool {
-    #[cfg(any(
-      feature = "streaming",
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "queue")]
     {
       self.queue_now.is_some()
     }
-    #[cfg(not(any(
-      feature = "streaming",
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    )))]
+    #[cfg(not(feature = "queue"))]
     {
       false
     }
@@ -155,12 +143,7 @@ impl App {
   /// on exactly those four sources: they are the decoded ones a queue item can
   /// name, so a build whose only decoded source is internet radio has no
   /// decoded slot to look up.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   pub fn queue_now_decoded_player(&self) -> Option<&Arc<crate::infra::audio::LocalPlayer>> {
     match self.queue_now.as_ref()? {
       QueueNowPlaying::Decoded(d) => Some(&d.player),
@@ -171,12 +154,7 @@ impl App {
 
   /// Take the queue slot, returning its player when it was a decoded track (so
   /// the caller can stop it). Clears [`Self::queue_now`] either way.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   pub fn take_queue_now_decoded_player(&mut self) -> Option<Arc<crate::infra::audio::LocalPlayer>> {
     match self.queue_now.take() {
       Some(QueueNowPlaying::Decoded(d)) => Some(d.player),
@@ -188,33 +166,16 @@ impl App {
   /// persistence to prepend it back onto the saved queue so a mid-queue quit
   /// doesn't lose the in-flight track.
   pub(super) fn queue_now_track(&self) -> Option<&TrackInfo> {
-    #[cfg(any(
-      feature = "streaming",
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "queue")]
     {
       match self.queue_now.as_ref()? {
-        #[cfg(any(
-          feature = "local-files",
-          feature = "subsonic",
-          feature = "qobuz",
-          feature = "youtube"
-        ))]
+        #[cfg(feature = "audio-decode-queue")]
         QueueNowPlaying::Decoded(d) => Some(&d.track),
         #[cfg(feature = "streaming")]
         QueueNowPlaying::Spotify { track } => Some(track),
       }
     }
-    #[cfg(not(any(
-      feature = "streaming",
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    )))]
+    #[cfg(not(feature = "queue"))]
     {
       None
     }
@@ -293,12 +254,7 @@ impl App {
     playing_base62_id: &str,
   ) -> Option<String> {
     let queued_uri = match self.queue_now.as_ref()? {
-      #[cfg(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      ))]
+      #[cfg(feature = "audio-decode-queue")]
       QueueNowPlaying::Decoded(_) => return None,
       QueueNowPlaying::Spotify { track } => track.uri.clone(),
     }?;

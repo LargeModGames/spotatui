@@ -26,12 +26,7 @@ impl App {
   /// active decoded context was suspended under the native queue, or `None` when
   /// no decoded context is suspended. Only one context is ever active, so this
   /// unambiguously describes it.
-  #[cfg(any(
-    feature = "youtube",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "local-files"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   fn suspended_resume(&self) -> Option<(Option<usize>, u64)> {
     match self.queue_suspended.as_ref()? {
       #[cfg(feature = "local-files")]
@@ -65,13 +60,7 @@ impl App {
     if !self.has_persistable_playback() {
       return None;
     }
-    #[cfg(any(
-      feature = "youtube",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "local-files",
-      feature = "internet-radio"
-    ))]
+    #[cfg(feature = "audio-decode")]
     use crate::core::persisted_playback::PersistedPlayback;
     #[cfg(feature = "youtube")]
     if let Some(s) = self.youtube_playback.as_ref() {
@@ -233,12 +222,7 @@ impl App {
   fn has_persistable_playback(&self) -> bool {
     // Mirrors `current_persisted_playback`: a decoded context suspended past
     // its end (resume_index == None) does not persist.
-    #[cfg(any(
-      feature = "youtube",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "local-files"
-    ))]
+    #[cfg(feature = "audio-decode-queue")]
     {
       let context_resumable = !matches!(self.suspended_resume(), Some((None, _)));
       #[cfg(feature = "youtube")]

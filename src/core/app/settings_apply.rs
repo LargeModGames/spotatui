@@ -352,6 +352,26 @@ impl App {
               crate::core::user_config::normalize_playbar_cover_art_size_percent(v);
           }
         }
+        #[cfg(feature = "cover-art")]
+        "behavior.cover_art_dither" => {
+          if let SettingValue::Bool(v) = setting.value {
+            self.user_config.behavior.cover_art_dither = v;
+          }
+        }
+        #[cfg(feature = "cover-art")]
+        "behavior.cover_art_dither_algorithm" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.cover_art_dither_algorithm =
+              crate::core::user_config::normalize_cover_art_dither_algorithm(v).to_string();
+          }
+        }
+        #[cfg(feature = "cover-art")]
+        "behavior.cover_art_dither_pixel_scale" => {
+          if let SettingValue::Number(v) = setting.value {
+            self.user_config.behavior.cover_art_dither_pixel_scale =
+              crate::core::user_config::normalize_cover_art_dither_pixel_scale(v);
+          }
+        }
         // Keybindings
         "keys.back" => {
           if let SettingValue::Key(v) = &setting.value {
@@ -705,6 +725,16 @@ impl App {
             if let Ok(c) = parse_theme_item(v) {
               self.user_config.theme.playbar_progress = c;
               self.user_config.custom_theme.playbar_progress = c;
+            }
+          }
+        }
+        #[cfg(feature = "cover-art")]
+        "theme.cover_art_dither_color" => {
+          if let SettingValue::Color(v) = &setting.value {
+            if v.trim().eq_ignore_ascii_case("auto") || v.trim().is_empty() {
+              self.user_config.cover_art_dither_color = None;
+            } else if let Ok(c) = parse_theme_item(v) {
+              self.user_config.cover_art_dither_color = Some(c);
             }
           }
         }

@@ -7,15 +7,7 @@ impl App {
   /// is unaffected (it stays at the front), so audio continues uninterrupted.
   /// Call only when [`active_queueable_decoded_source`](Self::active_queueable_decoded_source)
   /// holds, so exactly one branch applies.
-  #[cfg_attr(
-    not(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    )),
-    allow(unused_variables)
-  )]
+  #[cfg_attr(not(feature = "audio-decode-queue"), allow(unused_variables))]
   fn apply_decoded_shuffle(&mut self) {
     let on = self.decoded_shuffle;
     // While a track change is in flight (`advancing`), an async `play_index`
@@ -24,6 +16,7 @@ impl App {
     // [`reconcile_decoded_shuffle`](Self::reconcile_decoded_shuffle), driven by
     // the runner tick, applies it once the advance commits.
     #[cfg(feature = "local-files")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.local_playback.as_mut() {
       if !s.advancing {
         s.set_shuffle(on);
@@ -31,6 +24,7 @@ impl App {
       return;
     }
     #[cfg(feature = "subsonic")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.subsonic_playback.as_mut() {
       if !s.advancing {
         s.set_shuffle(on);
@@ -38,6 +32,7 @@ impl App {
       return;
     }
     #[cfg(feature = "youtube")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.youtube_playback.as_mut() {
       if !s.advancing {
         s.set_shuffle(on);
@@ -56,12 +51,7 @@ impl App {
   /// because a track change was in flight. Driven by the runner tick, so it lands
   /// as soon as the advance commits (`advancing` clears). A no-op whenever the
   /// order already matches `decoded_shuffle`, so it is cheap to call every tick.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   pub(crate) fn reconcile_decoded_shuffle(&mut self) {
     // The native queue owns the sink: any per-source struct is a suspended
     // context whose order is reconciled when it resumes, not now.
@@ -70,6 +60,7 @@ impl App {
     }
     let on = self.decoded_shuffle;
     #[cfg(feature = "local-files")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.local_playback.as_mut() {
       if !s.advancing && s.shuffle_backup.is_some() != on {
         s.set_shuffle(on);
@@ -77,6 +68,7 @@ impl App {
       return;
     }
     #[cfg(feature = "subsonic")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.subsonic_playback.as_mut() {
       if !s.advancing && s.shuffle_backup.is_some() != on {
         s.set_shuffle(on);
@@ -84,6 +76,7 @@ impl App {
       return;
     }
     #[cfg(feature = "youtube")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.youtube_playback.as_mut() {
       if !s.advancing && s.shuffle_backup.is_some() != on {
         s.set_shuffle(on);
@@ -107,12 +100,7 @@ impl App {
   /// handler) when the native queue owns playback or no queueable decoded source
   /// is active — the same ownership gate as the MPRIS mode setters, so a
   /// suspended context under the queue is never touched.
-  #[cfg(any(
-    feature = "local-files",
-    feature = "subsonic",
-    feature = "qobuz",
-    feature = "youtube"
-  ))]
+  #[cfg(feature = "audio-decode-queue")]
   pub(crate) fn set_decoded_repeat_from_state(
     &mut self,
     state: rspotify::model::enums::RepeatState,
@@ -138,17 +126,7 @@ impl App {
   /// client's property instead, because reaching this method at all means a
   /// decoded source (radio, or the queue slot) owns playback and the Spotify
   /// context is not what the user is listening to.
-  #[cfg(all(
-    feature = "mpris",
-    target_os = "linux",
-    any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    )
-  ))]
+  #[cfg(all(feature = "mpris", target_os = "linux", feature = "audio-decode",))]
   pub fn set_decoded_shuffle(&mut self, on: bool) -> bool {
     if !self.active_queueable_decoded_source() {
       return false;
@@ -163,17 +141,7 @@ impl App {
   /// Set the decoded repeat mode to an explicit value from an external media
   /// controller (MPRIS). Returns whether a queueable decoded source consumed it
   /// (see [`set_decoded_shuffle`](Self::set_decoded_shuffle)).
-  #[cfg(all(
-    feature = "mpris",
-    target_os = "linux",
-    any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "internet-radio",
-      feature = "youtube"
-    )
-  ))]
+  #[cfg(all(feature = "mpris", target_os = "linux", feature = "audio-decode"))]
   pub fn set_decoded_repeat(&mut self, mode: RepeatMode) -> bool {
     if !self.active_queueable_decoded_source() {
       return false;

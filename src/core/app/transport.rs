@@ -24,12 +24,7 @@ impl App {
   pub fn toggle_playback(&mut self) {
     // The native queue slot owns the sink: toggle its player directly (covers the
     // idle-app case where no per-source context is set).
-    #[cfg(any(
-      feature = "local-files",
-      feature = "subsonic",
-      feature = "qobuz",
-      feature = "youtube"
-    ))]
+    #[cfg(feature = "audio-decode-queue")]
     if let Some(player) = self.queue_now_decoded_player() {
       if player.is_paused() {
         player.resume();

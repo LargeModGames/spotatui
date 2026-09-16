@@ -12,15 +12,7 @@ impl App {
   /// [`crate::infra::queue::resume_index_after_queue`].
   pub(crate) fn suspend_active_decoded_context_for_skip(
     &mut self,
-    #[cfg_attr(
-      not(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      )),
-      allow(unused_variables)
-    )]
+    #[cfg_attr(not(feature = "audio-decode-queue"), allow(unused_variables))]
     cause: crate::infra::queue::SuspendCause,
   ) {
     // `resume_index_after_queue` applies the per-mode wrap/clamp: Repeat All
@@ -28,17 +20,10 @@ impl App {
     // first one rather than reading as exhausted (`None`); Repeat One resumes
     // the *same* track on an auto-advance (a queued song must not consume the
     // repeat) but advances on a manual skip; Off clamps to `None` at the boundary.
-    #[cfg_attr(
-      not(any(
-        feature = "local-files",
-        feature = "subsonic",
-        feature = "qobuz",
-        feature = "youtube"
-      )),
-      allow(unused_variables)
-    )]
+    #[cfg_attr(not(feature = "audio-decode-queue"), allow(unused_variables))]
     let repeat = self.decoded_repeat;
     #[cfg(feature = "local-files")]
+    #[allow(clippy::needless_return)]
     if let Some(local) = self.local_playback.as_mut() {
       let resume_index = crate::infra::queue::resume_index_after_queue(
         local.index,
@@ -54,6 +39,7 @@ impl App {
       return;
     }
     #[cfg(feature = "subsonic")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.subsonic_playback.as_mut() {
       let resume_index =
         crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
@@ -65,6 +51,7 @@ impl App {
       return;
     }
     #[cfg(feature = "youtube")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.youtube_playback.as_mut() {
       let resume_index =
         crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
@@ -76,6 +63,7 @@ impl App {
       return;
     }
     #[cfg(feature = "qobuz")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.qobuz_playback.as_mut() {
       let resume_index =
         crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
@@ -91,6 +79,7 @@ impl App {
       return;
     }
     #[cfg(feature = "internet-radio")]
+    #[allow(clippy::needless_return)]
     if let Some(radio) = self.radio_playback.take() {
       radio.player.stop();
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::Radio {
@@ -104,6 +93,7 @@ impl App {
   /// seekable position, so it is stashed for reconnect like the skip path.
   pub(crate) fn suspend_active_decoded_context_mid_track(&mut self) {
     #[cfg(feature = "local-files")]
+    #[allow(clippy::needless_return)]
     if let Some(local) = self.local_playback.as_mut() {
       let position_ms = local.player.position().as_millis() as u64;
       let index = local.index;
@@ -115,6 +105,7 @@ impl App {
       return;
     }
     #[cfg(feature = "subsonic")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.subsonic_playback.as_mut() {
       let position_ms = s.player.position().as_millis() as u64;
       let index = s.index;
@@ -126,6 +117,7 @@ impl App {
       return;
     }
     #[cfg(feature = "youtube")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.youtube_playback.as_mut() {
       let position_ms = s.player.position().as_millis() as u64;
       let index = s.index;
@@ -137,6 +129,7 @@ impl App {
       return;
     }
     #[cfg(feature = "qobuz")]
+    #[allow(clippy::needless_return)]
     if let Some(s) = self.qobuz_playback.as_mut() {
       let position_ms = s.player.position().as_millis() as u64;
       let index = s.index;

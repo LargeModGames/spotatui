@@ -624,8 +624,14 @@ When no image can be shown the widget draws a centered status line instead ("Loa
 art...", "No cover art for this source", ...). That is what you get when the track has no
 artwork, when the build was compiled without the `cover-art` feature, when
 `behavior.draw_cover_art` is off, or when the terminal has no graphics protocol and
-`behavior.draw_cover_art_forced` is off. Cover art needs a Kitty-, iTerm2- or Sixel-capable
-terminal.
+`behavior.draw_cover_art_forced` is off. A Kitty-, iTerm2- or Sixel-capable terminal shows
+graphics art by default; set `draw_cover_art_forced` for the basic-terminal fallback.
+
+When `behavior.cover_art_dither` is enabled, plugin cover-art widgets use the same optional
+two-color dither style as the playbar and full-screen art view. The accent comes from
+`theme.cover_art_dither_color`, or from the live playbar progress color when that setting is
+`auto`; the widget uses the current theme background for its other color. The mask is made
+from the original decoded image at the widget's output resolution, including for small slots.
 
 #### Keys
 
