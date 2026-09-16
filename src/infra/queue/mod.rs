@@ -411,14 +411,7 @@ pub fn restage(
   Ok(())
 }
 
-/// A queued *decoded* track playing through the shared [`LocalPlayer`] sink
-/// (local file, Subsonic, or YouTube). Kept separate from the per-source
-/// `*_playback` structs so the underlying context is preserved for resume.
-///
-/// Gated on exactly those three sources, not `audio-decode`: they are the ones
-/// [`dispatch::try_play_queued`] can play. Internet radio pulls `audio-decode`
-/// in as well, but a live stream is never a queue item, so a radio-only build
-/// can never construct this.
+/// Aborts a background queue download when dropped.
 #[cfg(feature = "queue-download")]
 pub struct DownloadAbortHandle(pub tokio::task::AbortHandle);
 
@@ -429,6 +422,26 @@ impl Drop for DownloadAbortHandle {
   }
 }
 
+#[cfg(all(test, feature = "queue-download"))]
+#[tokio::test]
+async fn dropping_the_abort_handle_cancels_the_download_task() {
+  let handle = tokio::spawn(async {
+    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+  });
+  let abort_handle = DownloadAbortHandle(handle.abort_handle());
+  drop(abort_handle);
+  let res = handle.await;
+  assert!(res.unwrap_err().is_cancelled());
+}
+
+/// A queued *decoded* track playing through the shared [`LocalPlayer`] sink
+/// (local file, Subsonic, or YouTube). Kept separate from the per-source
+/// `*_playback` structs so the underlying context is preserved for resume.
+///
+/// Gated on exactly those three sources, not `audio-decode`: they are the ones
+/// [`dispatch::try_play_queued`] can play. Internet radio pulls `audio-decode`
+/// in as well, but a live stream is never a queue item, so a radio-only build
+/// can never construct this.
 #[cfg(feature = "audio-decode-queue")]
 pub struct DecodedQueuePlayback {
   /// The output-device sink. Shared (`Arc::ptr_eq`) with the suspended context's
