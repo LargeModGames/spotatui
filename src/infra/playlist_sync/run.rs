@@ -481,12 +481,11 @@ async fn flush_adds<C: SyncClient>(
 ) -> Result<()> {
   let writes = plan(master, on_mirror, matches);
   let rows = add_rows(master, &writes.to_add, resolved);
-  if rows.is_empty() {
-    return Ok(());
+  for chunk in rows.chunks(BATCH) {
+    client.add(uri, chunk).await?;
+    on_mirror.extend(chunk.iter().map(|row| row.key.clone()));
+    *added += chunk.len();
   }
-  client.add(uri, &rows).await?;
-  on_mirror.extend(rows.iter().map(|row| row.key.clone()));
-  *added += rows.len();
   Ok(())
 }
 
@@ -578,6 +577,8 @@ mod tests {
     created: std::sync::Mutex<Vec<String>>,
     /// Playlists this source already has, by exact name.
     existing: BTreeMap<String, String>,
+    /// The add call, counted from one, from which every add fails.
+    fail_add_from: Option<usize>,
   }
 
   impl FakeClient {
@@ -636,6 +637,10 @@ mod tests {
     }
 
     async fn add(&self, _playlist_uri: &str, tracks: &[SyncTrack]) -> Result<()> {
+      let call = self.added.lock().unwrap().len() + 1;
+      if self.fail_add_from.is_some_and(|from| call >= from) {
+        return Err(anyhow!("the mirror refused the write"));
+      }
       self.added.lock().unwrap().push(tracks.to_vec());
       Ok(())
     }
@@ -1140,6 +1145,51 @@ mod tests {
         ("m2".to_string(), "x2".to_string()),
       ])
     );
+  }
+
+  #[tokio::test]
+  async fn a_failed_add_keeps_the_batches_that_landed_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _rx) = test_app();
+    let path = seeded_store(
+      &dir,
+      vec![link_at(
+        "aaa",
+        "Road Trip",
+        "spotify:playlist:1",
+        vec![mirror_at("qobuz:playlist:1", &[])],
+      )],
+    );
+    let master: Vec<SyncTrack> = (1..=25)
+      .map(|n| track(&format!("m{n}"), &format!("Song {n}")))
+      .collect();
+    let found: Vec<(String, SyncTrack)> = (1..=25)
+      .map(|n| {
+        (
+          format!("m{n}"),
+          track(&format!("x{n}"), &format!("Song {n}")),
+        )
+      })
+      .collect();
+    let clients = fake_clients(vec![
+      ("spotify:playlist:1", fake(master)),
+      (
+        "qobuz:playlist:1",
+        FakeClient {
+          hits: found.into_iter().collect(),
+          fail_add_from: Some(2),
+          ..Default::default()
+        },
+      ),
+    ]);
+
+    let report = run_all(&clients, &app, &path, None, false, true).await;
+
+    let mirror = &clients.by_uri["qobuz:playlist:1"];
+    assert_eq!(mirror.added_keys().len(), 1);
+    assert_eq!(report.links[0].added, 10);
+    assert!(report.failed());
+    assert_eq!(saved_mirror(&path, 0, 0).matches.len(), 20);
   }
 
   #[tokio::test]

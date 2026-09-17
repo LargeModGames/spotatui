@@ -1199,7 +1199,7 @@ mod tests {
   #[tokio::test]
   async fn create_playlist_encodes_the_name_and_returns_the_new_id() {
     let (base, server) = serve(vec![("200 OK", CREATE_PLAYLIST)]).await;
-    let id = SubsonicSource::new(base, "u", "p")
+    let id = SubsonicSource::new(base, "u", String::new())
       .create_playlist("Road Trip")
       .await
       .unwrap();
@@ -1214,7 +1214,7 @@ mod tests {
   #[tokio::test]
   async fn add_tracks_sends_one_song_id_to_add_per_track() {
     let (base, server) = serve(vec![("200 OK", UPDATE_OK)]).await;
-    SubsonicSource::new(base, "u", "p")
+    SubsonicSource::new(base, "u", String::new())
       .add_tracks(
         "subsonic:playlist:7",
         &["subsonic:track:101".to_string(), "102".to_string()],
@@ -1232,7 +1232,7 @@ mod tests {
   #[tokio::test]
   async fn remove_tracks_reads_the_playlist_then_removes_the_highest_index_first() {
     let (base, server) = serve(vec![("200 OK", DUPLICATE_ENTRIES), ("200 OK", UPDATE_OK)]).await;
-    SubsonicSource::new(base, "u", "p")
+    SubsonicSource::new(base, "u", String::new())
       .remove_tracks("subsonic:playlist:7", &["subsonic:track:101".to_string()])
       .await
       .unwrap();
@@ -1247,7 +1247,7 @@ mod tests {
 
   #[tokio::test]
   async fn adding_no_tracks_makes_no_request() {
-    SubsonicSource::new("http://127.0.0.1:1", "u", "p")
+    SubsonicSource::new("http://127.0.0.1:1", "u", String::new())
       .add_tracks("subsonic:playlist:7", &[])
       .await
       .unwrap();
@@ -1256,7 +1256,7 @@ mod tests {
   #[tokio::test]
   async fn sync_playlist_tracks_takes_the_first_isrc() {
     let (base, server) = serve(vec![("200 OK", SYNC_PLAYLIST)]).await;
-    let tracks = SubsonicSource::new(base, "u", "p")
+    let tracks = SubsonicSource::new(base, "u", String::new())
       .sync_playlist_tracks("subsonic:playlist:7")
       .await
       .unwrap();
@@ -1279,7 +1279,7 @@ mod tests {
   #[tokio::test]
   async fn sync_search_asks_for_songs_only() {
     let (base, server) = serve(vec![("200 OK", SEARCH3)]).await;
-    let found = SubsonicSource::new(base, "u", "p")
+    let found = SubsonicSource::new(base, "u", String::new())
       .sync_search("the beatles yesterday", 10)
       .await
       .unwrap();

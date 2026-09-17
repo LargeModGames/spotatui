@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Playlist sync across sources**: link one playlist as the master and mirror it onto Spotify, Qobuz, Subsonic or YouTube. Press `m` on a sidebar playlist and pick the mirror source: a playlist with the master's name is adopted there when you have one, or created. Every start syncs the changes, `s` on the new Playlist sync screen runs it now, and `spotatui sync [--link NAME] [--dry-run]` does the same from a shell. Tracks are matched by ISRC first, then by title, artist and duration; a YouTube mirror is filled through `yt-dlp` searches, so its first run takes minutes. The master wins: additions land on every mirror in master order, removals follow, and anything on a mirror that matches nothing in the master is never touched. Links and their match caches live in `playlist_sync.yml` in the state directory. See `docs/playlist-sync.md`.
+
 - **Optional theme-aware cover-art dithering** (`cover-art` builds): Enable it in Settings or with `behavior.cover_art_dither: true` to render two-color art in the playbar, full-screen view, and plugin widgets. Stucki is the default algorithm; Bayer 8×8 and Atkinson are also available, with a pixel scale from 1 to 3. The accent follows the current theme by default, or can be set independently with `theme.cover_art_dither_color`. Terminal cover-art requirements still apply.
 
 ### Fixed

@@ -28,8 +28,10 @@ The sync is one way. On every run:
 
 - Tracks added to the master are appended to each mirror, in master order.
 - Tracks removed from the master are removed from each mirror.
-- A track the sync never added is never touched. Add what you like to a mirror
-  by hand and the sync leaves it alone.
+- A row the sync paired with a master track, or added itself, follows the
+  master from then on: when the track leaves the master, that row goes. A row
+  that matches nothing in the master is never touched, so add what you like to
+  a mirror by hand and the sync leaves it alone.
 - A track the sync did add and you then deleted on the mirror comes back on the
   next run. The master is the truth.
 
@@ -91,8 +93,9 @@ server configured. Enter looks for a playlist of yours with the master's name
 on that source and adopts it, or creates an empty one when there is none;
 then it records the link and starts a run. An adopted playlist keeps every
 track it already has: the run pairs them with the master by ISRC, title and
-duration before it searches anything, adds what is missing, and only ever
-removes tracks the sync itself added. Enter also opens the sync screen, where the run's progress shows. Press
+duration before it searches anything, adds what is missing, and leaves every
+row that matches nothing in the master alone. A paired row follows the master
+from then on, like a row the sync added. Enter also opens the sync screen, where the run's progress shows. Press
 `m` on the same master again to add a second mirror to the same link.
 
 The **Playlist sync** row in the Library block of the sidebar opens the sync

@@ -146,6 +146,14 @@ mod tests {
   use crate::core::source::Source;
 
   #[test]
+  fn the_playlist_sync_route_focuses_its_block_from_the_sidebar() {
+    assert_eq!(
+      content_active_block_for_route(&RouteId::PlaylistSync),
+      Some(ActiveBlock::PlaylistSync)
+    );
+  }
+
+  #[test]
   fn test_on_down_press_handler() {
     let data = vec!["Choice 1", "Choice 2", "Choice 3"];
 

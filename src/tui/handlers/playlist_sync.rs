@@ -90,6 +90,16 @@ mod tests {
   }
 
   #[test]
+  fn s_asks_for_one_run_of_every_link() {
+    let (mut app, rx) = app_with_links();
+
+    handler(Key::Char('s'), &mut app);
+
+    assert!(rx.try_recv().is_ok());
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
   fn the_cursor_wraps_over_the_links() {
     let (mut app, _rx) = app_with_links();
 
