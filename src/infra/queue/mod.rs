@@ -411,6 +411,29 @@ pub fn restage(
   Ok(())
 }
 
+/// Aborts a background queue download when dropped.
+#[cfg(feature = "queue-download")]
+pub struct DownloadAbortHandle(pub tokio::task::AbortHandle);
+
+#[cfg(feature = "queue-download")]
+impl Drop for DownloadAbortHandle {
+  fn drop(&mut self) {
+    self.0.abort();
+  }
+}
+
+#[cfg(all(test, feature = "queue-download"))]
+#[tokio::test]
+async fn dropping_the_abort_handle_cancels_the_download_task() {
+  let handle = tokio::spawn(async {
+    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+  });
+  let abort_handle = DownloadAbortHandle(handle.abort_handle());
+  drop(abort_handle);
+  let res = handle.await;
+  assert!(res.unwrap_err().is_cancelled());
+}
+
 /// A queued *decoded* track playing through the shared [`LocalPlayer`] sink
 /// (local file, Subsonic, or YouTube). Kept separate from the per-source
 /// `*_playback` structs so the underlying context is preserved for resume.
@@ -445,6 +468,11 @@ pub struct DecodedQueuePlayback {
   #[cfg(feature = "queue-download")]
   #[allow(dead_code)]
   pub tempfile: Option<tempfile::NamedTempFile>,
+  /// The handle to abort the background download task if the slot is cleared
+  /// or replaced before the download completes.
+  #[cfg(feature = "queue-download")]
+  #[allow(dead_code)]
+  pub abort_handle: Option<DownloadAbortHandle>,
   /// The delivered audio format of a downloaded track (Qobuz, e.g.
   /// `FLAC 24/96`), shown after the artists in the playbar.
   #[cfg_attr(not(feature = "tui"), allow(dead_code))]

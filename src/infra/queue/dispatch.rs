@@ -332,15 +332,17 @@ async fn play_queued_subsonic(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &st
   let fetch_id = publish_pending_decoded(app, &player, track).await;
   // Fetch off the IoEvent pump: awaiting the download here would freeze every
   // other event (skips included, for every source) for its whole duration.
-  let app = Arc::clone(app);
+  let app_for_spawn = Arc::clone(app);
   let uri = uri.to_string();
   let name = track.name.clone();
-  tokio::spawn(async move {
+  let handle = tokio::spawn(async move {
     let result = crate::infra::subsonic::dispatch::download_for_queue(&source, &uri)
       .await
       .map(|tmp| (tmp, None));
-    finish_decoded_fetch(&app, fetch_id, result, &name).await;
+    finish_decoded_fetch(&app_for_spawn, fetch_id, result, &name).await;
   });
+  
+  attach_abort_handle(app, fetch_id, handle.abort_handle()).await;
   true
 }
 
@@ -356,15 +358,17 @@ async fn play_queued_qobuz(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) 
   let fetch_id = publish_pending_decoded(app, &player, track).await;
   let quality = app.lock().await.user_config.behavior.qobuz_quality;
   // Fetch off the IoEvent pump, like Subsonic: a Qobuz track is a long download.
-  let app = Arc::clone(app);
+  let app_for_spawn = Arc::clone(app);
   let uri = uri.to_string();
   let name = track.name.clone();
-  tokio::spawn(async move {
+  let handle = tokio::spawn(async move {
     let result = crate::infra::qobuz::dispatch::download_for_queue(&source, &uri, quality)
       .await
       .map(|(tmp, label)| (tmp, Some(label)));
-    finish_decoded_fetch(&app, fetch_id, result, &name).await;
+    finish_decoded_fetch(&app_for_spawn, fetch_id, result, &name).await;
   });
+  
+  attach_abort_handle(app, fetch_id, handle.abort_handle()).await;
   true
 }
 
@@ -382,15 +386,17 @@ async fn play_queued_youtube(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
   let source = crate::infra::youtube::dispatch::build_source(app).await;
   // Fetch off the IoEvent pump: awaiting yt-dlp here would freeze every other
   // event (skips included, for every source) for its whole duration.
-  let app = Arc::clone(app);
+  let app_for_spawn = Arc::clone(app);
   let uri = uri.to_string();
   let name = track.name.clone();
-  tokio::spawn(async move {
+  let handle = tokio::spawn(async move {
     let result = crate::infra::youtube::dispatch::download_for_queue(&source, &uri)
       .await
       .map(|tmp| (tmp, None));
-    finish_decoded_fetch(&app, fetch_id, result, &name).await;
+    finish_decoded_fetch(&app_for_spawn, fetch_id, result, &name).await;
   });
+  
+  attach_abort_handle(app, fetch_id, handle.abort_handle()).await;
   true
 }
 
@@ -556,6 +562,8 @@ async fn publish_pending_decoded(
     fetch_id,
     #[cfg(feature = "queue-download")]
     tempfile: None,
+    #[cfg(feature = "queue-download")]
+    abort_handle: None,
     quality: None,
   }));
   fetch_id
@@ -650,6 +658,8 @@ async fn publish_decoded(
     fetch_id: next_fetch_id(),
     #[cfg(feature = "queue-download")]
     tempfile,
+    #[cfg(feature = "queue-download")]
+    abort_handle: None,
     quality: None,
   }));
   guard.set_status_message(format!("\u{266a} {name} (queue)"), 4);
@@ -724,6 +734,22 @@ async fn suspended_context_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlay
 /// still-playing queued Spotify track that is being skipped mid-play. Called
 /// unconditionally at the top of every decoded queue-play path — a Spirc pause
 /// on an already-paused or idle librespot is a no-op.
+#[cfg(feature = "queue-download")]
+async fn attach_abort_handle(
+  app: &Arc<Mutex<App>>,
+  fetch_id: u64,
+  abort_handle: tokio::task::AbortHandle,
+) {
+  let mut guard = app.lock().await;
+  if let Some(crate::infra::queue::QueueNowPlaying::Decoded(ref mut d)) = guard.queue_now {
+    if d.fetch_id == fetch_id {
+      d.abort_handle = Some(crate::infra::queue::DownloadAbortHandle(abort_handle));
+      return;
+    }
+  }
+  abort_handle.abort();
+}
+
 #[cfg(feature = "audio-decode-queue")]
 async fn release_librespot(app: &Arc<Mutex<App>>) {
   #[cfg(feature = "streaming")]
@@ -1183,6 +1209,7 @@ mod tests {
   use std::time::SystemTime;
 
   #[cfg(any(
+    feature = "queue-download",
     feature = "streaming",
     not(all(feature = "qobuz", feature = "subsonic"))
   ))]
@@ -1583,4 +1610,6 @@ mod tests {
       "the queue slot now owns playback"
     );
   }
+
+
 }
