@@ -411,13 +411,15 @@ fn track_id_of(uri: &str) -> &str {
 }
 
 /// The positions of `track_ids` in the playlist, ascending.
+/// The position of the last occurrence of each wanted song: the sync adds one
+/// row per track, so one row per track goes and an earlier hand-added copy stays.
 fn song_indices_for(entries: &[types::SubsonicSong], track_ids: &[&str]) -> Vec<usize> {
-  entries
+  let mut indices: Vec<usize> = track_ids
     .iter()
-    .enumerate()
-    .filter(|(_, s)| track_ids.contains(&s.id.as_str()))
-    .map(|(index, _)| index)
-    .collect()
+    .filter_map(|id| entries.iter().rposition(|s| s.id == *id))
+    .collect();
+  indices.sort_unstable();
+  indices
 }
 
 impl From<&types::SubsonicPlaylist> for PlaylistInfo {
@@ -1191,7 +1193,7 @@ mod tests {
   fn song_indices_map_ids_to_every_position() {
     let envelope: SubsonicEnvelope = serde_json::from_str(DUPLICATE_ENTRIES).unwrap();
     let entries = envelope.response.playlist.unwrap().entry;
-    assert_eq!(song_indices_for(&entries, &["101"]), vec![0, 2]);
+    assert_eq!(song_indices_for(&entries, &["101"]), vec![2]);
     assert_eq!(song_indices_for(&entries, &["102"]), vec![1]);
     assert!(song_indices_for(&entries, &["999"]).is_empty());
   }

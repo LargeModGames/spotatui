@@ -633,10 +633,12 @@ fn track_id_of(uri: &str) -> &str {
 }
 
 /// The playlist item ids of `track_ids`, in playlist order.
+/// The item id of the last occurrence of each wanted track: the sync adds one
+/// row per track, so one row per track goes and an earlier hand-added copy stays.
 fn item_ids_for(items: &[types::Track], track_ids: &[&str]) -> Vec<String> {
-  items
+  track_ids
     .iter()
-    .filter(|t| track_ids.contains(&t.id.as_str()))
+    .filter_map(|id| items.iter().rev().find(|t| t.id == *id))
     .filter_map(|t| t.playlist_track_id.clone())
     .collect()
 }
@@ -1137,7 +1139,7 @@ mod tests {
   fn item_ids_map_track_ids_to_playlist_item_ids() {
     let playlist: types::Playlist = serde_json::from_str(PLAYLIST_ITEMS).unwrap();
     let items = playlist.tracks.unwrap().items;
-    assert_eq!(item_ids_for(&items, &["5001"]), vec!["90001", "90003"]);
+    assert_eq!(item_ids_for(&items, &["5001"]), vec!["90003"]);
     assert_eq!(item_ids_for(&items, &["5002"]), vec!["90002"]);
     assert!(item_ids_for(&items, &["9999"]).is_empty());
   }
@@ -1222,7 +1224,7 @@ mod tests {
     assert!(seen[0].0.contains("extra=tracks"));
     assert!(seen[1].0.contains("/playlist/deleteTracks"));
     assert!(sent(&seen[1]).contains("playlist_id=111"));
-    assert!(sent(&seen[1]).contains("playlist_track_ids=90001%2C90003"));
+    assert!(sent(&seen[1]).contains("playlist_track_ids=90003"));
   }
 
   #[tokio::test]

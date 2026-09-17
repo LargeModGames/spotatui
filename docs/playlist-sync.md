@@ -32,9 +32,10 @@ The sync is one way. On every run:
   master from then on: when the track leaves the master, that row goes. A row
   that matches nothing in the master is never touched, so add what you like to
   a mirror by hand and the sync leaves it alone.
-- Removal works by track id. When a track leaves the master, every row on the
-  mirror with that id goes, a second copy you added by hand included. The sync
-  keeps no per-row ownership yet.
+- Removal takes one row per track. When a track leaves the master, the sync
+  removes the last row on the mirror with that id and leaves an earlier copy
+  you added by hand. Spotify is the exception: its API removes a track by id
+  from every position, so a hand-added copy of the same track goes with it.
 - A track the sync did add and you then deleted on the mirror comes back on the
   next run. The master is the truth.
 
