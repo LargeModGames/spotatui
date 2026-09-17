@@ -34,6 +34,7 @@ pub mod pagination;
 pub mod paths;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod persisted_playback;
+pub mod playlist_sync;
 pub mod plugin_api;
 pub mod queue;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]

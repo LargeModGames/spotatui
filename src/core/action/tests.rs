@@ -2009,6 +2009,91 @@ fn open_remove_track_dialog_youtube_routes_the_local_edit() {
   assert!(rx.try_recv().is_err());
 }
 
+// --- playlist sync ---
+
+/// A Qobuz sidebar scope with one playlist highlighted.
+fn app_with_qobuz_playlist() -> (App, Receiver<IoEvent>) {
+  let (mut app, rx) = app_with_channel();
+  app.active_source = Source::Qobuz;
+  app.qobuz_playlists = vec![PlaylistInfo {
+    uri: "qobuz:playlist:9".to_string(),
+    ..playlist_info("9", "Mine", "owner", false)
+  }];
+  (app.with_sidebar_playlist(0), rx)
+}
+
+#[test]
+fn open_playlist_sync_picker_pushes_the_picker_dialog_for_a_qobuz_playlist() {
+  let (mut app, _rx) = app_with_qobuz_playlist();
+
+  app.apply(Action::OpenPlaylistSyncPicker);
+
+  assert_eq!(app.get_current_route().id, RouteId::Dialog);
+  assert_eq!(
+    app.get_current_route().active_block,
+    ActiveBlock::Dialog(DialogContext::PlaylistSyncPicker)
+  );
+  assert_eq!(
+    app
+      .pending_playlist_sync_master()
+      .map(|master| master.playlist_uri.as_str()),
+    Some("qobuz:playlist:9")
+  );
+}
+
+#[test]
+fn open_playlist_sync_picker_refuses_a_local_playlist() {
+  let (mut app, _rx) = app_with_channel();
+  app.active_source = Source::Local;
+  app.local_playlists = vec![PlaylistInfo {
+    uri: "file:///music/Jazz".to_string(),
+    ..playlist_info("jazz", "Jazz", "local", false)
+  }];
+  let mut app = app.with_sidebar_playlist(0);
+  let before = app.get_current_route().id.clone();
+
+  app.apply(Action::OpenPlaylistSyncPicker);
+
+  assert_eq!(app.get_current_route().id, before);
+  assert!(app.pending_playlist_sync_master().is_none());
+  assert!(app
+    .status_message()
+    .is_some_and(|text| text.contains("Highlight a playlist")));
+}
+
+#[test]
+fn link_playlist_to_dispatches_link_playlist_with_the_pending_master() {
+  let (mut app, rx) = app_with_qobuz_playlist();
+  app.apply(Action::OpenPlaylistSyncPicker);
+
+  app.apply(Action::LinkPlaylistTo(Source::YouTube));
+
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::LinkPlaylist(master, Source::YouTube)) if master.playlist_uri == "qobuz:playlist:9"
+  ));
+  assert!(app.pending_playlist_sync_master().is_none());
+}
+
+#[test]
+fn run_and_remove_playlist_sync_dispatch_their_events() {
+  let (mut app, rx) = app_with_channel();
+
+  app.apply(Action::RunPlaylistSync);
+  app.apply(Action::RemovePlaylistSyncLink("abc".to_string()));
+
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::RunPlaylistSync {
+      retry_unmatched: true
+    })
+  ));
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::RemovePlaylistSyncLink(id)) if id == "abc"
+  ));
+}
+
 // --- library sections ---
 
 #[test]
@@ -2152,6 +2237,7 @@ fn every_library_target_has_one_sidebar_row_with_a_distinct_label() {
       | LibraryTarget::RecentlyPlayed
       | LibraryTarget::Friends
       | LibraryTarget::Stats
+      | LibraryTarget::PlaylistSync
       | LibraryTarget::LikedSongs
       | LibraryTarget::Albums
       | LibraryTarget::Artists

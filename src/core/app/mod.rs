@@ -88,6 +88,7 @@ mod playback_routing;
 pub(crate) use playback_routing::{PlaybackOwner, NOTHING_PLAYING_STATUS};
 mod playlist_folders;
 mod playlist_pages;
+mod playlist_sync;
 mod playlists;
 mod plugins;
 mod queue;
@@ -559,6 +560,16 @@ pub struct App {
   // Create Playlist form state
   pub create_playlist_tracks: Vec<TrackInfo>,
   pub create_playlist_search_results: Vec<TrackInfo>,
+  /// Whether a playlist-sync run owns the single slot right now.
+  playlist_sync_in_flight: bool,
+  /// The links as the last run loaded them, for the sync screen.
+  playlist_sync_links: Vec<crate::core::playlist_sync::Link>,
+  /// The last finished run.
+  playlist_sync_last_report: Option<crate::core::playlist_sync::SyncReport>,
+  /// The playlist the open mirror picker is for.
+  pending_playlist_sync_master: Option<crate::core::playlist_sync::Endpoint>,
+  /// The link id the open remove-link confirm is for.
+  pending_playlist_sync_remove: Option<String>,
   /// Commands queued by keybindings for the scripting engine to run.
   pub pending_plugin_commands: Vec<String>,
   /// Per-domain write counters driving async plugin data reads (see

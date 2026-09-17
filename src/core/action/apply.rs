@@ -139,6 +139,12 @@ impl App {
         }
       }
       Action::DeletePlaylist(uri) => self.dispatch(IoEvent::DeleteYouTubePlaylist(uri)),
+      Action::OpenPlaylistSyncPicker => self.begin_playlist_sync_picker(),
+      Action::LinkPlaylistTo(source) => self.link_playlist_to(source),
+      Action::RunPlaylistSync => self.dispatch(IoEvent::RunPlaylistSync {
+        retry_unmatched: true,
+      }),
+      Action::RemovePlaylistSyncLink(id) => self.dispatch(IoEvent::RemovePlaylistSyncLink(id)),
       Action::ToggleSaveTrack(uri) => self.dispatch(IoEvent::ToggleSaveTrack(uri)),
       Action::ToggleSaveCurrentItem => self.toggle_save_current_item(),
       Action::SaveAlbum(id) => self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id)),

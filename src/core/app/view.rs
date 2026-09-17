@@ -126,6 +126,12 @@ pub struct ViewState {
   /// Selected index in the Stats screen's Top Tracks list
   pub stats_selected_track: usize,
 
+  // Playlist sync screen and its picker
+  /// Cursor in the link list.
+  pub playlist_sync_selected_link: usize,
+  /// Cursor in the mirror picker dialog.
+  pub playlist_sync_picker_index: usize,
+
   // Sort menu state
   /// Whether the sort menu popup is visible
   pub sort_menu_visible: bool,

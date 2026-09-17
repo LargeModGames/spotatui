@@ -6,8 +6,9 @@ use crate::cli;
 use crate::core::banner::BANNER;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::Network;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgMatches, Command as ClapApp};
+use std::sync::Arc;
 
 pub(super) fn build_clap_app() -> ClapApp {
   // `mut` is only exercised by the feature-gated subcommand additions below.
@@ -65,7 +66,8 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
     .subcommand(cli::play_subcommand())
     .subcommand(cli::list_subcommand())
     .subcommand(cli::history_subcommand())
-    .subcommand(cli::search_subcommand()),
+    .subcommand(cli::search_subcommand())
+    .subcommand(cli::sync_subcommand()),
   );
 
   #[cfg(feature = "scripting")]
@@ -84,6 +86,9 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
 /// CLI mode: run one subcommand against the network layer and print its
 /// result.
 pub(super) async fn run_subcommand(boot: Boot, cmd: &str, matches: &ArgMatches) -> Result<()> {
+  if cmd == "sync" {
+    return run_sync(boot, matches).await;
+  }
   let app = boot.app;
   // Held (unread) for the length of the command; see the field doc on `Boot`.
   let _sync_io_rx = boot.sync_io_rx;
@@ -98,6 +103,29 @@ pub(super) async fn run_subcommand(boot: Boot, cmd: &str, matches: &ArgMatches) 
   let cli_result = cli::handle_matches(matches, cmd.to_string(), network, boot.user_config).await;
   app.lock().await.flush_state_save(true);
   println!("{}", cli_result?);
+  Ok(())
+}
+
+/// The `sync` subcommand: no device probe, no Spotify requirement, its own exit signal.
+async fn run_sync(boot: Boot, matches: &ArgMatches) -> Result<()> {
+  let app = boot.app;
+  // Held (unread) for the length of the command; see the field doc on `Boot`.
+  let _sync_io_rx = boot.sync_io_rx;
+  let args = cli::sync_args(matches);
+  let ctx = crate::infra::playlist_sync::SyncContext::new(
+    boot.spotify,
+    boot.token_cache_path,
+    Arc::clone(&app),
+  );
+  let run = crate::infra::playlist_sync::run_guarded(ctx, args.link, args.dry_run, true);
+  let report = tokio::spawn(run)
+    .await
+    .context("playlist sync task failed")?;
+  app.lock().await.flush_state_save(true);
+  println!("{}", report.printable());
+  if report.failed() {
+    return Err(anyhow!("playlist sync failed"));
+  }
   Ok(())
 }
 

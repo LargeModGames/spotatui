@@ -709,8 +709,24 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
         draw_confirmation_dialog(f, app, "Save Shortcut Fallback", text, 66);
       }
     }
+    DialogContext::RemovePlaylistSyncLinkConfirm => {
+      if let Some(name) = app.view.dialog.as_ref() {
+        let text = vec![
+          Line::from(Span::raw("Remove the playlist link for:")),
+          Line::from(Span::styled(
+            name.as_str(),
+            Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+          )),
+          Line::from(Span::raw("The mirror playlists stay.")),
+        ];
+        draw_confirmation_dialog(f, app, "Remove Link", text, 50);
+      }
+    }
     DialogContext::AddTrackToPlaylistPicker => {
       draw_add_track_to_playlist_picker_dialog(f, app);
+    }
+    DialogContext::PlaylistSyncPicker => {
+      draw_playlist_sync_picker_dialog(f, app);
     }
   }
 }
@@ -890,6 +906,74 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
 
   let footer = Paragraph::new(format!(
     "Enter add/open | q cancel | {}/{} or arrows move | H/M/L jump",
+    app.user_config.keys.move_down, app.user_config.keys.move_up,
+  ))
+  .style(Style::default().fg(app.user_config.theme.inactive.into()))
+  .alignment(Alignment::Center);
+  f.render_widget(footer, vchunks[2]);
+}
+
+fn draw_playlist_sync_picker_dialog(f: &mut Frame<'_>, app: &App) {
+  let rect = centered_modal_rect(f.area(), 50, 12);
+  f.render_widget(Clear, rect);
+
+  let block = Block::default()
+    .title(Span::styled(
+      "Mirror Playlist",
+      Style::default()
+        .fg(app.user_config.theme.header.into())
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+    ))
+    .borders(Borders::ALL)
+    .style(app.user_config.theme.base_style())
+    .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
+  f.render_widget(block, rect);
+
+  let vchunks = Layout::default()
+    .direction(Direction::Vertical)
+    .margin(1)
+    .constraints([
+      Constraint::Length(2),
+      Constraint::Min(3),
+      Constraint::Length(1),
+    ])
+    .split(rect);
+
+  let master = app
+    .pending_playlist_sync_master()
+    .map(|endpoint| endpoint.name.as_str())
+    .unwrap_or("Selected playlist");
+
+  let header = Paragraph::new(Line::from(Span::raw(format!("Mirror \"{master}\" onto:"))))
+    .wrap(Wrap { trim: true })
+    .style(app.user_config.theme.base_style());
+  f.render_widget(header, vchunks[0]);
+
+  let sources = app.playlist_sync_picker_sources();
+  if sources.is_empty() {
+    let empty_text = Paragraph::new("No other source can take a mirror")
+      .style(Style::default().fg(app.user_config.theme.inactive.into()))
+      .alignment(Alignment::Center);
+    f.render_widget(empty_text, vchunks[1]);
+  } else {
+    let items: Vec<ListItem> = sources
+      .iter()
+      .map(|source| ListItem::new(Span::raw(source.label())))
+      .collect();
+    let selected = app.view.playlist_sync_picker_index.min(sources.len() - 1);
+    let mut list_state = ListState::default();
+    list_state.select(Some(selected));
+
+    let list = List::new(items)
+      .style(app.user_config.theme.base_style())
+      .highlight_style(Style::default().fg(app.user_config.theme.hovered.into()))
+      .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, vchunks[1], &mut list_state);
+  }
+
+  let footer = Paragraph::new(format!(
+    "Enter mirror | q cancel | {}/{} or arrows move",
     app.user_config.keys.move_down, app.user_config.keys.move_up,
   ))
   .style(Style::default().fg(app.user_config.theme.inactive.into()))
@@ -1449,4 +1533,56 @@ fn build_popup_line<'a>(pl: &'a PopupLine) -> Line<'a> {
     style = style.add_modifier(Modifier::ITALIC);
   }
   Line::from(Span::styled(pl.text.clone(), style))
+}
+
+#[cfg(test)]
+mod playlist_sync_picker_tests {
+  use super::*;
+  use crate::core::action::Action;
+  use crate::core::plugin_api::PlaylistInfo;
+  use crate::core::source::Source;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn the_mirror_picker_lists_the_offered_sources() {
+    let mut app = App::default_connected().under_source(Source::Qobuz);
+    app.qobuz_playlists.push(PlaylistInfo {
+      uri: "qobuz:playlist:9".to_string(),
+      name: "Mine".to_string(),
+      owner: "qobuz".to_string(),
+      track_count: 3,
+      id: Some("9".to_string()),
+      owner_id: None,
+      collaborative: false,
+      public: None,
+      image_url: None,
+    });
+    app.view.selected_playlist_index = Some(0);
+    app.apply(Action::OpenPlaylistSyncPicker);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| draw_dialog(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let content: String = (0..24)
+      .flat_map(|y| (0..80).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect();
+
+    assert!(
+      content.contains("Mirror Playlist"),
+      "picker title missing: {content}"
+    );
+    assert!(
+      content.contains("Mirror \"Mine\" onto:"),
+      "picker header missing: {content}"
+    );
+    assert!(
+      content.contains("Spotify"),
+      "the connected session should be offered: {content}"
+    );
+    assert!(
+      !content.contains("Qobuz"),
+      "the master's own source must not be offered: {content}"
+    );
+  }
 }

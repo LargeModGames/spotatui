@@ -124,8 +124,7 @@ pub struct Track {
   pub streamable: bool,
   #[serde(default)]
   pub parental_warning: bool,
-  /// Read by the sync matcher; no production reader yet.
-  #[allow(dead_code)]
+  /// The recording id the sync matcher prefers over a title match.
   #[serde(default)]
   pub isrc: Option<String>,
   /// The per-playlist item id `playlist/deleteTracks` takes.

@@ -27,6 +27,7 @@ use reqwest::Client;
 use serde::de::{DeserializeOwned, IgnoredAny};
 use tokio::sync::Mutex;
 
+use crate::core::playlist_sync::SyncTrack;
 use crate::core::plugin_api::{ArtistRef, PlaylistInfo, SearchResults, TrackInfo};
 use crate::core::source::{MediaSource, PlaylistWriter, Searcher};
 use crate::infra::audio::LocalPlayer;
@@ -542,8 +543,39 @@ impl QobuzSource {
     .await
   }
 
+  /// Every track of a playlist as sync candidates, with the ISRC `listing_tracks` drops.
+  pub(crate) async fn sync_playlist_tracks(&self, playlist_uri: &str) -> Result<Vec<SyncTrack>> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    Ok(
+      self
+        .playlist_items(id)
+        .await?
+        .iter()
+        .map(track_to_sync_track)
+        .collect(),
+    )
+  }
+
+  /// Catalog search results as sync candidates, ISRC included.
+  pub(crate) async fn sync_search(&self, query: &str, limit: u32) -> Result<Vec<SyncTrack>> {
+    let found: types::Search = self
+      .get(
+        "catalog/search",
+        &[("query", query.to_string()), ("limit", limit.to_string())],
+      )
+      .await?;
+    Ok(
+      found
+        .tracks
+        .unwrap_or_default()
+        .items
+        .iter()
+        .map(track_to_sync_track)
+        .collect(),
+    )
+  }
+
   /// Create a private playlist and return its id.
-  #[allow(dead_code)] // The sync engine is the first caller.
   pub async fn create_playlist(&self, name: &str) -> Result<String> {
     let created: types::Playlist = self
       .playlist_write(
@@ -702,6 +734,21 @@ fn track_to_track_info(t: &types::Track, parent: Option<&types::Album>) -> Track
     track_number: t.track_number,
     explicit: t.parental_warning,
     image_url: album.and_then(|a| a.image.large.clone()),
+  }
+}
+
+/// Map a Qobuz track onto the sync currency: the bare title, never the version suffix.
+fn track_to_sync_track(t: &types::Track) -> SyncTrack {
+  let performer = t
+    .performer
+    .as_ref()
+    .or(t.album.as_ref().and_then(|a| a.artist.as_ref()));
+  SyncTrack {
+    key: t.id.clone(),
+    isrc: t.isrc.clone(),
+    title: t.title.clone(),
+    artist: performer.map(|n| n.name.clone()).unwrap_or_default(),
+    duration_ms: (t.duration > 0).then_some(t.duration * 1000),
   }
 }
 
@@ -944,6 +991,32 @@ mod tests {
 
   const WRITE_OK: &str = r#"{ "status": "success" }"#;
 
+  const SYNC_PLAYLIST: &str = r#"{
+    "id": 111, "name": "Morning",
+    "tracks": {
+      "offset": 0, "limit": 500, "total": 2,
+      "items": [
+        { "id": 5001, "title": "Around the World", "version": "Radio Edit",
+          "duration": 429, "isrc": "gb-aaa-00-00001",
+          "performer": { "id": 36819, "name": "Daft Punk" } },
+        { "id": 5002, "title": "Veridis Quo",
+          "album": { "id": "0060254730302", "title": "Discovery",
+                     "artist": { "id": 36819, "name": "Daft Punk" } } }
+      ]
+    }
+  }"#;
+
+  const SYNC_SEARCH: &str = r#"{
+    "tracks": {
+      "offset": 0, "limit": 10, "total": 1,
+      "items": [
+        { "id": 5001, "title": "Around the World", "duration": 429,
+          "isrc": "GBAAA0000001",
+          "performer": { "id": 36819, "name": "Daft Punk" } }
+      ]
+    }
+  }"#;
+
   #[test]
   fn user_playlists_map_to_playlist_info() {
     let page: types::UserPlaylists = serde_json::from_str(USER_PLAYLISTS).unwrap();
@@ -1150,6 +1223,58 @@ mod tests {
     assert!(seen[1].0.contains("/playlist/deleteTracks"));
     assert!(sent(&seen[1]).contains("playlist_id=111"));
     assert!(sent(&seen[1]).contains("playlist_track_ids=90001%2C90003"));
+  }
+
+  #[tokio::test]
+  async fn sync_playlist_tracks_keeps_the_isrc_and_the_bare_title() {
+    let (base, server) = serve(vec![("200 OK", SYNC_PLAYLIST)]).await;
+    let tracks = QobuzSource::with_base(base)
+      .sync_playlist_tracks("qobuz:playlist:111")
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].0.starts_with("GET /playlist/get?"));
+    assert!(seen[0].0.contains("playlist_id=111"));
+    assert!(seen[0].0.contains("extra=tracks"));
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0].key, "5001");
+    assert_eq!(tracks[0].title, "Around the World");
+    assert_eq!(tracks[0].artist, "Daft Punk");
+    assert_eq!(tracks[0].isrc.as_deref(), Some("gb-aaa-00-00001"));
+    assert_eq!(tracks[0].duration_ms, Some(429_000));
+    assert_eq!(tracks[1].key, "5002");
+    assert_eq!(tracks[1].artist, "Daft Punk");
+    assert_eq!(tracks[1].isrc, None);
+  }
+
+  #[tokio::test]
+  async fn sync_search_sends_the_limit_it_was_given() {
+    let (base, server) = serve(vec![("200 OK", SYNC_SEARCH)]).await;
+    let found = QobuzSource::with_base(base)
+      .sync_search("daft punk around the world", 10)
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].0.starts_with("GET /catalog/search?"));
+    assert!(seen[0].0.contains("query=daft+punk+around+the+world"));
+    assert!(seen[0].0.contains("limit=10"));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].key, "5001");
+    assert_eq!(found[0].isrc.as_deref(), Some("GBAAA0000001"));
+    assert_eq!(found[0].duration_ms, Some(429_000));
+  }
+
+  #[test]
+  fn a_track_with_no_duration_reports_an_unknown_one() {
+    let playlist: types::Playlist = serde_json::from_str(PLAYLIST_ITEMS).unwrap();
+    let items = playlist.tracks.unwrap().items;
+    let track = track_to_sync_track(&items[1]);
+    assert_eq!(track.key, "5002");
+    assert_eq!(track.duration_ms, None);
+    assert_eq!(track.isrc, None);
+    assert_eq!(track.artist, "");
   }
 
   /// Live end to end: scrape the bundle, start a session, stream one track

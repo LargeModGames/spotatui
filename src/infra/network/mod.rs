@@ -19,6 +19,7 @@ use crate::core::app::{App, PlaybackOwner, SPOTIFY_NOT_CONNECTED_STATUS};
 use crate::core::auth;
 use crate::core::config::{ClientConfig, NCSPOT_CLIENT_ID};
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
+use crate::core::source::Source;
 use crate::infra::redirect_uri::{bind_callback_listener, serve_spotify_callback};
 use anyhow::anyhow;
 use rspotify::model::{
@@ -292,6 +293,15 @@ pub enum IoEvent {
   /// Remove a video (bare id or `youtube:` URI) from a local YouTube playlist.
   #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
   RemoveTrackFromYouTubePlaylist(String, String),
+  /// Run the configured playlist-sync links on a detached task.
+  RunPlaylistSync {
+    /// Search again for tracks the last run found no candidate for.
+    retry_unmatched: bool,
+  },
+  /// Create a mirror of the first endpoint's playlist on the source, link it and sync it.
+  LinkPlaylist(crate::core::playlist_sync::Endpoint, Source),
+  /// Forget one playlist-sync link by id; the mirror playlists stay.
+  RemovePlaylistSyncLink(String),
   /// Start an in-TUI Spotify OAuth login: open the browser and spawn the callback
   /// server. Dispatched from the `d` source picker when Spotify is unconfigured.
   /// Runs without a Spotify session (bypasses the auth gate).
@@ -568,6 +578,9 @@ impl Network {
         | IoEvent::DeleteYouTubePlaylist(_)
         | IoEvent::AddTrackToYouTubePlaylist(..)
         | IoEvent::RemoveTrackFromYouTubePlaylist(..)
+        | IoEvent::RunPlaylistSync { .. }
+        | IoEvent::LinkPlaylist(..)
+        | IoEvent::RemovePlaylistSyncLink(_)
     )
   }
 
@@ -1095,6 +1108,26 @@ impl Network {
       | IoEvent::DeleteYouTubePlaylist(_)
       | IoEvent::AddTrackToYouTubePlaylist(..)
       | IoEvent::RemoveTrackFromYouTubePlaylist(..) => {}
+      IoEvent::RunPlaylistSync { retry_unmatched } => {
+        crate::infra::playlist_sync::spawn_run(
+          self.spotify.clone(),
+          self.token_cache_path.clone(),
+          Arc::clone(&self.app),
+          retry_unmatched,
+        );
+      }
+      IoEvent::LinkPlaylist(master, mirror) => {
+        crate::infra::playlist_sync::spawn_link(
+          self.spotify.clone(),
+          self.token_cache_path.clone(),
+          Arc::clone(&self.app),
+          master,
+          mirror,
+        );
+      }
+      IoEvent::RemovePlaylistSyncLink(id) => {
+        crate::infra::playlist_sync::spawn_remove_link(Arc::clone(&self.app), id);
+      }
     };
 
     {
@@ -1963,6 +1996,32 @@ mod tests {
     for event in [IoEvent::AdvanceNativeQueue, IoEvent::FinishNativeQueue] {
       assert!(!Network::runs_on_service_lane(&event));
       assert!(!Network::event_bypasses_spotify_auth(&event));
+    }
+  }
+
+  #[test]
+  fn the_playlist_sync_events_bypass_auth_and_are_neither_service_lane_nor_transport() {
+    let master = crate::core::playlist_sync::Endpoint {
+      source: Source::Spotify,
+      playlist_uri: "spotify:playlist:1".to_string(),
+      name: "Road Trip".to_string(),
+    };
+    for event in [
+      IoEvent::RunPlaylistSync {
+        retry_unmatched: true,
+      },
+      IoEvent::LinkPlaylist(master, Source::Qobuz),
+      IoEvent::RemovePlaylistSyncLink("aaa".to_string()),
+    ] {
+      assert!(Network::event_bypasses_spotify_auth(&event));
+      assert!(
+        !Network::runs_on_service_lane(&event),
+        "the service lane builds its `Network` with no Spotify client to hand the run"
+      );
+      assert!(
+        !Network::event_is_transport(&event),
+        "a sync drives no sink, so it is never deferred or replayed"
+      );
     }
   }
 

@@ -74,6 +74,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 - **Synced lyrics.** Line-by-line lyrics that follow playback.
 - **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
 - **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
+- **[Playlist sync](docs/playlist-sync.md).** Link one playlist as the master and mirror it onto Spotify, Qobuz, Subsonic or YouTube. Runs at startup and from `spotatui sync`.
 - **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
 - **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
 - **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.

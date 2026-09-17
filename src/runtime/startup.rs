@@ -241,6 +241,10 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
 
   let history_collector = crate::infra::history::spawn_history_collector(Arc::clone(&app));
 
+  app.lock().await.dispatch(IoEvent::RunPlaylistSync {
+    retry_unmatched: false,
+  });
+
   // Opt-in MCP control socket. Nothing listens unless the user asked for it;
   // a bind failure is reported and shrugged off rather than blocking startup,
   // since the player is perfectly usable without it.

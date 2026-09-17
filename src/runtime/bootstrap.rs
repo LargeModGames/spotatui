@@ -299,18 +299,19 @@ enum SpotifyAuthMode {
 
 /// Interactive only right after the client wizard (fresh install,
 /// `--reconfigure-auth`, or the auth-setup migration): the user just asked for
-/// Spotify. A subcommand needs a session; a UI launch never blocks on a browser.
+/// Spotify. Most subcommands need a session; `sync` and a UI launch do not.
 fn spotify_auth_mode(
-  subcommand: bool,
+  subcommand: Option<&str>,
   reconfigure_auth: bool,
   wizard_ran: bool,
 ) -> SpotifyAuthMode {
   if reconfigure_auth || wizard_ran {
     SpotifyAuthMode::Interactive
-  } else if subcommand {
-    SpotifyAuthMode::CachedOrFail
   } else {
-    SpotifyAuthMode::CachedOrNone
+    match subcommand {
+      Some("sync") | None => SpotifyAuthMode::CachedOrNone,
+      Some(_) => SpotifyAuthMode::CachedOrFail,
+    }
   }
 }
 
@@ -615,11 +616,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 
   let config_paths = client_config.get_or_build_paths()?;
 
-  let auth_mode = spotify_auth_mode(
-    matches.subcommand_name().is_some(),
-    reconfigure_auth,
-    wizard_ran,
-  );
+  let auth_mode = spotify_auth_mode(matches.subcommand_name(), reconfigure_auth, wizard_ran);
 
   // The GitHub update check runs concurrently with authentication: both are
   // network round trips and neither depends on the other, so the check no
@@ -1002,19 +999,20 @@ mod tests {
   #[test]
   fn the_boot_auth_mode_follows_the_wizard_and_the_subcommand() {
     let cases = [
-      (false, true, false, SpotifyAuthMode::Interactive),
-      (true, true, false, SpotifyAuthMode::Interactive),
-      (false, false, true, SpotifyAuthMode::Interactive),
-      (true, false, true, SpotifyAuthMode::Interactive),
-      (true, false, false, SpotifyAuthMode::CachedOrFail),
-      (false, false, false, SpotifyAuthMode::CachedOrNone),
+      (None, true, false, SpotifyAuthMode::Interactive),
+      (Some("play"), true, false, SpotifyAuthMode::Interactive),
+      (None, false, true, SpotifyAuthMode::Interactive),
+      (Some("play"), false, true, SpotifyAuthMode::Interactive),
+      (Some("play"), false, false, SpotifyAuthMode::CachedOrFail),
+      (Some("sync"), false, false, SpotifyAuthMode::CachedOrNone),
+      (None, false, false, SpotifyAuthMode::CachedOrNone),
     ];
 
     for (subcommand, reconfigure_auth, wizard_ran, expected) in cases {
       assert_eq!(
         spotify_auth_mode(subcommand, reconfigure_auth, wizard_ran),
         expected,
-        "subcommand={subcommand} reconfigure_auth={reconfigure_auth} wizard_ran={wizard_ran}"
+        "subcommand={subcommand:?} reconfigure_auth={reconfigure_auth} wizard_ran={wizard_ran}"
       );
     }
   }

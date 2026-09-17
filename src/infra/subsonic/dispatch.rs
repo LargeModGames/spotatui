@@ -30,7 +30,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
@@ -149,6 +149,17 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
 /// taken from the `SPOTATUI_SUBSONIC_PASSWORD` env var when set. Returns `None`
 /// (after surfacing a status message) when no server URL is configured.
 pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource> {
+  match build_sync_source(app).await {
+    Ok(source) => Some(source),
+    Err(e) => {
+      set_error(app, e.to_string()).await;
+      None
+    }
+  }
+}
+
+/// A source for the playlist sync, with the unconfigured case left to the caller.
+pub(crate) async fn build_sync_source(app: &Arc<Mutex<App>>) -> Result<SubsonicSource> {
   let (url, username, config_password) = {
     let guard = app.lock().await;
     let behavior = &guard.user_config.behavior;
@@ -160,12 +171,9 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource
   };
 
   let Some(url) = url else {
-    set_error(
-      app,
-      "No Subsonic server configured (set behavior.subsonic_url)".to_string(),
-    )
-    .await;
-    return None;
+    return Err(anyhow!(
+      "No Subsonic server configured (set behavior.subsonic_url)"
+    ));
   };
 
   // Env override takes precedence over the plaintext config field.
@@ -174,7 +182,7 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource
     .or(config_password)
     .unwrap_or_default();
 
-  Some(SubsonicSource::new(
+  Ok(SubsonicSource::new(
     url,
     username.unwrap_or_default(),
     password,

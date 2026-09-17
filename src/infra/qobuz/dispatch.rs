@@ -206,6 +206,17 @@ pub(crate) async fn build_playback_source(app: &Arc<Mutex<App>>) -> Option<Qobuz
   build_source(app, WhenLoggedOut::Message).await
 }
 
+/// A source for the playlist sync; the caller reports the logged-out case itself.
+pub(crate) async fn build_sync_source(app: &Arc<Mutex<App>>) -> Result<QobuzSource> {
+  let token = auth::current_token().context("Qobuz is not logged in")?;
+  let constants = constants(app).await.context("Qobuz web player constants")?;
+  Ok(QobuzSource::new(
+    constants.app_id,
+    constants.app_secret,
+    token,
+  ))
+}
+
 /// Report a failed call as one status message; a 401 also clears the token.
 async fn report(app: &Arc<Mutex<App>>, step: &str, err: anyhow::Error) {
   let mut guard = app.lock().await;

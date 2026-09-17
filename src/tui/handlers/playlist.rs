@@ -2,6 +2,7 @@ use super::common_key_events;
 use crate::core::action::{Action, OpenTarget};
 use crate::core::app::{ActiveBlock, RouteId};
 use crate::core::app::{App, DialogContext, PlaylistFolderItem};
+use crate::core::requirement::{Capability, Requirement};
 use crate::core::source::Source;
 use crate::tui::event::Key;
 
@@ -187,6 +188,13 @@ pub fn handler(key: Key, app: &mut App) {
           }
         }
       }
+    }
+    Key::Char('m')
+      if app
+        .availability(Requirement::Capability(Capability::PlaylistSync))
+        .is_available() =>
+    {
+      app.apply(Action::OpenPlaylistSyncPicker);
     }
     _ => {}
   }
@@ -573,6 +581,33 @@ mod tests {
     assert_eq!(
       app.status_message(),
       Some("Removed saved radio station: Runtime Duplicate")
+    );
+  }
+
+  #[test]
+  fn m_on_a_qobuz_playlist_opens_the_mirror_picker() {
+    use crate::core::plugin_api::PlaylistInfo;
+    let (tx, _rx) = channel();
+    let mut app =
+      App::new(tx, UserConfig::new(), Some(SystemTime::now())).under_source(Source::Qobuz);
+    app.qobuz_playlists.push(PlaylistInfo {
+      uri: "qobuz:playlist:9".to_string(),
+      name: "Mine".to_string(),
+      owner: "qobuz".to_string(),
+      track_count: 3,
+      id: Some("9".to_string()),
+      owner_id: None,
+      collaborative: false,
+      public: None,
+      image_url: None,
+    });
+    app.view.selected_playlist_index = Some(0);
+
+    handler(Key::Char('m'), &mut app);
+
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::PlaylistSyncPicker)
     );
   }
 }

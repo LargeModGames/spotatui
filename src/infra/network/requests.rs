@@ -625,7 +625,6 @@ pub fn is_rate_limited_error(e: &anyhow::Error) -> bool {
   text.contains("429") || text.contains("Too Many Requests") || text.contains("Too many requests")
 }
 
-#[allow(dead_code)]
 pub fn is_transient_network_error(e: &anyhow::Error) -> bool {
   let text = e.to_string().to_lowercase();
   text.contains("error sending request for url")

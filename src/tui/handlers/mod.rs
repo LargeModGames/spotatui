@@ -29,6 +29,7 @@ mod mouse;
 mod party;
 mod playbar;
 mod playlist;
+mod playlist_sync;
 mod plugin_screen;
 mod podcasts;
 mod queue_menu;
@@ -569,6 +570,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     }
     ActiveBlock::Stats => {
       stats::handler(key, app);
+    }
+    ActiveBlock::PlaylistSync => {
+      playlist_sync::handler(key, app);
     }
     #[cfg(feature = "ai-dj")]
     ActiveBlock::AiDj => {

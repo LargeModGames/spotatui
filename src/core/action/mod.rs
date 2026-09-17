@@ -186,6 +186,14 @@ pub enum Action {
   /// Delete a local `youtube:playlist:` playlist; Spotify playlists leave
   /// through [`Action::UnfollowPlaylist`].
   DeletePlaylist(String),
+  /// Open the picker that mirrors the highlighted sidebar playlist onto another source.
+  OpenPlaylistSyncPicker,
+  /// The picker's Enter: create the mirror playlist on `Source`, link it, and sync it.
+  LinkPlaylistTo(Source),
+  /// Run every playlist-sync link now.
+  RunPlaylistSync,
+  /// Forget one link by id; the mirror playlists stay.
+  RemovePlaylistSyncLink(String),
   /// Save or unsave a track by bare base62 id or `spotify:track:` URI; the
   /// network layer accepts both.
   ToggleSaveTrack(String),
@@ -507,6 +515,7 @@ pub enum LibraryTarget {
   RecentlyPlayed,
   Friends,
   Stats,
+  PlaylistSync,
   LikedSongs,
   Albums,
   Artists,
@@ -520,11 +529,12 @@ pub enum LibraryTarget {
 impl LibraryTarget {
   /// Every target, in the order of `library_row_requirements()`.
   #[cfg(test)]
-  pub const ALL: [LibraryTarget; 10] = [
+  pub const ALL: [LibraryTarget; 11] = [
     LibraryTarget::Discover,
     LibraryTarget::RecentlyPlayed,
     LibraryTarget::Friends,
     LibraryTarget::Stats,
+    LibraryTarget::PlaylistSync,
     LibraryTarget::LikedSongs,
     LibraryTarget::Albums,
     LibraryTarget::Artists,
@@ -540,6 +550,7 @@ impl LibraryTarget {
       LibraryTarget::RecentlyPlayed => "Recently Played",
       LibraryTarget::Friends => "Friends",
       LibraryTarget::Stats => "Stats",
+      LibraryTarget::PlaylistSync => "Playlist sync",
       LibraryTarget::LikedSongs => "Liked Songs",
       LibraryTarget::Albums => "Albums",
       LibraryTarget::Artists => "Artists",

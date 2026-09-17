@@ -430,7 +430,7 @@ same predicate the row uses, so the two cannot disagree.
 
 ### Config & on-disk files
 
-Five files, five owners - a value that changes as the app runs goes in state,
+Six files, six owners - a value that changes as the app runs goes in state,
 never config:
 
 | File | Owner | Contents |
@@ -439,6 +439,7 @@ never config:
 | `client.yml` (config dir) | `core/config.rs` | Spotify app credentials |
 | `state.yml` (state dir) | `core/state.rs` | machine-written runtime values |
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
+| `playlist_sync.yml` (state dir) | `core/playlist_sync/store.rs` | playlist links + match cache |
 | `qobuz_credentials.yml` (config dir) | `infra/qobuz/auth.rs` | the Qobuz login token (feature `qobuz`) |
 
 - All paths resolve through `core/paths.rs`, never `dirs::` directly.

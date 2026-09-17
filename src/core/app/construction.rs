@@ -209,6 +209,11 @@ impl Default for App {
       last_friends_refresh_at: Instant::now(),
       create_playlist_tracks: Vec::new(),
       create_playlist_search_results: Vec::new(),
+      playlist_sync_in_flight: false,
+      playlist_sync_links: Vec::new(),
+      playlist_sync_last_report: None,
+      pending_playlist_sync_master: None,
+      pending_playlist_sync_remove: None,
       pending_plugin_commands: Vec::new(),
       plugin_data_generations: PluginDataGenerations::default(),
       plugin_screens: std::collections::BTreeMap::new(),
@@ -235,6 +240,13 @@ impl App {
   #[cfg(all(test, feature = "tui"))]
   pub(crate) fn under_source(mut self, source: Source) -> App {
     self.active_source = source;
+    self
+  }
+
+  /// This app with sidebar playlist row `index` highlighted, for tests.
+  #[cfg(test)]
+  pub(crate) fn with_sidebar_playlist(mut self, index: usize) -> App {
+    self.view.selected_playlist_index = Some(index);
     self
   }
 

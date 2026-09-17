@@ -35,6 +35,7 @@ use md5::{Digest, Md5};
 use rand::RngExt;
 use reqwest::Client;
 
+use crate::core::playlist_sync::SyncTrack;
 use crate::core::plugin_api::{
   AlbumInfo, ArtistInfo, ArtistRef, PlaylistInfo, SearchResults, TrackInfo,
 };
@@ -339,6 +340,51 @@ impl SubsonicSource {
       .with_context(|| format!("flushing stream to {}", dest.display()))?;
     Ok(())
   }
+
+  /// Every entry of a playlist; `tracks`, `remove_tracks` and the sync read share it.
+  async fn playlist_entries(&self, id: &str) -> Result<Vec<types::SubsonicSong>> {
+    let url = Self::append_param(
+      &self.endpoint_url("getPlaylist.view"),
+      "id",
+      &url_encode(id),
+    );
+    let detail = self
+      .fetch(&url)
+      .await?
+      .playlist
+      .ok_or_else(|| anyhow!("No playlist in getPlaylist response"))?;
+    Ok(detail.entry)
+  }
+
+  /// Every track of a playlist as sync candidates, with the ISRC `tracks` drops.
+  pub(crate) async fn sync_playlist_tracks(&self, playlist_uri: &str) -> Result<Vec<SyncTrack>> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    Ok(
+      self
+        .playlist_entries(id)
+        .await?
+        .iter()
+        .map(song_to_sync_track)
+        .collect(),
+    )
+  }
+
+  /// `search3.view` songs as sync candidates; albums and artists are asked for as zero.
+  pub(crate) async fn sync_search(&self, query: &str, limit: u32) -> Result<Vec<SyncTrack>> {
+    let encoded = url_encode(query);
+    let base = Self::append_param(&self.endpoint_url("search3.view"), "query", &encoded);
+    let url = format!("{base}&songCount={limit}&albumCount=0&artistCount=0");
+    let resp = self.fetch(&url).await?;
+    Ok(
+      resp
+        .search_result3
+        .unwrap_or_default()
+        .song
+        .iter()
+        .map(song_to_sync_track)
+        .collect(),
+    )
+  }
 }
 
 /// Strip the `subsonic:track:` prefix and return the raw track id.
@@ -444,6 +490,17 @@ impl SubsonicSource {
   }
 }
 
+/// Map a Subsonic song onto the sync currency; only the first ISRC survives.
+fn song_to_sync_track(s: &types::SubsonicSong) -> SyncTrack {
+  SyncTrack {
+    key: s.id.clone(),
+    isrc: s.isrc.first().cloned(),
+    title: s.title.clone(),
+    artist: s.artist.clone().unwrap_or_default(),
+    duration_ms: s.duration.filter(|d| *d > 0).map(|d| d * 1000),
+  }
+}
+
 fn album_to_album_info(a: &types::SubsonicAlbum) -> AlbumInfo {
   let artists = a
     .artist
@@ -522,18 +579,9 @@ impl PlaylistWriter for SubsonicSource {
     if track_uris.is_empty() {
       return Ok(());
     }
-    let read = Self::append_param(
-      &self.endpoint_url("getPlaylist.view"),
-      "id",
-      &url_encode(id),
-    );
-    let detail = self
-      .fetch(&read)
-      .await?
-      .playlist
-      .ok_or_else(|| anyhow!("No playlist in getPlaylist response"))?;
+    let entries = self.playlist_entries(id).await?;
     let wanted: Vec<&str> = track_uris.iter().map(|uri| track_id_of(uri)).collect();
-    let mut indices = song_indices_for(&detail.entry, &wanted);
+    let mut indices = song_indices_for(&entries, &wanted);
     indices.reverse();
     for chunk in indices.chunks(WRITE_CHUNK) {
       let mut url = Self::append_param(
@@ -574,16 +622,10 @@ impl MediaSource for SubsonicSource {
 
   async fn tracks(&self, playlist_uri: &str) -> Result<Vec<TrackInfo>> {
     let id = playlist_id_from_uri(playlist_uri)?;
-    let url = Self::append_param(&self.endpoint_url("getPlaylist.view"), "id", id);
-    let resp = self.fetch(&url).await?;
-
-    let detail = resp
-      .playlist
-      .ok_or_else(|| anyhow!("No playlist in getPlaylist response"))?;
-
     Ok(
-      detail
-        .entry
+      self
+        .playlist_entries(id)
+        .await?
         .iter()
         .map(|s| self.song_to_track_info(s))
         .collect(),
@@ -962,6 +1004,29 @@ mod tests {
 
   const UPDATE_OK: &str = r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
 
+  const SYNC_PLAYLIST: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": {
+        "id": "7",
+        "name": "Mirror",
+        "songCount": 2,
+        "entry": [
+          {
+            "id": "101",
+            "title": "Weightless",
+            "artist": "Marconi Union",
+            "duration": 469,
+            "isrc": ["GBAYE0601498", "GBAYE0601499"]
+          },
+          { "id": "102", "title": "Clair de Lune" }
+        ]
+      }
+    }
+  }"#;
+
   // -------------------------------------------------------------------------
   // JSON parsing tests
   // -------------------------------------------------------------------------
@@ -1186,5 +1251,49 @@ mod tests {
       .add_tracks("subsonic:playlist:7", &[])
       .await
       .unwrap();
+  }
+
+  #[tokio::test]
+  async fn sync_playlist_tracks_takes_the_first_isrc() {
+    let (base, server) = serve(vec![("200 OK", SYNC_PLAYLIST)]).await;
+    let tracks = SubsonicSource::new(base, "u", "p")
+      .sync_playlist_tracks("subsonic:playlist:7")
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/getPlaylist.view?"));
+    assert!(seen[0].contains("&id=7"));
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0].key, "101");
+    assert_eq!(tracks[0].title, "Weightless");
+    assert_eq!(tracks[0].artist, "Marconi Union");
+    assert_eq!(tracks[0].isrc.as_deref(), Some("GBAYE0601498"));
+    assert_eq!(tracks[0].duration_ms, Some(469_000));
+    assert_eq!(tracks[1].key, "102");
+    assert_eq!(tracks[1].isrc, None);
+    assert_eq!(tracks[1].artist, "");
+    assert_eq!(tracks[1].duration_ms, None);
+  }
+
+  #[tokio::test]
+  async fn sync_search_asks_for_songs_only() {
+    let (base, server) = serve(vec![("200 OK", SEARCH3)]).await;
+    let found = SubsonicSource::new(base, "u", "p")
+      .sync_search("the beatles yesterday", 10)
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/search3.view?"));
+    assert!(seen[0].contains("&query=the+beatles+yesterday"));
+    assert!(seen[0].contains("&songCount=10"));
+    assert!(seen[0].contains("&albumCount=0"));
+    assert!(seen[0].contains("&artistCount=0"));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].key, "201");
+    assert_eq!(found[0].title, "Yesterday");
+    assert_eq!(found[0].artist, "The Beatles");
+    assert_eq!(found[0].duration_ms, Some(125_000));
   }
 }

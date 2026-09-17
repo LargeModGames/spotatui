@@ -11,6 +11,7 @@ pub mod home;
 pub mod library;
 pub mod lyrics;
 pub mod player;
+pub mod playlist_sync;
 pub mod plugin_screen;
 pub mod popups;
 pub mod search;
@@ -34,6 +35,7 @@ pub use self::lyrics::draw_lyrics_view;
 pub use self::player::draw_cover_art_view;
 pub use self::player::draw_miniplayer;
 pub use self::player::{draw_device_list, draw_playbar};
+pub use self::playlist_sync::draw_playlist_sync;
 pub use self::plugin_screen::draw_plugin_screen;
 pub use self::popups::{
   draw_announcement_prompt, draw_community_pin_prompt, draw_dialog, draw_error_screen,
@@ -109,6 +111,9 @@ fn draw_route_content(f: &mut Frame<'_>, app: &App, content_area: Rect) {
     }
     RouteId::Stats => {
       draw_stats(f, app, content_area);
+    }
+    RouteId::PlaylistSync => {
+      draw_playlist_sync(f, app, content_area);
     }
     RouteId::Artists => {
       draw_artist_table(f, app, content_area);

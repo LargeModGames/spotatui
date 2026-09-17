@@ -13,6 +13,7 @@ pub(crate) fn library_row_requirements() -> &'static [(LibraryTarget, Requiremen
     ),
     (LibraryTarget::Friends, Requirement::None),
     (LibraryTarget::Stats, Requirement::None),
+    (LibraryTarget::PlaylistSync, Requirement::None),
     (
       LibraryTarget::LikedSongs,
       Requirement::Source(Source::Spotify),
@@ -311,6 +312,9 @@ impl App {
       LibraryTarget::Stats => {
         self.reload_stats();
         self.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
+      }
+      LibraryTarget::PlaylistSync => {
+        self.push_navigation_stack(RouteId::PlaylistSync, ActiveBlock::PlaylistSync);
       }
       LibraryTarget::LikedSongs => {
         self.reset_saved_tracks_view();

@@ -35,6 +35,10 @@ pub enum DialogContext {
   /// Confirm deleting a local YouTube playlist (sidebar `D` under the
   /// YouTube source).
   YouTubePlaylistWindow,
+  /// Pick the source a highlighted playlist is mirrored onto.
+  PlaylistSyncPicker,
+  /// Confirm removing the highlighted playlist-sync link (`D` on the sync screen).
+  RemovePlaylistSyncLinkConfirm,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -76,6 +80,7 @@ pub enum ActiveBlock {
   Friends,
   LocalBrowser,
   Stats,
+  PlaylistSync,
   /// The AI DJ screen's prompt + transcript.
   #[cfg(feature = "ai-dj")]
   AiDj,
@@ -130,6 +135,7 @@ pub enum RouteId {
   #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
   LocalBrowser,
   Stats,
+  PlaylistSync,
   #[cfg(feature = "ai-dj")]
   AiDj,
   /// A plugin-registered custom screen, keyed by its registered name.
