@@ -1244,7 +1244,8 @@ mod tests {
     assert!(seen[0].contains("&id=7"));
     assert!(seen[1].starts_with("/rest/updatePlaylist.view?"));
     assert!(seen[1].contains("&playlistId=7"));
-    assert!(seen[1].contains("&songIndexToRemove=2&songIndexToRemove=0"));
+    assert!(seen[1].contains("&songIndexToRemove=2"));
+    assert!(!seen[1].contains("songIndexToRemove=0"));
   }
 
   #[tokio::test]
