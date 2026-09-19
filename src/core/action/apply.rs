@@ -61,7 +61,7 @@ impl App {
         self.start_playback_track_in_context(context, track);
       }
       Action::TransferPlayback { device_id, persist } => {
-        self.dispatch(IoEvent::TransferPlaybackToDevice(device_id, persist));
+        self.transfer_playback_to_device(device_id, persist);
       }
       Action::AddToQueue(uri) => self.dispatch(IoEvent::AddItemToQueue(uri)),
       Action::QueueTrack(track) => self.add_track_to_native_queue(track),

@@ -188,14 +188,10 @@ fn snapshot_station(app: &App, uri: &str) -> TrackInfo {
 
 /// Release the other backends so only radio holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // Pause native Spotify so librespot releases the device.
+  // Pause native Spotify so librespot releases the device and no rebuild
+  // resumes it under this source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.pause_native_playback();
   // The other decoded sources never see this radio: start (the pump's
   // short-circuit), so their sessions are torn down here.
   let players = app.lock().await.take_decoded_sessions_except(Source::Radio);

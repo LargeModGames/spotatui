@@ -702,6 +702,22 @@ mod tests {
     app
   }
 
+  fn seed_desk_speaker(app: &mut App) {
+    app.devices = Some(DevicePayload {
+      devices: vec![Device {
+        id: Some("device-1".to_string()),
+        is_active: false,
+        is_private_session: false,
+        is_restricted: false,
+        name: "Desk Speaker".to_string(),
+        _type: DeviceType::Computer,
+        volume_percent: Some(42),
+      }],
+    });
+    app.view.selected_device_index = Some(0);
+    app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+  }
+
   #[test]
   fn keys_on_the_playlist_sync_block_reach_its_handler() {
     use crate::core::playlist_sync::{Endpoint, Link};
@@ -799,19 +815,7 @@ mod tests {
   fn enter_on_device_selector_dispatches_transfer_and_exits() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.devices = Some(DevicePayload {
-      devices: vec![Device {
-        id: Some("device-1".to_string()),
-        is_active: false,
-        is_private_session: false,
-        is_restricted: false,
-        name: "Desk Speaker".to_string(),
-        _type: DeviceType::Computer,
-        volume_percent: Some(42),
-      }],
-    });
-    app.view.selected_device_index = Some(0);
-    app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+    seed_desk_speaker(&mut app);
 
     handle_app(Key::Enter, &mut app);
 
@@ -830,6 +834,19 @@ mod tests {
       app.status_message(),
       Some("Switching playback to Desk Speaker")
     );
+  }
+
+  #[test]
+  fn enter_on_device_selector_under_a_decoded_owner_refuses_the_transfer() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    seed_desk_speaker(&mut app);
+    app.claim_decoded_sink(crate::core::source::Source::YouTube);
+
+    handle_app(Key::Enter, &mut app);
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some("Another source owns playback"));
   }
 
   #[test]

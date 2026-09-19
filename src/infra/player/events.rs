@@ -156,6 +156,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       if app.pending_start_playback.is_some() {
         info!("recovery route: replay parked StartPlayback");
         app.replay_pending_start_playback();
+      } else if !app.native_context_should_drive() {
+        info!("recovery route: none - another player owns the sink");
       } else if let Some(previous_track_id) = request.continue_after_track {
         if app.native_transition_has_advanced(&previous_track_id) {
           if let Some(generation) = app.native_playback_restore_generation() {
@@ -246,7 +248,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           replay_queue_slot,
           recovery_snapshot_summary(&app)
         );
-        if recovery_needs_native_selection(&request, replay_queue_slot) {
+        if app.native_should_drive() && recovery_needs_native_selection(&request, replay_queue_slot)
+        {
           app.dispatch(IoEvent::AutoSelectStreamingDevice(
             ctx.client_config.streaming_device_name.clone(),
             false,
@@ -265,6 +268,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           // would trigger the reload guard.
           info!("recovery route: ReplayPublishedSpotifyQueueSlot");
           app.dispatch(IoEvent::ReplayPublishedSpotifyQueueSlot);
+        } else if !app.native_context_should_drive() {
+          info!("recovery route: none - another player owns the sink");
         } else if let Some(previous_track_id) = request.continue_after_track {
           if app.native_transition_has_advanced(&previous_track_id) {
             if let Some(generation) = app.native_playback_restore_generation() {
@@ -473,17 +478,20 @@ async fn handle_player_events(
           last_position = position;
           last_progress_at = Instant::now();
         }
-        let desired_playing = {
+        let (desired_playing, should_drive) = {
           let app = app.lock().await;
-          app
-            .native_playback_recovery
-            .as_ref()
-            .map_or_else(
-              || shared_is_playing.load(Ordering::Relaxed),
-              |snapshot| snapshot.desired_playing,
-            )
+          (
+            app
+              .native_playback_recovery
+              .as_ref()
+              .map_or_else(
+                || shared_is_playing.load(Ordering::Relaxed),
+                |snapshot| snapshot.desired_playing,
+              ),
+            app.native_should_drive(),
+          )
         };
-        if !desired_playing && !session_lost {
+        if !should_drive || (!desired_playing && !session_lost) {
           progress_watchdog_armed = false;
           transport_recovery_pending = false;
           continue;
@@ -549,8 +557,9 @@ async fn handle_player_events(
         track_id,
         position_ms,
       } => {
-        // While the native queue is mid-handoff or playing a *decoded* track,
-        // librespot must stay paused. The handoff pauses Spirc, but a
+        // While a decoded source or a *decoded* queue slot owns the sink, or the
+        // native queue is mid-handoff, librespot must stay paused. The handoff
+        // pauses Spirc, but a
         // self-advance load (or a stale-slot reissue) already in flight at that
         // moment can complete afterwards and start audio over the queue slot —
         // re-pause instead of accepting the state update. Librespot playing is
@@ -560,25 +569,14 @@ async fn handle_player_events(
         // next one not yet published), it never is. One-shot: a paused Spirc
         // emits no further Playing events, so this can't ping-pong.
         {
-          let stray_over_queue = {
+          let stray_over_owner = {
             let guard = app.lock().await;
-            let decoded_slot = {
-              #[cfg(feature = "audio-decode-queue")]
-              {
-                guard.queue_now_decoded_player().is_some()
-              }
-              // Without a queueable decoded source the slot can never be
-              // decoded (internet radio enables `audio-decode` but is never
-              // queued), so there is nothing to shadow librespot here.
-              #[cfg(not(feature = "audio-decode-queue"))]
-              {
-                false
-              }
-            };
-            !guard.queue_now_is_spotify() && (decoded_slot || guard.queue_suspended.is_some())
+            !guard.native_should_drive()
+              || (!guard.queue_now_is_spotify() && guard.queue_suspended.is_some())
           };
-          if stray_over_queue {
+          if stray_over_owner {
             player.pause();
+            app.lock().await.set_native_playback_intent(false);
             continue;
           }
         }
@@ -1286,6 +1284,7 @@ fn spawn_end_of_track_continuation(
     // alone is not sufficient: a dead connection can stall after that event.
     if playback_transition_generation.load(Ordering::Relaxed) != observed_transition_generation
       || !is_current_streaming_player(&app, &player).await
+      || !app.lock().await.native_context_should_drive()
     {
       return;
     }

@@ -19,7 +19,10 @@ use crate::core::plugin_api::TrackInfo;
 #[cfg(feature = "queue")]
 use crate::core::queue::QueueItemSource;
 use crate::core::queue::{queue_item_source, source_available, source_label};
+#[cfg(feature = "audio-decode-queue")]
+use crate::core::source::Source;
 use crate::infra::network::IoEvent;
+use crate::infra::queue::QueueEnd;
 
 // The decoded queue slot exists only for the sources that own a finite track
 // list; internet radio enables `audio-decode` but is never queueable.
@@ -43,7 +46,7 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
   // The slot is done, with the rest of the queue left where it is: the driver's
   // tick sends this when the slot's device died and would not reopen.
   if let IoEvent::FinishNativeQueue = event {
-    resume_or_finish(app).await;
+    resume_or_finish(app, QueueEnd::DeviceLost).await;
     return true;
   }
 
@@ -63,6 +66,18 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     let mut guard = app.lock().await;
     if guard.queue_owns_playback() {
       guard.set_status_message("Repeat does not apply to this source", 2);
+      return true;
+    }
+  }
+
+  // Shuffle likewise. The keyboard and the Action path refuse inside
+  // `App::shuffle`, but the deferred streaming startup and the MPRIS fallback
+  // dispatch this straight at the pump, where it would reach spirc over the
+  // suspended context.
+  if let IoEvent::Shuffle(_) = event {
+    let mut guard = app.lock().await;
+    if guard.queue_owns_playback() {
+      guard.set_status_message("Shuffle does not apply to this source", 2);
       return true;
     }
   }
@@ -237,7 +252,7 @@ async fn advance_native_queue(app: &Arc<Mutex<App>>) {
       }
     };
     let Some(track) = track else {
-      resume_or_finish(app).await;
+      resume_or_finish(app, QueueEnd::Drained).await;
       return;
     };
     if try_play_queued(app, &track).await {
@@ -302,7 +317,7 @@ async fn try_play_queued(app: &Arc<Mutex<App>>, track: &TrackInfo) -> bool {
 
 #[cfg(feature = "local-files")]
 async fn play_queued_local(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) -> bool {
-  release_librespot(app).await;
+  release_librespot(app, Source::Local).await;
   let Some(player) = acquire_queue_player(app).await else {
     return false;
   };
@@ -322,7 +337,7 @@ async fn play_queued_local(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) 
 
 #[cfg(feature = "subsonic")]
 async fn play_queued_subsonic(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) -> bool {
-  release_librespot(app).await;
+  release_librespot(app, Source::Subsonic).await;
   let Some(source) = crate::infra::subsonic::dispatch::build_source(app).await else {
     return false; // build_source surfaced its own status
   };
@@ -346,7 +361,7 @@ async fn play_queued_subsonic(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &st
 
 #[cfg(feature = "qobuz")]
 async fn play_queued_qobuz(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) -> bool {
-  release_librespot(app).await;
+  release_librespot(app, Source::Qobuz).await;
   let Some(source) = crate::infra::qobuz::dispatch::build_playback_source(app).await else {
     return false; // build_playback_source surfaced its own status
   };
@@ -370,7 +385,7 @@ async fn play_queued_qobuz(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) 
 
 #[cfg(feature = "youtube")]
 async fn play_queued_youtube(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) -> bool {
-  release_librespot(app).await;
+  release_librespot(app, Source::YouTube).await;
   let Some(player) = acquire_queue_player(app).await else {
     return false;
   };
@@ -441,16 +456,24 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
     guard.spotify_queue_guard_reloads = 0;
     // A fresh slot always starts playing; pause/resume flip this afterwards.
     guard.queue_slot_desired_playing = true;
+    guard.native_is_playing = Some(true);
   }
   player.activate();
   if let Err(e) = player.play_uri(uri).await {
     // Unpublish so the failed slot can't shadow the next item (or the resume).
-    app.lock().await.queue_now = None;
+    {
+      let mut guard = app.lock().await;
+      guard.queue_now = None;
+      guard.native_is_playing = Some(false);
+    }
     set_status(app, format!("Cannot play {}: {e}", track.name)).await;
     return false;
   }
   {
     let mut guard = app.lock().await;
+    // Re-arm the intent the release cleared, so a stall inside this load
+    // still escalates to a rebuild.
+    guard.set_native_playback_intent(true);
     guard.set_status_message(format!("\u{266a} {} (queue)", track.name), 4);
     preload_next_queued_spotify(&guard);
   }
@@ -507,8 +530,9 @@ pub async fn replay_published_spotify_slot(app: &Arc<Mutex<App>>) -> bool {
 /// plays. A queued Spotify track is a cold direct `player.load` (metadata +
 /// audio key + CDN handshake), which reads as a small skip delay that Spirc's
 /// own in-context skipping doesn't have — Spirc preloads. This levels that:
-/// called whenever a queue slot starts playing, under whatever `App` borrow the
-/// caller already holds.
+/// called when a Spotify queue slot starts playing, under the `App` borrow the
+/// caller already holds. A decoded slot never warms the next track: that is
+/// librespot traffic while another source plays.
 #[cfg(feature = "streaming")]
 fn preload_next_queued_spotify(app: &App) {
   let Some(uri) = app.native_queue.first().and_then(|t| t.uri.clone()) else {
@@ -621,8 +645,6 @@ async fn finish_decoded_fetch(
     d.advancing = false;
   }
   guard.set_status_message(format!("\u{266a} {track_name} (queue)"), 4);
-  #[cfg(feature = "streaming")]
-  preload_next_queued_spotify(&guard);
 }
 
 /// Publish the decoded queue slot and announce the track. Only the local-file
@@ -653,8 +675,6 @@ async fn publish_decoded(
     quality: None,
   }));
   guard.set_status_message(format!("\u{266a} {name} (queue)"), 4);
-  #[cfg(feature = "streaming")]
-  preload_next_queued_spotify(&guard);
 }
 
 /// Acquire an output-device player for the queue slot, in priority order:
@@ -719,24 +739,18 @@ async fn suspended_context_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlay
   None
 }
 
-/// Pause native Spotify before a decoded queue item takes over: it both
-/// releases the output device (when a fresh one is opened) and silences a
-/// still-playing queued Spotify track that is being skipped mid-play. Called
-/// unconditionally at the top of every decoded queue-play path — a Spirc pause
-/// on an already-paused or idle librespot is a no-op.
+/// Hand the sink to `source` before a decoded queue item takes over: claim it,
+/// drop a Spotify slot that is being skipped mid-play, then pause librespot and
+/// its play intent so no rebuild resumes Spotify under the queued track.
 #[cfg(feature = "audio-decode-queue")]
-async fn release_librespot(app: &Arc<Mutex<App>>) {
+async fn release_librespot(app: &Arc<Mutex<App>>, source: Source) {
+  let mut guard = app.lock().await;
+  guard.claim_decoded_sink(source);
+  if guard.queue_now_is_spotify() {
+    guard.queue_now = None;
+  }
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
-  #[cfg(not(feature = "streaming"))]
-  {
-    let _ = app;
-  }
+  guard.pause_native_playback();
 }
 
 #[cfg(feature = "local-files")]
@@ -749,10 +763,11 @@ async fn apply_volume(app: &Arc<Mutex<App>>, player: &Arc<LocalPlayer>) {
 // Resume
 // ---------------------------------------------------------------------------
 
-/// Queue drained: resume the suspended context, or finish if nothing was
-/// suspended. The queue slot's player is stopped only when it is **not** shared
-/// with the context being resumed (`Arc::ptr_eq`).
-async fn resume_or_finish(app: &Arc<Mutex<App>>) {
+/// Queue episode over: resume the suspended context, or finish if nothing was
+/// suspended. A `DeviceLost` end resumes nothing. The queue slot's player is
+/// stopped only when it is **not** shared with the context being resumed
+/// (`Arc::ptr_eq`).
+async fn resume_or_finish(app: &Arc<Mutex<App>>, end: QueueEnd) {
   #[cfg(any(feature = "queue", feature = "internet-radio"))]
   use crate::core::queue::SuspendedContext;
 
@@ -771,16 +786,9 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
   // resumes over it. A naturally-ended slot was already cleared at EndOfTrack.
   #[cfg(feature = "streaming")]
   {
-    let player = {
-      let guard = app.lock().await;
-      if guard.queue_now_is_spotify() {
-        guard.streaming_player.clone()
-      } else {
-        None
-      }
-    };
-    if let Some(player) = player {
-      player.pause();
+    let mut guard = app.lock().await;
+    if guard.queue_now_is_spotify() {
+      guard.pause_native_playback();
     }
   }
 
@@ -804,6 +812,14 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
     }
   }
 
+  // The device is gone, not the queue. A resume would load the context onto
+  // the output the OS now calls default, the one the user just left. The
+  // driver already reported the device.
+  if matches!(end, QueueEnd::DeviceLost) {
+    app.lock().await.release_decoded_sink_claim();
+    return;
+  }
+
   match suspended {
     None => {
       // Nothing was suspended: the queue was playing over an idle app (or a
@@ -816,6 +832,8 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
           .await
           .set_status_message("Queue finished".to_string(), 3);
       }
+      // No decoded context resumes, so the queue's hold on the sink ends here.
+      app.lock().await.release_decoded_sink_claim();
     }
     #[cfg(feature = "local-files")]
     Some(SuspendedContext::Local {
@@ -872,6 +890,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
         player.stop();
       }
       let mut guard = app.lock().await;
+      guard.release_decoded_sink_claim();
       guard.dispatch(IoEvent::ResumeNativeShuffleSession(
         resume_index,
         generation,
@@ -894,6 +913,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>) {
         player.stop();
       }
       let mut guard = app.lock().await;
+      guard.release_decoded_sink_claim();
       guard.dispatch(IoEvent::ResumeSpotifyContext(context_uri, resume_track_uri));
       if !playing {
         guard.dispatch(IoEvent::PausePlayback);
@@ -1494,6 +1514,112 @@ mod tests {
       "the drain must forward the resume index and its session generation"
     );
     assert!(app.lock().await.queue_suspended.is_none());
+  }
+
+  #[tokio::test]
+  async fn a_drained_queue_releases_the_decoded_sink_claim() {
+    let app = test_app();
+    app
+      .lock()
+      .await
+      .claim_decoded_sink(crate::core::source::Source::Local);
+
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+
+    assert!(!app.lock().await.decoded_sink_claimed());
+  }
+
+  #[tokio::test]
+  async fn device_loss_releases_the_decoded_sink_claim() {
+    let app = test_app();
+    app
+      .lock()
+      .await
+      .claim_decoded_sink(crate::core::source::Source::Qobuz);
+
+    assert!(route_queue_event(&app, &IoEvent::FinishNativeQueue).await);
+
+    assert!(!app.lock().await.active_decoded_source());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn device_loss_stops_instead_of_resuming_the_suspended_spotify_context() {
+    use crate::core::queue::SuspendedContext;
+    let (app, rx) = test_app_with_rx();
+    let suspended = SuspendedContext::Spotify {
+      context_uri: Some("spotify:playlist:ctx".to_string()),
+      resume_track_uri: Some("spotify:track:resume".to_string()),
+    };
+
+    app.lock().await.queue_suspended = Some(suspended.clone());
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::ResumeSpotifyContext(..))
+    ));
+
+    app.lock().await.queue_suspended = Some(suspended);
+    assert!(route_queue_event(&app, &IoEvent::FinishNativeQueue).await);
+    assert!(rx.try_recv().is_err());
+    assert!(app.lock().await.queue_suspended.is_none());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn shuffle_is_refused_while_the_queue_slot_owns_playback() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    let shuffle = IoEvent::Shuffle(true);
+    assert!(!route_queue_event(&app, &shuffle).await);
+
+    app.lock().await.queue_now = Some(QueueNowPlaying::Spotify {
+      track: track("spotify:track:queued", "Queued"),
+    });
+    assert!(route_queue_event(&app, &shuffle).await);
+    assert_eq!(
+      app.lock().await.status_message(),
+      Some("Shuffle does not apply to this source")
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_drain_into_a_spotify_context_releases_the_decoded_sink_claim() {
+    use crate::core::queue::SuspendedContext;
+    let (app, rx) = test_app_with_rx();
+    {
+      let mut guard = app.lock().await;
+      guard.claim_decoded_sink(crate::core::source::Source::Local);
+      guard.queue_suspended = Some(SuspendedContext::Spotify {
+        context_uri: Some("spotify:playlist:ctx".to_string()),
+        resume_track_uri: None,
+      });
+    }
+
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+
+    assert!(!app.lock().await.decoded_sink_claimed());
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::ResumeSpotifyContext(..))
+    ));
+  }
+
+  #[cfg(all(feature = "audio-decode-queue", feature = "streaming"))]
+  #[tokio::test]
+  async fn a_decoded_queue_item_takes_the_sink_from_a_spotify_slot() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    app.lock().await.queue_now = Some(QueueNowPlaying::Spotify {
+      track: track("spotify:track:queued", "Queued"),
+    });
+
+    release_librespot(&app, Source::Local).await;
+
+    let guard = app.lock().await;
+    assert!(guard.queue_now.is_none());
+    assert!(guard.active_decoded_source());
   }
 
   /// An exhausted shuffle session (`resume_index == None`) still forwards its

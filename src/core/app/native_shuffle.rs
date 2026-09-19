@@ -178,9 +178,9 @@ impl App {
   /// Spotify's own per-lap reshuffle behavior.
   #[cfg(feature = "streaming")]
   pub(crate) fn sync_native_shuffle_index(&mut self, playing_base62_id: &str) {
-    // While a queued track owns playback the session is suspended; a queued
-    // track that also appears in the playlist must not move the session index.
-    if self.queue_owns_playback() {
+    // A queued track or a decoded source owns the sink and the session is
+    // suspended; a stray TrackChanged must not move its play position.
+    if !self.native_context_should_drive() {
       return;
     }
     // Repeat-one replays the current track in place (no reload), so an *auto*
@@ -403,5 +403,33 @@ mod tests {
     let session = app.native_spotify_shuffle.as_ref().unwrap();
     assert_eq!(session.index, 1);
     assert_eq!(session.pending_reload, None);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_decoded_owner_freezes_the_shuffle_index() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_spotify_shuffle = Some(NativeSpotifyShuffleSession {
+      order: track_uris(&["a", "b", "c"]),
+      original: Vec::new(),
+      index: 0,
+      shuffled: true,
+      fetch_complete: true,
+      fetch_failed: false,
+      generation: 1,
+      pending_reload: Some(PendingNativeShuffleReload {
+        index: 1,
+        seek_ms: 0,
+      }),
+      pending_manual_skip: None,
+    });
+    app.claim_decoded_sink(Source::YouTube);
+
+    app.sync_native_shuffle_index("b");
+
+    let session = app.native_spotify_shuffle.as_ref().unwrap();
+    assert_eq!(session.index, 0);
+    assert!(session.pending_reload.is_some());
   }
 }

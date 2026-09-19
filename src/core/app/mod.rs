@@ -508,7 +508,7 @@ pub struct App {
   /// (a failed start, a lost output device), cleared when an explicit Spotify
   /// start takes the sink. Covers the window in which every `*_playback` field
   /// is `None` for a source the user asked for.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(test, feature = "audio-decode"))]
   decoded_sink_claim: Option<Source>,
   /// Sender used to recover native streaming when a stale/disconnected player is detected.
   #[cfg(feature = "streaming")]

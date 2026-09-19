@@ -56,6 +56,9 @@ impl App {
     &mut self,
     reselect_device: bool,
   ) -> bool {
+    if !self.native_should_drive() {
+      return false;
+    }
     let Some(player) = self.streaming_player.as_ref() else {
       return false;
     };
@@ -74,6 +77,9 @@ impl App {
   /// TCP: `is_connected` true, Spirc commands silently dropped).
   #[cfg(feature = "streaming")]
   pub fn force_native_streaming_recovery(&mut self, reselect_device: bool) {
+    if !self.native_should_drive() {
+      return;
+    }
     let position_ms = u32::try_from(self.song_progress_ms).unwrap_or(u32::MAX);
     let is_playing = self.native_is_playing.unwrap_or(false);
     self.prepare_native_playback_recovery(position_ms, is_playing);
@@ -154,6 +160,9 @@ impl App {
     if pending.parked_at.elapsed() > MAX_PARKED_AGE {
       self.pending_start_playback = None;
       self.set_status_message("Playback request expired during native recovery.", 6);
+      return;
+    }
+    if !self.native_should_drive() {
       return;
     }
     self.set_status_message("Resuming playback request…", 4);
@@ -269,6 +278,48 @@ mod tests {
         .recovery_attempts,
       0
     );
+  }
+
+  #[test]
+  fn a_decoded_owner_does_not_force_a_backend_rebuild() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_decoded_sink(Source::Qobuz);
+    app.is_streaming_active = true;
+
+    app.force_native_streaming_recovery(true);
+
+    assert!(app.is_streaming_active);
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_parked_start_is_not_replayed_over_a_decoded_source() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.claim_decoded_sink(Source::YouTube);
+
+    app.replay_pending_start_playback();
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.pending_start_playback.is_some());
+  }
+
+  #[test]
+  fn a_refused_replay_still_expires_on_age() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    if let Some(pending) = app.pending_start_playback.as_mut() {
+      pending.parked_at = Instant::now() - Duration::from_secs(60);
+    }
+    app.claim_decoded_sink(Source::YouTube);
+
+    app.replay_pending_start_playback();
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.pending_start_playback.is_none());
   }
 
   #[cfg(feature = "streaming")]

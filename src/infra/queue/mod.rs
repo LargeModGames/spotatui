@@ -44,6 +44,13 @@ pub fn snapshot_tracks(
     .collect()
 }
 
+/// Why a queue episode ended: a drained queue resumes the suspended context,
+/// a lost output device resumes nothing.
+pub enum QueueEnd {
+  Drained,
+  DeviceLost,
+}
+
 /// The runner-tick decision at a decoded source's auto-advance point, once the
 /// native queue is in the picture.
 ///

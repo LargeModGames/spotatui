@@ -371,7 +371,7 @@ fn reconcile_native_idle_device_if_preferred(
   player: &crate::infra::player::StreamingPlayer,
   recovery: &mut NativeIdleRecoveryState,
 ) {
-  if !player.is_connected() {
+  if !player.is_connected() || !app.native_should_drive() {
     return;
   }
 
@@ -1922,12 +1922,12 @@ impl PlaybackNetwork for Network {
 
   #[cfg(feature = "streaming")]
   async fn restore_native_playback(&mut self, generation: u64) {
-    if decoded_source_owns_playback(self).await {
-      warn!("native restore {generation} skipped: a decoded source owns playback");
-      return;
-    }
     let (player, snapshot) = {
       let mut app = self.app.lock().await;
+      if !app.native_context_should_drive() {
+        warn!("native restore {generation} skipped: another player owns the sink");
+        return;
+      }
       if app.pending_start_playback.is_some() {
         warn!("native restore {generation} skipped: a parked StartPlayback owns the replay");
         return;
@@ -2365,17 +2365,16 @@ impl PlaybackNetwork for Network {
   }
 
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
-    #[cfg(feature = "streaming")]
-    let backend = transfer_playback_backend(self, &device_id).await;
-    // Only the hand-over to librespot touches the local sink; an external
-    // device stays a valid target.
-    #[cfg(feature = "streaming")]
-    if matches!(backend, PlaybackBackend::Native(_)) && decoded_source_owns_playback(self).await {
+    // Both targets are wrong while a decoded source holds the sink: librespot
+    // is paused underneath, and the Web API transfer starts a second player.
+    if decoded_source_owns_playback(self).await {
       self
         .show_status_message("Another source owns playback".to_string(), 4)
         .await;
       return;
     }
+    #[cfg(feature = "streaming")]
+    let backend = transfer_playback_backend(self, &device_id).await;
     // A device change moves playback off the session's `from_tracks` load;
     // the app-owned shuffle order no longer describes what plays.
     #[cfg(feature = "streaming")]
@@ -2577,6 +2576,10 @@ impl PlaybackNetwork for Network {
   }
 
   async fn ensure_playback_continues(&mut self, previous_track_id: String) {
+    if !self.app.lock().await.native_context_should_drive() {
+      info!("continuation for {previous_track_id}: skipped, another player owns the sink");
+      return;
+    }
     #[cfg(feature = "streaming")]
     let native_active = is_native_streaming_active_for_playback(self).await;
     #[cfg(feature = "streaming")]
@@ -3525,5 +3528,102 @@ mod tests {
 
     let guard = app.lock().await;
     assert_eq!(guard.status_message(), Some("Queue finished"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_spotify_queue_slot_blocks_a_cached_context_restore() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::queue::QueueNowPlaying;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, rx) = channel();
+    let mut app_state = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    app_state.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queued_track("spotify:track:0000000000000000000001"),
+    });
+    let generation = app_state.record_native_playback_request(
+      Some("spotify:playlist:ctx".to_string()),
+      None,
+      None,
+      true,
+      false,
+      rspotify::model::enums::RepeatState::Off,
+    );
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(app_state));
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_restore_slot_test.json"),
+    );
+
+    network.restore_native_playback(generation).await;
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.lock().await.status_message().is_none());
+  }
+
+  #[tokio::test]
+  async fn a_decoded_owner_refuses_the_end_of_track_continuation() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::source::Source;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    seeded.claim_decoded_sink(Source::YouTube);
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the `me/player` GET panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_continuation_refusal_test.json"),
+    );
+
+    network
+      .ensure_playback_continues("0000000000000000000001".to_string())
+      .await;
+
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn transfer_to_an_external_device_is_refused_while_a_decoded_source_owns_playback() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::source::Source;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, _rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    seeded.claim_decoded_sink(Source::YouTube);
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the `me/player` PUT panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_transfer_refusal_test.json"),
+    );
+
+    network
+      .transfert_playback_to_device("external-device".to_string(), true)
+      .await;
+
+    assert_eq!(
+      app.lock().await.status_message(),
+      Some("Another source owns playback")
+    );
+    assert!(network.client_config.device_id.is_none());
   }
 }

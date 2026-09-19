@@ -397,14 +397,10 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
 
 /// Release the other backends so only YouTube holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // Pause native Spotify so librespot releases the device.
+  // Pause native Spotify so librespot releases the device and no rebuild
+  // resumes it under this source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.pause_native_playback();
   let players = app
     .lock()
     .await

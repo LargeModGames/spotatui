@@ -193,7 +193,7 @@ impl App {
   /// Returns `true` when the queue took over (an `AdvanceNativeQueue` was
   /// dispatched, so the caller must **not** fall back to
   /// `EnsurePlaybackContinues`), `false` to let the normal continue-playback path
-  /// run. Three cases:
+  /// run. Four cases:
   ///
   /// - **A queued Spotify track just ended** (`queue_now_is_spotify`): clear the
   ///   slot *now* — before the advance is processed — so the Spirc self-advance
@@ -204,6 +204,8 @@ impl App {
   ///   sink** (`queue_owns_playback` without a Spotify slot): consume it without
   ///   touching the queue — advancing would skip the audible decoded track, and
   ///   `EnsurePlaybackContinues` would resume Spotify over it.
+  /// - **A stray librespot `EndOfTrack` while a decoded source owns the sink**:
+  ///   consume it the same way, with no queue slot in play.
   /// - **A context track ended with items waiting** (queue idle, non-empty):
   ///   snapshot the Spotify context for resume, `pause()` the streaming player to
   ///   preempt Spirc's own auto-advance, then advance the queue.
@@ -212,14 +214,12 @@ impl App {
     if self.queue_now_is_spotify() {
       self.queue_now = None;
       self.spotify_queue_guard_reloads = 0;
-      if let Some(player) = self.streaming_player.as_ref() {
-        player.pause();
-      }
+      self.pause_native_playback();
       self.song_progress_ms = 0;
       self.dispatch(IoEvent::AdvanceNativeQueue);
       return true;
     }
-    if self.queue_owns_playback() {
+    if self.queue_owns_playback() || !self.native_should_drive() {
       return true;
     }
     if !self.native_queue.is_empty() {
@@ -227,9 +227,7 @@ impl App {
       // Preempt Spirc: after a direct `player.load`, Spirc may try to advance to
       // the next context track on its own. Pausing first stops that before the
       // queue slot takes the sink.
-      if let Some(player) = self.streaming_player.as_ref() {
-        player.pause();
-      }
+      self.pause_native_playback();
       self.song_progress_ms = 0;
       self.dispatch(IoEvent::AdvanceNativeQueue);
       return true;
@@ -381,6 +379,77 @@ mod tests {
       "an empty slot must never reissue the finished track"
     );
     assert!(matches!(rx.recv().unwrap(), IoEvent::AdvanceNativeQueue));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_decoded_owner_survives_a_stray_end_of_track() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .native_queue
+      .push(queue_track(Some("spotify:track:next"), "Next"));
+    app.claim_decoded_sink(Source::Qobuz);
+
+    assert!(app.handle_native_spotify_track_end());
+
+    assert!(app.queue_suspended.is_none());
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  fn app_with_native_play_intent() -> App {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.record_native_playback_request(
+      None,
+      Some(vec!["spotify:track:ctx".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    app
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_finished_spotify_queue_slot_clears_the_native_play_intent() {
+    use crate::infra::queue::QueueNowPlaying;
+    let mut app = app_with_native_play_intent();
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queue_track(Some("spotify:track:queued"), "Queued"),
+    });
+
+    assert!(app.handle_native_spotify_track_end());
+
+    assert!(
+      !app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_context_end_with_items_waiting_clears_the_native_play_intent() {
+    let mut app = app_with_native_play_intent();
+    app
+      .native_queue
+      .push(queue_track(Some("spotify:track:next"), "Next"));
+
+    assert!(app.handle_native_spotify_track_end());
+
+    assert!(app.queue_suspended.is_some());
+    assert!(
+      !app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing
+    );
   }
 
   /// The Spirc self-advance guard reissues the queued track only when Spirc has

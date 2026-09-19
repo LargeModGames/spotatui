@@ -335,9 +335,7 @@ impl App {
       if !self.native_queue.is_empty() {
         self
           .suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::ManualSkip);
-        if let Some(player) = self.streaming_player.as_ref() {
-          player.pause();
-        }
+        self.pause_native_playback();
         self.song_progress_ms = 0;
         self.dispatch(IoEvent::AdvanceNativeQueue);
         return;
@@ -396,6 +394,16 @@ impl App {
       Some(vec![track_uri]),
       Some(0),
     ));
+  }
+
+  /// Transfer Spotify playback to a Connect device, refused while another
+  /// source owns the sink.
+  pub(crate) fn transfer_playback_to_device(&mut self, device_id: String, persist: bool) {
+    if self.active_decoded_source() {
+      self.set_status_message("Another source owns playback", 4);
+      return;
+    }
+    self.dispatch(IoEvent::TransferPlaybackToDevice(device_id, persist));
   }
 
   pub fn copy_song_url(&mut self) {
