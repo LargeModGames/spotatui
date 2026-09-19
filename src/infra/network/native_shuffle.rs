@@ -638,7 +638,7 @@ impl Network {
         .native_spotify_shuffle
         .as_ref()
         .is_some_and(|s| s.generation == generation);
-      match resume_index {
+      let action = match resume_index {
         Some(index) if session_matches => {
           let player = guard.streaming_player.clone();
           match guard.native_spotify_shuffle.as_mut() {
@@ -671,14 +671,17 @@ impl Network {
           guard.set_status_message("Queue finished", 3);
           None
         }
+      };
+      // The suspend cleared the play intent: re-arm it under the same lock as
+      // the owner check, or a stall in the load below never escalates.
+      if action.is_some() {
+        guard.set_native_playback_intent(true);
       }
+      action
     };
     if let Some((player, order, index)) = action {
       player.activate();
       // The queue drained, so resume playback regardless of prior pause state.
-      // The suspend cleared the play intent: re-arm it, or a stall in this load
-      // never escalates to a rebuild.
-      self.app.lock().await.set_native_playback_intent(true);
       if let Err(e) = load_session_tracks(&player, order, index, 0, true) {
         clear_pending_reload(&self.app).await;
         self
@@ -1172,6 +1175,25 @@ mod tests {
     let session = guard.native_spotify_shuffle.as_ref().unwrap();
     assert!(session.shuffled);
     assert_eq!(session.order, uris(&["b", "a"]));
+  }
+
+  /// No Spirc command follows, and `App::shuffle` already showed and persisted
+  /// the choice, so the session records it for the fetch completion to apply.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_toggle_during_the_context_fetch_is_recorded_under_a_decoded_owner() {
+    let (app, mut network) = session_under_a_decoded_owner(&["b", "a"], 0, 5);
+    if let Some(session) = app.lock().await.native_spotify_shuffle.as_mut() {
+      session.fetch_complete = false;
+    }
+
+    network.toggle_native_shuffle_session(false).await;
+
+    let guard = app.lock().await;
+    let session = guard.native_spotify_shuffle.as_ref().unwrap();
+    assert!(!session.shuffled);
+    assert_eq!(session.order, uris(&["b", "a"]));
+    assert!(session.pending_reload.is_none());
   }
 
   #[cfg(feature = "streaming")]
