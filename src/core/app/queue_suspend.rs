@@ -307,9 +307,7 @@ impl App {
           context_uri,
           resume_track_uri,
         });
-        if let Some(player) = self.streaming_player.as_ref() {
-          player.pause();
-        }
+        self.pause_native_playback();
         return;
       }
     }
@@ -343,9 +341,7 @@ impl App {
       context_uri,
       resume_track_uri,
     });
-    if let Some(player) = self.streaming_player.as_ref() {
-      player.pause();
-    }
+    self.pause_native_playback();
   }
 }
 

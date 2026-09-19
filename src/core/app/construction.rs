@@ -172,7 +172,7 @@ impl Default for App {
       radio_playback: None,
       #[cfg(feature = "youtube")]
       youtube_playback: None,
-      #[cfg(feature = "audio-decode")]
+      #[cfg(any(test, feature = "audio-decode"))]
       decoded_sink_claim: None,
       #[cfg(feature = "streaming")]
       streaming_recovery_tx: None,

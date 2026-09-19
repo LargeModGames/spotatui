@@ -22,6 +22,16 @@ pub enum PlaybackOwner {
   None,
 }
 
+impl PlaybackOwner {
+  /// Whether the native queue slot or a decoded source holds the sink.
+  pub(crate) fn owns_local_sink(self) -> bool {
+    match self {
+      PlaybackOwner::Queue | PlaybackOwner::Decoded => true,
+      PlaybackOwner::NativeSpotify | PlaybackOwner::Spotify | PlaybackOwner::None => false,
+    }
+  }
+}
+
 /// The item a track-level action on "what is playing now" can act on.
 pub(super) enum PlayingItem<'a> {
   /// Spotify owns playback and the cached context names the item. Under
@@ -88,27 +98,41 @@ impl App {
     PlaybackOwner::None
   }
 
+  /// Whether librespot is the right player for a command aimed at it. True
+  /// under a Spotify queue slot, whose track librespot plays.
+  pub(crate) fn native_should_drive(&self) -> bool {
+    !self.active_decoded_source()
+  }
+
+  /// Whether a path that restores or continues the cached Spotify context may
+  /// run. Also false under a queue slot, whose direct load suspended it.
+  pub(crate) fn native_context_should_drive(&self) -> bool {
+    self.native_should_drive() && !self.queue_owns_playback()
+  }
+
   /// Record that `source` took the audio sink; its start path calls this
   /// before it pauses librespot.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(test, feature = "audio-decode"))]
   pub(crate) fn claim_decoded_sink(&mut self, source: Source) {
     self.decoded_sink_claim = Some(source);
   }
 
   /// Spotify takes the sink back: an explicit Spotify start reached the
   /// network layer.
-  #[cfg(feature = "audio-decode")]
   pub(crate) fn release_decoded_sink_claim(&mut self) {
-    self.decoded_sink_claim = None;
+    #[cfg(any(test, feature = "audio-decode"))]
+    {
+      self.decoded_sink_claim = None;
+    }
   }
 
   /// Whether a decoded source holds the sink claim, session or not.
   pub(crate) fn decoded_sink_claimed(&self) -> bool {
-    #[cfg(feature = "audio-decode")]
+    #[cfg(any(test, feature = "audio-decode"))]
     {
       self.decoded_sink_claim.is_some()
     }
-    #[cfg(not(feature = "audio-decode"))]
+    #[cfg(not(any(test, feature = "audio-decode")))]
     {
       false
     }
@@ -234,7 +258,7 @@ impl App {
     }
     // A decoded start in flight, or a source whose session died with nothing to
     // replace it, still owns the sink: librespot is paused underneath.
-    #[cfg(feature = "audio-decode")]
+    #[cfg(any(test, feature = "audio-decode"))]
     if self.decoded_sink_claim.is_some() {
       return true;
     }
@@ -500,7 +524,15 @@ mod tests {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
   }
 
-  #[cfg(feature = "youtube")]
+  #[test]
+  fn only_the_queue_and_a_decoded_source_own_the_local_sink() {
+    assert!(PlaybackOwner::Queue.owns_local_sink());
+    assert!(PlaybackOwner::Decoded.owns_local_sink());
+    assert!(!PlaybackOwner::NativeSpotify.owns_local_sink());
+    assert!(!PlaybackOwner::Spotify.owns_local_sink());
+    assert!(!PlaybackOwner::None.owns_local_sink());
+  }
+
   #[test]
   fn a_claimed_decoded_sink_owns_playback_without_a_session() {
     let mut app = make_app_simple();
@@ -513,7 +545,6 @@ mod tests {
     assert!(app.active_source_position_ms().is_none());
   }
 
-  #[cfg(feature = "youtube")]
   #[test]
   fn releasing_the_claim_hands_the_sink_back_to_spotify() {
     let mut app = make_app_simple();
@@ -524,7 +555,7 @@ mod tests {
     assert_eq!(app.playback_owner(), PlaybackOwner::Spotify);
   }
 
-  #[cfg(all(feature = "streaming", feature = "youtube"))]
+  #[cfg(feature = "streaming")]
   #[test]
   fn a_spotify_queue_slot_shadows_the_claim() {
     use crate::infra::queue::QueueNowPlaying;
@@ -536,5 +567,26 @@ mod tests {
 
     assert!(!app.active_decoded_source());
     assert_eq!(app.playback_owner(), PlaybackOwner::Queue);
+  }
+
+  #[test]
+  fn a_decoded_owner_drives_neither_native_predicate() {
+    let mut app = make_app_simple();
+    assert!(app.native_should_drive());
+    assert!(app.native_context_should_drive());
+
+    #[cfg(feature = "streaming")]
+    {
+      app.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+        track: queue_track(Some("spotify:track:queued"), "Queued"),
+      });
+      assert!(app.native_should_drive(), "librespot plays the slot");
+      assert!(!app.native_context_should_drive());
+      app.queue_now = None;
+    }
+
+    app.claim_decoded_sink(Source::Qobuz);
+    assert!(!app.native_should_drive());
+    assert!(!app.native_context_should_drive());
   }
 }

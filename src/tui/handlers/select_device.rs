@@ -143,10 +143,10 @@ fn transfer_to_selected_device(app: &mut App) {
   // Both clones end the `app.devices` borrow before the apply.
   let device_id = device_id.clone();
   let device_name = device.name.clone();
+  app.set_status_message(format!("Switching playback to {}", device_name), 4);
   app.apply(Action::TransferPlayback {
     device_id,
     persist: true,
   });
-  app.set_status_message(format!("Switching playback to {}", device_name), 4);
   app.pop_navigation_stack();
 }

@@ -361,14 +361,10 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
 
 /// Release every other backend so only Qobuz holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // Pause native Spotify so librespot releases the device.
+  // Pause native Spotify so librespot releases the device and no rebuild
+  // resumes it under this source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.pause_native_playback();
   // The other decoded sources never see this `qobuz:` start (the pump
   // short-circuits), so their sessions are torn down here.
   let players = app.lock().await.take_decoded_sessions_except(Source::Qobuz);

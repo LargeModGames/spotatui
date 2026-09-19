@@ -262,14 +262,10 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
 
   app.lock().await.claim_decoded_sink(Source::Local);
 
-  // Pause native Spotify so librespot releases the output device.
+  // Pause native Spotify so librespot releases the output device and no
+  // rebuild resumes it under this source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.pause_native_playback();
 
   // The other decoded sources never see this file:// start (the pump's
   // `!handled_locally` short-circuit), so their sessions are torn down here.

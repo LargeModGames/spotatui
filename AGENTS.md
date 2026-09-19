@@ -231,6 +231,25 @@ session exists.
   context) reaches `Network::start_playback`, which releases it. A bare resume
   never releases it, so a media key or Space during a download cannot resume
   librespot.
+- Every hand-over of the sink away from librespot goes through
+  `App::pause_native_playback`, never a bare `player.pause()`: it clears the
+  native play intent with the pause, so a backend rebuild under the new owner
+  comes back idle instead of restoring Spotify over it. A path that loads
+  librespot again afterwards re-arms the intent (`play_queued_spotify`,
+  `resume_native_shuffle_session`), or the stall watchdog disarms on the false
+  intent and a stalled load never rebuilds.
+- The decoded *queue* path claims the sink as well (`release_librespot`).
+  `resume_or_finish` releases that claim only where no decoded context resumes
+  (nothing suspended, a Spotify context, a lost device). A resumed decoded
+  context keeps it: only `start_*_queue` sets the claim, `play_index` does not.
+- A native entry point asks one of two predicates before it drives librespot.
+  `App::native_should_drive()` is false under a decoded owner and true under a
+  Spotify queue slot, whose track librespot plays.
+  `App::native_context_should_drive()` is also false under any queue slot; it
+  guards the paths that restore or continue the *cached* context (the restore,
+  the end-of-track continuation, the shuffle-session handlers). The recovery
+  rebuild itself is never refused: every sender removes the player before it
+  sends, so a refusal there loses the backend for the process.
 - While the native queue slot owns the sink, `current_playback_context` names the
   *suspended* context's track. Inside `core/app/`, resolve the playing *track*
   through `App::playing_item()` (`core/app/playback_routing.rs`): it answers

@@ -501,6 +501,20 @@ fn transfer_playback_carries_device_and_persist() {
 }
 
 #[test]
+fn transfer_playback_is_refused_while_a_decoded_source_owns_the_sink() {
+  let (mut app, rx) = app_with_channel();
+  app.claim_decoded_sink(Source::YouTube);
+
+  app.apply(Action::TransferPlayback {
+    device_id: "dev-1".to_string(),
+    persist: true,
+  });
+
+  assert!(rx.try_recv().is_err());
+  assert_eq!(app.status_message(), Some("Another source owns playback"));
+}
+
+#[test]
 fn add_to_queue_dispatches_add_item() {
   let (mut app, rx) = app_with_channel();
 

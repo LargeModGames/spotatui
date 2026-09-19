@@ -190,41 +190,43 @@ impl App {
       {
         self.native_load_watchdog = None;
         const MAX_RECOVERY_ATTEMPTS: u8 = 2;
-        if let Some(pending) = self.pending_start_playback.as_mut() {
-          if pending.recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
-            self.pending_start_playback = None;
-            self.set_status_message(
-              "Native playback did not respond after recovery; request dropped.",
-              8,
-            );
-          } else {
-            pending.recovery_attempts += 1;
-            log::warn!(
-              "no player event within {}s of native load; forcing recovery attempt {}",
-              NATIVE_LOAD_WATCHDOG.as_secs(),
-              pending.recovery_attempts
-            );
-            self.force_native_streaming_recovery(true);
-          }
-        } else if let Some(attempt) = self.native_restore_pending.clone() {
-          let recovery_attempts = self
-            .native_playback_recovery
-            .as_ref()
-            .filter(|snapshot| snapshot.generation == attempt.generation)
-            .map_or(0, |snapshot| snapshot.recovery_attempts);
-          if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
-            self.native_restore_pending = None;
-            self.set_status_message(
-              "Native connection recovered, but playback could not be restored.",
-              8,
-            );
-          } else {
-            log::warn!(
-              "native restore generation {} produced no matching player event; forcing recovery attempt {}",
-              attempt.generation,
-              recovery_attempts + 1
-            );
-            self.force_native_streaming_recovery(true);
+        if self.native_should_drive() {
+          if let Some(pending) = self.pending_start_playback.as_mut() {
+            if pending.recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+              self.pending_start_playback = None;
+              self.set_status_message(
+                "Native playback did not respond after recovery; request dropped.",
+                8,
+              );
+            } else {
+              pending.recovery_attempts += 1;
+              log::warn!(
+                "no player event within {}s of native load; forcing recovery attempt {}",
+                NATIVE_LOAD_WATCHDOG.as_secs(),
+                pending.recovery_attempts
+              );
+              self.force_native_streaming_recovery(true);
+            }
+          } else if let Some(attempt) = self.native_restore_pending.clone() {
+            let recovery_attempts = self
+              .native_playback_recovery
+              .as_ref()
+              .filter(|snapshot| snapshot.generation == attempt.generation)
+              .map_or(0, |snapshot| snapshot.recovery_attempts);
+            if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+              self.native_restore_pending = None;
+              self.set_status_message(
+                "Native connection recovered, but playback could not be restored.",
+                8,
+              );
+            } else {
+              log::warn!(
+                "native restore generation {} produced no matching player event; forcing recovery attempt {}",
+                attempt.generation,
+                recovery_attempts + 1
+              );
+              self.force_native_streaming_recovery(true);
+            }
           }
         }
       }
@@ -342,6 +344,22 @@ mod tests {
 
     app.update_on_tick(Duration::from_millis(500));
     assert!(app.playback_position_ms().is_some());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_decoded_owner_does_not_spend_a_native_load_watchdog_attempt() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.native_load_watchdog = Some(Instant::now() - Duration::from_secs(60));
+    app.claim_decoded_sink(Source::YouTube);
+
+    app.update_on_tick(Duration::from_millis(500));
+
+    let pending = app.pending_start_playback.as_ref().expect("still parked");
+    assert_eq!(pending.recovery_attempts, 0);
+    assert!(app.native_load_watchdog.is_none());
   }
 
   #[test]

@@ -1870,10 +1870,7 @@ impl Network {
 /// guard on purpose: a queued Spotify track keeps librespot, but a guest must
 /// not drive the host's queue slot.
 fn party_yields_to_local_playback(app: &App) -> bool {
-  matches!(
-    app.playback_owner(),
-    PlaybackOwner::Decoded | PlaybackOwner::Queue
-  )
+  app.playback_owner().owns_local_sink()
 }
 
 #[cfg(test)]
