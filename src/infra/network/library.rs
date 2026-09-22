@@ -1039,7 +1039,7 @@ impl LibraryNetwork for Network {
             &saved_albums,
             crate::infra::network::mapping::saved_album_info,
           );
-          app.library.saved_albums.add_pages(domain_page);
+          app.store_saved_albums_page(domain_page);
         }
         // Bump even on an empty page: completion is the signal plugin data
         // requests wait on, and an empty library never writes a page.
