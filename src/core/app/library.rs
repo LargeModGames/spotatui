@@ -436,20 +436,44 @@ impl App {
   }
 
   pub fn get_current_user_saved_albums_next(&mut self) {
-    match self
+    let Some(current) = self.library.saved_albums.get_results(None) else {
+      return;
+    };
+    if !current.has_next() {
+      return;
+    }
+    let next_offset = current.offset + current.limit;
+    if self
       .library
       .saved_albums
       .get_results(Some(self.library.saved_albums.index + 1))
-      .cloned()
+      .is_some()
     {
-      Some(_) => self.library.saved_albums.index += 1,
-      None => {
-        if let Some(saved_albums) = &self.library.saved_albums.get_results(None) {
-          let offset = Some(saved_albums.offset + saved_albums.limit);
-          self.dispatch(IoEvent::GetCurrentUserSavedAlbums(offset));
-        }
-      }
+      self.library.saved_albums.index += 1;
+    } else {
+      self.dispatch(IoEvent::GetCurrentUserSavedAlbums(Some(next_offset)));
     }
+    // Back to the top row, where the next page opens.
+    self.view.album_list_index = 0;
+  }
+
+  /// Append a fetched saved-albums page; a repeat fetch of an offset already cached is dropped.
+  pub(crate) fn store_saved_albums_page(
+    &mut self,
+    page: Paged<SavedAlbumInfo>,
+    requested_offset: Option<u32>,
+  ) {
+    if requested_offset.is_some_and(|offset| {
+      self
+        .library
+        .saved_albums
+        .pages
+        .iter()
+        .any(|cached| cached.offset == offset)
+    }) {
+      return;
+    }
+    self.library.saved_albums.add_pages(page);
   }
 
   pub fn get_current_user_saved_albums_previous(&mut self) {
@@ -786,5 +810,97 @@ mod tests {
       }
       _ => panic!("expected playlist sort fetch"),
     }
+  }
+
+  fn saved_album_page(offset: u32, ids: &[&str], has_next: bool) -> Paged<SavedAlbumInfo> {
+    Paged {
+      items: ids
+        .iter()
+        .map(|id| SavedAlbumInfo {
+          album: crate::core::plugin_api::AlbumInfo {
+            id: Some(id.to_string()),
+            ..Default::default()
+          },
+          added_at: String::new(),
+        })
+        .collect(),
+      offset,
+      limit: ids.len() as u32,
+      total: 6,
+      next: has_next.then(|| "https://example.com/me/albums?next".to_string()),
+      previous: None,
+    }
+  }
+
+  #[test]
+  fn saved_albums_next_fetches_the_following_offset_and_resets_the_cursor() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetCurrentUserSavedAlbums(Some(2)))
+    ));
+    assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn saved_albums_next_on_the_final_page_fetches_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], false));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.view.album_list_index, 1);
+    assert_eq!(app.library.saved_albums.index, 0);
+  }
+
+  #[test]
+  fn saved_albums_next_flips_to_a_cached_page_without_fetching() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(2, &["a3", "a4"], true));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.library.saved_albums.index, 1);
+    assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn a_repeat_fetch_of_a_cached_saved_albums_offset_is_dropped() {
+    let mut app = App::default();
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true), Some(2));
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true), Some(2));
+
+    assert_eq!(app.library.saved_albums.pages.len(), 2);
+    assert_eq!(app.library.saved_albums.index, 1);
   }
 }
