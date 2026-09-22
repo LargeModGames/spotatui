@@ -457,23 +457,20 @@ impl App {
     self.view.album_list_index = 0;
   }
 
-  /// Append a fetched saved-albums page; a repeat fetch of an offset already cached is dropped.
-  pub(crate) fn store_saved_albums_page(
-    &mut self,
-    page: Paged<SavedAlbumInfo>,
-    requested_offset: Option<u32>,
-  ) {
-    if requested_offset.is_some_and(|offset| {
-      self
-        .library
-        .saved_albums
-        .pages
-        .iter()
-        .any(|cached| cached.offset == offset)
-    }) {
-      return;
+  /// Show a fetched saved-albums page; one whose offset is already cached replaces that copy.
+  pub(crate) fn store_saved_albums_page(&mut self, page: Paged<SavedAlbumInfo>) {
+    let albums = &mut self.library.saved_albums;
+    match albums
+      .pages
+      .iter()
+      .position(|cached| cached.offset == page.offset)
+    {
+      Some(slot) => {
+        albums.pages[slot] = page;
+        albums.index = slot;
+      }
+      None => albums.add_pages(page),
     }
-    self.library.saved_albums.add_pages(page);
   }
 
   pub fn get_current_user_saved_albums_previous(&mut self) {
@@ -890,16 +887,25 @@ mod tests {
   }
 
   #[test]
-  fn a_repeat_fetch_of_a_cached_saved_albums_offset_is_dropped() {
+  fn a_saved_albums_page_fetched_again_replaces_its_cached_copy() {
     let mut app = App::default();
-    app
-      .library
-      .saved_albums
-      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true));
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
 
-    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true), Some(2));
-    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true), Some(2));
+    // Reopening Albums fetches the first page again.
+    app.store_saved_albums_page(saved_album_page(0, &["b1", "b2"], true));
 
+    let albums = &app.library.saved_albums;
+    assert_eq!(albums.pages.len(), 2);
+    assert_eq!(albums.index, 0);
+    assert_eq!(albums.pages[0].items[0].album.id.as_deref(), Some("b1"));
+
+    // The next page is still one step forward, not stuck behind a duplicate.
+    app.get_current_user_saved_albums_next();
+    assert_eq!(app.library.saved_albums.index, 1);
+
+    // A second response for the same offset does not append a copy.
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
     assert_eq!(app.library.saved_albums.pages.len(), 2);
     assert_eq!(app.library.saved_albums.index, 1);
   }
