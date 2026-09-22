@@ -129,6 +129,11 @@ impl App {
     self.pending_track_table_selection = Some(PendingTrackSelection::Index(index));
   }
 
+  /// Drop a row parked for an in-flight page: the user moved on since.
+  pub(crate) fn forget_pending_row_selection(&mut self) {
+    self.pending_track_table_selection = None;
+  }
+
   #[cfg(test)]
   pub(crate) fn pending_track_table_selection(&self) -> Option<PendingTrackSelection> {
     self.pending_track_table_selection
