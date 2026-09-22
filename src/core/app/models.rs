@@ -66,6 +66,13 @@ impl App {
     if track_count > 0 {
       if let Some(pending) = self.pending_track_table_selection.take() {
         self.view.track_table_index = match pending {
+          // Short of the parked row while more pages load: wait for them on the last row.
+          PendingTrackSelection::Index(index)
+            if index >= track_count && self.track_table_has_more_rows() =>
+          {
+            self.pending_track_table_selection = Some(pending);
+            track_count - 1
+          }
           PendingTrackSelection::Index(index) => index.min(track_count.saturating_sub(1)),
         };
       } else {
@@ -132,6 +139,16 @@ impl App {
   /// Drop a row parked for an in-flight page: the user moved on since.
   pub(crate) fn forget_pending_row_selection(&mut self) {
     self.pending_track_table_selection = None;
+  }
+
+  fn track_table_has_more_rows(&self) -> bool {
+    match self.track_table.context {
+      Some(TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch) => {
+        self.current_playlist_has_more_tracks()
+      }
+      Some(TrackTableContext::SavedTracks) => self.current_saved_tracks_has_more_tracks(),
+      _ => false,
+    }
   }
 
   #[cfg(test)]

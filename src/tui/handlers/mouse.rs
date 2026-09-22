@@ -634,7 +634,10 @@ fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
 fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app: &mut App) {
   match active_block {
     ActiveBlock::AlbumList => app.view.album_list_index = index,
-    ActiveBlock::TrackTable => app.view.track_table_index = index,
+    ActiveBlock::TrackTable => {
+      app.forget_pending_row_selection();
+      app.view.track_table_index = index;
+    }
     ActiveBlock::AlbumTracks => match app.album_table_context {
       crate::core::app::AlbumTableContext::Full => app.view.saved_album_tracks_index = index,
       crate::core::app::AlbumTableContext::Simplified => {
@@ -1964,6 +1967,17 @@ mod tests {
     assert_eq!(app.view.artists_list_index, 11);
     assert_eq!(app.view.shows_list_index, 12);
     assert_eq!(app.view.episode_list_index, 13);
+  }
+
+  #[test]
+  fn clicking_a_track_row_cancels_a_row_parked_for_a_loading_page() {
+    let mut app = App::default();
+    app.select_row_when_next_page_lands(10);
+
+    set_content_table_selected_index(ActiveBlock::TrackTable, 1, &mut app);
+
+    assert_eq!(app.view.track_table_index, 1);
+    assert_eq!(app.pending_track_table_selection(), None);
   }
 
   #[test]

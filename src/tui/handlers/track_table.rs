@@ -802,15 +802,29 @@ mod tests {
       other => panic!("unexpected event: {:?}", event_name(&other)),
     }
 
-    let next = saved_tracks_page(
+    // A short page still leaves the target out of reach: the cursor waits on the new last row.
+    let short = saved_tracks_page_with_total(
       2,
       &["0000000000000000000003", "0000000000000000000004"],
-      false,
+      true,
+      14,
     );
-    app.library.saved_tracks.upsert_page_by_offset(next);
+    app.library.saved_tracks.upsert_page_by_offset(short);
     app.set_saved_tracks_to_table_continuous();
 
     assert_eq!(app.view.track_table_index, 3);
+    assert_eq!(
+      app.pending_track_table_selection(),
+      Some(PendingTrackSelection::Index(11))
+    );
+
+    let ids: Vec<String> = (5..15).map(|i| format!("{i:022}")).collect();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let last = saved_tracks_page_with_total(4, &ids, false, 14);
+    app.library.saved_tracks.upsert_page_by_offset(last);
+    app.set_saved_tracks_to_table_continuous();
+
+    assert_eq!(app.view.track_table_index, 11);
     assert_eq!(app.pending_track_table_selection(), None);
   }
 
