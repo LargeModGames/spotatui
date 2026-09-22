@@ -1,6 +1,6 @@
 # Issue #530: Spotify playlist-content 403s and librespot spclient
 
-**Research date:** 2026-09-24  
+**Research date:** 2026-09-22  
 **Scope:** repository state at commit [`91fd6b3`](https://github.com/nohint404/spotatui/tree/91fd6b36f5b0f6081cf0aebd8e1471f71fcee532); no credentials or live account were used.
 
 ## Findings
@@ -22,7 +22,7 @@ The important access distinction is therefore:
 - **Playlist where the user is a collaborator:** contents are also eligible.
 - **External playlist:** merely public, followed, or discoverable is not enough; Spotify says only metadata is returned for non-owned/non-collaborated playlists and the `items` field is absent. The reference separately specifies 403 for the items endpoint in that case ([migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide#playlist), [playlist concepts](https://developer.spotify.com/documentation/web-api/concepts/playlists)).
 
-Thus, 403 from the legacy `/tracks` path is expected to be treated as a removed-endpoint failure. A 403 from `/items` for an external playlist is also documented behavior. A 403 from `/items` for an owned/collaborative playlist is not explained by the published contract and needs account/client-mode reproduction; the official pages do not promise that an internal client can bypass it.
+Thus, Spotify documents the legacy `/tracks` operation as removed/replaced, without documenting a specific HTTP status for calling it; a 403 from that legacy endpoint was observed in the reported/reproduced behavior. A 403 from `/items` for an external playlist is documented behavior. A 403 from `/items` for an owned/collaborative playlist is not explained by the published contract and needs account/client-mode reproduction; the official pages do not promise that an internal client can bypass it.
 
 ### Exact librespot dependency in this repository
 

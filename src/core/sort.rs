@@ -3,7 +3,6 @@
 //! Provides sorting functionality for playlists, albums, artists, etc.
 
 use crate::core::plugin_api::TrackInfo;
-use rspotify::model::track::FullTrack;
 use serde::{Deserialize, Serialize};
 
 /// Fields that can be used for sorting
@@ -274,44 +273,6 @@ pub struct Sorter {
 impl Sorter {
   pub fn new(state: SortState) -> Self {
     Self { state }
-  }
-
-  #[allow(dead_code)]
-  pub fn sort_tracks(&self, tracks: &mut [FullTrack]) {
-    if self.state.field == SortField::Default {
-      return;
-    }
-
-    tracks.sort_by(|a, b| {
-      let order = match self.state.field {
-        SortField::Name => a.name.cmp(&b.name),
-        SortField::Duration => a.duration.cmp(&b.duration),
-        SortField::Artist => {
-          let empty_string = String::new();
-          let artist_a = a
-            .artists
-            .first()
-            .map(|ar| &ar.name)
-            .unwrap_or(&empty_string);
-          let artist_b = b
-            .artists
-            .first()
-            .map(|ar| &ar.name)
-            .unwrap_or(&empty_string);
-          artist_a.cmp(artist_b)
-        }
-        SortField::Album => a.album.name.cmp(&b.album.name),
-        // DateAdded requires PlaylistItem wrapper which we don't have here.
-        // Assuming Default order is DateAdded for playlists.
-        _ => std::cmp::Ordering::Equal,
-      };
-
-      if self.state.order == SortOrder::Descending {
-        order.reverse()
-      } else {
-        order
-      }
-    });
   }
 
   pub fn sort_track_infos(&self, tracks: &mut [TrackInfo]) {
