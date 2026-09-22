@@ -1,6 +1,6 @@
 use super::*;
 
-fn sort_playlist_track_matches(matches: &mut [(FullTrack, usize)], sort_state: SortState) {
+fn sort_playlist_track_matches(matches: &mut [(TrackInfo, usize)], sort_state: SortState) {
   if sort_state.field == SortField::Default {
     return;
   }
@@ -8,22 +8,9 @@ fn sort_playlist_track_matches(matches: &mut [(FullTrack, usize)], sort_state: S
   matches.sort_by(|(track_a, position_a), (track_b, position_b)| {
     let order = match sort_state.field {
       SortField::Name => track_a.name.cmp(&track_b.name),
-      SortField::Duration => track_a.duration.cmp(&track_b.duration),
-      SortField::Artist => {
-        let empty_string = String::new();
-        let artist_a = track_a
-          .artists
-          .first()
-          .map(|artist| &artist.name)
-          .unwrap_or(&empty_string);
-        let artist_b = track_b
-          .artists
-          .first()
-          .map(|artist| &artist.name)
-          .unwrap_or(&empty_string);
-        artist_a.cmp(artist_b)
-      }
-      SortField::Album => track_a.album.name.cmp(&track_b.album.name),
+      SortField::Duration => track_a.duration_ms.cmp(&track_b.duration_ms),
+      SortField::Artist => track_a.artists.first().cmp(&track_b.artists.first()),
+      SortField::Album => track_a.album.cmp(&track_b.album),
       SortField::DateAdded => position_a.cmp(position_b),
       SortField::Default => std::cmp::Ordering::Equal,
     };
@@ -199,11 +186,28 @@ impl App {
     self.set_playlist_tracks_to_table_continuous();
   }
 
+  #[allow(dead_code)]
   pub fn apply_playlist_track_search_results(
     &mut self,
     playlist_id: &PlaylistId<'_>,
     query: String,
-    mut matches: Vec<(FullTrack, usize)>,
+    matches: Vec<(FullTrack, usize)>,
+  ) -> bool {
+    self.apply_playlist_track_search_info_results(
+      playlist_id,
+      query,
+      matches
+        .into_iter()
+        .map(|(track, position)| (TrackInfo::from(&track), position))
+        .collect(),
+    )
+  }
+
+  pub fn apply_playlist_track_search_info_results(
+    &mut self,
+    playlist_id: &PlaylistId<'_>,
+    query: String,
+    mut matches: Vec<(TrackInfo, usize)>,
   ) -> bool {
     if !self.is_playlist_track_table_active_for(playlist_id) {
       return false;
@@ -213,12 +217,9 @@ impl App {
 
     let track_ids = matches
       .iter()
-      .filter_map(|(track, _)| track.id.as_ref().map(|id| id.id().to_string()))
+      .filter_map(|(track, _)| track.id.clone())
       .collect();
-    let tracks: Vec<TrackInfo> = matches
-      .iter()
-      .map(|(track, _)| TrackInfo::from(track))
-      .collect();
+    let tracks: Vec<TrackInfo> = matches.iter().map(|(track, _)| track.clone()).collect();
     let positions: Vec<usize> = matches.into_iter().map(|(_, position)| position).collect();
 
     self.active_playlist_track_filter = Some(query);
@@ -342,16 +343,27 @@ impl App {
     }
   }
 
+  #[allow(dead_code)]
   pub fn apply_sorted_playlist_tracks_if_current(
     &mut self,
     playlist_id: &PlaylistId<'_>,
     tracks: Vec<FullTrack>,
   ) -> bool {
+    self.apply_sorted_playlist_track_infos_if_current(
+      playlist_id,
+      tracks.iter().map(TrackInfo::from).collect(),
+    )
+  }
+
+  pub fn apply_sorted_playlist_track_infos_if_current(
+    &mut self,
+    playlist_id: &PlaylistId<'_>,
+    tracks: Vec<TrackInfo>,
+  ) -> bool {
     if !self.is_playlist_track_table_active_for(playlist_id) {
       return false;
     }
 
-    let tracks = tracks.iter().map(TrackInfo::from).collect();
     self.replace_track_table_tracks(tracks);
     self.view.track_table_index = 0;
     true

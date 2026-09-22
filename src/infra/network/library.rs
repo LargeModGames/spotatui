@@ -1,13 +1,16 @@
 use super::mapping::{map_page, playlist_items_page};
 use super::requests::{
-  spotify_api_request_json_for_with_refresh, spotify_get_typed_compat_for_with_refresh,
+  is_forbidden_error, spotify_api_request_json_for_with_refresh,
+  spotify_get_typed_compat_for_with_refresh,
 };
 use super::{IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
 };
-use crate::core::plugin_api::{PlaylistInfo, ShowInfo, TrackInfo};
+use crate::core::pagination::Paged;
+use crate::core::plugin_api::{PlayableInfo, PlaylistInfo, ShowInfo, TrackInfo};
+use crate::core::sort::Sorter;
 use crate::core::source::Source;
 use anyhow::anyhow;
 use reqwest::Method;
@@ -16,20 +19,376 @@ use rspotify::model::{
   page::Page,
   playlist::{PlaylistItem, SimplifiedPlaylist},
   track::SavedTrack,
-  PlayableItem,
 };
 use rspotify::{prelude::*, AuthCodePkceSpotify};
 use serde_json::json;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "streaming")]
 use crate::infra::player::StreamingPlayer;
+#[cfg(feature = "streaming")]
+use librespot_core::SpotifyUri;
+#[cfg(feature = "streaming")]
+use librespot_metadata::{
+  Episode as LibrespotEpisode, Metadata, Playlist as LibrespotPlaylist, Track as LibrespotTrack,
+};
 
 // Spotify's `me/library` endpoints (contains, save, remove) accept at most 40
 // uris per request; anything larger fails with a 400 "Too many uris".
 const LIBRARY_CONTAINS_MAX_URIS: usize = 40;
+
+const EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS: &str = concat!(
+  "Spotify Development Mode blocks playlist contents owned by another user. ",
+  "Only playlists you own or collaborate on are available."
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistAccess {
+  Owned,
+  Collaborative,
+  External,
+  Unknown,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PlaylistAccessMetadata {
+  collaborative: bool,
+  owner: Option<PlaylistOwnerMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PlaylistOwnerMetadata {
+  id: String,
+}
+
+/// The Web API page is still the primary representation. The librespot page is
+/// source-agnostic domain data because its internal metadata API does not
+/// expose rspotify's `PlaylistItem` model.
+enum PlaylistTracksPage {
+  Api(Page<PlaylistItem>),
+  #[cfg(feature = "streaming")]
+  Librespot(Paged<(u32, PlayableInfo)>),
+}
+
+impl PlaylistTracksPage {
+  fn into_domain(self) -> Paged<(u32, PlayableInfo)> {
+    match self {
+      Self::Api(page) => playlist_items_page(&page),
+      #[cfg(feature = "streaming")]
+      Self::Librespot(page) => page,
+    }
+  }
+}
+
+#[derive(Debug)]
+enum PlaylistPageError {
+  /// Spotify's Development Mode restriction applies to this external playlist
+  /// and neither the Web API nor the optional native fallback can serve it.
+  UnsupportedExternal,
+  Request(anyhow::Error),
+}
+
+fn playlist_access_from_owner(
+  user_id: Option<&str>,
+  owner_id: Option<&str>,
+  collaborative: bool,
+) -> PlaylistAccess {
+  if collaborative {
+    return PlaylistAccess::Collaborative;
+  }
+
+  match (user_id, owner_id) {
+    (Some(user_id), Some(owner_id)) if owner_id == user_id => PlaylistAccess::Owned,
+    (Some(_), Some(_)) => PlaylistAccess::External,
+    _ => PlaylistAccess::Unknown,
+  }
+}
+
+fn known_playlist_info<'a>(app: &'a App, playlist_id: &str) -> Option<&'a PlaylistInfo> {
+  app
+    .all_playlists
+    .iter()
+    .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
+    .or_else(|| {
+      app
+        .search_results
+        .playlists
+        .as_ref()?
+        .items
+        .iter()
+        .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
+    })
+}
+
+fn playlist_access(app: &App, playlist_id: &str) -> PlaylistAccess {
+  let Some(playlist) = known_playlist_info(app, playlist_id) else {
+    return PlaylistAccess::Unknown;
+  };
+
+  playlist_access_from_owner(
+    app.user.as_ref().map(|user| user.id.as_str()),
+    playlist.owner_id.as_deref(),
+    playlist.collaborative,
+  )
+}
+
+fn log_playlist_access(app: &App, playlist_id: &str, access: PlaylistAccess) {
+  if let Some(playlist) = known_playlist_info(app, playlist_id) {
+    log::debug!(
+      "playlist content access: id={} access={access:?} owner_id={:?} user_id={:?} collaborative={} public={:?}",
+      playlist_id,
+      playlist.owner_id,
+      app.user.as_ref().map(|user| user.id.as_str()),
+      playlist.collaborative,
+      playlist.public,
+    );
+  } else {
+    log::debug!(
+      "playlist content access: id={} access={access:?} metadata=unknown",
+      playlist_id,
+    );
+  }
+}
+
+async fn classify_playlist_after_forbidden(
+  spotify: &AuthCodePkceSpotify,
+  app: &Arc<Mutex<App>>,
+  token_cache_path: &Path,
+  playlist_id: &PlaylistId<'_>,
+) -> PlaylistAccess {
+  let known_access = {
+    let app_guard = app.lock().await;
+    let access = playlist_access(&app_guard, playlist_id.id());
+    log_playlist_access(&app_guard, playlist_id.id(), access);
+    access
+  };
+  if known_access != PlaylistAccess::Unknown {
+    return known_access;
+  }
+
+  // Search results and pasted playlist URIs are not necessarily in the user's
+  // library. The metadata endpoint remains useful for relationship checks even
+  // when the items endpoint is restricted, and the minimal shape avoids asking
+  // rspotify to deserialize a response with no item page.
+  let metadata = match spotify_get_typed_compat_for_with_refresh::<PlaylistAccessMetadata>(
+    spotify,
+    &format!("playlists/{}", playlist_id.id()),
+    &[],
+    token_cache_path,
+    app,
+  )
+  .await
+  {
+    Ok(metadata) => metadata,
+    Err(error) => {
+      log::debug!(
+        "playlist access metadata unavailable for {}: {}",
+        playlist_id.id(),
+        error
+      );
+      return PlaylistAccess::Unknown;
+    }
+  };
+
+  let access = {
+    let app_guard = app.lock().await;
+    playlist_access_from_owner(
+      app_guard.user.as_ref().map(|user| user.id.as_str()),
+      metadata.owner.as_ref().map(|owner| owner.id.as_str()),
+      metadata.collaborative,
+    )
+  };
+  log::debug!(
+    "playlist content access from metadata: id={} access={access:?} owner_id={:?}",
+    playlist_id.id(),
+    metadata.owner.as_ref().map(|owner| owner.id.as_str()),
+  );
+  access
+}
+
+/// Fetch playlist items through the Development Mode Web API first. A 403 is
+/// special only when the playlist metadata proves that it is external to the
+/// current user and non-collaborative; all other errors remain real errors.
+async fn fetch_playlist_tracks_page(
+  spotify: &AuthCodePkceSpotify,
+  app: &Arc<Mutex<App>>,
+  token_cache_path: &Path,
+  playlist_id: &PlaylistId<'_>,
+  offset: u32,
+  limit: u32,
+) -> Result<PlaylistTracksPage, PlaylistPageError> {
+  let path = format!("playlists/{}/items", playlist_id.id());
+  let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+  match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    spotify,
+    &path,
+    &query,
+    token_cache_path,
+    app,
+  )
+  .await
+  {
+    Ok(page) => Ok(PlaylistTracksPage::Api(page)),
+    Err(error) => {
+      let forbidden = is_forbidden_error(&error);
+      let access = if forbidden {
+        classify_playlist_after_forbidden(spotify, app, token_cache_path, playlist_id).await
+      } else {
+        PlaylistAccess::Unknown
+      };
+
+      if access == PlaylistAccess::External && forbidden {
+        #[cfg(feature = "streaming")]
+        match fetch_librespot_playlist_tracks_page(app, playlist_id, offset, limit).await {
+          Ok(page) => return Ok(PlaylistTracksPage::Librespot(page)),
+          Err(fallback_error) => {
+            log::warn!(
+              "librespot playlist fallback failed for {}: {}",
+              playlist_id.id(),
+              fallback_error
+            );
+          }
+        }
+        return Err(PlaylistPageError::UnsupportedExternal);
+      }
+
+      Err(PlaylistPageError::Request(error))
+    }
+  }
+}
+
+#[cfg(feature = "streaming")]
+async fn fetch_librespot_playlist_tracks_page(
+  app: &Arc<Mutex<App>>,
+  playlist_id: &PlaylistId<'_>,
+  offset: u32,
+  limit: u32,
+) -> anyhow::Result<Paged<(u32, PlayableInfo)>> {
+  let player = {
+    let app_guard = app.lock().await;
+    app_guard.streaming_player.clone()
+  }
+  .ok_or_else(|| anyhow!("native streaming session is unavailable"))?;
+  let session = player.session();
+  let id = librespot_core::SpotifyId::from_base62(playlist_id.id())
+    .map_err(|error| anyhow!("invalid playlist id for librespot: {error}"))?;
+  let uri = SpotifyUri::Playlist { user: None, id };
+  let playlist = LibrespotPlaylist::get(&session, &uri)
+    .await
+    .map_err(|error| anyhow!("librespot playlist request failed: {error}"))?;
+
+  if playlist.contents.is_truncated {
+    return Err(anyhow!("librespot returned truncated playlist contents"));
+  }
+
+  let limit = limit.max(1);
+  let total = playlist.length.max(0) as u32;
+  let end = offset.saturating_add(limit);
+  let content_offset = playlist.contents.position.max(0) as u32;
+  let selected = playlist
+    .contents
+    .items
+    .iter()
+    .enumerate()
+    .map(|(index, item)| (content_offset + index as u32, item.id.clone()))
+    .filter(|(position, _)| *position >= offset && *position < end)
+    .collect::<Vec<_>>();
+
+  let resolved = futures::future::join_all(selected.into_iter().map(|(position, uri)| {
+    let session = session.clone();
+    async move {
+      let item = match &uri {
+        SpotifyUri::Track { .. } => match LibrespotTrack::get(&session, &uri).await {
+          Ok(track) => librespot_track_info(&track).map(PlayableInfo::Track),
+          Err(error) => {
+            log::debug!("librespot track metadata failed for {}: {}", uri, error);
+            None
+          }
+        },
+        SpotifyUri::Episode { .. } => match LibrespotEpisode::get(&session, &uri).await {
+          Ok(episode) => librespot_episode_info(&episode).map(PlayableInfo::Episode),
+          Err(error) => {
+            log::debug!("librespot episode metadata failed for {}: {}", uri, error);
+            None
+          }
+        },
+        _ => {
+          log::debug!("librespot playlist item is not playable: {}", uri);
+          None
+        }
+      };
+      (position, item)
+    }
+  }))
+  .await;
+
+  Ok(Paged {
+    items: resolved
+      .into_iter()
+      .filter_map(|(position, item)| item.map(|item| (position, item)))
+      .collect(),
+    offset,
+    limit,
+    total,
+    next: (end < total).then(|| "librespot:playlist:next".to_string()),
+    previous: None,
+  })
+}
+
+#[cfg(feature = "streaming")]
+fn librespot_track_info(track: &LibrespotTrack) -> Option<TrackInfo> {
+  let id = track.id.to_id().ok()?;
+  let uri = track.id.to_uri().ok();
+  let album_id = track.album.id.to_id().ok();
+  let artist_refs = track
+    .artists
+    .iter()
+    .map(|artist| crate::core::plugin_api::ArtistRef {
+      id: artist.id.to_id().ok(),
+      name: artist.name.clone(),
+    })
+    .collect::<Vec<_>>();
+
+  Some(TrackInfo {
+    uri,
+    name: track.name.clone(),
+    artists: artist_refs
+      .iter()
+      .map(|artist| artist.name.clone())
+      .collect(),
+    album: track.album.name.clone(),
+    duration_ms: track.duration.max(0) as u64,
+    id: Some(id),
+    album_id,
+    artist_refs,
+    is_playable: track.restrictions.is_empty(),
+    is_local: false,
+    track_number: track.number.max(0) as u32,
+    explicit: track.is_explicit,
+    image_url: None,
+  })
+}
+
+#[cfg(feature = "streaming")]
+fn librespot_episode_info(
+  episode: &LibrespotEpisode,
+) -> Option<crate::core::plugin_api::EpisodeInfo> {
+  Some(crate::core::plugin_api::EpisodeInfo {
+    id: episode.id.to_id().ok(),
+    uri: episode.id.to_uri().ok(),
+    name: episode.name.clone(),
+    duration_ms: episode.duration.max(0) as u64,
+    show_name: episode.show_name.clone(),
+    description: episode.description.clone(),
+    release_date: String::new(),
+    is_playable: episode.restrictions.is_empty(),
+    resume_point: None,
+    image_url: None,
+  })
+}
 
 #[cfg(test)]
 fn next_saved_tracks_offset(page: &Page<SavedTrack>) -> Option<u32> {
@@ -59,6 +418,7 @@ fn playlist_track_search_terms(query: &str) -> Vec<String> {
     .collect()
 }
 
+#[cfg(test)]
 fn playlist_track_search_haystack(track: &rspotify::model::track::FullTrack) -> String {
   let mut haystack = format!("{} {}", track.name, track.album.name);
   for artist in &track.artists {
@@ -68,11 +428,18 @@ fn playlist_track_search_haystack(track: &rspotify::model::track::FullTrack) -> 
   haystack.to_lowercase()
 }
 
+#[cfg(test)]
 fn playlist_track_matches_terms(
   track: &rspotify::model::track::FullTrack,
   terms: &[String],
 ) -> bool {
   let haystack = playlist_track_search_haystack(track);
+  terms.iter().all(|term| haystack.contains(term))
+}
+
+fn playlist_track_info_matches_terms(track: &TrackInfo, terms: &[String]) -> bool {
+  let haystack =
+    format!("{} {} {}", track.name, track.album, track.artists.join(" "),).to_lowercase();
   terms.iter().all(|term| haystack.contains(term))
 }
 
@@ -182,20 +549,29 @@ pub async fn prefetch_playlist_tracks_page_task(
       return;
     }
 
-    let path = format!("playlists/{}/items", playlist_id.id());
-    let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    let Ok(page) = spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    let page = match fetch_playlist_tracks_page(
       &spotify,
-      &path,
-      &query,
-      &token_cache_path,
       &app,
+      &token_cache_path,
+      &playlist_id,
+      offset,
+      limit,
     )
     .await
-    else {
-      let mut app_guard = app.lock().await;
-      app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
-      return;
+    {
+      Ok(page) => page.into_domain(),
+      Err(PlaylistPageError::UnsupportedExternal) => {
+        let mut app_guard = app.lock().await;
+        app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
+        app_guard.set_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+        return;
+      }
+      Err(PlaylistPageError::Request(error)) => {
+        let mut app_guard = app.lock().await;
+        app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
+        app_guard.handle_error(error);
+        return;
+      }
     };
 
     if page.items.is_empty() {
@@ -213,9 +589,7 @@ pub async fn prefetch_playlist_tracks_page_task(
       return;
     }
 
-    app_guard
-      .playlist_track_pages
-      .upsert_page_by_offset(playlist_items_page(&page));
+    app_guard.playlist_track_pages.upsert_page_by_offset(page);
     app_guard.set_playlist_tracks_to_table_continuous();
     let Some(candidate_next_offset) = next_offset else {
       return;
@@ -502,10 +876,9 @@ async fn fetch_all_playlist_tracks_and_sort_task(
   playlist_id: PlaylistId<'static>,
 ) {
   let playlist_id_string = playlist_id.id().to_string();
-  let mut all_tracks = Vec::new();
+  let mut all_tracks: Vec<TrackInfo> = Vec::new();
   let mut offset = 0u32;
   let limit = 50u32;
-  let path = format!("playlists/{}/items", playlist_id.id());
 
   loop {
     {
@@ -517,41 +890,50 @@ async fn fetch_all_playlist_tracks_and_sort_task(
         return;
       }
     }
-    let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+
+    let page = match fetch_playlist_tracks_page(
       &spotify,
-      &path,
-      &query,
-      &token_cache_path,
       &app,
+      &token_cache_path,
+      &playlist_id,
+      offset,
+      limit,
     )
     .await
     {
-      Ok(page) => {
-        if page.items.is_empty() {
-          break;
-        }
-
-        for item in page.items {
-          if let Some(PlayableItem::Track(full_track)) = item.item {
-            all_tracks.push(full_track);
-          }
-        }
-
-        if page.next.is_none() {
-          break;
-        }
-        offset += limit;
-      }
-      Err(e) => {
+      Ok(page) => page.into_domain(),
+      Err(PlaylistPageError::UnsupportedExternal) => {
         let mut app = app.lock().await;
         app
           .playlist_sort_fetch_in_flight
           .remove(&playlist_id_string);
-        app.handle_error(anyhow!(e));
+        app.set_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
         return;
       }
+      Err(PlaylistPageError::Request(error)) => {
+        let mut app = app.lock().await;
+        app
+          .playlist_sort_fetch_in_flight
+          .remove(&playlist_id_string);
+        app.handle_error(error);
+        return;
+      }
+    };
+
+    if page.items.is_empty() {
+      break;
     }
+
+    for (_, item) in page.items {
+      if let PlayableInfo::Track(track) = item {
+        all_tracks.push(track);
+      }
+    }
+
+    if page.next.is_none() {
+      break;
+    }
+    offset = page.offset.saturating_add(page.limit);
   }
 
   // Apply sort if any
@@ -559,11 +941,8 @@ async fn fetch_all_playlist_tracks_and_sort_task(
   app
     .playlist_sort_fetch_in_flight
     .remove(&playlist_id_string);
-
-  use crate::core::sort::Sorter;
-  let sorter = Sorter::new(app.playlist_sort);
-  sorter.sort_tracks(&mut all_tracks);
-  let _ = app.apply_sorted_playlist_tracks_if_current(&playlist_id, all_tracks);
+  Sorter::new(app.playlist_sort).sort_track_infos(&mut all_tracks);
+  let _ = app.apply_sorted_playlist_track_infos_if_current(&playlist_id, all_tracks);
 }
 
 /// Background half of `get_current_user_playlists`: fetch the remaining pages
@@ -843,16 +1222,13 @@ impl LibraryNetwork for Network {
       app.playlist_tracks_prefetch_generation
     };
 
-    let path = format!("playlists/{}/items", playlist_id.id());
-    match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    match fetch_playlist_tracks_page(
       self.spotify(),
-      &path,
-      &[
-        ("limit", self.large_search_limit.to_string()),
-        ("offset", playlist_offset.to_string()),
-      ],
-      &self.token_cache_path,
       &self.app,
+      &self.token_cache_path,
+      &playlist_id,
+      playlist_offset,
+      self.large_search_limit,
     )
     .await
     {
@@ -872,7 +1248,7 @@ impl LibraryNetwork for Network {
 
         let playlist_tracks_index = app
           .playlist_track_pages
-          .upsert_page_by_offset(playlist_items_page(&playlist_tracks));
+          .upsert_page_by_offset(playlist_tracks.into_domain());
         app.set_playlist_tracks_to_table_continuous();
 
         let next_offset = app.next_missing_playlist_tracks_offset(playlist_tracks_index);
@@ -885,7 +1261,17 @@ impl LibraryNetwork for Network {
           self.spawn_playlist_tracks_prefetch(playlist_id, next_offset, generation);
         }
       }
-      Err(e) => {
+      Err(PlaylistPageError::UnsupportedExternal) => {
+        let mut app = self.app.lock().await;
+        app
+          .playlist_tracks_prefetch_in_flight
+          .remove(&playlist_offset);
+        if app.pending_playlist_open.as_deref() == Some(playlist_id.id()) {
+          app.pending_playlist_open = None;
+        }
+        app.set_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+      }
+      Err(PlaylistPageError::Request(error)) => {
         let mut app = self.app.lock().await;
         app
           .playlist_tracks_prefetch_in_flight
@@ -894,7 +1280,7 @@ impl LibraryNetwork for Network {
           app.pending_playlist_open = None;
         }
         drop(app);
-        self.handle_error(anyhow!(e)).await;
+        self.handle_error(error).await;
       }
     }
   }
@@ -909,22 +1295,28 @@ impl LibraryNetwork for Network {
 
     let limit = self.large_search_limit;
     let mut offset = 0u32;
-    let mut matches = Vec::new();
+    let mut matches: Vec<(TrackInfo, usize)> = Vec::new();
 
     loop {
-      let path = format!("playlists/{}/items", playlist_id.id());
-      let page = match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+      let page = match fetch_playlist_tracks_page(
         self.spotify(),
-        &path,
-        &[("limit", limit.to_string()), ("offset", offset.to_string())],
-        &self.token_cache_path,
         &self.app,
+        &self.token_cache_path,
+        &playlist_id,
+        offset,
+        limit,
       )
       .await
       {
-        Ok(page) => page,
-        Err(e) => {
-          self.handle_error(anyhow!(e)).await;
+        Ok(page) => page.into_domain(),
+        Err(PlaylistPageError::UnsupportedExternal) => {
+          let mut app = self.app.lock().await;
+          app.pending_playlist_track_search = None;
+          app.set_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+          return;
+        }
+        Err(PlaylistPageError::Request(error)) => {
+          self.handle_error(error).await;
           return;
         }
       };
@@ -933,10 +1325,10 @@ impl LibraryNetwork for Network {
         break;
       }
 
-      for (index, item) in page.items.iter().enumerate() {
-        if let Some(PlayableItem::Track(track)) = item.item.as_ref() {
-          if playlist_track_matches_terms(track, &terms) {
-            matches.push((track.clone(), page.offset as usize + index));
+      for (position, item) in page.items {
+        if let PlayableInfo::Track(track) = item {
+          if playlist_track_info_matches_terms(&track, &terms) {
+            matches.push((track, position as usize));
           }
         }
       }
@@ -949,7 +1341,7 @@ impl LibraryNetwork for Network {
 
     let match_count = matches.len();
     let mut app = self.app.lock().await;
-    if app.apply_playlist_track_search_results(&playlist_id, query.clone(), matches) {
+    if app.apply_playlist_track_search_info_results(&playlist_id, query.clone(), matches) {
       app.set_status_message(
         format!("{match_count} playlist tracks match \"{query}\""),
         3,
@@ -1445,6 +1837,32 @@ mod tests {
   use chrono::{Duration as ChronoDuration, Utc};
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
+
+  #[test]
+  fn playlist_access_keeps_external_403_distinct_from_owned_and_collaborative() {
+    use crate::core::test_helpers::{playlist_info, user_info};
+
+    let mut app = App::default();
+    app.user = Some(user_info("me"));
+    let mut external = playlist_info("external", "External", "other", false);
+    external.public = Some(true);
+    app.all_playlists = vec![
+      playlist_info("owned", "Owned", "me", false),
+      playlist_info("collab", "Collaborative", "other", true),
+    ];
+    app.search_results.playlists = Some(Paged {
+      items: vec![external],
+      ..Default::default()
+    });
+
+    assert_eq!(playlist_access(&app, "owned"), PlaylistAccess::Owned);
+    assert_eq!(
+      playlist_access(&app, "collab"),
+      PlaylistAccess::Collaborative
+    );
+    assert_eq!(playlist_access(&app, "external"), PlaylistAccess::External);
+    assert_eq!(playlist_access(&app, "missing"), PlaylistAccess::Unknown);
+  }
 
   #[allow(deprecated)]
   fn full_track(id: &str) -> FullTrack {
