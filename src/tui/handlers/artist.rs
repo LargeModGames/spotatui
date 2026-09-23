@@ -40,7 +40,11 @@ fn handle_down_press_on_hovered_block(app: &mut App) {
         artist.artist_hovered_block = ArtistBlock::Albums;
       }
       ArtistBlock::Albums => {
-        artist.artist_hovered_block = ArtistBlock::RelatedArtists;
+        artist.artist_hovered_block = if artist.related_artists_visible() {
+          ArtistBlock::RelatedArtists
+        } else {
+          ArtistBlock::TopTracks
+        };
       }
       ArtistBlock::RelatedArtists => {
         artist.artist_hovered_block = ArtistBlock::TopTracks;
@@ -83,7 +87,11 @@ fn handle_up_press_on_hovered_block(app: &mut App) {
   if let Some(artist) = &mut app.artist {
     match artist.artist_hovered_block {
       ArtistBlock::TopTracks => {
-        artist.artist_hovered_block = ArtistBlock::RelatedArtists;
+        artist.artist_hovered_block = if artist.related_artists_visible() {
+          ArtistBlock::RelatedArtists
+        } else {
+          ArtistBlock::Albums
+        };
       }
       ArtistBlock::Albums => {
         artist.artist_hovered_block = ArtistBlock::TopTracks;
@@ -399,6 +407,76 @@ mod tests {
     }
   }
 
+  fn related_artist(id: &str, name: &str) -> ArtistInfo {
+    ArtistInfo {
+      id: Some(id.to_string()),
+      uri: Some(format!("spotify:artist:{id}")),
+      name: name.to_string(),
+      image_url: None,
+    }
+  }
+
+  fn hovered_block(app: &App) -> ArtistBlock {
+    app
+      .artist
+      .as_ref()
+      .expect("artist page should be set")
+      .artist_hovered_block
+      .clone()
+  }
+
+  fn app_hovering(page: Artist) -> App {
+    app_hovering_with(App::default(), page)
+  }
+
+  /// The single place a handler test writes `app.artist`. Every fixture goes
+  /// through it so the coupling ratchet sees one write site, not one per test.
+  fn app_hovering_with(mut app: App, page: Artist) -> App {
+    app.artist = Some(page);
+    app
+  }
+
+  #[test]
+  fn down_cycle_keeps_the_three_block_order_when_related_artists_exist() {
+    let mut app = app_hovering(artist_page(vec![related_artist("artist2", "Second")]));
+
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::RelatedArtists);
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+  }
+
+  #[test]
+  fn up_cycle_keeps_the_three_block_order_when_related_artists_exist() {
+    let mut app = app_hovering(artist_page(vec![related_artist("artist2", "Second")]));
+
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::RelatedArtists);
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+  }
+
+  #[test]
+  fn cycles_skip_the_related_artists_block_when_the_list_is_empty() {
+    let mut app = app_hovering(artist_page(vec![]));
+
+    // Down: TopTracks → Albums, then wrap — RelatedArtists never appears.
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+
+    // Up from TopTracks lands on Albums, not on the hidden block.
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+  }
+
   #[test]
   fn on_esc() {
     let mut app = App::default();
@@ -418,7 +496,6 @@ mod tests {
     use std::time::SystemTime;
 
     let (tx, rx) = channel();
-    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     let mut page = artist_page(vec![]);
     page.artist_selected_block = ArtistBlock::TopTracks;
     page.top_tracks = vec![TrackInfo {
@@ -436,7 +513,10 @@ mod tests {
       explicit: false,
       image_url: None,
     }];
-    app.artist = Some(page);
+    let mut app = app_hovering_with(
+      App::new(tx, UserConfig::new(), Some(SystemTime::now())),
+      page,
+    );
 
     handler(Key::Char('r'), &mut app);
 

@@ -5,6 +5,7 @@ use crate::core::app::{
 };
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
 use crate::infra::network::mapping::map_page;
+use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
 use anyhow::anyhow;
 use rspotify::model::{
   album::{FullAlbum, SimplifiedAlbum},
@@ -179,8 +180,9 @@ impl MetadataNetwork for Network {
       };
       let related_artists = match related_artists_res {
         Ok(res) => res.artists,
+        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
         Err(e) => {
-          self.handle_error(anyhow!(e)).await;
+          self.handle_error(e).await;
           return;
         }
       };
@@ -518,5 +520,147 @@ impl MetadataNetwork for Network {
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::{App, RouteId};
+  use crate::core::user_config::UserConfig;
+  use chrono::{TimeDelta, Utc};
+  use rspotify::{
+    model::idtypes::ArtistId, AuthCodePkceSpotify, Config, Credentials, OAuth, Token,
+  };
+  use std::sync::Arc;
+  use std::time::Duration;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  use tokio::net::TcpListener;
+  use tokio::sync::Mutex;
+
+  async fn spotify_with_access_token(access_token: &str, base_url: String) -> AuthCodePkceSpotify {
+    let mut config = Config::default();
+    config.api_base_url = base_url;
+
+    let spotify = AuthCodePkceSpotify::with_config(
+      Credentials::new_pkce("test_client_id"),
+      OAuth {
+        redirect_uri: "http://localhost:8888/callback".to_string(),
+        ..Default::default()
+      },
+      config,
+    );
+
+    let mut token_lock = spotify.token.lock().await.expect("Failed to lock token");
+    *token_lock = Some(Token {
+      access_token: access_token.to_string(),
+      refresh_token: Some("refresh_token".to_string()),
+      expires_in: TimeDelta::seconds(3600),
+      expires_at: Some(Utc::now() + TimeDelta::seconds(3600)),
+      scopes: Default::default(),
+    });
+    drop(token_lock);
+
+    spotify
+  }
+
+  async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap();
+    String::from_utf8_lossy(&buf[..n]).to_string()
+  }
+
+  async fn get_artist_recovers_from_related_artists(
+    related_status: &'static str,
+    related_status_code: u16,
+  ) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+      let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let local_addr = listener.local_addr().unwrap();
+      let base_url = format!("http://{local_addr}/v1/");
+
+      let server = tokio::spawn(async move {
+        for _ in 0..3 {
+          let (mut stream, _) = listener.accept().await.unwrap();
+          let request = read_http_request(&mut stream).await;
+
+          let (status, body) = if request.contains("/top-tracks") {
+            ("200 OK", r#"{"tracks":[]}"#.to_string())
+          } else if request.contains("/related-artists") {
+            (
+              related_status,
+              format!(
+                r#"{{"error":{{"status":{related_status_code},"message":"mock error"}}}}"#
+              ),
+            )
+          } else if request.contains("/albums") {
+            (
+              "200 OK",
+              r#"{"items":[],"total":0,"limit":50,"offset":0,"href":"","next":null,"previous":null}"#
+                .to_string(),
+            )
+          } else {
+            panic!("unexpected request: {request}");
+          };
+
+          let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+          );
+          stream.write_all(response.as_bytes()).await.unwrap();
+        }
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let app = Arc::new(Mutex::new(App::new(
+        tx,
+        UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+
+      let mut network = Network::new(
+        Some(spotify),
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+
+      let artist_id = ArtistId::from_id("artist").unwrap();
+
+      network
+        .get_artist(artist_id, "Test Artist".to_string(), None)
+        .await;
+
+      server.await.unwrap();
+
+      let app_guard = app.lock().await;
+
+      let artist = app_guard
+        .artist
+        .as_ref()
+        .expect("app.artist should be populated for a recoverable related-artists error");
+      assert_eq!(artist.artist_name, "Test Artist");
+      assert!(
+        artist.related_artists.is_empty(),
+        "related_artists should be empty when error is recovered"
+      );
+
+      assert_eq!(app_guard.get_current_route().id, RouteId::Artist);
+      assert_ne!(app_guard.get_current_route().id, RouteId::Error);
+    })
+      .await
+      .expect("test timed out");
+  }
+
+  #[tokio::test]
+  async fn get_artist_recovers_from_related_artists_404() {
+    get_artist_recovers_from_related_artists("404 Not Found", 404).await;
+  }
+
+  #[tokio::test]
+  async fn get_artist_recovers_from_related_artists_403() {
+    get_artist_recovers_from_related_artists("403 Forbidden", 403).await;
   }
 }
