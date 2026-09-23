@@ -371,6 +371,15 @@
         "code",
         "doc"
       ]
+    },
+    {
+      "login": "Oud-Idk",
+      "name": "Oud",
+      "avatar_url": "https://avatars.githubusercontent.com/u/80905197?v=4",
+      "profile": "https://github.com/Oud-Idk",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
