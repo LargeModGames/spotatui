@@ -318,7 +318,7 @@ fn spotify_auth_mode(
 fn global_song_counter_prompt() -> OnboardingPrompt {
   OnboardingPrompt::Confirm {
     title: "Global Song Counter".to_string(),
-    body: "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment when a new song starts".to_string(),
+    body: "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds".to_string(),
     question: "\nWould you like to participate? (Y/n): ".to_string(),
   }
 }
@@ -853,7 +853,7 @@ mod tests {
     assert_eq!(title, "Global Song Counter");
     assert_eq!(
       body,
-      "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment when a new song starts"
+      "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds"
     );
     assert_eq!(question, "\nWould you like to participate? (Y/n): ");
 

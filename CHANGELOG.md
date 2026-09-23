@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **The global song counter counts your songs again, from every source**: since v0.40.3 a song played on the spotatui device itself (native streaming) sent no count, so the counter only grew from songs on another device, app launches and users on older versions. The counter now watches what is playing instead of the Spotify playback poll: a song counts once it has played for 30 seconds (half its length for a shorter one), a song on repeat counts again each time through, and Local Files, Subsonic, Qobuz and YouTube count as well. Internet radio counts one song for every 2.5 minutes of listening.
+
 - **Next page and previous page move through track tables again**: since playlists and Liked Songs load as one continuous list, `next_page` (`Ctrl+d`) did nothing in a track table and `previous_page` (`Ctrl+u`) jumped to the top. Both now move the cursor half a screen, and `next_page` loads the next page when the cursor passes the loaded rows ([#281](https://github.com/LargeModGames/spotatui/issues/281)).
 
 - **Saved Albums no longer looks cut off after one page**: the list shows one page of albums at a time, sized by the terminal height, and only `next_page` (`Ctrl+d`) loaded the rest, so a library of hundreds of albums looked like it stopped at the first 47. Pressing Down on the last album now loads the next page, the way Liked Songs does, and `next_page` on the final page no longer fetches an empty page past the end ([#296](https://github.com/LargeModGames/spotatui/issues/296)).

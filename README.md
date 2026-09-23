@@ -316,7 +316,7 @@ You can also override the app ID via `SPOTATUI_DISCORD_APP_ID`, or disable it in
 
 ### Anonymous Song Counter
 
-spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment when a new song starts. It is enabled by default and can be disabled with `enable_global_song_count: false` in `config.yml`. This is purely a fun community metric with zero tracking of individual users.
+spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment once a song has played for 30 seconds, from any source (Spotify, local files, Subsonic, Qobuz or YouTube). Internet radio counts one song for every 2.5 minutes of listening. It is enabled by default and can be disabled with `enable_global_song_count: false` in `config.yml`. This is purely a fun community metric with zero tracking of individual users.
 
 ### GitHub Profile Widget
 
