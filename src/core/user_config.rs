@@ -270,56 +270,53 @@ fn parse_key(key: String) -> Result<Key> {
     }
   }
 
-  match key.len() {
-    1 => match key.chars().next() {
-      Some(c) => Ok(Key::Char(c)),
-      None => Err(anyhow!("The key binding is empty")),
-    },
-    _ => {
-      let sections: Vec<&str> = key.split('-').collect();
+  let mut chars = key.chars();
+  if let (Some(c), None) = (chars.next(), chars.next()) {
+    return Ok(Key::Char(c));
+  }
 
-      if sections.len() > 2 {
-        return Err(anyhow!(
-          "Shortcut can only have 2 keys, \"{}\" has {}",
-          key,
-          sections.len()
-        ));
-      }
+  let sections: Vec<&str> = key.split('-').collect();
 
-      match sections[0].to_lowercase().as_str() {
-        "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
-        "alt" => Ok(Key::Alt(modifier_char(&key, &sections)?)),
-        "left" => Ok(Key::Left),
-        "right" => Ok(Key::Right),
-        "up" => Ok(Key::Up),
-        "down" => Ok(Key::Down),
-        "backspace" | "delete" => Ok(Key::Backspace),
-        "del" => Ok(Key::Delete),
-        "esc" | "escape" => Ok(Key::Esc),
-        "pageup" => Ok(Key::PageUp),
-        "pagedown" => Ok(Key::PageDown),
-        "space" => Ok(Key::Char(' ')),
-        "enter" => Ok(Key::Enter),
-        "tab" => Ok(Key::Tab),
-        "home" => Ok(Key::Home),
-        "end" => Ok(Key::End),
-        "ins" | "insert" => Ok(Key::Ins),
-        "f0" => Ok(Key::F0),
-        "f1" => Ok(Key::F1),
-        "f2" => Ok(Key::F2),
-        "f3" => Ok(Key::F3),
-        "f4" => Ok(Key::F4),
-        "f5" => Ok(Key::F5),
-        "f6" => Ok(Key::F6),
-        "f7" => Ok(Key::F7),
-        "f8" => Ok(Key::F8),
-        "f9" => Ok(Key::F9),
-        "f10" => Ok(Key::F10),
-        "f11" => Ok(Key::F11),
-        "f12" => Ok(Key::F12),
-        _ => Err(anyhow!("The key \"{}\" is unknown.", sections[0])),
-      }
-    }
+  if sections.len() > 2 {
+    return Err(anyhow!(
+      "Shortcut can only have 2 keys, \"{}\" has {}",
+      key,
+      sections.len()
+    ));
+  }
+
+  match sections[0].to_lowercase().as_str() {
+    "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
+    "alt" => Ok(Key::Alt(modifier_char(&key, &sections)?)),
+    "left" => Ok(Key::Left),
+    "right" => Ok(Key::Right),
+    "up" => Ok(Key::Up),
+    "down" => Ok(Key::Down),
+    "backspace" | "delete" => Ok(Key::Backspace),
+    "del" => Ok(Key::Delete),
+    "esc" | "escape" => Ok(Key::Esc),
+    "pageup" => Ok(Key::PageUp),
+    "pagedown" => Ok(Key::PageDown),
+    "space" => Ok(Key::Char(' ')),
+    "enter" => Ok(Key::Enter),
+    "tab" => Ok(Key::Tab),
+    "home" => Ok(Key::Home),
+    "end" => Ok(Key::End),
+    "ins" | "insert" => Ok(Key::Ins),
+    "f0" => Ok(Key::F0),
+    "f1" => Ok(Key::F1),
+    "f2" => Ok(Key::F2),
+    "f3" => Ok(Key::F3),
+    "f4" => Ok(Key::F4),
+    "f5" => Ok(Key::F5),
+    "f6" => Ok(Key::F6),
+    "f7" => Ok(Key::F7),
+    "f8" => Ok(Key::F8),
+    "f9" => Ok(Key::F9),
+    "f10" => Ok(Key::F10),
+    "f11" => Ok(Key::F11),
+    "f12" => Ok(Key::F12),
+    _ => Err(anyhow!("The key \"{}\" is unknown.", sections[0])),
   }
 }
 
@@ -2559,6 +2556,18 @@ mod tests {
     assert_eq!(parse_key(String::from("f10")).unwrap(), Key::F10);
     assert_eq!(parse_key(String::from("f11")).unwrap(), Key::F11);
     assert_eq!(parse_key(String::from("f12")).unwrap(), Key::F12);
+  }
+
+  #[test]
+  fn a_single_non_ascii_character_parses_as_a_char_binding() {
+    use super::parse_key;
+    use crate::core::input::Key;
+
+    for key in ['ö', 'Ö', 'é', 'ß'] {
+      assert_eq!(parse_key(key.to_string()).unwrap(), Key::Char(key));
+    }
+    assert_eq!(parse_key(String::from("ctrl-ö")).unwrap(), Key::Ctrl('ö'));
+    assert!(parse_key(String::from("öö")).is_err());
   }
 
   #[test]
