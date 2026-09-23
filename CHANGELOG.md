@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v0.43.0] 2026-09-23
 
 ### Added
 
@@ -21,6 +21,18 @@
 - **Spotify stays silent while another source plays**: a paused Spotify session could still act while Local Files, Subsonic, Internet Radio, YouTube or Qobuz played. A reconnect of the native player restored the old Spotify track on top of the source, the stalled-load watchdog rebuilt the player and showed "Native streaming disconnected", a late end-of-track event from Spotify skipped the track you heard, and the background steps of a shuffled Spotify context moved its position or reloaded it at the other source's position. Every source start, and every queued track from another source, now also marks Spotify as paused on purpose, so no recovery resumes it, and each of these native paths first checks who owns the output. A queued track from another source claims the output for its download, so Space and the media keys no longer resume the Spotify track it replaced. Moving playback to a Spotify Connect device is refused with "Another source owns playback" while another source plays; before, a transfer to an external device started a second player. When the output device of the queue is gone for good, the queue stops instead of restarting the suspended Spotify context on the new default device. A Spotify track that follows a track from another source in the queue is no longer preloaded, so it starts a moment later.
 
 - **Terminal window title no longer says the old `spt` name**: with `behavior.set_window_title` on (the default), the title read `spt - spotatui` while nothing played and was put back on exit; it now reads `spotatui` ([#557](https://github.com/LargeModGames/spotatui/issues/557)).
+
+- **Media keys on macOS control spotatui again**: since v0.42.0 the play/pause, next and previous keys went to Apple Music instead of spotatui, because the app no longer ran on the main thread there. macOS runs it on the main thread again; Windows keeps its larger-stack thread ([#527](https://github.com/LargeModGames/spotatui/issues/527)).
+
+- **Other people's playlists open on your own Spotify app**: an app in Spotify's Development Mode gets `403 Forbidden` for the tracks of a playlist you neither own nor collaborate on, and spotatui showed that as a full-screen error. Such a playlist now loads its tracks through the native streaming session instead, and says so in the status bar when that fails too. Errors on your own and collaborative playlists still show as before ([#530](https://github.com/LargeModGames/spotatui/issues/530)).
+
+- **An artist page opens when Spotify refuses its related artists**: a `403` or `404` from the related-artists endpoint replaced the whole artist screen with an error page. It now counts as no related artists, and the empty column is dropped so tracks and albums share the width.
+
+- **Keybindings accept non-ASCII characters**: a single `ö`, `é` or `ß` (also with a modifier, such as `ctrl-ö`) in `config.yml` was rejected as more than one character; it now binds like any other key ([#541](https://github.com/LargeModGames/spotatui/issues/541)).
+
+- **A new track under native shuffle starts at its beginning**: picking a track while client-side shuffle was on could start it at the position of the track that played before.
+
+- **`--help` text cleaned up**: the help no longer calls the binary `spt`, lists the `%u` and `%r` placeholders of `--format`, fixes typos and capitalisation, and gives the `--volume` range as 0 to 100.
 
 ## [v0.42.0] 2026-09-08
 
