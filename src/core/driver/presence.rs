@@ -9,7 +9,7 @@ use crate::infra::discord_rpc;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::infra::mpris;
 
-pub(super) const DEFAULT_WINDOW_TITLE: &str = "spt - spotatui";
+pub(super) const DEFAULT_WINDOW_TITLE: &str = "spotatui";
 
 #[derive(Default)]
 pub(super) struct WindowTitleState {

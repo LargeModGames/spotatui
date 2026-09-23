@@ -18,6 +18,8 @@
 
 - **Spotify stays silent while another source plays**: a paused Spotify session could still act while Local Files, Subsonic, Internet Radio, YouTube or Qobuz played. A reconnect of the native player restored the old Spotify track on top of the source, the stalled-load watchdog rebuilt the player and showed "Native streaming disconnected", a late end-of-track event from Spotify skipped the track you heard, and the background steps of a shuffled Spotify context moved its position or reloaded it at the other source's position. Every source start, and every queued track from another source, now also marks Spotify as paused on purpose, so no recovery resumes it, and each of these native paths first checks who owns the output. A queued track from another source claims the output for its download, so Space and the media keys no longer resume the Spotify track it replaced. Moving playback to a Spotify Connect device is refused with "Another source owns playback" while another source plays; before, a transfer to an external device started a second player. When the output device of the queue is gone for good, the queue stops instead of restarting the suspended Spotify context on the new default device. A Spotify track that follows a track from another source in the queue is no longer preloaded, so it starts a moment later.
 
+- **Terminal window title no longer says the old `spt` name**: with `behavior.set_window_title` on (the default), the title read `spt - spotatui` while nothing played and was put back on exit; it now reads `spotatui` ([#557](https://github.com/LargeModGames/spotatui/issues/557)).
+
 ## [v0.42.0] 2026-09-08
 
 ### Changed
