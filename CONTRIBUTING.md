@@ -64,7 +64,7 @@ cargo run
 
 Slim build (no audio/streaming):
 ```bash
-cargo run --no-default-features --features telemetry
+cargo run --no-default-features --features telemetry,tui
 ```
 
 ### Before Opening a PR
@@ -72,11 +72,11 @@ cargo run --no-default-features --features telemetry
 Run these checks (the fast local gate):
 ```bash
 cargo fmt --all
-cargo clippy --no-default-features --features telemetry -- -D warnings
-cargo test --no-default-features --features telemetry
+cargo clippy --no-default-features --features telemetry,tui -- -D warnings
+cargo test --no-default-features --features telemetry,tui
 ```
 
-CI runs a wider five-leg feature matrix (see `.github/workflows/ci.yml`), including
+CI runs a wider seven-leg feature matrix plus a macOS job (see `.github/workflows/ci.yml`), including
 a plain `cargo test` with default features, and passes `--locked` - regenerate
 `Cargo.lock` if you touch `Cargo.toml`. See `AGENTS.md` for the full matrix.
 
@@ -94,4 +94,4 @@ We use [all-contributors](https://allcontributors.org/) to recognize everyone wh
 
 ## Questions?
 
-Start a [Discussion](https://github.com/LargeModGames/spotatui/discussions) or ping us in an issue. We're happy to help!
+Join the [spotatui Discord](https://spotatui.com/discord), start a [Discussion](https://github.com/LargeModGames/spotatui/discussions), or ping us in an issue. We're happy to help!
