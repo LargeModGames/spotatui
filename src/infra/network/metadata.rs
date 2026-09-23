@@ -5,7 +5,7 @@ use crate::core::app::{
 };
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
 use crate::infra::network::mapping::map_page;
-use crate::infra::network::requests::is_not_found_error;
+use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
 use anyhow::anyhow;
 use rspotify::model::{
   album::{FullAlbum, SimplifiedAlbum},
@@ -180,7 +180,7 @@ impl MetadataNetwork for Network {
       };
       let related_artists = match related_artists_res {
         Ok(res) => res.artists,
-        Err(e) if is_not_found_error(&e) => Vec::new(),
+        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
         Err(e) => {
           self.handle_error(e).await;
           return;
