@@ -570,8 +570,10 @@ mod tests {
     String::from_utf8_lossy(&buf[..n]).to_string()
   }
 
-  #[tokio::test]
-  async fn get_artist_recovers_from_related_artists_404() {
+  async fn get_artist_recovers_from_related_artists(
+    related_status: &'static str,
+    related_status_code: u16,
+  ) {
     tokio::time::timeout(Duration::from_secs(5), async {
       let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
       let local_addr = listener.local_addr().unwrap();
@@ -586,8 +588,10 @@ mod tests {
             ("200 OK", r#"{"tracks":[]}"#.to_string())
           } else if request.contains("/related-artists") {
             (
-              "404 Not Found",
-              r#"{"error":{"status":404,"message":"Not found"}}"#.to_string(),
+              related_status,
+              format!(
+                r#"{{"error":{{"status":{related_status_code},"message":"mock error"}}}}"#
+              ),
             )
           } else if request.contains("/albums") {
             (
@@ -636,11 +640,11 @@ mod tests {
       let artist = app_guard
         .artist
         .as_ref()
-        .expect("app.artist should be populated even if related-artists 404s");
+        .expect("app.artist should be populated for a recoverable related-artists error");
       assert_eq!(artist.artist_name, "Test Artist");
       assert!(
         artist.related_artists.is_empty(),
-        "related_artists should be empty when 404 is recovered"
+        "related_artists should be empty when error is recovered"
       );
 
       assert_eq!(app_guard.get_current_route().id, RouteId::Artist);
@@ -648,5 +652,15 @@ mod tests {
     })
       .await
       .expect("test timed out");
+  }
+
+  #[tokio::test]
+  async fn get_artist_recovers_from_related_artists_404() {
+    get_artist_recovers_from_related_artists("404 Not Found", 404).await;
+  }
+
+  #[tokio::test]
+  async fn get_artist_recovers_from_related_artists_403() {
+    get_artist_recovers_from_related_artists("403 Forbidden", 403).await;
   }
 }
