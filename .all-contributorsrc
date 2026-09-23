@@ -380,6 +380,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "yvoolab",
+      "name": "Yvoo",
+      "avatar_url": "https://avatars.githubusercontent.com/u/202315522?v=4",
+      "profile": "https://salty-nebula-7f4.notion.site/Yvoolab-3c6f362dc885816bae88f25d128e85cd",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
