@@ -168,6 +168,7 @@ impl App {
       Action::LoadMore(target) => match target {
         super::ListTarget::PlaylistTracks => self.get_playlist_tracks_next(),
         super::ListTarget::SavedTracks => self.get_current_user_saved_tracks_next(),
+        super::ListTarget::SavedAlbums => self.get_current_user_saved_albums_next(),
         super::ListTarget::SavedShows => self.get_current_user_saved_shows_next(),
         super::ListTarget::ShowEpisodes => self.get_episode_table_next(),
       },

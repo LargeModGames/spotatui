@@ -186,7 +186,7 @@ impl App {
     self.set_playlist_tracks_to_table_continuous();
   }
 
-  pub fn apply_playlist_track_search_info_results(
+  pub fn apply_playlist_track_search_results(
     &mut self,
     playlist_id: &PlaylistId<'_>,
     query: String,
@@ -326,7 +326,7 @@ impl App {
     }
   }
 
-  pub fn apply_sorted_playlist_track_infos_if_current(
+  pub fn apply_sorted_playlist_tracks_if_current(
     &mut self,
     playlist_id: &PlaylistId<'_>,
     tracks: Vec<TrackInfo>,
@@ -629,7 +629,7 @@ mod tests {
     app.playlist_track_table_id = Some(playlist_id.clone());
     app.pending_playlist_track_search = Some("track".to_string());
 
-    assert!(app.apply_playlist_track_search_info_results(
+    assert!(app.apply_playlist_track_search_results(
       &playlist_id,
       "track".to_string(),
       vec![
@@ -649,7 +649,7 @@ mod tests {
       _ => panic!("unexpected event"),
     }
 
-    assert!(app.apply_playlist_track_search_info_results(&playlist_id, "none".to_string(), vec![]));
+    assert!(app.apply_playlist_track_search_results(&playlist_id, "none".to_string(), vec![]));
     assert!(app.track_table.tracks.is_empty());
     assert_eq!(app.playlist_track_positions, Some(vec![]));
   }
@@ -684,8 +684,7 @@ mod tests {
   }
 
   #[test]
-  fn apply_sorted_playlist_track_infos_if_current_requires_matching_playlist_identity_and_context()
-  {
+  fn apply_sorted_playlist_tracks_if_current_requires_matching_playlist_identity_and_context() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     let sidebar_playlist_id = playlist_id("37i9dQZF1DXcBWIGoYBM5M");
@@ -696,7 +695,7 @@ mod tests {
     app.track_table.context = Some(TrackTableContext::PlaylistSearch);
     app.playlist_track_table_id = Some(active_playlist_id.clone());
 
-    assert!(!app.apply_sorted_playlist_track_infos_if_current(
+    assert!(!app.apply_sorted_playlist_tracks_if_current(
       &sidebar_playlist_id,
       vec![track_info("0000000000000000000002", "Wrong Playlist")],
     ));
@@ -706,7 +705,7 @@ mod tests {
     );
 
     app.track_table.context = Some(TrackTableContext::SavedTracks);
-    assert!(!app.apply_sorted_playlist_track_infos_if_current(
+    assert!(!app.apply_sorted_playlist_tracks_if_current(
       &active_playlist_id,
       vec![track_info("0000000000000000000003", "Wrong Context")],
     ));

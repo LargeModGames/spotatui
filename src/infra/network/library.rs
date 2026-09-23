@@ -72,15 +72,19 @@ fn should_attempt_external_fallback(access: PlaylistAccess, forbidden: bool) -> 
 /// Next raw-page offset for a converted playlist page, driven by continuation
 /// metadata only. Compaction (`playlist_items_page`) and the librespot slice
 /// can drop every item of a nonterminal page, so item count must never stop
-/// pagination. A zero limit cannot advance and terminates instead of looping.
-fn playlist_page_next_offset(page: &Paged<(u32, PlayableInfo)>) -> Option<u32> {
+/// pagination. The response offset must equal the requested one: a stale page
+/// would otherwise repeat the same request forever. A zero limit, an overflow,
+/// or a non-advancing offset terminates instead of looping.
+fn playlist_page_next_offset(
+  page: &Paged<(u32, PlayableInfo)>,
+  requested_offset: u32,
+) -> Option<u32> {
   if page.limit == 0 {
     return None;
   }
-  page
-    .next
-    .as_ref()
-    .map(|_| page.offset.saturating_add(page.limit))
+  page.next.as_ref()?;
+  let next_offset = page.offset.checked_add(page.limit)?;
+  (page.offset == requested_offset && next_offset > requested_offset).then_some(next_offset)
 }
 
 /// Session-scoped reuse for the external-playlist fallback path, shared by
@@ -159,6 +163,15 @@ impl ExternalPlaylistFallbackCacheInner {
   fn store_contents(&mut self, playlist_id: &str, contents: CachedExternalPlaylistContents) {
     self.contents.insert(playlist_id.to_string(), contents);
     self.mark_external(playlist_id);
+  }
+
+  /// Drop a playlist's resolved contents (e.g. on a fresh open at offset 0)
+  /// so the next visit re-downloads instead of showing the first snapshot
+  /// all session. The External classification is kept: the relationship
+  /// rarely changes, and re-proving it would cost a metadata request again.
+  #[cfg(feature = "streaming")]
+  fn clear_contents(&mut self, playlist_id: &str) {
+    self.contents.remove(playlist_id);
   }
 
   /// Drop the oldest ids once over capacity. Classification and contents for
@@ -358,6 +371,19 @@ async fn fetch_playlist_tracks_page(
   limit: u32,
   fallbacks: &ExternalPlaylistFallbackCache,
 ) -> Result<PlaylistTracksPage, PlaylistPageError> {
+  // A cached external playlist skips the Web API round trip (which would
+  // just 403 again) and slices the resolved contents directly. A failure
+  // here — e.g. the streaming session went away — falls through to the
+  // normal Web API attempt instead of failing the page.
+  #[cfg(feature = "streaming")]
+  if let Some(cached) = fallbacks.lock().await.contents_for(playlist_id.id()) {
+    if let Ok(session) = streaming_session(app).await {
+      if let Ok(page) = resolve_cached_playlist_slice(&session, &cached, offset, limit).await {
+        return Ok(PlaylistTracksPage::Librespot(page));
+      }
+    }
+  }
+
   let path = format!("playlists/{}/items", playlist_id.id());
   let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
   match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
@@ -401,6 +427,16 @@ async fn fetch_playlist_tracks_page(
 }
 
 #[cfg(feature = "streaming")]
+async fn streaming_session(app: &Arc<Mutex<App>>) -> anyhow::Result<librespot_core::Session> {
+  let player = {
+    let app_guard = app.lock().await;
+    app_guard.streaming_player.clone()
+  }
+  .ok_or_else(|| anyhow!("native streaming session is unavailable"))?;
+  Ok(player.session())
+}
+
+#[cfg(feature = "streaming")]
 async fn fetch_librespot_playlist_tracks_page(
   app: &Arc<Mutex<App>>,
   fallbacks: &ExternalPlaylistFallbackCache,
@@ -408,12 +444,7 @@ async fn fetch_librespot_playlist_tracks_page(
   offset: u32,
   limit: u32,
 ) -> anyhow::Result<Paged<(u32, PlayableInfo)>> {
-  let player = {
-    let app_guard = app.lock().await;
-    app_guard.streaming_player.clone()
-  }
-  .ok_or_else(|| anyhow!("native streaming session is unavailable"))?;
-  let session = player.session();
+  let session = streaming_session(app).await?;
 
   // Reuse the proto a previous page already downloaded: later slices resolve
   // only their own window of track metadata.
@@ -514,10 +545,10 @@ async fn resolve_playlist_slice(
   .collect()
 }
 
-/// Default playability for fallback tracks. Librespot's `restrictions` is the
+/// Default playability for fallback items. Librespot's `restrictions` is the
 /// raw per-catalogue list, so `restrictions.is_empty()` marks nearly every
-/// fallback track unplayable for Lua/MCP readers. No clearly correct supported
-/// signal is exposed, so fallback tracks default to playable.
+/// fallback item unplayable for Lua/MCP readers. No clearly correct supported
+/// signal is exposed, so fallback items default to playable.
 #[cfg(feature = "streaming")]
 fn external_fallback_track_is_playable() -> bool {
   true
@@ -569,7 +600,7 @@ fn librespot_episode_info(
     show_name: episode.show_name.clone(),
     description: episode.description.clone(),
     release_date: String::new(),
-    is_playable: episode.restrictions.is_empty(),
+    is_playable: external_fallback_track_is_playable(),
     resume_point: None,
     image_url: None,
   })
@@ -769,7 +800,7 @@ pub async fn prefetch_playlist_tracks_page_task(
     // Pagination runs on continuation metadata only: a compacted page may
     // hold zero domain items while `next` still promises more raw slots, so
     // the empty page is upserted and the next offset is still derived.
-    let next_offset = playlist_page_next_offset(&page);
+    let next_offset = playlist_page_next_offset(&page, offset);
     let mut app_guard = app.lock().await;
     app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
     if app_guard.playlist_tracks_prefetch_generation != generation
@@ -1116,7 +1147,7 @@ async fn fetch_all_playlist_tracks_and_sort_task(
     // A compacted page may hold zero domain items while `next` still
     // promises more raw slots, so only the continuation metadata stops the
     // walk. The zero-limit guard lives in `playlist_page_next_offset`.
-    let next_offset = playlist_page_next_offset(&page);
+    let next_offset = playlist_page_next_offset(&page, offset);
     for (_, item) in page.items {
       if let PlayableInfo::Track(track) = item {
         all_tracks.push(track);
@@ -1134,8 +1165,8 @@ async fn fetch_all_playlist_tracks_and_sort_task(
   app
     .playlist_sort_fetch_in_flight
     .remove(&playlist_id_string);
-  Sorter::new(app.playlist_sort).sort_track_infos(&mut all_tracks);
-  let _ = app.apply_sorted_playlist_track_infos_if_current(&playlist_id, all_tracks);
+  Sorter::new(app.playlist_sort).sort_tracks(&mut all_tracks);
+  let _ = app.apply_sorted_playlist_tracks_if_current(&playlist_id, all_tracks);
 }
 
 /// Background half of `get_current_user_playlists`: fetch the remaining pages
@@ -1410,6 +1441,17 @@ impl LibraryNetwork for Network {
   }
 
   async fn get_playlist_tracks(&mut self, playlist_id: PlaylistId<'static>, playlist_offset: u32) {
+    // A fresh open re-downloads the fallback contents instead of showing the
+    // first snapshot all session. The External classification is kept.
+    #[cfg(feature = "streaming")]
+    if playlist_offset == 0 {
+      self
+        .external_playlist_fallbacks
+        .lock()
+        .await
+        .clear_contents(playlist_id.id());
+    }
+
     let generation = {
       let app = self.app.lock().await;
       app.playlist_tracks_prefetch_generation
@@ -1518,7 +1560,7 @@ impl LibraryNetwork for Network {
 
       // See the sort walk: only `next` stops pagination, never the compacted
       // item count.
-      let next_offset = playlist_page_next_offset(&page);
+      let next_offset = playlist_page_next_offset(&page, offset);
       for (position, item) in page.items {
         if let PlayableInfo::Track(track) = item {
           if playlist_track_info_matches_terms(&track, &terms) {
@@ -1535,7 +1577,7 @@ impl LibraryNetwork for Network {
 
     let match_count = matches.len();
     let mut app = self.app.lock().await;
-    if app.apply_playlist_track_search_info_results(&playlist_id, query.clone(), matches) {
+    if app.apply_playlist_track_search_results(&playlist_id, query.clone(), matches) {
       app.set_status_message(
         format!("{match_count} playlist tracks match \"{query}\""),
         3,
@@ -1625,7 +1667,7 @@ impl LibraryNetwork for Network {
             &saved_albums,
             crate::infra::network::mapping::saved_album_info,
           );
-          app.library.saved_albums.add_pages(domain_page);
+          app.store_saved_albums_page(domain_page);
         }
         // Bump even on an empty page: completion is the signal plugin data
         // requests wait on, and an empty library never writes a page.
@@ -1936,7 +1978,7 @@ impl LibraryNetwork for Network {
     // The full pagination pays the pacing floor per page (a 3,000-track
     // playlist is 60 pages, 15s+), so it runs detached instead of
     // head-of-line-blocking playback controls and polling on the serial pump.
-    // `apply_sorted_playlist_track_infos_if_current` already guards a stale result.
+    // `apply_sorted_playlist_tracks_if_current` already guards a stale result.
     {
       let mut app = self.app.lock().await;
       if !app
@@ -2292,14 +2334,23 @@ mod tests {
     // A compacted page: zero domain items, but `next` promises more raw
     // slots. Pagination must still advance to the adjacent raw offset.
     let empty_nonterminal = domain_track_page(0, 50, 120, true, vec![]);
-    assert_eq!(playlist_page_next_offset(&empty_nonterminal), Some(50));
+    assert_eq!(playlist_page_next_offset(&empty_nonterminal, 0), Some(50));
 
     let empty_terminal = domain_track_page(100, 50, 120, false, vec![]);
-    assert_eq!(playlist_page_next_offset(&empty_terminal), None);
+    assert_eq!(playlist_page_next_offset(&empty_terminal, 100), None);
 
     // A zero limit cannot advance: terminate instead of looping on one offset.
     let zero_limit = domain_track_page(0, 0, 120, true, vec![]);
-    assert_eq!(playlist_page_next_offset(&zero_limit), None);
+    assert_eq!(playlist_page_next_offset(&zero_limit, 0), None);
+
+    // A stale response offset must not repeat pagination: requesting 50 but
+    // receiving offset 0 would otherwise request 50 again forever.
+    let stale = domain_track_page(0, 50, 120, true, vec![]);
+    assert_eq!(playlist_page_next_offset(&stale, 50), None);
+
+    // An overflowing next offset terminates instead of wrapping around.
+    let overflowing = domain_track_page(u32::MAX, 1, u32::MAX, true, vec![]);
+    assert_eq!(playlist_page_next_offset(&overflowing, u32::MAX), None);
   }
 
   #[test]
@@ -2373,6 +2424,30 @@ mod tests {
     );
     assert!(cached.has_next(0, 2));
     assert!(!cached.has_next(2, 2));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn fallback_cache_clear_refreshes_contents_but_keeps_classification() {
+    use librespot_core::SpotifyUri;
+
+    let mut cache = ExternalPlaylistFallbackCacheInner::default();
+    let uris = vec![SpotifyUri::from_uri("spotify:track:0000000000000000000001").unwrap()];
+    cache.store_contents(
+      "external",
+      CachedExternalPlaylistContents {
+        uris,
+        base_offset: 0,
+        total: 1,
+      },
+    );
+    assert!(cache.contents_for("external").is_some());
+
+    // A fresh open drops the snapshot so the next visit re-downloads, while
+    // the confirmed-External classification survives (no metadata re-request).
+    cache.clear_contents("external");
+    assert!(cache.contents_for("external").is_none());
+    assert!(cache.is_external("external"));
   }
 
   #[cfg(feature = "streaming")]

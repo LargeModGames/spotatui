@@ -5,6 +5,8 @@ use crate::tui::event::Key;
 use rspotify::prelude::Id;
 
 pub fn handler(key: Key, app: &mut App) {
+  // A row parked by an earlier key follows only that key; the paging arms below re-park.
+  app.forget_pending_row_selection();
   match key {
     k if common_key_events::left_event(k, &app.user_config.keys) => {
       common_key_events::handle_left_event(app)
@@ -77,48 +79,36 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Enter => {
       on_enter(app);
     }
-    // Scroll down
     k if k == app.user_config.keys.next_page => {
-      if let Some(context) = &app.track_table.context {
-        match context {
-          TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch => {
-            // Self-guarding: a no-op when there is no next page.
+      let len = app.track_table.tracks.len();
+      if len == 0 {
+        return;
+      }
+      let target = app.view.track_table_index.saturating_add(page_step(app));
+      if target >= len {
+        // Past the loaded rows: stand on the last one and follow into the next page.
+        match &app.track_table.context {
+          Some(TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch)
+            if app.current_playlist_has_more_tracks() =>
+          {
+            app.view.track_table_index = len - 1;
+            app.select_row_when_next_page_lands(target);
             app.apply(Action::LoadMore(ListTarget::PlaylistTracks));
+            return;
           }
-          TrackTableContext::RecommendedTracks => {}
-          TrackTableContext::SavedTracks => {
+          Some(TrackTableContext::SavedTracks) if app.current_saved_tracks_has_more_tracks() => {
+            app.view.track_table_index = len - 1;
+            app.select_row_when_next_page_lands(target);
             app.apply(Action::LoadMore(ListTarget::SavedTracks));
+            return;
           }
-          TrackTableContext::AlbumSearch => {}
-          TrackTableContext::DiscoverPlaylist => {}
-          // Local folders and Subsonic/YouTube/Qobuz playlists have no pagination.
-          TrackTableContext::LocalPlaylist
-          | TrackTableContext::SubsonicPlaylist
-          | TrackTableContext::YouTubePlaylist
-          | TrackTableContext::QobuzPlaylist => {}
+          _ => {}
         }
-      };
+      }
+      app.view.track_table_index = target.min(len - 1);
     }
-    // Scroll up
     k if k == app.user_config.keys.previous_page => {
-      if let Some(context) = &app.track_table.context {
-        match context {
-          TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch => {
-            app.view.track_table_index = 0;
-          }
-          TrackTableContext::RecommendedTracks => {}
-          TrackTableContext::SavedTracks => {
-            app.view.track_table_index = 0;
-          }
-          TrackTableContext::AlbumSearch => {}
-          TrackTableContext::DiscoverPlaylist => {}
-          // Local folders and Subsonic/YouTube/Qobuz playlists have no pagination.
-          TrackTableContext::LocalPlaylist
-          | TrackTableContext::SubsonicPlaylist
-          | TrackTableContext::YouTubePlaylist
-          | TrackTableContext::QobuzPlaylist => {}
-        }
-      };
+      app.view.track_table_index = app.view.track_table_index.saturating_sub(page_step(app));
     }
     Key::Char('w') => {
       app.apply(Action::OpenAddTrackDialog);
@@ -379,6 +369,11 @@ fn jump_to_start(app: &mut App) {
   app.view.track_table_index = 0;
 }
 
+/// Rows one `next_page`/`previous_page` press moves: half the terminal, like vim's Ctrl-D.
+fn page_step(app: &App) -> usize {
+  usize::from(app.view.size.height / 2).max(1)
+}
+
 /// The active playlist's `spotify:playlist:` context URI, for `StartPlayback`.
 fn current_playlist_context_id(app: &App) -> Option<String> {
   app.current_playlist_track_table_id().map(|id| id.uri())
@@ -400,6 +395,7 @@ fn saved_tracks_playback_request(app: &App) -> Option<(Vec<String>, usize)> {
 mod tests {
   use super::*;
   use crate::core::app::PendingTrackSelection;
+  use crate::core::geometry::Viewport;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{PlayableInfo, TrackInfo};
   use crate::core::test_helpers::full_track;
@@ -774,8 +770,13 @@ mod tests {
   }
 
   #[test]
-  fn next_page_on_saved_tracks_dispatches_without_moving_the_cursor() {
+  fn next_page_past_the_loaded_rows_parks_the_target_and_loads_more() {
     let (mut app, rx) = app_with_saved_tracks();
+    // A 20-row terminal pages by 10.
+    app.view.size = Viewport {
+      width: 80,
+      height: 20,
+    };
     let page = saved_tracks_page(
       0,
       &["0000000000000000000001", "0000000000000000000002"],
@@ -791,15 +792,168 @@ mod tests {
 
     handler(Key::Ctrl('d'), &mut app);
 
-    // next_page fetches but does NOT set pending selection: the cursor
-    // clamps into the loaded rows instead of following into the new page
-    // (that follow is the down-at-last-row path's behavior).
-    assert_eq!(app.pending_track_table_selection(), None);
+    assert_eq!(app.view.track_table_index, 1);
+    assert_eq!(
+      app.pending_track_table_selection(),
+      Some(PendingTrackSelection::Index(11))
+    );
     match rx.recv().unwrap() {
       IoEvent::GetCurrentSavedTracks(Some(offset)) => assert_eq!(offset, 2),
       other => panic!("unexpected event: {:?}", event_name(&other)),
     }
+
+    // A short page still leaves the target out of reach: the cursor waits on the new last row.
+    let short = saved_tracks_page_with_total(
+      2,
+      &["0000000000000000000003", "0000000000000000000004"],
+      true,
+      14,
+    );
+    app.library.saved_tracks.upsert_page_by_offset(short);
+    app.set_saved_tracks_to_table_continuous();
+
+    assert_eq!(app.view.track_table_index, 3);
+    assert_eq!(
+      app.pending_track_table_selection(),
+      Some(PendingTrackSelection::Index(11))
+    );
+
+    let ids: Vec<String> = (5..15).map(|i| format!("{i:022}")).collect();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let last = saved_tracks_page_with_total(4, &ids, false, 14);
+    app.library.saved_tracks.upsert_page_by_offset(last);
+    app.set_saved_tracks_to_table_continuous();
+
+    assert_eq!(app.view.track_table_index, 11);
+    assert_eq!(app.pending_track_table_selection(), None);
+  }
+
+  #[test]
+  fn next_page_past_the_loaded_playlist_rows_parks_the_target_and_loads_more() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static();
+    app.open_playlist_tracks(playlist_id, TrackTableContext::MyPlaylists);
+    app.playlist_track_pages.upsert_page_by_offset(Paged {
+      items: vec![
+        playlist_item(0, "0000000000000000000001", "Track 1"),
+        playlist_item(1, "0000000000000000000002", "Track 2"),
+      ],
+      limit: 2,
+      next: Some("https://example.com/playlists/test/items?next".to_string()),
+      offset: 0,
+      previous: None,
+      total: 4,
+    });
+    app.set_playlist_tracks_to_table_continuous();
+    while rx.try_recv().is_ok() {}
+    app.view.size = Viewport {
+      width: 80,
+      height: 20,
+    };
+
+    handler(Key::Ctrl('d'), &mut app);
+
     assert_eq!(app.view.track_table_index, 1);
+    assert_eq!(
+      app.pending_track_table_selection(),
+      Some(PendingTrackSelection::Index(10))
+    );
+    assert!(rx.try_recv().is_ok(), "the next playlist page is fetched");
+  }
+
+  #[test]
+  fn a_key_press_after_next_page_cancels_the_parked_row() {
+    let (mut app, _rx) = app_with_saved_tracks();
+    app.view.size = Viewport {
+      width: 80,
+      height: 20,
+    };
+    let page = saved_tracks_page(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      true,
+    );
+    app.library.saved_tracks.upsert_page_by_offset(page);
+    app.set_saved_tracks_to_table_continuous();
+
+    handler(Key::Ctrl('d'), &mut app);
+    handler(Key::Ctrl('u'), &mut app);
+
+    assert_eq!(app.view.track_table_index, 0);
+    assert_eq!(app.pending_track_table_selection(), None);
+
+    let next = saved_tracks_page(
+      2,
+      &["0000000000000000000003", "0000000000000000000004"],
+      false,
+    );
+    app.library.saved_tracks.upsert_page_by_offset(next);
+    app.set_saved_tracks_to_table_continuous();
+
+    assert_eq!(app.view.track_table_index, 0);
+  }
+
+  #[test]
+  fn next_page_moves_the_playlist_cursor_down_half_a_screen_once_every_page_is_loaded() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static();
+    app.open_playlist_tracks(playlist_id, TrackTableContext::MyPlaylists);
+    app.playlist_track_pages.upsert_page_by_offset(Paged {
+      items: (0..30)
+        .map(|i| playlist_item(i, &format!("{i:022}"), &format!("Track {i}")))
+        .collect(),
+      limit: 30,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 30,
+    });
+    app.set_playlist_tracks_to_table_continuous();
+    while rx.try_recv().is_ok() {}
+    app.view.size = Viewport {
+      width: 80,
+      height: 20,
+    };
+
+    for expected in [10, 20, 29, 29] {
+      handler(Key::Ctrl('d'), &mut app);
+      assert_eq!(app.view.track_table_index, expected);
+    }
+    assert!(
+      rx.try_recv().is_err(),
+      "every page is loaded, nothing to fetch"
+    );
+  }
+
+  #[test]
+  fn previous_page_moves_the_cursor_up_half_a_screen_instead_of_to_the_top() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.set_track_table(
+      (0..30)
+        .map(|i| TrackInfo::from(&full_track(&format!("{i:022}"), &format!("Track {i}"))))
+        .collect(),
+      TrackTableContext::LocalPlaylist,
+    );
+    app.view.size = Viewport {
+      width: 80,
+      height: 20,
+    };
+    app.view.track_table_index = 25;
+
+    for expected in [15, 5, 0] {
+      handler(Key::Ctrl('u'), &mut app);
+      assert_eq!(app.view.track_table_index, expected);
+    }
+    // A table with no pagination pages down too.
+    handler(Key::Ctrl('d'), &mut app);
+    assert_eq!(app.view.track_table_index, 10);
   }
 
   #[test]

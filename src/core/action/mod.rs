@@ -232,7 +232,8 @@ pub enum Action {
   /// Fetch the next page of a paginated list surface - the shared "hit the
   /// end of the list" consequence that GUI infinite scroll also fires.
   /// Self-guarding: a no-op when no next page exists. Page-flipped surfaces
-  /// (saved shows, show episodes) move the visible page when it is cached.
+  /// (saved albums, saved shows, show episodes) move the visible page when it
+  /// is cached.
   LoadMore(ListTarget),
   /// Sort a list surface by a field, like the sort menu: the field already
   /// in effect flips the direction instead.
@@ -469,6 +470,8 @@ pub enum ListTarget {
   PlaylistTracks,
   /// The liked-songs (saved tracks) table.
   SavedTracks,
+  /// The saved-albums list (page-flipped, not continuous).
+  SavedAlbums,
   /// The saved-podcasts list (page-flipped, not continuous).
   SavedShows,
   /// The open show's episode list; the show is resolved at apply time.

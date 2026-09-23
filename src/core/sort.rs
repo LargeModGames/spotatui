@@ -275,7 +275,7 @@ impl Sorter {
     Self { state }
   }
 
-  pub fn sort_track_infos(&self, tracks: &mut [TrackInfo]) {
+  pub fn sort_tracks(&self, tracks: &mut [TrackInfo]) {
     if self.state.field == SortField::Default {
       return;
     }
