@@ -1305,7 +1305,15 @@ impl UserConfig {
     macro_rules! to_theme_item {
       ($name: ident) => {
         if let Some(theme_item) = theme.$name {
-          self.custom_theme.$name = parse_theme_item(&theme_item)?;
+          match parse_theme_item(&theme_item) {
+            Ok(theme) => self.custom_theme.$name = theme,
+            // An invalid theme config should not inhibit launch:
+            // warn and fall back on a default. (#547)
+            Err(e) => log::warn!(
+              "[config] theme.{}: {e}; keeping the default",
+              stringify!($name)
+            ),
+          }
         }
       };
     }
@@ -2603,6 +2611,23 @@ mod tests {
     config.load_keybindings(bindings).unwrap();
     assert_eq!(config.keys.back, default_back);
     assert_eq!(config.keys.move_up, Key::Char('w'));
+  }
+
+  #[test]
+  fn a_malformed_theme_color_keeps_the_default_and_still_loads() {
+    use super::{UserConfig, UserTheme};
+    use crate::core::theme::Color;
+
+    let mut config = UserConfig::new();
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Custom\ntext: '300, 0, 0'\nactive: '1, 2, 3'\n")
+        .expect("UserTheme must deserialize");
+
+    let result = config.load_theme(theme);
+
+    assert!(result.is_ok());
+    assert_eq!(config.theme.text, UserConfig::new().theme.text);
+    assert_eq!(config.theme.active, Color::Rgb(1, 2, 3))
   }
 
   #[test]
