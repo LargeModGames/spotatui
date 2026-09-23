@@ -56,7 +56,6 @@ const EXTERNAL_PLAYLIST_FALLBACK_CAP: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlaylistAccess {
   Owned,
-  Collaborative,
   External,
   Unknown,
 }
@@ -191,7 +190,6 @@ impl ExternalPlaylistFallbackCacheInner {
 
 #[derive(Debug, serde::Deserialize)]
 struct PlaylistAccessMetadata {
-  collaborative: bool,
   owner: Option<PlaylistOwnerMetadata>,
 }
 
@@ -227,15 +225,12 @@ enum PlaylistPageError {
   Request(anyhow::Error),
 }
 
-fn playlist_access_from_owner(
-  user_id: Option<&str>,
-  owner_id: Option<&str>,
-  collaborative: bool,
-) -> PlaylistAccess {
-  if collaborative {
-    return PlaylistAccess::Collaborative;
-  }
-
+/// Classify a playlist's 403 by owner relationship only. Spotify's
+/// `collaborative` flag says the playlist itself is collaborative; it does
+/// NOT prove the current user is one of its collaborators, so it must not
+/// decide the fallback. A followed collaborative playlist owned by someone
+/// else is External.
+fn playlist_access_from_owner(user_id: Option<&str>, owner_id: Option<&str>) -> PlaylistAccess {
   match (user_id, owner_id) {
     (Some(user_id), Some(owner_id)) if owner_id == user_id => PlaylistAccess::Owned,
     (Some(_), Some(_)) => PlaylistAccess::External,
@@ -267,7 +262,6 @@ fn playlist_access(app: &App, playlist_id: &str) -> PlaylistAccess {
   playlist_access_from_owner(
     app.user.as_ref().map(|user| user.id.as_str()),
     playlist.owner_id.as_deref(),
-    playlist.collaborative,
   )
 }
 
@@ -345,7 +339,6 @@ async fn classify_playlist_after_forbidden(
     playlist_access_from_owner(
       app_guard.user.as_ref().map(|user| user.id.as_str()),
       metadata.owner.as_ref().map(|owner| owner.id.as_str()),
-      metadata.collaborative,
     )
   };
   log::debug!(
@@ -360,8 +353,8 @@ async fn classify_playlist_after_forbidden(
 }
 
 /// Fetch playlist items through the Development Mode Web API first. A 403 is
-/// special only when the playlist metadata proves that it is external to the
-/// current user and non-collaborative; all other errors remain real errors.
+/// special only when the playlist metadata proves another user owns it;
+/// all other errors remain real errors.
 async fn fetch_playlist_tracks_page(
   spotify: &AuthCodePkceSpotify,
   app: &Arc<Mutex<App>>,
@@ -374,12 +367,17 @@ async fn fetch_playlist_tracks_page(
   // A cached external playlist skips the Web API round trip (which would
   // just 403 again) and slices the resolved contents directly. A failure
   // here — e.g. the streaming session went away — falls through to the
-  // normal Web API attempt instead of failing the page.
+  // normal Web API attempt instead of failing the page. The lookup is bound
+  // before the `if let` so no MutexGuard is held across the awaits below.
   #[cfg(feature = "streaming")]
-  if let Some(cached) = fallbacks.lock().await.contents_for(playlist_id.id()) {
-    if let Ok(session) = streaming_session(app).await {
-      if let Ok(page) = resolve_cached_playlist_slice(&session, &cached, offset, limit).await {
-        return Ok(PlaylistTracksPage::Librespot(page));
+  {
+    let cached = fallbacks.lock().await.contents_for(playlist_id.id());
+
+    if let Some(cached) = cached {
+      if let Ok(session) = streaming_session(app).await {
+        if let Ok(page) = resolve_cached_playlist_slice(&session, &cached, offset, limit).await {
+          return Ok(PlaylistTracksPage::Librespot(page));
+        }
       }
     }
   }
@@ -447,8 +445,11 @@ async fn fetch_librespot_playlist_tracks_page(
   let session = streaming_session(app).await?;
 
   // Reuse the proto a previous page already downloaded: later slices resolve
-  // only their own window of track metadata.
-  if let Some(cached) = fallbacks.lock().await.contents_for(playlist_id.id()) {
+  // only their own window of track metadata. The lookup is bound before the
+  // `if let` so no MutexGuard is held across the resolve await.
+  let cached = fallbacks.lock().await.contents_for(playlist_id.id());
+
+  if let Some(cached) = cached {
     return resolve_cached_playlist_slice(&session, &cached, offset, limit).await;
   }
 
@@ -2083,7 +2084,7 @@ mod tests {
   use std::collections::{HashMap, HashSet};
 
   #[test]
-  fn playlist_access_keeps_external_403_distinct_from_owned_and_collaborative() {
+  fn playlist_access_classifies_by_owner_only() {
     use crate::core::test_helpers::{playlist_info, user_info};
 
     let mut app = App::default();
@@ -2092,6 +2093,9 @@ mod tests {
     external.public = Some(true);
     app.all_playlists = vec![
       playlist_info("owned", "Owned", "me", false),
+      // Another user's collaborative playlist: the flag does not prove the
+      // current user collaborates, so this stays External (regression: a
+      // followed collaborative playlist hit the error page on 403).
       playlist_info("collab", "Collaborative", "other", true),
     ];
     app.search_results.playlists = Some(Paged {
@@ -2100,12 +2104,27 @@ mod tests {
     });
 
     assert_eq!(playlist_access(&app, "owned"), PlaylistAccess::Owned);
-    assert_eq!(
-      playlist_access(&app, "collab"),
-      PlaylistAccess::Collaborative
-    );
+    assert_eq!(playlist_access(&app, "collab"), PlaylistAccess::External);
     assert_eq!(playlist_access(&app, "external"), PlaylistAccess::External);
     assert_eq!(playlist_access(&app, "missing"), PlaylistAccess::Unknown);
+  }
+
+  #[test]
+  fn playlist_access_without_user_or_owner_is_unknown() {
+    use crate::core::test_helpers::{playlist_info, user_info};
+
+    // No current user: even an owned-looking playlist cannot be proven.
+    let mut app = App::default();
+    app.all_playlists = vec![playlist_info("owned", "Owned", "me", false)];
+    assert_eq!(playlist_access(&app, "owned"), PlaylistAccess::Unknown);
+
+    // Current user but playlist without owner metadata.
+    let mut app = App::default();
+    app.user = Some(user_info("me"));
+    let mut ownerless = playlist_info("ownerless", "Ownerless", "me", false);
+    ownerless.owner_id = None;
+    app.all_playlists = vec![ownerless];
+    assert_eq!(playlist_access(&app, "ownerless"), PlaylistAccess::Unknown);
   }
 
   #[allow(deprecated)]
@@ -2314,14 +2333,13 @@ mod tests {
 
   #[test]
   fn external_fallback_only_for_confirmed_external_403s() {
-    use PlaylistAccess::{Collaborative, External, Owned, Unknown};
+    use PlaylistAccess::{External, Owned, Unknown};
 
     // The one path that may use the librespot fallback.
     assert!(should_attempt_external_fallback(External, true));
-    // An owned or collaborative playlist that 403s is a diagnosable server
-    // error, never a silent fallback.
+    // An owned playlist that 403s is a diagnosable server error, never a
+    // silent fallback.
     assert!(!should_attempt_external_fallback(Owned, true));
-    assert!(!should_attempt_external_fallback(Collaborative, true));
     assert!(!should_attempt_external_fallback(Unknown, true));
     // Non-403 failures keep their real error whatever the relationship.
     assert!(!should_attempt_external_fallback(External, false));
