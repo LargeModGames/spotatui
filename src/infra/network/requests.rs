@@ -625,6 +625,17 @@ pub fn is_rate_limited_error(e: &anyhow::Error) -> bool {
   text.contains("429") || text.contains("Too Many Requests") || text.contains("Too many requests")
 }
 
+/// Whether an error is the exact 403 response returned by Spotify.
+///
+/// Callers use this to distinguish Development Mode's playlist-content
+/// restriction from authentication, transport, and other API failures. The
+/// typed error is retained through `anyhow`, so this never relies on matching
+/// a translated or truncated response-body string.
+pub fn is_forbidden_error(e: &anyhow::Error) -> bool {
+  e.downcast_ref::<SpotifyApiError>()
+    .is_some_and(|error| error.status == reqwest::StatusCode::FORBIDDEN)
+}
+
 pub fn is_transient_network_error(e: &anyhow::Error) -> bool {
   let text = e.to_string().to_lowercase();
   text.contains("error sending request for url")
@@ -731,6 +742,20 @@ mod tests {
     let mut buf = vec![0; 4096];
     let n = stream.read(&mut buf).await.unwrap();
     String::from_utf8_lossy(&buf[..n]).to_string()
+  }
+
+  #[test]
+  fn forbidden_error_classification_uses_status_not_body_text() {
+    let error = anyhow::Error::new(SpotifyApiError {
+      status: reqwest::StatusCode::FORBIDDEN,
+      body: "playlist contents unavailable".to_string(),
+      detail: None,
+    });
+    assert!(is_forbidden_error(&error));
+    assert!(!is_rate_limited_error(&error));
+    assert!(!is_forbidden_error(&anyhow::anyhow!(
+      "Spotify API 403 Forbidden"
+    )));
   }
 
   #[tokio::test]

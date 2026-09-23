@@ -1,6 +1,6 @@
 use super::*;
 
-fn sort_playlist_track_matches(matches: &mut [(FullTrack, usize)], sort_state: SortState) {
+fn sort_playlist_track_matches(matches: &mut [(TrackInfo, usize)], sort_state: SortState) {
   if sort_state.field == SortField::Default {
     return;
   }
@@ -8,22 +8,9 @@ fn sort_playlist_track_matches(matches: &mut [(FullTrack, usize)], sort_state: S
   matches.sort_by(|(track_a, position_a), (track_b, position_b)| {
     let order = match sort_state.field {
       SortField::Name => track_a.name.cmp(&track_b.name),
-      SortField::Duration => track_a.duration.cmp(&track_b.duration),
-      SortField::Artist => {
-        let empty_string = String::new();
-        let artist_a = track_a
-          .artists
-          .first()
-          .map(|artist| &artist.name)
-          .unwrap_or(&empty_string);
-        let artist_b = track_b
-          .artists
-          .first()
-          .map(|artist| &artist.name)
-          .unwrap_or(&empty_string);
-        artist_a.cmp(artist_b)
-      }
-      SortField::Album => track_a.album.name.cmp(&track_b.album.name),
+      SortField::Duration => track_a.duration_ms.cmp(&track_b.duration_ms),
+      SortField::Artist => track_a.artists.first().cmp(&track_b.artists.first()),
+      SortField::Album => track_a.album.cmp(&track_b.album),
       SortField::DateAdded => position_a.cmp(position_b),
       SortField::Default => std::cmp::Ordering::Equal,
     };
@@ -203,7 +190,7 @@ impl App {
     &mut self,
     playlist_id: &PlaylistId<'_>,
     query: String,
-    mut matches: Vec<(FullTrack, usize)>,
+    mut matches: Vec<(TrackInfo, usize)>,
   ) -> bool {
     if !self.is_playlist_track_table_active_for(playlist_id) {
       return false;
@@ -213,12 +200,9 @@ impl App {
 
     let track_ids = matches
       .iter()
-      .filter_map(|(track, _)| track.id.as_ref().map(|id| id.id().to_string()))
+      .filter_map(|(track, _)| track.id.clone())
       .collect();
-    let tracks: Vec<TrackInfo> = matches
-      .iter()
-      .map(|(track, _)| TrackInfo::from(track))
-      .collect();
+    let tracks: Vec<TrackInfo> = matches.iter().map(|(track, _)| track.clone()).collect();
     let positions: Vec<usize> = matches.into_iter().map(|(_, position)| position).collect();
 
     self.active_playlist_track_filter = Some(query);
@@ -345,13 +329,12 @@ impl App {
   pub fn apply_sorted_playlist_tracks_if_current(
     &mut self,
     playlist_id: &PlaylistId<'_>,
-    tracks: Vec<FullTrack>,
+    tracks: Vec<TrackInfo>,
   ) -> bool {
     if !self.is_playlist_track_table_active_for(playlist_id) {
       return false;
     }
 
-    let tracks = tracks.iter().map(TrackInfo::from).collect();
     self.replace_track_table_tracks(tracks);
     self.view.track_table_index = 0;
     true
@@ -408,6 +391,10 @@ mod tests {
 
   fn playlist_id(id: &str) -> PlaylistId<'static> {
     PlaylistId::from_id(id).unwrap().into_static()
+  }
+
+  fn track_info(id: &str, name: &str) -> TrackInfo {
+    TrackInfo::from(&full_track(id, name))
   }
 
   #[test]
@@ -583,6 +570,56 @@ mod tests {
   }
 
   #[test]
+  fn empty_converted_page_with_next_still_advances_prefetch_offset() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+
+    // A compacted page: zero domain items, but continuation metadata promises
+    // more raw slots. Prefetch must still derive the next offset from it.
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id);
+    app
+      .playlist_track_pages
+      .upsert_page_by_offset(empty_playlist_page(0, 60, 20, true));
+
+    assert_eq!(app.next_missing_playlist_tracks_offset(0), Some(20));
+  }
+
+  #[test]
+  fn continuous_table_reaches_later_page_across_empty_converted_page() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+    let later_page = playlist_page(
+      2,
+      4,
+      &["0000000000000000000003", "0000000000000000000004"],
+      false,
+    );
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id);
+    app
+      .playlist_track_pages
+      .upsert_page_by_offset(empty_playlist_page(0, 4, 2, true));
+    app.playlist_track_pages.upsert_page_by_offset(later_page);
+
+    app.set_playlist_tracks_to_table_continuous();
+
+    // The empty first page contributes no rows but must not stop the later
+    // page from reaching the table with its absolute positions intact.
+    assert_eq!(app.track_table.tracks.len(), 2);
+    assert_eq!(app.playlist_track_positions, Some(vec![2, 3]));
+    match rx.recv().unwrap() {
+      IoEvent::CurrentUserSavedTracksContains(track_ids) => {
+        assert_eq!(track_ids.len(), 2);
+      }
+      _ => panic!("unexpected event"),
+    }
+  }
+
+  #[test]
   fn playlist_search_results_preserve_source_positions_and_handle_no_matches() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
@@ -596,8 +633,8 @@ mod tests {
       &playlist_id,
       "track".to_string(),
       vec![
-        (full_track("0000000000000000000002", "Second"), 8),
-        (full_track("0000000000000000000004", "Fourth"), 11),
+        (track_info("0000000000000000000002", "Second"), 8),
+        (track_info("0000000000000000000004", "Fourth"), 11),
       ],
     ));
 
@@ -652,29 +689,29 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     let sidebar_playlist_id = playlist_id("37i9dQZF1DXcBWIGoYBM5M");
     let active_playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
-    let original_track = full_track("0000000000000000000001", "Original");
+    let original_track = track_info("0000000000000000000001", "Original");
 
-    app.track_table.tracks = vec![TrackInfo::from(&original_track)];
+    app.track_table.tracks = vec![original_track.clone()];
     app.track_table.context = Some(TrackTableContext::PlaylistSearch);
     app.playlist_track_table_id = Some(active_playlist_id.clone());
 
     assert!(!app.apply_sorted_playlist_tracks_if_current(
       &sidebar_playlist_id,
-      vec![full_track("0000000000000000000002", "Wrong Playlist")],
+      vec![track_info("0000000000000000000002", "Wrong Playlist")],
     ));
     assert_eq!(
       app.track_table.tracks[0].id.as_deref(),
-      original_track.id.as_ref().map(|id| id.id())
+      original_track.id.as_deref()
     );
 
     app.track_table.context = Some(TrackTableContext::SavedTracks);
     assert!(!app.apply_sorted_playlist_tracks_if_current(
       &active_playlist_id,
-      vec![full_track("0000000000000000000003", "Wrong Context")],
+      vec![track_info("0000000000000000000003", "Wrong Context")],
     ));
     assert_eq!(
       app.track_table.tracks[0].id.as_deref(),
-      original_track.id.as_ref().map(|id| id.id())
+      original_track.id.as_deref()
     );
   }
 

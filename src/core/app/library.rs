@@ -436,19 +436,40 @@ impl App {
   }
 
   pub fn get_current_user_saved_albums_next(&mut self) {
-    match self
+    let Some(current) = self.library.saved_albums.get_results(None) else {
+      return;
+    };
+    if !current.has_next() {
+      return;
+    }
+    let next_offset = current.offset + current.limit;
+    if self
       .library
       .saved_albums
       .get_results(Some(self.library.saved_albums.index + 1))
-      .cloned()
+      .is_some()
     {
-      Some(_) => self.library.saved_albums.index += 1,
-      None => {
-        if let Some(saved_albums) = &self.library.saved_albums.get_results(None) {
-          let offset = Some(saved_albums.offset + saved_albums.limit);
-          self.dispatch(IoEvent::GetCurrentUserSavedAlbums(offset));
-        }
+      self.library.saved_albums.index += 1;
+    } else {
+      self.dispatch(IoEvent::GetCurrentUserSavedAlbums(Some(next_offset)));
+    }
+    // Back to the top row, where the next page opens.
+    self.view.album_list_index = 0;
+  }
+
+  /// Show a fetched saved-albums page; one whose offset is already cached replaces that copy.
+  pub(crate) fn store_saved_albums_page(&mut self, page: Paged<SavedAlbumInfo>) {
+    let albums = &mut self.library.saved_albums;
+    match albums
+      .pages
+      .iter()
+      .position(|cached| cached.offset == page.offset)
+    {
+      Some(slot) => {
+        albums.pages[slot] = page;
+        albums.index = slot;
       }
+      None => albums.add_pages(page),
     }
   }
 
@@ -786,5 +807,106 @@ mod tests {
       }
       _ => panic!("expected playlist sort fetch"),
     }
+  }
+
+  fn saved_album_page(offset: u32, ids: &[&str], has_next: bool) -> Paged<SavedAlbumInfo> {
+    Paged {
+      items: ids
+        .iter()
+        .map(|id| SavedAlbumInfo {
+          album: crate::core::plugin_api::AlbumInfo {
+            id: Some(id.to_string()),
+            ..Default::default()
+          },
+          added_at: String::new(),
+        })
+        .collect(),
+      offset,
+      limit: ids.len() as u32,
+      total: 6,
+      next: has_next.then(|| "https://example.com/me/albums?next".to_string()),
+      previous: None,
+    }
+  }
+
+  #[test]
+  fn saved_albums_next_fetches_the_following_offset_and_resets_the_cursor() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetCurrentUserSavedAlbums(Some(2)))
+    ));
+    assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn saved_albums_next_on_the_final_page_fetches_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], false));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.view.album_list_index, 1);
+    assert_eq!(app.library.saved_albums.index, 0);
+  }
+
+  #[test]
+  fn saved_albums_next_flips_to_a_cached_page_without_fetching() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(2, &["a3", "a4"], true));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.library.saved_albums.index, 1);
+    assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn a_saved_albums_page_fetched_again_replaces_its_cached_copy() {
+    let mut app = App::default();
+    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true));
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
+
+    // Reopening Albums fetches the first page again.
+    app.store_saved_albums_page(saved_album_page(0, &["b1", "b2"], true));
+
+    let albums = &app.library.saved_albums;
+    assert_eq!(albums.pages.len(), 2);
+    assert_eq!(albums.index, 0);
+    assert_eq!(albums.pages[0].items[0].album.id.as_deref(), Some("b1"));
+
+    // The next page is still one step forward, not stuck behind a duplicate.
+    app.get_current_user_saved_albums_next();
+    assert_eq!(app.library.saved_albums.index, 1);
+
+    // A second response for the same offset does not append a copy.
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
+    assert_eq!(app.library.saved_albums.pages.len(), 2);
+    assert_eq!(app.library.saved_albums.index, 1);
   }
 }

@@ -21,8 +21,7 @@ use anyhow::anyhow;
 use rspotify::{
   model::enums::Country,
   model::{
-    context::CurrentPlaybackContext, device::DevicePayload, idtypes::PlaylistId, track::FullTrack,
-    PlayableItem,
+    context::CurrentPlaybackContext, device::DevicePayload, idtypes::PlaylistId, PlayableItem,
   },
   prelude::*, // Adds Id trait for .id() method
 };
@@ -61,7 +60,8 @@ use crate::core::test_helpers::{playlist_info, user_info};
 use chrono::Duration as ChronoDuration;
 #[cfg(test)]
 use rspotify::model::{
-  artist::SimplifiedArtist, idtypes::TrackId, page::Page, track::SavedTrack, SimplifiedAlbum,
+  artist::SimplifiedArtist, idtypes::TrackId, page::Page, track::FullTrack, track::SavedTrack,
+  SimplifiedAlbum,
 };
 #[cfg(test)]
 use std::collections::HashMap;

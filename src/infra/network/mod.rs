@@ -408,6 +408,12 @@ pub struct Network {
   /// The `Retry-After` window every Spotify call checks: the shared gate in
   /// production, a private one in tests.
   rate_gate: requests::ForcedRefreshGate,
+  /// Session-scoped reuse for the external-playlist fallback path (Development
+  /// Mode 403s): confirmed-external classifications and resolved librespot
+  /// playlist contents, shared by foreground fetch, background prefetch,
+  /// sort, and search so each playlist pays classification plus one proto
+  /// download instead of one per page.
+  pub(crate) external_playlist_fallbacks: library::ExternalPlaylistFallbackCache,
   /// Spotify-bound events held back while that window is open. Only the pump
   /// sets `defers_rate_limited`; the CLI has no pump to block and waits inline.
   deferred: Vec<Deferred>,
@@ -456,6 +462,7 @@ impl Network {
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
       rate_gate: requests::shared_forced_refresh_gate().clone(),
+      external_playlist_fallbacks: library::external_playlist_fallback_cache(),
       deferred: Vec::new(),
       defers_rate_limited: false,
     }
@@ -483,6 +490,7 @@ impl Network {
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
       rate_gate: requests::shared_forced_refresh_gate().clone(),
+      external_playlist_fallbacks: library::external_playlist_fallback_cache(),
       deferred: Vec::new(),
       defers_rate_limited: false,
     }

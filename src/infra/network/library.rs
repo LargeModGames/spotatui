@@ -1,13 +1,16 @@
 use super::mapping::{map_page, playlist_items_page};
 use super::requests::{
-  spotify_api_request_json_for_with_refresh, spotify_get_typed_compat_for_with_refresh,
+  is_forbidden_error, spotify_api_request_json_for_with_refresh,
+  spotify_get_typed_compat_for_with_refresh,
 };
 use super::{IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
 };
-use crate::core::plugin_api::{PlaylistInfo, ShowInfo, TrackInfo};
+use crate::core::pagination::Paged;
+use crate::core::plugin_api::{PlayableInfo, PlaylistInfo, ShowInfo, TrackInfo};
+use crate::core::sort::Sorter;
 use crate::core::source::Source;
 use anyhow::anyhow;
 use reqwest::Method;
@@ -16,20 +19,593 @@ use rspotify::model::{
   page::Page,
   playlist::{PlaylistItem, SimplifiedPlaylist},
   track::SavedTrack,
-  PlayableItem,
 };
 use rspotify::{prelude::*, AuthCodePkceSpotify};
 use serde_json::json;
+#[cfg(feature = "streaming")]
+use std::collections::HashMap;
+use std::collections::{HashSet, VecDeque};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "streaming")]
 use crate::infra::player::StreamingPlayer;
+#[cfg(feature = "streaming")]
+use librespot_core::SpotifyUri;
+#[cfg(feature = "streaming")]
+use librespot_metadata::{
+  Episode as LibrespotEpisode, Metadata, Playlist as LibrespotPlaylist, Track as LibrespotTrack,
+};
 
 // Spotify's `me/library` endpoints (contains, save, remove) accept at most 40
 // uris per request; anything larger fails with a 400 "Too many uris".
 const LIBRARY_CONTAINS_MAX_URIS: usize = 40;
+
+const EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS: &str = concat!(
+  "Spotify Development Mode blocks playlist contents owned by another user. ",
+  "Only playlists you own or collaborate on are available."
+);
+
+/// How many external-playlist fallbacks are remembered per session. Bounds the
+/// cache: each entry holds one classification plus (streaming builds) one
+/// playlist's item URIs, so an unbounded map would grow with every pasted URI.
+const EXTERNAL_PLAYLIST_FALLBACK_CAP: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistAccess {
+  Owned,
+  External,
+  Unknown,
+}
+
+/// Whether a 403 on the items endpoint may use the librespot fallback. Only a
+/// confirmed-external playlist with a real 403 qualifies: an owned or
+/// collaborative playlist that 403s is a diagnosable server error, and any
+/// non-403 failure keeps its real error.
+fn should_attempt_external_fallback(access: PlaylistAccess, forbidden: bool) -> bool {
+  forbidden && access == PlaylistAccess::External
+}
+
+/// Next raw-page offset for a converted playlist page, driven by continuation
+/// metadata only. Compaction (`playlist_items_page`) and the librespot slice
+/// can drop every item of a nonterminal page, so item count must never stop
+/// pagination. The response offset must equal the requested one: a stale page
+/// would otherwise repeat the same request forever. A zero limit, an overflow,
+/// or a non-advancing offset terminates instead of looping.
+fn playlist_page_next_offset(
+  page: &Paged<(u32, PlayableInfo)>,
+  requested_offset: u32,
+) -> Option<u32> {
+  if page.limit == 0 {
+    return None;
+  }
+  page.next.as_ref()?;
+  let next_offset = page.offset.checked_add(page.limit)?;
+  (page.offset == requested_offset && next_offset > requested_offset).then_some(next_offset)
+}
+
+/// Session-scoped reuse for the external-playlist fallback path, shared by
+/// foreground fetch, background prefetch, sort, and search through one
+/// `Arc<Mutex<…>>` handle. Locks are held only for map lookups/inserts, never
+/// across Spotify or librespot awaits.
+pub(crate) type ExternalPlaylistFallbackCache = Arc<Mutex<ExternalPlaylistFallbackCacheInner>>;
+
+pub(crate) fn external_playlist_fallback_cache() -> ExternalPlaylistFallbackCache {
+  Arc::new(Mutex::new(ExternalPlaylistFallbackCacheInner::default()))
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ExternalPlaylistFallbackCacheInner {
+  /// Playlist ids confirmed `External` via metadata after a 403, so later
+  /// pages skip the `GET playlists/{id}` classification request.
+  external_ids: HashSet<String>,
+  /// Resolved librespot contents per external playlist id, so later page
+  /// slices reuse the downloaded proto instead of refetching it.
+  #[cfg(feature = "streaming")]
+  contents: HashMap<String, CachedExternalPlaylistContents>,
+  /// Insertion order for the bounded eviction in `retain_newest`.
+  order: VecDeque<String>,
+}
+
+/// Resolved librespot playlist contents: the item URIs in playlist order plus
+/// the base offset and total from the downloaded proto. Absolute positions are
+/// `base_offset + index`, so page slices stay aligned with the raw playlist.
+#[cfg(feature = "streaming")]
+#[derive(Debug, Clone)]
+struct CachedExternalPlaylistContents {
+  uris: Vec<librespot_core::SpotifyUri>,
+  base_offset: u32,
+  total: u32,
+}
+
+#[cfg(feature = "streaming")]
+impl CachedExternalPlaylistContents {
+  /// Absolute `(position, item-index)` pairs for the requested raw window:
+  /// `offset=0, limit=50` selects `[0..50]` of the cached contents, `50/50`
+  /// selects `[50..100]`, and so on.
+  fn slice_positions(&self, offset: u32, limit: u32) -> Vec<(u32, usize)> {
+    let end = offset.saturating_add(limit.max(1));
+    self
+      .uris
+      .iter()
+      .enumerate()
+      .map(|(index, _)| (self.base_offset.saturating_add(index as u32), index))
+      .filter(|(position, _)| *position >= offset && *position < end)
+      .collect()
+  }
+
+  fn has_next(&self, offset: u32, limit: u32) -> bool {
+    offset.saturating_add(limit.max(1)) < self.total
+  }
+}
+
+impl ExternalPlaylistFallbackCacheInner {
+  fn is_external(&self, playlist_id: &str) -> bool {
+    self.external_ids.contains(playlist_id)
+  }
+
+  fn mark_external(&mut self, playlist_id: &str) {
+    if self.external_ids.insert(playlist_id.to_string()) {
+      self.order.push_back(playlist_id.to_string());
+    }
+    self.retain_newest();
+  }
+
+  #[cfg(feature = "streaming")]
+  fn contents_for(&self, playlist_id: &str) -> Option<CachedExternalPlaylistContents> {
+    self.contents.get(playlist_id).cloned()
+  }
+
+  #[cfg(feature = "streaming")]
+  fn store_contents(&mut self, playlist_id: &str, contents: CachedExternalPlaylistContents) {
+    self.contents.insert(playlist_id.to_string(), contents);
+    self.mark_external(playlist_id);
+  }
+
+  /// Drop a playlist's resolved contents (e.g. on a fresh open at offset 0)
+  /// so the next visit re-downloads instead of showing the first snapshot
+  /// all session. The External classification is kept: the relationship
+  /// rarely changes, and re-proving it would cost a metadata request again.
+  #[cfg(feature = "streaming")]
+  fn clear_contents(&mut self, playlist_id: &str) {
+    self.contents.remove(playlist_id);
+  }
+
+  /// Drop the oldest ids once over capacity. Classification and contents for
+  /// an id are evicted together; the next visit simply re-resolves them.
+  fn retain_newest(&mut self) {
+    while self.order.len() > EXTERNAL_PLAYLIST_FALLBACK_CAP {
+      if let Some(oldest) = self.order.pop_front() {
+        self.external_ids.remove(&oldest);
+        #[cfg(feature = "streaming")]
+        self.contents.remove(&oldest);
+      } else {
+        break;
+      }
+    }
+  }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PlaylistAccessMetadata {
+  owner: Option<PlaylistOwnerMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PlaylistOwnerMetadata {
+  id: String,
+}
+
+/// The Web API page is still the primary representation. The librespot page is
+/// source-agnostic domain data because its internal metadata API does not
+/// expose rspotify's `PlaylistItem` model.
+enum PlaylistTracksPage {
+  Api(Page<PlaylistItem>),
+  #[cfg(feature = "streaming")]
+  Librespot(Paged<(u32, PlayableInfo)>),
+}
+
+impl PlaylistTracksPage {
+  fn into_domain(self) -> Paged<(u32, PlayableInfo)> {
+    match self {
+      Self::Api(page) => playlist_items_page(&page),
+      #[cfg(feature = "streaming")]
+      Self::Librespot(page) => page,
+    }
+  }
+}
+
+#[derive(Debug)]
+enum PlaylistPageError {
+  /// Spotify's Development Mode restriction applies to this external playlist
+  /// and neither the Web API nor the optional native fallback can serve it.
+  UnsupportedExternal,
+  Request(anyhow::Error),
+}
+
+/// Classify a playlist's 403 by owner relationship only. Spotify's
+/// `collaborative` flag says the playlist itself is collaborative; it does
+/// NOT prove the current user is one of its collaborators, so it must not
+/// decide the fallback. A followed collaborative playlist owned by someone
+/// else is External.
+fn playlist_access_from_owner(user_id: Option<&str>, owner_id: Option<&str>) -> PlaylistAccess {
+  match (user_id, owner_id) {
+    (Some(user_id), Some(owner_id)) if owner_id == user_id => PlaylistAccess::Owned,
+    (Some(_), Some(_)) => PlaylistAccess::External,
+    _ => PlaylistAccess::Unknown,
+  }
+}
+
+fn known_playlist_info<'a>(app: &'a App, playlist_id: &str) -> Option<&'a PlaylistInfo> {
+  app
+    .all_playlists
+    .iter()
+    .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
+    .or_else(|| {
+      app
+        .search_results
+        .playlists
+        .as_ref()?
+        .items
+        .iter()
+        .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
+    })
+}
+
+fn playlist_access(app: &App, playlist_id: &str) -> PlaylistAccess {
+  let Some(playlist) = known_playlist_info(app, playlist_id) else {
+    return PlaylistAccess::Unknown;
+  };
+
+  playlist_access_from_owner(
+    app.user.as_ref().map(|user| user.id.as_str()),
+    playlist.owner_id.as_deref(),
+  )
+}
+
+fn log_playlist_access(app: &App, playlist_id: &str, access: PlaylistAccess) {
+  if let Some(playlist) = known_playlist_info(app, playlist_id) {
+    log::debug!(
+      "playlist content access: id={} access={access:?} owner_id={:?} user_id={:?} collaborative={} public={:?}",
+      playlist_id,
+      playlist.owner_id,
+      app.user.as_ref().map(|user| user.id.as_str()),
+      playlist.collaborative,
+      playlist.public,
+    );
+  } else {
+    log::debug!(
+      "playlist content access: id={} access={access:?} metadata=unknown",
+      playlist_id,
+    );
+  }
+}
+
+async fn classify_playlist_after_forbidden(
+  spotify: &AuthCodePkceSpotify,
+  app: &Arc<Mutex<App>>,
+  token_cache_path: &Path,
+  playlist_id: &PlaylistId<'_>,
+  fallbacks: &ExternalPlaylistFallbackCache,
+) -> PlaylistAccess {
+  let known_access = {
+    let app_guard = app.lock().await;
+    let access = playlist_access(&app_guard, playlist_id.id());
+    log_playlist_access(&app_guard, playlist_id.id(), access);
+    access
+  };
+  if known_access != PlaylistAccess::Unknown {
+    return known_access;
+  }
+
+  // A previous page already proved this id external: reuse that without
+  // another metadata request.
+  if fallbacks.lock().await.is_external(playlist_id.id()) {
+    log::debug!(
+      "playlist content access: id={} access=External metadata=cached",
+      playlist_id.id(),
+    );
+    return PlaylistAccess::External;
+  }
+
+  // Search results and pasted playlist URIs are not necessarily in the user's
+  // library. The metadata endpoint remains useful for relationship checks even
+  // when the items endpoint is restricted, and the minimal shape avoids asking
+  // rspotify to deserialize a response with no item page.
+  let metadata = match spotify_get_typed_compat_for_with_refresh::<PlaylistAccessMetadata>(
+    spotify,
+    &format!("playlists/{}", playlist_id.id()),
+    &[],
+    token_cache_path,
+    app,
+  )
+  .await
+  {
+    Ok(metadata) => metadata,
+    Err(error) => {
+      log::debug!(
+        "playlist access metadata unavailable for {}: {}",
+        playlist_id.id(),
+        error
+      );
+      return PlaylistAccess::Unknown;
+    }
+  };
+
+  let access = {
+    let app_guard = app.lock().await;
+    playlist_access_from_owner(
+      app_guard.user.as_ref().map(|user| user.id.as_str()),
+      metadata.owner.as_ref().map(|owner| owner.id.as_str()),
+    )
+  };
+  log::debug!(
+    "playlist content access from metadata: id={} access={access:?} owner_id={:?}",
+    playlist_id.id(),
+    metadata.owner.as_ref().map(|owner| owner.id.as_str()),
+  );
+  if access == PlaylistAccess::External {
+    fallbacks.lock().await.mark_external(playlist_id.id());
+  }
+  access
+}
+
+/// Fetch playlist items through the Development Mode Web API first. A 403 is
+/// special only when the playlist metadata proves another user owns it;
+/// all other errors remain real errors.
+async fn fetch_playlist_tracks_page(
+  spotify: &AuthCodePkceSpotify,
+  app: &Arc<Mutex<App>>,
+  token_cache_path: &Path,
+  playlist_id: &PlaylistId<'_>,
+  offset: u32,
+  limit: u32,
+  fallbacks: &ExternalPlaylistFallbackCache,
+) -> Result<PlaylistTracksPage, PlaylistPageError> {
+  // A cached external playlist skips the Web API round trip (which would
+  // just 403 again) and slices the resolved contents directly. A failure
+  // here — e.g. the streaming session went away — falls through to the
+  // normal Web API attempt instead of failing the page. The lookup is bound
+  // before the `if let` so no MutexGuard is held across the awaits below.
+  #[cfg(feature = "streaming")]
+  {
+    let cached = fallbacks.lock().await.contents_for(playlist_id.id());
+
+    if let Some(cached) = cached {
+      if let Ok(session) = streaming_session(app).await {
+        if let Ok(page) = resolve_cached_playlist_slice(&session, &cached, offset, limit).await {
+          return Ok(PlaylistTracksPage::Librespot(page));
+        }
+      }
+    }
+  }
+
+  let path = format!("playlists/{}/items", playlist_id.id());
+  let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+  match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    spotify,
+    &path,
+    &query,
+    token_cache_path,
+    app,
+  )
+  .await
+  {
+    Ok(page) => Ok(PlaylistTracksPage::Api(page)),
+    Err(error) => {
+      let forbidden = is_forbidden_error(&error);
+      let access = if forbidden {
+        classify_playlist_after_forbidden(spotify, app, token_cache_path, playlist_id, fallbacks)
+          .await
+      } else {
+        PlaylistAccess::Unknown
+      };
+
+      if should_attempt_external_fallback(access, forbidden) {
+        #[cfg(feature = "streaming")]
+        match fetch_librespot_playlist_tracks_page(app, fallbacks, playlist_id, offset, limit).await
+        {
+          Ok(page) => return Ok(PlaylistTracksPage::Librespot(page)),
+          Err(fallback_error) => {
+            log::warn!(
+              "librespot playlist fallback failed for {}: {}",
+              playlist_id.id(),
+              fallback_error
+            );
+          }
+        }
+        return Err(PlaylistPageError::UnsupportedExternal);
+      }
+
+      Err(PlaylistPageError::Request(error))
+    }
+  }
+}
+
+#[cfg(feature = "streaming")]
+async fn streaming_session(app: &Arc<Mutex<App>>) -> anyhow::Result<librespot_core::Session> {
+  let player = {
+    let app_guard = app.lock().await;
+    app_guard.streaming_player.clone()
+  }
+  .ok_or_else(|| anyhow!("native streaming session is unavailable"))?;
+  Ok(player.session())
+}
+
+#[cfg(feature = "streaming")]
+async fn fetch_librespot_playlist_tracks_page(
+  app: &Arc<Mutex<App>>,
+  fallbacks: &ExternalPlaylistFallbackCache,
+  playlist_id: &PlaylistId<'_>,
+  offset: u32,
+  limit: u32,
+) -> anyhow::Result<Paged<(u32, PlayableInfo)>> {
+  let session = streaming_session(app).await?;
+
+  // Reuse the proto a previous page already downloaded: later slices resolve
+  // only their own window of track metadata. The lookup is bound before the
+  // `if let` so no MutexGuard is held across the resolve await.
+  let cached = fallbacks.lock().await.contents_for(playlist_id.id());
+
+  if let Some(cached) = cached {
+    return resolve_cached_playlist_slice(&session, &cached, offset, limit).await;
+  }
+
+  let id = librespot_core::SpotifyId::from_base62(playlist_id.id())
+    .map_err(|error| anyhow!("invalid playlist id for librespot: {error}"))?;
+  let uri = SpotifyUri::Playlist { user: None, id };
+  let playlist = LibrespotPlaylist::get(&session, &uri)
+    .await
+    .map_err(|error| anyhow!("librespot playlist request failed: {error}"))?;
+
+  if playlist.contents.is_truncated {
+    return Err(anyhow!("librespot returned truncated playlist contents"));
+  }
+
+  let cached = CachedExternalPlaylistContents {
+    total: playlist.length.max(0) as u32,
+    base_offset: playlist.contents.position.max(0) as u32,
+    uris: playlist
+      .contents
+      .items
+      .iter()
+      .map(|item| item.id.clone())
+      .collect(),
+  };
+  fallbacks
+    .lock()
+    .await
+    .store_contents(playlist_id.id(), cached.clone());
+  resolve_cached_playlist_slice(&session, &cached, offset, limit).await
+}
+
+#[cfg(feature = "streaming")]
+async fn resolve_cached_playlist_slice(
+  session: &librespot_core::Session,
+  cached: &CachedExternalPlaylistContents,
+  offset: u32,
+  limit: u32,
+) -> anyhow::Result<Paged<(u32, PlayableInfo)>> {
+  let limit = limit.max(1);
+  let selected = cached
+    .slice_positions(offset, limit)
+    .into_iter()
+    .map(|(position, index)| (position, cached.uris[index].clone()))
+    .collect::<Vec<_>>();
+
+  let resolved = resolve_playlist_slice(session, selected).await;
+
+  Ok(Paged {
+    items: resolved,
+    offset,
+    limit,
+    total: cached.total,
+    next: cached
+      .has_next(offset, limit)
+      .then(|| "librespot:playlist:next".to_string()),
+    previous: None,
+  })
+}
+
+#[cfg(feature = "streaming")]
+async fn resolve_playlist_slice(
+  session: &librespot_core::Session,
+  selected: Vec<(u32, librespot_core::SpotifyUri)>,
+) -> Vec<(u32, PlayableInfo)> {
+  futures::future::join_all(selected.into_iter().map(|(position, uri)| {
+    let session = session.clone();
+    async move {
+      let item = match &uri {
+        SpotifyUri::Track { .. } => match LibrespotTrack::get(&session, &uri).await {
+          Ok(track) => librespot_track_info(&track).map(PlayableInfo::Track),
+          Err(error) => {
+            log::debug!("librespot track metadata failed for {}: {}", uri, error);
+            None
+          }
+        },
+        SpotifyUri::Episode { .. } => match LibrespotEpisode::get(&session, &uri).await {
+          Ok(episode) => librespot_episode_info(&episode).map(PlayableInfo::Episode),
+          Err(error) => {
+            log::debug!("librespot episode metadata failed for {}: {}", uri, error);
+            None
+          }
+        },
+        _ => {
+          log::debug!("librespot playlist item is not playable: {}", uri);
+          None
+        }
+      };
+      (position, item)
+    }
+  }))
+  .await
+  .into_iter()
+  .filter_map(|(position, item)| item.map(|item| (position, item)))
+  .collect()
+}
+
+/// Default playability for fallback items. Librespot's `restrictions` is the
+/// raw per-catalogue list, so `restrictions.is_empty()` marks nearly every
+/// fallback item unplayable for Lua/MCP readers. No clearly correct supported
+/// signal is exposed, so fallback items default to playable.
+#[cfg(feature = "streaming")]
+fn external_fallback_track_is_playable() -> bool {
+  true
+}
+
+#[cfg(feature = "streaming")]
+fn librespot_track_info(track: &LibrespotTrack) -> Option<TrackInfo> {
+  let id = track.id.to_id().ok()?;
+  let uri = track.id.to_uri().ok();
+  let album_id = track.album.id.to_id().ok();
+  let artist_refs = track
+    .artists
+    .iter()
+    .map(|artist| crate::core::plugin_api::ArtistRef {
+      id: artist.id.to_id().ok(),
+      name: artist.name.clone(),
+    })
+    .collect::<Vec<_>>();
+
+  Some(TrackInfo {
+    uri,
+    name: track.name.clone(),
+    artists: artist_refs
+      .iter()
+      .map(|artist| artist.name.clone())
+      .collect(),
+    album: track.album.name.clone(),
+    duration_ms: track.duration.max(0) as u64,
+    id: Some(id),
+    album_id,
+    artist_refs,
+    is_playable: external_fallback_track_is_playable(),
+    is_local: false,
+    track_number: track.number.max(0) as u32,
+    explicit: track.is_explicit,
+    image_url: None,
+  })
+}
+
+#[cfg(feature = "streaming")]
+fn librespot_episode_info(
+  episode: &LibrespotEpisode,
+) -> Option<crate::core::plugin_api::EpisodeInfo> {
+  Some(crate::core::plugin_api::EpisodeInfo {
+    id: episode.id.to_id().ok(),
+    uri: episode.id.to_uri().ok(),
+    name: episode.name.clone(),
+    duration_ms: episode.duration.max(0) as u64,
+    show_name: episode.show_name.clone(),
+    description: episode.description.clone(),
+    release_date: String::new(),
+    is_playable: external_fallback_track_is_playable(),
+    resume_point: None,
+    image_url: None,
+  })
+}
 
 #[cfg(test)]
 fn next_saved_tracks_offset(page: &Page<SavedTrack>) -> Option<u32> {
@@ -59,21 +635,28 @@ fn playlist_track_search_terms(query: &str) -> Vec<String> {
     .collect()
 }
 
-fn playlist_track_search_haystack(track: &rspotify::model::track::FullTrack) -> String {
-  let mut haystack = format!("{} {}", track.name, track.album.name);
-  for artist in &track.artists {
-    haystack.push(' ');
-    haystack.push_str(&artist.name);
-  }
-  haystack.to_lowercase()
+fn playlist_track_info_matches_terms(track: &TrackInfo, terms: &[String]) -> bool {
+  let haystack =
+    format!("{} {} {}", track.name, track.album, track.artists.join(" "),).to_lowercase();
+  terms.iter().all(|term| haystack.contains(term))
 }
 
-fn playlist_track_matches_terms(
-  track: &rspotify::model::track::FullTrack,
-  terms: &[String],
-) -> bool {
-  let haystack = playlist_track_search_haystack(track);
-  terms.iter().all(|term| haystack.contains(term))
+#[cfg(test)]
+fn domain_track_page(
+  offset: u32,
+  limit: u32,
+  total: u32,
+  has_next: bool,
+  items: Vec<(u32, PlayableInfo)>,
+) -> Paged<(u32, PlayableInfo)> {
+  Paged {
+    items,
+    offset,
+    limit,
+    total,
+    next: has_next.then(|| "https://example.com/playlists/test/items?next".to_string()),
+    previous: None,
+  }
 }
 
 pub async fn prefetch_saved_tracks_page_task(
@@ -157,6 +740,9 @@ pub async fn prefetch_saved_tracks_page_task(
   }
 }
 
+// Eight args is the spawned-task threading (client, state, paths, playlist,
+// offsets, generation, shared fallback cache); cf. `finish_playlists_fetch`.
+#[allow(clippy::too_many_arguments)]
 pub async fn prefetch_playlist_tracks_page_task(
   spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
@@ -165,6 +751,7 @@ pub async fn prefetch_playlist_tracks_page_task(
   playlist_id: PlaylistId<'static>,
   mut offset: u32,
   generation: u64,
+  fallbacks: ExternalPlaylistFallbackCache,
 ) {
   loop {
     let should_fetch = {
@@ -182,29 +769,39 @@ pub async fn prefetch_playlist_tracks_page_task(
       return;
     }
 
-    let path = format!("playlists/{}/items", playlist_id.id());
-    let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    let Ok(page) = spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    let page = match fetch_playlist_tracks_page(
       &spotify,
-      &path,
-      &query,
-      &token_cache_path,
       &app,
+      &token_cache_path,
+      &playlist_id,
+      offset,
+      limit,
+      &fallbacks,
     )
     .await
-    else {
-      let mut app_guard = app.lock().await;
-      app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
-      return;
+    {
+      Ok(page) => page.into_domain(),
+      Err(PlaylistPageError::UnsupportedExternal) => {
+        let mut app_guard = app.lock().await;
+        app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
+        app_guard.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+        return;
+      }
+      Err(PlaylistPageError::Request(_)) => {
+        // Background prefetch stays silent like on main: the user may have
+        // left the playlist, or the shared request path may be inside a
+        // `Retry-After` window whose synthetic 429 must not open the
+        // full-screen error route.
+        let mut app_guard = app.lock().await;
+        app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
+        return;
+      }
     };
 
-    if page.items.is_empty() {
-      let mut app_guard = app.lock().await;
-      app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
-      return;
-    }
-
-    let next_offset = page.next.as_ref().map(|_| page.offset + page.limit);
+    // Pagination runs on continuation metadata only: a compacted page may
+    // hold zero domain items while `next` still promises more raw slots, so
+    // the empty page is upserted and the next offset is still derived.
+    let next_offset = playlist_page_next_offset(&page, offset);
     let mut app_guard = app.lock().await;
     app_guard.playlist_tracks_prefetch_in_flight.remove(&offset);
     if app_guard.playlist_tracks_prefetch_generation != generation
@@ -213,9 +810,7 @@ pub async fn prefetch_playlist_tracks_page_task(
       return;
     }
 
-    app_guard
-      .playlist_track_pages
-      .upsert_page_by_offset(playlist_items_page(&page));
+    app_guard.playlist_track_pages.upsert_page_by_offset(page);
     app_guard.set_playlist_tracks_to_table_continuous();
     let Some(candidate_next_offset) = next_offset else {
       return;
@@ -386,6 +981,7 @@ impl Network {
     let app = self.app.clone();
     let token_cache_path = self.token_cache_path.clone();
     let large_search_limit = self.large_search_limit;
+    let fallbacks = self.external_playlist_fallbacks.clone();
     tokio::spawn(async move {
       prefetch_playlist_tracks_page_task(
         spotify,
@@ -395,6 +991,7 @@ impl Network {
         playlist_id,
         offset,
         generation,
+        fallbacks,
       )
       .await;
     });
@@ -500,12 +1097,12 @@ async fn fetch_all_playlist_tracks_and_sort_task(
   app: Arc<Mutex<App>>,
   token_cache_path: std::path::PathBuf,
   playlist_id: PlaylistId<'static>,
+  fallbacks: ExternalPlaylistFallbackCache,
 ) {
   let playlist_id_string = playlist_id.id().to_string();
-  let mut all_tracks = Vec::new();
+  let mut all_tracks: Vec<TrackInfo> = Vec::new();
   let mut offset = 0u32;
   let limit = 50u32;
-  let path = format!("playlists/{}/items", playlist_id.id());
 
   loop {
     {
@@ -517,41 +1114,51 @@ async fn fetch_all_playlist_tracks_and_sort_task(
         return;
       }
     }
-    let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+
+    let page = match fetch_playlist_tracks_page(
       &spotify,
-      &path,
-      &query,
-      &token_cache_path,
       &app,
+      &token_cache_path,
+      &playlist_id,
+      offset,
+      limit,
+      &fallbacks,
     )
     .await
     {
-      Ok(page) => {
-        if page.items.is_empty() {
-          break;
-        }
-
-        for item in page.items {
-          if let Some(PlayableItem::Track(full_track)) = item.item {
-            all_tracks.push(full_track);
-          }
-        }
-
-        if page.next.is_none() {
-          break;
-        }
-        offset += limit;
-      }
-      Err(e) => {
+      Ok(page) => page.into_domain(),
+      Err(PlaylistPageError::UnsupportedExternal) => {
         let mut app = app.lock().await;
         app
           .playlist_sort_fetch_in_flight
           .remove(&playlist_id_string);
-        app.handle_error(anyhow!(e));
+        app.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
         return;
       }
+      Err(PlaylistPageError::Request(error)) => {
+        let mut app = app.lock().await;
+        app
+          .playlist_sort_fetch_in_flight
+          .remove(&playlist_id_string);
+        app.handle_error(error);
+        return;
+      }
+    };
+
+    // A compacted page may hold zero domain items while `next` still
+    // promises more raw slots, so only the continuation metadata stops the
+    // walk. The zero-limit guard lives in `playlist_page_next_offset`.
+    let next_offset = playlist_page_next_offset(&page, offset);
+    for (_, item) in page.items {
+      if let PlayableInfo::Track(track) = item {
+        all_tracks.push(track);
+      }
     }
+
+    let Some(next_offset) = next_offset else {
+      break;
+    };
+    offset = next_offset;
   }
 
   // Apply sort if any
@@ -559,10 +1166,7 @@ async fn fetch_all_playlist_tracks_and_sort_task(
   app
     .playlist_sort_fetch_in_flight
     .remove(&playlist_id_string);
-
-  use crate::core::sort::Sorter;
-  let sorter = Sorter::new(app.playlist_sort);
-  sorter.sort_tracks(&mut all_tracks);
+  Sorter::new(app.playlist_sort).sort_tracks(&mut all_tracks);
   let _ = app.apply_sorted_playlist_tracks_if_current(&playlist_id, all_tracks);
 }
 
@@ -838,21 +1442,30 @@ impl LibraryNetwork for Network {
   }
 
   async fn get_playlist_tracks(&mut self, playlist_id: PlaylistId<'static>, playlist_offset: u32) {
+    // A fresh open re-downloads the fallback contents instead of showing the
+    // first snapshot all session. The External classification is kept.
+    #[cfg(feature = "streaming")]
+    if playlist_offset == 0 {
+      self
+        .external_playlist_fallbacks
+        .lock()
+        .await
+        .clear_contents(playlist_id.id());
+    }
+
     let generation = {
       let app = self.app.lock().await;
       app.playlist_tracks_prefetch_generation
     };
 
-    let path = format!("playlists/{}/items", playlist_id.id());
-    match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+    match fetch_playlist_tracks_page(
       self.spotify(),
-      &path,
-      &[
-        ("limit", self.large_search_limit.to_string()),
-        ("offset", playlist_offset.to_string()),
-      ],
-      &self.token_cache_path,
       &self.app,
+      &self.token_cache_path,
+      &playlist_id,
+      playlist_offset,
+      self.large_search_limit,
+      &self.external_playlist_fallbacks,
     )
     .await
     {
@@ -872,7 +1485,7 @@ impl LibraryNetwork for Network {
 
         let playlist_tracks_index = app
           .playlist_track_pages
-          .upsert_page_by_offset(playlist_items_page(&playlist_tracks));
+          .upsert_page_by_offset(playlist_tracks.into_domain());
         app.set_playlist_tracks_to_table_continuous();
 
         let next_offset = app.next_missing_playlist_tracks_offset(playlist_tracks_index);
@@ -885,7 +1498,17 @@ impl LibraryNetwork for Network {
           self.spawn_playlist_tracks_prefetch(playlist_id, next_offset, generation);
         }
       }
-      Err(e) => {
+      Err(PlaylistPageError::UnsupportedExternal) => {
+        let mut app = self.app.lock().await;
+        app
+          .playlist_tracks_prefetch_in_flight
+          .remove(&playlist_offset);
+        if app.pending_playlist_open.as_deref() == Some(playlist_id.id()) {
+          app.pending_playlist_open = None;
+        }
+        app.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+      }
+      Err(PlaylistPageError::Request(error)) => {
         let mut app = self.app.lock().await;
         app
           .playlist_tracks_prefetch_in_flight
@@ -894,7 +1517,7 @@ impl LibraryNetwork for Network {
           app.pending_playlist_open = None;
         }
         drop(app);
-        self.handle_error(anyhow!(e)).await;
+        self.handle_error(error).await;
       }
     }
   }
@@ -909,42 +1532,48 @@ impl LibraryNetwork for Network {
 
     let limit = self.large_search_limit;
     let mut offset = 0u32;
-    let mut matches = Vec::new();
+    let mut matches: Vec<(TrackInfo, usize)> = Vec::new();
 
     loop {
-      let path = format!("playlists/{}/items", playlist_id.id());
-      let page = match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
+      let page = match fetch_playlist_tracks_page(
         self.spotify(),
-        &path,
-        &[("limit", limit.to_string()), ("offset", offset.to_string())],
-        &self.token_cache_path,
         &self.app,
+        &self.token_cache_path,
+        &playlist_id,
+        offset,
+        limit,
+        &self.external_playlist_fallbacks,
       )
       .await
       {
-        Ok(page) => page,
-        Err(e) => {
-          self.handle_error(anyhow!(e)).await;
+        Ok(page) => page.into_domain(),
+        Err(PlaylistPageError::UnsupportedExternal) => {
+          let mut app = self.app.lock().await;
+          app.pending_playlist_track_search = None;
+          app.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+          return;
+        }
+        Err(PlaylistPageError::Request(error)) => {
+          self.handle_error(error).await;
           return;
         }
       };
 
-      if page.items.is_empty() {
-        break;
-      }
-
-      for (index, item) in page.items.iter().enumerate() {
-        if let Some(PlayableItem::Track(track)) = item.item.as_ref() {
-          if playlist_track_matches_terms(track, &terms) {
-            matches.push((track.clone(), page.offset as usize + index));
+      // See the sort walk: only `next` stops pagination, never the compacted
+      // item count.
+      let next_offset = playlist_page_next_offset(&page, offset);
+      for (position, item) in page.items {
+        if let PlayableInfo::Track(track) = item {
+          if playlist_track_info_matches_terms(&track, &terms) {
+            matches.push((track, position as usize));
           }
         }
       }
 
-      if page.next.is_none() {
+      let Some(next_offset) = next_offset else {
         break;
-      }
-      offset = page.offset.saturating_add(page.limit);
+      };
+      offset = next_offset;
     }
 
     let match_count = matches.len();
@@ -1039,7 +1668,7 @@ impl LibraryNetwork for Network {
             &saved_albums,
             crate::infra::network::mapping::saved_album_info,
           );
-          app.library.saved_albums.add_pages(domain_page);
+          app.store_saved_albums_page(domain_page);
         }
         // Bump even on an empty page: completion is the signal plugin data
         // requests wait on, and an empty library never writes a page.
@@ -1363,8 +1992,16 @@ impl LibraryNetwork for Network {
     let spotify = self.spotify().clone();
     let app = Arc::clone(&self.app);
     let token_cache_path = self.token_cache_path.clone();
+    let fallbacks = self.external_playlist_fallbacks.clone();
     tokio::spawn(async move {
-      fetch_all_playlist_tracks_and_sort_task(spotify, app, token_cache_path, playlist_id).await;
+      fetch_all_playlist_tracks_and_sort_task(
+        spotify,
+        app,
+        token_cache_path,
+        playlist_id,
+        fallbacks,
+      )
+      .await;
     });
   }
 
@@ -1445,6 +2082,50 @@ mod tests {
   use chrono::{Duration as ChronoDuration, Utc};
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
+
+  #[test]
+  fn playlist_access_classifies_by_owner_only() {
+    use crate::core::test_helpers::{playlist_info, user_info};
+
+    let mut app = App::default();
+    app.user = Some(user_info("me"));
+    let mut external = playlist_info("external", "External", "other", false);
+    external.public = Some(true);
+    app.all_playlists = vec![
+      playlist_info("owned", "Owned", "me", false),
+      // Another user's collaborative playlist: the flag does not prove the
+      // current user collaborates, so this stays External (regression: a
+      // followed collaborative playlist hit the error page on 403).
+      playlist_info("collab", "Collaborative", "other", true),
+    ];
+    app.search_results.playlists = Some(Paged {
+      items: vec![external],
+      ..Default::default()
+    });
+
+    assert_eq!(playlist_access(&app, "owned"), PlaylistAccess::Owned);
+    assert_eq!(playlist_access(&app, "collab"), PlaylistAccess::External);
+    assert_eq!(playlist_access(&app, "external"), PlaylistAccess::External);
+    assert_eq!(playlist_access(&app, "missing"), PlaylistAccess::Unknown);
+  }
+
+  #[test]
+  fn playlist_access_without_user_or_owner_is_unknown() {
+    use crate::core::test_helpers::{playlist_info, user_info};
+
+    // No current user: even an owned-looking playlist cannot be proven.
+    let mut app = App::default();
+    app.all_playlists = vec![playlist_info("owned", "Owned", "me", false)];
+    assert_eq!(playlist_access(&app, "owned"), PlaylistAccess::Unknown);
+
+    // Current user but playlist without owner metadata.
+    let mut app = App::default();
+    app.user = Some(user_info("me"));
+    let mut ownerless = playlist_info("ownerless", "Ownerless", "me", false);
+    ownerless.owner_id = None;
+    app.all_playlists = vec![ownerless];
+    assert_eq!(playlist_access(&app, "ownerless"), PlaylistAccess::Unknown);
+  }
 
   #[allow(deprecated)]
   fn full_track(id: &str) -> FullTrack {
@@ -1610,24 +2291,24 @@ mod tests {
 
   #[test]
   fn playlist_track_filter_matches_title_artist_album_case_insensitively() {
-    let mut track = full_track("0000000000000000000001");
+    let mut track = TrackInfo::from(&full_track("0000000000000000000001"));
     track.name = "Midnight City".to_string();
-    track.artists[0].name = "M83".to_string();
-    track.album.name = "Hurry Up".to_string();
+    track.artists = vec!["M83".to_string()];
+    track.album = "Hurry Up".to_string();
 
-    assert!(playlist_track_matches_terms(
+    assert!(playlist_track_info_matches_terms(
       &track,
       &playlist_track_search_terms("midnight")
     ));
-    assert!(playlist_track_matches_terms(
+    assert!(playlist_track_info_matches_terms(
       &track,
       &playlist_track_search_terms("m83")
     ));
-    assert!(playlist_track_matches_terms(
+    assert!(playlist_track_info_matches_terms(
       &track,
       &playlist_track_search_terms("hurry")
     ));
-    assert!(playlist_track_matches_terms(
+    assert!(playlist_track_info_matches_terms(
       &track,
       &playlist_track_search_terms("MIDNIGHT m83")
     ));
@@ -1635,19 +2316,185 @@ mod tests {
 
   #[test]
   fn playlist_track_filter_requires_every_query_term() {
-    let mut track = full_track("0000000000000000000001");
+    let mut track = TrackInfo::from(&full_track("0000000000000000000001"));
     track.name = "Midnight City".to_string();
-    track.artists[0].name = "M83".to_string();
-    track.album.name = "Hurry Up".to_string();
+    track.artists = vec!["M83".to_string()];
+    track.album = "Hurry Up".to_string();
 
-    assert!(playlist_track_matches_terms(
+    assert!(playlist_track_info_matches_terms(
       &track,
       &playlist_track_search_terms("city hurry")
     ));
-    assert!(!playlist_track_matches_terms(
+    assert!(!playlist_track_info_matches_terms(
       &track,
       &playlist_track_search_terms("city missing")
     ));
+  }
+
+  #[test]
+  fn external_fallback_only_for_confirmed_external_403s() {
+    use PlaylistAccess::{External, Owned, Unknown};
+
+    // The one path that may use the librespot fallback.
+    assert!(should_attempt_external_fallback(External, true));
+    // An owned playlist that 403s is a diagnosable server error, never a
+    // silent fallback.
+    assert!(!should_attempt_external_fallback(Owned, true));
+    assert!(!should_attempt_external_fallback(Unknown, true));
+    // Non-403 failures keep their real error whatever the relationship.
+    assert!(!should_attempt_external_fallback(External, false));
+    assert!(!should_attempt_external_fallback(Owned, false));
+    assert!(!should_attempt_external_fallback(Unknown, false));
+  }
+
+  #[test]
+  fn playlist_page_next_offset_ignores_compacted_item_count() {
+    // A compacted page: zero domain items, but `next` promises more raw
+    // slots. Pagination must still advance to the adjacent raw offset.
+    let empty_nonterminal = domain_track_page(0, 50, 120, true, vec![]);
+    assert_eq!(playlist_page_next_offset(&empty_nonterminal, 0), Some(50));
+
+    let empty_terminal = domain_track_page(100, 50, 120, false, vec![]);
+    assert_eq!(playlist_page_next_offset(&empty_terminal, 100), None);
+
+    // A zero limit cannot advance: terminate instead of looping on one offset.
+    let zero_limit = domain_track_page(0, 0, 120, true, vec![]);
+    assert_eq!(playlist_page_next_offset(&zero_limit, 0), None);
+
+    // A stale response offset must not repeat pagination: requesting 50 but
+    // receiving offset 0 would otherwise request 50 again forever.
+    let stale = domain_track_page(0, 50, 120, true, vec![]);
+    assert_eq!(playlist_page_next_offset(&stale, 50), None);
+
+    // An overflowing next offset terminates instead of wrapping around.
+    let overflowing = domain_track_page(u32::MAX, 1, u32::MAX, true, vec![]);
+    assert_eq!(playlist_page_next_offset(&overflowing, u32::MAX), None);
+  }
+
+  #[test]
+  fn external_fallback_cache_remembers_confirmed_external_ids() {
+    let mut cache = ExternalPlaylistFallbackCacheInner::default();
+    assert!(!cache.is_external("external"));
+
+    cache.mark_external("external");
+    assert!(cache.is_external("external"));
+    assert!(!cache.is_external("other"));
+  }
+
+  #[test]
+  fn external_fallback_cache_stays_bounded() {
+    let mut cache = ExternalPlaylistFallbackCacheInner::default();
+    for index in 0..EXTERNAL_PLAYLIST_FALLBACK_CAP + 5 {
+      cache.mark_external(&format!("playlist-{index}"));
+    }
+
+    assert!(cache.order.len() <= EXTERNAL_PLAYLIST_FALLBACK_CAP);
+    assert!(cache.external_ids.len() <= EXTERNAL_PLAYLIST_FALLBACK_CAP);
+    // The newest confirmation survives eviction.
+    assert!(cache.is_external(&format!("playlist-{}", EXTERNAL_PLAYLIST_FALLBACK_CAP + 4)));
+  }
+
+  #[test]
+  fn external_unavailable_status_names_development_mode() {
+    assert!(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS.contains("Development Mode"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn fallback_track_defaults_to_playable() {
+    // Librespot's `restrictions` is the raw per-catalogue list, so the
+    // fallback must not derive playability from it.
+    assert!(external_fallback_track_is_playable());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn cached_contents_slice_windows_match_raw_positions() {
+    use librespot_core::SpotifyUri;
+
+    let uris = (1..=4)
+      .map(|index| {
+        SpotifyUri::from_uri(&format!("spotify:track:000000000000000000{index:04}")).unwrap()
+      })
+      .collect::<Vec<_>>();
+    let cached = CachedExternalPlaylistContents {
+      uris,
+      base_offset: 0,
+      total: 4,
+    };
+
+    // Slices reuse the same cached contents window by window.
+    assert_eq!(
+      cached
+        .slice_positions(0, 2)
+        .into_iter()
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>(),
+      vec![0, 1]
+    );
+    assert_eq!(
+      cached
+        .slice_positions(2, 2)
+        .into_iter()
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>(),
+      vec![2, 3]
+    );
+    assert!(cached.has_next(0, 2));
+    assert!(!cached.has_next(2, 2));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn fallback_cache_clear_refreshes_contents_but_keeps_classification() {
+    use librespot_core::SpotifyUri;
+
+    let mut cache = ExternalPlaylistFallbackCacheInner::default();
+    let uris = vec![SpotifyUri::from_uri("spotify:track:0000000000000000000001").unwrap()];
+    cache.store_contents(
+      "external",
+      CachedExternalPlaylistContents {
+        uris,
+        base_offset: 0,
+        total: 1,
+      },
+    );
+    assert!(cache.contents_for("external").is_some());
+
+    // A fresh open drops the snapshot so the next visit re-downloads, while
+    // the confirmed-External classification survives (no metadata re-request).
+    cache.clear_contents("external");
+    assert!(cache.contents_for("external").is_none());
+    assert!(cache.is_external("external"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn fallback_cache_reuses_stored_contents_across_slices() {
+    use librespot_core::SpotifyUri;
+
+    let mut cache = ExternalPlaylistFallbackCacheInner::default();
+    let uris = (1..=3)
+      .map(|index| {
+        SpotifyUri::from_uri(&format!("spotify:track:000000000000000000{index:04}")).unwrap()
+      })
+      .collect::<Vec<_>>();
+    cache.store_contents(
+      "external",
+      CachedExternalPlaylistContents {
+        uris,
+        base_offset: 0,
+        total: 3,
+      },
+    );
+
+    // Storing contents confirms the id, so classification is reused too.
+    assert!(cache.is_external("external"));
+    let cached = cache.contents_for("external").expect("stored contents");
+    assert_eq!(cached.total, 3);
+    assert_eq!(cached.slice_positions(0, 50).len(), 3);
+    assert_eq!(cached.slice_positions(50, 50).len(), 0);
+    assert!(!cached.has_next(0, 50));
   }
 }
 
