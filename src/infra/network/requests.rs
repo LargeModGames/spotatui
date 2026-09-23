@@ -235,10 +235,16 @@ pub async fn spotify_api_request_json_for_with_refresh(
   token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
 ) -> anyhow::Result<Value> {
+  let base_url = if spotify.config.api_base_url.is_empty() {
+    SPOTIFY_API_BASE_URL
+  } else {
+    &spotify.config.api_base_url
+  };
+
   spotify_api_request_json_for_base_with_refresh(
     spotify,
     SpotifyApiRequest {
-      base_url: SPOTIFY_API_BASE_URL,
+      base_url,
       method,
       path,
       query,
