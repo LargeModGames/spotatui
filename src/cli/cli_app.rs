@@ -45,7 +45,7 @@ impl CliApp {
     format.trim().to_string()
   }
 
-  // spt playback -t
+  // spotatui playback -t
   pub async fn toggle_playback(&mut self) {
     let context = self.net.app.lock().await.current_playback_context.clone();
     if let Some(c) = context {
@@ -60,7 +60,7 @@ impl CliApp {
       .await;
   }
 
-  // spt pb --share-track (share the current playing song)
+  // spotatui pb --share-track (share the current playing song)
   // Basically copy-pasted the 'copy_song_url' function
   pub async fn share_track_or_episode(&mut self) -> Result<String> {
     let app = self.net.app.lock().await;
@@ -89,7 +89,7 @@ impl CliApp {
     }
   }
 
-  // spt pb --share-album (share the current album)
+  // spotatui pb --share-album (share the current album)
   // Basically copy-pasted the 'copy_album_url' function
   pub async fn share_album_or_show(&mut self) -> Result<String> {
     let app = self.net.app.lock().await;
@@ -118,7 +118,7 @@ impl CliApp {
     }
   }
 
-  // spt ... -d ... (specify device to control)
+  // spotatui ... -d ... (specify device to control)
   pub async fn set_device(&mut self, name: String) -> Result<()> {
     // Change the device if specified by user
     let app = self.net.app.lock().await;
@@ -142,7 +142,7 @@ impl CliApp {
     Ok(())
   }
 
-  // spt query ... --limit LIMIT (set max search limit)
+  // spotatui list/search --limit LIMIT (set max search limit)
   pub async fn update_query_limits(&mut self, max: String, ceiling: u32) -> Result<()> {
     let num = parse_query_limit(&max, ceiling)?;
 
@@ -170,7 +170,7 @@ impl CliApp {
     Ok(())
   }
 
-  // spt playback --next / --previous
+  // spotatui playback --next / --previous
   pub async fn jump(&mut self, d: &JumpDirection) {
     match d {
       JumpDirection::Next => self.net.handle_network_event(IoEvent::NextTrack).await,
@@ -178,7 +178,7 @@ impl CliApp {
     }
   }
 
-  // spt query -l ...
+  // spotatui list ...
   pub async fn list(&mut self, item: Type, format: &str) -> String {
     match item {
       Type::Device => {
@@ -251,7 +251,7 @@ impl CliApp {
     }
   }
 
-  // spt playback --transfer DEVICE
+  // spotatui playback --transfer DEVICE
   pub async fn transfer_playback(&mut self, device: &str) -> Result<()> {
     // Get the device id by name
     let mut id = String::new();
@@ -337,7 +337,7 @@ impl CliApp {
     Ok(())
   }
 
-  // spt playback --like / --dislike / --shuffle / --repeat
+  // spotatui playback --like / --dislike / --shuffle / --repeat
   pub async fn mark(&mut self, flag: Flag) -> Result<()> {
     let c = {
       let app = self.net.app.lock().await;
@@ -393,7 +393,7 @@ impl CliApp {
     Ok(())
   }
 
-  // spt playback -s
+  // spotatui playback -s
   pub async fn get_status(&mut self, format: String) -> Result<String> {
     // Update info on current playback
     self
@@ -462,7 +462,7 @@ impl CliApp {
     Ok(self.format_output(format, hs))
   }
 
-  // spt play -u URI
+  // spotatui play -u URI
   pub async fn play_uri(&mut self, uri: String, queue: bool, random: bool) {
     let offset = if random {
       // Only works with playlists for now
@@ -524,7 +524,7 @@ impl CliApp {
     }
   }
 
-  // spt play -n NAME ...
+  // spotatui play -n NAME ...
   pub async fn play(&mut self, name: String, item: Type, queue: bool, random: bool) -> Result<()> {
     self
       .net
@@ -602,7 +602,7 @@ impl CliApp {
     Ok(())
   }
 
-  // spt query -s SEARCH ...
+  // spotatui search SEARCH ...
   pub async fn query(&mut self, search: String, format: String, item: Type) -> String {
     self
       .net
