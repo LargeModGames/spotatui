@@ -112,6 +112,13 @@ pub struct Artist {
   pub artist_selected_block: ArtistBlock,
 }
 
+impl Artist {
+  /// Whether the RelatedArtists block has anything to show.
+  pub fn related_artists_visible(&self) -> bool {
+    !self.related_artists.is_empty()
+  }
+}
+
 impl App {
   /// Sort the recently-played track list in place per `recently_played_sort`.
   /// `Default` keeps the API's play order (a re-fetch restores it).

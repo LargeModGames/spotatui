@@ -646,6 +646,11 @@ pub fn is_transient_network_error(e: &anyhow::Error) -> bool {
     || text.contains("dns")
 }
 
+pub fn is_not_found_error(e: &anyhow::Error) -> bool {
+  e.downcast_ref::<SpotifyApiError>()
+    .is_some_and(|se| se.status == reqwest::StatusCode::NOT_FOUND)
+}
+
 pub async fn spotify_get_typed_compat_for_with_refresh<T: DeserializeOwned>(
   spotify: &AuthCodePkceSpotify,
   path: &str,
@@ -756,6 +761,22 @@ mod tests {
     assert!(!is_forbidden_error(&anyhow::anyhow!(
       "Spotify API 403 Forbidden"
     )));
+  }
+
+  #[test]
+  fn not_found_is_recognized_but_rate_limit_is_not() {
+    let not_found = anyhow::Error::from(SpotifyApiError {
+      status: reqwest::StatusCode::NOT_FOUND,
+      body: String::new(),
+      detail: None,
+    });
+    let rate_limited = anyhow::Error::from(SpotifyApiError {
+      status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+      body: String::new(),
+      detail: None,
+    });
+    assert!(is_not_found_error(&not_found));
+    assert!(!is_not_found_error(&rate_limited));
   }
 
   #[tokio::test]

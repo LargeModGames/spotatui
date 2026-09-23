@@ -9,14 +9,22 @@ use rspotify::prelude::Id;
 use super::util::{draw_selectable_list, get_artist_highlight_state, join_artist_names};
 
 pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let [tracks_area, albums_area, related_artists_area] =
-    layout_chunk.layout(&Layout::horizontal([
-      Constraint::Percentage(33),
-      Constraint::Percentage(33),
-      Constraint::Percentage(33),
-    ]));
-
   if let Some(artist) = &app.artist {
+    let (tracks_area, albums_area, related_artists_area) = if artist.related_artists_visible() {
+      let [tracks, albums, related] = layout_chunk.layout(&Layout::horizontal([
+        Constraint::Percentage(33),
+        Constraint::Percentage(33),
+        Constraint::Percentage(33),
+      ]));
+      (tracks, albums, Some(related))
+    } else {
+      let [tracks, albums] = layout_chunk.layout(&Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+      ]));
+      (tracks, albums, None)
+    };
+
     let top_tracks = artist
       .top_tracks
       .iter()
@@ -79,29 +87,31 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       Some(artist.selected_album_index),
     );
 
-    let related_artists = artist
-      .related_artists
-      .iter()
-      .map(|item| {
-        let mut artist = String::new();
-        if let Some(artist_id) = &item.id {
-          if app.followed_artist_ids_set.contains(artist_id.as_str()) {
-            artist.push_str(&app.user_config.padded_liked_icon());
+    if let Some(related_artists_area) = related_artists_area {
+      let related_artists = artist
+        .related_artists
+        .iter()
+        .map(|item| {
+          let mut artist = String::new();
+          if let Some(artist_id) = &item.id {
+            if app.followed_artist_ids_set.contains(artist_id.as_str()) {
+              artist.push_str(&app.user_config.padded_liked_icon());
+            }
           }
-        }
-        artist.push_str(&item.name.to_owned());
-        artist
-      })
-      .collect::<Vec<String>>();
+          artist.push_str(&item.name.to_owned());
+          artist
+        })
+        .collect::<Vec<String>>();
 
-    draw_selectable_list(
-      f,
-      app,
-      related_artists_area,
-      "Related artists",
-      &related_artists,
-      get_artist_highlight_state(app, ArtistBlock::RelatedArtists),
-      Some(artist.selected_related_artist_index),
-    );
+      draw_selectable_list(
+        f,
+        app,
+        related_artists_area,
+        "Related artists",
+        &related_artists,
+        get_artist_highlight_state(app, ArtistBlock::RelatedArtists),
+        Some(artist.selected_related_artist_index),
+      );
+    }
   };
 }
