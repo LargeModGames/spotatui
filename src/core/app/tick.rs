@@ -427,8 +427,8 @@ mod tests {
 
   #[test]
   fn a_paused_decoded_source_overrides_the_suspended_spotify_state() {
-    // The Spotify-to-decoded handoff only pauses librespot, so both the native
-    // flag and the context it left behind can still read as playing.
+    // A handoff that only pauses librespot (a queue slot) can leave both the
+    // native flag and the context it left behind reading as playing.
     assert!(!playing_for_keepawake(Some(false), Some(true), Some(true)));
   }
 

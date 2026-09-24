@@ -1876,9 +1876,10 @@ impl Network {
 
 /// The party follows Spotify transport only. Coarser than the transport
 /// guard on purpose: a queued Spotify track keeps librespot, but a guest must
-/// not drive the host's queue slot.
+/// not drive the host's queue slot. A parked native backend has no Spotify
+/// playback to relay or follow.
 fn party_yields_to_local_playback(app: &App) -> bool {
-  app.playback_owner().owns_local_sink()
+  app.playback_owner().owns_local_sink() || app.native_parked_here()
 }
 
 #[cfg(test)]

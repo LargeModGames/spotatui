@@ -17,8 +17,8 @@
 //! ## Device ownership
 //!
 //! Only one backend holds the audio output device at a time (required on
-//! exclusive-ALSA setups, harmless elsewhere). Starting local playback pauses
-//! native Spotify (librespot releases the device when its sink stops); starting
+//! exclusive-ALSA setups, harmless elsewhere). Starting local playback pauses or
+//! parks native Spotify (librespot releases the device when its sink stops); starting
 //! Spotify tears the local session down (dropping it releases the device).
 //!
 //! ## Publish-once
@@ -262,10 +262,10 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
 
   app.lock().await.claim_decoded_sink(Source::Local);
 
-  // Pause native Spotify so librespot releases the output device and no
-  // rebuild resumes it under this source.
+  // Take the sink from native Spotify so no rebuild resumes it under this
+  // source.
   #[cfg(feature = "streaming")]
-  app.lock().await.pause_native_playback();
+  app.lock().await.release_native_for_decoded();
 
   // The other decoded sources never see this file:// start (the pump's
   // `!handled_locally` short-circuit), so their sessions are torn down here.

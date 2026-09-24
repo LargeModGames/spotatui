@@ -915,7 +915,7 @@ async fn handle_mpris_events(
         #[cfg(feature = "streaming")]
         if let Some(ref player) = current_player {
           player.play();
-          app.lock().await.set_native_playback_intent(true);
+          app.lock().await.arm_native_play_intent();
           continue;
         }
         let mut app_lock = app.lock().await;
@@ -1229,13 +1229,20 @@ async fn handle_macos_media_events(
     // (intercepted by the per-source route_*_event dispatchers before the
     // Spotify network) so media keys follow the audible source instead of
     // librespot. This must run *before* `active_streaming_player` below, since
-    // librespot stays active even while a decoded source is playing.
+    // a paused librespot stays active while a decoded source is playing.
     #[cfg(feature = "audio-decode")]
     if route_decoded_macos_event(&event, &app).await {
       continue;
     }
 
     let Some(player) = player::active_streaming_player(&app).await else {
+      // A parked backend resumes through the fallback, which rebuilds it.
+      if matches!(event, MacMediaEvent::PlayPause | MacMediaEvent::Play) {
+        let mut app_lock = app.lock().await;
+        if app_lock.native_parked_here() {
+          app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
+        }
+      }
       continue;
     };
 
@@ -1337,7 +1344,7 @@ async fn handle_windows_media_events(
     // (intercepted by the per-source route_*_event dispatchers before the
     // Spotify network) so SMTC controls follow the audible source instead of
     // librespot. This must run *before* the streaming-player branches below,
-    // since librespot stays active even while a decoded source is playing.
+    // since a paused librespot stays active while a decoded source is playing.
     #[cfg(feature = "audio-decode")]
     if route_decoded_windows_event(&event, &app).await {
       continue;

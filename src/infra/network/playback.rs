@@ -803,10 +803,17 @@ async fn should_activate_native_streaming_for_playback(network: &Network) -> boo
   })
 }
 
+/// Whether the start must wait for a rebuilt backend. A parked backend is
+/// rebuilt for an explicit start only: the App side decides a bare resume.
 #[cfg(feature = "streaming")]
-async fn request_native_streaming_recovery_if_disconnected(network: &Network) -> bool {
+async fn request_native_streaming_recovery_if_disconnected(
+  network: &Network,
+  explicit: bool,
+) -> bool {
   let mut app = network.app.lock().await;
+  // A start while another device plays keeps its Connect route.
   app.request_native_streaming_recovery_if_disconnected(true)
+    || (explicit && !app.spotify_playing_elsewhere() && app.reacquire_parked_backend())
 }
 
 #[cfg(feature = "streaming")]
@@ -1200,6 +1207,16 @@ impl PlaybackNetwork for Network {
           }
         }
 
+        // A parked backend plays nothing, whatever Spotify still reports for
+        // its device.
+        #[cfg(feature = "streaming")]
+        if app.native_backend_parked()
+          && c.device.id.is_some()
+          && c.device.id == app.native_device_id
+        {
+          c.is_playing = false;
+        }
+
         if !stale_api_item_for_native {
           // Cover art (Spotify album/episode image) is fetched by the shared
           // track-change detector in `core/driver/`, from the snapshot's image URL.
@@ -1475,7 +1492,12 @@ impl PlaybackNetwork for Network {
 
     // Check if we should use native streaming for playback
     #[cfg(feature = "streaming")]
-    if request_native_streaming_recovery_if_disconnected(self).await {
+    if request_native_streaming_recovery_if_disconnected(
+      self,
+      context_id.is_some() || uris.is_some(),
+    )
+    .await
+    {
       // Park the request instead of dropping it: the recovery handler replays
       // it once the new session and device selection are in place, so the
       // press that detected the disconnect still plays.
@@ -2362,12 +2384,30 @@ impl PlaybackNetwork for Network {
 
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
     // Both targets are wrong while a decoded source holds the sink: librespot
-    // is paused underneath, and the Web API transfer starts a second player.
+    // is paused or parked underneath, and the Web API transfer starts a second player.
     if decoded_source_owns_playback(self).await {
       self
         .show_status_message("Another source owns playback".to_string(), 4)
         .await;
       return;
+    }
+    // Enter on the parked spotatui row is the explicit rebuild.
+    #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      if app.native_device_id.as_deref() == Some(device_id.as_str())
+        && app.reacquire_parked_device()
+      {
+        if persist_device_id {
+          persist_native_device_id_if_needed(
+            &mut self.client_config,
+            &mut app,
+            &device_id,
+            NativeDevicePreferenceUpdate::Persist,
+          );
+        }
+        return;
+      }
     }
     #[cfg(feature = "streaming")]
     let backend = transfer_playback_backend(self, &device_id).await;
@@ -3589,6 +3629,87 @@ mod tests {
       .await;
 
     assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn an_explicit_start_waits_for_a_parked_backend_instead_of_the_web_api() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    const PLAYLIST: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+    let (io_tx, rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    seeded.streaming_recovery_tx = Some(recovery_tx);
+    seeded.seed_native_parked();
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the Connect arm's `me/player` PUT panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_parked_start_test.json"),
+    );
+
+    network
+      .start_playback(
+        crate::infra::network::ids::play_context_id(PLAYLIST),
+        None,
+        None,
+      )
+      .await;
+
+    let guard = app.lock().await;
+    assert_eq!(
+      guard
+        .pending_start_playback
+        .as_ref()
+        .and_then(|pending| pending.context_uri.as_deref()),
+      Some(PLAYLIST)
+    );
+    assert!(recovery_rx
+      .try_recv()
+      .is_ok_and(|request| request.reacquire));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_transfer_to_the_parked_native_device_requests_the_rebuild() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, _rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    seeded.streaming_recovery_tx = Some(recovery_tx);
+    seeded.seed_native_parked();
+    seeded.native_device_id = Some("native-device".to_string());
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the `me/player` PUT panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_parked_transfer_test.json"),
+    );
+
+    network
+      .transfert_playback_to_device("native-device".to_string(), false)
+      .await;
+
+    assert!(recovery_rx.try_recv().is_ok());
+    assert_eq!(
+      app.lock().await.status_message(),
+      Some("Reconnecting native streaming…")
+    );
   }
 
   #[tokio::test]

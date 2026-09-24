@@ -881,11 +881,7 @@ impl StreamingPlayer {
 
     info!("Initializing Spirc with device_id={}", session.device_id());
 
-    let init_timeout_secs = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
-      .ok()
-      .and_then(|v| v.parse::<u64>().ok())
-      .filter(|&v| v > 0)
-      .unwrap_or(30);
+    let init_timeout = spirc_init_timeout();
 
     let mut retried_with_fresh_credentials = false;
 
@@ -899,7 +895,7 @@ impl StreamingPlayer {
         mixer.clone(),
       );
 
-      match timeout(Duration::from_secs(init_timeout_secs), spirc_new).await {
+      match timeout(init_timeout, spirc_new).await {
         Ok(Ok(result)) => break result,
         Ok(Err(e))
           if matches!(auth_mode, StreamingAuthMode::InteractiveIfNeeded)
@@ -942,7 +938,7 @@ impl StreamingPlayer {
           return Err(anyhow!(
             "Spirc initialization timed out after {}s. Streaming skipped for this session. \
              Set SPOTATUI_STREAMING_INIT_TIMEOUT_SECS to adjust.",
-            init_timeout_secs
+            init_timeout.as_secs()
           ));
         }
       }
@@ -1299,6 +1295,22 @@ impl Drop for StreamingPlayer {
 
 // Re-export player events and their disconnect reason for use in other modules.
 pub use librespot_playback::player::{PlayerEvent, SessionDisconnectReason};
+
+/// The Spirc handshake bound: `SPOTATUI_STREAMING_INIT_TIMEOUT_SECS`, else 30 s.
+fn spirc_init_timeout() -> Duration {
+  let secs = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
+    .ok()
+    .and_then(|v| v.parse::<u64>().ok())
+    .filter(|&v| v > 0)
+    .unwrap_or(30);
+  Duration::from_secs(secs)
+}
+
+/// The bound on a whole player build: the Spirc handshake plus 15 s for the
+/// setup around it.
+pub fn player_build_timeout() -> Duration {
+  spirc_init_timeout().saturating_add(Duration::from_secs(15))
+}
 
 /// Returns true when a Spirc init failure should be retried with fresh OAuth
 /// credentials instead of cached ones.

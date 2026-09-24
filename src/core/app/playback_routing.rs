@@ -2,6 +2,9 @@ use super::*;
 
 pub(crate) const NOTHING_PLAYING_STATUS: &str = "Nothing is playing";
 
+/// The status for a Spotify gesture the parked native backend cannot serve.
+const SPOTIFY_PARKED_STATUS: &str = "Press play to resume Spotify";
+
 /// The status shown when a Spotify-bound request finds no session.
 pub(crate) const SPOTIFY_NOT_CONNECTED_STATUS: &str =
   "Spotify not connected. Press `d` and pick Spotify to log in.";
@@ -139,13 +142,80 @@ impl App {
   }
 
   /// The last arm of a transport chain: the Web API when a session exists,
-  /// otherwise a source-neutral status instead of the "not connected" nag.
+  /// otherwise a source-neutral status instead of the "not connected" nag. A
+  /// parked native backend takes a bare resume as its rebuild and refuses the
+  /// rest.
   pub(crate) fn dispatch_spotify_fallback(&mut self, event: IoEvent) {
     if self.playback_owner() == PlaybackOwner::None {
       self.set_status_message(NOTHING_PLAYING_STATUS, 4);
       return;
     }
+    #[cfg(feature = "streaming")]
+    if self.native_parked_here() {
+      let bare_resume = matches!(event, IoEvent::StartPlayback(None, None, None));
+      if !bare_resume || self.native_backend_pending {
+        // A play press during the rebuild still asks the restore to play.
+        if bare_resume {
+          self.arm_native_play_intent();
+        }
+        self.refuse_parked_gesture();
+      } else if self.native_playback_recovery.is_none() {
+        self.set_status_message(NOTHING_PLAYING_STATUS, 4);
+      } else {
+        // The rebuild restores the snapshot, which now asks to play.
+        self.set_native_playback_intent(true);
+        self.reacquire_parked_backend();
+      }
+      return;
+    }
     self.dispatch(event);
+  }
+
+  /// Answer a Spotify gesture the parked native backend cannot serve.
+  pub(crate) fn refuse_parked_gesture(&mut self) {
+    #[cfg(feature = "streaming")]
+    if self.native_backend_pending {
+      self.set_status_message("Reconnecting native streaming…", 5);
+      return;
+    }
+    self.set_status_message(SPOTIFY_PARKED_STATUS, 4);
+  }
+
+  /// Whether the cached Spotify playback belongs to the parked native backend,
+  /// whoever owns the sink now.
+  pub(crate) fn native_parked_owns_context(&self) -> bool {
+    #[cfg(feature = "streaming")]
+    {
+      self.native_backend_parked()
+        && match self.current_playback_context.as_ref() {
+          Some(ctx) => ctx.device.id.is_some() && ctx.device.id == self.native_device_id,
+          None => self.native_playback_recovery.is_some(),
+        }
+    }
+    #[cfg(not(feature = "streaming"))]
+    {
+      false
+    }
+  }
+
+  /// Whether another Spotify Connect device plays the cached playback.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn spotify_playing_elsewhere(&self) -> bool {
+    self.current_playback_context.as_ref().is_some_and(|ctx| {
+      ctx.is_playing && ctx.device.id.is_some() && ctx.device.id != self.native_device_id
+    })
+  }
+
+  /// Whether Spotify transport would land on the parked native backend.
+  pub(crate) fn native_parked_here(&self) -> bool {
+    #[cfg(feature = "streaming")]
+    {
+      self.native_parked_owns_context() && self.playback_owner() == PlaybackOwner::Spotify
+    }
+    #[cfg(not(feature = "streaming"))]
+    {
+      false
+    }
   }
 
   /// `Some(true)` when a decoded source owns the sink and plays, `Some(false)`
@@ -222,7 +292,9 @@ impl App {
   pub fn spotify_external_device_active(&self) -> bool {
     #[cfg(feature = "streaming")]
     {
-      self.current_playback_context.is_some() && !self.is_native_streaming_active_for_playback()
+      self.current_playback_context.is_some()
+        && !self.is_native_streaming_active_for_playback()
+        && !self.native_parked_owns_context()
     }
     #[cfg(not(feature = "streaming"))]
     {
@@ -233,10 +305,10 @@ impl App {
   /// Whether any decoded-audio source (local file, Subsonic, internet radio, or
   /// YouTube) currently owns the playback session.
   ///
-  /// Starting a non-Spotify source only *pauses* librespot; it never clears
+  /// Starting a non-Spotify source pauses or parks librespot; it never clears
   /// `is_streaming_active` / `current_playback_context`, so
   /// [`is_native_streaming_active_for_playback`](Self::is_native_streaming_active_for_playback)
-  /// stays true while a decoded source owns the rodio sink. The direct-control
+  /// can stay true while a decoded source owns the rodio sink. The direct-control
   /// transport methods (next/prev/volume) use this guard to route to the active
   /// source via `IoEvent` dispatch instead of driving the paused librespot.
   ///
@@ -257,7 +329,7 @@ impl App {
       return false;
     }
     // A decoded start in flight, or a source whose session died with nothing to
-    // replace it, still owns the sink: librespot is paused underneath.
+    // replace it, still owns the sink: librespot is paused or parked underneath.
     #[cfg(any(test, feature = "audio-decode"))]
     if self.decoded_sink_claim.is_some() {
       return true;
@@ -468,6 +540,97 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_bare_resume_rebuilds_the_parked_backend_only_while_its_device_holds_the_playback() {
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.toggle_playback();
+    assert!(rx.try_recv().is_err());
+    assert!(recovery_rx
+      .try_recv()
+      .is_ok_and(|request| request.reacquire));
+    assert!(app
+      .native_playback_recovery
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.desired_playing));
+    app.toggle_playback();
+    assert!(recovery_rx.try_recv().is_err());
+
+    // A phone holds the playback: the Web API route of today.
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.current_playback_context = Some(make_external_context());
+    app.is_streaming_active = false;
+    app.toggle_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+    assert!(recovery_rx.try_recv().is_err());
+
+    // Nothing is known to resume: no rebuild.
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.current_playback_context = None;
+    app.native_playback_recovery = None;
+    app.is_streaming_active = false;
+    app.toggle_playback();
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+    assert!(recovery_rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_play_press_during_the_rebuild_asks_the_restore_to_play() {
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.native_backend_pending = true;
+
+    app.toggle_playback();
+
+    assert!(app
+      .native_playback_recovery
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.desired_playing));
+    assert!(recovery_rx.try_recv().is_err());
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some("Reconnecting native streaming…"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_queue_add_is_refused_while_the_parked_device_held_the_playback() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+    app.claim_decoded_sink(Source::YouTube);
+
+    let _ = app.apply(crate::core::action::Action::AddToQueue(
+      "spotify:track:x".to_string(),
+    ));
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some(SPOTIFY_PARKED_STATUS));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn only_a_playing_foreign_device_is_playing_elsewhere() {
+    let (mut app, _rx, _recovery_rx) = parked_native_app();
+    assert!(!app.spotify_playing_elsewhere());
+
+    app.current_playback_context = Some(make_external_context());
+    assert!(app.spotify_playing_elsewhere());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn queueing_a_spotify_track_over_the_parked_device_uses_the_native_queue() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+
+    app.add_track_to_native_queue(queue_track(Some("spotify:track:x"), "X"));
+
+    assert_eq!(app.native_queue.len(), 1);
+    assert!(rx.try_recv().is_err());
+    app.current_playback_context = Some(make_external_context());
+    assert!(app.spotify_external_device_active());
+  }
 
   #[cfg(feature = "streaming")]
   #[test]

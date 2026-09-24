@@ -63,7 +63,14 @@ impl App {
       Action::TransferPlayback { device_id, persist } => {
         self.transfer_playback_to_device(device_id, persist);
       }
-      Action::AddToQueue(uri) => self.dispatch(IoEvent::AddItemToQueue(uri)),
+      Action::AddToQueue(uri) => {
+        // No device holds a Spotify queue while the native backend is parked.
+        if self.native_parked_owns_context() {
+          self.refuse_parked_gesture();
+        } else {
+          self.dispatch(IoEvent::AddItemToQueue(uri));
+        }
+      }
       Action::QueueTrack(track) => self.add_track_to_native_queue(track),
       Action::PlayQueueItem { uri, position } => self.play_queue_item(&uri, position),
       Action::RemoveFromQueue { uri, position } => {

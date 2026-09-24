@@ -181,6 +181,8 @@ impl Default for App {
       #[cfg(feature = "streaming")]
       native_backend_pending: false,
       #[cfg(feature = "streaming")]
+      native_parked: false,
+      #[cfg(feature = "streaming")]
       native_load_watchdog: None,
       #[cfg(feature = "streaming")]
       native_playback_recovery: None,
@@ -255,6 +257,12 @@ impl App {
   pub(crate) fn with_playback(mut self, context: CurrentPlaybackContext) -> App {
     self.current_playback_context = Some(context);
     self
+  }
+
+  /// Mark the native backend parked with no player, for tests.
+  #[cfg(all(test, feature = "streaming"))]
+  pub(crate) fn seed_native_parked(&mut self) {
+    self.native_parked = true;
   }
 
   #[cfg(test)]

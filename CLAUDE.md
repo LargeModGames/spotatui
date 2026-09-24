@@ -220,9 +220,25 @@ next, previous, shuffle, repeat, volume) end on `dispatch_spotify_fallback`,
 which answers "Nothing is playing" instead of a Spotify dispatch when no
 session exists.
 
-- Starting a decoded source (Local/Subsonic/Qobuz/Radio/YouTube) only **pauses**
-  librespot - the native flag stays true, so driving librespot directly resumes
-  the wrong player.
+- A decoded start (Local/Subsonic/Qobuz/Radio/YouTube) **parks** librespot when
+  spotatui owned the sink (the active Connect device, a Spotify queue slot, a
+  failed backend) and only **pauses** it otherwise (an idle device under a
+  phone, a decoded queue slot over a Spotify context). A paused librespot keeps
+  the native flag true, so driving it directly resumes the wrong player.
+- A park (`App::release_native_for_decoded`, then `App::park_native_backend`)
+  shuts librespot down, removes it from `App` and sets the private
+  `native_parked` marker; the Spotify context and the recovery snapshot stay.
+  A shut-down player never resumes. An explicit Spotify start (unless another
+  device plays the cached playback), a queued Spotify item, Enter on the
+  parked device row, or a bare resume while the parked device held the
+  playback (`App::native_parked_here`) sends a reacquire request
+  (`App::reacquire_parked_backend`), and the recovery loop rebuilds the
+  backend and replays. Without the marker, a start after a park reaches the
+  Web API and the saved-device retry, which can start the phone. The rebuild
+  install refuses a new player while parked under a decoded owner
+  (`App::accept_rebuilt_native_backend`). Any other transport on the parked
+  device answers "Press play to resume Spotify", or "Reconnecting native
+  streaming…" once its rebuild is pending.
 - A decoded start claims the sink (`App::claim_decoded_sink`) before it pauses
   librespot, and `active_decoded_source()` reads the claim: the owner is
   `Decoded` from the first line of the start, through a failed start or a lost
@@ -232,12 +248,12 @@ session exists.
   never releases it, so a media key or Space during a download cannot resume
   librespot.
 - Every hand-over of the sink away from librespot goes through
-  `App::pause_native_playback`, never a bare `player.pause()`: it clears the
-  native play intent with the pause, so a backend rebuild under the new owner
-  comes back idle instead of restoring Spotify over it. A path that loads
-  librespot again afterwards re-arms the intent (`play_queued_spotify`,
-  `resume_native_shuffle_session`), or the stall watchdog disarms on the false
-  intent and a stalled load never rebuilds.
+  `App::pause_native_playback` (the park calls it too), never a bare
+  `player.pause()`: it clears the native play intent with the pause, so a
+  backend rebuild under the new owner comes back idle instead of restoring
+  Spotify over it. A path that loads librespot again afterwards re-arms the
+  intent (`play_queued_spotify`, `resume_native_shuffle_session`), or the stall
+  watchdog disarms on the false intent and a stalled load never rebuilds.
 - The decoded *queue* path claims the sink as well (`release_librespot`).
   `resume_or_finish` releases that claim only where no decoded context resumes
   (nothing suspended, a Spotify context, a lost device). A resumed decoded

@@ -126,8 +126,8 @@ fn chain_is_written(source: &str, chain_start: usize) -> bool {
 /// source or the native queue slot owns the sink, so every reader outside
 /// the ownership resolver (`core/app/playback_routing.rs`), the snapshot
 /// builder (`infra/media_metadata.rs`) and this file is a candidate for
-/// reading the wrong track. No `#[cfg(test)]` cut: `tui/runner.rs` has production reads after
-/// its test module, and every test occurrence is a write anyway.
+/// reading the wrong track. No `#[cfg(test)]` cut: production code can follow
+/// a test module (`tui/runner.rs`), and every test occurrence is a write anyway.
 fn count_playback_context_reads(source: &str) -> usize {
   let needle = concat!(".current_", "playback_context");
   source

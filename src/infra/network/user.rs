@@ -25,20 +25,35 @@ struct ArtistTopTracksResponse {
 }
 
 #[cfg(feature = "streaming")]
-fn include_native_streaming_device(app: &crate::core::app::App, payload: &mut DevicePayload) {
-  let Some(player) = app.streaming_player.as_ref() else {
-    return;
+fn include_native_streaming_device(
+  app: &crate::core::app::App,
+  parked_device_name: &str,
+  payload: &mut DevicePayload,
+) {
+  let (device_name, device_id, is_active, volume_percent) = match app.streaming_player.as_ref() {
+    Some(player) if player.is_available() => (
+      player.device_name(),
+      app
+        .native_device_id
+        .clone()
+        .unwrap_or_else(|| player.device_id()),
+      app.is_streaming_active,
+      player.get_volume(),
+    ),
+    // A parked backend keeps its row: Enter on it is the rebuild.
+    None if app.native_backend_parked() => {
+      let Some(device_id) = app.native_device_id.clone() else {
+        return;
+      };
+      (
+        parked_device_name,
+        device_id,
+        false,
+        app.runtime_state.volume_percent,
+      )
+    }
+    _ => return,
   };
-
-  if !player.is_available() {
-    return;
-  }
-
-  let device_name = player.device_name();
-  let device_id = app
-    .native_device_id
-    .clone()
-    .unwrap_or_else(|| player.device_id());
 
   if let Some(device) = payload
     .devices
@@ -53,12 +68,12 @@ fn include_native_streaming_device(app: &crate::core::app::App, payload: &mut De
 
   payload.devices.push(Device {
     id: Some(device_id),
-    is_active: app.is_streaming_active,
+    is_active,
     is_private_session: false,
     is_restricted: false,
     name: device_name.to_string(),
     _type: DeviceType::Computer,
-    volume_percent: Some(player.get_volume().into()),
+    volume_percent: Some(volume_percent.into()),
   });
 }
 
@@ -124,7 +139,11 @@ impl UserNetwork for Network {
         {
           let recovering = app.request_native_streaming_recovery_if_disconnected(true);
           if !recovering {
-            include_native_streaming_device(&app, &mut result);
+            include_native_streaming_device(
+              &app,
+              &self.client_config.streaming_device_name,
+              &mut result,
+            );
           }
         }
 
@@ -282,5 +301,31 @@ impl UserNetwork for Network {
         self.handle_error(anyhow!(e)).await;
       }
     }
+  }
+}
+
+#[cfg(all(test, feature = "streaming"))]
+mod tests {
+  use super::*;
+  use crate::core::app::App;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  #[test]
+  fn a_parked_backend_keeps_its_row_in_the_device_list() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.seed_native_parked();
+    app.native_device_id = Some("native-device".to_string());
+    let mut payload = DevicePayload { devices: vec![] };
+
+    include_native_streaming_device(&app, "spotatui", &mut payload);
+
+    assert_eq!(payload.devices.len(), 1);
+    let row = &payload.devices[0];
+    assert_eq!(row.id.as_deref(), Some("native-device"));
+    assert_eq!(row.name, "spotatui");
+    assert!(!row.is_active);
   }
 }

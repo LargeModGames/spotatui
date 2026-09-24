@@ -315,40 +315,19 @@ mod tests {
   }
 }
 
+/// Parks the native backend at exit, so other clients see the Connect device
+/// go inactive; returns the channel that reports the session teardown.
 #[cfg(feature = "streaming")]
-async fn pause_native_playback_before_exit(app: &Arc<Mutex<App>>) {
-  let player = {
-    let mut app = app.lock().await;
-    if !app.is_streaming_active {
-      return;
-    }
-
-    let Some(player) = app.streaming_player.clone() else {
-      return;
-    };
-
-    let is_playing = app.native_is_playing.unwrap_or_else(|| {
-      app
-        .current_playback_context
-        .as_ref()
-        .map(|context| context.is_playing)
-        .unwrap_or(false)
-    });
-
-    if !is_playing {
-      return;
-    }
-
-    app.native_is_playing = Some(false);
-    if let Some(context) = app.current_playback_context.as_mut() {
-      context.is_playing = false;
-    }
-
-    player
-  };
-
-  player.pause();
-  tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+async fn park_native_playback_before_exit(
+  app: &Arc<Mutex<App>>,
+) -> Option<librespot_playback::player::PlayerEventChannel> {
+  let mut app = app.lock().await;
+  let player = app.streaming_player.as_ref()?;
+  // Reconnecting or failed: no spirc is left to report the teardown.
+  let events = player.is_connected().then(|| player.get_event_channel());
+  app.pause_native_playback();
+  app.park_native_backend();
+  events
 }
 
 pub async fn start_ui(
@@ -614,7 +593,7 @@ pub async fn start_ui(
   }
 
   #[cfg(feature = "streaming")]
-  pause_native_playback_before_exit(app).await;
+  let native_teardown = park_native_playback_before_exit(app).await;
 
   // Stop the collector and all network work it owns before the final sync and
   // clear. In particular, a pause-triggered now-playing push must not race the
@@ -664,6 +643,27 @@ pub async fn start_ui(
   }
 
   driver.clear_presence();
+
+  // Last, so the terminal restore and the exit HTTP calls overlap the
+  // teardown the park started.
+  #[cfg(feature = "streaming")]
+  if let Some(mut events) = native_teardown {
+    use crate::infra::player::{PlayerEvent, SessionDisconnectReason};
+    let teardown = async {
+      while let Some(event) = events.recv().await {
+        if matches!(
+          event,
+          PlayerEvent::SessionDisconnected {
+            reason: SessionDisconnectReason::LocalCommand,
+            ..
+          }
+        ) {
+          break;
+        }
+      }
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), teardown).await;
+  }
 
   Ok(())
 }

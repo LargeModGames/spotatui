@@ -59,7 +59,7 @@ impl PlaybackSnapshot {
 pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // A non-Spotify decoded source (local / subsonic / internet-radio / youtube)
   // owns the audio sink while its `*_playback` field is `Some`. Starting such a
-  // source only *pauses* librespot and never clears the Spotify context, so
+  // source pauses or parks librespot and never clears the Spotify context, so
   // without this branch the snapshot (window title, Discord RPC, and the
   // MPRIS/macOS fallback path) would keep showing the stale paused Spotify
   // track. Progress and play-state are read live from the owning source's

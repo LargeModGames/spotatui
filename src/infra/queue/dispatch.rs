@@ -185,6 +185,8 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       guard.native_is_playing = Some(true);
       guard.queue_slot_desired_playing = true;
       guard.set_native_playback_intent(true);
+      // After a failed reacquire the parked slot has no player: Space retries.
+      guard.reacquire_parked_backend();
       Some(true)
     }
     // A skip while paused plays the next item, decoded or not.
@@ -410,14 +412,21 @@ async fn play_queued_youtube(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
 }
 
 /// Play a queued Spotify track through the native streaming player via a direct
-/// `player.load` (no Spirc context), publishing a Spotify queue slot. Requires a
-/// available streaming player; otherwise the item is skipped like any other
-/// unplayable one. Any decoded audio is silenced first so librespot doesn't play
-/// over it.
+/// `player.load` (no Spirc context), publishing a Spotify queue slot. With a
+/// parked backend the slot is published and the rebuild replays it; with no
+/// player at all the item is skipped like any other unplayable one. Any decoded
+/// audio is silenced first so librespot doesn't play over it.
 #[cfg(feature = "streaming")]
 async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) -> bool {
-  let player = { app.lock().await.streaming_player.clone() };
-  let Some(player) = player.filter(|p| p.is_available()) else {
+  let playable = {
+    let guard = app.lock().await;
+    guard.native_backend_parked()
+      || guard
+        .streaming_player
+        .as_ref()
+        .is_some_and(|p| p.is_available())
+  };
+  if !playable {
     set_status(
       app,
       format!(
@@ -446,7 +455,7 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
   // are classified correctly: the stray-playback guard sees a Spotify slot and
   // lets this track start, and a Spirc self-advance racing the load is caught
   // by the reload guard instead of slipping through an empty slot.
-  {
+  let player = {
     use crate::infra::queue::QueueNowPlaying;
     let mut guard = app.lock().await;
     guard.queue_now = Some(QueueNowPlaying::Spotify {
@@ -457,7 +466,17 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
     // A fresh slot always starts playing; pause/resume flip this afterwards.
     guard.queue_slot_desired_playing = true;
     guard.native_is_playing = Some(true);
-  }
+    let player = guard.streaming_player.clone().filter(|p| p.is_available());
+    if player.is_none() {
+      // A parked start would replay before the slot, and its start clears it.
+      guard.pending_start_playback = None;
+      guard.reacquire_parked_backend();
+    }
+    player
+  };
+  let Some(player) = player else {
+    return true;
+  };
   player.activate();
   if let Err(e) = player.play_uri(uri).await {
     // Unpublish so the failed slot can't shadow the next item (or the resume).
@@ -781,13 +800,16 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>, end: QueueEnd) {
   #[allow(unused_variables)]
   let playing = true;
 
-  // The slot can still be a *playing* Spotify track when the drain came from a
-  // mid-play skip (only unplayable items were left); silence it before anything
-  // resumes over it. A naturally-ended slot was already cleared at EndOfTrack.
+  // A drain into a decoded context abandons librespot, whether the Spotify
+  // slot was skipped mid-play or already ended at EndOfTrack. Any other drain
+  // only silences a slot that is still playing (a mid-play skip with only
+  // unplayable items left).
   #[cfg(feature = "streaming")]
   {
     let mut guard = app.lock().await;
-    if guard.queue_now_is_spotify() {
+    if drain_resumes_decoded(&end, suspended.as_ref()) {
+      guard.release_native_for_decoded();
+    } else if guard.queue_now_is_spotify() {
       guard.pause_native_playback();
     }
   }
@@ -929,6 +951,34 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>, end: QueueEnd) {
         player.stop();
       }
     }
+  }
+}
+
+/// Whether a queue drain resumes a decoded context, which abandons librespot.
+#[cfg(feature = "streaming")]
+fn drain_resumes_decoded(
+  end: &QueueEnd,
+  suspended: Option<&crate::core::queue::SuspendedContext>,
+) -> bool {
+  use crate::core::queue::SuspendedContext;
+  if matches!(end, QueueEnd::DeviceLost) {
+    return false;
+  }
+  match suspended {
+    None | Some(SuspendedContext::Spotify { .. } | SuspendedContext::SpotifyShuffled { .. }) => {
+      false
+    }
+    #[cfg(feature = "local-files")]
+    Some(SuspendedContext::Local { resume_index, .. }) => resume_index.is_some(),
+    #[cfg(feature = "subsonic")]
+    Some(SuspendedContext::Subsonic { resume_index, .. }) => resume_index.is_some(),
+    #[cfg(feature = "qobuz")]
+    Some(SuspendedContext::Qobuz { resume_index, .. }) => resume_index.is_some(),
+    #[cfg(feature = "youtube")]
+    Some(SuspendedContext::YouTube { resume_index, .. }) => resume_index.is_some(),
+    // A station resumes through its own start, which releases librespot.
+    #[cfg(feature = "internet-radio")]
+    Some(SuspendedContext::Radio { .. }) => false,
   }
 }
 
@@ -1647,6 +1697,142 @@ mod tests {
       "an exhausted session still forwards its generation"
     );
     assert!(app.lock().await.queue_suspended.is_none());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_parked_backend_holds_a_queued_spotify_item_for_the_rebuild() {
+    let app = test_app();
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+      let mut guard = app.lock().await;
+      guard.streaming_recovery_tx = Some(recovery_tx);
+      guard.seed_native_parked();
+      guard.park_start_playback(Some("spotify:playlist:older".to_string()), None, None);
+    }
+
+    assert!(
+      play_queued_spotify(
+        &app,
+        &track("spotify:track:queued", "Queued"),
+        "spotify:track:queued"
+      )
+      .await
+    );
+
+    let guard = app.lock().await;
+    assert!(guard.queue_now_is_spotify());
+    assert!(guard.pending_start_playback.is_none());
+    assert!(guard.native_backend_pending);
+    assert!(recovery_rx
+      .try_recv()
+      .is_ok_and(|request| request.reacquire));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn space_on_a_parked_spotify_slot_requests_the_rebuild() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+      let mut guard = app.lock().await;
+      guard.streaming_recovery_tx = Some(recovery_tx);
+      guard.seed_native_parked();
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_slot_desired_playing = false;
+    }
+
+    assert!(route_queue_event(&app, &IoEvent::StartPlayback(None, None, None)).await);
+
+    assert!(app.lock().await.queue_slot_desired_playing);
+    assert!(recovery_rx.try_recv().is_ok());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn only_a_drain_that_resumes_a_decoded_context_abandons_librespot() {
+    use crate::core::queue::SuspendedContext;
+    let spotify = SuspendedContext::Spotify {
+      context_uri: None,
+      resume_track_uri: None,
+    };
+    let shuffled = SuspendedContext::SpotifyShuffled {
+      resume_index: Some(0),
+      generation: 1,
+      context_uri: None,
+      resume_track_uri: None,
+    };
+    assert!(!drain_resumes_decoded(&QueueEnd::Drained, None));
+    assert!(!drain_resumes_decoded(&QueueEnd::Drained, Some(&spotify)));
+    assert!(!drain_resumes_decoded(&QueueEnd::Drained, Some(&shuffled)));
+    #[cfg(feature = "youtube")]
+    {
+      let resumes = SuspendedContext::YouTube {
+        resume_index: Some(0),
+        resume_position_ms: 0,
+      };
+      let exhausted = SuspendedContext::YouTube {
+        resume_index: None,
+        resume_position_ms: 0,
+      };
+      assert!(drain_resumes_decoded(&QueueEnd::Drained, Some(&resumes)));
+      assert!(!drain_resumes_decoded(&QueueEnd::Drained, Some(&exhausted)));
+      assert!(!drain_resumes_decoded(
+        &QueueEnd::DeviceLost,
+        Some(&resumes)
+      ));
+    }
+  }
+
+  #[cfg(all(feature = "streaming", feature = "youtube"))]
+  #[tokio::test]
+  async fn a_spotify_slot_skipped_into_a_decoded_context_releases_librespot() {
+    use crate::core::app::NativeTrackInfo;
+    use crate::core::queue::SuspendedContext;
+    use crate::infra::queue::QueueNowPlaying;
+    let (app, rx) = test_app_with_rx();
+    {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_suspended = Some(SuspendedContext::YouTube {
+        resume_index: Some(0),
+        resume_position_ms: 0,
+      });
+      guard.native_track_info = Some(NativeTrackInfo::default());
+    }
+
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+
+    let guard = app.lock().await;
+    assert!(guard.native_track_info.is_none());
+    assert!(guard.queue_now.is_none());
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(all(feature = "streaming", feature = "youtube"))]
+  #[tokio::test]
+  async fn a_drain_into_a_decoded_context_pauses_librespot_after_the_slot_ended() {
+    use crate::core::queue::SuspendedContext;
+    let (app, rx) = test_app_with_rx();
+    {
+      let mut guard = app.lock().await;
+      guard.queue_suspended = Some(SuspendedContext::YouTube {
+        resume_index: Some(0),
+        resume_position_ms: 0,
+      });
+      // Stands in for the paused librespot that the drain must release.
+      guard.native_is_playing = Some(true);
+    }
+
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+
+    assert_eq!(app.lock().await.native_is_playing, Some(false));
+    assert!(rx.try_recv().is_err());
   }
 
   /// A live end-to-end queue test: browse a Subsonic playlist, start it, queue a

@@ -16,7 +16,7 @@
 //! Subsonic playback owns a single piece of state, [`App::subsonic_playback`],
 //! and never writes Spotify/librespot fields — the playbar reads progress/pause
 //! live from the player. Only one backend holds the audio device at a time:
-//! starting Subsonic pauses librespot **and** tears down any local session; the
+//! starting Subsonic pauses or parks librespot **and** tears down any local session; the
 //! reciprocal teardown lives in the local and network start paths.
 //!
 //! ## Streaming
@@ -250,10 +250,10 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
 
 /// Release the other backends so only subsonic holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // Pause native Spotify so librespot releases the device and no rebuild
-  // resumes it under this source.
+  // Take the sink from native Spotify so no rebuild resumes it under this
+  // source.
   #[cfg(feature = "streaming")]
-  app.lock().await.pause_native_playback();
+  app.lock().await.release_native_for_decoded();
   // The other decoded sources never see this subsonic: start (the pump's
   // `!handled_subsonic` short-circuit), so their sessions are torn down here.
   let players = app

@@ -122,3 +122,40 @@ pub(super) fn playing_track_context(track: FullTrack) -> CurrentPlaybackContext 
     ..make_external_context()
   }
 }
+
+/// A session whose native backend was parked while its device held the paused
+/// track, with the receivers for dispatched events and rebuild requests.
+#[cfg(feature = "streaming")]
+#[allow(deprecated)]
+pub(super) fn parked_native_app() -> (
+  App,
+  std::sync::mpsc::Receiver<IoEvent>,
+  tokio::sync::mpsc::UnboundedReceiver<crate::infra::player::StreamingRecoveryRequest>,
+) {
+  let (tx, rx) = channel();
+  let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+  let (recovery_tx, recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+  app.streaming_recovery_tx = Some(recovery_tx);
+  app.native_parked = true;
+  app.native_device_id = Some("spotatui".to_string());
+  app.native_is_playing = Some(false);
+  let mut context = playing_track_context(full_track("0000000000000000000001", "Parked"));
+  context.device.id = Some("spotatui".to_string());
+  context.is_playing = false;
+  context.context = Some(rspotify::model::context::Context {
+    uri: "spotify:playlist:parked".to_string(),
+    href: String::new(),
+    external_urls: HashMap::new(),
+    _type: rspotify::model::Type::Playlist,
+  });
+  app.current_playback_context = Some(context);
+  app.record_native_playback_request(
+    Some("spotify:playlist:parked".to_string()),
+    None,
+    None,
+    false,
+    false,
+    RepeatState::Off,
+  );
+  (app, rx, recovery_rx)
+}

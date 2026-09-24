@@ -525,6 +525,10 @@ pub struct App {
   /// to the full-screen error.
   #[cfg(feature = "streaming")]
   pub native_backend_pending: bool,
+  /// librespot was shut down for another source; the next Spotify start
+  /// rebuilds it.
+  #[cfg(feature = "streaming")]
+  native_parked: bool,
   /// Armed when a native load is issued; a Playing/TrackChanged event disarms
   /// it. If it fires, the session is a zombie (passes `is_connected` but
   /// silently drops Spirc commands) and recovery is forced.
@@ -632,5 +636,11 @@ impl App {
   // Close the IO channel to allow the network thread to exit gracefully
   pub fn close_io_channel(&mut self) {
     self.io_tx = None;
+    // App-side rebuild requests stop here; the install check refuses any
+    // build that a player handler still starts.
+    #[cfg(feature = "streaming")]
+    {
+      self.streaming_recovery_tx = None;
+    }
   }
 }

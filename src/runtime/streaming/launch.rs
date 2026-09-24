@@ -298,12 +298,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   // SPOTATUI_STREAMING_INIT_TIMEOUT_SECS). The outer timeout here is a safety net
   // that catches hangs *outside* Spirc init (e.g. OAuth callback never arriving,
   // blocking I/O in credential retrieval). Set it above the internal timeout.
-  let internal_timeout_secs: u64 = std::env::var("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS")
-    .ok()
-    .and_then(|v| v.parse().ok())
-    .filter(|&v: &u64| v > 0)
-    .unwrap_or(30);
-  let outer_timeout = Duration::from_secs(internal_timeout_secs.saturating_add(15));
+  let outer_timeout = player::player_build_timeout();
 
   let init_task = tokio::spawn(async move {
     player::StreamingPlayer::new_cache_only(&client_id, &redirect_uri, streaming_config).await
@@ -353,6 +348,12 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   // Store streaming player reference in App for direct control (bypasses event channel)
   {
     let mut app_mut = ctx.app.lock().await;
+    // The frontend is exiting: nothing would shut this player down.
+    if app_mut.io_tx_clone().is_none() {
+      drop(app_mut);
+      streaming_player.shutdown();
+      return;
+    }
     app_mut.streaming_player = Some(Arc::clone(&streaming_player));
     // Startup playlist loading may have fallen back to a flat list while the
     // deferred player was unavailable. Refresh once so rootlist folders are

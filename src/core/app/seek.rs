@@ -253,6 +253,11 @@ impl App {
 
   /// Queue an API-based seek with throttling (for external device control)
   fn queue_api_seek(&mut self, position_ms: u32) {
+    if self.native_parked_here() {
+      self.seek_ms = None;
+      self.refuse_parked_gesture();
+      return;
+    }
     // Always update UI immediately
     self.song_progress_ms = position_ms as u128;
     self.seek_ms = None;
@@ -353,6 +358,17 @@ mod tests {
   use super::*;
   use crate::core::app::test_support::*;
   use crate::infra::queue::QueueNowPlaying;
+
+  #[test]
+  fn a_seek_on_the_parked_device_sends_no_web_api_seek() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+
+    app.seek_to(30_000);
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.seek_ms.is_none());
+    assert_eq!(app.status_message(), Some("Press play to resume Spotify"));
+  }
 
   fn app_with_spotify_queue_slot() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
     let (tx, rx) = channel();
