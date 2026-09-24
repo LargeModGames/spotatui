@@ -58,7 +58,7 @@ jobs:
           # Slim build used for fast local iteration (matches CLAUDE.md).
           - name: slim
             args: "--locked --no-default-features --features telemetry,tui"
-          # Headless: one of two legs without `tui`. `mod tui` is
+          # Headless: one of three legs without `tui`. `mod tui` is
           # feature-gated, so this leg turns any `crate::tui` import from
           # core/infra/cli into a compile error, which is what keeps a second
           # frontend from silently re-coupling to the terminal one.
@@ -70,6 +70,12 @@ jobs:
           # `crate::tui` in scope.
           - name: headless-streaming
             args: "--locked --no-default-features --features telemetry,streaming"
+          # The browser frontend without `tui`: the Linux feature set a
+          # spotatui-gui build carries (cover-art needs `tui`, ai-dj is the
+          # terminal DJ screen). The first leg that builds scripting, Discord,
+          # MPRIS, self-update and MCP without the terminal frontend.
+          - name: gui
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -111,6 +117,9 @@ jobs:
           # See the check job for why the headless leg exists.
           - name: headless
             args: "--locked --no-default-features --features telemetry"
+          # See the check job for why the gui leg exists.
+          - name: gui
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -206,6 +215,9 @@ jobs:
           # See the check job for why the headless-streaming leg exists.
           - name: headless-streaming
             args: "--locked --no-default-features --features telemetry,streaming"
+          # See the check job for why the gui leg exists.
+          - name: gui
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -226,7 +238,7 @@ jobs:
           command: clippy
           args: ${{ matrix.args }} -- -D warnings
 
-  # macOS is the one platform the seven Linux legs above cannot speak for: it
+  # macOS is the one platform the eight Linux legs above cannot speak for: it
   # picks a different playback backend (portaudio, not alsa/rodio), a different
   # OS integration (`macos-media`, not `mpris`), a different visualizer capture
   # (`audio-viz-cpal`, not the PipeWire `audio-viz`), and it is the only place

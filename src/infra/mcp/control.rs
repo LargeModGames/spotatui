@@ -23,6 +23,7 @@
 use super::executor::AppExecutor;
 use super::server;
 use crate::core::app::App;
+use crate::infra::loopback::{generate_token, tokens_match};
 use crate::infra::network::IoEvent;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -128,22 +129,6 @@ fn clear_handshake_at(path: &Path, pid: u32) {
   }
 }
 
-fn generate_token() -> Result<String> {
-  // 128 bits straight from the OS CSPRNG, hex-encoded. `SysRng` rather than the
-  // thread RNG so the entropy source is the one the comment claims, with no
-  // userspace state to reason about for a value that authenticates a socket.
-  use rand::rngs::SysRng;
-  use rand::TryRng;
-  let mut rng = SysRng;
-  let high = rng
-    .try_next_u64()
-    .context("could not read from the system random source")?;
-  let low = rng
-    .try_next_u64()
-    .context("could not read from the system random source")?;
-  Ok(format!("{high:016x}{low:016x}"))
-}
-
 /// Bind the control listener and serve connections until the process exits.
 ///
 /// Returns the bound port so the caller can report it. Each accepted connection
@@ -247,16 +232,9 @@ async fn serve_connection(
         .map(str::to_string)
     });
 
-  let authorised = presented.as_deref().is_some_and(|token| {
-    // Length-independent comparison is overkill for a loopback socket, but
-    // constant-time-ish beats an early-exit compare and costs nothing.
-    token.len() == expected_token.len()
-      && token
-        .bytes()
-        .zip(expected_token.bytes())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
-  });
+  let authorised = presented
+    .as_deref()
+    .is_some_and(|token| tokens_match(token, &expected_token));
 
   if !authorised {
     let _ = write_half
@@ -273,15 +251,6 @@ async fn serve_connection(
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn generated_tokens_are_long_and_distinct() {
-    let a = generate_token().unwrap();
-    let b = generate_token().unwrap();
-    assert_eq!(a.len(), 32, "128 bits, hex-encoded");
-    assert_ne!(a, b);
-    assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
-  }
 
   #[test]
   fn clear_handshake_leaves_a_file_another_process_published() {

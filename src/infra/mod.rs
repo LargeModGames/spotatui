@@ -10,6 +10,8 @@ pub mod dj;
 pub mod history;
 #[cfg(feature = "local-files")]
 pub mod local;
+#[cfg(any(feature = "mcp-server", feature = "gui"))]
+pub mod loopback;
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
 pub mod macos_media;
 #[cfg(feature = "mcp-server")]

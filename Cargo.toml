@@ -20,6 +20,8 @@ exclude = [
     ".github/ISSUE_TEMPLATE",
     "target/",
     "snap/",
+    "gui/node_modules/",
+    "gui/dist/",
 ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -109,6 +111,8 @@ librespot-protocol = { version = "=0.8.3", package = "spotatui-librespot-protoco
 protobuf = { version = "3.7", optional = true }
 futures = "0.3.32"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+# The GUI page server's request-head parser.
+httparse = { version = "1.10", optional = true }
 url = "2.5"
 keepawake = "0.6"
 
@@ -154,10 +158,10 @@ telemetry = []
 # is a compile error there - that is what keeps a second frontend from silently
 # re-coupling to the terminal one.
 tui = ["dep:ratatui", "dep:crossterm", "dep:tui-bar-graph", "dep:colorgrad"]
-# Reserved for the windowed frontend. Currently gates only the `spotatui-gui`
-# bin shim (which claims the binary name and the Windows console-attach
-# plumbing); the frontend itself has not landed yet.
-gui = []
+# The browser frontend: the loopback page server, `run_gui` and the
+# `spotatui-gui` bin shim (which claims the binary name and the Windows
+# console-attach plumbing).
+gui = ["dep:httparse"]
 self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
 streaming = ["librespot-core", "librespot-playback", "librespot-connect", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf", "queue"]
 # Audio backend features
@@ -232,7 +236,7 @@ ai-dj = ["dj-core"]
 [dev-dependencies]
 tempfile = "3"
 
-# Constraint-only pin (spotatui has no build script): vergen 9.1.0 breaks
+# Constraint-only pin (spotatui's build script does not use it): vergen 9.1.0 breaks
 # librespot-core 0.8.0's build script on a fresh resolve (#350). Remove once
 # librespot ships a fix.
 [build-dependencies]

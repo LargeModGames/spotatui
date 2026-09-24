@@ -18,6 +18,7 @@ pub enum DisplayDomain {
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
 #[derive(Default, Clone, Copy)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize))]
 pub struct DisplayRevisions {
   route: u64,
   status: u64,
@@ -31,6 +32,25 @@ pub struct DisplayRevisions {
   artist: u64,
   library: u64,
   queue: u64,
+}
+
+impl DisplayDomain {
+  /// Every domain, in declaration order.
+  #[cfg(feature = "gui")]
+  pub const ALL: [DisplayDomain; 12] = [
+    DisplayDomain::Route,
+    DisplayDomain::Status,
+    DisplayDomain::Source,
+    DisplayDomain::Theme,
+    DisplayDomain::Playback,
+    DisplayDomain::Party,
+    DisplayDomain::Devices,
+    DisplayDomain::Search,
+    DisplayDomain::Lyrics,
+    DisplayDomain::Artist,
+    DisplayDomain::Library,
+    DisplayDomain::Queue,
+  ];
 }
 
 impl DisplayRevisions {
@@ -81,5 +101,24 @@ impl App {
   #[cfg(any(test, feature = "gui"))]
   pub fn display_revisions(&self) -> DisplayRevisions {
     self.display_revisions
+  }
+
+  /// The playback view the Playback revision counted.
+  #[cfg(feature = "gui")]
+  pub(crate) fn playback_view(
+    &self,
+  ) -> &(
+    Option<crate::infra::media_metadata::PlaybackSnapshot>,
+    u32,
+    Option<String>,
+    bool,
+  ) {
+    &self.playback_view
+  }
+
+  /// The queue view the Queue revision counted.
+  #[cfg(feature = "gui")]
+  pub(crate) fn queue_view(&self) -> &(Option<QueueState>, Vec<TrackInfo>, Option<TrackInfo>) {
+    &self.queue_view
   }
 }

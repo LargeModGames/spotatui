@@ -11,7 +11,7 @@ This file is maintained as three near-identical copies: `CLAUDE.md`, `AGENTS.md`
 # Full build (native streaming + audio viz + Lua scripting + OS integrations)
 cargo run
 
-# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's seven legs
+# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's eight legs
 cargo run --no-default-features --features telemetry,tui
 
 # With the alternative sources (Local/Subsonic/Radio/YouTube/Qobuz). These are NOT
@@ -30,7 +30,7 @@ cargo test --no-default-features --features telemetry,tui
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
 (`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` on `ubuntu-latest`
-across a **seven-leg** feature matrix, plus one `macos-latest` job (below):
+across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
 
 | Leg | Features |
 |-----|----------|
@@ -39,8 +39,9 @@ across a **seven-leg** feature matrix, plus one `macos-latest` job (below):
 | `mcp-only` | `telemetry,tui,mcp-server` |
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
-| `headless` | `telemetry` - one of two legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
+| `headless` | `telemetry` - one of three legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
 | `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its two entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
+| `gui` | `telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris` - the third leg without `tui`: the Linux feature set a `spotatui-gui` build carries. `check`, `clippy` and `test` |
 
 - `mcp-only` and `ai-dj-only` matter more than their size suggests: both enable
   `dj-core` **without** `streaming` (a combination nothing else covers), and each
@@ -87,18 +88,19 @@ the slim build, check the `N filtered out` count actually says your test ran.
 ## Architecture
 
 One cargo package: a `[lib]` (`src/lib.rs`, private modules, public API =
-`run_cli`) plus two `[[bin]]` shims in `src/bin/` - `spotatui` (console) and
-`spotatui-gui`, a placeholder behind the off-by-default `gui` feature that
-exists to own the crate-root `windows_subsystem` attribute. Five top-level
-units under `src/`:
+`run_cli`, plus `run_gui` under `gui`) plus two `[[bin]]` shims in `src/bin/` -
+`spotatui` (console) and `spotatui-gui`, the browser frontend behind the
+off-by-default `gui` feature, which also owns the crate-root
+`windows_subsystem` attribute. Six top-level units under `src/`:
 
 | Unit | Role |
 |------|------|
 | `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), the shared action vocabulary (`action/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
 | `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
+| `gui/` | Browser frontend (feature `gui`): the loopback page server with its Host/Origin/launch-code checks (`server.rs`), the JSON push protocol over the display revisions (`protocol.rs`), and the socket bridge to the tick loop (`bridge.rs`); `build.rs` embeds `gui/dist` |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
-| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller, plus the boot auth rule `spotify_auth_mode`: interactive only right after the client wizard or `--reconfigure-auth`, a subcommand needs a cached token, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui`), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
+| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` and `run_gui` its callers, plus the boot auth rule `spotify_auth_mode`: interactive only right after the client wizard or `--reconfigure-auth`, a subcommand needs a cached token, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui` or `gui`), `gui.rs::run_gui` (the browser frontend: boot without prompts, the loopback server, a tick loop with no terminal), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
 
 ### Data flow
 
@@ -499,8 +501,8 @@ never config:
   every shipped binary enables it), the five sources, and the DJ features.
 - `tui` gates `mod tui` and owns the terminal-only crates (ratatui, crossterm,
   tui-bar-graph, colorgrad - the last also pulled by `art-decode` for the
-  adaptive-theme HSV math). `gui` is a reserved placeholder that only gates the
-  `spotatui-gui` bin shim.
+  adaptive-theme HSV math). `gui` gates `mod gui` (the browser frontend's
+  loopback page server, with `httparse`), `run_gui` and the `spotatui-gui` bin shim.
 - Cover art is two features: `art-decode` is the frontend-agnostic decode half
   (`dep:image`, fills `core::art::CoverArtStore`, feeds the adaptive theme;
   never enabled by hand); `cover-art` layers the ratatui-image terminal

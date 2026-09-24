@@ -8,14 +8,19 @@
 
 mod bootstrap;
 mod cli;
-#[cfg(feature = "tui")]
+#[cfg(feature = "gui")]
+mod gui;
+#[cfg(any(feature = "tui", feature = "gui"))]
 mod instance;
 mod logging;
 mod pump;
-#[cfg(feature = "tui")]
+#[cfg(any(feature = "tui", feature = "gui"))]
 mod startup;
 #[cfg(any(feature = "streaming", test))]
 mod streaming;
+
+#[cfg(feature = "gui")]
+pub use gui::run_gui;
 
 use crate::core::migrations::apply_legacy_state_file_migrations;
 use anyhow::{anyhow, Result};
