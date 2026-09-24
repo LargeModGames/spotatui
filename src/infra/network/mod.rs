@@ -1278,7 +1278,7 @@ impl Network {
           app.runtime_state.dev_client_ids.push(client_id);
           let dev_client_ids = app.runtime_state.dev_client_ids.clone();
           app.schedule_state_save(PersistedRuntimeState {
-            dev_client_ids,
+            dev_client_ids: Some(dev_client_ids),
             ..PersistedRuntimeState::default()
           });
         }

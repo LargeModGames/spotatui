@@ -110,7 +110,9 @@ impl RuntimeState {
     if let Some(community_pin_prompt_shown) = state.community_pin_prompt_shown {
       self.community_pin_prompt_shown = community_pin_prompt_shown;
     }
-    self.dev_client_ids = state.dev_client_ids.clone();
+    if let Some(dev_client_ids) = &state.dev_client_ids {
+      self.dev_client_ids = sanitized_dev_client_ids(dev_client_ids);
+    }
   }
 
   pub fn to_persisted(&self) -> PersistedRuntimeState {
@@ -126,7 +128,7 @@ impl RuntimeState {
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
       qobuz_bundle_cache: None,
-      dev_client_ids: self.dev_client_ids.clone(),
+      dev_client_ids: Some(sanitized_dev_client_ids(&self.dev_client_ids)),
     }
   }
 
@@ -230,8 +232,8 @@ pub struct PersistedRuntimeState {
   pub community_pin_prompt_shown: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub qobuz_bundle_cache: Option<QobuzBundleCache>,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub dev_client_ids: Vec<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub dev_client_ids: Option<Vec<String>>,
 }
 
 impl PersistedRuntimeState {
@@ -326,7 +328,7 @@ impl PersistedRuntimeState {
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
       && self.qobuz_bundle_cache.is_none()
-      && self.dev_client_ids.is_empty()
+      && self.dev_client_ids.is_none()
   }
 }
 
@@ -487,7 +489,10 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .qobuz_bundle_cache
       .clone()
       .filter(QobuzBundleCache::is_complete),
-    dev_client_ids: state.dev_client_ids.clone(),
+    dev_client_ids: state
+      .dev_client_ids
+      .as_deref()
+      .map(sanitized_dev_client_ids),
   }
 }
 
@@ -534,8 +539,11 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(qobuz_bundle_cache) = &patch.qobuz_bundle_cache {
     merged.qobuz_bundle_cache = Some(qobuz_bundle_cache.clone());
   }
-  if !patch.dev_client_ids.is_empty() {
-    merged.dev_client_ids = merged_ids(&merged.dev_client_ids, &patch.dev_client_ids);
+  if let Some(dev_client_ids) = &patch.dev_client_ids {
+    merged.dev_client_ids = Some(merged_ids(
+      merged.dev_client_ids.as_deref().unwrap_or(&[]),
+      dev_client_ids,
+    ));
   }
 }
 
@@ -560,6 +568,10 @@ fn merged_ids(existing: &[String], incoming: &[String]) -> Vec<String> {
       Some(id.to_string())
     })
     .collect()
+}
+
+fn sanitized_dev_client_ids(ids: &[String]) -> Vec<String> {
+  merged_ids(&[], ids)
 }
 
 pub(crate) fn sanitized_radio_stations(stations: &[RadioStationConfig]) -> Vec<RadioStationConfig> {
@@ -668,7 +680,7 @@ mod tests {
         app_secret: "s".repeat(32),
         oauth_key: "k".to_string(),
       }),
-      dev_client_ids: Vec::new(),
+      dev_client_ids: Some(vec!["dev-client".to_string()]),
     };
 
     save(&path, &state).unwrap();
@@ -696,7 +708,7 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.yml");
     let first_patch = PersistedRuntimeState {
-      dev_client_ids: vec![" client-a ".to_string(), "client-a".to_string()],
+      dev_client_ids: Some(vec![" client-a ".to_string(), "client-a".to_string()]),
       ..PersistedRuntimeState::default()
     };
 
@@ -704,14 +716,14 @@ mod tests {
     save(&path, &first_patch).unwrap();
 
     let second_patch = PersistedRuntimeState {
-      dev_client_ids: vec!["client-a".to_string(), "client-b".to_string()],
+      dev_client_ids: Some(vec!["client-a".to_string(), "client-b".to_string()]),
       ..PersistedRuntimeState::default()
     };
     save(&path, &second_patch).unwrap();
 
     assert_eq!(
       load(&path).unwrap().dev_client_ids,
-      vec!["client-a".to_string(), "client-b".to_string()]
+      Some(vec!["client-a".to_string(), "client-b".to_string()])
     );
   }
 
@@ -945,6 +957,34 @@ mod tests {
         ..Default::default()
       }
     );
+  }
+
+  #[test]
+  fn applying_persisted_development_client_ids_preserves_absent_values_and_sanitizes_present_values(
+  ) {
+    let mut runtime = RuntimeState {
+      dev_client_ids: vec!["existing".to_string()],
+      ..RuntimeState::default()
+    };
+
+    runtime.apply_persisted(&PersistedRuntimeState::default());
+    assert_eq!(runtime.dev_client_ids, vec!["existing"]);
+
+    runtime.apply_persisted(&PersistedRuntimeState {
+      dev_client_ids: Some(vec![
+        " new ".to_string(),
+        "new".to_string(),
+        " ".to_string(),
+      ]),
+      ..PersistedRuntimeState::default()
+    });
+    assert_eq!(runtime.dev_client_ids, vec!["new"]);
+
+    runtime.apply_persisted(&PersistedRuntimeState {
+      dev_client_ids: Some(Vec::new()),
+      ..PersistedRuntimeState::default()
+    });
+    assert!(runtime.dev_client_ids.is_empty());
   }
 
   #[test]
