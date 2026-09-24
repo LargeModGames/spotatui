@@ -42,12 +42,18 @@ fn handle_down_press_on_hovered_block(app: &mut App) {
       ArtistBlock::Albums => {
         artist.artist_hovered_block = if artist.related_artists_visible() {
           ArtistBlock::RelatedArtists
-        } else {
+        } else if artist.top_tracks_visible() {
           ArtistBlock::TopTracks
+        } else {
+          ArtistBlock::Albums
         };
       }
       ArtistBlock::RelatedArtists => {
-        artist.artist_hovered_block = ArtistBlock::TopTracks;
+        artist.artist_hovered_block = if artist.top_tracks_visible() {
+          ArtistBlock::TopTracks
+        } else {
+          ArtistBlock::Albums
+        };
       }
       ArtistBlock::Empty => {}
     }
@@ -94,7 +100,13 @@ fn handle_up_press_on_hovered_block(app: &mut App) {
         };
       }
       ArtistBlock::Albums => {
-        artist.artist_hovered_block = ArtistBlock::TopTracks;
+        artist.artist_hovered_block = if artist.top_tracks_visible() {
+          ArtistBlock::TopTracks
+        } else if artist.related_artists_visible() {
+          ArtistBlock::RelatedArtists
+        } else {
+          ArtistBlock::Albums
+        }
       }
       ArtistBlock::RelatedArtists => {
         artist.artist_hovered_block = ArtistBlock::Albums;
@@ -251,10 +263,13 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
 fn handle_enter_event_on_hovered_block(app: &mut App) {
   if let Some(artist) = &mut app.artist {
     match artist.artist_hovered_block {
-      ArtistBlock::TopTracks => artist.artist_selected_block = ArtistBlock::TopTracks,
+      ArtistBlock::TopTracks if artist.top_tracks_visible() => {
+        artist.artist_selected_block = ArtistBlock::TopTracks;
+      }
       ArtistBlock::Albums => artist.artist_selected_block = ArtistBlock::Albums,
       ArtistBlock::RelatedArtists => artist.artist_selected_block = ArtistBlock::RelatedArtists,
       ArtistBlock::Empty => {}
+      ArtistBlock::TopTracks => {}
     }
   }
 }
@@ -284,7 +299,11 @@ pub fn handler(key: Key, app: &mut App) {
         match artist.artist_hovered_block {
           ArtistBlock::TopTracks => common_key_events::handle_left_event(app),
           ArtistBlock::Albums => {
-            artist.artist_hovered_block = ArtistBlock::TopTracks;
+            if artist.top_tracks_visible() {
+              artist.artist_hovered_block = ArtistBlock::TopTracks;
+            } else {
+              common_key_events::handle_left_event(app);
+            }
           }
           ArtistBlock::RelatedArtists => {
             artist.artist_hovered_block = ArtistBlock::Albums;

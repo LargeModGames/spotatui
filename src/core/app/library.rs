@@ -117,6 +117,11 @@ impl Artist {
   pub fn related_artists_visible(&self) -> bool {
     !self.related_artists.is_empty()
   }
+
+  /// Whether the TopTracks block has anything to show
+  pub fn top_tracks_visible(&self) -> bool {
+    !self.top_tracks.is_empty()
+  }
 }
 
 impl App {

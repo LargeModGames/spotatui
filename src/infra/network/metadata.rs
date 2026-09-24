@@ -173,6 +173,7 @@ impl MetadataNetwork for Network {
 
       let top_tracks = match top_tracks_res {
         Ok(res) => res.tracks,
+        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
         Err(e) => {
           self.handle_error(anyhow!(e)).await;
           return;
@@ -274,8 +275,8 @@ impl MetadataNetwork for Network {
       selected_album_index: 0,
       selected_related_artist_index: 0,
       selected_top_track_index: 0,
-      artist_selected_block: ArtistBlock::TopTracks,
-      artist_hovered_block: ArtistBlock::TopTracks,
+      artist_selected_block: if top_tracks.is_empty() { ArtistBlock::Albums } else { ArtistBlock::TopTracks },
+      artist_hovered_block: if top_tracks.is_empty() { ArtistBlock::Albums } else { ArtistBlock::TopTracks },
     });
     app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
   }

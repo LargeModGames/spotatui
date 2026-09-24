@@ -3,11 +3,12 @@ use crate::core::{app::App, auth};
 use anyhow::anyhow;
 use log::warn;
 use reqwest::header::CONTENT_LENGTH;
-use reqwest::Method;
+use reqwest::{Method, StatusCode};
 use rspotify::AuthCodePkceSpotify;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
+  env,
   future::Future,
   path::Path,
   sync::Arc,
@@ -333,6 +334,7 @@ where
       let token = token_lock
         .as_ref()
         .ok_or_else(|| anyhow!("No access token available"))?;
+      warn!("Access Token: {}", token.access_token);
       (token.access_token.clone(), token_age(token))
     };
 
@@ -501,6 +503,17 @@ impl Network {
     path: &str,
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
+    let debug_fail = env::var("MAKE_OUD_SUFFER").ok().is_none_or(|_| true);
+    if debug_fail && path.contains("/top-tracks") {
+      return Err(
+        SpotifyApiError {
+          status: StatusCode::FORBIDDEN,
+          body: "Forbidden".into(),
+          detail: None,
+        }
+        .into(),
+      );
+    }
     let mut value = self
       .spotify_api_request_json(Method::GET, path, query, None)
       .await?;
