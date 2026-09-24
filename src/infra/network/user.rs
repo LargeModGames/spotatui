@@ -216,7 +216,7 @@ impl UserNetwork for Network {
 
   async fn get_top_artists_mix(&mut self) {
     if self.app.lock().await.is_spotify_development_app() {
-      self.remind_when_dev_mode().await;
+      self.set_and_remind_dev_app("Top Artists Mix").await;
       return;
     }
 
@@ -260,7 +260,8 @@ impl UserNetwork for Network {
       match res {
         Ok(res) => all_tracks.extend(res.tracks),
         Err(e) if is_forbidden_error(&e) || is_not_found_error(&e) => {
-          self.remind_when_dev_mode().await;
+          self.set_and_remind_dev_app("Top Artists Mix").await;
+          self.app.lock().await.discover_loading = false;
           return;
         }
         Err(e) => {

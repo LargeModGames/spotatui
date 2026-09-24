@@ -129,7 +129,7 @@ impl RecommendationNetwork for Network {
         app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
       }
       Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-        self.remind_when_dev_mode().await
+        self.set_and_remind_dev_app("Recommendation").await
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;

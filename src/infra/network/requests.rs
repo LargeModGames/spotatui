@@ -502,6 +502,7 @@ impl Network {
     path: &str,
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
+    // TODO remove this debug statement
     let debug_fail = env::var("MAKE_OUD_SUFFER").is_ok();
     if debug_fail
       && (path.contains("/top-tracks")

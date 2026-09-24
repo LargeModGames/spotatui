@@ -222,6 +222,8 @@ pub struct PersistedRuntimeState {
   pub community_pin_prompt_shown: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub qobuz_bundle_cache: Option<QobuzBundleCache>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub dev_client_ids: Vec<String>,
 }
 
 impl PersistedRuntimeState {
