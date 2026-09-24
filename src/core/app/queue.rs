@@ -2,7 +2,7 @@ use super::*;
 
 /// Domain-level representation of the playback queue.
 /// Replaces `rspotify::model::CurrentUserQueue` in `App` state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct QueueState {
   pub currently_playing: Option<PlayableInfo>,
   pub queue: Vec<PlayableInfo>,

@@ -2755,6 +2755,7 @@ fn remove_radio_station_reports_a_config_owned_station_without_removing() {
     app.status_message(),
     Some("Radio station is configured in config.yml: Configured Groove")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]
@@ -2787,6 +2788,7 @@ fn remove_radio_station_removes_only_the_saved_copy_of_a_configured_station() {
     app.status_message(),
     Some("Removed saved radio station: Runtime Duplicate")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]
@@ -2809,6 +2811,7 @@ fn remove_radio_station_reports_an_unfavorited_station() {
     app.status_message(),
     Some("Radio station is not favorited: Groove Salad")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]
@@ -2829,6 +2832,7 @@ fn remove_radio_station_without_a_stream_url_reports_it() {
     app.status_message(),
     Some("Radio station has no stream URL")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]

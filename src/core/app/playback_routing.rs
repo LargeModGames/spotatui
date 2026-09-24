@@ -557,13 +557,15 @@ impl App {
       self.display_revisions.bump(DisplayDomain::Playback);
     }
 
-    let spotify_queue = crate::core::plugin_api::queue_snapshot(self);
-    let slot = self.queue_now_track().cloned();
-    if self.queue_view.0 != spotify_queue
+    if self.queue_view.0 != self.queue
       || self.queue_view.1 != self.native_queue
-      || self.queue_view.2 != slot
+      || self.queue_view.2.as_ref() != self.queue_now_track()
     {
-      self.queue_view = (spotify_queue, self.native_queue.clone(), slot);
+      self.queue_view = (
+        self.queue.clone(),
+        self.native_queue.clone(),
+        self.queue_now_track().cloned(),
+      );
       self.display_revisions.bump(DisplayDomain::Queue);
     }
   }

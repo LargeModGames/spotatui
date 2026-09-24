@@ -134,14 +134,17 @@ impl App {
   ))]
   pub(crate) fn show_source_search_tracks(&mut self, tracks: Vec<TrackInfo>) {
     let total = tracks.len() as u32;
-    self.set_search_results(SearchResult {
+    // No cursor clamp here, unlike set_search_results: the hidden blocks keep
+    // their cursors for the next Spotify search, as before.
+    self.search_results = SearchResult {
       tracks: Some(Paged {
         items: tracks,
         total,
         ..Default::default()
       }),
       ..Default::default()
-    });
+    };
+    self.display_revisions.bump(DisplayDomain::Search);
     self.view.search_selected_tracks_index = Some(0);
     self.view.search_hovered_block = SearchResultBlock::SongSearch;
     self.view.search_selected_block = SearchResultBlock::Empty;

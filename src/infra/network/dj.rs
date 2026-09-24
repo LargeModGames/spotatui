@@ -928,7 +928,10 @@ mod tests {
     network.dj_index_library().await;
 
     let app = network.app.lock().await;
-    assert!(app.dj.revision > before);
+    assert!(
+      app.dj.revision >= before + 2,
+      "the finished crawl needs a revision past the start"
+    );
     assert!(app
       .dj
       .transcript
