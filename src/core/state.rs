@@ -326,6 +326,7 @@ impl PersistedRuntimeState {
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
       && self.qobuz_bundle_cache.is_none()
+      && self.dev_client_ids.is_empty()
   }
 }
 
@@ -533,6 +534,9 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(qobuz_bundle_cache) = &patch.qobuz_bundle_cache {
     merged.qobuz_bundle_cache = Some(qobuz_bundle_cache.clone());
   }
+  if !patch.dev_client_ids.is_empty() {
+    merged.dev_client_ids = merged_ids(&merged.dev_client_ids, &patch.dev_client_ids);
+  }
 }
 
 fn sanitized_ids(ids: &[String]) -> Vec<String> {
@@ -685,6 +689,30 @@ mod tests {
       assert_eq!(dir_mode, 0o700);
       assert_eq!(file_mode, 0o600);
     }
+  }
+
+  #[test]
+  fn development_client_ids_round_trip_as_a_deduplicated_sparse_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let first_patch = PersistedRuntimeState {
+      dev_client_ids: vec![" client-a ".to_string(), "client-a".to_string()],
+      ..PersistedRuntimeState::default()
+    };
+
+    assert!(!first_patch.is_empty());
+    save(&path, &first_patch).unwrap();
+
+    let second_patch = PersistedRuntimeState {
+      dev_client_ids: vec!["client-a".to_string(), "client-b".to_string()],
+      ..PersistedRuntimeState::default()
+    };
+    save(&path, &second_patch).unwrap();
+
+    assert_eq!(
+      load(&path).unwrap().dev_client_ids,
+      vec!["client-a".to_string(), "client-b".to_string()]
+    );
   }
 
   #[test]
