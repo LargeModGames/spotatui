@@ -662,13 +662,13 @@ pub fn route_name(route: &crate::core::app::Route) -> String {
 
 /// The user's playlists (full list, folder structure flattened away).
 pub fn playlists_snapshot(app: &App) -> Vec<PlaylistInfo> {
-  app.all_playlists.clone()
+  app.all_playlists().clone()
 }
 
 /// Saved ("liked") tracks fetched so far, in library order.
 pub fn saved_tracks_snapshot(app: &App) -> Vec<TrackInfo> {
   app
-    .library
+    .library()
     .saved_tracks
     .pages
     .iter()
@@ -679,7 +679,7 @@ pub fn saved_tracks_snapshot(app: &App) -> Vec<TrackInfo> {
 /// Saved albums fetched so far, in library order.
 pub fn saved_albums_snapshot(app: &App) -> Vec<SavedAlbumInfo> {
   app
-    .library
+    .library()
     .saved_albums
     .pages
     .iter()
@@ -690,7 +690,7 @@ pub fn saved_albums_snapshot(app: &App) -> Vec<SavedAlbumInfo> {
 /// Saved shows fetched so far, in library order.
 pub fn saved_shows_snapshot(app: &App) -> Vec<ShowInfo> {
   app
-    .library
+    .library()
     .saved_shows
     .pages
     .iter()

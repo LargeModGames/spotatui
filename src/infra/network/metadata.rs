@@ -419,8 +419,8 @@ impl MetadataNetwork for Network {
         if !episodes.items.is_empty() {
           let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
           let mut app = self.app.lock().await;
-          app.library.show_episodes = ScrollableResultPages::new();
-          app.library.show_episodes.add_pages(domain_page);
+          app.library_mut().show_episodes = ScrollableResultPages::new();
+          app.library_mut().show_episodes.add_pages(domain_page);
 
           app.selected_show_simplified = Some(SelectedShow { show: *show });
 
@@ -476,7 +476,7 @@ impl MetadataNetwork for Network {
         if !episodes.items.is_empty() {
           let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
           let mut app = self.app.lock().await;
-          app.library.show_episodes.add_pages(domain_page);
+          app.library_mut().show_episodes.add_pages(domain_page);
         }
       }
       Err(e) => {
@@ -500,7 +500,7 @@ impl MetadataNetwork for Network {
         let domain_page =
           crate::infra::network::mapping::map_cursor_page(&res.artists, |a| ArtistInfo::from(a));
         let mut app = self.app.lock().await;
-        app.library.saved_artists.add_pages(domain_page);
+        app.library_mut().saved_artists.add_pages(domain_page);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -527,7 +527,9 @@ impl MetadataNetwork for Network {
         let mut app = self.app.lock().await;
         for (id, is_following) in artist_ids.iter().zip(is_following) {
           if is_following {
-            app.followed_artist_ids_set.insert(id.id().to_string());
+            app
+              .followed_artist_ids_set_mut()
+              .insert(id.id().to_string());
           }
         }
       }

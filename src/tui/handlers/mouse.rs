@@ -566,7 +566,7 @@ fn select_clicked_content_table_item(
 fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
   match active_block {
     ActiveBlock::AlbumList => app
-      .library
+      .library()
       .saved_albums
       .get_results(None)
       .map(|albums| albums.items.len())
@@ -590,19 +590,19 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
       .map(|recently_played| recently_played.items.len())
       .unwrap_or(0),
     ActiveBlock::Artists => app
-      .library
+      .library()
       .saved_artists
       .get_results(None)
       .map(|artists| artists.items.len())
       .unwrap_or(0),
     ActiveBlock::Podcasts => app
-      .library
+      .library()
       .saved_shows
       .get_results(None)
       .map(|shows| shows.items.len())
       .unwrap_or(0),
     ActiveBlock::EpisodeTable => app
-      .library
+      .library()
       .show_episodes
       .get_results(None)
       .map(|episodes| episodes.items.len())
@@ -939,7 +939,7 @@ mod tests {
     // Keep these row-index assertions about real playlists; the community pin
     // is exercised in dedicated tests.
     app.user_config.behavior.pin_community_playlist = false;
-    app.playlist_folder_items = vec![
+    *app.playlist_folder_items_mut() = vec![
       PlaylistFolderItem::Playlist {
         index: 0,
         current_id: 0,
@@ -1006,7 +1006,7 @@ mod tests {
       &page,
       crate::infra::network::mapping::saved_album_info,
     );
-    app.library.saved_albums.add_pages(domain_page);
+    app.library_mut().saved_albums.add_pages(domain_page);
   }
 
   fn open_settings(app: &mut App) {

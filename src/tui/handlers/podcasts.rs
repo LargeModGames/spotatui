@@ -10,33 +10,33 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      if let Some(shows) = &mut app.library.saved_shows.get_results(None) {
+      if let Some(shows) = app.library().saved_shows.get_results(None) {
         let next_index =
           common_key_events::on_down_press_handler(&shows.items, Some(app.view.shows_list_index));
         app.view.shows_list_index = next_index;
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      if let Some(shows) = &mut app.library.saved_shows.get_results(None) {
+      if let Some(shows) = app.library().saved_shows.get_results(None) {
         let next_index =
           common_key_events::on_up_press_handler(&shows.items, Some(app.view.shows_list_index));
         app.view.shows_list_index = next_index;
       }
     }
     k if common_key_events::high_event(k) => {
-      if let Some(_shows) = app.library.saved_shows.get_results(None) {
+      if let Some(_shows) = app.library().saved_shows.get_results(None) {
         let next_index = common_key_events::on_high_press_handler();
         app.view.shows_list_index = next_index;
       }
     }
     k if common_key_events::middle_event(k) => {
-      if let Some(shows) = app.library.saved_shows.get_results(None) {
+      if let Some(shows) = app.library().saved_shows.get_results(None) {
         let next_index = common_key_events::on_middle_press_handler(&shows.items);
         app.view.shows_list_index = next_index;
       }
     }
     k if common_key_events::low_event(k) => {
-      if let Some(shows) = app.library.saved_shows.get_results(None) {
+      if let Some(shows) = app.library().saved_shows.get_results(None) {
         let next_index = common_key_events::on_low_press_handler(&shows.items);
         app.view.shows_list_index = next_index;
       }
@@ -62,7 +62,7 @@ pub fn handler(key: Key, app: &mut App) {
 /// The row under the cursor; `None` on a missing page.
 fn selected_saved_show(app: &App) -> Option<&ShowInfo> {
   app
-    .library
+    .library()
     .saved_shows
     .get_results(None)?
     .items
@@ -81,7 +81,7 @@ mod tests {
   fn app_with_shows(ids: &[Option<&str>]) -> (App, Receiver<IoEvent>) {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.library.saved_shows.add_pages(Paged {
+    app.library_mut().saved_shows.add_pages(Paged {
       items: ids
         .iter()
         .enumerate()

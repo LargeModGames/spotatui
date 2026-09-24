@@ -189,7 +189,7 @@ pub(crate) async fn build_sync_source(app: &Arc<Mutex<App>>) -> Result<SubsonicS
   ))
 }
 
-/// Fetch the user's server playlists into `app.subsonic_playlists`.
+/// Fetch the user's server playlists into `app.subsonic_playlists()`.
 async fn load_subsonic_playlists(app: &Arc<Mutex<App>>) {
   let Some(source) = build_source(app).await else {
     return;
@@ -197,7 +197,7 @@ async fn load_subsonic_playlists(app: &Arc<Mutex<App>>) {
   match source.playlists().await {
     Ok(playlists) => {
       let mut app = app.lock().await;
-      app.subsonic_playlists = playlists;
+      *app.subsonic_playlists_mut() = playlists;
     }
     Err(e) => set_error(app, format!("Cannot load Subsonic playlists: {e}")).await,
   }
@@ -593,7 +593,7 @@ mod tests {
     let playlist_uri = app
       .lock()
       .await
-      .subsonic_playlists
+      .subsonic_playlists()
       .first()
       .expect("demo has playlists")
       .uri

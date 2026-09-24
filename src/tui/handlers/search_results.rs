@@ -352,7 +352,7 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
       }
     }
     SearchResultBlock::ShowSearch => {
-      // OpenShowEpisodes populates app.library.show_episodes (opening the show
+      // OpenShowEpisodes populates app.library().show_episodes (opening the show
       // by id sets EpisodeTableContext::Full but does NOT populate it, leaving
       // a blank episode list). `show` is already a domain ShowInfo.
       if let Some(show) = selected_search_show_row(app).cloned() {
@@ -797,7 +797,7 @@ mod tests {
       app.runtime_state.radio_stations[0].url,
       "https://ice1.somafm.com/groovesalad-128-mp3"
     );
-    assert_eq!(app.radio_stations.len(), 1);
+    assert_eq!(app.radio_stations().len(), 1);
     assert_eq!(
       app.status_message(),
       Some("Favorited radio station: Groove Salad")
@@ -808,12 +808,12 @@ mod tests {
   fn pressing_w_on_search_song_opens_add_to_playlist_picker() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.user = Some(user_info("spotatui-owner"));
-    app.playlists = Some(Paged {
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.playlists_mut() = Some(Paged {
       total: 1,
       ..Default::default()
     });
-    app.all_playlists = vec![playlist_info(
+    *app.all_playlists_mut() = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "Owned Playlist",
       "spotatui-owner",

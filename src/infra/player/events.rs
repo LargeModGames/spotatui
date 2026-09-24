@@ -330,7 +330,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           app.set_status_message("Native streaming recovered.", 6);
         }
         // A playlist refresh while parked had no session for the folders.
-        if reacquired && app._playlist_folder_nodes.is_none() {
+        if reacquired && app.playlist_folder_nodes().is_none() {
           app.dispatch(IoEvent::GetPlaylists);
         }
       }

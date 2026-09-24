@@ -207,7 +207,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           if currently_playing_id == id {
             song_name += "▶ "
           }
-          if app.liked_song_ids_set.contains(&id) {
+          if app.liked_song_ids_set().contains(&id) {
             song_name += &app.user_config.padded_liked_icon();
           }
 
@@ -236,7 +236,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|item| {
           let mut artist = String::new();
           if let Some(ref id) = item.id {
-            if app.followed_artist_ids_set.contains(id.as_str()) {
+            if app.followed_artist_ids_set().contains(id.as_str()) {
               artist.push_str(&app.user_config.padded_liked_icon());
             }
           }
@@ -271,7 +271,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|item| {
           let mut album_artist = String::new();
           if let Some(ref id) = item.id {
-            if app.saved_album_ids_set.contains(id.as_str()) {
+            if app.saved_album_ids_set().contains(id.as_str()) {
               album_artist.push_str(&app.user_config.padded_liked_icon());
             }
           }
@@ -353,7 +353,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           .map(|item| {
             let mut show_name = String::new();
             if let Some(ref id) = item.id {
-              if app.saved_show_ids_set.contains(id.as_str()) {
+              if app.saved_show_ids_set().contains(id.as_str()) {
                 show_name.push_str(&app.user_config.padded_liked_icon());
               }
             }

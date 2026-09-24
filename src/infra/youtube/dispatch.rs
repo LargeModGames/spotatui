@@ -208,7 +208,7 @@ async fn publish_playlists(app: &Arc<Mutex<App>>, file: &super::playlists::Playl
     .iter()
     .map(super::playlists::playlist_to_info)
     .collect();
-  app.lock().await.youtube_playlists = infos;
+  *app.lock().await.youtube_playlists_mut() = infos;
 }
 
 /// Load `youtube_playlists.yml` into the sidebar.
@@ -879,15 +879,15 @@ mod tests {
 
     // Empty file → empty sidebar list.
     assert!(route_youtube_event(&app, &IoEvent::GetYouTubePlaylists).await);
-    assert!(app.lock().await.youtube_playlists.is_empty());
+    assert!(app.lock().await.youtube_playlists().is_empty());
 
     // Create a playlist; the sidebar refreshes.
     assert!(route_youtube_event(&app, &IoEvent::CreateYouTubePlaylist("Focus".to_string())).await);
     let playlist_uri = {
       let guard = app.lock().await;
-      assert_eq!(guard.youtube_playlists.len(), 1);
-      assert_eq!(guard.youtube_playlists[0].name, "Focus");
-      guard.youtube_playlists[0].uri.clone()
+      assert_eq!(guard.youtube_playlists().len(), 1);
+      assert_eq!(guard.youtube_playlists()[0].name, "Focus");
+      guard.youtube_playlists()[0].uri.clone()
     };
 
     // Fake a search view holding the video's metadata, then add it by id —
@@ -914,7 +914,7 @@ mod tests {
       .await
     );
     assert_eq!(
-      app.lock().await.youtube_playlists[0].track_count,
+      app.lock().await.youtube_playlists()[0].track_count,
       1,
       "sidebar count must refresh after an add"
     );
@@ -927,7 +927,7 @@ mod tests {
       )
       .await
     );
-    assert_eq!(app.lock().await.youtube_playlists[0].track_count, 1);
+    assert_eq!(app.lock().await.youtube_playlists()[0].track_count, 1);
 
     // Open the playlist into the shared track table.
     assert!(route_youtube_event(&app, &IoEvent::GetYouTubeTracks(playlist_uri.clone())).await);
@@ -959,14 +959,14 @@ mod tests {
         guard.track_table.tracks.is_empty(),
         "open table must refresh"
       );
-      assert_eq!(guard.youtube_playlists[0].track_count, 0);
+      assert_eq!(guard.youtube_playlists()[0].track_count, 0);
     }
 
     // Delete the playlist; the sidebar refreshes and the open marker clears.
     assert!(route_youtube_event(&app, &IoEvent::DeleteYouTubePlaylist(playlist_uri)).await);
     {
       let guard = app.lock().await;
-      assert!(guard.youtube_playlists.is_empty());
+      assert!(guard.youtube_playlists().is_empty());
       assert!(guard.youtube_open_playlist.is_none());
     }
 

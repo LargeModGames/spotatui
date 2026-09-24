@@ -12,6 +12,7 @@ pub enum DisplayDomain {
   Search,
   Lyrics,
   Artist,
+  Library,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -27,6 +28,7 @@ pub struct DisplayRevisions {
   search: u64,
   lyrics: u64,
   artist: u64,
+  library: u64,
 }
 
 impl DisplayRevisions {
@@ -42,6 +44,7 @@ impl DisplayRevisions {
       DisplayDomain::Search => &mut self.search,
       DisplayDomain::Lyrics => &mut self.lyrics,
       DisplayDomain::Artist => &mut self.artist,
+      DisplayDomain::Library => &mut self.library,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -59,6 +62,7 @@ impl DisplayRevisions {
       DisplayDomain::Search => self.search,
       DisplayDomain::Lyrics => self.lyrics,
       DisplayDomain::Artist => self.artist,
+      DisplayDomain::Library => self.library,
     }
   }
 }

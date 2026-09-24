@@ -47,11 +47,11 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // Local Files: the sidebar Playlists panel lists the local folders for the
   // active source instead of Spotify playlists (no write, so no "Add Playlist").
   if app.active_source == Source::Local {
-    let items: Vec<String> = if app.local_playlists.is_empty() {
+    let items: Vec<String> = if app.local_playlists().is_empty() {
       vec!["(no folders \u{2014} set music dir, then press `d`)".to_string()]
     } else {
       app
-        .local_playlists
+        .local_playlists()
         .iter()
         .map(|p| format!("\u{1F4C1} {}", p.name))
         .collect()
@@ -71,11 +71,11 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // Subsonic: the sidebar Playlists panel lists the server's playlists (no
   // local-write support, so no "Add Playlist").
   if app.active_source == Source::Subsonic {
-    let items: Vec<String> = if app.subsonic_playlists.is_empty() {
+    let items: Vec<String> = if app.subsonic_playlists().is_empty() {
       vec!["(no playlists \u{2014} configure server, then press `d`)".to_string()]
     } else {
       app
-        .subsonic_playlists
+        .subsonic_playlists()
         .iter()
         .map(|p| format!("\u{1F3B5} {}", p.name))
         .collect()
@@ -95,10 +95,14 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // Qobuz: the sidebar Playlists panel lists the favorites row, the user's
   // playlists, and the favorite albums, each opening the shared track table.
   if app.active_source == Source::Qobuz {
-    let items: Vec<String> = if app.qobuz_playlists.is_empty() {
+    let items: Vec<String> = if app.qobuz_playlists().is_empty() {
       vec!["(not logged in \u{2014} press `d`, pick Qobuz)".to_string()]
     } else {
-      app.qobuz_playlists.iter().map(|p| p.name.clone()).collect()
+      app
+        .qobuz_playlists()
+        .iter()
+        .map(|p| p.name.clone())
+        .collect()
     };
     draw_selectable_list(
       f,
@@ -115,11 +119,11 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // Internet Radio: the sidebar Playlists panel lists the configured stations.
   // A station is a leaf — Enter plays it directly instead of drilling in.
   if app.active_source == Source::Radio {
-    let items: Vec<String> = if app.radio_stations.is_empty() {
+    let items: Vec<String> = if app.radio_stations().is_empty() {
       vec!["(no saved stations \u{2014} search to add)".to_string()]
     } else {
       app
-        .radio_stations
+        .radio_stations()
         .iter()
         .map(|s| format!("\u{1F4FB} {}", s.name))
         .collect()
@@ -141,7 +145,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // entry. Videos are found via search and added with `w`.
   if app.active_source == Source::YouTube {
     let mut items: Vec<String> = app
-      .youtube_playlists
+      .youtube_playlists()
       .iter()
       .map(|p| format!("\u{1F4FC} {} ({})", p.name, p.track_count))
       .collect();
@@ -160,7 +164,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
   let display_items = app.get_playlist_display_items();
 
-  let playlist_items: Vec<String> = if app.playlist_folder_items.is_empty() {
+  let playlist_items: Vec<String> = if app.playlist_folder_items().is_empty() {
     // Fallback only when folder-aware items are not initialized yet. Keep the
     // pin at row 0 so this branch stays consistent with the display-item count
     // (which injects the pin) and the Enter/click index math.
@@ -168,7 +172,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     if app.community_pin_visible() {
       names.push(community_pin_label());
     }
-    if let Some(p) = &app.playlists {
+    if let Some(p) = app.playlists() {
       names.extend(p.items.iter().map(|item| item.name.to_owned()));
     }
     names
@@ -185,7 +189,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           }
         }
         crate::core::app::PlaylistFolderItem::Playlist { index, .. } => app
-          .all_playlists
+          .all_playlists()
           .get(*index)
           .map(|p| p.name.clone())
           .unwrap_or_else(|| "Unknown".to_string()),
@@ -265,7 +269,7 @@ mod tests {
   fn local_source_sidebar_lists_folders_below_the_free_library_rows() {
     let mut app = App::default_connected();
     app.active_source = Source::Local;
-    app.local_playlists = vec![folder("Jazz")];
+    *app.local_playlists_mut() = vec![folder("Jazz")];
     let content = rendered(&app, Rect::new(0, 0, 32, 40));
     assert!(
       content.contains("Jazz"),
@@ -314,13 +318,13 @@ mod tests {
     use crate::core::app::PlaylistFolderItem;
     use crate::core::test_helpers::playlist_info;
     let mut app = App::default(); // Spotify default, toggle on by default
-    app.all_playlists = vec![playlist_info(
+    *app.all_playlists_mut() = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "My Mix",
       "me",
       false,
     )];
-    app.playlist_folder_items = vec![PlaylistFolderItem::Playlist {
+    *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Playlist {
       index: 0,
       current_id: 0,
     }];
@@ -341,7 +345,7 @@ mod tests {
   fn community_pin_absent_under_non_spotify_source() {
     let mut app = App::default();
     app.active_source = Source::Local;
-    app.local_playlists = vec![folder("Jazz")];
+    *app.local_playlists_mut() = vec![folder("Jazz")];
     let content = rendered(&app, Rect::new(0, 0, 40, 40));
     assert!(
       !content.contains("spotatui community"),
@@ -365,13 +369,13 @@ mod tests {
     use crate::core::app::{PlaylistFolderItem, COMMUNITY_PLAYLIST_ID};
     use crate::core::test_helpers::playlist_info;
     let mut app = App::default();
-    app.all_playlists = vec![playlist_info(
+    *app.all_playlists_mut() = vec![playlist_info(
       COMMUNITY_PLAYLIST_ID,
       "Community Follow",
       "spotatui",
       false,
     )];
-    app.playlist_folder_items = vec![PlaylistFolderItem::Playlist {
+    *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Playlist {
       index: 0,
       current_id: 0,
     }];

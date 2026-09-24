@@ -31,7 +31,7 @@ impl CliApp {
     // The IoEvent handler defers to a detached worker (it must not block the
     // TUI's serial pump); the CLI needs the answer before returning.
     self.net.resolve_liked_state_now(&[id.to_string()]).await?;
-    Ok(self.net.app.lock().await.liked_song_ids_set.contains(id))
+    Ok(self.net.app.lock().await.liked_song_ids_set().contains(id))
   }
 
   pub fn format_output(&self, mut format: String, values: Vec<Format>) -> String {
@@ -203,7 +203,7 @@ impl CliApp {
       }
       Type::Playlist => {
         self.net.handle_network_event(IoEvent::GetPlaylists).await;
-        if let Some(playlists) = &self.net.app.lock().await.playlists {
+        if let Some(playlists) = &self.net.app.lock().await.playlists() {
           playlists
             .items
             .iter()

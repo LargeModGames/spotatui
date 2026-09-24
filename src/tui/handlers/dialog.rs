@@ -192,7 +192,7 @@ fn handle_youtube_playlist_dialog(app: &mut App) {
   let uri = app
     .view
     .selected_playlist_index
-    .and_then(|idx| app.youtube_playlists.get(idx))
+    .and_then(|idx| app.youtube_playlists().get(idx))
     .map(|playlist| playlist.uri.clone());
   if let Some(uri) = uri {
     app.apply(Action::DeletePlaylist(uri));
@@ -246,12 +246,12 @@ mod tests {
   fn add_to_playlist_picker_dispatches_selected_editable_playlist() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.user = Some(user_info("spotatui-owner"));
-    app.playlists = Some(Paged {
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.playlists_mut() = Some(Paged {
       total: 3,
       ..Default::default()
     });
-    app.all_playlists = vec![
+    *app.all_playlists_mut() = vec![
       playlist_info("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
       playlist_info("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
       playlist_info(
@@ -286,12 +286,12 @@ mod tests {
   fn add_to_playlist_picker_navigates_folders_and_filters_uneditable() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.user = Some(user_info("spotatui-owner"));
-    app.all_playlists = vec![
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.all_playlists_mut() = vec![
       playlist_info("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
       playlist_info("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
     ];
-    app.playlist_folder_items = vec![
+    *app.playlist_folder_items_mut() = vec![
       PlaylistFolderItem::Folder(PlaylistFolder {
         name: "Mixes".to_string(),
         current_id: 0,
@@ -350,14 +350,14 @@ mod tests {
   fn picker_rows_respect_group_folders_first() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.user = Some(user_info("spotatui-owner"));
-    app.all_playlists = vec![playlist_info(
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.all_playlists_mut() = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "Owned",
       "spotatui-owner",
       false,
     )];
-    app.playlist_folder_items = vec![
+    *app.playlist_folder_items_mut() = vec![
       PlaylistFolderItem::Playlist {
         index: 0,
         current_id: 0,
@@ -388,7 +388,7 @@ mod tests {
     let (tx, rx) = channel();
     let mut app =
       App::new(tx, UserConfig::new(), Some(SystemTime::now())).under_source(Source::Qobuz);
-    app.qobuz_playlists.push(PlaylistInfo {
+    app.qobuz_playlists_mut().push(PlaylistInfo {
       uri: "qobuz:playlist:9".to_string(),
       name: "Mine".to_string(),
       owner: "qobuz".to_string(),

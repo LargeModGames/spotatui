@@ -47,6 +47,60 @@ pub enum CreatePlaylistFocus {
 }
 
 impl App {
+  // The per-source sidebar lists, part of the Library display state.
+
+  pub(crate) fn local_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.local_playlists
+  }
+
+  #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
+  pub(crate) fn local_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.local_playlists
+  }
+
+  pub(crate) fn subsonic_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.subsonic_playlists
+  }
+
+  #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
+  pub(crate) fn subsonic_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.subsonic_playlists
+  }
+
+  pub(crate) fn qobuz_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.qobuz_playlists
+  }
+
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  pub(crate) fn qobuz_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.qobuz_playlists
+  }
+
+  pub(crate) fn radio_stations(&self) -> &Vec<TrackInfo> {
+    &self.radio_stations
+  }
+
+  #[cfg_attr(not(feature = "internet-radio"), allow(dead_code))]
+  pub(crate) fn radio_stations_mut(&mut self) -> &mut Vec<TrackInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.radio_stations
+  }
+
+  pub(crate) fn youtube_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.youtube_playlists
+  }
+
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  pub(crate) fn youtube_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.youtube_playlists
+  }
+}
+
+impl App {
   pub fn clear_playlist_track_dialog_state(&mut self) {
     self.pending_playlist_track_add = None;
     self.pending_playlist_track_removal = None;

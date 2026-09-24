@@ -1072,7 +1072,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       // user's own (no "(collab)" suffix).
       playlist.owner_id.is_none()
         || app
-          .user
+          .user()
           .as_ref()
           .is_some_and(|user| Some(user.id.as_str()) == playlist.owner_id.as_deref())
     };
@@ -1757,7 +1757,7 @@ mod playlist_sync_picker_tests {
   #[test]
   fn the_mirror_picker_lists_the_offered_sources() {
     let mut app = App::default_connected().under_source(Source::Qobuz);
-    app.qobuz_playlists.push(PlaylistInfo {
+    app.qobuz_playlists_mut().push(PlaylistInfo {
       uri: "qobuz:playlist:9".to_string(),
       name: "Mine".to_string(),
       owner: "qobuz".to_string(),

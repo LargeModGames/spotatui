@@ -615,7 +615,7 @@ impl Network {
         .app
         .lock()
         .await
-        .user
+        .user()
         .as_ref()
         .map(|user| user.id.clone())
     };

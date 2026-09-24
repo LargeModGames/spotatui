@@ -230,7 +230,7 @@ pub struct App {
   /// generation counter that invalidates in-flight background work.
   #[cfg(feature = "dj-core")]
   pub dj: crate::infra::dj::DjState,
-  pub liked_song_ids_set: HashSet<String>,
+  liked_song_ids_set: HashSet<String>,
   /// Liked-state lookups pending for the detached contains worker, as bare
   /// base62 track ids (deduped). The `CurrentUserSavedTracksContains` handler
   /// enqueues here instead of resolving on the serial IoEvent pump.
@@ -241,10 +241,10 @@ pub struct App {
   /// Bumped on every local like/unlike so a detached liked-state read that
   /// started before the mutation is re-read instead of clobbering it.
   pub liked_state_epoch: u64,
-  pub followed_artist_ids_set: HashSet<String>,
-  pub saved_album_ids_set: HashSet<String>,
-  pub saved_show_ids_set: HashSet<String>,
-  pub library: Library,
+  followed_artist_ids_set: HashSet<String>,
+  saved_album_ids_set: HashSet<String>,
+  saved_show_ids_set: HashSet<String>,
+  library: Library,
   pub playlist_offset: u32,
   // Each item carries its absolute playlist position (`page.offset + raw slot
   // index`) alongside the playable. The position is computed in the mapping
@@ -255,7 +255,7 @@ pub struct App {
   pub playlist_track_table_id: Option<PlaylistId<'static>>,
   pub active_playlist_track_filter: Option<String>,
   pub pending_playlist_track_search: Option<String>,
-  pub playlists: Option<Paged<PlaylistInfo>>,
+  playlists: Option<Paged<PlaylistInfo>>,
   /// The Recently Played page. Its cursor is `view.recently_played_index`.
   pub recently_played:
     Option<crate::core::pagination::CursorPaged<crate::core::plugin_api::TrackInfo>>,
@@ -288,26 +288,26 @@ pub struct App {
   pub episode_table_context: EpisodeTableContext,
   pub selected_show_simplified: Option<SelectedShow>,
   pub selected_show_full: Option<SelectedFullShow>,
-  pub user: Option<UserInfo>,
+  user: Option<UserInfo>,
   /// Folders under the configured music dir that hold audio, shown by the
   /// Local Files browser. Its cursor is `view.local_playlists_index`.
-  pub local_playlists: Vec<PlaylistInfo>,
+  local_playlists: Vec<PlaylistInfo>,
   /// The user's Subsonic server playlists shown by the Subsonic browser.
   /// Populated by `GetSubsonicPlaylists` dispatch.
-  pub subsonic_playlists: Vec<PlaylistInfo>,
+  subsonic_playlists: Vec<PlaylistInfo>,
   /// The Qobuz sidebar rows (favorites, playlists, albums) shown by the Qobuz
   /// browser. Populated by `GetQobuzPlaylists` dispatch.
-  pub qobuz_playlists: Vec<PlaylistInfo>,
+  qobuz_playlists: Vec<PlaylistInfo>,
   /// The user's configured internet-radio stations (as playable rows, uri
   /// `radio:<url>`) shown by the sidebar when the Radio source is active.
   /// Populated by `GetRadioStations` dispatch.
   /// Unconditional (domain type) because the sidebar match arms key on the
   /// unconditional `Source::Radio` variant even in the slim build.
-  pub radio_stations: Vec<TrackInfo>,
+  radio_stations: Vec<TrackInfo>,
   /// The user's local YouTube playlists (from `youtube_playlists.yml`), shown
   /// by the sidebar when the YouTube source is active. Unconditional for the
   /// same slim-build reason as [`radio_stations`](Self::radio_stations).
-  pub youtube_playlists: Vec<PlaylistInfo>,
+  youtube_playlists: Vec<PlaylistInfo>,
   /// The `youtube:playlist:` URI currently open in the shared track table, so
   /// the remove-track flow knows which playlist to edit.
   pub youtube_open_playlist: Option<String>,
@@ -424,11 +424,11 @@ pub struct App {
   /// Pending track removal info in remove-from-playlist confirmation flow
   pub pending_playlist_track_removal: Option<PendingPlaylistTrackRemoval>,
   /// Full flat list of all user playlists (all pages combined)
-  pub all_playlists: Vec<PlaylistInfo>,
+  all_playlists: Vec<PlaylistInfo>,
   /// Folder tree from rootlist (None if not fetched or streaming disabled)
-  pub _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
+  _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
   /// Flattened folder+playlist items for display navigation
-  pub playlist_folder_items: Vec<PlaylistFolderItem>,
+  playlist_folder_items: Vec<PlaylistFolderItem>,
   /// Backing storage for the injected community-playlist pin so display methods
   /// can hand out a `&PlaylistFolderItem`. Never stored in
   /// `playlist_folder_items`.

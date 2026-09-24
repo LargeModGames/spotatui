@@ -268,7 +268,7 @@ pub fn draw_local_browser(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 
   let items: Vec<String> = app
-    .local_playlists
+    .local_playlists()
     .iter()
     .map(|folder| {
       if folder.track_count > 0 {
@@ -279,7 +279,7 @@ pub fn draw_local_browser(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     })
     .collect();
 
-  let title = if app.local_playlists.is_empty() {
+  let title = if app.local_playlists().is_empty() {
     "Local Files (no folders — set behavior.local_music_path)"
   } else {
     "Local Files"
@@ -312,7 +312,7 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::Artists,
   );
 
-  if let Some(saved_artists) = app.library.saved_artists.get_results(None) {
+  if let Some(saved_artists) = app.library().saved_artists.get_results(None) {
     let (offset, visible) = visible_window(
       app,
       layout_chunk,
@@ -362,7 +362,7 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::Podcasts,
   );
 
-  if let Some(saved_shows) = app.library.saved_shows.get_results(None) {
+  if let Some(saved_shows) = app.library().saved_shows.get_results(None) {
     let (offset, visible) = visible_window(
       app,
       layout_chunk,
@@ -567,7 +567,7 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 
   let selected_song_index = app.view.album_list_index;
 
-  if let Some(saved_albums) = app.library.saved_albums.get_results(None) {
+  if let Some(saved_albums) = app.library().saved_albums.get_results(None) {
     let (offset, visible) =
       visible_window(app, layout_chunk, selected_song_index, &saved_albums.items);
     let items = visible
@@ -599,7 +599,7 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::EpisodeTable,
   );
 
-  if let Some(episodes) = app.library.show_episodes.get_results(None) {
+  if let Some(episodes) = app.library().show_episodes.get_results(None) {
     let (offset, visible) = visible_window(
       app,
       layout_chunk,
@@ -740,7 +740,7 @@ fn draw_table(
 
         // Show this the liked icon if the song is liked
         if let Some(liked_idx) = header.get_index(ColumnId::Liked) {
-          if app.liked_song_ids_set.contains(item.id.as_str()) {
+          if app.liked_song_ids_set().contains(item.id.as_str()) {
             formatted_row[liked_idx] = app.user_config.padded_liked_icon();
           }
         }
@@ -929,7 +929,7 @@ mod tests {
   #[test]
   fn local_browser_lists_folders_with_track_counts() {
     let mut app = App::default();
-    app.local_playlists = vec![folder("MyAlbum", 3)];
+    *app.local_playlists_mut() = vec![folder("MyAlbum", 3)];
     let content = rendered(&app, Rect::new(0, 0, 60, 6));
     assert!(
       content.contains("MyAlbum (3 tracks)"),

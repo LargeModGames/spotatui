@@ -1399,7 +1399,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           )
         };
 
-      let track_name = if app.liked_song_ids_set.contains(&item_id) {
+      let track_name = if app.liked_song_ids_set().contains(&item_id) {
         format!("{}{}", app.user_config.padded_liked_icon(), display_name)
       } else {
         display_name

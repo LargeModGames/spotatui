@@ -1601,7 +1601,7 @@ mod action_tests {
   #[test]
   fn drain_unfollow_playlist_resolves_current_user() {
     let (mut app, rx) = make_app();
-    app.user = Some(UserInfo {
+    *app.user_mut() = Some(UserInfo {
       id: "me-123".to_string(),
       display_name: None,
       country: None,
@@ -1698,7 +1698,7 @@ mod data_read_tests {
     assert!(drain(&engine).is_empty());
 
     // Simulate the network write + bump, then the next engine pass resolves.
-    app.all_playlists = vec![playlist("Jams")];
+    *app.all_playlists_mut() = vec![playlist("Jams")];
     app.plugin_data_generations.bump(PluginDataKind::Playlists);
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(500));
 
@@ -2040,7 +2040,7 @@ mod data_read_tests {
     }
 
     // Data lands without a bump: the cache must NOT refresh.
-    app.all_playlists = vec![playlist("A")];
+    *app.all_playlists_mut() = vec![playlist("A")];
     engine.on_tick(&mut app);
     engine
       .load_source(

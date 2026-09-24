@@ -11,12 +11,12 @@ use crate::tui::event::Key;
 /// (no write capability, so no "Add Playlist").
 pub(crate) fn total_display_count(app: &App) -> usize {
   match app.active_source {
-    Source::Local => app.local_playlists.len(),
-    Source::Subsonic => app.subsonic_playlists.len(),
-    Source::Radio => app.radio_stations.len(),
+    Source::Local => app.local_playlists().len(),
+    Source::Subsonic => app.subsonic_playlists().len(),
+    Source::Radio => app.radio_stations().len(),
     // Local YouTube playlists + the "+ New Playlist" entry.
-    Source::YouTube => app.youtube_playlists.len() + 1,
-    Source::Qobuz => app.qobuz_playlists.len(),
+    Source::YouTube => app.youtube_playlists().len() + 1,
+    Source::Qobuz => app.qobuz_playlists().len(),
     Source::Spotify => app.get_playlist_display_count() + 1,
   }
 }
@@ -33,7 +33,7 @@ fn open_local_folder(app: &mut App) {
   let uri = app
     .view
     .selected_playlist_index
-    .and_then(|idx| app.local_playlists.get(idx))
+    .and_then(|idx| app.local_playlists().get(idx))
     .map(|folder| folder.uri.clone());
   open_source_playlist(app, uri);
 }
@@ -44,7 +44,7 @@ fn open_subsonic_folder(app: &mut App) {
   let uri = app
     .view
     .selected_playlist_index
-    .and_then(|idx| app.subsonic_playlists.get(idx))
+    .and_then(|idx| app.subsonic_playlists().get(idx))
     .map(|playlist| playlist.uri.clone());
   open_source_playlist(app, uri);
 }
@@ -55,7 +55,7 @@ fn open_qobuz_folder(app: &mut App) {
   let uri = app
     .view
     .selected_playlist_index
-    .and_then(|idx| app.qobuz_playlists.get(idx))
+    .and_then(|idx| app.qobuz_playlists().get(idx))
     .map(|playlist| playlist.uri.clone());
   open_source_playlist(app, uri);
 }
@@ -67,14 +67,14 @@ fn open_youtube_playlist(app: &mut App) {
   let Some(idx) = app.view.selected_playlist_index else {
     return;
   };
-  if idx == app.youtube_playlists.len() {
+  if idx == app.youtube_playlists().len() {
     // "+ New Playlist" — reuse the create form; its name stage dispatches
     // CreateYouTubePlaylist under the YouTube source.
     app.push_navigation_stack(RouteId::CreatePlaylist, ActiveBlock::CreatePlaylistForm);
     return;
   }
   let uri = app
-    .youtube_playlists
+    .youtube_playlists()
     .get(idx)
     .map(|playlist| playlist.uri.clone());
   open_source_playlist(app, uri);
@@ -87,7 +87,7 @@ fn play_radio_station(app: &mut App) {
   let Some(idx) = app.view.selected_playlist_index else {
     return;
   };
-  let uri = app.radio_stations.get(idx).and_then(|s| s.uri.clone());
+  let uri = app.radio_stations().get(idx).and_then(|s| s.uri.clone());
   if let Some(uri) = uri {
     // A one-item URI list: the radio router starts the station for both shapes.
     app.apply(Action::PlayUris {
@@ -103,7 +103,7 @@ fn remove_radio_station(app: &mut App) {
     return;
   };
   let Some(uri) = app
-    .radio_stations
+    .radio_stations()
     .get(idx)
     .map(|station| station.uri.clone())
   else {
@@ -116,10 +116,10 @@ fn remove_radio_station(app: &mut App) {
   };
   app.apply(Action::RemoveRadioStation(uri));
   // The clamp is a no-op for every outcome that leaves the list untouched.
-  app.view.selected_playlist_index = if app.radio_stations.is_empty() {
+  app.view.selected_playlist_index = if app.radio_stations().is_empty() {
     None
   } else {
-    Some(idx.min(app.radio_stations.len() - 1))
+    Some(idx.min(app.radio_stations().len() - 1))
   };
 }
 
@@ -159,7 +159,7 @@ pub fn handler(key: Key, app: &mut App) {
       if let Some(playlist) = app
         .view
         .selected_playlist_index
-        .and_then(|idx| app.youtube_playlists.get(idx))
+        .and_then(|idx| app.youtube_playlists().get(idx))
       {
         app.view.dialog = Some(playlist.name.clone());
         app.view.confirm = false;
@@ -176,7 +176,7 @@ pub fn handler(key: Key, app: &mut App) {
           .checked_sub(1)
           .and_then(|i| app.get_playlist_display_item_at(i))
         {
-          if let Some(playlist) = app.all_playlists.get(*index) {
+          if let Some(playlist) = app.all_playlists().get(*index) {
             let selected_playlist = &playlist.name;
             app.view.dialog = Some(selected_playlist.clone());
             app.view.confirm = false;
@@ -249,7 +249,7 @@ fn open_spotify_row(app: &mut App) {
           // Open the playlist tracks: navigates immediately with the
           // cleared table as the loading state (see open_playlist_tracks).
           let index = *index;
-          let id_str = app.all_playlists.get(index).and_then(|p| p.id.clone());
+          let id_str = app.all_playlists().get(index).and_then(|p| p.id.clone());
           if let Some(id_str) = id_str {
             app.view.active_playlist_index = Some(index);
             app.apply(Action::Open(OpenTarget::Playlist {
@@ -306,13 +306,13 @@ mod tests {
     // Exercise a real playlist (row 1, below the leading "+ Add Playlist" row),
     // not the pinned community entry.
     app.user_config.behavior.pin_community_playlist = false;
-    app.all_playlists = vec![playlist_info(
+    *app.all_playlists_mut() = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "Test Playlist",
       "spotatui-test-user",
       false,
     )];
-    app.playlist_folder_items = vec![PlaylistFolderItem::Playlist {
+    *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Playlist {
       index: 0,
       current_id: 0,
     }];
@@ -335,13 +335,13 @@ mod tests {
     // Exercise a real playlist (row 1, below the leading "+ Add Playlist" row),
     // not the pinned community entry.
     app.user_config.behavior.pin_community_playlist = false;
-    app.all_playlists = vec![playlist_info(
+    *app.all_playlists_mut() = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "Test Playlist",
       "spotatui-test-user",
       false,
     )];
-    app.playlist_folder_items = vec![PlaylistFolderItem::Playlist {
+    *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Playlist {
       index: 0,
       current_id: 0,
     }];
@@ -422,7 +422,7 @@ mod tests {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.active_source = Source::Local;
-    app.local_playlists = vec![PlaylistInfo {
+    *app.local_playlists_mut() = vec![PlaylistInfo {
       uri: "file:///music/Jazz".to_string(),
       name: "Jazz".to_string(),
       owner: "local".to_string(),
@@ -465,7 +465,7 @@ mod tests {
     ];
 
     app.active_source = Source::Radio;
-    app.radio_stations = vec![
+    *app.radio_stations_mut() = vec![
       TrackInfo {
         uri: Some("radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string()),
         name: "Groove Salad".to_string(),
@@ -506,8 +506,8 @@ mod tests {
       app.runtime_state.radio_stations[0].url,
       "https://ice1.somafm.com/secretagent-128-mp3"
     );
-    assert_eq!(app.radio_stations.len(), 1);
-    assert_eq!(app.radio_stations[0].name, "Secret Agent");
+    assert_eq!(app.radio_stations().len(), 1);
+    assert_eq!(app.radio_stations()[0].name, "Secret Agent");
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message(),
@@ -530,7 +530,7 @@ mod tests {
     let mut app = App::new(tx, config, Some(SystemTime::now()));
     app.state_path = Some(dir.path().join("state.yml"));
     app.active_source = Source::Radio;
-    app.radio_stations = vec![radio_station_row(
+    *app.radio_stations_mut() = vec![radio_station_row(
       "Configured Groove",
       "https://ice1.somafm.com/groovesalad-128-mp3",
     )];
@@ -539,7 +539,7 @@ mod tests {
     handler(Key::Char('D'), &mut app);
 
     assert!(app.runtime_state.radio_stations.is_empty());
-    assert_eq!(app.radio_stations.len(), 1);
+    assert_eq!(app.radio_stations().len(), 1);
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message(),
@@ -566,7 +566,7 @@ mod tests {
       url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
     }];
     app.active_source = Source::Radio;
-    app.radio_stations = vec![radio_station_row(
+    *app.radio_stations_mut() = vec![radio_station_row(
       "Configured Groove",
       "https://ice1.somafm.com/groovesalad-128-mp3",
     )];
@@ -575,8 +575,8 @@ mod tests {
     handler(Key::Char('D'), &mut app);
 
     assert!(app.runtime_state.radio_stations.is_empty());
-    assert_eq!(app.radio_stations.len(), 1);
-    assert_eq!(app.radio_stations[0].name, "Configured Groove");
+    assert_eq!(app.radio_stations().len(), 1);
+    assert_eq!(app.radio_stations()[0].name, "Configured Groove");
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(
       app.status_message(),
@@ -590,7 +590,7 @@ mod tests {
     let (tx, _rx) = channel();
     let mut app =
       App::new(tx, UserConfig::new(), Some(SystemTime::now())).under_source(Source::Qobuz);
-    app.qobuz_playlists.push(PlaylistInfo {
+    app.qobuz_playlists_mut().push(PlaylistInfo {
       uri: "qobuz:playlist:9".to_string(),
       name: "Mine".to_string(),
       owner: "qobuz".to_string(),
