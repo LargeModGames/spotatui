@@ -222,7 +222,7 @@ async fn run_cli_inner() -> Result<()> {
   #[cfg(not(feature = "tui"))]
   let onboarding: Arc<dyn crate::core::onboarding::Onboarding> = Arc::new(HeadlessOnboarding);
 
-  let boot = bootstrap::boot(&matches, onboarding, &mut instance_lock).await?;
+  let boot = bootstrap::boot(cli::boot_options(&matches), onboarding, &mut instance_lock).await?;
 
   // Work with the cli (not really async)
   if let Some(cmd) = matches.subcommand_name() {
