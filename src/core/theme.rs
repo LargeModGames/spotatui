@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 /// to the on-disk `config.yml` format, which stays hand-parsed by
 /// [`parse_theme_item`] / [`color_to_string`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum Color {
   Reset,
   Black,
@@ -102,6 +103,7 @@ impl Default for Theme {
 /// parallel string whitelists silently dropped the write on a typo.
 #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum ThemeField {
   Active,
   Banner,

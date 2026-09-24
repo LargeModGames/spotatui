@@ -1,0 +1,52 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: var(--background, #121212);
+  color: var(--text, #e6e6e6);
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.queue {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+  padding: 16px 16px 16px 40px;
+}
+
+.bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--playbar_background, #1e1e1e);
+  color: var(--playbar_text, inherit);
+}
+
+.meta {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+progress {
+  width: 100%;
+  accent-color: var(--playbar_progress, #1db954);
+}
+
+.hint {
+  color: var(--hint, #9a9a9a);
+}
+
+.notice {
+  padding: 16px;
+}

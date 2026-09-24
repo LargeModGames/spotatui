@@ -25,14 +25,14 @@ use crate::core::plugin_api::{AlbumInfo, ArtistInfo, PlaylistInfo, SearchResults
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// The source the UI is currently scoped to — which catalog the sidebar, search
+/// The source the UI is currently scoped to: which catalog the sidebar, search
 /// and capability gating reflect.
 ///
 /// This is a **browse-scope** marker only: it never changes playback routing
 /// (that stays URI-scheme driven via `route_local_event` + `App::local_playback`),
 /// so switching the active source never interrupts what is currently playing.
 ///
-/// The enum is deliberately unconditional — every variant compiles in every
+/// The enum is deliberately unconditional: every variant compiles in every
 /// build (including the slim `telemetry`-only CI build) so handlers and UI code
 /// never need `#[cfg]`. Only the per-source *data loading* is gated behind that
 /// source's feature (`local-files`, `subsonic`).
@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 /// variant strings coincide with the `to_config_str()` tokens, while the
 /// `state.yml` persistence keeps its own lenient hand-written helpers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum Source {
   #[default]
   Spotify,

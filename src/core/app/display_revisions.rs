@@ -19,6 +19,7 @@ pub enum DisplayDomain {
 /// Per-domain revisions that move only when that domain's displayed state changed.
 #[derive(Default, Clone, Copy)]
 #[cfg_attr(feature = "gui", derive(serde::Serialize))]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct DisplayRevisions {
   route: u64,
   status: u64,
