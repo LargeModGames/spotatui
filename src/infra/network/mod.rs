@@ -28,13 +28,13 @@ use rspotify::model::{
 };
 use rspotify::prelude::Id;
 // `parse_response_code` / `request_token` for the in-TUI login live on this trait.
+use crate::core::state::PersistedRuntimeState;
 use rspotify::clients::OAuthClient;
 use rspotify::AuthCodePkceSpotify;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-
 // Re-export traits
 use self::library::LibraryNetwork;
 use self::metadata::MetadataNetwork;
@@ -1273,11 +1273,23 @@ impl Network {
     {
       let mut app = self.app.lock().await;
       app.mark_spotify_development_app();
+      if let Some(client_id) = self.spotify.as_ref().map(|s| s.creds.id.clone()) {
+        if !app.runtime_state.dev_client_ids.contains(&client_id) {
+          app.runtime_state.dev_client_ids.push(client_id);
+          let dev_client_ids = app.runtime_state.dev_client_ids.clone();
+          app.schedule_state_save(PersistedRuntimeState {
+            dev_client_ids,
+            ..PersistedRuntimeState::default()
+          });
+        }
+      }
     }
-    self.show_status_message(
-      format!("{feature_name}: unavailable for apps in Spotify Development Mode"),
-      5,
-    ).await;
+    self
+      .show_status_message(
+        format!("{feature_name}: unavailable for apps in Spotify Development Mode"),
+        5,
+      )
+      .await;
   }
 
   async fn show_status_message(&self, message: String, ttl_secs: u64) {

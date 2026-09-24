@@ -106,9 +106,9 @@ mod transport;
 mod view;
 mod volume;
 
+mod spotify_session;
 #[cfg(test)]
 mod test_support;
-pub mod spotify_session;
 
 pub use discover::*;
 pub use friends::*;

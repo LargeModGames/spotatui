@@ -57,6 +57,7 @@ pub struct RuntimeState {
   pub radio_stations: Vec<RadioStationConfig>,
   /// Whether the one-time community-playlist-pin prompt has been shown.
   pub community_pin_prompt_shown: bool,
+  pub dev_client_ids: Vec<String>,
 }
 
 impl Default for RuntimeState {
@@ -72,6 +73,7 @@ impl Default for RuntimeState {
       library_height_percent: 30,
       radio_stations: Vec::new(),
       community_pin_prompt_shown: false,
+      dev_client_ids: Vec::new(),
     }
   }
 }
@@ -108,6 +110,7 @@ impl RuntimeState {
     if let Some(community_pin_prompt_shown) = state.community_pin_prompt_shown {
       self.community_pin_prompt_shown = community_pin_prompt_shown;
     }
+    self.dev_client_ids = state.dev_client_ids.clone();
   }
 
   pub fn to_persisted(&self) -> PersistedRuntimeState {
@@ -123,7 +126,12 @@ impl RuntimeState {
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
       qobuz_bundle_cache: None,
+      dev_client_ids: self.dev_client_ids.clone(),
     }
+  }
+
+  pub fn is_dev_client_id(&self, id: &str) -> bool {
+    self.dev_client_ids.contains(&id.to_string())
   }
 
   pub fn add_radio_station(
@@ -478,6 +486,7 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .qobuz_bundle_cache
       .clone()
       .filter(QobuzBundleCache::is_complete),
+    dev_client_ids: state.dev_client_ids.clone(),
   }
 }
 
@@ -655,6 +664,7 @@ mod tests {
         app_secret: "s".repeat(32),
         oauth_key: "k".to_string(),
       }),
+      dev_client_ids: Vec::new(),
     };
 
     save(&path, &state).unwrap();

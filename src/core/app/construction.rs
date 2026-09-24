@@ -278,6 +278,7 @@ impl App {
       RuntimeState::default(),
       None,
       spotify_token_expiry,
+      false,
     )
   }
 
@@ -287,6 +288,7 @@ impl App {
     runtime_state: RuntimeState,
     state_path: Option<PathBuf>,
     spotify_token_expiry: Option<SystemTime>,
+    is_dev_app: bool,
   ) -> App {
     // Read the persisted active source before moving runtime_state into the struct,
     // so the restored value overrides the Source::default() set by App::default().
@@ -354,6 +356,7 @@ impl App {
       album_sort,
       artist_sort,
       recently_played_sort,
+      is_dev_app,
       #[cfg(feature = "ai-dj")]
       dj: crate::infra::dj::DjState {
         avoid_library: dj_avoid_library,
