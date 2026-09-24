@@ -63,6 +63,22 @@ describe("Connection", () => {
     expect(connection.getState().expired).toBe(true);
   });
 
+  it("a launch with neither a code nor a token is expired at once", () => {
+    const { connection, sockets } = harness(null);
+    expect(sockets).toHaveLength(0);
+    expect(connection.getState().expired).toBe(true);
+  });
+
+  it("a refused token after a drop leaves the page expired", () => {
+    const { connection, sockets, retries } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
+    sockets[0].handlers.close();
+    retries[0]();
+    sockets[1].handlers.close();
+    expect(retries).toHaveLength(1);
+    expect(connection.getState().expired).toBe(true);
+  });
+
   it("a new connection starts from an empty store", () => {
     const { connection, sockets, retries } = harness("abc");
     sockets[0].handlers.message(hello("t1"));

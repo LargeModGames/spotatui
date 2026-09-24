@@ -4,6 +4,7 @@ import type { NowPlaying as Item } from "./bindings/NowPlaying";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { Connection, Position } from "./connection";
 
+/** A placeholder page that exercises the bridge; not a design. */
 export function App({ connection }: { connection: Connection }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
   const theme = state.channels.theme?.payload;
@@ -31,7 +32,13 @@ export function App({ connection }: { connection: Connection }) {
   return (
     <main>
       <Queue
-        tracks={[...(queue?.now ? [queue.now] : []), ...(queue?.native ?? [])]}
+        tracks={[
+          ...(queue?.now ? [queue.now] : []),
+          ...(queue?.native ?? []),
+          ...(queue?.spotify.items ?? []).flatMap((item) =>
+            item.track ? [item.track] : [],
+          ),
+        ]}
       />
       <NowPlaying
         item={item}

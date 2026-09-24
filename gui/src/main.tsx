@@ -12,7 +12,8 @@ const connection = new Connection(
     socket.onclose = () => handlers.close();
     return socket;
   },
-  window.sessionStorage,
+  // localStorage, so a reopened tab still finds the token of this spotatui run.
+  window.localStorage,
   (retry, ms) => {
     window.setTimeout(retry, ms);
   },

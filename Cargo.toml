@@ -20,7 +20,7 @@ exclude = [
     ".github/ISSUE_TEMPLATE",
     "target/",
     "snap/",
-    "gui/",
+    "/gui/",
 ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
