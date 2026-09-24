@@ -607,6 +607,10 @@ async fn handle_player_events(
       _ => {}
     }
 
+    let notes_playback = !matches!(
+      event,
+      PlayerEvent::PositionChanged { .. } | PlayerEvent::Preloading { .. }
+    );
     match event {
       PlayerEvent::Playing {
         play_request_id: _,
@@ -1201,6 +1205,10 @@ async fn handle_player_events(
       _ => {}
     }
 
+    if notes_playback {
+      app.lock().await.note_playback_change();
+    }
+
     // A failed in-place reconnect owns no viable Spirc. Runs after event
     // bookkeeping so EndOfTrack still records queue/stop-after-current state.
     if session_lost && fast_reconnect_failed && !audibly_playing {
@@ -1456,6 +1464,7 @@ async fn disconnect_streaming_player(
   app_lock.current_playback_context = None;
   app_lock.set_status_message(status_message, 8);
   app_lock.dispatch(IoEvent::GetCurrentPlayback);
+  app_lock.note_playback_change();
 
   shared_position.store(0, Ordering::Relaxed);
   shared_is_playing.store(false, Ordering::Relaxed);

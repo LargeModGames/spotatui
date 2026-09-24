@@ -11,7 +11,7 @@ use std::sync::mpsc::{channel, Receiver};
 use std::time::SystemTime;
 
 use super::{Action, NavTarget, RepeatSetting};
-use crate::core::app::{App, RouteId, UserInfo, NOTHING_PLAYING_STATUS};
+use crate::core::app::{App, DisplayDomain, RouteId, UserInfo, NOTHING_PLAYING_STATUS};
 use crate::core::theme::{Color, Theme, ThemeField};
 use crate::core::user_config::UserConfig;
 use crate::infra::network::IoEvent;
@@ -3718,4 +3718,16 @@ mod dj_screen_actions {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::DjIndexLibrary)));
     assert_eq!(app.get_current_route().id, RouteId::AiDj);
   }
+}
+
+#[test]
+fn set_theme_bumps_the_theme_revision_only_when_a_color_changes() {
+  let (mut app, _rx) = app_with_channel();
+  let rev = app.display_revisions().get(DisplayDomain::Theme);
+  let action = || Action::SetTheme(vec![(ThemeField::Active, Color::Rgb(1, 2, 3))]);
+
+  app.apply(action());
+  assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 1);
+  app.apply(action());
+  assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 1);
 }

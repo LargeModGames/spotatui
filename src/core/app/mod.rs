@@ -72,6 +72,7 @@ use std::sync::mpsc::channel;
 mod album_theme;
 mod construction;
 mod discover;
+mod display_revisions;
 mod dj;
 mod friends;
 mod help;
@@ -112,6 +113,7 @@ mod spotify_session;
 mod test_support;
 
 pub use discover::*;
+pub use display_revisions::*;
 pub use friends::*;
 pub use help::*;
 pub use keybindings::*;
@@ -582,6 +584,14 @@ pub struct App {
   /// [`PluginDataKind`]). Ungated: the network layer bumps them in every build;
   /// only the scripting engine reads them.
   pub plugin_data_generations: PluginDataGenerations,
+  display_revisions: DisplayRevisions,
+  /// The playback view the Playback revision last counted: snapshot without position, volume, device, liked.
+  playback_view: (
+    Option<crate::infra::media_metadata::PlaybackSnapshot>,
+    u32,
+    Option<String>,
+    bool,
+  ),
   /// Retained content of plugin-registered custom screens, keyed by screen
   /// name. Written by script effects; read by the draw loop.
   pub plugin_screens:
