@@ -33,7 +33,8 @@ pub(crate) struct Publisher {
   pushes: broadcast::Sender<String>,
   sent: DisplayRevisions,
   last_tick: Instant,
-  alone_since: Instant,
+  /// When the last page went away; unset while one is connected or before the first check.
+  alone_since: Option<Instant>,
 }
 
 pub(crate) fn channel(
@@ -47,7 +48,7 @@ pub(crate) fn channel(
     pushes: pushes.clone(),
     sent: DisplayRevisions::default(),
     last_tick: now,
-    alone_since: now,
+    alone_since: None,
   };
   (
     Link {
@@ -81,9 +82,10 @@ impl Publisher {
   /// True once no page socket has been open for a minute; no page can reach the process then.
   pub(crate) fn abandoned(&mut self, now: Instant) -> bool {
     if self.pushes.receiver_count() > 0 {
-      self.alone_since = now;
+      self.alone_since = None;
+      return false;
     }
-    now.saturating_duration_since(self.alone_since) >= NO_PAGE_LIMIT
+    now.saturating_duration_since(*self.alone_since.get_or_insert(now)) >= NO_PAGE_LIMIT
   }
 }
 
@@ -213,7 +215,8 @@ pub(crate) mod tests {
     assert!(!publisher.abandoned(t0 + Duration::from_secs(120)));
     drop(page);
     assert!(!publisher.abandoned(t0 + Duration::from_secs(150)));
-    assert!(publisher.abandoned(t0 + Duration::from_secs(181)));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(209)));
+    assert!(publisher.abandoned(t0 + Duration::from_secs(210)));
   }
   #[tokio::test]
   async fn a_lagging_socket_drops_the_backlog_and_gets_a_fresh_resync() {

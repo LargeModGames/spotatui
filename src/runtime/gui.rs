@@ -62,6 +62,10 @@ async fn launch_gui() -> Result<()> {
     Ok(boot) => boot,
     Err(e) => {
       onboarding.info(&format!("spotatui could not start: {e:#}"));
+      // A browser that is still starting has not connected yet.
+      onboarding
+        .wait_for_page(crate::gui::onboarding::NO_PAGE_GRACE)
+        .await;
       // Long enough for the line to reach the page before the process exits.
       tokio::time::sleep(Duration::from_secs(2)).await;
       return Err(e);

@@ -7,9 +7,11 @@ import type { Source } from "./bindings/Source";
 /** The first-launch questions, answered in the page; a placeholder layout like the rest. */
 export function Onboarding({
   view,
+  connected,
   onReply,
 }: {
   view: OnboardingView;
+  connected: boolean;
   onReply: (reply: OnboardingReply) => void;
 }) {
   return (
@@ -19,6 +21,7 @@ export function Onboarding({
         <Question
           key={view.pending.seq}
           question={view.pending}
+          connected={connected}
           onReply={onReply}
         />
       )}
@@ -28,9 +31,11 @@ export function Onboarding({
 
 function Question({
   question: { seq, ask },
+  connected,
   onReply,
 }: {
   question: OnboardingQuestion;
+  connected: boolean;
   onReply: (reply: OnboardingReply) => void;
 }) {
   const [text, setText] = useState("");
@@ -53,7 +58,9 @@ function Question({
               autoFocus
             />
           </label>
-          <button type="submit">Continue</button>
+          <button type="submit" disabled={!connected}>
+            Continue
+          </button>
         </form>
       );
     case "Confirm":
@@ -63,6 +70,7 @@ function Question({
           <pre>{ask.body}</pre>
           <p>{ask.question}</p>
           <button
+            disabled={!connected}
             onClick={() =>
               onReply({ seq, answer: { kind: "Confirm", yes: true } })
             }
@@ -70,6 +78,7 @@ function Question({
             Yes
           </button>
           <button
+            disabled={!connected}
             onClick={() =>
               onReply({ seq, answer: { kind: "Confirm", yes: false } })
             }
@@ -86,23 +95,30 @@ function Question({
             onReply({ seq, answer: { kind: "Sources", picked } });
           }}
         >
-          {ask.options.map((option) => (
-            <label key={option}>
+          <h2>Choose your music sources</h2>
+          <p>
+            Leave all unchecked to set up Spotify only; you can add or switch
+            sources later.
+          </p>
+          {ask.options.map(({ source, label, note }) => (
+            <label key={source}>
               <input
                 type="checkbox"
-                checked={picked.includes(option)}
+                checked={picked.includes(source)}
                 onChange={(event) =>
                   setPicked((current) =>
                     event.target.checked
-                      ? [...current, option]
-                      : current.filter((source) => source !== option),
+                      ? [...current, source]
+                      : current.filter((other) => other !== source),
                   )
                 }
               />
-              {option}
+              {label} ({note})
             </label>
           ))}
-          <button type="submit">Continue</button>
+          <button type="submit" disabled={!connected}>
+            Continue
+          </button>
         </form>
       );
   }

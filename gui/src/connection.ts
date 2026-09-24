@@ -42,6 +42,14 @@ export function takeLaunchCode(
   return code;
 }
 
+/** Whether the page shows the first-launch questions: a question is open, or the app has not booted. */
+export function showsOnboarding(state: State): boolean {
+  return (
+    state.onboarding !== null &&
+    (state.onboarding.pending !== null || state.channels.route === undefined)
+  );
+}
+
 export class Connection {
   private state: State = {
     connected: false,

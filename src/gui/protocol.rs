@@ -434,6 +434,7 @@ mod tests {
     written::<OnboardingView>(&dir, &cfg);
     written::<crate::gui::onboarding::OnboardingQuestion>(&dir, &cfg);
     written::<crate::gui::onboarding::OnboardingAsk>(&dir, &cfg);
+    written::<crate::gui::onboarding::SourceChoice>(&dir, &cfg);
     written::<OnboardingReply>(&dir, &cfg);
     written::<crate::gui::onboarding::OnboardingReplyAnswer>(&dir, &cfg);
     for entry in std::fs::read_dir(&dir).unwrap() {

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 /// How long a question waits with no page connected: the launch code's lifetime.
-const NO_PAGE_GRACE: Duration = Duration::from_secs(60);
+pub(crate) const NO_PAGE_GRACE: Duration = Duration::from_secs(60);
 
 /// Everything the page shows before boot: what was said so far, and the open question.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -42,8 +42,17 @@ pub(crate) enum OnboardingAsk {
     question: String,
   },
   PickSources {
-    options: Vec<Source>,
+    options: Vec<SourceChoice>,
   },
+}
+
+/// One source the first-run picker offers, with the text the terminal picker shows.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SourceChoice {
+  pub(crate) source: Source,
+  pub(crate) label: String,
+  pub(crate) note: String,
 }
 
 /// The page's answer to the question with the same `seq`.
@@ -98,8 +107,25 @@ impl BrowserOnboarding {
     self.view.subscribe()
   }
 
+  /// Passes on a reply to the open question; any other reply is dropped.
   pub(crate) fn answer(&self, reply: OnboardingReply) {
-    let _ = self.replies_tx.send(reply);
+    let open = self
+      .view
+      .borrow()
+      .pending
+      .as_ref()
+      .map(|question| question.seq);
+    if open == Some(reply.seq) {
+      let _ = self.replies_tx.send(reply);
+    }
+  }
+
+  /// Waits until a page is connected, up to `limit`.
+  pub(crate) async fn wait_for_page(&self, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    while self.pages.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+    }
   }
 
   pub(crate) fn page_connected(&self) -> PageConnection<'_> {
@@ -190,9 +216,15 @@ impl Onboarding for BrowserOnboarding {
   }
 
   fn pick_sources(&self, options: &[Source]) -> Result<Option<Vec<Source>>> {
-    match self.ask_page(OnboardingAsk::PickSources {
-      options: options.to_vec(),
-    })? {
+    let choices = options
+      .iter()
+      .map(|source| SourceChoice {
+        source: *source,
+        label: source.label().to_string(),
+        note: source.note().to_string(),
+      })
+      .collect();
+    match self.ask_page(OnboardingAsk::PickSources { options: choices })? {
       OnboardingReplyAnswer::Sources { picked } => {
         // Offered order: the first pick becomes the active source.
         let picked: Vec<Source> = options
@@ -317,7 +349,14 @@ mod tests {
     assert_eq!(
       page.join().unwrap(),
       OnboardingAsk::PickSources {
-        options: options.to_vec()
+        options: options
+          .iter()
+          .map(|source| SourceChoice {
+            source: *source,
+            label: source.label().to_string(),
+            note: source.note().to_string(),
+          })
+          .collect()
       }
     );
     let page = answer_next(&bridge, OnboardingReplyAnswer::Sources { picked: vec![] });

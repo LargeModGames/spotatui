@@ -7,6 +7,7 @@ const render = (ask: OnboardingAsk, transcript = "") =>
   renderToStaticMarkup(
     <Onboarding
       view={{ transcript, pending: { seq: 0, ask } }}
+      connected
       onReply={() => {}}
     />,
   );
@@ -35,8 +36,14 @@ describe("Onboarding", () => {
   });
 
   it("lists every offered source as a checkbox", () => {
-    const html = render({ kind: "PickSources", options: ["Spotify", "Local"] });
+    const html = render({
+      kind: "PickSources",
+      options: [
+        { source: "Spotify", label: "Spotify", note: "needs login" },
+        { source: "Local", label: "Local Files", note: "free" },
+      ],
+    });
     expect(html.match(/type="checkbox"/g)).toHaveLength(2);
-    expect(html).toContain("Local");
+    expect(html).toContain("Local Files (free)");
   });
 });
