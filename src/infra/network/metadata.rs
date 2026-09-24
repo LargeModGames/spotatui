@@ -179,7 +179,7 @@ impl MetadataNetwork for Network {
         let top_tracks = match top_tracks_res {
           Ok(res) => res.tracks,
           Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-            self.app.lock().await.mark_spotify_development_app();
+            self.mark_spotify_development_app().await;
             Vec::new()
           }
           Err(e) => {
@@ -191,7 +191,7 @@ impl MetadataNetwork for Network {
         let related_artists = match related_artists_res {
           Ok(res) => res.artists,
           Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-            self.app.lock().await.mark_spotify_development_app();
+            self.mark_spotify_development_app().await;
             Vec::new()
           }
           Err(e) => {

@@ -28,7 +28,6 @@ use rspotify::model::{
 };
 use rspotify::prelude::Id;
 // `parse_response_code` / `request_token` for the in-TUI login live on this trait.
-use crate::core::state::PersistedRuntimeState;
 use rspotify::clients::OAuthClient;
 use rspotify::AuthCodePkceSpotify;
 use std::path::PathBuf;
@@ -1269,21 +1268,20 @@ impl Network {
     }
   }
 
+  async fn mark_spotify_development_app(&self) {
+    let client_id = self
+      .spotify
+      .as_ref()
+      .map(|spotify| spotify.creds.id.clone());
+    self
+      .app
+      .lock()
+      .await
+      .mark_spotify_development_app(client_id.as_deref());
+  }
+
   async fn set_and_remind_dev_app(&self, feature_name: &str) {
-    {
-      let mut app = self.app.lock().await;
-      app.mark_spotify_development_app();
-      if let Some(client_id) = self.spotify.as_ref().map(|s| s.creds.id.clone()) {
-        if !app.runtime_state.dev_client_ids.contains(&client_id) {
-          app.runtime_state.dev_client_ids.push(client_id);
-          let dev_client_ids = app.runtime_state.dev_client_ids.clone();
-          app.schedule_state_save(PersistedRuntimeState {
-            dev_client_ids: Some(dev_client_ids),
-            ..PersistedRuntimeState::default()
-          });
-        }
-      }
-    }
+    self.mark_spotify_development_app().await;
     self
       .show_status_message(
         format!("{feature_name}: unavailable for apps in Spotify Development Mode"),
