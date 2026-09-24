@@ -8,6 +8,8 @@
 
 mod bootstrap;
 mod cli;
+#[cfg(feature = "tui")]
+mod instance;
 mod logging;
 mod pump;
 #[cfg(feature = "tui")]
@@ -164,6 +166,12 @@ async fn run_cli_inner() -> Result<()> {
     return Ok(());
   }
 
+  let mut instance_lock = None;
+  #[cfg(feature = "tui")]
+  if matches.subcommand_name().is_none() {
+    instance_lock = instance::acquire()?;
+  }
+
   if let Err(e) = apply_legacy_state_file_migrations() {
     log::warn!("[state] failed to migrate legacy app data files: {e}");
   }
@@ -214,7 +222,7 @@ async fn run_cli_inner() -> Result<()> {
   #[cfg(not(feature = "tui"))]
   let onboarding: Arc<dyn crate::core::onboarding::Onboarding> = Arc::new(HeadlessOnboarding);
 
-  let boot = bootstrap::boot(&matches, onboarding).await?;
+  let boot = bootstrap::boot(&matches, onboarding, &mut instance_lock).await?;
 
   // Work with the cli (not really async)
   if let Some(cmd) = matches.subcommand_name() {

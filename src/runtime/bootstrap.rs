@@ -518,7 +518,11 @@ pub(super) struct Boot {
 /// playback session, client credentials, Spotify authentication (joined with
 /// the auto-update check), and `App` construction. Frontend-neutral: every
 /// interactive step goes through `onboarding`.
-pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) -> Result<Boot> {
+pub(super) async fn boot(
+  matches: &ArgMatches,
+  onboarding: Arc<dyn Onboarding>,
+  instance_lock: &mut Option<std::fs::File>,
+) -> Result<Boot> {
   // Auto-update on launch: silently check, download, install, and restart.
   // Skip if a CLI subcommand is active or SPOTATUI_SKIP_UPDATE is set (prevents restart loops).
   let mut user_config = UserConfig::new();
@@ -722,7 +726,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
   // Only now that authentication has released the OAuth callback port and the
   // terminal. Runs before the `?` below so a broken auth state is still allowed
   // to restart into the newer build, which may be what fixes it.
-  super::cli::restart_after_update(installed_update)?;
+  super::cli::restart_after_update(installed_update, instance_lock)?;
 
   let authenticated: Option<auth::AuthenticatedClient> = authenticated?;
 

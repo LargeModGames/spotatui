@@ -265,8 +265,13 @@ pub(super) async fn run_auto_update(
 /// will need. The child repeats startup from scratch, so anything this process
 /// still owns (the OAuth callback port on 8989, stdin, the terminal) it would
 /// contend with. Authentication persists its token before returning, so the
-/// child reuses it rather than opening a second browser login.
-pub(super) fn restart_after_update(new_version: Option<String>) -> Result<()> {
+/// child reuses it rather than opening a second browser login. The
+/// single-instance lock is released just before the re-exec, since the child
+/// takes it again while this process waits.
+pub(super) fn restart_after_update(
+  new_version: Option<String>,
+  instance_lock: &mut Option<std::fs::File>,
+) -> Result<()> {
   let Some(new_version) = new_version else {
     return Ok(());
   };
@@ -279,6 +284,7 @@ pub(super) fn restart_after_update(new_version: Option<String>) -> Result<()> {
   let exe = std::env::current_exe()
     .context("failed to get current executable path while restarting after an update")?;
   let args: Vec<String> = std::env::args().skip(1).collect();
+  drop(instance_lock.take());
   let status = std::process::Command::new(&exe)
     .args(&args)
     .env("SPOTATUI_SKIP_UPDATE", "1")

@@ -9,6 +9,7 @@ categories = ["command-line-utilities"]
 version = "0.43.0"
 authors = ["LargeModGames <LargeModGames@gmail.com>"]
 edition = "2021"
+rust-version = "1.90"
 license = "MIT"
 # Two [[bin]] targets make a plain `cargo run` ambiguous; the console binary
 # stays the default.
