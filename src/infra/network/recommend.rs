@@ -26,6 +26,10 @@ fn country_code(country: Country) -> String {
   code.to_string()
 }
 
+fn is_development_mode_error(error: &anyhow::Error) -> bool {
+  is_not_found_error(error) || is_forbidden_error(error)
+}
+
 pub trait RecommendationNetwork {
   async fn get_recommendations_for_seed(
     &mut self,
@@ -105,6 +109,10 @@ impl RecommendationNetwork for Network {
             .await
           {
             Ok(res) => res.tracks,
+            Err(e) if is_development_mode_error(&e) => {
+              self.set_and_remind_dev_app("Recommendation").await;
+              return;
+            }
             Err(e) => {
               self.handle_error(anyhow!(e)).await;
               return;
@@ -128,7 +136,7 @@ impl RecommendationNetwork for Network {
         app.track_table.context = Some(TrackTableContext::RecommendedTracks);
         app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
       }
-      Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
+      Err(e) if is_development_mode_error(&e) => {
         self.set_and_remind_dev_app("Recommendation").await
       }
       Err(e) => {
@@ -148,5 +156,28 @@ impl RecommendationNetwork for Network {
     self
       .get_recommendations_for_seed(None, seed_tracks, first_track, country)
       .await;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::infra::network::requests::SpotifyApiError;
+  use reqwest::StatusCode;
+
+  #[test]
+  fn recommendation_errors_classify_removed_endpoint_responses() {
+    for status in [StatusCode::FORBIDDEN, StatusCode::NOT_FOUND] {
+      let error = anyhow::Error::new(SpotifyApiError {
+        status,
+        body: "Forbidden".to_string(),
+        detail: None,
+      });
+      assert!(is_development_mode_error(&error));
+    }
+
+    assert!(!is_development_mode_error(&anyhow::anyhow!(
+      "transport failure"
+    )));
   }
 }
