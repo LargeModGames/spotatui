@@ -1,6 +1,15 @@
 use super::*;
 
 impl App {
+  pub(crate) fn devices(&self) -> Option<&DevicePayload> {
+    self.devices.as_ref()
+  }
+
+  pub(crate) fn set_devices(&mut self, payload: DevicePayload) {
+    self.devices = Some(payload);
+    self.display_revisions.bump(DisplayDomain::Devices);
+  }
+
   /// Pause native streaming playback with the full bookkeeping the pause
   /// branch of [`toggle_playback`](Self::toggle_playback) does: clear any
   /// parked StartPlayback and the load watchdog (either would resume or force
@@ -721,5 +730,24 @@ mod tests {
 
     assert!(rx.try_recv().is_err());
     assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  }
+}
+
+#[cfg(test)]
+mod devices_tests {
+  use super::*;
+
+  #[test]
+  fn caching_a_device_list_bumps_the_devices_revision() {
+    let mut app = App::default();
+    let before = app.display_revisions().get(DisplayDomain::Devices);
+
+    app.set_devices(DevicePayload { devices: vec![] });
+
+    assert_eq!(app.devices().map(|p| p.devices.len()), Some(0));
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Devices),
+      before + 1
+    );
   }
 }

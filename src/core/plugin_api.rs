@@ -600,8 +600,7 @@ pub fn playback_state(app: &App) -> Option<PlaybackState> {
 /// Return a list of available devices from [`App`]'s cached device payload.
 pub fn device_list(app: &App) -> Vec<DeviceInfo> {
   app
-    .devices
-    .as_ref()
+    .devices()
     .map(|payload| {
       payload
         .devices
@@ -731,31 +730,31 @@ pub fn queue_snapshot(app: &App) -> QueueSnapshot {
 pub fn search_results_snapshot(app: &App) -> SearchResults {
   SearchResults {
     tracks: app
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     albums: app
-      .search_results
+      .search_results()
       .albums
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     artists: app
-      .search_results
+      .search_results()
       .artists
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     playlists: app
-      .search_results
+      .search_results()
       .playlists
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     shows: app
-      .search_results
+      .search_results()
       .shows
       .as_ref()
       .map(|p| p.items.clone())

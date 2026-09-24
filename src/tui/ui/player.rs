@@ -1289,7 +1289,7 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       // Build the title from the configurable playbar_status template.
       // Values are pre-padded to match the original `{:-N}` format widths so
       // the default template reproduces today's output byte-for-byte.
-      let party_segment = if let Some(session) = &app.party_session {
+      let party_segment = if let Some(session) = app.party_session() {
         match session.role {
           crate::infra::network::sync::PartyRole::Host => {
             format!(" | Party: {} listeners", session.guests.len())
@@ -1709,7 +1709,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   };
 
   let no_device_message = Span::raw("No devices found: Make sure a device is active");
-  let items: Vec<ListItem> = match &app.devices {
+  let items: Vec<ListItem> = match app.devices() {
     Some(payload) if !payload.devices.is_empty() => payload
       .devices
       .iter()

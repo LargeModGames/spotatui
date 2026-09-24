@@ -1539,7 +1539,7 @@ impl Network {
     }
     {
       let mut app = self.app.lock().await;
-      app.party_status = sync::PartyStatus::Connecting;
+      app.set_party_status(sync::PartyStatus::Connecting);
     }
 
     let relay_url = {
@@ -1560,18 +1560,18 @@ impl Network {
         self.party_incoming_rx = Some(incoming_rx);
 
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Hosting;
-        app.party_session = Some(sync::PartySession {
+        app.set_party_status(sync::PartyStatus::Hosting);
+        app.set_party_session(Some(sync::PartySession {
           role: sync::PartyRole::Host,
           code: String::new(),
           guests: Vec::new(),
           control_mode,
           host_name: "Host".to_string(),
-        });
+        }));
       }
       Err(e) => {
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Disconnected;
+        app.set_party_status(sync::PartyStatus::Disconnected);
         app.handle_error(anyhow!("Failed to start party: {}", e));
       }
     }
@@ -1587,7 +1587,7 @@ impl Network {
     }
     {
       let mut app = self.app.lock().await;
-      app.party_status = sync::PartyStatus::Connecting;
+      app.set_party_status(sync::PartyStatus::Connecting);
     }
 
     let relay_url = {
@@ -1603,18 +1603,18 @@ impl Network {
         self.party_incoming_rx = Some(incoming_rx);
 
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Joined;
-        app.party_session = Some(sync::PartySession {
+        app.set_party_status(sync::PartyStatus::Joined);
+        app.set_party_session(Some(sync::PartySession {
           role: sync::PartyRole::Guest,
           code: code.to_uppercase(),
           guests: Vec::new(),
           control_mode: sync::ControlMode::default(),
           host_name: String::new(),
-        });
+        }));
       }
       Err(e) => {
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Disconnected;
+        app.set_party_status(sync::PartyStatus::Disconnected);
         app.handle_error(anyhow!("Failed to join party: {}", e));
       }
     }
@@ -1628,14 +1628,14 @@ impl Network {
     self.party_incoming_rx = None;
 
     let mut app = self.app.lock().await;
-    app.party_status = sync::PartyStatus::Disconnected;
-    app.party_session = None;
+    app.set_party_status(sync::PartyStatus::Disconnected);
+    app.set_party_session(None);
   }
 
   async fn sync_playback(&mut self) {
     let sync_state = {
       let app = self.app.lock().await;
-      let session = match &app.party_session {
+      let session = match app.party_session() {
         Some(s) if s.role == sync::PartyRole::Host => s,
         _ => return,
       };
@@ -1731,19 +1731,19 @@ impl Network {
       match msg {
         sync::SyncMessage::RoomCreated { code, .. } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             session.code = code;
           }
         }
         sync::SyncMessage::JoinedRoom { host_name } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             session.host_name = host_name;
           }
         }
         sync::SyncMessage::GuestJoined { name } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             if !session.guests.contains(&name) {
               session.guests.push(name.clone());
             }
@@ -1752,7 +1752,7 @@ impl Network {
         }
         sync::SyncMessage::GuestLeft { name } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             if let Some(pos) = session.guests.iter().position(|g| g == &name) {
               session.guests.remove(pos);
             }
@@ -1761,7 +1761,7 @@ impl Network {
         }
         sync::SyncMessage::SetControlMode { control_mode } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             session.control_mode = match control_mode.as_str() {
               "shared_control" => sync::ControlMode::SharedControl,
               _ => sync::ControlMode::HostOnly,
@@ -1777,16 +1777,16 @@ impl Network {
         sync::SyncMessage::RoomClosed => {
           self.party_connection = None;
           let mut app = self.app.lock().await;
-          app.party_status = sync::PartyStatus::Disconnected;
-          app.party_session = None;
+          app.set_party_status(sync::PartyStatus::Disconnected);
+          app.set_party_session(None);
           app.set_status_message("Party ended".to_string(), 5);
         }
         sync::SyncMessage::Error { message } => {
           self.party_connection = None;
           self.party_incoming_rx = None;
           let mut app = self.app.lock().await;
-          app.party_status = sync::PartyStatus::Disconnected;
-          app.party_session = None;
+          app.set_party_status(sync::PartyStatus::Disconnected);
+          app.set_party_session(None);
           app.handle_error(anyhow!("Party: {}", message));
         }
         _ => {}
@@ -1819,7 +1819,7 @@ impl Network {
     };
     let mut app = self.app.lock().await;
     let follows_host = matches!(
-      &app.party_session,
+      app.party_session(),
       Some(s) if s.role == sync::PartyRole::Guest
     ) && !party_yields_to_local_playback(&app);
     if !follows_host {
@@ -1889,7 +1889,7 @@ impl Network {
   async fn handle_incoming_playback_command(&mut self, action: sync::PlaybackAction) {
     let mut app = self.app.lock().await;
     let relays = matches!(
-      &app.party_session,
+      app.party_session(),
       Some(s) if s.role == sync::PartyRole::Host
     ) && !party_yields_to_local_playback(&app);
     if !relays {
@@ -2309,7 +2309,7 @@ mod tests {
     assert!(network.party_connection.is_none());
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
-    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
+    assert_eq!(*app.party_status(), sync::PartyStatus::Disconnected);
     assert_eq!(app.status_message(), Some(SPOTIFY_NOT_CONNECTED_STATUS));
   }
 
@@ -2325,7 +2325,7 @@ mod tests {
     assert!(network.party_connection.is_none());
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
-    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
+    assert_eq!(*app.party_status(), sync::PartyStatus::Disconnected);
     assert_eq!(app.status_message(), Some(SPOTIFY_NOT_CONNECTED_STATUS));
   }
 
@@ -2337,16 +2337,16 @@ mod tests {
     network.party_incoming_rx = Some(rx);
     {
       let mut app = app.lock().await;
-      app.party_status = sync::PartyStatus::Hosting;
-      app.party_session = Some(party_session(sync::PartyRole::Host));
+      app.set_party_status(sync::PartyStatus::Hosting);
+      app.set_party_session(Some(party_session(sync::PartyRole::Host)));
     }
 
     network.process_party_messages().await;
 
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
-    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
-    assert!(app.party_session.is_none());
+    assert_eq!(*app.party_status(), sync::PartyStatus::Disconnected);
+    assert!(app.party_session().is_none());
   }
 
   fn party_session(role: sync::PartyRole) -> sync::PartySession {
@@ -2372,7 +2372,10 @@ mod tests {
       Credentials::default(),
       OAuth::default(),
     ));
-    app.lock().await.party_session = Some(party_session(role));
+    app
+      .lock()
+      .await
+      .set_party_session(Some(party_session(role)));
     network
   }
 
@@ -2489,7 +2492,7 @@ mod tests {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::SyncPlayback)));
     assert!(rx.try_recv().is_err());
 
-    app.lock().await.party_session.as_mut().unwrap().role = sync::PartyRole::Guest;
+    app.lock().await.party_session_mut().unwrap().role = sync::PartyRole::Guest;
     let mut state = host_state();
     if let sync::SyncMessage::SyncState {
       position_ms,
@@ -2533,8 +2536,38 @@ mod tests {
     relay(&mut network, host_state()).await;
     assert!(rx.try_recv().is_err());
 
-    app.lock().await.party_session.as_mut().unwrap().role = sync::PartyRole::Host;
+    app.lock().await.party_session_mut().unwrap().role = sync::PartyRole::Host;
     relay(&mut network, guest_pause()).await;
     assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn a_relayed_guest_join_bumps_the_party_revision() {
+    use crate::core::app::DisplayDomain;
+    let (app, _rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Host).await;
+    let before = app
+      .lock()
+      .await
+      .display_revisions()
+      .get(DisplayDomain::Party);
+
+    relay(
+      &mut network,
+      sync::SyncMessage::GuestJoined {
+        name: "Guest".to_string(),
+      },
+    )
+    .await;
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.party_session().map(|s| s.guests.clone()),
+      Some(vec!["Guest".to_string()])
+    );
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Party),
+      before + 1
+    );
   }
 }

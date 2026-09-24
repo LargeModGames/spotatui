@@ -619,7 +619,7 @@ pub(crate) async fn start_qobuz_queue(
   let tracks = {
     let guard = app.lock().await;
     let search = guard
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.as_slice());

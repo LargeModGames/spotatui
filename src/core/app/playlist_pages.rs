@@ -134,15 +134,14 @@ impl App {
   ))]
   pub(crate) fn show_source_search_tracks(&mut self, tracks: Vec<TrackInfo>) {
     let total = tracks.len() as u32;
-    self.search_results.tracks = Some(Paged {
-      items: tracks,
-      total,
+    self.set_search_results(SearchResult {
+      tracks: Some(Paged {
+        items: tracks,
+        total,
+        ..Default::default()
+      }),
       ..Default::default()
     });
-    self.search_results.albums = None;
-    self.search_results.artists = None;
-    self.search_results.playlists = None;
-    self.search_results.shows = None;
     self.view.search_selected_tracks_index = Some(0);
     self.view.search_hovered_block = SearchResultBlock::SongSearch;
     self.view.search_selected_block = SearchResultBlock::Empty;
@@ -730,5 +729,27 @@ mod tests {
 
     app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
     assert!(app.is_current_route_playlist_track_table_for(&playlist_id));
+  }
+
+  #[cfg(any(
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  #[test]
+  fn a_decoded_source_search_bumps_the_search_revision() {
+    let mut app = App::default();
+    let before = app.display_revisions().get(DisplayDomain::Search);
+
+    app.show_source_search_tracks(vec![TrackInfo::from(&full_track(
+      "0000000000000000000001",
+      "Hit",
+    ))]);
+
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Search),
+      before + 1
+    );
   }
 }

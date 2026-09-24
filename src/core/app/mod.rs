@@ -174,7 +174,7 @@ pub struct App {
   /// The next Playing event will see this flag and immediately pause.
   #[allow(dead_code)]
   pub pending_stop_after_track: bool,
-  pub devices: Option<DevicePayload>,
+  devices: Option<DevicePayload>,
   pub queue: Option<QueueState>,
   /// The native cross-source playback queue (FIFO). Unlike [`Self::queue`]
   /// (a read-only mirror of Spotify's Web-API queue), this is owned by the app
@@ -261,7 +261,7 @@ pub struct App {
     Option<crate::core::pagination::CursorPaged<crate::core::plugin_api::TrackInfo>>,
   pub recommendations_seed: String,
   pub recommendations_context: Option<RecommendationsContext>,
-  pub search_results: SearchResult,
+  search_results: SearchResult,
   pub selected_album_simplified: Option<SelectedAlbum>,
   pub selected_album_full: Option<SelectedFullAlbum>,
   pub song_progress_ms: u128,
@@ -411,9 +411,9 @@ pub struct App {
   /// True when the current status message is an error (blocks normal message overwrites)
   status_message_is_error: bool,
   /// Listening party status
-  pub party_status: PartyStatus,
+  party_status: PartyStatus,
   /// Active listening party session data
-  pub party_session: Option<PartySession>,
+  party_session: Option<PartySession>,
   /// Pending track table selection to apply when new page loads
   pending_track_table_selection: Option<PendingTrackSelection>,
   /// Maps visible track table rows to source playlist item positions.

@@ -4,6 +4,31 @@ const PARTY_NEEDS_SPOTIFY: &str =
   "Listening Party needs Spotify. Press `d` and pick Spotify to log in.";
 
 impl App {
+  pub(crate) fn party_status(&self) -> &PartyStatus {
+    &self.party_status
+  }
+
+  pub(crate) fn party_session(&self) -> Option<&PartySession> {
+    self.party_session.as_ref()
+  }
+
+  pub(crate) fn set_party_status(&mut self, status: PartyStatus) {
+    self.party_status = status;
+    self.display_revisions.bump(DisplayDomain::Party);
+  }
+
+  pub(crate) fn set_party_session(&mut self, session: Option<PartySession>) {
+    self.party_session = session;
+    self.display_revisions.bump(DisplayDomain::Party);
+  }
+
+  /// The live session for an in-place update; bumps the party revision when one exists.
+  pub(crate) fn party_session_mut(&mut self) -> Option<&mut PartySession> {
+    let session = self.party_session.as_mut()?;
+    self.display_revisions.bump(DisplayDomain::Party);
+    Some(session)
+  }
+
   /// Host a party; needs a Spotify session, the relay drives Spotify playback.
   pub(crate) fn start_party(&mut self) {
     if !self.spotify_connected {
@@ -37,6 +62,7 @@ impl App {
       ControlMode::SharedControl => ControlMode::HostOnly,
     };
     session.control_mode = updated_mode.clone();
+    self.display_revisions.bump(DisplayDomain::Party);
     self.dispatch(IoEvent::SetPartyControlMode(updated_mode));
   }
 }

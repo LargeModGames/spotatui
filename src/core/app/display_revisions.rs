@@ -7,6 +7,9 @@ pub enum DisplayDomain {
   Source,
   Theme,
   Playback,
+  Party,
+  Devices,
+  Search,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -17,6 +20,9 @@ pub struct DisplayRevisions {
   source: u64,
   theme: u64,
   playback: u64,
+  party: u64,
+  devices: u64,
+  search: u64,
 }
 
 impl DisplayRevisions {
@@ -27,6 +33,9 @@ impl DisplayRevisions {
       DisplayDomain::Source => &mut self.source,
       DisplayDomain::Theme => &mut self.theme,
       DisplayDomain::Playback => &mut self.playback,
+      DisplayDomain::Party => &mut self.party,
+      DisplayDomain::Devices => &mut self.devices,
+      DisplayDomain::Search => &mut self.search,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -39,6 +48,9 @@ impl DisplayRevisions {
       DisplayDomain::Source => self.source,
       DisplayDomain::Theme => self.theme,
       DisplayDomain::Playback => self.playback,
+      DisplayDomain::Party => self.party,
+      DisplayDomain::Devices => self.devices,
+      DisplayDomain::Search => self.search,
     }
   }
 }

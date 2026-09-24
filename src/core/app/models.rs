@@ -98,9 +98,20 @@ impl App {
     }
   }
 
+  pub(crate) fn search_results(&self) -> &SearchResult {
+    &self.search_results
+  }
+
+  /// Replace every search page, keeping each cursor inside its new page.
+  pub(crate) fn set_search_results(&mut self, results: SearchResult) {
+    self.search_results = results;
+    self.clamp_search_cursors();
+    self.display_revisions.bump(DisplayDomain::Search);
+  }
+
   /// Keep every search cursor inside its page after the pages were replaced:
   /// a shorter page must never leave a cursor past its end.
-  pub(crate) fn clamp_search_cursors(&mut self) {
+  fn clamp_search_cursors(&mut self) {
     let pages = &self.search_results;
     clamp_cursor(
       &mut self.view.search_selected_tracks_index,
@@ -220,5 +231,28 @@ mod tests {
     let new_page = page_of(5);
     clamp_cursor(&mut index, page_len(&new_page));
     assert_eq!(index, None);
+  }
+
+  #[test]
+  fn replacing_search_results_clamps_a_stale_cursor_and_bumps_the_search_revision() {
+    use crate::core::test_helpers::playlist_info;
+    let mut app = App::default();
+    app.view.search_selected_playlists_index = Some(20);
+    let before = app.display_revisions().get(DisplayDomain::Search);
+
+    app.set_search_results(SearchResult {
+      playlists: Some(Paged {
+        items: vec![playlist_info("p1", "One", "owner", false)],
+        total: 1,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+
+    assert_eq!(app.view.search_selected_playlists_index, Some(0));
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Search),
+      before + 1
+    );
   }
 }

@@ -115,7 +115,7 @@ impl App {
 
     // Periodic party sync: host broadcasts state about every 2 seconds.
     // Keep this before early-return paths so sync still happens during native-streaming fast paths.
-    if self.party_status == PartyStatus::Hosting
+    if *self.party_status() == PartyStatus::Hosting
       && self.last_party_sync_at.elapsed() >= Duration::from_secs(2)
     {
       self.last_party_sync_at = Instant::now();

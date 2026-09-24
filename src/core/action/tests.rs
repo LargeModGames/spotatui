@@ -2498,19 +2498,24 @@ fn leave_party_dispatches_the_leave() {
 #[test]
 fn toggle_party_control_mode_flips_the_session_and_tells_the_relay() {
   let (mut app, rx) = app_with_channel();
-  app.party_session = Some(PartySession {
+  app.set_party_session(Some(PartySession {
     role: PartyRole::Host,
     code: "ABC123".to_string(),
     guests: Vec::new(),
     control_mode: ControlMode::HostOnly,
     host_name: "Host".to_string(),
-  });
+  }));
+  let before = app.display_revisions().get(DisplayDomain::Party);
 
   app.apply(Action::TogglePartyControlMode);
+  assert_eq!(
+    app.display_revisions().get(DisplayDomain::Party),
+    before + 1
+  );
 
   // The relay handler only sends the message; the popup renders from this record.
   assert_eq!(
-    app.party_session.as_ref().map(|s| s.control_mode.clone()),
+    app.party_session().map(|s| s.control_mode.clone()),
     Some(ControlMode::SharedControl)
   );
   match rx.try_recv() {
@@ -2521,7 +2526,7 @@ fn toggle_party_control_mode_flips_the_session_and_tells_the_relay() {
   app.apply(Action::TogglePartyControlMode);
 
   assert_eq!(
-    app.party_session.as_ref().map(|s| s.control_mode.clone()),
+    app.party_session().map(|s| s.control_mode.clone()),
     Some(ControlMode::HostOnly)
   );
   match rx.try_recv() {
@@ -2536,7 +2541,7 @@ fn toggle_party_control_mode_without_a_session_dispatches_nothing() {
 
   app.apply(Action::TogglePartyControlMode);
 
-  assert!(app.party_session.is_none());
+  assert!(app.party_session().is_none());
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
 }
 

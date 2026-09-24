@@ -312,7 +312,7 @@ async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx:
   let tracks = {
     let guard = app.lock().await;
     let search = guard
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.as_slice());
@@ -674,7 +674,7 @@ mod tests {
     let uris: Vec<String> = app
       .lock()
       .await
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .expect("search populated the songs block")

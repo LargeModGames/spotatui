@@ -293,7 +293,7 @@ fn find_video_row(app: &App, video_ref: &str) -> Option<TrackInfo> {
       || t.uri.as_deref() == Some(uri.as_str())
   };
   app
-    .search_results
+    .search_results()
     .tracks
     .as_ref()
     .and_then(|p| p.items.iter().find(matches))
@@ -460,7 +460,7 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
   let tracks = {
     let guard = app.lock().await;
     let search = guard
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.as_slice());
@@ -835,9 +835,12 @@ mod tests {
       let mut guard = app.lock().await;
       let mut live = video("youtube:live12345", "24/7 Lofi Radio");
       live.duration_ms = 0;
-      guard.search_results.tracks = Some(Paged {
-        items: vec![live],
-        total: 1,
+      guard.set_search_results(crate::core::app::SearchResult {
+        tracks: Some(Paged {
+          items: vec![live],
+          total: 1,
+          ..Default::default()
+        }),
         ..Default::default()
       });
     }
@@ -891,13 +894,17 @@ mod tests {
     // exactly what the picker dialog dispatches.
     {
       let mut guard = app.lock().await;
-      guard.search_results.tracks = Some(Paged {
-        items: vec![video("youtube:vid1234", "Cool Song")],
-        total: 1,
+      // The search row's id field carries the bare video id.
+      let mut row = video("youtube:vid1234", "Cool Song");
+      row.id = Some("vid1234".to_string());
+      guard.set_search_results(crate::core::app::SearchResult {
+        tracks: Some(Paged {
+          items: vec![row],
+          total: 1,
+          ..Default::default()
+        }),
         ..Default::default()
       });
-      // The search row's id field carries the bare video id.
-      guard.search_results.tracks.as_mut().unwrap().items[0].id = Some("vid1234".to_string());
     }
     assert!(
       route_youtube_event(
@@ -989,7 +996,7 @@ mod tests {
     let uris: Vec<String> = app
       .lock()
       .await
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .expect("search populated the songs block")

@@ -245,7 +245,7 @@ fn known_playlist_info<'a>(app: &'a App, playlist_id: &str) -> Option<&'a Playli
     .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
     .or_else(|| {
       app
-        .search_results
+        .search_results()
         .playlists
         .as_ref()?
         .items
@@ -2098,8 +2098,11 @@ mod tests {
       // followed collaborative playlist hit the error page on 403).
       playlist_info("collab", "Collaborative", "other", true),
     ];
-    app.search_results.playlists = Some(Paged {
-      items: vec![external],
+    app.set_search_results(crate::core::app::SearchResult {
+      playlists: Some(Paged {
+        items: vec![external],
+        ..Default::default()
+      }),
       ..Default::default()
     });
 

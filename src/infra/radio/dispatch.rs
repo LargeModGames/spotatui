@@ -174,7 +174,7 @@ fn snapshot_station(app: &App, uri: &str) -> TrackInfo {
     .or_else(|| app.track_table.tracks.iter().find(matches))
     .or_else(|| {
       app
-        .search_results
+        .search_results()
         .tracks
         .as_ref()
         .and_then(|p| p.items.iter().find(matches))
@@ -391,9 +391,12 @@ mod tests {
   fn snapshot_falls_back_to_search_results() {
     let mut app = test_app();
     let uri = "radio:https://example.com/stream";
-    app.search_results.tracks = Some(Paged {
-      items: vec![station_row(uri, "Searched FM")],
-      total: 1,
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(Paged {
+        items: vec![station_row(uri, "Searched FM")],
+        total: 1,
+        ..Default::default()
+      }),
       ..Default::default()
     });
     assert_eq!(snapshot_station(&app, uri).name, "Searched FM");

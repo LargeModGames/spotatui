@@ -163,7 +163,7 @@ impl UserNetwork for Network {
             .filter(|index| *index < result.devices.len())
             .or(Some(0))
         };
-        app.devices = Some(result);
+        app.set_devices(result);
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::Devices);

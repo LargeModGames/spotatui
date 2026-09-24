@@ -2754,7 +2754,7 @@ mod state_event_tests {
         volume_percent: Some(30),
       }],
     };
-    app.devices = Some(payload);
+    app.set_devices(payload);
     engine.on_tick(&mut app);
     assert_eq!(app.status_message(), Some("devices moved"));
   }

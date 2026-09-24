@@ -703,7 +703,7 @@ mod tests {
   }
 
   fn seed_desk_speaker(app: &mut App) {
-    app.devices = Some(DevicePayload {
+    app.set_devices(DevicePayload {
       devices: vec![Device {
         id: Some("device-1".to_string()),
         is_active: false,
@@ -1111,23 +1111,26 @@ mod tests {
       config_file_path: dir.path().join("config.yml"),
     });
     app.state_path = Some(dir.path().join("state.yml"));
-    app.search_results.tracks = Some(Paged {
-      items: vec![TrackInfo {
-        uri: Some("radio:https://example.com/stream".to_string()),
-        name: "Example FM".to_string(),
-        artists: vec![],
-        album: String::new(),
-        duration_ms: 0,
-        id: None,
-        album_id: None,
-        artist_refs: vec![],
-        is_playable: true,
-        is_local: false,
-        track_number: 0,
-        explicit: false,
-        image_url: None,
-      }],
-      total: 1,
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(Paged {
+        items: vec![TrackInfo {
+          uri: Some("radio:https://example.com/stream".to_string()),
+          name: "Example FM".to_string(),
+          artists: vec![],
+          album: String::new(),
+          duration_ms: 0,
+          id: None,
+          album_id: None,
+          artist_refs: vec![],
+          is_playable: true,
+          is_local: false,
+          track_number: 0,
+          explicit: false,
+          image_url: None,
+        }],
+        total: 1,
+        ..Default::default()
+      }),
       ..Default::default()
     });
     app.view.search_selected_tracks_index = Some(0);

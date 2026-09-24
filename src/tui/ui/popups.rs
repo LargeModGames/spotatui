@@ -1495,7 +1495,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
 
   let mut lines: Vec<Line> = Vec::new();
 
-  match &app.party_status {
+  match app.party_status() {
     PartyStatus::Disconnected | PartyStatus::Connecting => {
       if !app.view.party_input.is_empty()
         || app.view.party_input_idx > 0
@@ -1564,7 +1564,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
       } else {
         lines.push(Line::from(Span::styled("Listening Party", active_style)));
         lines.push(Line::from(""));
-        if app.party_status == PartyStatus::Connecting {
+        if *app.party_status() == PartyStatus::Connecting {
           lines.push(Line::from(Span::styled("Connecting...", hint_style)));
         } else {
           lines.push(Line::from(vec![
@@ -1586,7 +1586,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
         active_style,
       )));
       lines.push(Line::from(""));
-      if let Some(session) = &app.party_session {
+      if let Some(session) = app.party_session() {
         let code_display = if session.code.is_empty() {
           "Generating...".to_string()
         } else {
@@ -1634,7 +1634,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
         active_style,
       )));
       lines.push(Line::from(""));
-      if let Some(session) = &app.party_session {
+      if let Some(session) = app.party_session() {
         lines.push(Line::from(vec![
           Span::styled("Host: ", style),
           Span::styled(&session.host_name, style),
@@ -1654,7 +1654,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
     }
   }
 
-  let title = match &app.party_status {
+  let title = match app.party_status() {
     PartyStatus::Hosting => "Party (Hosting)",
     PartyStatus::Joined => "Party (Joined)",
     _ => "Party",

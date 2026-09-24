@@ -197,7 +197,7 @@ Rules when working in here:
   and `core/app/` (a network or source handler, a script effect, the CLI) that
   resets or clamps a cursor is counted by `view_writes_outside_tui`, which may only
   fall: a producer that replaces a list resets its cursor through an `App` method
-  (`set_track_table`, `clamp_search_cursors`), never by writing `view` itself. A
+  (`set_track_table`, `set_search_results`), never by writing `view` itself. A
   new field goes in `view` only if it is presentation state; a pending operation,
   or anything a second frontend would also need, stays on `App`.
 - `dispatch` pins the global loading spinner; long work with its own progress

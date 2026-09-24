@@ -135,7 +135,7 @@ pub fn draw_input_and_help_box(
 /// same `SongSearch` block/index as the songs list so selection and Enter
 /// share the existing machinery.
 fn draw_radio_station_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
-  let stations: Vec<String> = match &app.search_results.tracks {
+  let stations: Vec<String> = match &app.search_results().tracks {
     Some(tracks) => tracks
       .items
       .iter()
@@ -197,7 +197,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       })
       .unwrap_or_default();
 
-    let songs = match &app.search_results.tracks {
+    let songs = match &app.search_results().tracks {
       Some(tracks) => tracks
         .items
         .iter()
@@ -229,7 +229,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       app.view.search_selected_tracks_index,
     );
 
-    let artists = match &app.search_results.artists {
+    let artists = match &app.search_results().artists {
       Some(artists) => artists
         .items
         .iter()
@@ -264,7 +264,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       Constraint::Percentage(50),
     ]));
 
-    let albums = match &app.search_results.albums {
+    let albums = match &app.search_results().albums {
       Some(albums) => albums
         .items
         .iter()
@@ -297,7 +297,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       app.view.search_selected_album_index,
     );
 
-    let playlists = match &app.search_results.playlists {
+    let playlists = match &app.search_results().playlists {
       Some(playlists) => playlists
         .items
         .iter()
@@ -346,7 +346,7 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       app,
       podcasts_area,
       "Podcasts",
-      &match &app.search_results.shows {
+      &match &app.search_results().shows {
         Some(podcasts) => podcasts
           .items
           .iter()
@@ -413,16 +413,19 @@ mod tests {
   fn radio_results_render_single_station_panel() {
     let mut app = App::default();
     app.active_source = Source::Radio;
-    app.search_results.tracks = Some(Paged {
-      items: vec![
-        station(
-          "Groove Salad",
-          vec!["ambient".to_string(), "chillout".to_string()],
-          "US \u{2022} MP3 \u{2022} 128 kbps",
-        ),
-        station("Bare FM", vec![], ""),
-      ],
-      total: 2,
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(Paged {
+        items: vec![
+          station(
+            "Groove Salad",
+            vec!["ambient".to_string(), "chillout".to_string()],
+            "US \u{2022} MP3 \u{2022} 128 kbps",
+          ),
+          station("Bare FM", vec![], ""),
+        ],
+        total: 2,
+        ..Default::default()
+      }),
       ..Default::default()
     });
 
