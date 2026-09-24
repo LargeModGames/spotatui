@@ -1138,10 +1138,6 @@ impl PlaybackNetwork for Network {
 
                   // Check if this is a new track
                   if app.last_track_id.as_ref() != Some(&track_id_str) {
-                    if app.user_config.behavior.enable_global_song_count {
-                      app.dispatch(IoEvent::IncrementGlobalSongCount);
-                    }
-
                     // Lyrics (and cover art) are now driven by the shared
                     // track-change detector in the UI tick, which works for every
                     // source — see `core/driver/`. No per-source dispatch here.

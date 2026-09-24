@@ -853,10 +853,14 @@ async fn handle_player_events(
           windows_media.set_stopped();
         }
 
-        if let Ok(mut app) = app.try_lock() {
+        {
+          let mut app = app.lock().await;
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
           }
+          // The next poll copies this flag over the API's play state, so a
+          // stale `Some(true)` would report the stopped player as playing.
+          app.native_is_playing = Some(false);
           app.song_progress_ms = 0;
           app.last_track_id = None;
           app.native_track_info = None;
@@ -1104,6 +1108,8 @@ async fn handle_player_events(
         // that stampede hammers Spotify and can get the account rate-limited.
         if consecutive_unavailable >= UNAVAILABLE_ESCALATION_THRESHOLD {
           player.pause();
+          // A pause during a load emits no Paused event.
+          app.lock().await.native_is_playing = Some(false);
           progress_watchdog_armed = false;
           pending_end_of_track = None;
         }

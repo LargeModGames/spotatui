@@ -352,6 +352,42 @@ impl App {
     players
   }
 
+  /// Whether the decoded source that owns the sink is between tracks: its
+  /// snapshot can name the next track while the sink still plays the last one.
+  pub(crate) fn decoded_change_pending(&self) -> bool {
+    #[cfg(feature = "audio-decode")]
+    {
+      #[cfg(feature = "audio-decode-queue")]
+      if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = self.queue_now.as_ref() {
+        return d.advancing;
+      }
+      if self.queue_now_is_spotify() {
+        return false;
+      }
+      #[cfg(feature = "local-files")]
+      if let Some(s) = &self.local_playback {
+        return s.advancing;
+      }
+      #[cfg(feature = "subsonic")]
+      if let Some(s) = &self.subsonic_playback {
+        return s.advancing;
+      }
+      #[cfg(feature = "qobuz")]
+      if let Some(s) = &self.qobuz_playback {
+        return s.advancing;
+      }
+      #[cfg(feature = "youtube")]
+      if let Some(s) = &self.youtube_playback {
+        return s.advancing;
+      }
+      false
+    }
+    #[cfg(not(feature = "audio-decode"))]
+    {
+      false
+    }
+  }
+
   /// The player of whichever decoded source (local file, Subsonic, Qobuz,
   /// internet radio, or YouTube) currently owns the session, or `None` when
   /// Spotify (or nothing) owns it. All five decode through the same `LocalPlayer`
