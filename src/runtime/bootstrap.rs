@@ -1021,28 +1021,6 @@ mod tests {
     assert!(!onboarding.saw("Thank you for participating!\n"));
   }
 
-  #[cfg(feature = "gui")]
-  #[test]
-  fn the_gui_refuses_the_song_counter_question_instead_of_opting_out() {
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.yml");
-    let mut user_config = user_config_at(config_path.clone());
-
-    let error = prompt_global_song_count_opt_in(
-      &mut user_config,
-      &crate::runtime::gui::TerminalSetupRequired,
-    )
-    .unwrap_err();
-
-    assert!(
-      error
-        .to_string()
-        .contains("cannot run the first-launch setup yet"),
-      "{error}"
-    );
-    assert!(!config_path.exists());
-  }
-
   #[test]
   fn a_failed_global_song_counter_write_does_not_abort_boot() {
     let dir = tempfile::tempdir().unwrap();

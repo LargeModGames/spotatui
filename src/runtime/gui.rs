@@ -6,48 +6,16 @@ use super::instance;
 use super::startup::{prepare_frontend, shutdown_frontend, FrontendHandles};
 use crate::core::app::App;
 use crate::core::driver::{Driver, TickEnv};
-use crate::core::onboarding::{Onboarding, OnboardingAnswer, OnboardingPrompt};
-use crate::core::source::Source;
+use crate::core::onboarding::Onboarding;
 use crate::gui::bridge::{self, Publisher};
+use crate::gui::onboarding::BrowserOnboarding;
 use crate::gui::protocol::ClientMessage;
 use crate::gui::server;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
-
-const SETUP_IN_TERMINAL: &str = "spotatui-gui cannot run the first-launch setup yet: finish it once in the terminal `spotatui` (a build with the terminal UI), then start spotatui-gui again";
-
-/// The first-launch surface until the page can answer: every question fails boot with the terminal hint.
-pub(super) struct TerminalSetupRequired;
-
-impl Onboarding for TerminalSetupRequired {
-  fn info(&self, text: &str) {
-    log::info!("{text}");
-  }
-
-  fn progress(&self, text: &str) {
-    log::info!("{text}");
-  }
-
-  fn prompt_line(&self, _prompt: &str) -> Result<String> {
-    Err(anyhow!(SETUP_IN_TERMINAL))
-  }
-
-  // True so the song-counter question fails boot instead of silently opting the user out.
-  fn is_interactive(&self) -> bool {
-    true
-  }
-
-  fn ask(&self, _prompt: &OnboardingPrompt) -> Result<OnboardingAnswer> {
-    Err(anyhow!(SETUP_IN_TERMINAL))
-  }
-
-  fn pick_sources(&self, _options: &[Source]) -> Result<Option<Vec<Source>>> {
-    Err(anyhow!(SETUP_IN_TERMINAL))
-  }
-}
 
 pub async fn run_gui() -> Result<()> {
   // No clap here: the crash notice's "rerun with --debug" must still work.
@@ -68,6 +36,19 @@ async fn launch_gui() -> Result<()> {
   if let Err(e) = crate::core::migrations::apply_legacy_state_file_migrations() {
     log::warn!("[state] failed to migrate legacy app data files: {e}");
   }
+  // The page answers the first-launch questions, so it must be up before boot asks them.
+  let onboarding = Arc::new(BrowserOnboarding::new());
+  let (boot_done, apps) = tokio::sync::watch::channel(None);
+  let (link, publisher, inbox) = bridge::channel(apps, Arc::clone(&onboarding));
+  let (port, access) = server::spawn_listener(server::ASSETS, link).await?;
+  let url = format!(
+    "http://127.0.0.1:{port}/#code={}",
+    access.issue(Instant::now())?
+  );
+  if let Err(e) = open::that_detached(&url) {
+    log::warn!("could not open the browser: {e}");
+    eprintln!("Open {url} in a browser");
+  }
   // No auto-update: it installs the console `spotatui` binary over this one and re-execs it.
   let options = BootOptions {
     config_path: None,
@@ -77,7 +58,15 @@ async fn launch_gui() -> Result<()> {
     play_file: None,
     no_update: true,
   };
-  let boot = bootstrap::boot(options, Arc::new(TerminalSetupRequired), &mut instance_lock).await?;
+  let boot = match bootstrap::boot(options, onboarding.clone(), &mut instance_lock).await {
+    Ok(boot) => boot,
+    Err(e) => {
+      onboarding.info(&format!("spotatui could not start: {e:#}"));
+      // Long enough for the line to reach the page before the process exits.
+      tokio::time::sleep(Duration::from_secs(2)).await;
+      return Err(e);
+    }
+  };
   let FrontendHandles {
     app,
     user_config,
@@ -86,31 +75,16 @@ async fn launch_gui() -> Result<()> {
     discord,
     history_collector,
   } = prepare_frontend(boot).await;
+  boot_done.send_replace(Some(Arc::clone(&app)));
   let tick_rate = Duration::from_millis(user_config.behavior.tick_rate_milliseconds);
   let mut driver = Driver::new(shared_position, mpris, discord);
-  let (link, publisher, inbox) = bridge::channel(Arc::clone(&app));
-  let result = match server::spawn_listener(server::ASSETS, link).await {
-    Ok((port, access)) => match access.issue(Instant::now()) {
-      Ok(code) => {
-        let url = format!("http://127.0.0.1:{port}/#code={code}");
-        if let Err(e) = open::that_detached(&url) {
-          log::warn!("could not open the browser: {e}");
-          eprintln!("Open {url} in a browser");
-        }
-        serve_until_quit(&app, &mut driver, publisher, inbox, tick_rate).await;
-        Ok(())
-      }
-      Err(e) => Err(e),
-    },
-    Err(e) => Err(e),
-  };
-  // Also on a serve error: prepare_frontend already started librespot, the pump and the MCP listener.
+  serve_until_quit(&app, &mut driver, publisher, inbox, tick_rate).await;
   app.lock().await.close_io_channel();
   shutdown_frontend(&app, &mut driver, history_collector, |_| {}).await;
   drop(driver);
   #[cfg(feature = "mcp-server")]
   crate::infra::mcp::clear_handshake();
-  result
+  Ok(())
 }
 
 /// Ticks the driver, pushes to the page and applies its actions until a quit.
@@ -169,6 +143,8 @@ async fn serve_until_quit(
           driver.run_pending_script_commands(&mut app);
           publisher.publish(&app);
         }
+        // The socket answers these itself; boot is over by now.
+        Some(ClientMessage::Onboarding { .. }) => {}
         Some(ClientMessage::Quit) | None => break,
       },
       () = &mut ctrl_c => break,

@@ -347,7 +347,7 @@ mod tests {
   fn test_link() -> (Link, UnboundedReceiver<ClientMessage>) {
     let (tx, _rx) = std::sync::mpsc::channel();
     let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    let (link, _publisher, inbox) = bridge::channel(Arc::new(tokio::sync::Mutex::new(app)));
+    let (link, _publisher, inbox) = bridge::tests::booted(Arc::new(tokio::sync::Mutex::new(app)));
     (link, inbox)
   }
 
@@ -594,13 +594,22 @@ mod tests {
     .unwrap();
 
     let mut values = Vec::new();
-    for _ in 0..7 {
+    for _ in 0..8 {
       values.push(next_json(&mut socket).await);
     }
     let kinds: Vec<_> = values.iter().map(|value| value["kind"].clone()).collect();
     assert_eq!(
       kinds,
-      ["hello", "route", "status", "theme", "playback", "devices", "queue"]
+      [
+        "hello",
+        "onboarding",
+        "route",
+        "status",
+        "theme",
+        "playback",
+        "devices",
+        "queue"
+      ]
     );
     assert!(values[0]["payload"]["token"].is_string());
     assert!(values[0]["payload"]["revisions"]["playback"].is_u64());
@@ -661,5 +670,65 @@ mod tests {
     let (_stream, peer) = listener.accept().await.unwrap();
 
     assert!(same_user(peer.port(), port));
+  }
+  /// A server whose app has not booted yet, and a page connected to it.
+  async fn before_boot() -> (
+    WebSocketStream<TcpStream>,
+    Arc<crate::gui::onboarding::BrowserOnboarding>,
+    tokio::sync::watch::Sender<Option<Arc<tokio::sync::Mutex<App>>>>,
+  ) {
+    let onboarding = Arc::new(crate::gui::onboarding::BrowserOnboarding::new());
+    let (boot, apps) = tokio::sync::watch::channel(None);
+    let (link, _publisher, _inbox) = bridge::channel(apps, Arc::clone(&onboarding));
+    let (port, access) = spawn_listener(PAGE, link).await.unwrap();
+    let code = access.issue(Instant::now()).unwrap();
+    let mut page = connect(
+      port,
+      &format!("http://127.0.0.1:{port}"),
+      Some(&format!("{CODE_PROTOCOL}{code}")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next_json(&mut page).await["kind"], "hello");
+    let first = next_json(&mut page).await;
+    assert_eq!(first["kind"], "onboarding");
+    assert!(first["payload"]["pending"].is_null());
+    (page, onboarding, boot)
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_page_connected_before_boot_answers_a_prompt_over_the_socket() {
+    let (mut page, onboarding, _boot) = before_boot().await;
+
+    let asking = {
+      let onboarding = Arc::clone(&onboarding);
+      tokio::task::spawn_blocking(move || {
+        use crate::core::onboarding::Onboarding;
+        onboarding.prompt_line("Client ID: ")
+      })
+    };
+    let question = next_json(&mut page).await;
+    assert_eq!(
+      question["payload"]["pending"]["ask"],
+      serde_json::json!({ "kind": "Line", "prompt": "Client ID: ", "secret": false })
+    );
+    let reply = serde_json::json!({
+      "type": "onboarding",
+      "reply": { "seq": question["payload"]["pending"]["seq"], "answer": { "kind": "Line", "text": "abc" } }
+    });
+    page.send(WsMessage::text(reply.to_string())).await.unwrap();
+
+    assert_eq!(asking.await.unwrap().unwrap(), "abc\n");
+  }
+
+  #[tokio::test]
+  async fn publishing_the_app_resyncs_a_page_connected_before_boot() {
+    let (mut page, _onboarding, boot) = before_boot().await;
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+
+    boot.send_replace(Some(Arc::new(tokio::sync::Mutex::new(app))));
+
+    assert_eq!(next_json(&mut page).await["kind"], "route");
   }
 }

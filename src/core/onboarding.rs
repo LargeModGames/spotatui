@@ -79,6 +79,12 @@ pub trait Onboarding: Send + Sync {
   /// mean to.
   fn prompt_line(&self, prompt: &str) -> Result<String>;
 
+  /// [`Self::prompt_line`] for a value the frontend must not echo.
+  #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
+  fn prompt_secret(&self, prompt: &str) -> Result<String> {
+    self.prompt_line(prompt)
+  }
+
   /// First-run source picker over the compiled-in `options`. `None` means the
   /// user cancelled or confirmed with nothing selected (the caller falls
   /// through to the Spotify wizard, matching the historical default).

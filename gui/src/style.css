@@ -50,3 +50,9 @@ progress {
 .notice {
   padding: 16px;
 }
+
+.onboarding,
+.transcript {
+  padding: 16px;
+  white-space: pre-wrap;
+}

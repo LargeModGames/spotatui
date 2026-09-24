@@ -3,6 +3,7 @@ import type { Action } from "./bindings/Action";
 import type { NowPlaying as Item } from "./bindings/NowPlaying";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { Connection, Position } from "./connection";
+import { Onboarding } from "./Onboarding";
 
 /** A placeholder page that exercises the bridge; not a design. */
 export function App({ connection }: { connection: Connection }) {
@@ -23,7 +24,22 @@ export function App({ connection }: { connection: Connection }) {
 
   if (state.expired)
     return (
-      <p className="notice">This page is no longer connected to spotatui.</p>
+      <>
+        {state.onboarding && (
+          <pre className="transcript">{state.onboarding.transcript}</pre>
+        )}
+        <p className="notice">This page is no longer connected to spotatui.</p>
+      </>
+    );
+
+  // The channels arrive once boot is done; until then the questions are the page.
+  const booted = state.channels.route !== undefined;
+  if (state.onboarding && (state.onboarding.pending || !booted))
+    return (
+      <Onboarding
+        view={state.onboarding}
+        onReply={(reply) => connection.send({ type: "onboarding", reply })}
+      />
     );
 
   const send = (action: Action) => connection.send({ type: "action", action });

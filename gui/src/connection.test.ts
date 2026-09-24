@@ -94,6 +94,15 @@ describe("Connection", () => {
     expect(connection.getState().channels.route?.payload).toBe("home");
   });
 
+  it("an onboarding message replaces the questions on show", () => {
+    const { connection, sockets } = harness("abc");
+    const view = { transcript: "Hi\n", pending: null };
+    sockets[0].handlers.message(
+      JSON.stringify({ kind: "onboarding", payload: view }),
+    );
+    expect(connection.getState().onboarding).toEqual(view);
+  });
+
   it("a tick records the position and when it arrived", () => {
     const { connection, sockets } = harness("abc");
     sockets[0].handlers.message(hello("t1"));
