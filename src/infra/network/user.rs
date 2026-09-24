@@ -215,6 +215,11 @@ impl UserNetwork for Network {
   }
 
   async fn get_top_artists_mix(&mut self) {
+    if self.app.lock().await.is_dev_app {
+      self.remind_when_dev_mode().await;
+      return;
+    }
+
     // Set loading state
     {
       let mut app = self.app.lock().await;
@@ -251,18 +256,13 @@ impl UserNetwork for Network {
       }
     });
     let mut all_tracks = Vec::new();
-    for res in futures::future::join_all(track_fetches)
-      .await
-      .into_iter()
-    {
+    for res in futures::future::join_all(track_fetches).await.into_iter() {
       match res {
         Ok(res) => all_tracks.extend(res.tracks),
         Err(e) if is_forbidden_error(&e) || is_not_found_error(&e) => {
-          let mut app = self.app.lock().await;
-          app.set_status_message("Top Artists Mix is unavailable for apps in Spotify Development Mode", 5);
-          app.discover_loading = false;
+          self.remind_when_dev_mode().await;
           return;
-        },
+        }
         Err(e) => {
           self.handle_error(e).await;
           let mut app = self.app.lock().await;

@@ -594,6 +594,8 @@ pub struct App {
   /// Where this run's log file is being written, resolved once here so draw
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,
+  /// Whether the current client ID used is in Development Mode.
+  pub is_dev_app: bool,
 }
 
 impl App {

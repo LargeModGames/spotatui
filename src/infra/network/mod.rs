@@ -1269,6 +1269,16 @@ impl Network {
     }
   }
 
+  async fn remind_when_dev_mode(&self) {
+    let mut app = self.app.lock().await;
+    app.is_dev_app = true;
+    app.set_status_message(
+      "Top Artists Mix is unavailable for apps in Spotify Development Mode",
+      5,
+    );
+    app.discover_loading = false;
+  }
+
   async fn show_status_message(&self, message: String, ttl_secs: u64) {
     self.app.lock().await.set_status_message(message, ttl_secs);
   }

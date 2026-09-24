@@ -166,26 +166,41 @@ impl MetadataNetwork for Network {
         top_tracks_query.push(("market", country_code(country)));
       }
 
-      let (top_tracks_res, related_artists_res) = tokio::join!(
-        self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
-        self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
-      );
+      let is_dev_app = self.app.lock().await.is_dev_app;
 
-      let top_tracks = match top_tracks_res {
-        Ok(res) => res.tracks,
-        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
-        Err(e) => {
-          self.handle_error(anyhow!(e)).await;
-          return;
-        }
-      };
-      let related_artists = match related_artists_res {
-        Ok(res) => res.artists,
-        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
-        Err(e) => {
-          self.handle_error(e).await;
-          return;
-        }
+      let (top_tracks, related_artists) = if is_dev_app {
+        (Vec::new(), Vec::new())
+      } else {
+        let (top_tracks_res, related_artists_res) = tokio::join!(
+          self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
+          self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
+        );
+
+        let top_tracks = match top_tracks_res {
+          Ok(res) => res.tracks,
+          Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
+            self.app.lock().await.is_dev_app = true;
+            Vec::new()
+          }
+          Err(e) => {
+            self.handle_error(anyhow!(e)).await;
+            return;
+          }
+        };
+
+        let related_artists = match related_artists_res {
+          Ok(res) => res.artists,
+          Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
+            self.app.lock().await.is_dev_app = true;
+            Vec::new()
+          }
+          Err(e) => {
+            self.handle_error(e).await;
+            return;
+          }
+        };
+
+        (top_tracks, related_artists)
       };
 
       let mut album_items = Vec::new();
@@ -275,8 +290,16 @@ impl MetadataNetwork for Network {
       selected_album_index: 0,
       selected_related_artist_index: 0,
       selected_top_track_index: 0,
-      artist_selected_block: if top_tracks.is_empty() { ArtistBlock::Albums } else { ArtistBlock::TopTracks },
-      artist_hovered_block: if top_tracks.is_empty() { ArtistBlock::Albums } else { ArtistBlock::TopTracks },
+      artist_selected_block: if top_tracks.is_empty() {
+        ArtistBlock::Albums
+      } else {
+        ArtistBlock::TopTracks
+      },
+      artist_hovered_block: if top_tracks.is_empty() {
+        ArtistBlock::Albums
+      } else {
+        ArtistBlock::TopTracks
+      },
     });
     app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
   }

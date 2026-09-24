@@ -1,6 +1,7 @@
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, RouteId, TrackTableContext};
 use crate::core::plugin_api::TrackInfo;
+use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
 use anyhow::anyhow;
 use rspotify::model::{
   enums::Country,
@@ -9,7 +10,6 @@ use rspotify::model::{
 };
 use rspotify::prelude::*;
 use serde::Deserialize;
-use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
 
 #[derive(Deserialize)]
 struct RecommendationsResponse {
@@ -129,8 +129,7 @@ impl RecommendationNetwork for Network {
         app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
       }
       Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-        let mut app = self.app.lock().await;
-        app.set_status_message("Recommendations are unavailable for apps in Spotify Development Mode", 5);
+        self.remind_when_dev_mode().await
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;

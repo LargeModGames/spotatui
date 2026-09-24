@@ -503,11 +503,11 @@ impl Network {
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
     let debug_fail = env::var("MAKE_OUD_SUFFER").ok().is_none_or(|_| true);
-    if debug_fail && (
-      path.contains("/top-tracks")
-      || path.contains("recommendations")
-      || path.contains("tracks?ids=")
-    ) {
+    if debug_fail
+      && (path.contains("/top-tracks")
+        || path.contains("recommendations")
+        || path.contains("tracks?ids="))
+    {
       return Err(
         SpotifyApiError {
           status: StatusCode::FORBIDDEN,

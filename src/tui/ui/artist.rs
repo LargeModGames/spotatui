@@ -1,15 +1,15 @@
+use super::util::{draw_selectable_list, get_artist_highlight_state, get_color, join_artist_names};
 use crate::core::app::{App, ArtistBlock};
+use crate::tui::theme::ThemeExt;
 use ratatui::layout::Alignment;
+use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   Frame,
 };
-use ratatui::text::Span;
 use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
-use crate::tui::theme::ThemeExt;
-use super::util::{draw_selectable_list, get_artist_highlight_state, get_color, join_artist_names};
 
 pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   if let Some(artist) = &app.artist {
@@ -34,9 +34,10 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .style(app.user_config.theme.base_style())
-        .title(
-          Span::styled(title, get_color((false, false), app.user_config.theme))
-        )
+        .title(Span::styled(
+          title,
+          get_color((false, false), app.user_config.theme),
+        ))
         .border_style(get_color((false, false), app.user_config.theme));
 
       let notice = Paragraph::new("Top tracks unavailable on new keys under development mode")
