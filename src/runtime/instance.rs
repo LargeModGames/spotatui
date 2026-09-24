@@ -4,6 +4,11 @@ use anyhow::{anyhow, Context, Result};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
 
+/// Only a UI launch (no subcommand) locks, so the CLI keeps working beside a running UI.
+pub(super) fn takes_lock(subcommand: Option<&str>) -> bool {
+  subcommand.is_none()
+}
+
 /// The single-instance lock for a UI launch, held for as long as the file lives.
 /// `None` when this system cannot lock; the launch then goes ahead unlocked.
 pub(super) fn acquire() -> Result<Option<File>> {
@@ -55,6 +60,13 @@ fn acquire_in(dir: &Path) -> Result<Option<File>> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn only_a_ui_launch_takes_the_lock() {
+    assert!(takes_lock(None));
+    assert!(!takes_lock(Some("playback")));
+    assert!(!takes_lock(Some("sync")));
+  }
 
   #[test]
   fn a_second_launch_is_refused_while_the_first_holds_the_lock() {

@@ -168,7 +168,7 @@ async fn run_cli_inner() -> Result<()> {
 
   let mut instance_lock = None;
   #[cfg(feature = "tui")]
-  if matches.subcommand_name().is_none() {
+  if instance::takes_lock(matches.subcommand_name()) {
     instance_lock = instance::acquire()?;
   }
 
