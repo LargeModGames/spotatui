@@ -8,6 +8,7 @@
 
 mod bootstrap;
 mod cli;
+mod logging;
 mod pump;
 #[cfg(feature = "tui")]
 mod startup;
@@ -87,17 +88,62 @@ impl crate::core::onboarding::Onboarding for HeadlessOnboarding {
 }
 
 pub async fn run_cli() -> Result<()> {
-  bootstrap::setup_logging()?;
+  let result = run_cli_inner().await;
+  // A failing run is the one that gets reported, so it needs the log path
+  // most — and `?` inside carries every failure straight past the notice at
+  // the bottom. Checked rather than assumed: `setup_logging` is itself one of
+  // the steps that can fail, and pointing at a file that was never created
+  // sends the reporter looking for something that is not there.
+  if result.is_err() {
+    let path = crate::core::paths::app_log_path();
+    if path.is_file() {
+      eprintln!(
+        "{}",
+        logging::exit_log_notice(&path, log::max_level() >= log::LevelFilter::Debug)
+      );
+    }
+  }
+  result
+}
+
+async fn run_cli_inner() -> Result<()> {
+  let mut clap_app = cli::build_clap_app();
+
+  let matches = clap_app.clone().get_matches();
+
+  // Logging depends on the parsed flags (`--debug`), so it moves here from
+  // being the very first statement. Accepted consequence: a clap usage error
+  // above (bad flag, `--help`, `--version`) exits before any log file exists.
+  let debug_flag = matches.get_flag("debug");
+  let env_log_value = std::env::var("SPOTATUI_LOG").ok();
+  let (log_level, log_level_warning) =
+    logging::resolve_log_level(debug_flag, env_log_value.as_deref());
+  bootstrap::setup_logging(log_level, &logging::target_levels(log_level))?;
+  if let Some(warning) = log_level_warning {
+    log::warn!("{warning}");
+  }
+
+  // Always on, so a bug report has version/platform/build context in every
+  // log, not just `--debug` ones.
+  info!(
+    "{}",
+    logging::startup_header(
+      env!("CARGO_PKG_VERSION"),
+      std::env::consts::OS,
+      std::env::consts::ARCH,
+      &logging::compiled_features(),
+      std::env::var("TERM").ok().as_deref(),
+      std::env::var("TERM_PROGRAM").ok().as_deref(),
+      std::env::var_os("WT_SESSION").is_some(),
+    )
+  );
+
   info!("spotatui {} starting up", env!("CARGO_PKG_VERSION"));
   bootstrap::init_audio_backend();
   info!("audio backend initialized");
 
   bootstrap::install_panic_hook();
   info!("panic hook configured");
-
-  let mut clap_app = cli::build_clap_app();
-
-  let matches = clap_app.clone().get_matches();
 
   // Shell completions don't need any spotify work
   if let Some(s) = matches.get_one::<String>("completions") {
@@ -183,6 +229,19 @@ pub async fn run_cli() -> Result<()> {
     #[cfg(not(feature = "tui"))]
     unreachable!("headless builds reject a UI launch before boot");
   }
+
+  // On stderr, same reasoning as the "Logging to:" notice in `setup_logging`:
+  // stdout is reserved for program output (history HTML, MCP JSON-RPC). Only
+  // reached by the CLI-subcommand and UI-launch paths above; `--completions`,
+  // `update`, `history`, `mcp`, `plugin`, and the headless no-subcommand error
+  // all return earlier and skip it. The failure case is covered by `run_cli`.
+  eprintln!(
+    "{}",
+    logging::exit_log_notice(
+      &crate::core::paths::app_log_path(),
+      log::max_level() >= log::LevelFilter::Debug,
+    )
+  );
 
   Ok(())
 }
