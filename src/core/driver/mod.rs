@@ -848,7 +848,7 @@ impl Driver {
       }
     }
 
-    app.note_playback_change();
+    app.note_display_changes();
   }
 
   /// The one-shot startup dispatch, fired by the frontend right after its

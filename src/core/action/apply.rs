@@ -16,7 +16,7 @@ impl App {
   /// every arm follows.
   pub fn apply(&mut self, action: Action) -> ActionOutcome {
     let outcome = self.apply_action(action);
-    self.note_playback_change();
+    self.note_display_changes();
     outcome
   }
 

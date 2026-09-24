@@ -592,6 +592,12 @@ pub struct App {
     Option<String>,
     bool,
   ),
+  /// The queue view the Queue revision last counted: the Spotify mirror, the native queue, the playing slot.
+  queue_view: (
+    crate::core::plugin_api::QueueSnapshot,
+    Vec<TrackInfo>,
+    Option<TrackInfo>,
+  ),
   /// Retained content of plugin-registered custom screens, keyed by screen
   /// name. Written by script effects; read by the draw loop.
   pub plugin_screens:
