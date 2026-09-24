@@ -301,6 +301,7 @@ impl MetadataNetwork for Network {
         ArtistBlock::TopTracks
       },
     });
+    app.bump_display(crate::core::app::DisplayDomain::Artist);
     app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
   }
 
@@ -345,6 +346,7 @@ impl MetadataNetwork for Network {
             selected_index: 0,
           });
           app.album_table_context = crate::core::app::AlbumTableContext::Simplified;
+          app.bump_display(crate::core::app::DisplayDomain::Artist);
           app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
         }
         Err(e) => self.handle_error(anyhow!(e)).await,
@@ -393,6 +395,7 @@ impl MetadataNetwork for Network {
           selected_index: 0,
         });
         app.album_table_context = crate::core::app::AlbumTableContext::Full;
+        app.bump_display(crate::core::app::DisplayDomain::Artist);
         app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
@@ -423,6 +426,7 @@ impl MetadataNetwork for Network {
 
           app.episode_table_context = EpisodeTableContext::Simplified;
 
+          app.bump_display(crate::core::app::DisplayDomain::Artist);
           app.push_navigation_stack(RouteId::PodcastEpisodes, ActiveBlock::EpisodeTable);
         }
       }
@@ -448,6 +452,7 @@ impl MetadataNetwork for Network {
         app.selected_show_full = Some(selected_show);
 
         app.episode_table_context = EpisodeTableContext::Full;
+        app.bump_display(crate::core::app::DisplayDomain::Artist);
         app.push_navigation_stack(RouteId::PodcastEpisodes, ActiveBlock::EpisodeTable);
       }
       Err(e) => {
@@ -652,6 +657,11 @@ mod tests {
       );
 
       let artist_id = ArtistId::from_id("artist").unwrap();
+      let before = app
+        .lock()
+        .await
+        .display_revisions()
+        .get(crate::core::app::DisplayDomain::Artist);
 
       network
         .get_artist(artist_id, "Test Artist".to_string(), None)
@@ -666,6 +676,12 @@ mod tests {
         .as_ref()
         .expect("app.artist should be populated for a recoverable related-artists error");
       assert_eq!(artist.artist_name, "Test Artist");
+      assert!(
+        app_guard
+          .display_revisions()
+          .get(crate::core::app::DisplayDomain::Artist)
+          > before
+      );
       assert!(
         artist.related_artists.is_empty(),
         "related_artists should be empty when error is recovered"

@@ -236,6 +236,7 @@ impl App {
     sort_by_key_with_order(&mut self.artists, sort_state.order, |a| {
       a.name.to_lowercase()
     });
+    self.display_revisions.bump(DisplayDomain::Artist);
   }
 
   pub(crate) fn reload_stats(&mut self) {
@@ -392,6 +393,7 @@ impl App {
 
   pub fn set_saved_artists_to_table(&mut self, saved_artists_page: &CursorPaged<ArtistInfo>) {
     self.artists = saved_artists_page.items.clone();
+    self.display_revisions.bump(DisplayDomain::Artist);
   }
 
   pub fn get_current_user_saved_artists_next(&mut self) {
@@ -522,6 +524,7 @@ impl App {
       selected_index: 0,
     });
     self.album_table_context = AlbumTableContext::Full;
+    self.display_revisions.bump(DisplayDomain::Artist);
     self.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
   }
 

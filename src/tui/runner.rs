@@ -422,7 +422,7 @@ pub async fn start_ui(
         && app.user_config.behavior.banner_gradient)
         || current_route.active_block == ActiveBlock::Analysis
         || (current_route.id == RouteId::LyricsView
-          && app.lyrics_status == crate::core::app::LyricsStatus::Found)
+          && app.lyrics_status() == crate::core::app::LyricsStatus::Found)
         || app.view.liked_song_animation_frame.is_some()
         || app.theme_fade_active();
       let current_tick_rate = if animation_active {

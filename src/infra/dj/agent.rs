@@ -262,6 +262,7 @@ impl<E: ToolExecutor> Turn<'_, E> {
   async fn show_step(&self, step: usize, of: usize) {
     let mut app = self.app.lock().await;
     app.dj.step = Some((step, of));
+    app.dj.bump_revision();
   }
 }
 

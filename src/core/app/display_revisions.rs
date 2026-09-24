@@ -10,6 +10,8 @@ pub enum DisplayDomain {
   Party,
   Devices,
   Search,
+  Lyrics,
+  Artist,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -23,6 +25,8 @@ pub struct DisplayRevisions {
   party: u64,
   devices: u64,
   search: u64,
+  lyrics: u64,
+  artist: u64,
 }
 
 impl DisplayRevisions {
@@ -36,6 +40,8 @@ impl DisplayRevisions {
       DisplayDomain::Party => &mut self.party,
       DisplayDomain::Devices => &mut self.devices,
       DisplayDomain::Search => &mut self.search,
+      DisplayDomain::Lyrics => &mut self.lyrics,
+      DisplayDomain::Artist => &mut self.artist,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -51,11 +57,18 @@ impl DisplayRevisions {
       DisplayDomain::Party => self.party,
       DisplayDomain::Devices => self.devices,
       DisplayDomain::Search => self.search,
+      DisplayDomain::Lyrics => self.lyrics,
+      DisplayDomain::Artist => self.artist,
     }
   }
 }
 
 impl App {
+  /// Bump a display revision from a producer whose fields are not behind a setter yet.
+  pub(crate) fn bump_display(&mut self, domain: DisplayDomain) {
+    self.display_revisions.bump(domain);
+  }
+
   /// A copy of every display revision, for a frontend to diff against.
   #[cfg(any(test, feature = "gui"))]
   pub fn display_revisions(&self) -> DisplayRevisions {

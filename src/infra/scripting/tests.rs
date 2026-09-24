@@ -1819,8 +1819,11 @@ mod data_read_tests {
   fn get_lyrics_terminal_status_delivers_immediately_without_dispatch() {
     let mut engine = ScriptEngine::new().unwrap();
     let (mut app, rx) = make_app();
-    app.lyrics_status = LyricsStatus::Found;
-    app.lyrics = Some(vec![(1500, "hello lyrics".to_string())]);
+    app.set_lyrics(
+      LyricsStatus::Found,
+      Some(vec![(1500, "hello lyrics".to_string())]),
+      false,
+    );
 
     engine
       .load_source(
@@ -1848,7 +1851,7 @@ mod data_read_tests {
   fn get_lyrics_pending_resolves_when_fetch_completes() {
     let mut engine = ScriptEngine::new().unwrap();
     let (mut app, rx) = make_app();
-    app.lyrics_status = LyricsStatus::Loading;
+    app.set_lyrics(LyricsStatus::Loading, None, false);
 
     engine
       .load_source(
@@ -1865,7 +1868,7 @@ mod data_read_tests {
     );
     assert!(drain(&engine).is_empty());
 
-    app.lyrics_status = LyricsStatus::NotFound;
+    app.set_lyrics(LyricsStatus::NotFound, None, false);
     app.plugin_data_generations.bump(PluginDataKind::Lyrics);
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
     match one(&engine) {
@@ -1900,8 +1903,11 @@ mod data_read_tests {
     // Track A is playing and its lyrics have landed.
     playing(&mut app, "Track A");
     app.desired_lyrics_identity = Some(("Track A".to_string(), "The Artist".to_string()));
-    app.lyrics_status = LyricsStatus::Found;
-    app.lyrics = Some(vec![(0, "lyrics for A".to_string())]);
+    app.set_lyrics(
+      LyricsStatus::Found,
+      Some(vec![(0, "lyrics for A".to_string())]),
+      false,
+    );
 
     // Playback moves to track B. The detector has NOT run yet, so the lyrics
     // state still describes A - this is the exact window the bug lived in.
@@ -1927,7 +1933,11 @@ mod data_read_tests {
 
     // The detector then runs and B's lyrics land, bumping the generation.
     app.desired_lyrics_identity = Some(("Track B".to_string(), "The Artist".to_string()));
-    app.lyrics = Some(vec![(0, "lyrics for B".to_string())]);
+    app.set_lyrics(
+      LyricsStatus::Found,
+      Some(vec![(0, "lyrics for B".to_string())]),
+      false,
+    );
     app.plugin_data_generations.bump(PluginDataKind::Lyrics);
     engine.process_data_requests_for_test(&mut app, now + Duration::from_millis(1));
     match one(&engine) {
@@ -1954,8 +1964,11 @@ mod data_read_tests {
       image_url: None,
     });
     app.desired_lyrics_identity = Some(("Track A".to_string(), "The Artist".to_string()));
-    app.lyrics_status = LyricsStatus::Found;
-    app.lyrics = Some(vec![(0, "lyrics for A".to_string())]);
+    app.set_lyrics(
+      LyricsStatus::Found,
+      Some(vec![(0, "lyrics for A".to_string())]),
+      false,
+    );
 
     engine
       .load_source(

@@ -335,14 +335,14 @@ pub struct App {
 
   pub active_announcement: Option<Announcement>,
   pending_announcements: Vec<Announcement>,
-  pub lyrics: Option<Vec<(u128, String)>>,
-  pub lyrics_status: LyricsStatus,
+  lyrics: Option<Vec<(u128, String)>>,
+  lyrics_status: LyricsStatus,
   /// Title/artist pair whose lyrics response is currently desired. Detached
   /// service responses must match this before mutating visible state.
   pub desired_lyrics_identity: Option<(String, String)>,
   /// Whether the current `lyrics` carry real LRC timestamps rather than
   /// synthesized evenly-spaced ones derived from plain lyrics.
-  pub lyrics_synced: bool,
+  lyrics_synced: bool,
   pub global_song_count: Option<u64>,
   pub global_song_count_failed: bool,
   // Settings screen state

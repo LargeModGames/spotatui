@@ -794,7 +794,7 @@ pub fn lyrics_state_is_current(app: &App) -> bool {
 /// Lyrics for the current track, with the fetch status spelled out.
 pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
   use crate::core::app::LyricsStatus;
-  let status = match app.lyrics_status {
+  let status = match app.lyrics_status() {
     LyricsStatus::NotStarted => "not_started",
     LyricsStatus::Loading => "loading",
     LyricsStatus::Found => "found",
@@ -803,8 +803,7 @@ pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
   LyricsSnapshot {
     status: status.to_string(),
     lines: app
-      .lyrics
-      .as_ref()
+      .lyrics()
       .map(|lines| {
         lines
           .iter()
