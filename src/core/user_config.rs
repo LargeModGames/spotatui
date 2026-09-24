@@ -1297,7 +1297,13 @@ impl UserConfig {
       self.cover_art_dither_color = match theme.cover_art_dither_color.as_deref() {
         None => None,
         Some(value) if value.trim().eq_ignore_ascii_case("auto") => None,
-        Some(value) => Some(parse_theme_item(value)?),
+        Some(value) => match parse_theme_item(value) {
+          Ok(dither_color) => Some(dither_color),
+          Err(e) => {
+            log::warn!("[config] cover_art_dither_color: {e}; keeping the default");
+            None
+          }
+        },
       };
     }
     // Individual color fields populate the custom_theme — they only
@@ -1305,7 +1311,15 @@ impl UserConfig {
     macro_rules! to_theme_item {
       ($name: ident) => {
         if let Some(theme_item) = theme.$name {
-          self.custom_theme.$name = parse_theme_item(&theme_item)?;
+          match parse_theme_item(&theme_item) {
+            Ok(theme) => self.custom_theme.$name = theme,
+            // An invalid theme config should not inhibit launch:
+            // warn and fall back on a default. (#547)
+            Err(e) => log::warn!(
+              "[config] theme.{}: {e}; keeping the default",
+              stringify!($name)
+            ),
+          }
         }
       };
     }
@@ -2603,6 +2617,39 @@ mod tests {
     config.load_keybindings(bindings).unwrap();
     assert_eq!(config.keys.back, default_back);
     assert_eq!(config.keys.move_up, Key::Char('w'));
+  }
+
+  #[test]
+  fn a_malformed_theme_color_keeps_the_default_and_still_loads() {
+    use super::{UserConfig, UserTheme};
+    use crate::core::theme::Color;
+
+    let mut config = UserConfig::new();
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Custom\ntext: '300, 0, 0'\nactive: '1, 2, 3'\n")
+        .expect("UserTheme must deserialize");
+
+    let result = config.load_theme(theme);
+
+    assert!(result.is_ok());
+    assert_eq!(config.theme.text, UserConfig::new().theme.text);
+    assert_eq!(config.theme.active, Color::Rgb(1, 2, 3))
+  }
+
+  #[test]
+  #[cfg(feature = "cover-art")]
+  fn a_malformed_cover_art_dither_color_keeps_the_default_and_still_loads() {
+    use super::{UserConfig, UserTheme};
+
+    let mut config = UserConfig::new();
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Custom\ncover_art_dither_color: '300, 0, 0'\n")
+        .expect("UserTheme must deserialize");
+
+    let result = config.load_theme(theme);
+
+    assert!(result.is_ok());
+    assert_eq!(config.cover_art_dither_color, None)
   }
 
   #[test]
