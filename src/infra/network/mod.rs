@@ -1271,7 +1271,7 @@ impl Network {
 
   async fn remind_when_dev_mode(&self) {
     let mut app = self.app.lock().await;
-    app.is_dev_app = true;
+    app.mark_spotify_development_app();
     app.set_status_message(
       "Top Artists Mix is unavailable for apps in Spotify Development Mode",
       5,

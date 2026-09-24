@@ -215,7 +215,7 @@ impl UserNetwork for Network {
   }
 
   async fn get_top_artists_mix(&mut self) {
-    if self.app.lock().await.is_dev_app {
+    if self.app.lock().await.is_spotify_development_app() {
       self.remind_when_dev_mode().await;
       return;
     }

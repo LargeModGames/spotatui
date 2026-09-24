@@ -166,7 +166,7 @@ impl MetadataNetwork for Network {
         top_tracks_query.push(("market", country_code(country)));
       }
 
-      let is_dev_app = self.app.lock().await.is_dev_app;
+      let is_dev_app = self.app.lock().await.is_spotify_development_app();
 
       let (top_tracks, related_artists) = if is_dev_app {
         (Vec::new(), Vec::new())
@@ -179,7 +179,7 @@ impl MetadataNetwork for Network {
         let top_tracks = match top_tracks_res {
           Ok(res) => res.tracks,
           Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-            self.app.lock().await.is_dev_app = true;
+            self.app.lock().await.mark_spotify_development_app();
             Vec::new()
           }
           Err(e) => {
@@ -191,7 +191,7 @@ impl MetadataNetwork for Network {
         let related_artists = match related_artists_res {
           Ok(res) => res.artists,
           Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-            self.app.lock().await.is_dev_app = true;
+            self.app.lock().await.mark_spotify_development_app();
             Vec::new()
           }
           Err(e) => {
