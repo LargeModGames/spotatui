@@ -30,6 +30,7 @@ fn include_native_streaming_device(
   parked_device_name: &str,
   payload: &mut DevicePayload,
 ) {
+  let parked = app.native_backend_parked();
   let (device_name, device_id, is_active, volume_percent) = match app.streaming_player.as_ref() {
     Some(player) if player.is_available() => (
       player.device_name(),
@@ -41,7 +42,7 @@ fn include_native_streaming_device(
       player.get_volume(),
     ),
     // A parked backend keeps its row: Enter on it is the rebuild.
-    None if app.native_backend_parked() => {
+    None if parked => {
       let Some(device_id) = app.native_device_id.clone() else {
         return;
       };
@@ -55,12 +56,17 @@ fn include_native_streaming_device(
     _ => return,
   };
 
-  if let Some(device) = payload
-    .devices
-    .iter_mut()
-    .find(|device| device.name.eq_ignore_ascii_case(device_name))
-  {
-    if device.id.is_none() {
+  // The parked row matches by id: another device can carry the same name.
+  if let Some(device) = payload.devices.iter_mut().find(|device| {
+    if parked {
+      device.id.as_deref() == Some(device_id.as_str())
+    } else {
+      device.name.eq_ignore_ascii_case(device_name)
+    }
+  }) {
+    if parked {
+      device.is_active = false;
+    } else if device.id.is_none() {
       device.id = Some(device_id);
     }
     return;
@@ -327,5 +333,38 @@ mod tests {
     assert_eq!(row.id.as_deref(), Some("native-device"));
     assert_eq!(row.name, "spotatui");
     assert!(!row.is_active);
+  }
+
+  #[test]
+  fn a_parked_row_matches_by_id_not_by_name() {
+    let device = |id: &str| Device {
+      id: Some(id.to_string()),
+      is_active: true,
+      is_private_session: false,
+      is_restricted: false,
+      name: "spotatui".to_string(),
+      _type: DeviceType::Computer,
+      volume_percent: Some(50),
+    };
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.seed_native_parked();
+    app.native_device_id = Some("native-device".to_string());
+
+    // Another computer with the same device name.
+    let mut payload = DevicePayload {
+      devices: vec![device("other-computer")],
+    };
+    include_native_streaming_device(&app, "spotatui", &mut payload);
+    assert_eq!(payload.devices.len(), 2);
+    assert_eq!(payload.devices[1].id.as_deref(), Some("native-device"));
+
+    // Spotify still lists the parked device as active.
+    let mut payload = DevicePayload {
+      devices: vec![device("native-device")],
+    };
+    include_native_streaming_device(&app, "spotatui", &mut payload);
+    assert_eq!(payload.devices.len(), 1);
+    assert!(!payload.devices[0].is_active);
   }
 }

@@ -9,6 +9,16 @@ pub struct QueueState {
 }
 
 impl App {
+  /// Add an item to the Spotify Web API queue of the active device.
+  pub(crate) fn add_to_spotify_queue(&mut self, uri: String) {
+    // No device holds a Spotify queue while the native backend is parked.
+    if self.native_parked_owns_context() {
+      self.refuse_parked_gesture();
+    } else {
+      self.dispatch(IoEvent::AddItemToQueue(uri));
+    }
+  }
+
   /// Add a track to the native cross-source queue.
   ///
   /// Rejects tracks with no URI and radio streams (a live stream is not a finite
