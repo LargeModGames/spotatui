@@ -13,7 +13,8 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http::StatusCode;
 
 const MAX_HEAD_BYTES: usize = 16 * 1024;
-const HEAD_TIMEOUT: Duration = Duration::from_secs(5);
+/// A plain request, or the head and handshake of a socket, must finish within this.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const LAUNCH_CODE_TTL: Duration = Duration::from_secs(60);
 const CODE_PROTOCOL: &str = "spotatui.code.";
 const TOKEN_PROTOCOL: &str = "spotatui.token.";
@@ -128,6 +129,12 @@ pub(crate) async fn spawn_listener(assets: Assets, link: Link) -> Result<(u16, A
         log::warn!("GUI: refusing non-loopback connection from {peer}");
         continue;
       }
+      // Another local user can read the launch URL from the browser's command line.
+      #[cfg(target_os = "linux")]
+      if !same_user(peer.port(), port) {
+        log::warn!("GUI: refusing a loopback connection from another user");
+        continue;
+      }
       let server = Arc::clone(&server);
       tokio::spawn(async move {
         if let Err(e) = serve_connection(stream, &server).await {
@@ -140,25 +147,36 @@ pub(crate) async fn spawn_listener(assets: Assets, link: Link) -> Result<(u16, A
 }
 
 async fn serve_connection(mut stream: TcpStream, server: &Server) -> Result<()> {
-  let (head, raw) = tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut stream))
+  let upgrade = tokio::time::timeout(REQUEST_TIMEOUT, answer(&mut stream, server))
     .await
-    .context("request head timed out")??;
+    .context("request timed out")??;
+  match upgrade {
+    Some(raw) => open_socket(stream, raw, server).await,
+    None => Ok(()),
+  }
+}
+
+/// Answers a plain request; returns the head read so far when it asks for the socket.
+async fn answer(stream: &mut TcpStream, server: &Server) -> Result<Option<Vec<u8>>> {
+  let (head, raw) = read_head(stream).await?;
   let port = server.port;
   if !is_allowed(&head, port) {
-    return respond(&mut stream, port, "403 Forbidden", TEXT, b"forbidden\n").await;
+    respond(stream, port, "403 Forbidden", TEXT, b"forbidden\n").await?;
+    return Ok(None);
   }
   if head.method != "GET" {
-    return respond(
-      &mut stream,
+    respond(
+      stream,
       port,
       "405 Method Not Allowed",
       TEXT,
       b"method not allowed\n",
     )
-    .await;
+    .await?;
+    return Ok(None);
   }
   if head.upgrade {
-    return open_socket(stream, raw, server).await;
+    return Ok(Some(raw));
   }
   let path = head.path.split('?').next().unwrap_or_default();
   let name = if path == "/" {
@@ -167,19 +185,20 @@ async fn serve_connection(mut stream: TcpStream, server: &Server) -> Result<()> 
     path.trim_start_matches('/')
   };
   match server.assets.iter().find(|(asset, _)| *asset == name) {
-    Some((_, body)) => respond(&mut stream, port, "200 OK", content_type(name), body).await,
+    Some((_, body)) => respond(stream, port, "200 OK", content_type(name), body).await?,
     None if name == "index.html" => {
       respond(
-        &mut stream,
+        stream,
         port,
         "503 Service Unavailable",
         TEXT,
         MISSING_FRONTEND,
       )
-      .await
+      .await?
     }
-    None => respond(&mut stream, port, "404 Not Found", TEXT, b"not found\n").await,
+    None => respond(stream, port, "404 Not Found", TEXT, b"not found\n").await?,
   }
+  Ok(None)
 }
 
 /// Reads one request head, keeping every byte read so an upgrade can replay it.
@@ -226,13 +245,37 @@ fn is_allowed(head: &Head, port: u16) -> bool {
   }
 }
 
+/// Whether a loopback peer runs as this process's user, from the kernel's socket table.
+#[cfg(target_os = "linux")]
+fn same_user(peer_port: u16, local_port: u16) -> bool {
+  use std::os::unix::fs::MetadataExt;
+  let own = std::fs::metadata("/proc/self").map(|meta| meta.uid());
+  let table = std::fs::read_to_string("/proc/net/tcp");
+  matches!((own, table), (Ok(own), Ok(table)) if peer_uid(&table, peer_port, local_port) == Some(own))
+}
+
+/// The uid of the socket in /proc/net/tcp from peer_port to local_port.
+#[cfg(target_os = "linux")]
+fn peer_uid(table: &str, peer_port: u16, local_port: u16) -> Option<u32> {
+  let port = |address: &str| {
+    address
+      .rsplit_once(':')
+      .and_then(|(_, port)| u16::from_str_radix(port, 16).ok())
+  };
+  table.lines().skip(1).find_map(|line| {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let matches = port(fields.get(1)?)? == peer_port && port(fields.get(2)?)? == local_port;
+    matches.then(|| fields.get(7)?.parse().ok())?
+  })
+}
+
 // The callback's error type is tungstenite's `ErrorResponse`, large by its API.
 #[allow(clippy::result_large_err)]
 async fn open_socket(stream: TcpStream, raw: Vec<u8>, server: &Server) -> Result<()> {
   let (read_half, write_half) = stream.into_split();
   let replay = tokio::io::join(Cursor::new(raw).chain(read_half), write_half);
   let mut admission = None;
-  let socket =
+  let handshake =
     tokio_tungstenite::accept_hdr_async(replay, |request: &Request, mut response: Response| {
       let offered = request.headers().get(PROTOCOL_HEADER).cloned();
       admission = offered
@@ -250,8 +293,10 @@ async fn open_socket(stream: TcpStream, raw: Vec<u8>, server: &Server) -> Result
           Err(refusal)
         }
       }
-    })
-    .await?;
+    });
+  let socket = tokio::time::timeout(REQUEST_TIMEOUT, handshake)
+    .await
+    .context("handshake timed out")??;
   let token = matches!(admission, Some(Admission::Fresh)).then(|| server.access.token.clone());
   bridge::run_socket(socket, server.link.clone(), token).await;
   Ok(())
@@ -372,6 +417,18 @@ mod tests {
 
   #[test]
   fn cross_site_requests_fail_the_origin_check() {
+    // DNS rebinding: a foreign name that resolves to 127.0.0.1, with its own origin.
+    for upgrade in [false, true] {
+      assert!(!is_allowed(
+        &head(
+          "attacker.example:9",
+          Some("http://attacker.example:9"),
+          None,
+          upgrade
+        ),
+        9
+      ));
+    }
     assert!(is_allowed(
       &head("127.0.0.1:9", None, Some("none"), false),
       9
@@ -558,5 +615,51 @@ mod tests {
       .await
       .unwrap();
     assert!(matches!(received, Some(ClientMessage::Action { .. })));
+  }
+  #[tokio::test]
+  async fn a_request_that_never_finishes_its_head_times_out() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (link, _inbox) = test_link();
+    let server = Server {
+      port,
+      access: Arc::new(Access {
+        code: Mutex::new(None),
+        token: "t".to_string(),
+      }),
+      assets: PAGE,
+      link,
+    };
+    let client = tokio::spawn(async move {
+      let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+      stream.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+      stream
+    });
+    let (stream, _) = listener.accept().await.unwrap();
+
+    let result = serve_connection(stream, &server).await;
+
+    assert!(result.unwrap_err().to_string().contains("timed out"));
+    drop(client);
+  }
+
+  #[cfg(target_os = "linux")]
+  #[test]
+  fn the_socket_table_names_the_user_of_a_connection() {
+    let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:D431 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1000        0 12345 1\n";
+
+    assert_eq!(peer_uid(table, 0xD431, 0x1F90), Some(1000));
+    assert_eq!(peer_uid(table, 0x1F90, 0xD431), None);
+  }
+
+  #[cfg(target_os = "linux")]
+  #[tokio::test]
+  async fn a_connection_from_this_user_is_recognized() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let _client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let (_stream, peer) = listener.accept().await.unwrap();
+
+    assert!(same_user(peer.port(), port));
   }
 }

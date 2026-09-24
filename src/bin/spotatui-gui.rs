@@ -20,7 +20,8 @@ fn main() -> Result<()> {
   // A windowed binary detaches from the console; re-attach to the parent's so
   // `--version` and errors still print when run from a shell.
   #[cfg(windows)]
-  attach_parent_console();
+  #[cfg_attr(debug_assertions, allow(unused_variables))]
+  let attached = attach_parent_console();
   if version_requested() {
     return Ok(());
   }
@@ -34,10 +35,16 @@ fn main() -> Result<()> {
         .expect("failed to build the tokio runtime")
         .block_on(spotatui::run_gui())
     })?;
-  match handle.join() {
+  let result = match handle.join() {
     Ok(result) => result,
     Err(panic) => std::panic::resume_unwind(panic),
+  };
+  // Started from Explorer, a windowed build has nowhere else to show why it stopped.
+  #[cfg(all(windows, not(debug_assertions)))]
+  if let (Err(e), false) = (&result, attached) {
+    show_error(&format!("{e:#}"));
   }
+  result
 }
 
 fn version_requested() -> bool {
@@ -49,7 +56,7 @@ fn version_requested() -> bool {
 }
 
 #[cfg(windows)]
-fn attach_parent_console() {
+fn attach_parent_console() -> bool {
   #[link(name = "kernel32")]
   extern "system" {
     fn AttachConsole(process_id: u32) -> i32;
@@ -58,7 +65,28 @@ fn attach_parent_console() {
   const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
   // Failure just means there is no parent console (launched from the
   // desktop), which is exactly the case the windowed subsystem exists for.
+  unsafe { AttachConsole(ATTACH_PARENT_PROCESS) != 0 }
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn show_error(text: &str) {
+  #[link(name = "user32")]
+  extern "system" {
+    fn MessageBoxW(
+      window: *mut std::ffi::c_void,
+      text: *const u16,
+      caption: *const u16,
+      kind: u32,
+    ) -> i32;
+  }
+  const MB_ICONERROR: u32 = 0x10;
+  let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
   unsafe {
-    AttachConsole(ATTACH_PARENT_PROCESS);
+    MessageBoxW(
+      std::ptr::null_mut(),
+      wide(text).as_ptr(),
+      wide("spotatui-gui").as_ptr(),
+      MB_ICONERROR,
+    );
   }
 }

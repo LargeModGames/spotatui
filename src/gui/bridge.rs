@@ -11,6 +11,8 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio_tungstenite::{tungstenite::Message as WsMessage, WebSocketStream};
 
 const TICK_EVERY: Duration = Duration::from_millis(250);
+/// Timer jitter: a 250 ms tick loop may arrive a few ms early.
+const TICK_SLACK: Duration = Duration::from_millis(20);
 const NO_PAGE_LIMIT: Duration = Duration::from_secs(60);
 
 /// What a page socket needs: the app for its first snapshot, the pushes, and the way back.
@@ -55,7 +57,7 @@ impl Publisher {
 
   /// Push the position at most every 250 ms, whatever the tick rate.
   pub(crate) fn tick(&mut self, app: &App, now: Instant) {
-    if now.saturating_duration_since(self.last_tick) >= TICK_EVERY {
+    if now.saturating_duration_since(self.last_tick) + TICK_SLACK >= TICK_EVERY {
       self.last_tick = now;
       let _ = self.pushes.send(protocol::encode(&protocol::tick(app)));
     }
@@ -139,17 +141,19 @@ mod tests {
 
   #[tokio::test]
   async fn a_tick_push_waits_a_quarter_second_whatever_the_tick_rate() {
-    let t0 = Instant::now();
     let app = shared_app();
     let (link, mut publisher, _inbox) = channel(Arc::clone(&app));
+    let t0 = publisher.last_tick;
     let mut rx = link.pushes.subscribe();
     let app = app.lock().await;
 
     publisher.tick(&app, t0 + Duration::from_millis(100));
     assert!(rx.try_recv().is_err());
-    publisher.tick(&app, t0 + Duration::from_millis(300));
+    publisher.tick(&app, t0 + Duration::from_millis(249));
     assert!(rx.try_recv().unwrap().contains("\"kind\":\"tick\""));
     assert!(rx.try_recv().is_err());
+    publisher.tick(&app, t0 + Duration::from_millis(498));
+    assert!(rx.try_recv().is_ok());
   }
 
   #[test]
@@ -163,5 +167,34 @@ mod tests {
     drop(page);
     assert!(!publisher.abandoned(t0 + Duration::from_secs(150)));
     assert!(publisher.abandoned(t0 + Duration::from_secs(181)));
+  }
+  #[tokio::test]
+  async fn a_lagging_socket_drops_the_backlog_and_gets_a_fresh_resync() {
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    let (link, _publisher, _inbox) = channel(shared_app());
+    let (server_end, client_end) = tokio::io::duplex(64);
+    let server = WebSocketStream::from_raw_socket(server_end, Role::Server, None).await;
+    let mut client = WebSocketStream::from_raw_socket(client_end, Role::Client, None).await;
+    tokio::spawn(run_socket(server, link.clone(), None));
+
+    // The first frame proves the socket subscribed; the tiny pipe then stalls it.
+    let first = client.next().await.unwrap().unwrap();
+    assert!(first.to_text().unwrap().contains("\"kind\":\"hello\""));
+    for _ in 0..70 {
+      link.pushes.send("stale".to_string()).unwrap();
+    }
+
+    let mut frames = Vec::new();
+    while let Ok(Some(Ok(frame))) =
+      tokio::time::timeout(Duration::from_millis(500), client.next()).await
+    {
+      frames.push(frame.to_text().unwrap().to_string());
+    }
+    assert!(frames.iter().all(|frame| frame != "stale"));
+    let routes = frames
+      .iter()
+      .filter(|frame| frame.contains("\"kind\":\"route\""))
+      .count();
+    assert_eq!(routes, 2, "{frames:?}");
   }
 }
