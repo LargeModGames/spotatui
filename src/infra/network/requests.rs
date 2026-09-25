@@ -518,7 +518,6 @@ impl Network {
     path: &str,
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
-    warn!("Sent request to {}", path);
     let mut value = self
       .spotify_api_request_json(Method::GET, path, query, None)
       .await?;

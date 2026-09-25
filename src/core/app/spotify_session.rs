@@ -3,40 +3,18 @@ use super::*;
 impl App {
   /// Whether the request funnel will refuse `endpoint` for this key.
   pub(crate) fn spotify_endpoint_blocked(&self, endpoint: RestrictedEndpoint) -> bool {
-    self.spotify_endpoint_blocked_with(endpoint, simulated_tier())
-  }
-
-  /// [`Self::spotify_endpoint_blocked`] with the simulation passed in, for
-  /// tests (which may not read the process environment: one process, shared
-  /// threads). The env is read only by the two public wrappers above and below.
-  fn spotify_endpoint_blocked_with(
-    &self,
-    endpoint: RestrictedEndpoint,
-    simulated: Option<SpotifyKeyTier>,
-  ) -> bool {
-    SpotifyKeyTier::effective(self.spotify_key_tier, simulated) >= endpoint.required_tier()
+    self.spotify_key_tier >= endpoint.required_tier()
   }
 
   /// Record that `endpoint` refused this key, and persist the new tier for the
-  /// client ID. Ratchets up only; a refusal the simulation could have produced
-  /// is not evidence about the real key, so it is dropped.
+  /// client ID. Ratchets up only.
   pub(crate) fn raise_spotify_key_tier(
     &mut self,
     endpoint: RestrictedEndpoint,
     client_id: Option<&str>,
   ) {
-    self.raise_spotify_key_tier_with(endpoint, client_id, simulated_tier())
-  }
-
-  /// [`Self::raise_spotify_key_tier`] with the simulation passed in, for tests.
-  fn raise_spotify_key_tier_with(
-    &mut self,
-    endpoint: RestrictedEndpoint,
-    client_id: Option<&str>,
-    simulated: Option<SpotifyKeyTier>,
-  ) {
     let required = endpoint.required_tier();
-    if !SpotifyKeyTier::refusal_is_evidence(required, self.spotify_key_tier, simulated) {
+    if required <= self.spotify_key_tier {
       return;
     }
     self.spotify_key_tier = required;
@@ -142,41 +120,5 @@ mod tests {
         "{endpoint:?} must stay reachable on a fresh key"
       );
     }
-  }
-
-  /// A simulated tier refuses for this run only; recording it would lock a real
-  /// key into a tier it never had.
-  #[test]
-  fn a_simulated_tier_refuses_without_recording_anything() {
-    let mut app = App::default();
-    let simulated = Some(SpotifyKeyTier::Restricted2024);
-
-    // The 2024 set goes, the 2026 set stays.
-    assert!(app.spotify_endpoint_blocked_with(RestrictedEndpoint::Recommendations, simulated));
-    assert!(app.spotify_endpoint_blocked_with(RestrictedEndpoint::RelatedArtists, simulated));
-    assert!(!app.spotify_endpoint_blocked_with(RestrictedEndpoint::ArtistTopTracks, simulated));
-    assert!(!app.spotify_endpoint_blocked_with(RestrictedEndpoint::TracksByIds, simulated));
-
-    // A refusal the simulation explains is not evidence about the real key.
-    app.raise_spotify_key_tier_with(
-      RestrictedEndpoint::RelatedArtists,
-      Some("client-a"),
-      simulated,
-    );
-    assert_eq!(app.spotify_key_tier, SpotifyKeyTier::Full);
-    assert!(app.runtime_state.client_key_tiers.is_empty());
-    assert!(app.pending_state_save_patch.client_key_tiers.is_none());
-
-    // One it cannot explain still counts: top tracks are lost only at 2026.
-    app.raise_spotify_key_tier_with(
-      RestrictedEndpoint::ArtistTopTracks,
-      Some("client-a"),
-      simulated,
-    );
-    assert_eq!(app.spotify_key_tier, SpotifyKeyTier::Restricted2026);
-    assert_eq!(
-      app.runtime_state.client_key_tiers.get("client-a"),
-      Some(&SpotifyKeyTier::Restricted2026)
-    );
   }
 }

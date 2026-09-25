@@ -47,30 +47,6 @@ impl SpotifyKeyTier {
       Self::Restricted2026 => "removed by Spotify for apps registered after 2026-02-11",
     }
   }
-
-  /// `0` = full, `1` = 2024 cut, `2` = 2026 cut; higher clamps.
-  pub fn from_level(level: u8) -> Self {
-    match level {
-      0 => Self::Full,
-      1 => Self::Restricted2024,
-      _ => Self::Restricted2026,
-    }
-  }
-
-  /// The recorded tier, widened by the simulation.
-  pub fn effective(recorded: Self, simulated: Option<Self>) -> Self {
-    match simulated {
-      Some(simulated) if simulated > recorded => simulated,
-      _ => recorded,
-    }
-  }
-
-  /// Whether a refusal of an endpoint needing `required` proves the real key
-  /// lost it. False when already recorded, or when the simulation alone could
-  /// have produced it - a simulated refusal is never recorded.
-  pub fn refusal_is_evidence(required: Self, recorded: Self, simulated: Option<Self>) -> bool {
-    required > recorded && !simulated.is_some_and(|simulated| simulated >= required)
-  }
 }
 
 /// An endpoint whose availability depends on the key's tier.
@@ -137,26 +113,6 @@ pub fn restricted_endpoint(
     }
     _ => None,
   }
-}
-
-/// Pretend the key is narrower than it is (`0`/`1`/`2`), so all three
-/// generations can be exercised without three Spotify apps. Widens the
-/// effective tier only; a simulated refusal is never recorded.
-pub const SIMULATED_TIER_ENV_VAR: &str = "MAKE_OUD_SUFFER";
-
-/// The tier `MAKE_OUD_SUFFER` asks for, read from the environment.
-pub fn simulated_tier() -> Option<SpotifyKeyTier> {
-  simulated_tier_from(std::env::var(SIMULATED_TIER_ENV_VAR).ok().as_deref())
-}
-
-/// [`simulated_tier`] from a raw value, so tests never touch the
-/// process environment (one process, shared threads).
-pub fn simulated_tier_from(raw: Option<&str>) -> Option<SpotifyKeyTier> {
-  raw?
-    .trim()
-    .parse::<u8>()
-    .ok()
-    .map(SpotifyKeyTier::from_level)
 }
 
 #[cfg(test)]
@@ -268,79 +224,6 @@ mod tests {
 
     assert!(tier_2024 >= RestrictedEndpoint::Recommendations.required_tier());
     assert!(tier_2024 < RestrictedEndpoint::ArtistTopTracks.required_tier());
-  }
-
-  #[test]
-  fn effective_tier_takes_the_widest_of_recorded_and_simulated() {
-    assert_eq!(
-      SpotifyKeyTier::effective(SpotifyKeyTier::Full, None),
-      SpotifyKeyTier::Full
-    );
-    assert_eq!(
-      SpotifyKeyTier::effective(SpotifyKeyTier::Full, Some(SpotifyKeyTier::Restricted2024)),
-      SpotifyKeyTier::Restricted2024
-    );
-    assert_eq!(
-      SpotifyKeyTier::effective(
-        SpotifyKeyTier::Restricted2026,
-        Some(SpotifyKeyTier::Restricted2024)
-      ),
-      SpotifyKeyTier::Restricted2026,
-      "a simulation must never narrow a recorded tier"
-    );
-  }
-
-  #[test]
-  fn a_refusal_the_simulation_explains_is_not_recorded() {
-    use SpotifyKeyTier::*;
-
-    let recorded = Full;
-    let simulated = Some(Restricted2024);
-
-    // The simulation produced this refusal: no evidence about the real key.
-    assert!(!SpotifyKeyTier::refusal_is_evidence(
-      Restricted2024,
-      recorded,
-      simulated
-    ));
-    // A stricter endpoint still needs a real answer.
-    assert!(SpotifyKeyTier::refusal_is_evidence(
-      Restricted2026,
-      recorded,
-      simulated
-    ));
-    // With no simulation, a refusal is always evidence.
-    assert!(SpotifyKeyTier::refusal_is_evidence(
-      Restricted2024,
-      recorded,
-      None
-    ));
-    // Already recorded: a ratchet needs no second proof.
-    assert!(!SpotifyKeyTier::refusal_is_evidence(
-      Restricted2024,
-      Restricted2024,
-      None
-    ));
-  }
-
-  #[test]
-  fn simulated_tier_reads_the_env_value_without_touching_the_environment() {
-    assert_eq!(simulated_tier_from(None), None);
-    assert_eq!(simulated_tier_from(Some("")), None);
-    assert_eq!(simulated_tier_from(Some("soon")), None);
-    assert_eq!(simulated_tier_from(Some("0")), Some(SpotifyKeyTier::Full));
-    assert_eq!(
-      simulated_tier_from(Some(" 1 ")),
-      Some(SpotifyKeyTier::Restricted2024)
-    );
-    assert_eq!(
-      simulated_tier_from(Some("2")),
-      Some(SpotifyKeyTier::Restricted2026)
-    );
-    assert_eq!(
-      simulated_tier_from(Some("9")),
-      Some(SpotifyKeyTier::Restricted2026)
-    );
   }
 
   #[test]
