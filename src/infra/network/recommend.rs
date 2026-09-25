@@ -53,6 +53,11 @@ impl RecommendationNetwork for Network {
     first_track: Box<Option<TrackInfo>>,
     country: Option<Country>,
   ) {
+    if self.app.lock().await.is_spotify_development_app() {
+      self.set_and_remind_dev_app("Recommendation").await;
+      return;
+    }
+
     let limit = self.large_search_limit;
     let mut query = vec![("limit", limit.to_string())];
     if let Some(country) = country {
@@ -162,8 +167,31 @@ impl RecommendationNetwork for Network {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::app::App;
+  use crate::core::config::ClientConfig;
   use crate::infra::network::requests::SpotifyApiError;
   use reqwest::StatusCode;
+  use std::path::PathBuf;
+  use std::sync::Arc;
+  use tokio::sync::Mutex;
+
+  #[tokio::test]
+  async fn recommendations_short_circuit_before_request_for_development_app() {
+    let app = Arc::new(Mutex::new(App::default()));
+    app.lock().await.mark_spotify_development_app(None);
+    let mut network = Network::new(None, ClientConfig::new(), &app, PathBuf::new());
+
+    network
+      .get_recommendations_for_seed(None, None, Box::new(None), None)
+      .await;
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.status_message(),
+      Some("Recommendation: unavailable for apps in Spotify Development Mode")
+    );
+    assert_ne!(app.get_current_route().id, RouteId::Error);
+  }
 
   #[test]
   fn recommendation_errors_classify_removed_endpoint_responses() {
