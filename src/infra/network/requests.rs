@@ -503,19 +503,26 @@ impl Network {
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
     // TODO remove this debug statement
-    let debug_fail = env::var("MAKE_OUD_SUFFER").is_ok();
-    if debug_fail
-      && (path.contains("/top-tracks")
-        || path.contains("recommendations")
-        || path.contains("tracks?ids="))
-    {
+    let suffer_level: u8 = std::env::var("MAKE_OUD_SUFFER")
+      .ok()
+      .and_then(|v| v.parse().ok())
+      .unwrap_or(0);
+
+    let level_1_blocked = path.contains("recommendations") || path.contains("related-artists");
+    let level_2_blocked = path.contains("/top-tracks")
+      || (path.contains("tracks") && query.iter().any(|(k, _)| k.contains("ids")));
+
+    let should_suffer = (suffer_level >= 1 && level_1_blocked)
+      || (suffer_level >= 2 && level_2_blocked);
+
+    if should_suffer {
       return Err(
         SpotifyApiError {
           status: StatusCode::FORBIDDEN,
           body: "Forbidden".into(),
           detail: None,
         }
-        .into(),
+          .into(),
       );
     }
     let mut value = self
