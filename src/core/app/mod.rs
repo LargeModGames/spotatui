@@ -8,6 +8,7 @@ use crate::core::plugin_api::{
 use crate::core::requirement::{availability, Availability, Capability, Requirement};
 use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
 use crate::core::source::Source;
+use crate::core::spotify_access::{RestrictedEndpoint, SpotifyKeyTier};
 use crate::core::state::{
   PersistedRuntimeState, RadioStationAddOutcome, RadioStationConfig, RuntimeState,
 };
@@ -106,6 +107,7 @@ mod transport;
 mod view;
 mod volume;
 
+mod spotify_session;
 #[cfg(test)]
 mod test_support;
 
@@ -594,6 +596,9 @@ pub struct App {
   /// Where this run's log file is being written, resolved once here so draw
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,
+  /// The Spotify API tier learned for this client ID; `Full` until an endpoint
+  /// refuses it. Private: read through [`App::spotify_endpoint_blocked`].
+  spotify_key_tier: SpotifyKeyTier,
 }
 
 impl App {

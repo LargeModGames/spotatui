@@ -42,12 +42,18 @@ fn handle_down_press_on_hovered_block(app: &mut App) {
       ArtistBlock::Albums => {
         artist.artist_hovered_block = if artist.related_artists_visible() {
           ArtistBlock::RelatedArtists
-        } else {
+        } else if artist.top_tracks_visible() {
           ArtistBlock::TopTracks
+        } else {
+          ArtistBlock::Albums
         };
       }
       ArtistBlock::RelatedArtists => {
-        artist.artist_hovered_block = ArtistBlock::TopTracks;
+        artist.artist_hovered_block = if artist.top_tracks_visible() {
+          ArtistBlock::TopTracks
+        } else {
+          ArtistBlock::Albums
+        };
       }
       ArtistBlock::Empty => {}
     }
@@ -94,7 +100,13 @@ fn handle_up_press_on_hovered_block(app: &mut App) {
         };
       }
       ArtistBlock::Albums => {
-        artist.artist_hovered_block = ArtistBlock::TopTracks;
+        artist.artist_hovered_block = if artist.top_tracks_visible() {
+          ArtistBlock::TopTracks
+        } else if artist.related_artists_visible() {
+          ArtistBlock::RelatedArtists
+        } else {
+          ArtistBlock::Albums
+        }
       }
       ArtistBlock::RelatedArtists => {
         artist.artist_hovered_block = ArtistBlock::Albums;
@@ -251,10 +263,13 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
 fn handle_enter_event_on_hovered_block(app: &mut App) {
   if let Some(artist) = &mut app.artist {
     match artist.artist_hovered_block {
-      ArtistBlock::TopTracks => artist.artist_selected_block = ArtistBlock::TopTracks,
+      ArtistBlock::TopTracks if artist.top_tracks_visible() => {
+        artist.artist_selected_block = ArtistBlock::TopTracks;
+      }
       ArtistBlock::Albums => artist.artist_selected_block = ArtistBlock::Albums,
       ArtistBlock::RelatedArtists => artist.artist_selected_block = ArtistBlock::RelatedArtists,
       ArtistBlock::Empty => {}
+      ArtistBlock::TopTracks => {}
     }
   }
 }
@@ -284,7 +299,11 @@ pub fn handler(key: Key, app: &mut App) {
         match artist.artist_hovered_block {
           ArtistBlock::TopTracks => common_key_events::handle_left_event(app),
           ArtistBlock::Albums => {
-            artist.artist_hovered_block = ArtistBlock::TopTracks;
+            if artist.top_tracks_visible() {
+              artist.artist_hovered_block = ArtistBlock::TopTracks;
+            } else {
+              common_key_events::handle_left_event(app);
+            }
           }
           ArtistBlock::RelatedArtists => {
             artist.artist_hovered_block = ArtistBlock::Albums;
@@ -390,21 +409,52 @@ mod tests {
   use super::*;
   use crate::core::app::ActiveBlock;
   use crate::core::pagination::Paged;
-  use crate::core::plugin_api::ArtistInfo;
+  use crate::core::plugin_api::{ArtistInfo, TrackInfo};
 
-  fn artist_page(related_artists: Vec<ArtistInfo>) -> Artist {
+  fn track(id: &str, name: &str) -> TrackInfo {
+    TrackInfo {
+      id: Some(id.to_string()),
+      name: name.to_string(),
+      uri: Some(format!("spotify:track:{id}")),
+      artists: vec!["First".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 1_000,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }
+  }
+
+  fn artist_page_with_tracks(
+    top_tracks: Vec<TrackInfo>,
+    related_artists: Vec<ArtistInfo>,
+  ) -> Artist {
     Artist {
       artist_id: "artist1".to_string(),
       artist_name: "First".to_string(),
       albums: Paged::default(),
       related_artists,
-      top_tracks: vec![],
+      top_tracks,
       selected_album_index: 0,
       selected_related_artist_index: 0,
       selected_top_track_index: 0,
       artist_hovered_block: ArtistBlock::TopTracks,
       artist_selected_block: ArtistBlock::RelatedArtists,
     }
+  }
+
+  fn artist_page(related_artists: Vec<ArtistInfo>) -> Artist {
+    // Default page has 1 track so top_tracks_visible() is true for standard 3-block tests
+    artist_page_with_tracks(vec![track("t1", "Track 1")], related_artists)
+  }
+
+  fn empty_artist_page(related_artists: Vec<ArtistInfo>) -> Artist {
+    // Empty tracks for testing dev-mode / visibility-skipping behavior
+    artist_page_with_tracks(vec![], related_artists)
   }
 
   fn related_artist(id: &str, name: &str) -> ArtistInfo {
@@ -429,8 +479,6 @@ mod tests {
     app_hovering_with(App::default(), page)
   }
 
-  /// The single place a handler test writes `app.artist`. Every fixture goes
-  /// through it so the coupling ratchet sees one write site, not one per test.
   fn app_hovering_with(mut app: App, page: Artist) -> App {
     app.artist = Some(page);
     app
@@ -464,17 +512,108 @@ mod tests {
   fn cycles_skip_the_related_artists_block_when_the_list_is_empty() {
     let mut app = app_hovering(artist_page(vec![]));
 
-    // Down: TopTracks → Albums, then wrap — RelatedArtists never appears.
+    // Down: TopTracks → Albums, then wraps back to TopTracks (skips RelatedArtists)
     handle_down_press_on_hovered_block(&mut app);
     assert_eq!(hovered_block(&app), ArtistBlock::Albums);
     handle_down_press_on_hovered_block(&mut app);
     assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
 
-    // Up from TopTracks lands on Albums, not on the hidden block.
+    // Up from TopTracks lands on Albums
     handle_up_press_on_hovered_block(&mut app);
     assert_eq!(hovered_block(&app), ArtistBlock::Albums);
     handle_up_press_on_hovered_block(&mut app);
     assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+  }
+
+  #[test]
+  fn cycles_skip_top_tracks_when_not_visible() {
+    let mut page = empty_artist_page(vec![related_artist("artist2", "Second")]);
+    page.artist_hovered_block = ArtistBlock::Albums;
+    let mut app = app_hovering(page);
+
+    // Down: Albums → RelatedArtists, then wraps straight to Albums (skipping TopTracks)
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::RelatedArtists);
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+
+    // Up: Albums → RelatedArtists, wraps back to Albums (skipping TopTracks)
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::RelatedArtists);
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+  }
+
+  #[test]
+  fn cycles_stay_on_albums_when_both_top_tracks_and_related_artists_are_empty() {
+    let mut page = empty_artist_page(vec![]);
+    page.artist_hovered_block = ArtistBlock::Albums;
+    let mut app = app_hovering(page);
+
+    // Only Albums exists: pressing down or up stays on Albums
+    handle_down_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+
+    handle_up_press_on_hovered_block(&mut app);
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+  }
+
+  #[test]
+  fn left_press_from_albums_moves_to_top_tracks_when_visible() {
+    let mut page = artist_page(vec![]);
+    page.artist_hovered_block = ArtistBlock::Albums;
+    let mut app = app_hovering(page);
+
+    handler(Key::Left, &mut app);
+
+    assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+  }
+
+  #[test]
+  fn left_press_from_albums_exits_artist_view_when_top_tracks_not_visible() {
+    let mut page = empty_artist_page(vec![]);
+    page.artist_hovered_block = ArtistBlock::Albums;
+    let mut app = app_hovering(page);
+
+    handler(Key::Left, &mut app);
+
+    // Does NOT get stuck on TopTracks; exits or resets selected block
+    assert_ne!(hovered_block(&app), ArtistBlock::TopTracks);
+    assert_eq!(
+      app.artist.as_ref().unwrap().artist_selected_block,
+      ArtistBlock::Empty
+    );
+  }
+
+  #[test]
+  fn enter_on_hovered_top_tracks_ignored_when_not_visible() {
+    let mut page = empty_artist_page(vec![]);
+    page.artist_hovered_block = ArtistBlock::TopTracks;
+    page.artist_selected_block = ArtistBlock::Empty;
+    let mut app = app_hovering(page);
+
+    handle_enter_event_on_hovered_block(&mut app);
+
+    // Remains unselected because top tracks are hidden/empty!
+    assert_eq!(
+      app.artist.as_ref().unwrap().artist_selected_block,
+      ArtistBlock::Empty
+    );
+  }
+
+  #[test]
+  fn enter_on_hovered_top_tracks_selects_when_visible() {
+    let mut page = artist_page(vec![]);
+    page.artist_hovered_block = ArtistBlock::TopTracks;
+    page.artist_selected_block = ArtistBlock::Empty;
+    let mut app = app_hovering(page);
+
+    handle_enter_event_on_hovered_block(&mut app);
+
+    assert_eq!(
+      app.artist.as_ref().unwrap().artist_selected_block,
+      ArtistBlock::TopTracks
+    );
   }
 
   #[test]
@@ -489,30 +628,14 @@ mod tests {
 
   #[test]
   fn r_on_a_top_track_seeds_recommendations_with_the_track_as_the_context_row() {
-    use crate::core::plugin_api::TrackInfo;
     use crate::core::user_config::UserConfig;
     use crate::infra::network::IoEvent;
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
 
     let (tx, rx) = channel();
-    let mut page = artist_page(vec![]);
+    let mut page = artist_page_with_tracks(vec![track("one", "One")], vec![]);
     page.artist_selected_block = ArtistBlock::TopTracks;
-    page.top_tracks = vec![TrackInfo {
-      uri: Some("spotify:track:one".to_string()),
-      name: "One".to_string(),
-      artists: vec!["First".to_string()],
-      album: "Album".to_string(),
-      duration_ms: 1_000,
-      id: Some("one".to_string()),
-      album_id: None,
-      artist_refs: vec![],
-      is_playable: true,
-      is_local: false,
-      track_number: 0,
-      explicit: false,
-      image_url: None,
-    }];
     let mut app = app_hovering_with(
       App::new(tx, UserConfig::new(), Some(SystemTime::now())),
       page,
@@ -535,13 +658,12 @@ mod tests {
 
   #[test]
   fn related_artist_lookup_on_an_empty_list_resolves_nothing() {
-    // An empty related-artists list with the cursor at 0 used to index out of bounds.
-    assert_eq!(selected_related_artist(&artist_page(vec![])), None);
+    assert_eq!(selected_related_artist(&empty_artist_page(vec![])), None);
   }
 
   #[test]
   fn related_artist_lookup_returns_the_row_identity() {
-    let page = artist_page(vec![ArtistInfo {
+    let page = empty_artist_page(vec![ArtistInfo {
       id: Some("artist2".to_string()),
       uri: Some("spotify:artist:artist2".to_string()),
       name: "Second".to_string(),
@@ -556,7 +678,7 @@ mod tests {
 
   #[test]
   fn related_artist_lookup_without_an_id_resolves_nothing() {
-    let page = artist_page(vec![ArtistInfo {
+    let page = empty_artist_page(vec![ArtistInfo {
       id: None,
       uri: None,
       name: "Unknown".to_string(),

@@ -344,6 +344,39 @@ fn spotify_auth_mode(
   }
 }
 
+/// Whether this launch forgets the key tier a `403`/`404` saved: whenever the
+/// auth wizard ran, the one gesture that means "ask Spotify again".
+fn forgets_saved_spotify_key_tier(reconfigure_auth: bool, wizard_ran: bool) -> bool {
+  reconfigure_auth || wizard_ran
+}
+
+const TIER_RESET_NOTICE: &str =
+  "Cleared the saved Spotify API restrictions; your app is asked again from scratch.\n";
+
+/// Forget the key tier a refusal saved: the map `App` is built from, and the
+/// saved entry that would bring it back next launch. A still-refused endpoint
+/// is simply learned again.
+fn clear_saved_spotify_key_tier(
+  runtime_state: &mut RuntimeState,
+  state_path: Option<&Path>,
+  onboarding: &dyn Onboarding,
+) {
+  if runtime_state.client_key_tiers.is_empty() {
+    return;
+  }
+  runtime_state.client_key_tiers.clear();
+  onboarding.info(TIER_RESET_NOTICE);
+
+  match state_path {
+    Some(path) => {
+      if let Err(e) = crate::core::state::save_clearing_client_key_tiers(path) {
+        log::warn!("[state] failed to clear the saved Spotify key tier: {e:#}");
+      }
+    }
+    None => log::warn!("[state] no runtime state path; the cleared Spotify key tier was not saved"),
+  }
+}
+
 fn global_song_counter_prompt() -> OnboardingPrompt {
   OnboardingPrompt::Confirm {
     title: "Global Song Counter".to_string(),
@@ -645,6 +678,16 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 
   let config_paths = client_config.get_or_build_paths()?;
 
+  // Before `App` reads the tier below: the wizard running is the one moment a
+  // saved refusal is worth forgetting.
+  if forgets_saved_spotify_key_tier(reconfigure_auth, wizard_ran) {
+    clear_saved_spotify_key_tier(
+      &mut runtime_state,
+      state_path.as_deref(),
+      onboarding.as_ref(),
+    );
+  }
+
   let auth_mode = spotify_auth_mode(matches.subcommand_name(), reconfigure_auth, wizard_ran);
 
   // The GitHub update check runs concurrently with authentication: both are
@@ -729,6 +772,12 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     None => (None, None),
   };
 
+  let current_client_id = spotify
+    .as_ref()
+    .map(|client| client.creds.id.as_str())
+    .unwrap_or(client_config.client_id.as_str());
+  let spotify_key_tier = runtime_state.spotify_key_tier_for(current_client_id);
+
   let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
   info!("app state initialized");
 
@@ -739,6 +788,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     runtime_state.clone(),
     state_path.clone(),
     token_expiry,
+    spotify_key_tier,
   )));
 
   // `--play-file <PATH>`: queue a local file to start once the UI is up. The
@@ -785,13 +835,14 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 mod tests {
   use super::{
     apply_configured_runtime_defaults, ask_auth_setup_migration, auth_setup_migration_prompt,
-    describe_client_id_notice, global_song_counter_prompt, persist_global_song_count,
-    prompt_global_song_count_opt_in, should_prompt_global_song_count, spotify_auth_mode,
-    SpotifyAuthMode,
+    clear_saved_spotify_key_tier, describe_client_id_notice, forgets_saved_spotify_key_tier,
+    global_song_counter_prompt, persist_global_song_count, prompt_global_song_count_opt_in,
+    should_prompt_global_song_count, spotify_auth_mode, SpotifyAuthMode, TIER_RESET_NOTICE,
   };
   use crate::core::auth;
   use crate::core::limits::MAX_PLAYBAR_ROWS;
   use crate::core::onboarding::OnboardingPrompt;
+  use crate::core::spotify_access::SpotifyKeyTier;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
   use crate::core::test_helpers::ScriptedOnboarding;
   use crate::core::user_config::UserConfig;
@@ -1044,5 +1095,68 @@ mod tests {
         "subcommand={subcommand:?} reconfigure_auth={reconfigure_auth} wizard_ran={wizard_ran}"
       );
     }
+  }
+
+  #[test]
+  fn a_re_auth_is_the_only_thing_that_forgets_a_saved_key_tier() {
+    assert!(forgets_saved_spotify_key_tier(true, false));
+    assert!(forgets_saved_spotify_key_tier(false, true));
+    assert!(forgets_saved_spotify_key_tier(true, true));
+
+    // A plain launch, a subcommand, a declined migration.
+    assert!(!forgets_saved_spotify_key_tier(false, false));
+  }
+
+  #[test]
+  fn re_authentication_forgets_a_tier_saved_from_an_earlier_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let client_id = "0123456789abcdef0123456789abcdef";
+    crate::core::state::save(
+      &path,
+      &PersistedRuntimeState {
+        client_key_tiers: Some(std::collections::BTreeMap::from([(
+          client_id.to_string(),
+          SpotifyKeyTier::Restricted2026,
+        )])),
+        ..PersistedRuntimeState::default()
+      },
+    )
+    .unwrap();
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&crate::core::state::load(&path).unwrap());
+    assert_eq!(
+      runtime.spotify_key_tier_for(client_id),
+      SpotifyKeyTier::Restricted2026
+    );
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    clear_saved_spotify_key_tier(&mut runtime, Some(&path), &onboarding);
+
+    assert_eq!(
+      runtime.spotify_key_tier_for(client_id),
+      SpotifyKeyTier::Full
+    );
+    assert_eq!(
+      crate::core::state::load(&path).unwrap().client_key_tiers,
+      None
+    );
+    assert!(onboarding.saw(TIER_RESET_NOTICE));
+  }
+
+  #[test]
+  fn re_authentication_says_nothing_when_no_tier_was_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let mut runtime = RuntimeState::default();
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    clear_saved_spotify_key_tier(&mut runtime, Some(&path), &onboarding);
+
+    assert!(
+      !path.exists(),
+      "a launch with no saved tier must not write a state file"
+    );
+    assert!(!onboarding.saw(TIER_RESET_NOTICE));
   }
 }

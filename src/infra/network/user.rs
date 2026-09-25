@@ -1,7 +1,8 @@
-use super::requests::is_rate_limited_error;
+use super::requests::{is_rate_limited_error, is_restricted_client_id_error};
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId, UserInfo};
 use crate::core::plugin_api::TrackInfo;
+use crate::core::spotify_access::RestrictedEndpoint;
 use anyhow::anyhow;
 
 use crate::infra::network::mapping::map_cursor_page;
@@ -215,6 +216,15 @@ impl UserNetwork for Network {
   }
 
   async fn get_top_artists_mix(&mut self) {
+    // The mix is built from each artist's top tracks, so a key without that
+    // endpoint cannot build it at all - refuse before the fan-out.
+    if self
+      .endpoint_is_out_of_reach("Top Artists Mix", RestrictedEndpoint::ArtistTopTracks)
+      .await
+    {
+      return;
+    }
+
     // Set loading state
     {
       let mut app = self.app.lock().await;
@@ -251,12 +261,20 @@ impl UserNetwork for Network {
       }
     });
     let mut all_tracks = Vec::new();
-    for res in futures::future::join_all(track_fetches)
-      .await
-      .into_iter()
-      .flatten()
-    {
-      all_tracks.extend(res.tracks);
+    for res in futures::future::join_all(track_fetches).await.into_iter() {
+      match res {
+        Ok(res) => all_tracks.extend(res.tracks),
+        Err(e) if is_restricted_client_id_error(&e) => {
+          self
+            .raise_and_remind_unavailable("Top Artists Mix", RestrictedEndpoint::ArtistTopTracks)
+            .await;
+          self.app.lock().await.discover_loading = false;
+          return;
+        }
+        Err(e) => {
+          log::warn!("top-tracks fetch failed for one mix artist: {e}");
+        }
+      }
     }
 
     // 3. Shuffle
@@ -314,9 +332,34 @@ impl UserNetwork for Network {
 mod tests {
   use super::*;
   use crate::core::app::App;
+  use crate::core::config::ClientConfig;
   use crate::core::user_config::UserConfig;
+  use std::path::PathBuf;
   use std::sync::mpsc::channel;
+  use std::sync::Arc;
   use std::time::SystemTime;
+  use tokio::sync::Mutex;
+
+  #[tokio::test]
+  async fn the_mix_short_circuits_when_the_key_lost_top_tracks() {
+    // The mix is built from `artists/{id}/top-tracks`, so that endpoint - not
+    // `me/top/artists`, which survived - decides whether it can run at all.
+    let app = Arc::new(Mutex::new(App::default()));
+    app
+      .lock()
+      .await
+      .raise_spotify_key_tier(RestrictedEndpoint::ArtistTopTracks, None);
+    let mut network = Network::new(None, ClientConfig::new(), &app, PathBuf::new());
+
+    network.get_top_artists_mix().await;
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.status_message(),
+      Some("Top Artists Mix: removed by Spotify for apps registered after 2026-02-11")
+    );
+    assert_ne!(app.get_current_route().id, RouteId::Error);
+  }
 
   #[test]
   fn a_parked_backend_keeps_its_row_in_the_device_list() {

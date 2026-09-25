@@ -1,6 +1,8 @@
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, RouteId, TrackTableContext};
 use crate::core::plugin_api::TrackInfo;
+use crate::core::spotify_access::RestrictedEndpoint;
+use crate::infra::network::requests::is_restricted_client_id_error;
 use anyhow::anyhow;
 use rspotify::model::{
   enums::Country,
@@ -48,6 +50,13 @@ impl RecommendationNetwork for Network {
     first_track: Box<Option<TrackInfo>>,
     country: Option<Country>,
   ) {
+    if self
+      .endpoint_is_out_of_reach("Recommendation", RestrictedEndpoint::Recommendations)
+      .await
+    {
+      return;
+    }
+
     let limit = self.large_search_limit;
     let mut query = vec![("limit", limit.to_string())];
     if let Some(country) = country {
@@ -104,6 +113,12 @@ impl RecommendationNetwork for Network {
             .await
           {
             Ok(res) => res.tracks,
+            Err(e) if is_restricted_client_id_error(&e) => {
+              self
+                .raise_and_remind_unavailable("Recommendation", RestrictedEndpoint::TracksByIds)
+                .await;
+              return;
+            }
             Err(e) => {
               self.handle_error(anyhow!(e)).await;
               return;
@@ -127,6 +142,11 @@ impl RecommendationNetwork for Network {
         app.track_table.context = Some(TrackTableContext::RecommendedTracks);
         app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
       }
+      Err(e) if is_restricted_client_id_error(&e) => {
+        self
+          .raise_and_remind_unavailable("Recommendation", RestrictedEndpoint::Recommendations)
+          .await
+      }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
       }
@@ -144,5 +164,36 @@ impl RecommendationNetwork for Network {
     self
       .get_recommendations_for_seed(None, seed_tracks, first_track, country)
       .await;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::App;
+  use crate::core::config::ClientConfig;
+  use std::path::PathBuf;
+  use std::sync::Arc;
+  use tokio::sync::Mutex;
+
+  #[tokio::test]
+  async fn recommendations_short_circuit_before_request_when_the_key_lost_them() {
+    let app = Arc::new(Mutex::new(App::default()));
+    app
+      .lock()
+      .await
+      .raise_spotify_key_tier(RestrictedEndpoint::Recommendations, None);
+    let mut network = Network::new(None, ClientConfig::new(), &app, PathBuf::new());
+
+    network
+      .get_recommendations_for_seed(None, None, Box::new(None), None)
+      .await;
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.status_message(),
+      Some("Recommendation: removed by Spotify for apps registered after 2024-11-27")
+    );
+    assert_ne!(app.get_current_route().id, RouteId::Error);
   }
 }

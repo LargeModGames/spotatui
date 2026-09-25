@@ -1,9 +1,9 @@
 use super::Network;
-use crate::core::{app::App, auth};
+use crate::core::{app::App, auth, spotify_access::restricted_endpoint};
 use anyhow::anyhow;
 use log::{debug, trace, warn};
 use reqwest::header::CONTENT_LENGTH;
-use reqwest::Method;
+use reqwest::{Method, StatusCode};
 use rspotify::AuthCodePkceSpotify;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -439,6 +439,24 @@ pub async fn spotify_api_request_json_for_with_refresh(
   token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
 ) -> anyhow::Result<Value> {
+  // Key-tier gate: every caller funnels through here, so a surface that forgot
+  // to pre-check still cannot spend a refused request. Answered before the
+  // token, pacing and socket, so callers see the same 403 as Spotify's own.
+  if let Some(endpoint) = restricted_endpoint(method.as_str(), path, query) {
+    let blocked = app.lock().await.spotify_endpoint_blocked(endpoint);
+    if blocked {
+      return Err(
+        SpotifyApiError {
+          status: StatusCode::FORBIDDEN,
+          body: "Forbidden".to_string(),
+          detail: Some(endpoint.unavailable_note().to_string()),
+          endpoint: None,
+        }
+        .into(),
+      );
+    }
+  }
+
   let base_url = &spotify.config.api_base_url;
 
   spotify_api_request_json_for_base_with_refresh(
@@ -961,6 +979,11 @@ pub fn is_not_found_error(e: &anyhow::Error) -> bool {
     .is_some_and(|se| se.status == reqwest::StatusCode::NOT_FOUND)
 }
 
+/// Whether an error is Spotify refusing the endpoint because of the key's tier.
+pub fn is_restricted_client_id_error(e: &anyhow::Error) -> bool {
+  is_forbidden_error(e) || is_not_found_error(e)
+}
+
 pub async fn spotify_get_typed_compat_for_with_refresh<T: DeserializeOwned>(
   spotify: &AuthCodePkceSpotify,
   path: &str,
@@ -1432,6 +1455,26 @@ mod tests {
     });
     assert!(is_not_found_error(&not_found));
     assert!(!is_not_found_error(&rate_limited));
+  }
+
+  #[test]
+  fn restricted_key_classification_accepts_both_refusal_statuses() {
+    for status in [
+      reqwest::StatusCode::FORBIDDEN,
+      reqwest::StatusCode::NOT_FOUND,
+    ] {
+      let error = anyhow::Error::new(SpotifyApiError {
+        status,
+        body: "Forbidden".to_string(),
+        detail: None,
+        endpoint: None,
+      });
+      assert!(is_restricted_client_id_error(&error));
+    }
+
+    assert!(!is_restricted_client_id_error(&anyhow::anyhow!(
+      "transport failure"
+    )));
   }
 
   #[tokio::test]

@@ -1,12 +1,16 @@
+use super::util::{draw_selectable_list, get_artist_highlight_state, get_color, join_artist_names};
 use crate::core::app::{App, ArtistBlock};
+use crate::core::spotify_access::RestrictedEndpoint;
+use crate::tui::theme::ThemeExt;
+use ratatui::layout::Alignment;
+use ratatui::text::Span;
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   Frame,
 };
 use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
-
-use super::util::{draw_selectable_list, get_artist_highlight_state, join_artist_names};
 
 pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   if let Some(artist) = &app.artist {
@@ -25,36 +29,65 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       (tracks, albums, None)
     };
 
-    let top_tracks = artist
-      .top_tracks
-      .iter()
-      .map(|top_track| {
-        let mut name = String::new();
-        if let Some(context) = &app.current_playback_context {
-          let track_id = match &context.item {
-            Some(PlayableItem::Track(track)) => track.id.as_ref().map(|id| id.id().to_string()),
-            Some(PlayableItem::Episode(episode)) => Some(episode.id.id().to_string()),
-            _ => None,
+    if artist.top_tracks.is_empty() {
+      let title = &format!("{} - Top Tracks", artist.artist_name);
+      let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(app.user_config.theme.base_style())
+        .title(Span::styled(
+          title,
+          get_color((false, false), app.user_config.theme),
+        ))
+        .border_style(get_color((false, false), app.user_config.theme));
+
+      // Empty means either the key lost the endpoint or the artist has none;
+      // only the first may name Spotify's cutoff.
+      let notice_text = if app.spotify_endpoint_blocked(RestrictedEndpoint::ArtistTopTracks) {
+        format!(
+          "Top Tracks: {}",
+          RestrictedEndpoint::ArtistTopTracks.unavailable_note()
+        )
+      } else {
+        "No top tracks".to_string()
+      };
+      let notice = Paragraph::new(notice_text)
+        .block(block)
+        .style(app.user_config.theme.base_style())
+        .alignment(Alignment::Center);
+
+      f.render_widget(notice, tracks_area);
+    } else {
+      let top_tracks = artist
+        .top_tracks
+        .iter()
+        .map(|top_track| {
+          let mut name = String::new();
+          if let Some(context) = &app.current_playback_context {
+            let track_id = match &context.item {
+              Some(PlayableItem::Track(track)) => track.id.as_ref().map(|id| id.id().to_string()),
+              Some(PlayableItem::Episode(episode)) => Some(episode.id.id().to_string()),
+              _ => None,
+            };
+
+            if track_id.is_some() && track_id == top_track.id {
+              name.push_str("▶ ");
+            }
           };
-
-          if track_id.is_some() && track_id == top_track.id {
-            name.push_str("▶ ");
-          }
-        };
-        name.push_str(&top_track.name);
-        name
-      })
-      .collect::<Vec<String>>();
-
-    draw_selectable_list(
-      f,
-      app,
-      tracks_area,
-      &format!("{} - Top Tracks", artist.artist_name),
-      &top_tracks,
-      get_artist_highlight_state(app, ArtistBlock::TopTracks),
-      Some(artist.selected_top_track_index),
-    );
+          name.push_str(&top_track.name);
+          name
+        })
+        .collect::<Vec<String>>();
+      draw_selectable_list(
+        f,
+        app,
+        tracks_area,
+        &format!("{} - Top Tracks", artist.artist_name),
+        &top_tracks,
+        get_artist_highlight_state(app, ArtistBlock::TopTracks),
+        Some(artist.selected_top_track_index),
+      );
+    };
 
     let albums = &artist
       .albums

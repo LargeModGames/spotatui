@@ -5,9 +5,11 @@
 //! edits do not churn every time volume, source, pane sizes, announcements, or
 //! radio stations change.
 
+use crate::core::spotify_access::SpotifyKeyTier;
 use crate::core::{limits::MAX_PLAYBAR_ROWS, source::Source};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const FILE_NAME: &str = "state.yml";
@@ -57,6 +59,9 @@ pub struct RuntimeState {
   pub radio_stations: Vec<RadioStationConfig>,
   /// Whether the one-time community-playlist-pin prompt has been shown.
   pub community_pin_prompt_shown: bool,
+  /// The Spotify API tier learned for each client ID, so re-authorising with a
+  /// different app behaves the way that key is allowed to.
+  pub client_key_tiers: BTreeMap<String, SpotifyKeyTier>,
 }
 
 impl Default for RuntimeState {
@@ -72,6 +77,7 @@ impl Default for RuntimeState {
       library_height_percent: 30,
       radio_stations: Vec::new(),
       community_pin_prompt_shown: false,
+      client_key_tiers: BTreeMap::new(),
     }
   }
 }
@@ -108,6 +114,9 @@ impl RuntimeState {
     if let Some(community_pin_prompt_shown) = state.community_pin_prompt_shown {
       self.community_pin_prompt_shown = community_pin_prompt_shown;
     }
+    if let Some(client_key_tiers) = &state.client_key_tiers {
+      self.client_key_tiers = sanitized_client_key_tiers(client_key_tiers);
+    }
   }
 
   pub fn to_persisted(&self) -> PersistedRuntimeState {
@@ -123,7 +132,13 @@ impl RuntimeState {
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
       qobuz_bundle_cache: None,
+      client_key_tiers: Some(sanitized_client_key_tiers(&self.client_key_tiers)),
     }
+  }
+
+  /// The tier learned for `id`, or full access for a key nothing has refused.
+  pub fn spotify_key_tier_for(&self, id: &str) -> SpotifyKeyTier {
+    self.client_key_tiers.get(id).copied().unwrap_or_default()
   }
 
   pub fn add_radio_station(
@@ -222,6 +237,8 @@ pub struct PersistedRuntimeState {
   pub community_pin_prompt_shown: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub qobuz_bundle_cache: Option<QobuzBundleCache>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub client_key_tiers: Option<BTreeMap<String, SpotifyKeyTier>>,
 }
 
 impl PersistedRuntimeState {
@@ -316,6 +333,7 @@ impl PersistedRuntimeState {
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
       && self.qobuz_bundle_cache.is_none()
+      && self.client_key_tiers.is_none()
   }
 }
 
@@ -333,8 +351,9 @@ pub fn default_state_path() -> Result<PathBuf> {
 enum StateRead {
   /// The file is absent or blank; treat as empty state.
   Empty,
-  /// The file parsed cleanly.
-  Parsed(PersistedRuntimeState),
+  /// The file parsed cleanly. Boxed: it dwarfs the other variants
+  /// (`clippy::large_enum_variant`), and a state read is not a hot loop.
+  Parsed(Box<PersistedRuntimeState>),
   /// The file was readable but its contents did not parse.
   Malformed(anyhow::Error),
   /// The file could not be read (permissions, other I/O error).
@@ -371,7 +390,7 @@ fn read_state(path: &Path) -> StateRead {
   }
 
   match serde_yaml::from_str::<PersistedRuntimeState>(contents) {
-    Ok(state) => StateRead::Parsed(sanitized_persisted_state(&state)),
+    Ok(state) => StateRead::Parsed(Box::new(sanitized_persisted_state(&state))),
     Err(error) => StateRead::Malformed(
       anyhow::Error::new(error)
         .context(format!("malformed runtime state file: {}", path.display())),
@@ -384,7 +403,7 @@ fn read_state(path: &Path) -> StateRead {
 pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
   match read_state(path) {
     StateRead::Empty => Ok(PersistedRuntimeState::default()),
-    StateRead::Parsed(state) => Ok(state),
+    StateRead::Parsed(state) => Ok(*state),
     StateRead::Malformed(error) | StateRead::Unreadable(error) => Err(error),
   }
 }
@@ -401,7 +420,7 @@ pub fn load(path: &Path) -> Result<PersistedRuntimeState> {
 fn load_for_save(path: &Path) -> Result<PersistedRuntimeState> {
   match read_state(path) {
     StateRead::Empty => Ok(PersistedRuntimeState::default()),
-    StateRead::Parsed(state) => Ok(state),
+    StateRead::Parsed(state) => Ok(*state),
     StateRead::Malformed(error) => {
       let backup = path.with_extension("yml.bak");
       match std::fs::rename(path, &backup) {
@@ -444,6 +463,18 @@ pub fn save_removing_radio_station(path: &Path, url: &str) -> Result<()> {
   write_state(path, &merged)
 }
 
+/// Forget every saved Spotify key tier.
+///
+/// A patch can only tighten a tier (`merged_client_key_tiers`), so lifting one
+/// needs its own read-modify-write. Writes nothing when there is none to forget.
+pub fn save_clearing_client_key_tiers(path: &Path) -> Result<()> {
+  let mut merged = load_for_save(path)?;
+  if merged.client_key_tiers.take().is_none() {
+    return Ok(());
+  }
+  write_state(path, &merged)
+}
+
 fn write_state(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
   let state = sanitized_persisted_state(state);
   let yaml = serde_yaml::to_string(&state).context("serializing runtime state")?;
@@ -476,6 +507,10 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .qobuz_bundle_cache
       .clone()
       .filter(QobuzBundleCache::is_complete),
+    client_key_tiers: state
+      .client_key_tiers
+      .as_ref()
+      .map(sanitized_client_key_tiers),
   }
 }
 
@@ -522,6 +557,10 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(qobuz_bundle_cache) = &patch.qobuz_bundle_cache {
     merged.qobuz_bundle_cache = Some(qobuz_bundle_cache.clone());
   }
+  if let Some(client_key_tiers) = &patch.client_key_tiers {
+    let existing = merged.client_key_tiers.clone().unwrap_or_default();
+    merged.client_key_tiers = Some(merged_client_key_tiers(&existing, client_key_tiers));
+  }
 }
 
 fn sanitized_ids(ids: &[String]) -> Vec<String> {
@@ -545,6 +584,37 @@ fn merged_ids(existing: &[String], incoming: &[String]) -> Vec<String> {
       Some(id.to_string())
     })
     .collect()
+}
+
+fn sanitized_client_key_tiers(
+  tiers: &BTreeMap<String, SpotifyKeyTier>,
+) -> BTreeMap<String, SpotifyKeyTier> {
+  tiers
+    .iter()
+    .filter_map(|(id, tier)| {
+      let id = id.trim();
+      (!id.is_empty()).then(|| (id.to_string(), *tier))
+    })
+    .collect()
+}
+
+/// Union two saved tier maps for the read-modify-write save path, taking the
+/// stricter tier per ID: a tier only ratchets up, so a second instance may add
+/// a restriction but never lift one.
+fn merged_client_key_tiers(
+  existing: &BTreeMap<String, SpotifyKeyTier>,
+  incoming: &BTreeMap<String, SpotifyKeyTier>,
+) -> BTreeMap<String, SpotifyKeyTier> {
+  let mut merged = sanitized_client_key_tiers(existing);
+  for (id, tier) in sanitized_client_key_tiers(incoming) {
+    match merged.get(&id) {
+      Some(recorded) if *recorded >= tier => {}
+      _ => {
+        merged.insert(id, tier);
+      }
+    }
+  }
+  merged
 }
 
 pub(crate) fn sanitized_radio_stations(stations: &[RadioStationConfig]) -> Vec<RadioStationConfig> {
@@ -653,6 +723,10 @@ mod tests {
         app_secret: "s".repeat(32),
         oauth_key: "k".to_string(),
       }),
+      client_key_tiers: Some(BTreeMap::from([(
+        "dev-client".to_string(),
+        SpotifyKeyTier::Restricted2026,
+      )])),
     };
 
     save(&path, &state).unwrap();
@@ -673,6 +747,127 @@ mod tests {
       assert_eq!(dir_mode, 0o700);
       assert_eq!(file_mode, 0o600);
     }
+  }
+
+  #[test]
+  fn client_key_tiers_round_trip_as_a_max_merged_sparse_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let first_patch = PersistedRuntimeState {
+      client_key_tiers: Some(BTreeMap::from([
+        (" client-a ".to_string(), SpotifyKeyTier::Restricted2024),
+        ("client-a".to_string(), SpotifyKeyTier::Restricted2024),
+      ])),
+      ..PersistedRuntimeState::default()
+    };
+
+    assert!(!first_patch.is_empty());
+    save(&path, &first_patch).unwrap();
+
+    // A second instance may only tighten: client-a keeps the stricter tier it
+    // already had, client-b is new.
+    let second_patch = PersistedRuntimeState {
+      client_key_tiers: Some(BTreeMap::from([
+        ("client-a".to_string(), SpotifyKeyTier::Full),
+        ("client-b".to_string(), SpotifyKeyTier::Restricted2026),
+      ])),
+      ..PersistedRuntimeState::default()
+    };
+    save(&path, &second_patch).unwrap();
+
+    assert_eq!(
+      load(&path).unwrap().client_key_tiers,
+      Some(BTreeMap::from([
+        ("client-a".to_string(), SpotifyKeyTier::Restricted2024),
+        ("client-b".to_string(), SpotifyKeyTier::Restricted2026),
+      ]))
+    );
+  }
+
+  #[test]
+  fn clearing_the_saved_tiers_lifts_a_ratchet_and_keeps_the_rest_of_the_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(
+      &path,
+      &PersistedRuntimeState {
+        volume_percent: Some(42),
+        client_key_tiers: Some(BTreeMap::from([
+          ("client-a".to_string(), SpotifyKeyTier::Restricted2024),
+          ("client-b".to_string(), SpotifyKeyTier::Restricted2026),
+        ])),
+        ..PersistedRuntimeState::default()
+      },
+    )
+    .unwrap();
+
+    save_clearing_client_key_tiers(&path).unwrap();
+
+    let saved = load(&path).unwrap();
+    assert_eq!(saved.client_key_tiers, None);
+    assert_eq!(saved.volume_percent, Some(42));
+    // Absent, not empty: an empty map writes a field with nothing to say.
+    assert!(!std::fs::read_to_string(&path)
+      .unwrap()
+      .contains("client_key_tiers"));
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&saved);
+    for client_id in ["client-a", "client-b", "client-c"] {
+      assert_eq!(
+        runtime.spotify_key_tier_for(client_id),
+        SpotifyKeyTier::Full
+      );
+    }
+  }
+
+  #[test]
+  fn clearing_absent_tiers_does_not_create_a_state_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    save_clearing_client_key_tiers(&path).unwrap();
+
+    assert!(!path.exists(), "nothing to forget, so nothing is written");
+  }
+
+  #[test]
+  fn a_tier_learned_after_a_clear_is_saved_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(
+      &path,
+      &PersistedRuntimeState {
+        client_key_tiers: Some(BTreeMap::from([(
+          "client-a".to_string(),
+          SpotifyKeyTier::Restricted2026,
+        )])),
+        ..PersistedRuntimeState::default()
+      },
+    )
+    .unwrap();
+    save_clearing_client_key_tiers(&path).unwrap();
+
+    // The endpoint is refused again, so the tier is learned as it was the
+    // first time.
+    save(
+      &path,
+      &PersistedRuntimeState {
+        client_key_tiers: Some(BTreeMap::from([(
+          "client-a".to_string(),
+          SpotifyKeyTier::Restricted2026,
+        )])),
+        ..PersistedRuntimeState::default()
+      },
+    )
+    .unwrap();
+
+    assert_eq!(
+      load(&path).unwrap().client_key_tiers,
+      Some(BTreeMap::from([(
+        "client-a".to_string(),
+        SpotifyKeyTier::Restricted2026
+      )]))
+    );
   }
 
   #[test]
@@ -904,6 +1099,49 @@ mod tests {
         playbar_height_rows: Some(MAX_PLAYBAR_ROWS),
         ..Default::default()
       }
+    );
+  }
+
+  #[test]
+  fn applying_persisted_client_key_tiers_preserves_absent_values_and_sanitizes_present_values() {
+    let mut runtime = RuntimeState {
+      client_key_tiers: BTreeMap::from([("existing".to_string(), SpotifyKeyTier::Restricted2024)]),
+      ..RuntimeState::default()
+    };
+
+    runtime.apply_persisted(&PersistedRuntimeState::default());
+    assert_eq!(
+      runtime.client_key_tiers,
+      BTreeMap::from([("existing".to_string(), SpotifyKeyTier::Restricted2024)])
+    );
+
+    runtime.apply_persisted(&PersistedRuntimeState {
+      client_key_tiers: Some(BTreeMap::from([
+        (" new ".to_string(), SpotifyKeyTier::Restricted2026),
+        ("new".to_string(), SpotifyKeyTier::Restricted2026),
+        (" ".to_string(), SpotifyKeyTier::Restricted2026),
+      ])),
+      ..PersistedRuntimeState::default()
+    });
+    assert_eq!(
+      runtime.client_key_tiers,
+      BTreeMap::from([("new".to_string(), SpotifyKeyTier::Restricted2026)])
+    );
+
+    runtime.apply_persisted(&PersistedRuntimeState {
+      client_key_tiers: Some(BTreeMap::new()),
+      ..PersistedRuntimeState::default()
+    });
+    assert!(runtime.client_key_tiers.is_empty());
+  }
+
+  #[test]
+  fn a_key_nothing_has_refused_still_has_full_access() {
+    let runtime = RuntimeState::default();
+
+    assert_eq!(
+      runtime.spotify_key_tier_for("any-client"),
+      SpotifyKeyTier::Full
     );
   }
 
