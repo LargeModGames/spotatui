@@ -1,7 +1,7 @@
 use super::Network;
 use crate::core::{app::App, auth};
 use anyhow::anyhow;
-use log::warn;
+use log::{debug, trace, warn};
 use reqwest::header::CONTENT_LENGTH;
 use reqwest::Method;
 use rspotify::AuthCodePkceSpotify;
@@ -51,6 +51,191 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
 
 /// Longest response body echoed into the diagnostics log.
 const MAX_LOGGED_BODY_CHARS: usize = 512;
+
+/// What a redacted value reads as in the log.
+const REDACTED_PLACEHOLDER: &str = "***";
+
+/// JSON object keys and query parameters whose *value* never reaches the log,
+/// matched case-insensitively and by the whole key.
+///
+/// Deliberately a denylist rather than an allowlist: an allowlist would blank
+/// every field spotatui does not already know about, which is exactly the
+/// unknown endpoint a bug report is about, and would make the debug log
+/// useless. The price is that a secret-ish field Spotify adds tomorrow passes
+/// through — the mitigation is the `--debug` help text asking users to read
+/// the log before posting it publicly. The access token is not covered by this
+/// at all: it lives in the `Authorization` header, and the rule there is that
+/// no code path ever formats a header into a log line.
+const REDACTED_KEYS: [&str; 11] = [
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "token",
+  "client_secret",
+  "code",
+  "email",
+  "phone_number",
+  "password",
+  "secret",
+  "authorization",
+];
+
+/// Whole-key match, so `token_type` (a plain, useful field) survives while
+/// `token` does not. A substring match would blank half of every payload.
+fn is_redacted_key(key: &str) -> bool {
+  REDACTED_KEYS
+    .iter()
+    .any(|denied| key.eq_ignore_ascii_case(denied))
+}
+
+/// Redacted in a query string on top of [`REDACTED_KEYS`]. `q` is the search
+/// box. The endpoint appears in the `warn!` line for every failed request, and
+/// `warn` is on without `--debug`, so a failed search would otherwise write
+/// what the user typed into a log they never opted into.
+const REDACTED_QUERY_KEYS: [&str; 1] = ["q"];
+
+fn is_redacted_query_key(key: &str) -> bool {
+  is_redacted_key(key)
+    || REDACTED_QUERY_KEYS
+      .iter()
+      .any(|denied| key.eq_ignore_ascii_case(denied))
+}
+
+/// Replaces the value of every denylisted key with `***`, at any depth and
+/// whatever its type: a denylisted key holding an object is replaced whole,
+/// never walked into.
+fn redact_json(value: &Value) -> Value {
+  match value {
+    Value::Object(map) => Value::Object(
+      map
+        .iter()
+        .map(|(key, child)| {
+          let redacted = if is_redacted_key(key) {
+            Value::String(REDACTED_PLACEHOLDER.to_string())
+          } else {
+            redact_json(child)
+          };
+          (key.clone(), redacted)
+        })
+        .collect(),
+    ),
+    Value::Array(items) => Value::Array(items.iter().map(redact_json).collect()),
+    other => other.clone(),
+  }
+}
+
+/// The endpoint as it may appear in a log line or an error message: the path
+/// plus the query, with denylisted parameter values replaced.
+fn redacted_target(url: &reqwest::Url) -> String {
+  let path = url.path().to_string();
+  let mut pairs = url.query_pairs().peekable();
+  if pairs.peek().is_none() {
+    return path;
+  }
+  // Re-encoded rather than concatenated: `query_pairs` hands back decoded
+  // values, so a `&` or a newline inside one would split the logged endpoint
+  // into something that reads like two parameters or two log lines.
+  let mut query = url::form_urlencoded::Serializer::new(String::new());
+  for (key, value) in pairs {
+    if is_redacted_query_key(&key) {
+      query.append_pair(&key, REDACTED_PLACEHOLDER);
+    } else {
+      query.append_pair(&key, &value);
+    }
+  }
+  format!("{path}?{}", query.finish())
+}
+
+/// Redacted, truncated request body for a log line; empty when there is none.
+fn request_body_for_log(body: Option<&Value>) -> String {
+  body.map_or_else(String::new, |payload| {
+    format!(
+      " body {}",
+      truncate_for_log(&redact_json(payload).to_string())
+    )
+  })
+}
+
+/// Redacted, truncated response body. JSON is redacted key-wise; anything else
+/// (an HTML error page, a bare `OK`) is only truncated.
+fn response_body_for_log(body: &str) -> String {
+  serde_json::from_str::<Value>(body).map_or_else(
+    |_| truncate_for_log(body),
+    |value| truncate_for_log(&redact_json(&value).to_string()),
+  )
+}
+
+/// The `debug!` line a successful request leaves behind. A free function
+/// rather than an inline `format!` so a test can assert that the body really
+/// goes through [`request_body_for_log`]: an argument swapped at the call site
+/// would otherwise put an unredacted body in the log with every test green.
+fn request_success_line(
+  endpoint: &str,
+  status: reqwest::StatusCode,
+  elapsed_ms: u128,
+  body: Option<&Value>,
+) -> String {
+  format!(
+    "Spotify API {endpoint} -> {status} in {elapsed_ms}ms{}",
+    request_body_for_log(body)
+  )
+}
+
+/// The `trace!` line carrying a response body. Same reasoning as
+/// [`request_success_line`].
+fn response_trace_line(endpoint: &str, status: reqwest::StatusCode, response_body: &str) -> String {
+  format!(
+    "Spotify API {endpoint} -> {status} response {}",
+    response_body_for_log(response_body)
+  )
+}
+
+/// Everything the `warn!` line for a non-2xx response needs. Grouped into a
+/// struct because the line carries eight values and the point of extracting it
+/// is testability, not a shorter signature.
+struct FailureLine<'a> {
+  /// Whether the request body may go in. The body carries user-entered text
+  /// (a playlist name, a search term), and this line is logged at `warn`,
+  /// which is on without `--debug` — so the body is opt-in like everything
+  /// else the debug mode adds.
+  include_body: bool,
+  endpoint: &'a str,
+  status: reqwest::StatusCode,
+  elapsed_ms: u128,
+  attempt: u8,
+  max_attempts: u8,
+  token_age: Option<std::time::Duration>,
+  body: Option<&'a Value>,
+  response_body: &'a str,
+}
+
+impl FailureLine<'_> {
+  fn render(&self) -> String {
+    let token_age = self.token_age.map_or_else(
+      || "unknown".to_string(),
+      |age| format!("{}s", age.as_secs()),
+    );
+    format!(
+      "Spotify API {} -> {} in {}ms (attempt {}/{}, token age {}){}: {}",
+      self.endpoint,
+      self.status,
+      self.elapsed_ms,
+      self.attempt,
+      self.max_attempts,
+      token_age,
+      self.body_for_log(),
+      response_body_for_log(self.response_body)
+    )
+  }
+
+  fn body_for_log(&self) -> String {
+    match (self.include_body, self.body.is_some()) {
+      (true, _) => request_body_for_log(self.body),
+      (false, true) => " body omitted (--debug logs it)".to_string(),
+      (false, false) => String::new(),
+    }
+  }
+}
 
 /// Cooldown state for forced token refreshes triggered by a 401 response.
 ///
@@ -122,13 +307,32 @@ pub struct SpotifyApiError {
   pub status: reqwest::StatusCode,
   pub(crate) body: String,
   pub(crate) detail: Option<String>,
+  /// `METHOD /path?query`, redacted. Issue #566: a bare
+  /// `Spotify API 403 Forbidden failed: …` never said which call broke.
+  pub(crate) endpoint: Option<String>,
 }
 
+/// # This text is parsed
+///
+/// Several call sites classify a failure by matching substrings of this
+/// output — `is_rate_limited_error`/`is_transient_network_error` here,
+/// `is_no_active_device_error`/`is_restriction_violated_error` and the
+/// playback poll's inline `contains("404")`/`contains("401")` checks in
+/// `playback.rs`. Their own tests hand-build the string, so a change here
+/// breaks them *silently*. The endpoint is therefore appended at the end,
+/// behind `detail`, leaving every existing substring in place; and the two
+/// classifiers in this file strip it again before matching, because an
+/// endpoint carries user-supplied ids and search terms (a track id containing
+/// `dns`, a playlist id containing `429`) that would otherwise read as a
+/// transport failure or a rate limit.
 impl std::fmt::Display for SpotifyApiError {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "Spotify API {} failed: {}", self.status, self.body)?;
-    match &self.detail {
-      Some(detail) => write!(f, " ({detail})"),
+    if let Some(detail) = &self.detail {
+      write!(f, " ({detail})")?;
+    }
+    match &self.endpoint {
+      Some(endpoint) => write!(f, " [{endpoint}]"),
       None => Ok(()),
     }
   }
@@ -306,9 +510,18 @@ where
     }
   }
 
+  // One redacted `METHOD /path?query` for every log line and error below.
+  let endpoint = format!("{} {}", method, redacted_target(&url));
+
   // Inside a `Retry-After` window every call fails here, at once and with no
   // request: a sleep would park the serial pump and every event behind it.
   if let Some(left) = forced_refresh_gate.rate_limit_remaining().await {
+    // Worth one line: without it the debug log just goes quiet for the length
+    // of the window, with no request to explain the gap.
+    debug!(
+      "Spotify API {endpoint} not sent: rate limited for another {}s",
+      left.as_secs().max(1)
+    );
     return Err(
       SpotifyApiError {
         status: reqwest::StatusCode::TOO_MANY_REQUESTS,
@@ -317,6 +530,7 @@ where
           left.as_secs().max(1)
         ),
         detail: None,
+        endpoint: Some(endpoint.clone()),
       }
       .into(),
     );
@@ -354,6 +568,7 @@ where
       request = request.header(CONTENT_LENGTH, "0").body(Vec::new());
     }
 
+    let attempt_started_at = Instant::now();
     let response = match request.send().await {
       Ok(response) => response,
       Err(e) => {
@@ -363,12 +578,40 @@ where
           attempt += 1;
           continue;
         }
+        // Which call broke goes in the log, not in the message: reqwest's
+        // `Display` carries the full request URL, and the query string holds
+        // the search box, while this message is surfaced on the error screen
+        // and recorded by `App::handle_error` at `info` — both without
+        // `--debug`. `without_url` drops it; `is_transient_network_error`
+        // matches what is left.
+        let e = e.without_url();
+        warn!(
+          "{} transport failure after {:?} on attempt {}/{}: {}",
+          endpoint,
+          attempt_started_at.elapsed(),
+          attempt + 1,
+          max_attempts,
+          e
+        );
         return Err(anyhow!("Spotify API request failed: {}", e));
       }
     };
-    if response.status().is_success() {
+    let elapsed = attempt_started_at.elapsed();
+    let status = response.status();
+    if status.is_success() {
+      // The one line every successful call leaves behind (issue #566): what ran
+      // before the failure that is being reported. `log!` only formats its
+      // arguments once the level is enabled, so the redaction below costs
+      // nothing with debug off.
+      debug!(
+        "{}",
+        request_success_line(&endpoint, status, elapsed.as_millis(), body.as_ref())
+      );
       let should_parse_json = response_is_json(&response);
       let response_body = response.text().await?;
+      // Response bodies are the largest PII surface in the whole log and are
+      // rarely what a successful call is diagnosed by, so they stay at trace.
+      trace!("{}", response_trace_line(&endpoint, status, &response_body));
       if response_body.trim().is_empty() {
         return Ok(Value::Null);
       }
@@ -378,7 +621,6 @@ where
       return Ok(Value::Null);
     }
 
-    let status = response.status();
     let retry_after_secs = response
       .headers()
       .get("retry-after")
@@ -387,25 +629,30 @@ where
       .unwrap_or(1);
     // `text()` consumes the response, so everything the branches below need
     // (status, retry-after, body) is captured here, once.
-    let body = response.text().await.unwrap_or_default();
+    let response_body = response.text().await.unwrap_or_default();
 
-    // Diagnostics for every non-2xx: which endpoint, which status, what Spotify
-    // actually said, and how old the token we attached was. The token *value* is
-    // never logged. This is what separates "the token really expired" from
-    // "Spotify rejected a valid token" in a user-supplied log (issue #395).
-    warn!(
-      "Spotify API {} {} -> {} (attempt {}/{}, token age {}): {}",
-      method,
-      url.path(),
+    // Diagnostics for every non-2xx: which endpoint (path *and* query), which
+    // status, what was asked for, what Spotify actually said, and how old the
+    // token we attached was. Failure is the case that gets reported, so it
+    // carries the full picture at any level; the token *value* is never logged.
+    // This is what separates "the token really expired" from "Spotify rejected
+    // a valid token" in a user-supplied log (issue #395).
+    // Built outside the macro on purpose: a struct of references costs nothing
+    // on a path that just did HTTP, and it puts these lines on the executed
+    // path of the failure tests below. `render()` stays inside, so the
+    // redaction still only runs when the level is enabled.
+    let failure = FailureLine {
+      include_body: log::max_level() >= log::LevelFilter::Debug,
+      endpoint: &endpoint,
       status,
-      attempt + 1,
+      elapsed_ms: elapsed.as_millis(),
+      attempt: attempt + 1,
       max_attempts,
-      access_token_age.map_or_else(
-        || "unknown".to_string(),
-        |age| format!("{}s", age.as_secs())
-      ),
-      truncate_for_log(&body)
-    );
+      token_age: access_token_age,
+      body: body.as_ref(),
+      response_body: &response_body,
+    };
+    warn!("{}", failure.render());
 
     if status == reqwest::StatusCode::UNAUTHORIZED && !attempted_unauthorized_recovery {
       // One-shot: whichever recovery path runs below, a second 401 falls through
@@ -422,8 +669,9 @@ where
             return Err(
               SpotifyApiError {
                 status,
-                body,
+                body: response_body,
                 detail: Some("token refresh unavailable for this request".to_string()),
+                endpoint: Some(endpoint),
               }
               .into(),
             );
@@ -432,8 +680,9 @@ where
             return Err(
               SpotifyApiError {
                 status,
-                body,
+                body: response_body,
                 detail: Some(format!("token refresh failed: {refresh_err}")),
+                endpoint: Some(endpoint),
               }
               .into(),
             );
@@ -460,6 +709,7 @@ where
           status,
           body: format!("rate limited by Spotify, retry in {window}s"),
           detail: None,
+          endpoint: Some(endpoint),
         }
         .into(),
       );
@@ -468,8 +718,9 @@ where
     return Err(
       SpotifyApiError {
         status,
-        body,
+        body: response_body,
         detail: None,
+        endpoint: Some(endpoint),
       }
       .into(),
     );
@@ -622,8 +873,33 @@ pub fn normalize_spotify_payload(value: &mut Value) {
   }
 }
 
-pub fn is_rate_limited_error(e: &anyhow::Error) -> bool {
+/// The error text a substring classifier may look at: everything `Display`
+/// writes except the endpoint.
+///
+/// The endpoint carries user-supplied material — a track id containing `dns`,
+/// a playlist id containing `429`, a search term — and the classifiers below
+/// match on three-character substrings, so leaving it in would turn an
+/// ordinary 404 into a "transport failure" or a "rate limit" at random.
+///
+/// The classifiers in `playback.rs` deliberately do not go through this: they
+/// match on whole phrases (`no_active_device`, `restriction violated`) that a
+/// URL cannot contain, and the one substring block there is fed only by the
+/// fixed `/v1/me/player` endpoint. Any new classifier that matches a short
+/// substring belongs here instead.
+fn classifiable_text(e: &anyhow::Error) -> String {
   let text = e.to_string();
+  let suffix = e
+    .downcast_ref::<SpotifyApiError>()
+    .and_then(|error| error.endpoint.as_deref())
+    .map(|endpoint| format!(" [{endpoint}]"));
+  match suffix {
+    Some(suffix) => text.strip_suffix(&suffix).unwrap_or(&text).to_string(),
+    None => text,
+  }
+}
+
+pub fn is_rate_limited_error(e: &anyhow::Error) -> bool {
+  let text = classifiable_text(e);
   text.contains("429") || text.contains("Too Many Requests") || text.contains("Too many requests")
 }
 
@@ -639,13 +915,45 @@ pub fn is_forbidden_error(e: &anyhow::Error) -> bool {
 }
 
 pub fn is_transient_network_error(e: &anyhow::Error) -> bool {
-  let text = e.to_string().to_lowercase();
-  text.contains("error sending request for url")
+  let text = classifiable_text(e).to_lowercase();
+  // Deliberately shorter than reqwest's full "error sending request for url
+  // (…)": the request path strips the URL off that message before surfacing
+  // it, since the query string carries the user's search terms. The prefix
+  // still matches every text the longer form matched, so no hand-built test
+  // string and no caller silently stops being classified as transient.
+  text.contains("error sending request")
     || text.contains("connection reset")
     || text.contains("connection refused")
     || text.contains("timed out")
     || text.contains("temporary failure")
     || text.contains("dns")
+}
+
+#[cfg(test)]
+mod transient_classification_tests {
+  use super::*;
+
+  /// reqwest writes "error sending request for url (…)"; dropping the URL to
+  /// keep the search box out of the log must not stop the retry paths from
+  /// recognising a transport failure.
+  #[test]
+  fn transient_network_error_is_recognised_without_the_url() {
+    assert!(is_transient_network_error(&anyhow!(
+      "Spotify API request failed: error sending request"
+    )));
+    assert!(is_transient_network_error(&anyhow!(
+      "Spotify API request failed: error sending request for url (https://api.spotify.com/v1/me)"
+    )));
+  }
+
+  /// The same message must not read as a rate limit just because an id or a
+  /// search term happens to contain the digits.
+  #[test]
+  fn a_transport_failure_is_not_a_rate_limit() {
+    assert!(!is_rate_limited_error(&anyhow!(
+      "Spotify API request failed: error sending request"
+    )));
+  }
 }
 
 pub fn is_not_found_error(e: &anyhow::Error) -> bool {
@@ -708,6 +1016,114 @@ pub async fn spotify_get_typed_before_app<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// The call sites are the part a unit test cannot otherwise reach: the
+  /// redaction helpers are covered in isolation, but nothing would notice an
+  /// argument swapped for the raw body at the `debug!`/`warn!` line itself.
+  #[test]
+  fn request_success_line_redacts_the_request_body() {
+    let body = serde_json::json!({ "access_token": "BQsecret", "uris": ["spotify:track:1"] });
+    let line = request_success_line(
+      "GET /v1/me/player",
+      reqwest::StatusCode::OK,
+      42,
+      Some(&body),
+    );
+    assert!(line.contains("GET /v1/me/player"), "{line}");
+    assert!(line.contains("42ms"), "{line}");
+    assert!(line.contains("spotify:track:1"), "{line}");
+    assert!(!line.contains("BQsecret"), "{line}");
+  }
+
+  #[test]
+  fn request_success_line_omits_the_body_section_when_there_is_none() {
+    let line = request_success_line("GET /v1/me", reqwest::StatusCode::OK, 7, None);
+    assert!(!line.contains("body"), "{line}");
+  }
+
+  #[test]
+  fn response_trace_line_redacts_the_response_body() {
+    let line = response_trace_line(
+      "POST /api/token",
+      reqwest::StatusCode::OK,
+      r#"{"access_token":"BQsecret","token_type":"Bearer"}"#,
+    );
+    assert!(!line.contains("BQsecret"), "{line}");
+    assert!(line.contains("Bearer"), "{line}");
+  }
+
+  fn failure_line(body: Option<&Value>, response_body: &str) -> String {
+    FailureLine {
+      include_body: true,
+      endpoint: "PUT /v1/me/player/play",
+      status: reqwest::StatusCode::FORBIDDEN,
+      elapsed_ms: 13,
+      attempt: 2,
+      max_attempts: 3,
+      token_age: Some(std::time::Duration::from_secs(90)),
+      body,
+      response_body,
+    }
+    .render()
+  }
+
+  #[test]
+  fn failure_line_redacts_both_bodies() {
+    let body = serde_json::json!({ "refresh_token": "AQsecret", "position_ms": 0 });
+    let line = failure_line(
+      Some(&body),
+      r#"{"error":{"status":403},"password":"hunter2"}"#,
+    );
+    assert!(!line.contains("AQsecret"), "{line}");
+    assert!(!line.contains("hunter2"), "{line}");
+    assert!(line.contains("position_ms"), "{line}");
+    assert!(line.contains("403"), "{line}");
+  }
+
+  /// The `warn!` line is written without `--debug`, so a playlist name or a
+  /// search term must not ride along in it by default.
+  #[test]
+  fn failure_line_omits_the_request_body_unless_debug_is_on() {
+    let body = serde_json::json!({ "name": "My Private Playlist" });
+    let line = FailureLine {
+      include_body: false,
+      endpoint: "POST /v1/users/me/playlists",
+      status: reqwest::StatusCode::FORBIDDEN,
+      elapsed_ms: 5,
+      attempt: 1,
+      max_attempts: 1,
+      token_age: None,
+      body: Some(&body),
+      response_body: "",
+    }
+    .render();
+    assert!(!line.contains("My Private Playlist"), "{line}");
+    assert!(line.contains("--debug"), "{line}");
+  }
+
+  #[test]
+  fn failure_line_reports_attempt_and_token_age() {
+    let line = failure_line(None, "");
+    assert!(line.contains("attempt 2/3"), "{line}");
+    assert!(line.contains("token age 90s"), "{line}");
+  }
+
+  #[test]
+  fn failure_line_says_unknown_when_the_token_age_is_unavailable() {
+    let line = FailureLine {
+      include_body: true,
+      endpoint: "GET /v1/me",
+      status: reqwest::StatusCode::UNAUTHORIZED,
+      elapsed_ms: 1,
+      attempt: 1,
+      max_attempts: 1,
+      token_age: None,
+      body: None,
+      response_body: "",
+    }
+    .render();
+    assert!(line.contains("token age unknown"), "{line}");
+  }
   use chrono::{TimeDelta, Utc};
   use rspotify::{Config, Credentials, OAuth, Token};
   use std::{
@@ -752,11 +1168,246 @@ mod tests {
   }
 
   #[test]
+  fn redactor_replaces_a_nested_access_token_without_walking_into_it() {
+    let payload = json!({
+      "device": { "id": "abc", "credentials": { "access_token": "secret" } },
+      "access_token": { "value": "secret", "scopes": ["a", "b"] },
+      "position_ms": 42
+    });
+
+    assert_eq!(
+      redact_json(&payload),
+      json!({
+        "device": { "id": "abc", "credentials": { "access_token": "***" } },
+        "access_token": "***",
+        "position_ms": 42
+      })
+    );
+  }
+
+  #[test]
+  fn redactor_blanks_every_denylisted_key_whatever_its_type() {
+    let payload = json!({
+      "refresh_token": "r",
+      "id_token": "i",
+      "token": 1,
+      "client_secret": "c",
+      "code": ["a"],
+      "email": "a@b.c",
+      "phone_number": "+49",
+      "password": null,
+      "authorization": "Bearer x"
+    });
+
+    let redacted = redact_json(&payload);
+    for (_, value) in redacted.as_object().unwrap() {
+      assert_eq!(value, "***", "{redacted}");
+    }
+  }
+
+  /// The README and `docs/configuration.md` both tell the user which fields of
+  /// their profile a `trace` log can still expose. This pins that promise to
+  /// the redactor: `email` goes, `country` stays. Dropping `email` from the
+  /// denylist, or adding `country` to it, makes the documentation wrong
+  /// without any other test noticing.
+  #[test]
+  fn a_profile_response_keeps_the_country_and_blanks_the_email() {
+    let profile = json!({
+      "display_name": "Ada",
+      "email": "a@b.c",
+      "country": "DE",
+      "id": "ada"
+    });
+
+    assert_eq!(
+      redact_json(&profile),
+      json!({
+        "display_name": "Ada",
+        "email": "***",
+        "country": "DE",
+        "id": "ada"
+      })
+    );
+  }
+
+  #[test]
+  fn redactor_matches_keys_case_insensitively() {
+    let payload = json!({ "Access_Token": "s", "AUTHORIZATION": "s" });
+
+    assert_eq!(
+      redact_json(&payload),
+      json!({ "Access_Token": "***", "AUTHORIZATION": "***" })
+    );
+  }
+
+  /// A deliberate decision: the denylist matches whole keys, so the useful
+  /// `token_type` / `email_verified` fields survive. A substring match would
+  /// blank half of every payload and make the log unreadable.
+  #[test]
+  fn redactor_keeps_a_key_that_merely_contains_a_denylisted_word() {
+    let payload = json!({ "token_type": "Bearer", "email_verified": true, "encoded": "x" });
+
+    assert_eq!(redact_json(&payload), payload);
+  }
+
+  #[test]
+  fn redactor_walks_arrays_of_objects() {
+    let payload = json!({
+      "items": [
+        { "uri": "spotify:track:1", "token": "s" },
+        { "uri": "spotify:track:2", "owner": { "email": "a@b.c" } }
+      ]
+    });
+
+    assert_eq!(
+      redact_json(&payload),
+      json!({
+        "items": [
+          { "uri": "spotify:track:1", "token": "***" },
+          { "uri": "spotify:track:2", "owner": { "email": "***" } }
+        ]
+      })
+    );
+  }
+
+  #[test]
+  fn redactor_returns_non_object_input_unchanged() {
+    for value in [
+      json!("token"),
+      json!(7),
+      json!(null),
+      json!(true),
+      json!(["token", "email"]),
+    ] {
+      assert_eq!(redact_json(&value), value);
+    }
+  }
+
+  #[test]
+  fn redacted_target_keeps_the_query_and_blanks_denylisted_parameters() {
+    let url = reqwest::Url::parse("https://api.spotify.com/v1/search?q=abba&type=track").unwrap();
+    assert_eq!(redacted_target(&url), "/v1/search?q=***&type=track");
+
+    let url =
+      reqwest::Url::parse("https://accounts.spotify.com/api/token?code=xyz&grant_type=pkce")
+        .unwrap();
+    assert_eq!(redacted_target(&url), "/api/token?code=***&grant_type=pkce");
+  }
+
+  /// A decoded separator or newline put back verbatim would read as an extra
+  /// parameter, or as an extra log line.
+  #[test]
+  fn redacted_target_re_encodes_separators_and_newlines() {
+    let url =
+      reqwest::Url::parse("https://api.spotify.com/v1/search?market=a%26b%0Afake=1").unwrap();
+    let target = redacted_target(&url);
+    assert!(!target.contains('\n'), "{target}");
+    assert_eq!(target, "/v1/search?market=a%26b%0Afake%3D1");
+  }
+
+  #[test]
+  fn redacted_target_is_only_the_path_when_there_is_no_query() {
+    let url = reqwest::Url::parse("https://api.spotify.com/v1/me/player").unwrap();
+    assert_eq!(redacted_target(&url), "/v1/me/player");
+  }
+
+  #[test]
+  fn a_logged_request_body_is_redacted_and_bounded() {
+    assert_eq!(request_body_for_log(None), "");
+
+    let line = request_body_for_log(Some(
+      &json!({ "uris": ["spotify:track:1"], "token": "supersecret" }),
+    ));
+    assert!(line.contains(r#""token":"***""#), "{line}");
+    assert!(!line.contains("supersecret"), "{line}");
+    assert!(line.contains("spotify:track:1"), "{line}");
+
+    let long = json!({ "note": "x".repeat(MAX_LOGGED_BODY_CHARS * 2) });
+    assert!(
+      request_body_for_log(Some(&long)).contains("(truncated)"),
+      "an unbounded body reached the log"
+    );
+  }
+
+  #[test]
+  fn a_logged_response_body_falls_back_to_plain_truncation_when_it_is_not_json() {
+    assert_eq!(
+      response_body_for_log(r#"{"error":{"message":"nope"},"access_token":"s"}"#),
+      r#"{"access_token":"***","error":{"message":"nope"}}"#
+    );
+    assert_eq!(
+      response_body_for_log("  <html>502</html> "),
+      "<html>502</html>"
+    );
+  }
+
+  #[test]
+  fn the_error_text_names_the_endpoint_that_failed() {
+    let error = anyhow::Error::from(SpotifyApiError {
+      status: reqwest::StatusCode::FORBIDDEN,
+      body: "Player command failed".to_string(),
+      detail: None,
+      endpoint: Some("PUT /v1/me/player/play?device_id=abc".to_string()),
+    });
+
+    assert_eq!(
+      error.to_string(),
+      "Spotify API 403 Forbidden failed: Player command failed [PUT /v1/me/player/play?device_id=abc]"
+    );
+  }
+
+  #[test]
+  fn the_endpoint_is_appended_behind_the_detail() {
+    let error = anyhow::Error::from(SpotifyApiError {
+      status: reqwest::StatusCode::UNAUTHORIZED,
+      body: "expired".to_string(),
+      detail: Some("token refresh failed: no network".to_string()),
+      endpoint: Some("GET /v1/me".to_string()),
+    });
+
+    assert_eq!(
+      error.to_string(),
+      "Spotify API 401 Unauthorized failed: expired (token refresh failed: no network) [GET /v1/me]"
+    );
+  }
+
+  /// The endpoint carries ids and search terms the user chose, and the
+  /// classifiers match three-character substrings. A track id containing
+  /// `dns`, or a playlist id containing `429`, must not turn a plain 404 into
+  /// a transport failure or a rate limit.
+  #[test]
+  fn user_supplied_ids_in_the_endpoint_are_not_read_as_a_failure_class() {
+    let error = anyhow::Error::from(SpotifyApiError {
+      status: reqwest::StatusCode::NOT_FOUND,
+      body: "not found".to_string(),
+      detail: None,
+      endpoint: Some("GET /v1/playlists/3dns429xTimedOut/tracks?q=connection+reset".to_string()),
+    });
+
+    assert!(!is_transient_network_error(&error), "{error}");
+    assert!(!is_rate_limited_error(&error), "{error}");
+    assert!(is_not_found_error(&error));
+  }
+
+  #[test]
+  fn a_real_rate_limit_is_still_classified_with_an_endpoint_attached() {
+    let error = anyhow::Error::from(SpotifyApiError {
+      status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+      body: "rate limited by Spotify, retry in 17s".to_string(),
+      detail: None,
+      endpoint: Some("GET /v1/me/player".to_string()),
+    });
+
+    assert!(is_rate_limited_error(&error), "{error}");
+  }
+
+  #[test]
   fn forbidden_error_classification_uses_status_not_body_text() {
     let error = anyhow::Error::new(SpotifyApiError {
       status: reqwest::StatusCode::FORBIDDEN,
       body: "playlist contents unavailable".to_string(),
       detail: None,
+      endpoint: None,
     });
     assert!(is_forbidden_error(&error));
     assert!(!is_rate_limited_error(&error));
@@ -771,11 +1422,13 @@ mod tests {
       status: reqwest::StatusCode::NOT_FOUND,
       body: String::new(),
       detail: None,
+      endpoint: None,
     });
     let rate_limited = anyhow::Error::from(SpotifyApiError {
       status: reqwest::StatusCode::TOO_MANY_REQUESTS,
       body: String::new(),
       detail: None,
+      endpoint: None,
     });
     assert!(is_not_found_error(&not_found));
     assert!(!is_not_found_error(&rate_limited));
@@ -1156,6 +1809,50 @@ mod tests {
     server.await.unwrap();
 
     assert_eq!(result, Value::Null);
+  }
+
+  /// Issue #566: `Spotify API 403 Forbidden failed: …` never said which call
+  /// broke. The failing call's method, path *and* query now travel with it.
+  #[tokio::test]
+  async fn a_failed_request_names_the_endpoint_it_used() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      let body = r#"{"error":{"status":403,"message":"Player command failed"}}"#;
+      let response = format!(
+        "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      stream.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let spotify = spotify_with_access_token("access").await;
+    let error = spotify_api_request_json_for_base_with_refresh(
+      &spotify,
+      SpotifyApiRequest {
+        base_url: &base_url,
+        method: Method::PUT,
+        path: "me/player/play",
+        query: &[("device_id", "device-1".to_string())],
+        body: Some(json!({ "uris": ["spotify:track:1"] })),
+      },
+      |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
+      &ForcedRefreshGate::default(),
+    )
+    .await
+    .unwrap_err();
+    server.await.unwrap();
+
+    assert!(
+      error
+        .to_string()
+        .ends_with("[PUT /v1/me/player/play?device_id=device-1]"),
+      "unexpected error text: {error}"
+    );
+    assert!(is_forbidden_error(&error));
   }
 
   /// A 429 opens a `Retry-After` window on the gate: the call fails at once

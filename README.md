@@ -472,6 +472,27 @@ You might get a linking error. If so, you'll probably need to install additional
 sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
+## Reporting a Bug
+
+Run the thing that broke again with `--debug`, then attach the log file:
+
+```bash
+spotatui --debug
+```
+
+spotatui prints the log path on startup and on exit — it lives in your temp
+directory as `spotatui_logs/spotatuilog<pid>`. With `--debug` it records every
+Spotify Web API request (method, path, status, duration), which is what turns
+"it doesn't play" into something diagnosable.
+
+If it crashed instead, `spotatui_panic.log` in the state directory already has
+the panic, a backtrace, and the tail of the log in one file.
+
+Tokens and headers are never written to the log, and known secret fields are
+redacted — but a log can still contain your display name, and a `trace` log
+your country. Have a quick look before posting it publicly. See
+[`docs/configuration.md`](docs/configuration.md#logging) for the details.
+
 ## Help Wanted
 
 **spotatui is currently maintained by a solo developer.** More contributors would be hugely appreciated — and **you don't need to write code to help**:
