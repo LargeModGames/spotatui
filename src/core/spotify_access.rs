@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | before 2024-11-27 | `Full` | nothing |
 //! | 2024-11-27 ... 2026-02-11 | `Restricted2024` | recommendations, related artists |
-//! | after 2026-02-11 | `Restricted2026` | the above, plus artist top tracks, `tracks?ids=`, `me/top/artists` |
+//! | after 2026-02-11 | `Restricted2026` | the above, plus artist top tracks, `tracks?ids=` |
 //!
 //! A tier is learned from a 403/404 on one of these endpoints and only
 //! ratchets up (`App::raise_spotify_key_tier`). Everything reads it through
@@ -31,8 +31,8 @@ pub enum SpotifyKeyTier {
   /// Registered 2024-11-27 … 2026-02-11: no recommendations, no related artists.
   #[serde(rename = "restricted-2024")]
   Restricted2024,
-  /// Registered after 2026-02-11: the 2024 set plus artist top tracks,
-  /// `tracks?ids=`, and `me/top/artists`.
+  /// Registered after 2026-02-11: the 2024 set plus artist top tracks and
+  /// `tracks?ids=`.
   #[serde(rename = "restricted-2026")]
   Restricted2026,
 }
@@ -84,8 +84,6 @@ pub enum RestrictedEndpoint {
   ArtistTopTracks,
   /// `GET tracks?ids=` — the batch track lookup.
   TracksByIds,
-  /// `GET me/top/artists` — the Discover screen's top-artists mix.
-  MeTopArtists,
 }
 
 impl RestrictedEndpoint {
@@ -93,9 +91,7 @@ impl RestrictedEndpoint {
   pub const fn required_tier(self) -> SpotifyKeyTier {
     match self {
       Self::Recommendations | Self::RelatedArtists => SpotifyKeyTier::Restricted2024,
-      Self::ArtistTopTracks | Self::TracksByIds | Self::MeTopArtists => {
-        SpotifyKeyTier::Restricted2026
-      }
+      Self::ArtistTopTracks | Self::TracksByIds => SpotifyKeyTier::Restricted2026,
     }
   }
 
@@ -107,9 +103,9 @@ impl RestrictedEndpoint {
 
 /// Match a request against the restricted table; `None` for everything else.
 ///
-/// Exact segments, so lookalikes (`albums/{id}/tracks`, `me/top/tracks`) are
-/// not refused. Only `GET` is classified: a write to the same path is a
-/// different endpoint.
+/// Exact segments, so `albums/{id}/tracks` is not the batch track lookup.
+/// `me/top/{action}` survived both cuts and is never refused. Only `GET` is
+/// classified: a write to the same path is a different endpoint.
 pub fn restricted_endpoint(
   method: &str,
   path: &str,
@@ -139,7 +135,6 @@ pub fn restricted_endpoint(
     ("tracks", None, None) if query.iter().any(|(key, _)| *key == "ids") => {
       Some(RestrictedEndpoint::TracksByIds)
     }
-    ("me", Some("top"), Some("artists")) => Some(RestrictedEndpoint::MeTopArtists),
     _ => None,
   }
 }
@@ -191,7 +186,6 @@ mod tests {
         RestrictedEndpoint::ArtistTopTracks,
       ),
       ("tracks", ids_query(), RestrictedEndpoint::TracksByIds),
-      ("me/top/artists", vec![], RestrictedEndpoint::MeTopArtists),
     ];
 
     for (path, query, expected) in cases {
@@ -204,8 +198,9 @@ mod tests {
   }
 
   #[test]
-  fn lookalike_paths_are_not_refused() {
+  fn surviving_and_lookalike_paths_are_not_refused() {
     let allowed = [
+      "me/top/artists",
       "me/top/tracks",
       "albums/abc/tracks",
       "artists/abc/albums",
@@ -240,7 +235,7 @@ mod tests {
   #[test]
   fn only_get_requests_are_classified() {
     assert_eq!(
-      restricted_endpoint("PUT", "me/top/artists", &[]),
+      restricted_endpoint("PUT", "artists/abc/top-tracks", &[]),
       None,
       "a write to a restricted path is a different endpoint"
     );
@@ -263,10 +258,6 @@ mod tests {
     );
     assert_eq!(
       RestrictedEndpoint::TracksByIds.required_tier(),
-      SpotifyKeyTier::Restricted2026
-    );
-    assert_eq!(
-      RestrictedEndpoint::MeTopArtists.required_tier(),
       SpotifyKeyTier::Restricted2026
     );
   }

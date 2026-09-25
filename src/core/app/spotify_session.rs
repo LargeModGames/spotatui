@@ -124,7 +124,6 @@ mod tests {
     assert!(app.spotify_endpoint_blocked(RestrictedEndpoint::Recommendations));
     assert!(app.spotify_endpoint_blocked(RestrictedEndpoint::RelatedArtists));
     assert!(!app.spotify_endpoint_blocked(RestrictedEndpoint::ArtistTopTracks));
-    assert!(!app.spotify_endpoint_blocked(RestrictedEndpoint::MeTopArtists));
     assert!(!app.spotify_endpoint_blocked(RestrictedEndpoint::TracksByIds));
   }
 
@@ -137,7 +136,6 @@ mod tests {
       RestrictedEndpoint::RelatedArtists,
       RestrictedEndpoint::ArtistTopTracks,
       RestrictedEndpoint::TracksByIds,
-      RestrictedEndpoint::MeTopArtists,
     ] {
       assert!(
         !app.spotify_endpoint_blocked(endpoint),
@@ -157,7 +155,7 @@ mod tests {
     assert!(app.spotify_endpoint_blocked_with(RestrictedEndpoint::Recommendations, simulated));
     assert!(app.spotify_endpoint_blocked_with(RestrictedEndpoint::RelatedArtists, simulated));
     assert!(!app.spotify_endpoint_blocked_with(RestrictedEndpoint::ArtistTopTracks, simulated));
-    assert!(!app.spotify_endpoint_blocked_with(RestrictedEndpoint::MeTopArtists, simulated));
+    assert!(!app.spotify_endpoint_blocked_with(RestrictedEndpoint::TracksByIds, simulated));
 
     // A refusal the simulation explains is not evidence about the real key.
     app.raise_spotify_key_tier_with(

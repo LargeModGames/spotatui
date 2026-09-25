@@ -216,10 +216,10 @@ impl UserNetwork for Network {
   }
 
   async fn get_top_artists_mix(&mut self) {
-    // `me/top/artists` is the 2026 cut only, so a 2024-2026 key still gets
-    // its mix.
+    // The mix is built from each artist's top tracks, so a key without that
+    // endpoint cannot build it at all - refuse before the fan-out.
     if self
-      .endpoint_is_out_of_reach("Top Artists Mix", RestrictedEndpoint::MeTopArtists)
+      .endpoint_is_out_of_reach("Top Artists Mix", RestrictedEndpoint::ArtistTopTracks)
       .await
     {
       return;
@@ -241,16 +241,6 @@ impl UserNetwork for Network {
 
     let artists = match artists_res {
       Ok(page) => page.items,
-      // A key nothing has refused passes the pre-check, so this is the 403
-      // that records the tier: say why here rather than take over the screen
-      // with an error page.
-      Err(e) if is_forbidden_error(&e) || is_not_found_error(&e) => {
-        self
-          .raise_and_remind_unavailable("Top Artists Mix", RestrictedEndpoint::MeTopArtists)
-          .await;
-        self.app.lock().await.discover_loading = false;
-        return;
-      }
       Err(e) => {
         let mut app = self.app.lock().await;
         app.discover_loading = false;
@@ -345,9 +335,34 @@ impl UserNetwork for Network {
 mod tests {
   use super::*;
   use crate::core::app::App;
+  use crate::core::config::ClientConfig;
   use crate::core::user_config::UserConfig;
+  use std::path::PathBuf;
   use std::sync::mpsc::channel;
+  use std::sync::Arc;
   use std::time::SystemTime;
+  use tokio::sync::Mutex;
+
+  #[tokio::test]
+  async fn the_mix_short_circuits_when_the_key_lost_top_tracks() {
+    // The mix is built from `artists/{id}/top-tracks`, so that endpoint - not
+    // `me/top/artists`, which survived - decides whether it can run at all.
+    let app = Arc::new(Mutex::new(App::default()));
+    app
+      .lock()
+      .await
+      .raise_spotify_key_tier(RestrictedEndpoint::ArtistTopTracks, None);
+    let mut network = Network::new(None, ClientConfig::new(), &app, PathBuf::new());
+
+    network.get_top_artists_mix().await;
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.status_message(),
+      Some("Top Artists Mix: removed by Spotify for apps registered after 2026-02-11")
+    );
+    assert_ne!(app.get_current_route().id, RouteId::Error);
+  }
 
   #[test]
   fn a_parked_backend_keeps_its_row_in_the_device_list() {
