@@ -272,10 +272,7 @@ impl UserNetwork for Network {
           return;
         }
         Err(e) => {
-          self.handle_error(e).await;
-          let mut app = self.app.lock().await;
-          app.discover_loading = false;
-          return;
+          log::warn!("top-tracks fetch failed for one mix artist: {e}");
         }
       }
     }
