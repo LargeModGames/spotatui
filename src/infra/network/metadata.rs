@@ -6,7 +6,7 @@ use crate::core::app::{
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
 use crate::core::spotify_access::RestrictedEndpoint;
 use crate::infra::network::mapping::map_page;
-use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
+use crate::infra::network::requests::is_restricted_client_id_error;
 use anyhow::anyhow;
 use rspotify::model::{
   album::{FullAlbum, SimplifiedAlbum},
@@ -177,7 +177,7 @@ impl MetadataNetwork for Network {
 
       let top_tracks = match top_tracks_res {
         Ok(res) => res.tracks,
-        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
+        Err(e) if is_restricted_client_id_error(&e) => {
           self
             .raise_spotify_key_tier(RestrictedEndpoint::ArtistTopTracks)
             .await;
@@ -191,7 +191,7 @@ impl MetadataNetwork for Network {
 
       let related_artists = match related_artists_res {
         Ok(res) => res.artists,
-        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
+        Err(e) if is_restricted_client_id_error(&e) => {
           self
             .raise_spotify_key_tier(RestrictedEndpoint::RelatedArtists)
             .await;

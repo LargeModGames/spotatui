@@ -2,7 +2,7 @@ use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, RouteId, TrackTableContext};
 use crate::core::plugin_api::TrackInfo;
 use crate::core::spotify_access::RestrictedEndpoint;
-use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
+use crate::infra::network::requests::is_restricted_client_id_error;
 use anyhow::anyhow;
 use rspotify::model::{
   enums::Country,
@@ -25,10 +25,6 @@ struct TracksResponse {
 fn country_code(country: Country) -> String {
   let code: &'static str = country.into();
   code.to_string()
-}
-
-fn is_development_mode_error(error: &anyhow::Error) -> bool {
-  is_not_found_error(error) || is_forbidden_error(error)
 }
 
 pub trait RecommendationNetwork {
@@ -117,7 +113,7 @@ impl RecommendationNetwork for Network {
             .await
           {
             Ok(res) => res.tracks,
-            Err(e) if is_development_mode_error(&e) => {
+            Err(e) if is_restricted_client_id_error(&e) => {
               self
                 .raise_and_remind_unavailable("Recommendation", RestrictedEndpoint::TracksByIds)
                 .await;
@@ -146,7 +142,7 @@ impl RecommendationNetwork for Network {
         app.track_table.context = Some(TrackTableContext::RecommendedTracks);
         app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
       }
-      Err(e) if is_development_mode_error(&e) => {
+      Err(e) if is_restricted_client_id_error(&e) => {
         self
           .raise_and_remind_unavailable("Recommendation", RestrictedEndpoint::Recommendations)
           .await
@@ -176,8 +172,6 @@ mod tests {
   use super::*;
   use crate::core::app::App;
   use crate::core::config::ClientConfig;
-  use crate::infra::network::requests::SpotifyApiError;
-  use reqwest::StatusCode;
   use std::path::PathBuf;
   use std::sync::Arc;
   use tokio::sync::Mutex;
@@ -201,21 +195,5 @@ mod tests {
       Some("Recommendation: removed by Spotify for apps registered after 2024-11-27")
     );
     assert_ne!(app.get_current_route().id, RouteId::Error);
-  }
-
-  #[test]
-  fn recommendation_errors_classify_removed_endpoint_responses() {
-    for status in [StatusCode::FORBIDDEN, StatusCode::NOT_FOUND] {
-      let error = anyhow::Error::new(SpotifyApiError {
-        status,
-        body: "Forbidden".to_string(),
-        detail: None,
-      });
-      assert!(is_development_mode_error(&error));
-    }
-
-    assert!(!is_development_mode_error(&anyhow::anyhow!(
-      "transport failure"
-    )));
   }
 }

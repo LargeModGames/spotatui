@@ -1,4 +1,4 @@
-use super::requests::{is_forbidden_error, is_not_found_error, is_rate_limited_error};
+use super::requests::{is_rate_limited_error, is_restricted_client_id_error};
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId, UserInfo};
 use crate::core::plugin_api::TrackInfo;
@@ -264,7 +264,7 @@ impl UserNetwork for Network {
     for res in futures::future::join_all(track_fetches).await.into_iter() {
       match res {
         Ok(res) => all_tracks.extend(res.tracks),
-        Err(e) if is_forbidden_error(&e) || is_not_found_error(&e) => {
+        Err(e) if is_restricted_client_id_error(&e) => {
           self
             .raise_and_remind_unavailable("Top Artists Mix", RestrictedEndpoint::ArtistTopTracks)
             .await;
