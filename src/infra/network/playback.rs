@@ -1,3 +1,4 @@
+use super::requests::is_transient_network_error;
 use super::{IoEvent, Network};
 use crate::core::app::PlaybackOwner;
 #[cfg(feature = "streaming")]
@@ -1020,6 +1021,15 @@ fn native_restore_load_request(snapshot: &NativePlaybackRecoverySnapshot) -> Opt
   }
 }
 
+/// Whether `get_current_playback`'s poll failure is a dropped connection that
+/// should retry quietly instead of escalating to the full-screen error route.
+/// Delegates to the central classifier, kept as its own function so the exact
+/// decision `get_current_playback` makes can be pinned by a test without
+/// building a Spotify client.
+fn current_playback_poll_is_transient(err: &anyhow::Error) -> bool {
+  is_transient_network_error(err)
+}
+
 impl PlaybackNetwork for Network {
   async fn get_current_playback(&mut self) {
     // When using native streaming, the Spotify API returns stale server-side state
@@ -1280,16 +1290,7 @@ impl PlaybackNetwork for Network {
           return;
         }
 
-        if err
-          .to_string()
-          .to_lowercase()
-          .contains("error sending request for url")
-          || err.to_string().contains("connection reset")
-          || err.to_string().contains("connection refused")
-          || err.to_string().contains("timed out")
-          || err.to_string().contains("temporary failure")
-          || err.to_string().contains("dns")
-        {
+        if current_playback_poll_is_transient(&err) {
           app.set_status_message(
             "Temporary Spotify network error while polling playback; retrying automatically.",
             5,
@@ -2852,6 +2853,83 @@ mod tests {
     )));
   }
 
+  /// Every classifier in this file matches on the *text* of a failure, and
+  /// every test around them hand-builds that text with `anyhow!`. So a change
+  /// to `SpotifyApiError`'s `Display` would stop spotatui recognising "no
+  /// active device" at runtime while all of those tests still passed. This one
+  /// renders a real error value through the real `Display` — endpoint and all
+  /// — and re-asks the classifiers.
+  #[test]
+  fn the_real_error_text_still_reads_as_no_active_device() {
+    let error: anyhow::Error = crate::infra::network::requests::SpotifyApiError {
+      status: reqwest::StatusCode::NOT_FOUND,
+      body: r#"{"error":{"status":404,"message":"Player command failed: No active device found","reason":"NO_ACTIVE_DEVICE"}}"#
+        .to_string(),
+      detail: None,
+      endpoint: Some("PUT /v1/me/player/play?device_id=1a2b3c".to_string()),
+    }
+    .into();
+    let text = error.to_string();
+
+    assert!(is_no_active_device_error(&error), "{text}");
+    // `get_current_playback` classifies inline on the same string.
+    assert!(text.contains("404"), "{text}");
+    assert!(text.contains("Not Found"), "{text}");
+    assert!(
+      !crate::infra::network::requests::is_rate_limited_error(&error),
+      "{text}"
+    );
+    assert!(
+      !crate::infra::network::requests::is_transient_network_error(&error),
+      "{text}"
+    );
+  }
+
+  /// The playback poll's inline branches key off the bare status text.
+  #[test]
+  fn the_real_error_text_still_carries_the_status_the_playback_poll_matches() {
+    for (status, needle) in [
+      (401u16, "401"),
+      (429, "Too Many Requests"),
+      (503, "Service Unavailable"),
+      (504, "504"),
+    ] {
+      let error: anyhow::Error = crate::infra::network::requests::SpotifyApiError {
+        status: reqwest::StatusCode::from_u16(status).unwrap(),
+        body: "upstream said no".to_string(),
+        detail: None,
+        endpoint: Some("GET /v1/me/player?additional_types=episode,track".to_string()),
+      }
+      .into();
+
+      assert!(error.to_string().contains(needle), "{error}");
+    }
+  }
+
+  /// Regression test for `current_playback_poll_is_transient`: it used to
+  /// hand-check `"error sending request for url"`, a needle `without_url()`
+  /// deletes, which fell through to the full-screen error route on a dropped
+  /// connection instead of retrying quietly. Binds a real listener and closes
+  /// it immediately so nothing answers, then rebuilds the exact wrapping
+  /// `get_current_playback` applies around the transport failure - a
+  /// hand-built string using only the old long needle would not have caught
+  /// this regression.
+  #[tokio::test]
+  async fn a_dropped_connection_still_reads_as_transient_after_the_url_is_stripped() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let reqwest_err = reqwest::Client::new()
+      .get(format!("http://{addr}/"))
+      .send()
+      .await
+      .expect_err("nothing listens on the closed port");
+    let err = anyhow!("Spotify API request failed: {}", reqwest_err.without_url());
+
+    assert!(current_playback_poll_is_transient(&err), "{err}");
+  }
+
   #[test]
   fn saved_device_retry_needs_the_error_and_a_device_and_no_native_claim() {
     assert_eq!(
@@ -3100,6 +3178,24 @@ mod tests {
       "{}",
       r#"Spotify API 403 Forbidden failed: {"error":{"status":403,"message":"Player command failed: Restriction violated","reason":"UNKNOWN"}}"#
     )));
+  }
+
+  /// Same acceptance check for the 403 classifier: a real value, the real
+  /// `Display`.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn the_real_error_text_still_reads_as_a_restriction_violation() {
+    let error: anyhow::Error = crate::infra::network::requests::SpotifyApiError {
+      status: reqwest::StatusCode::FORBIDDEN,
+      body: r#"{"error":{"status":403,"message":"Player command failed: Restriction violated","reason":"UNKNOWN"}}"#
+        .to_string(),
+      detail: None,
+      endpoint: Some("POST /v1/me/player/next?device_id=1a2b3c".to_string()),
+    }
+    .into();
+
+    assert!(is_restriction_violated_error(&error), "{error}");
+    assert!(!is_no_active_device_error(&error), "{error}");
   }
 
   #[cfg(feature = "streaming")]

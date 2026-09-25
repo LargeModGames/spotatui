@@ -61,6 +61,21 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         .value_parser(["bash", "zsh", "fish", "power-shell", "elvish"])
         .value_name("SHELL"),
     )
+    .arg(
+      Arg::new("debug")
+        .long("debug")
+        .global(true)
+        .action(clap::ArgAction::SetTrue)
+        .help("Enable verbose debug logging for bug reports (also SPOTATUI_LOG=debug)")
+        .long_help(
+          "Enable verbose debug logging for spotatui and the native streaming crates it embeds \
+(equivalent to SPOTATUI_LOG=debug). At this level the log records identifying details such as \
+your Spotify user id and playlist ids. SPOTATUI_LOG=trace goes further and adds raw audio packet \
+activity and full API response bodies, which include your country. Access \
+tokens and request headers are never logged, but read through the file before posting it \
+publicly.",
+        ),
+    )
     // Control spotify from the command line
     .subcommand(cli::playback_subcommand())
     .subcommand(cli::play_subcommand())
@@ -275,5 +290,62 @@ pub(super) fn restart_after_update(new_version: Option<String>) -> Result<()> {
       eprintln!("Please restart spotatui manually.");
       std::process::exit(1);
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// `--debug` is the flag every bug report in issue #566 is going to be asked
+  /// for, and the help text is the only place a user learns that the log can
+  /// carry personal data. Renaming either is a silent regression otherwise:
+  /// nothing else in the suite builds the clap app.
+  #[test]
+  fn debug_flag_parses_and_defaults_to_off() {
+    let app = build_clap_app();
+    let matches = app
+      .clone()
+      .try_get_matches_from(["spotatui", "--debug"])
+      .expect("--debug must parse");
+    assert!(matches.get_flag("debug"));
+
+    let matches = app
+      .try_get_matches_from(["spotatui"])
+      .expect("no args must parse");
+    assert!(!matches.get_flag("debug"));
+  }
+
+  /// `--debug` needs `global(true)` to parse after a subcommand
+  /// (`spotatui playback --status --debug`), not just before one. `run_cli`
+  /// reads it off the root `ArgMatches` (`matches.get_flag("debug")` in
+  /// `runtime/mod.rs`), and clap copies a global flag's value back up to
+  /// every parent level it was propagated through, so that read keeps working
+  /// once the flag is placed on the subcommand line instead of the root one.
+  #[test]
+  fn debug_flag_parses_after_a_subcommand() {
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "playback", "--status", "--debug"])
+      .expect("--debug after a subcommand must parse");
+    assert!(matches.get_flag("debug"));
+  }
+
+  #[test]
+  fn debug_flag_long_help_warns_about_personal_data() {
+    let help = build_clap_app()
+      .get_arguments()
+      .find(|arg| arg.get_id() == "debug")
+      .and_then(|arg| arg.get_long_help().or_else(|| arg.get_help()))
+      .map(ToString::to_string)
+      .expect("--debug must document itself");
+    let help = help.to_lowercase();
+    assert!(
+      help.contains("before posting"),
+      "the long help must tell the user to read the log before posting it:\n{help}"
+    );
+    assert!(
+      help.contains("country"),
+      "the long help must name what trace adds to the log:\n{help}"
+    );
   }
 }

@@ -68,7 +68,10 @@ pub(super) fn init_audio_backend() {
 #[cfg(not(all(target_os = "linux", feature = "streaming")))]
 pub(super) fn init_audio_backend() {}
 
-pub(super) fn setup_logging() -> anyhow::Result<()> {
+pub(super) fn setup_logging(
+  resolved_level: log::LevelFilter,
+  target_levels: &[(&'static str, log::LevelFilter)],
+) -> anyhow::Result<()> {
   let log_dir = crate::core::paths::app_log_dir();
   let log_path = crate::core::paths::app_log_path();
 
@@ -82,8 +85,14 @@ pub(super) fn setup_logging() -> anyhow::Result<()> {
       e
     )
   })?;
-  // define format of log messages.
-  fern::Dispatch::new()
+  // The global level never goes above `Info`: dependencies (reqwest, hyper,
+  // rustls, h2, ...) are deliberately never pinned individually with
+  // `level_for`, so the global default is what keeps them quiet at
+  // `--debug`/`SPOTATUI_LOG=trace` without a pin list that has to be kept in
+  // sync as dependencies change. Below `Info` (e.g. `SPOTATUI_LOG=warn`) the
+  // requested level applies globally instead, since nothing needs raising.
+  let global_level = resolved_level.min(log::LevelFilter::Info);
+  let mut dispatch = fern::Dispatch::new()
     .format(|out, message, record| {
       out.finish(format_args!(
         "{}[{}][{}] {}",
@@ -93,7 +102,11 @@ pub(super) fn setup_logging() -> anyhow::Result<()> {
         message
       ))
     })
-    .level(log::LevelFilter::Info)
+    .level(global_level);
+  for &(target, level) in target_levels {
+    dispatch = dispatch.level_for(target, level);
+  }
+  dispatch
     .chain(fern::log_file(&log_path)?) // Use the dynamic path
     .apply()
     .map_err(|e| anyhow::anyhow!("Failed to initialize logger: {}", e))?;
@@ -147,8 +160,24 @@ pub(super) fn install_panic_hook() {
         let _ = writeln!(f, "\n==== spotatui panic ====");
         let _ = writeln!(f, "{}", info);
         let _ = writeln!(f, "{:?}", Backtrace::new());
+        // Only the tail (at most the last 64 KiB / 200 lines) is read, never
+        // the whole file: the running log can be megabytes by the time a
+        // panic happens. `read_log_tail` never panics (every fallible step
+        // returns `None`), which matters here — a panic inside a panic hook
+        // aborts the process with no message at all.
+        let log_tail =
+          super::logging::read_log_tail(&crate::core::paths::app_log_path(), 64 * 1024, 200);
+        if let Some(tail) = log_tail {
+          if !tail.is_empty() {
+            let _ = writeln!(f, "\n==== log tail (up to the last 200 lines) ====");
+            let _ = writeln!(f, "{tail}");
+          }
+        }
       }
-      eprintln!("A crash log was written to: {}", path.to_string_lossy());
+      eprintln!(
+        "A crash log was written to: {} (rerun with --debug for a much more detailed log)",
+        path.to_string_lossy()
+      );
     }
     default_hook(info);
 
