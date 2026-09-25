@@ -40,7 +40,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         ))
         .border_style(get_color((false, false), app.user_config.theme));
 
-      let notice = Paragraph::new("Top tracks unavailable on new keys under development mode")
+      let notice = Paragraph::new("Top Tracks: unavailable for apps in Spotify Development Mode")
         .block(block)
         .style(app.user_config.theme.base_style())
         .alignment(Alignment::Center);
