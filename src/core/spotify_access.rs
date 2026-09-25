@@ -10,7 +10,8 @@
 //! | after 2026-02-11 | `Restricted2026` | the above, plus artist top tracks, `tracks?ids=` |
 //!
 //! A tier is learned from a 403/404 on one of these endpoints and only
-//! ratchets up (`App::raise_spotify_key_tier`). Everything reads it through
+//! ratchets up (`App::raise_spotify_key_tier`); re-authenticating clears it
+//! (`state::save_clearing_client_key_tiers`). Everything reads it through
 //! `App::spotify_endpoint_blocked`: the request funnel and the screens that
 //! render the result.
 
