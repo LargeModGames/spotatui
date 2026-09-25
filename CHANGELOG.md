@@ -6,6 +6,10 @@
 
 - **Spotify steps aside while another source plays**: when Local Files, Subsonic, Internet Radio, YouTube or Qobuz takes over from Spotify playing on spotatui, spotatui now shuts its Spotify player down instead of only pausing it, so the spotatui device leaves the device list of your other Spotify apps until you play Spotify in spotatui again. That start rebuilds the player in about a second ("Reconnecting native streaming…") and then plays, and a Spotify track queued behind another source plays the same way. When the other source ends, Space or a media key resumes the Spotify track you left; previous, seek, volume, shuffle, repeat and next with nothing queued answer "Press play to resume Spotify" until then, and the device picker still lists spotatui (Enter on it reconnects). A track from another source queued in the middle of a Spotify playlist still only pauses Spotify, so the playlist continues without a reconnect, and when Spotify plays on another device nothing changes. Quitting now also shuts the spotatui device down, so your other Spotify apps show it as inactive.
 
+### Fixed
+
+- **`ctrl--` and `alt--` keybindings work**: a binding whose key is a dash after a modifier was rejected with "Shortcut can only have 2 keys", so in `config.yml` it was skipped with a warning, and pressing Alt+- or Ctrl+- in Settings showed the new binding while the old one stayed active. Only the first dash now separates the modifier from the key ([#554](https://github.com/LargeModGames/spotatui/issues/554)).
+
 ## [v0.43.0] 2026-09-23
 
 ### Added

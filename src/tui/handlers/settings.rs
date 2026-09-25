@@ -614,6 +614,15 @@ mod tests {
   }
 
   #[test]
+  fn a_dash_keybinding_round_trips_through_the_config_string() {
+    use crate::core::user_config::parse_key_public;
+
+    for key in [Key::Alt('-'), Key::Ctrl('-'), Key::Char('-')] {
+      assert_eq!(parse_key_public(key_to_config_string(&key)).unwrap(), key);
+    }
+  }
+
+  #[test]
   fn cycling_preset_to_terminal_turns_banner_gradient_setting_off() {
     let mut app = App::default();
     app.view.settings_category = SettingsCategory::Theme;

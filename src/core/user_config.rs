@@ -275,15 +275,10 @@ fn parse_key(key: String) -> Result<Key> {
     return Ok(Key::Char(c));
   }
 
-  let sections: Vec<&str> = key.split('-').collect();
-
-  if sections.len() > 2 {
-    return Err(anyhow!(
-      "Shortcut can only have 2 keys, \"{}\" has {}",
-      key,
-      sections.len()
-    ));
-  }
+  // Split on the first dash only, so the key after a modifier may itself be a
+  // dash (`ctrl--`, `alt--`). Anything longer (`ctrl-a-b`) is rejected by
+  // `modifier_char`, which names the binding (#554).
+  let sections: Vec<&str> = key.splitn(2, '-').collect();
 
   match sections[0].to_lowercase().as_str() {
     "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
@@ -2582,6 +2577,23 @@ mod tests {
     }
     assert_eq!(parse_key(String::from("ctrl-ö")).unwrap(), Key::Ctrl('ö'));
     assert!(parse_key(String::from("öö")).is_err());
+  }
+
+  #[test]
+  fn a_dash_after_a_modifier_parses_as_the_key() {
+    use super::parse_key;
+    use crate::core::input::Key;
+
+    // Only the first dash separates the modifier from the key, so the key
+    // itself may be a dash (#554).
+    assert_eq!(parse_key(String::from("ctrl--")).unwrap(), Key::Ctrl('-'));
+    assert_eq!(parse_key(String::from("alt--")).unwrap(), Key::Alt('-'));
+    assert_eq!(parse_key(String::from("-")).unwrap(), Key::Char('-'));
+    let err = parse_key(String::from("ctrl-a-b")).unwrap_err();
+    assert!(
+      err.to_string().contains("ctrl-a-b"),
+      "error for \"ctrl-a-b\" must name the binding: {err}"
+    );
   }
 
   #[test]
