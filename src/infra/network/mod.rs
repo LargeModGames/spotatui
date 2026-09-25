@@ -20,6 +20,7 @@ use crate::core::auth;
 use crate::core::config::{ClientConfig, NCSPOT_CLIENT_ID};
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use crate::core::source::Source;
+use crate::core::spotify_access::RestrictedEndpoint;
 use crate::infra::redirect_uri::{bind_callback_listener, serve_spotify_callback};
 use anyhow::anyhow;
 use rspotify::model::{
@@ -1268,7 +1269,10 @@ impl Network {
     }
   }
 
-  async fn mark_spotify_development_app(&self) {
+  /// Record that `endpoint` refused the key in use, and persist the new tier.
+  /// The caller passes the endpoint that refused, so a refusal outside the
+  /// restricted table never reaches this.
+  async fn raise_spotify_key_tier(&self, endpoint: RestrictedEndpoint) {
     let client_id = self
       .spotify
       .as_ref()
@@ -1277,17 +1281,38 @@ impl Network {
       .app
       .lock()
       .await
-      .mark_spotify_development_app(client_id.as_deref());
+      .raise_spotify_key_tier(endpoint, client_id.as_deref());
   }
 
-  async fn set_and_remind_dev_app(&self, feature_name: &str) {
-    self.mark_spotify_development_app().await;
+  /// [`Self::raise_spotify_key_tier`] plus the status line saying why the
+  /// feature is not there. One entry point for both halves of a refusal.
+  async fn raise_and_remind_unavailable(&self, feature_name: &str, endpoint: RestrictedEndpoint) {
+    self.raise_spotify_key_tier(endpoint).await;
     self
       .show_status_message(
-        format!("{feature_name}: unavailable for apps in Spotify Development Mode"),
+        format!("{feature_name}: {}", endpoint.unavailable_note()),
         5,
       )
       .await;
+  }
+
+  /// [`Self::raise_and_remind_unavailable`] as a pre-check: `true` when the
+  /// funnel would refuse `endpoint`, so the caller returns instead of starting
+  /// the work. Same state and message as a refusal caught after the fact.
+  async fn endpoint_is_out_of_reach(
+    &self,
+    feature_name: &str,
+    endpoint: RestrictedEndpoint,
+  ) -> bool {
+    // A `let`, not an `if` condition: the guard must be dropped before
+    // `raise_and_remind_unavailable` takes the same lock.
+    let blocked = self.app.lock().await.spotify_endpoint_blocked(endpoint);
+    if blocked {
+      self
+        .raise_and_remind_unavailable(feature_name, endpoint)
+        .await;
+    }
+    blocked
   }
 
   async fn show_status_message(&self, message: String, ttl_secs: u64) {

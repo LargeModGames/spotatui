@@ -1,5 +1,6 @@
 use super::util::{draw_selectable_list, get_artist_highlight_state, get_color, join_artist_names};
 use crate::core::app::{App, ArtistBlock};
+use crate::core::spotify_access::RestrictedEndpoint;
 use crate::tui::theme::ThemeExt;
 use ratatui::layout::Alignment;
 use ratatui::text::Span;
@@ -40,7 +41,17 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         ))
         .border_style(get_color((false, false), app.user_config.theme));
 
-      let notice = Paragraph::new("Top Tracks: unavailable for apps in Spotify Development Mode")
+      // Empty means either the key lost the endpoint or the artist has none;
+      // only the first may name Spotify's cutoff.
+      let notice_text = if app.spotify_endpoint_blocked(RestrictedEndpoint::ArtistTopTracks) {
+        format!(
+          "Top Tracks: {}",
+          RestrictedEndpoint::ArtistTopTracks.unavailable_note()
+        )
+      } else {
+        "No top tracks".to_string()
+      };
+      let notice = Paragraph::new(notice_text)
         .block(block)
         .style(app.user_config.theme.base_style())
         .alignment(Alignment::Center);

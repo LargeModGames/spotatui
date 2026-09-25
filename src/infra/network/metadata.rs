@@ -4,6 +4,7 @@ use crate::core::app::{
   SelectedFullShow, SelectedShow,
 };
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
+use crate::core::spotify_access::RestrictedEndpoint;
 use crate::infra::network::mapping::map_page;
 use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
 use anyhow::anyhow;
@@ -166,41 +167,40 @@ impl MetadataNetwork for Network {
         top_tracks_query.push(("market", country_code(country)));
       }
 
-      let is_dev_app = self.app.lock().await.is_spotify_development_app();
+      // No "development app" short-circuit here: each fetch is gated on its
+      // own endpoint by the request funnel, and each 403 records only the
+      // endpoint that produced it.
+      let (top_tracks_res, related_artists_res) = tokio::join!(
+        self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
+        self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
+      );
 
-      let (top_tracks, related_artists) = if is_dev_app {
-        (Vec::new(), Vec::new())
-      } else {
-        let (top_tracks_res, related_artists_res) = tokio::join!(
-          self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
-          self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
-        );
+      let top_tracks = match top_tracks_res {
+        Ok(res) => res.tracks,
+        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
+          self
+            .raise_spotify_key_tier(RestrictedEndpoint::ArtistTopTracks)
+            .await;
+          Vec::new()
+        }
+        Err(e) => {
+          self.handle_error(anyhow!(e)).await;
+          return;
+        }
+      };
 
-        let top_tracks = match top_tracks_res {
-          Ok(res) => res.tracks,
-          Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-            self.mark_spotify_development_app().await;
-            Vec::new()
-          }
-          Err(e) => {
-            self.handle_error(anyhow!(e)).await;
-            return;
-          }
-        };
-
-        let related_artists = match related_artists_res {
-          Ok(res) => res.artists,
-          Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
-            self.mark_spotify_development_app().await;
-            Vec::new()
-          }
-          Err(e) => {
-            self.handle_error(e).await;
-            return;
-          }
-        };
-
-        (top_tracks, related_artists)
+      let related_artists = match related_artists_res {
+        Ok(res) => res.artists,
+        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => {
+          self
+            .raise_spotify_key_tier(RestrictedEndpoint::RelatedArtists)
+            .await;
+          Vec::new()
+        }
+        Err(e) => {
+          self.handle_error(e).await;
+          return;
+        }
       };
 
       let mut album_items = Vec::new();
@@ -686,5 +686,110 @@ mod tests {
   #[tokio::test]
   async fn get_artist_recovers_from_related_artists_403() {
     get_artist_recovers_from_related_artists("403 Forbidden", 403).await;
+  }
+
+  /// A related-artists 403 must not cost later artist pages their top tracks:
+  /// the old single development-app flag gated both.
+  #[tokio::test]
+  async fn a_related_artists_403_does_not_cost_the_next_artist_its_top_tracks() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+      let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+
+      // Five requests: artist 1 sends top-tracks, related-artists (403),
+      // albums; artist 2 sends top-tracks and albums only. A regression that
+      // gates top tracks too leaves the server one connection short, so this
+      // loop never finishes and the timeout fails the test.
+      let log = seen.clone();
+      let server = tokio::spawn(async move {
+        for _ in 0..5 {
+          let (mut stream, _) = listener.accept().await.unwrap();
+          let request = read_http_request(&mut stream).await;
+          log.lock().await.push(request.clone());
+
+          let (status, body) = if request.contains("/top-tracks") {
+            ("200 OK", r#"{"tracks":[]}"#.to_string())
+          } else if request.contains("/related-artists") {
+            (
+              "403 Forbidden",
+              r#"{"error":{"status":403,"message":"Forbidden"}}"#.to_string(),
+            )
+          } else if request.contains("/albums") {
+            (
+              "200 OK",
+              r#"{"items":[],"total":0,"limit":50,"offset":0,"href":"","next":null,"previous":null}"#
+                .to_string(),
+            )
+          } else {
+            panic!("unexpected request: {request}");
+          };
+
+          let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+          );
+          stream.write_all(response.as_bytes()).await.unwrap();
+        }
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let app = Arc::new(Mutex::new(App::new(
+        tx,
+        UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+      let mut network = Network::new(
+        Some(spotify),
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+
+      network
+        .get_artist(ArtistId::from_id("first").unwrap(), "First".to_string(), None)
+        .await;
+      network
+        .get_artist(ArtistId::from_id("second").unwrap(), "Second".to_string(), None)
+        .await;
+
+      server.await.unwrap();
+
+      let seen = seen.lock().await;
+      assert!(
+        seen
+          .iter()
+          .any(|request| request.contains("/artists/second/top-tracks")),
+        "the second artist's top tracks must still be requested: {seen:?}"
+      );
+      assert!(
+        !seen
+          .iter()
+          .any(|request| request.contains("/artists/second/related-artists")),
+        "related artists must be refused before the wire once the tier knows: {seen:?}"
+      );
+
+      let app_guard = app.lock().await;
+      assert!(
+        !app_guard.spotify_endpoint_blocked(RestrictedEndpoint::ArtistTopTracks),
+        "a related-artists refusal is 2024 evidence only; top tracks are the 2026 cut"
+      );
+      assert!(
+        app_guard.spotify_endpoint_blocked(RestrictedEndpoint::RelatedArtists),
+        "the related-artists refusal must have raised the tier"
+      );
+      // The synthetic 403 must read as a forbidden error, or the page would
+      // fall through to a full-screen error instead of one missing column.
+      assert_eq!(app_guard.get_current_route().id, RouteId::Artist);
+      assert_eq!(
+        app_guard.artist.as_ref().map(|artist| artist.artist_name.as_str()),
+        Some("Second"),
+        "the second artist page must have completed"
+      );
+    })
+    .await
+    .expect("test timed out");
   }
 }

@@ -2,6 +2,7 @@ use super::requests::{is_forbidden_error, is_not_found_error, is_rate_limited_er
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId, UserInfo};
 use crate::core::plugin_api::TrackInfo;
+use crate::core::spotify_access::RestrictedEndpoint;
 use anyhow::anyhow;
 
 use crate::infra::network::mapping::map_cursor_page;
@@ -215,8 +216,12 @@ impl UserNetwork for Network {
   }
 
   async fn get_top_artists_mix(&mut self) {
-    if self.app.lock().await.is_spotify_development_app() {
-      self.set_and_remind_dev_app("Top Artists Mix").await;
+    // `me/top/artists` is the 2026 cut only, so a 2024-2026 key still gets
+    // its mix.
+    if self
+      .endpoint_is_out_of_reach("Top Artists Mix", RestrictedEndpoint::MeTopArtists)
+      .await
+    {
       return;
     }
 
@@ -236,6 +241,16 @@ impl UserNetwork for Network {
 
     let artists = match artists_res {
       Ok(page) => page.items,
+      // A key nothing has refused passes the pre-check, so this is the 403
+      // that records the tier: say why here rather than take over the screen
+      // with an error page.
+      Err(e) if is_forbidden_error(&e) || is_not_found_error(&e) => {
+        self
+          .raise_and_remind_unavailable("Top Artists Mix", RestrictedEndpoint::MeTopArtists)
+          .await;
+        self.app.lock().await.discover_loading = false;
+        return;
+      }
       Err(e) => {
         let mut app = self.app.lock().await;
         app.discover_loading = false;
@@ -260,7 +275,9 @@ impl UserNetwork for Network {
       match res {
         Ok(res) => all_tracks.extend(res.tracks),
         Err(e) if is_forbidden_error(&e) || is_not_found_error(&e) => {
-          self.set_and_remind_dev_app("Top Artists Mix").await;
+          self
+            .raise_and_remind_unavailable("Top Artists Mix", RestrictedEndpoint::ArtistTopTracks)
+            .await;
           self.app.lock().await.discover_loading = false;
           return;
         }

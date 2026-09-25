@@ -704,7 +704,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     .as_ref()
     .map(|client| client.creds.id.as_str())
     .unwrap_or(client_config.client_id.as_str());
-  let is_dev_app = runtime_state.is_dev_client_id(current_client_id);
+  let spotify_key_tier = runtime_state.spotify_key_tier_for(current_client_id);
 
   let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
   info!("app state initialized");
@@ -716,7 +716,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     runtime_state.clone(),
     state_path.clone(),
     token_expiry,
-    is_dev_app,
+    spotify_key_tier,
   )));
 
   // `--play-file <PATH>`: queue a local file to start once the UI is up. The

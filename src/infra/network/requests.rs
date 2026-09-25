@@ -1,5 +1,5 @@
 use super::Network;
-use crate::core::{app::App, auth};
+use crate::core::{app::App, auth, spotify_access::restricted_endpoint};
 use anyhow::anyhow;
 use log::warn;
 use reqwest::header::CONTENT_LENGTH;
@@ -8,7 +8,6 @@ use rspotify::AuthCodePkceSpotify;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
-  env,
   future::Future,
   path::Path,
   sync::Arc,
@@ -236,6 +235,23 @@ pub async fn spotify_api_request_json_for_with_refresh(
   token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
 ) -> anyhow::Result<Value> {
+  // Key-tier gate: every caller funnels through here, so a surface that forgot
+  // to pre-check still cannot spend a refused request. Answered before the
+  // token, pacing and socket, so callers see the same 403 as Spotify's own.
+  if let Some(endpoint) = restricted_endpoint(method.as_str(), path, query) {
+    let blocked = app.lock().await.spotify_endpoint_blocked(endpoint);
+    if blocked {
+      return Err(
+        SpotifyApiError {
+          status: StatusCode::FORBIDDEN,
+          body: "Forbidden".to_string(),
+          detail: Some(endpoint.unavailable_note().to_string()),
+        }
+        .into(),
+      );
+    }
+  }
+
   let base_url = &spotify.config.api_base_url;
 
   spotify_api_request_json_for_base_with_refresh(
@@ -502,29 +518,7 @@ impl Network {
     path: &str,
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
-    // TODO remove this debug statement
-    let suffer_level: u8 = std::env::var("MAKE_OUD_SUFFER")
-      .ok()
-      .and_then(|v| v.parse().ok())
-      .unwrap_or(0);
-
-    let level_1_blocked = path.contains("recommendations") || path.contains("related-artists");
-    let level_2_blocked = path.contains("/top-tracks")
-      || (path.contains("tracks") && query.iter().any(|(k, _)| k.contains("ids")));
-
-    let should_suffer = (suffer_level >= 1 && level_1_blocked)
-      || (suffer_level >= 2 && level_2_blocked);
-
-    if should_suffer {
-      return Err(
-        SpotifyApiError {
-          status: StatusCode::FORBIDDEN,
-          body: "Forbidden".into(),
-          detail: None,
-        }
-          .into(),
-      );
-    }
+    warn!("Sent request to {}", path);
     let mut value = self
       .spotify_api_request_json(Method::GET, path, query, None)
       .await?;

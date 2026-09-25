@@ -1,6 +1,7 @@
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, RouteId, TrackTableContext};
 use crate::core::plugin_api::TrackInfo;
+use crate::core::spotify_access::RestrictedEndpoint;
 use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
 use anyhow::anyhow;
 use rspotify::model::{
@@ -53,8 +54,10 @@ impl RecommendationNetwork for Network {
     first_track: Box<Option<TrackInfo>>,
     country: Option<Country>,
   ) {
-    if self.app.lock().await.is_spotify_development_app() {
-      self.set_and_remind_dev_app("Recommendation").await;
+    if self
+      .endpoint_is_out_of_reach("Recommendation", RestrictedEndpoint::Recommendations)
+      .await
+    {
       return;
     }
 
@@ -115,7 +118,9 @@ impl RecommendationNetwork for Network {
           {
             Ok(res) => res.tracks,
             Err(e) if is_development_mode_error(&e) => {
-              self.set_and_remind_dev_app("Recommendation").await;
+              self
+                .raise_and_remind_unavailable("Recommendation", RestrictedEndpoint::TracksByIds)
+                .await;
               return;
             }
             Err(e) => {
@@ -142,7 +147,9 @@ impl RecommendationNetwork for Network {
         app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
       }
       Err(e) if is_development_mode_error(&e) => {
-        self.set_and_remind_dev_app("Recommendation").await
+        self
+          .raise_and_remind_unavailable("Recommendation", RestrictedEndpoint::Recommendations)
+          .await
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -176,9 +183,12 @@ mod tests {
   use tokio::sync::Mutex;
 
   #[tokio::test]
-  async fn recommendations_short_circuit_before_request_for_development_app() {
+  async fn recommendations_short_circuit_before_request_when_the_key_lost_them() {
     let app = Arc::new(Mutex::new(App::default()));
-    app.lock().await.mark_spotify_development_app(None);
+    app
+      .lock()
+      .await
+      .raise_spotify_key_tier(RestrictedEndpoint::Recommendations, None);
     let mut network = Network::new(None, ClientConfig::new(), &app, PathBuf::new());
 
     network
@@ -188,7 +198,7 @@ mod tests {
     let app = app.lock().await;
     assert_eq!(
       app.status_message(),
-      Some("Recommendation: unavailable for apps in Spotify Development Mode")
+      Some("Recommendation: removed by Spotify for apps registered after 2024-11-27")
     );
     assert_ne!(app.get_current_route().id, RouteId::Error);
   }

@@ -634,10 +634,7 @@ mod tests {
     use std::time::SystemTime;
 
     let (tx, rx) = channel();
-    let mut page = artist_page_with_tracks(
-      vec![track("one", "One")],
-      vec![],
-    );
+    let mut page = artist_page_with_tracks(vec![track("one", "One")], vec![]);
     page.artist_selected_block = ArtistBlock::TopTracks;
     let mut app = app_hovering_with(
       App::new(tx, UserConfig::new(), Some(SystemTime::now())),
