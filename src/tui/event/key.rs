@@ -85,6 +85,8 @@ impl From<event::KeyEvent> for Key {
       // Terminals using the kitty keyboard protocol send Shift+letter as lowercase
       // char with SHIFT modifier; normalise to uppercase so Key::Char('P') works.
       // A letter whose uppercase is more than one char (`ß` → `SS`) stays as is.
+      // Windows console input has already applied Caps Lock XOR Shift, so preserve it there.
+      #[cfg(not(windows))]
       event::KeyEvent {
         code: event::KeyCode::Char(c),
         modifiers: event::KeyModifiers::SHIFT,
@@ -102,6 +104,7 @@ impl From<event::KeyEvent> for Key {
 }
 
 /// The uppercase form of `c` when it is exactly one char, `None` otherwise.
+#[cfg(not(windows))]
 fn single_char_uppercase(c: char) -> Option<char> {
   let mut upper = c.to_uppercase();
   match (upper.next(), upper.next()) {
@@ -119,17 +122,27 @@ mod tests {
     Key::from(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT))
   }
 
+  #[cfg(not(windows))]
   #[test]
   fn shift_with_a_lowercase_non_ascii_letter_gives_its_uppercase_char() {
     assert_eq!(shifted('ö'), Key::Char('Ö'));
     assert_eq!(shifted('é'), Key::Char('É'));
   }
 
+  #[cfg(not(windows))]
   #[test]
   fn shift_with_eszett_stays_eszett_because_its_uppercase_is_two_chars() {
     assert_eq!(shifted('ß'), Key::Char('ß'));
   }
 
+  #[cfg(windows)]
+  #[test]
+  fn windows_shift_with_lowercase_char_preserves_console_result() {
+    assert_eq!(shifted('a'), Key::Char('a'));
+    assert_eq!(shifted('ö'), Key::Char('ö'));
+  }
+
+  #[cfg(not(windows))]
   #[test]
   fn shift_with_an_ascii_letter_still_gives_its_uppercase_char() {
     assert_eq!(shifted('p'), Key::Char('P'));
