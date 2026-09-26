@@ -275,13 +275,15 @@ fn parse_key(key: String) -> Result<Key> {
     return Ok(Key::Char(c));
   }
 
-  let sections: Vec<&str> = key.split('-').collect();
+  // Split on the first dash only: the key after a modifier may be '-' itself
+  // ("ctrl--"). modifier_char rejects a longer suffix ("ctrl-a-b").
+  let sections: Vec<&str> = key.splitn(2, '-').collect();
+  let is_modifier = matches!(sections[0].to_lowercase().as_str(), "ctrl" | "alt");
 
-  if sections.len() > 2 {
+  if sections.len() > 1 && !is_modifier {
     return Err(anyhow!(
-      "Shortcut can only have 2 keys, \"{}\" has {}",
-      key,
-      sections.len()
+      "Only ctrl and alt combine with another key, \"{}\" does not",
+      key
     ));
   }
 
@@ -2598,6 +2600,25 @@ mod tests {
       );
     }
     assert!(parse_key(String::new()).is_err());
+  }
+
+  #[test]
+  fn a_dash_after_a_modifier_parses_as_the_key() {
+    use super::parse_key;
+    use crate::core::input::Key;
+
+    assert_eq!(parse_key(String::from("ctrl--")).unwrap(), Key::Ctrl('-'));
+    assert_eq!(parse_key(String::from("alt--")).unwrap(), Key::Alt('-'));
+    assert_eq!(parse_key(String::from("-")).unwrap(), Key::Char('-'));
+    for bad in [
+      "ctrl-a-b", "ctrl---", "alt--a", "f1-a-b", "f1--", "f1-a", "left--",
+    ] {
+      let err = parse_key(bad.to_string()).unwrap_err();
+      assert!(
+        err.to_string().contains(bad),
+        "error for {bad:?} must name the binding: {err}"
+      );
+    }
   }
 
   #[test]
