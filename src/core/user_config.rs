@@ -275,13 +275,18 @@ fn parse_key(key: String) -> Result<Key> {
     return Ok(Key::Char(c));
   }
 
-  let sections: Vec<&str> = key.split('-').collect();
+  // Split on the first dash only: the key after a modifier may be '-' itself
+  // ("ctrl--"). A dash inside a longer suffix is still a third key.
+  let sections: Vec<&str> = key.splitn(2, '-').collect();
 
-  if sections.len() > 2 {
+  if sections
+    .get(1)
+    .is_some_and(|rest| rest.len() > 1 && rest.contains('-'))
+  {
     return Err(anyhow!(
       "Shortcut can only have 2 keys, \"{}\" has {}",
       key,
-      sections.len()
+      key.split('-').count()
     ));
   }
 
@@ -2598,6 +2603,22 @@ mod tests {
       );
     }
     assert!(parse_key(String::new()).is_err());
+  }
+
+  #[test]
+  fn a_dash_after_a_modifier_parses_as_the_key() {
+    use super::parse_key;
+    use crate::core::input::Key;
+
+    assert_eq!(parse_key(String::from("ctrl--")).unwrap(), Key::Ctrl('-'));
+    assert_eq!(parse_key(String::from("alt--")).unwrap(), Key::Alt('-'));
+    assert_eq!(parse_key(String::from("-")).unwrap(), Key::Char('-'));
+    for bad in ["ctrl-a-b", "alt--a", "f1-a-b"] {
+      assert!(
+        parse_key(bad.to_string()).is_err(),
+        "{bad:?} must not parse"
+      );
+    }
   }
 
   #[test]

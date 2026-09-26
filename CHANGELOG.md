@@ -16,6 +16,8 @@
 
 - **Shift + a non-ASCII letter triggers its uppercase binding**: on terminals that send Shift+letter as the lowercase letter with Shift held (kitty keyboard protocol), a binding such as `next_track: Ö` never fired and a binding on plain `ö` fired instead. Shift now turns any lowercase letter into its uppercase letter, as it already did for `a`–`z`. A letter whose uppercase is two letters, such as `ß`, stays as it is ([#553](https://github.com/LargeModGames/spotatui/issues/553)).
 
+- **`ctrl--` and `alt--` keybindings work**: a binding with `-` as the key after a modifier was rejected with "Shortcut can only have 2 keys", so config.yml skipped it with a warning and Settings showed `alt--` while the old binding stayed active. Both now bind Ctrl+- and Alt+- ([#554](https://github.com/LargeModGames/spotatui/issues/554)).
+
 ## [v0.43.0] 2026-09-23
 
 ### Added
