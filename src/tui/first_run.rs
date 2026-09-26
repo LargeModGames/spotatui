@@ -62,9 +62,9 @@ fn interactive_multiselect(options: &[Source]) -> Result<Option<Vec<Source>>> {
       let pointer = if index == hover { ">" } else { " " };
       let checkbox = if checked[index] { "[x]" } else { "[ ]" };
       let line = format!(
-        "  {pointer} {checkbox} {}{}",
+        "  {pointer} {checkbox} {} ({})",
         source.label(),
-        source_note(*source)
+        source.note()
       );
       if index == hover {
         print!("{}\r\n", line.cyan().bold());
@@ -132,28 +132,12 @@ impl Drop for RawModeGuard {
 fn numbered_fallback(options: &[Source]) -> Result<Vec<Source>> {
   println!("\nWelcome to spotatui! Choose your music source:\n");
   for (index, source) in options.iter().enumerate() {
-    println!(
-      "  {}) {}{}",
-      index + 1,
-      source.label(),
-      source_note(*source)
-    );
+    println!("  {}) {} ({})", index + 1, source.label(), source.note());
   }
   println!("\nYou can add or switch sources anytime from the `d` menu.");
 
   let choice = prompt_choice(options.len())?;
   Ok(vec![options[choice - 1]])
-}
-
-fn source_note(source: Source) -> &'static str {
-  match source {
-    Source::Spotify => " (needs login)",
-    Source::YouTube => " (free, needs the yt-dlp binary)",
-    Source::Subsonic => " (free, needs a Subsonic/Navidrome server)",
-    Source::Radio => " (free)",
-    Source::Local => " (free)",
-    Source::Qobuz => " (paid subscription, logs in through the browser)",
-  }
 }
 
 fn prompt_choice(max: usize) -> Result<usize> {

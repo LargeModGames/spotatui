@@ -1,4 +1,5 @@
 import type { ClientMessage } from "./bindings/ClientMessage";
+import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
 import { applyChannel, type Channels } from "./store";
 
@@ -27,6 +28,8 @@ export interface State {
   expired: boolean;
   channels: Channels;
   position: Position | null;
+  /** The first-launch questions; the page shows them until the app has booted. */
+  onboarding: OnboardingView | null;
 }
 
 /** Reads the one-time launch code from the fragment and removes it from the address bar. */
@@ -39,12 +42,21 @@ export function takeLaunchCode(
   return code;
 }
 
+/** Whether the page shows the first-launch questions: a question is open, or the app has not booted. */
+export function showsOnboarding(state: State): boolean {
+  return (
+    state.onboarding !== null &&
+    (state.onboarding.pending !== null || state.channels.route === undefined)
+  );
+}
+
 export class Connection {
   private state: State = {
     connected: false,
     expired: false,
     channels: {},
     position: null,
+    onboarding: null,
   };
   private socket: Socket | null = null;
   private readonly listeners = new Set<() => void>();
@@ -103,6 +115,8 @@ export class Connection {
           this.storage.setItem(TOKEN_KEY, message.payload.token);
         // Every channel follows the hello, so the store starts over.
         return this.update({ connected: true, channels: {} });
+      case "onboarding":
+        return this.update({ onboarding: message.payload });
       case "tick":
         return this.update({
           position: { ms: message.payload, at: this.now() },

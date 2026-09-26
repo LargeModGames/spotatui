@@ -1,13 +1,14 @@
 //! Pushes from the tick loop to every page socket, and page messages back.
 
 use crate::core::app::{App, DisplayRevisions};
-use crate::gui::protocol::{self, ClientMessage};
+use crate::gui::onboarding::BrowserOnboarding;
+use crate::gui::protocol::{self, ClientMessage, ServerMessage};
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio_tungstenite::{tungstenite::Message as WsMessage, WebSocketStream};
 
 const TICK_EVERY: Duration = Duration::from_millis(250);
@@ -15,10 +16,14 @@ const TICK_EVERY: Duration = Duration::from_millis(250);
 const TICK_SLACK: Duration = Duration::from_millis(20);
 const NO_PAGE_LIMIT: Duration = Duration::from_secs(60);
 
-/// What a page socket needs: the app for its first snapshot, the pushes, and the way back.
+/// The app once boot has built it: `None` while the first-launch questions run.
+pub(crate) type SharedApp = watch::Receiver<Option<Arc<Mutex<App>>>>;
+
+/// What a page socket needs: the app for its snapshots, the pushes, the questions, and the way back.
 #[derive(Clone)]
 pub(crate) struct Link {
-  app: Arc<Mutex<App>>,
+  app: SharedApp,
+  onboarding: Arc<BrowserOnboarding>,
   pushes: broadcast::Sender<String>,
   inbox: mpsc::UnboundedSender<ClientMessage>,
 }
@@ -28,11 +33,13 @@ pub(crate) struct Publisher {
   pushes: broadcast::Sender<String>,
   sent: DisplayRevisions,
   last_tick: Instant,
-  alone_since: Instant,
+  /// When the last page went away; unset while one is connected or before the first check.
+  alone_since: Option<Instant>,
 }
 
 pub(crate) fn channel(
-  app: Arc<Mutex<App>>,
+  app: SharedApp,
+  onboarding: Arc<BrowserOnboarding>,
 ) -> (Link, Publisher, mpsc::UnboundedReceiver<ClientMessage>) {
   let (pushes, _) = broadcast::channel(64);
   let (inbox, messages) = mpsc::unbounded_channel();
@@ -41,9 +48,18 @@ pub(crate) fn channel(
     pushes: pushes.clone(),
     sent: DisplayRevisions::default(),
     last_tick: now,
-    alone_since: now,
+    alone_since: None,
   };
-  (Link { app, pushes, inbox }, publisher, messages)
+  (
+    Link {
+      app,
+      onboarding,
+      pushes,
+      inbox,
+    },
+    publisher,
+    messages,
+  )
 }
 
 impl Publisher {
@@ -66,9 +82,18 @@ impl Publisher {
   /// True once no page socket has been open for a minute; no page can reach the process then.
   pub(crate) fn abandoned(&mut self, now: Instant) -> bool {
     if self.pushes.receiver_count() > 0 {
-      self.alone_since = now;
+      self.alone_since = None;
+      return false;
     }
-    now.saturating_duration_since(self.alone_since) >= NO_PAGE_LIMIT
+    now.saturating_duration_since(*self.alone_since.get_or_insert(now)) >= NO_PAGE_LIMIT
+  }
+}
+
+async fn resync(app: &SharedApp) -> Vec<ServerMessage> {
+  let app = app.borrow().clone();
+  match app {
+    Some(app) => protocol::resync(&*app.lock().await),
+    None => Vec::new(),
   }
 }
 
@@ -78,14 +103,21 @@ where
   S: AsyncRead + AsyncWrite + Unpin,
 {
   let (mut sink, mut stream) = socket.split();
+  let _page = link.onboarding.page_connected();
   // Subscribe before the snapshot: a push racing it is older and the page drops it.
   let mut pushes = link.pushes.subscribe();
-  let mut outgoing = {
-    let app = link.app.lock().await;
-    let mut first = vec![protocol::hello(app.display_revisions(), token)];
-    first.extend(protocol::resync(&app));
-    first
+  let mut views = link.onboarding.subscribe();
+  let mut apps = link.app.clone();
+  let app = apps.borrow_and_update().clone();
+  let revisions = match app {
+    Some(app) => app.lock().await.display_revisions(),
+    None => DisplayRevisions::default(),
   };
+  let mut outgoing = vec![
+    protocol::hello(revisions, token),
+    protocol::onboarding(views.borrow_and_update().clone()),
+  ];
+  outgoing.extend(resync(&apps).await);
   loop {
     for message in outgoing.drain(..) {
       if sink
@@ -106,12 +138,21 @@ where
         Err(RecvError::Lagged(_)) => {
           // Stale ticks carry no revision; drop the backlog and start over.
           pushes = pushes.resubscribe();
-          outgoing = protocol::resync(&*link.app.lock().await);
+          outgoing = resync(&apps).await;
         }
         Err(RecvError::Closed) => return,
       },
+      Ok(()) = views.changed() => {
+        outgoing.push(protocol::onboarding(views.borrow_and_update().clone()));
+      }
+      Ok(()) = apps.changed() => {
+        apps.borrow_and_update();
+        outgoing = resync(&apps).await;
+      }
       incoming = stream.next() => match incoming {
         Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
+          // Answered here: boot waits on it before the tick loop exists.
+          Ok(ClientMessage::Onboarding { reply }) => link.onboarding.answer(reply),
           Ok(message) => {
             let _ = link.inbox.send(message);
           }
@@ -125,7 +166,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
   use crate::core::user_config::UserConfig;
   use std::time::SystemTime;
@@ -139,10 +180,18 @@ mod tests {
     )))
   }
 
+  /// A bridge over an app that has finished booting.
+  pub(crate) fn booted(
+    app: Arc<Mutex<App>>,
+  ) -> (Link, Publisher, mpsc::UnboundedReceiver<ClientMessage>) {
+    let (_boot, apps) = watch::channel(Some(app));
+    channel(apps, Arc::new(BrowserOnboarding::new()))
+  }
+
   #[tokio::test]
   async fn a_tick_push_waits_a_quarter_second_whatever_the_tick_rate() {
     let app = shared_app();
-    let (link, mut publisher, _inbox) = channel(Arc::clone(&app));
+    let (link, mut publisher, _inbox) = booted(Arc::clone(&app));
     let t0 = publisher.last_tick;
     let mut rx = link.pushes.subscribe();
     let app = app.lock().await;
@@ -159,19 +208,20 @@ mod tests {
   #[test]
   fn a_bridge_with_no_page_for_a_minute_is_abandoned() {
     let t0 = Instant::now();
-    let (link, mut publisher, _inbox) = channel(shared_app());
+    let (link, mut publisher, _inbox) = booted(shared_app());
 
     assert!(!publisher.abandoned(t0 + Duration::from_secs(30)));
     let page = link.pushes.subscribe();
     assert!(!publisher.abandoned(t0 + Duration::from_secs(120)));
     drop(page);
     assert!(!publisher.abandoned(t0 + Duration::from_secs(150)));
-    assert!(publisher.abandoned(t0 + Duration::from_secs(181)));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(209)));
+    assert!(publisher.abandoned(t0 + Duration::from_secs(210)));
   }
   #[tokio::test]
   async fn a_lagging_socket_drops_the_backlog_and_gets_a_fresh_resync() {
     use tokio_tungstenite::tungstenite::protocol::Role;
-    let (link, _publisher, _inbox) = channel(shared_app());
+    let (link, _publisher, _inbox) = booted(shared_app());
     let (server_end, client_end) = tokio::io::duplex(64);
     let server = WebSocketStream::from_raw_socket(server_end, Role::Server, None).await;
     let mut client = WebSocketStream::from_raw_socket(client_end, Role::Client, None).await;

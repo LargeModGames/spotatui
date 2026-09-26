@@ -2,7 +2,8 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Action } from "./bindings/Action";
 import type { NowPlaying as Item } from "./bindings/NowPlaying";
 import type { TrackInfo } from "./bindings/TrackInfo";
-import type { Connection, Position } from "./connection";
+import { showsOnboarding, type Connection, type Position } from "./connection";
+import { Onboarding } from "./Onboarding";
 
 /** A placeholder page that exercises the bridge; not a design. */
 export function App({ connection }: { connection: Connection }) {
@@ -21,9 +22,25 @@ export function App({ connection }: { connection: Connection }) {
     };
   }, [theme]);
 
+  // The channels arrive once boot is done; before that the transcript is the page.
+  const booted = state.channels.route !== undefined;
   if (state.expired)
     return (
-      <p className="notice">This page is no longer connected to spotatui.</p>
+      <>
+        {state.onboarding && !booted && (
+          <pre className="transcript">{state.onboarding.transcript}</pre>
+        )}
+        <p className="notice">This page is no longer connected to spotatui.</p>
+      </>
+    );
+
+  if (state.onboarding && showsOnboarding(state))
+    return (
+      <Onboarding
+        view={state.onboarding}
+        connected={state.connected}
+        onReply={(reply) => connection.send({ type: "onboarding", reply })}
+      />
     );
 
   const send = (action: Action) => connection.send({ type: "action", action });

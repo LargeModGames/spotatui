@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { Connection, takeLaunchCode, type Handlers } from "./connection";
+import {
+  Connection,
+  showsOnboarding,
+  takeLaunchCode,
+  type Handlers,
+  type State,
+} from "./connection";
 
 function harness(code: string | null, stored: Record<string, string> = {}) {
   const sockets: { protocol: string; handlers: Handlers; sent: string[] }[] =
@@ -94,6 +100,15 @@ describe("Connection", () => {
     expect(connection.getState().channels.route?.payload).toBe("home");
   });
 
+  it("an onboarding message replaces the questions on show", () => {
+    const { connection, sockets } = harness("abc");
+    const view = { transcript: "Hi\n", pending: null };
+    sockets[0].handlers.message(
+      JSON.stringify({ kind: "onboarding", payload: view }),
+    );
+    expect(connection.getState().onboarding).toEqual(view);
+  });
+
   it("a tick records the position and when it arrived", () => {
     const { connection, sockets } = harness("abc");
     sockets[0].handlers.message(hello("t1"));
@@ -119,5 +134,45 @@ describe("takeLaunchCode", () => {
       takeLaunchCode({ hash: "#code=xyz", pathname: "/" }, { replaceState }),
     ).toBe("xyz");
     expect(replaceState).toHaveBeenCalledWith(null, "", "/");
+  });
+});
+
+describe("showsOnboarding", () => {
+  const base: State = {
+    connected: true,
+    expired: false,
+    channels: {},
+    position: null,
+    onboarding: null,
+  };
+  const view = { transcript: "", pending: null };
+  const route = { kind: "route" as const, rev: 1, payload: "home" };
+
+  it("shows the questions until the app has booted", () => {
+    expect(showsOnboarding({ ...base, onboarding: view })).toBe(true);
+  });
+
+  it("hands over to the player once the app has booted", () => {
+    expect(
+      showsOnboarding({ ...base, onboarding: view, channels: { route } }),
+    ).toBe(false);
+  });
+
+  it("shows a question asked after boot", () => {
+    const pending = {
+      seq: 3,
+      ask: { kind: "Line" as const, prompt: "?", masked: false },
+    };
+    expect(
+      showsOnboarding({
+        ...base,
+        onboarding: { transcript: "", pending },
+        channels: { route },
+      }),
+    ).toBe(true);
+  });
+
+  it("shows nothing before the first onboarding message", () => {
+    expect(showsOnboarding(base)).toBe(false);
   });
 });

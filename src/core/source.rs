@@ -75,6 +75,18 @@ impl Source {
     }
   }
 
+  /// What the source needs, shown after its label in the first-run picker.
+  pub fn note(&self) -> &'static str {
+    match self {
+      Source::Spotify => "needs login",
+      Source::YouTube => "free, needs the yt-dlp binary",
+      Source::Subsonic => "free, needs a Subsonic/Navidrome server",
+      Source::Radio => "free",
+      Source::Local => "free",
+      Source::Qobuz => "paid subscription, logs in through the browser",
+    }
+  }
+
   /// Config-file token used to persist the active source.
   /// Distinct from `label()` so the config key stays stable even if the
   /// display name changes.

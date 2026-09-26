@@ -8,6 +8,7 @@ use crate::core::plugin_api::{
   device_list, route_name, DeviceInfo, PlaybackState, QueueItemSnapshot, QueueSnapshot, TrackInfo,
 };
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
+use crate::gui::onboarding::{OnboardingReply, OnboardingView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -17,6 +18,10 @@ use std::collections::BTreeMap;
 pub(crate) enum ServerMessage {
   Hello {
     payload: HelloPayload,
+  },
+  /// The first-launch questions; sent on connect and on every change until boot is done.
+  Onboarding {
+    payload: OnboardingView,
   },
   /// The playback position in ms, or `null` while the tick loop is stale.
   Tick {
@@ -103,6 +108,7 @@ pub(crate) struct StatusPayload {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ClientMessage {
   Action { action: Box<Action> },
+  Onboarding { reply: OnboardingReply },
   Quit,
 }
 
@@ -114,6 +120,10 @@ pub(crate) fn hello(revisions: DisplayRevisions, token: Option<String>) -> Serve
       revisions,
     },
   }
+}
+
+pub(crate) fn onboarding(view: OnboardingView) -> ServerMessage {
+  ServerMessage::Onboarding { payload: view }
 }
 
 pub(crate) fn tick(app: &App) -> ServerMessage {
@@ -421,6 +431,12 @@ mod tests {
     written::<QueueItemSnapshot>(&dir, &cfg);
     written::<EpisodeInfo>(&dir, &cfg);
     written::<ResumePointInfo>(&dir, &cfg);
+    written::<OnboardingView>(&dir, &cfg);
+    written::<crate::gui::onboarding::OnboardingQuestion>(&dir, &cfg);
+    written::<crate::gui::onboarding::OnboardingAsk>(&dir, &cfg);
+    written::<crate::gui::onboarding::SourceChoice>(&dir, &cfg);
+    written::<OnboardingReply>(&dir, &cfg);
+    written::<crate::gui::onboarding::OnboardingReplyAnswer>(&dir, &cfg);
     for entry in std::fs::read_dir(&dir).unwrap() {
       let path = entry.unwrap().path();
       assert!(
