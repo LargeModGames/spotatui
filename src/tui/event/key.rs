@@ -114,12 +114,6 @@ fn shifted_char(c: char, shift_already_applied: bool) -> char {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-  fn shifted(c: char) -> Key {
-    Key::from(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT))
-  }
-
   #[test]
   fn shifted_char_uppercases_lowercase_when_shift_is_not_applied() {
     assert_eq!(shifted_char('p', false), 'P');
