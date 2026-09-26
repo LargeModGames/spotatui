@@ -165,26 +165,23 @@ impl SearchNetwork for Network {
     }
 
     // Convert rspotify pages to domain Paged<T> before storing on App.
-    app.search_results.tracks = track_result
-      .as_ref()
-      .map(|p| map_page(p, |t| TrackInfo::from(t)));
-    app.search_results.artists = artist_result
-      .as_ref()
-      .map(|p| map_page(p, |a| ArtistInfo::from(a)));
-    app.search_results.albums = album_result
-      .as_ref()
-      .map(|p| map_page(p, |a| AlbumInfo::from(a)));
-    app.search_results.playlists = playlist_result
-      .as_ref()
-      .map(|p| map_page(p, PlaylistInfo::from_simplified));
-    app.search_results.shows = show_result
-      .as_ref()
-      .map(|p| map_page(p, |s| ShowInfo::from(s)));
-
-    // A replaced page can be shorter than the previous one (or empty), which
-    // would otherwise leave a stale cursor pointing past the end of the new
-    // results (panic-1: unchecked `.items[selected_index]` indexing downstream).
-    app.clamp_search_cursors();
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: track_result
+        .as_ref()
+        .map(|p| map_page(p, |t| TrackInfo::from(t))),
+      artists: artist_result
+        .as_ref()
+        .map(|p| map_page(p, |a| ArtistInfo::from(a))),
+      albums: album_result
+        .as_ref()
+        .map(|p| map_page(p, |a| AlbumInfo::from(a))),
+      playlists: playlist_result
+        .as_ref()
+        .map(|p| map_page(p, PlaylistInfo::from_simplified)),
+      shows: show_result
+        .as_ref()
+        .map(|p| map_page(p, |s| ShowInfo::from(s))),
+    });
     app
       .plugin_data_generations
       .bump(crate::core::app::PluginDataKind::Search);

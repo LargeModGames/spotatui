@@ -7,6 +7,13 @@ pub enum DisplayDomain {
   Source,
   Theme,
   Playback,
+  Party,
+  Devices,
+  Search,
+  Lyrics,
+  Artist,
+  Library,
+  Queue,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -17,6 +24,13 @@ pub struct DisplayRevisions {
   source: u64,
   theme: u64,
   playback: u64,
+  party: u64,
+  devices: u64,
+  search: u64,
+  lyrics: u64,
+  artist: u64,
+  library: u64,
+  queue: u64,
 }
 
 impl DisplayRevisions {
@@ -27,6 +41,13 @@ impl DisplayRevisions {
       DisplayDomain::Source => &mut self.source,
       DisplayDomain::Theme => &mut self.theme,
       DisplayDomain::Playback => &mut self.playback,
+      DisplayDomain::Party => &mut self.party,
+      DisplayDomain::Devices => &mut self.devices,
+      DisplayDomain::Search => &mut self.search,
+      DisplayDomain::Lyrics => &mut self.lyrics,
+      DisplayDomain::Artist => &mut self.artist,
+      DisplayDomain::Library => &mut self.library,
+      DisplayDomain::Queue => &mut self.queue,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -39,11 +60,23 @@ impl DisplayRevisions {
       DisplayDomain::Source => self.source,
       DisplayDomain::Theme => self.theme,
       DisplayDomain::Playback => self.playback,
+      DisplayDomain::Party => self.party,
+      DisplayDomain::Devices => self.devices,
+      DisplayDomain::Search => self.search,
+      DisplayDomain::Lyrics => self.lyrics,
+      DisplayDomain::Artist => self.artist,
+      DisplayDomain::Library => self.library,
+      DisplayDomain::Queue => self.queue,
     }
   }
 }
 
 impl App {
+  /// Bump a display revision from a producer whose fields are not behind a setter yet.
+  pub(crate) fn bump_display(&mut self, domain: DisplayDomain) {
+    self.display_revisions.bump(domain);
+  }
+
   /// A copy of every display revision, for a frontend to diff against.
   #[cfg(any(test, feature = "gui"))]
   pub fn display_revisions(&self) -> DisplayRevisions {

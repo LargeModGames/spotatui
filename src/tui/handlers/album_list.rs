@@ -11,7 +11,7 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       let on_last_row_with_more =
         app
-          .library
+          .library()
           .saved_albums
           .get_results(None)
           .is_some_and(|albums| {
@@ -19,33 +19,33 @@ pub fn handler(key: Key, app: &mut App) {
           });
       if on_last_row_with_more {
         app.apply(Action::LoadMore(ListTarget::SavedAlbums));
-      } else if let Some(albums) = &mut app.library.saved_albums.get_results(None) {
+      } else if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index =
           common_key_events::on_down_press_handler(&albums.items, Some(app.view.album_list_index));
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      if let Some(albums) = &mut app.library.saved_albums.get_results(None) {
+      if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index =
           common_key_events::on_up_press_handler(&albums.items, Some(app.view.album_list_index));
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::high_event(k) => {
-      if let Some(_albums) = app.library.saved_albums.get_results(None) {
+      if let Some(_albums) = app.library().saved_albums.get_results(None) {
         let next_index = common_key_events::on_high_press_handler();
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::middle_event(k) => {
-      if let Some(albums) = app.library.saved_albums.get_results(None) {
+      if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index = common_key_events::on_middle_press_handler(&albums.items);
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::low_event(k) => {
-      if let Some(albums) = app.library.saved_albums.get_results(None) {
+      if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index = common_key_events::on_low_press_handler(&albums.items);
         app.view.album_list_index = next_index;
       }
@@ -75,7 +75,7 @@ pub fn handler(key: Key, app: &mut App) {
 /// The album id under the list cursor.
 fn selected_saved_album_id(app: &App) -> Option<String> {
   app
-    .library
+    .library()
     .saved_albums
     .get_results(None)?
     .items
@@ -138,7 +138,7 @@ mod tests {
         .collect(),
       ..AlbumInfo::default()
     };
-    app.library.saved_albums.upsert_page_by_offset(Paged {
+    app.library_mut().saved_albums.upsert_page_by_offset(Paged {
       items: vec![SavedAlbumInfo {
         album,
         added_at: String::new(),
@@ -211,7 +211,7 @@ mod tests {
       },
       added_at: String::new(),
     };
-    app.library.saved_albums.upsert_page_by_offset(Paged {
+    app.library_mut().saved_albums.upsert_page_by_offset(Paged {
       items: vec![album("a1"), album("a2")],
       offset: 0,
       limit: 2,

@@ -188,6 +188,7 @@ impl App {
   pub(crate) fn toggle_dj_auto_queue(&mut self) {
     use crate::infra::dj::TurnKind;
     self.dj.auto_queue = !self.dj.auto_queue;
+    self.dj.bump_revision();
     // Either direction invalidates a *refill* in flight: switching off should drop
     // a pending one, and switching on starts a fresh one.
     //
@@ -237,6 +238,7 @@ impl App {
   #[cfg(feature = "ai-dj")]
   pub(crate) fn toggle_dj_fresh_only(&mut self) {
     self.dj.avoid_library = !self.dj.avoid_library;
+    self.dj.bump_revision();
     if self.dj.avoid_library {
       self.set_status_message("DJ: only tracks you don't already have", 4);
       self.request_dj_library_index();

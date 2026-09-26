@@ -240,12 +240,12 @@ fn playlist_access_from_owner(user_id: Option<&str>, owner_id: Option<&str>) -> 
 
 fn known_playlist_info<'a>(app: &'a App, playlist_id: &str) -> Option<&'a PlaylistInfo> {
   app
-    .all_playlists
+    .all_playlists()
     .iter()
     .find(|playlist| playlist.id.as_deref() == Some(playlist_id))
     .or_else(|| {
       app
-        .search_results
+        .search_results()
         .playlists
         .as_ref()?
         .items
@@ -260,7 +260,7 @@ fn playlist_access(app: &App, playlist_id: &str) -> PlaylistAccess {
   };
 
   playlist_access_from_owner(
-    app.user.as_ref().map(|user| user.id.as_str()),
+    app.user().as_ref().map(|user| user.id.as_str()),
     playlist.owner_id.as_deref(),
   )
 }
@@ -271,7 +271,7 @@ fn log_playlist_access(app: &App, playlist_id: &str, access: PlaylistAccess) {
       "playlist content access: id={} access={access:?} owner_id={:?} user_id={:?} collaborative={} public={:?}",
       playlist_id,
       playlist.owner_id,
-      app.user.as_ref().map(|user| user.id.as_str()),
+      app.user().as_ref().map(|user| user.id.as_str()),
       playlist.collaborative,
       playlist.public,
     );
@@ -337,7 +337,7 @@ async fn classify_playlist_after_forbidden(
   let access = {
     let app_guard = app.lock().await;
     playlist_access_from_owner(
-      app_guard.user.as_ref().map(|user| user.id.as_str()),
+      app_guard.user().as_ref().map(|user| user.id.as_str()),
       metadata.owner.as_ref().map(|owner| owner.id.as_str()),
     )
   };
@@ -672,7 +672,7 @@ pub async fn prefetch_saved_tracks_page_task(
       let mut app = app.lock().await;
       app.saved_tracks_prefetch_generation == generation
         && app
-          .library
+          .library()
           .saved_tracks
           .page_index_for_offset(offset)
           .is_none()
@@ -711,11 +711,11 @@ pub async fn prefetch_saved_tracks_page_task(
       return;
     }
 
-    populate_liked_song_ids_from_saved_tracks(&mut app_guard.liked_song_ids_set, &page);
+    populate_liked_song_ids_from_saved_tracks(app_guard.liked_song_ids_set_mut(), &page);
     let domain_page =
       crate::infra::network::mapping::map_page(&page, |st| TrackInfo::from(&st.track));
     app_guard
-      .library
+      .library_mut()
       .saved_tracks
       .upsert_page_by_offset(domain_page);
     app_guard.set_saved_tracks_to_table_continuous();
@@ -723,7 +723,7 @@ pub async fn prefetch_saved_tracks_page_task(
       return;
     };
     let should_prefetch_next = app_guard
-      .library
+      .library()
       .saved_tracks
       .page_index_for_offset(candidate_next_offset)
       .is_none()
@@ -908,10 +908,10 @@ impl Network {
     for (i, id) in ids.iter().enumerate() {
       match is_saved_vec.get(i) {
         Some(true) => {
-          app.liked_song_ids_set.insert(id.clone());
+          app.liked_song_ids_set_mut().insert(id.clone());
         }
         Some(false) => {
-          app.liked_song_ids_set.remove(id);
+          app.liked_song_ids_set_mut().remove(id);
         }
         None => {}
       }
@@ -1059,10 +1059,10 @@ async fn liked_lookup_worker_task(
         for (i, id) in batch.into_iter().enumerate() {
           match is_saved_vec.get(i) {
             Some(true) => {
-              guard.liked_song_ids_set.insert(id);
+              guard.liked_song_ids_set_mut().insert(id);
             }
             Some(false) => {
-              guard.liked_song_ids_set.remove(&id);
+              guard.liked_song_ids_set_mut().remove(&id);
             }
             None => {}
           }
@@ -1244,9 +1244,9 @@ async fn finish_playlists_fetch(
     }
     let (previous_playlists, previous_nodes, previous_items) = previous_complete;
     if !previous_playlists.is_empty() {
-      app.all_playlists = previous_playlists;
-      app._playlist_folder_nodes = previous_nodes;
-      app.playlist_folder_items = previous_items;
+      *app.all_playlists_mut() = previous_playlists;
+      *app.playlist_folder_nodes_mut() = previous_nodes;
+      *app.playlist_folder_items_mut() = previous_items;
       reconcile_playlist_selection(
         &mut app,
         original_selection.0.as_deref(),
@@ -1292,12 +1292,12 @@ async fn finish_playlists_fetch(
     current_selection
   };
 
-  app.all_playlists = all_playlists;
+  *app.all_playlists_mut() = all_playlists;
   app
     .plugin_data_generations
     .bump(crate::core::app::PluginDataKind::Playlists);
-  app._playlist_folder_nodes = folder_nodes;
-  app.playlist_folder_items = folder_items;
+  *app.playlist_folder_nodes_mut() = folder_nodes;
+  *app.playlist_folder_items_mut() = folder_items;
 
   reconcile_playlist_selection(&mut app, preferred.0.as_deref(), preferred.1, preferred.2);
 
@@ -1375,33 +1375,33 @@ impl LibraryNetwork for Network {
 
     let (generation, page_one_selection, previous_complete) = {
       let mut app = self.app.lock().await;
-      let had_previous_complete = !app.all_playlists.is_empty();
+      let had_previous_complete = !app.all_playlists().is_empty();
       // Snapshot the existing complete list only when background pagination can
       // fail partway (`has_more`) and there is something worth restoring. A
       // single-page refresh or a first-ever load never uses this, so skip the
       // clone in the common case.
       let previous_complete = if has_more && had_previous_complete {
         (
-          app.all_playlists.clone(),
-          app._playlist_folder_nodes.clone(),
-          app.playlist_folder_items.clone(),
+          app.all_playlists().clone(),
+          app.playlist_folder_nodes().clone(),
+          app.playlist_folder_items().clone(),
         )
       } else {
         (Vec::new(), None, Vec::new())
       };
       app.playlist_refresh_generation = app.playlist_refresh_generation.wrapping_add(1);
-      app.playlists = Some(mapped_first);
+      *app.playlists_mut() = Some(mapped_first);
       let selected_is_in_first_page = original_selection.0.as_ref().is_some_and(|selected| {
         first_items
           .iter()
           .any(|playlist| playlist.id.as_deref() == Some(selected.as_str()))
       });
       if !had_previous_complete || original_selection.0.is_none() || selected_is_in_first_page {
-        app.all_playlists = first_items.clone();
+        *app.all_playlists_mut() = first_items.clone();
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::Playlists);
-        app.playlist_folder_items = build_flat_playlist_items(&first_items);
+        *app.playlist_folder_items_mut() = build_flat_playlist_items(&first_items);
         reconcile_playlist_selection(
           &mut app,
           original_selection.0.as_deref(),
@@ -1618,10 +1618,13 @@ impl LibraryNetwork for Network {
           return;
         }
 
-        populate_liked_song_ids_from_saved_tracks(&mut app.liked_song_ids_set, &saved_tracks);
+        populate_liked_song_ids_from_saved_tracks(app.liked_song_ids_set_mut(), &saved_tracks);
         let domain_page =
           crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
-        let saved_tracks_index = app.library.saved_tracks.upsert_page_by_offset(domain_page);
+        let saved_tracks_index = app
+          .library_mut()
+          .saved_tracks
+          .upsert_page_by_offset(domain_page);
         app.set_saved_tracks_to_table_continuous();
         app
           .plugin_data_generations
@@ -1694,9 +1697,9 @@ impl LibraryNetwork for Network {
         for (i, id) in album_ids.iter().enumerate() {
           if let Some(is_saved) = is_saved_vec.get(i) {
             if *is_saved {
-              app.saved_album_ids_set.insert(id.id().to_string());
-            } else if app.saved_album_ids_set.contains(id.id()) {
-              app.saved_album_ids_set.remove(id.id());
+              app.saved_album_ids_set_mut().insert(id.id().to_string());
+            } else if app.saved_album_ids_set().contains(id.id()) {
+              app.saved_album_ids_set_mut().remove(id.id());
             }
           };
         }
@@ -1712,7 +1715,7 @@ impl LibraryNetwork for Network {
     match self.library_remove_uris(&uris).await {
       Ok(_) => {
         let mut app = self.app.lock().await;
-        app.saved_album_ids_set.remove(album_id.id());
+        app.saved_album_ids_set_mut().remove(album_id.id());
         // Reload saved albums to refresh UI
         // dispatching event would require loop access, but we can't from here easily unless we return IoEvent
         // For now, assume optimistic update is handled or manually remove
@@ -1726,7 +1729,9 @@ impl LibraryNetwork for Network {
     match self.library_save_uris(&uris).await {
       Ok(_) => {
         let mut app = self.app.lock().await;
-        app.saved_album_ids_set.insert(album_id.id().to_string());
+        app
+          .saved_album_ids_set_mut()
+          .insert(album_id.id().to_string());
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -1743,9 +1748,9 @@ impl LibraryNetwork for Network {
         for (i, id) in show_ids.iter().enumerate() {
           if let Some(is_saved) = is_saved_vec.get(i) {
             if *is_saved {
-              app.saved_show_ids_set.insert(id.id().to_string());
-            } else if app.saved_show_ids_set.contains(id.id()) {
-              app.saved_show_ids_set.remove(id.id());
+              app.saved_show_ids_set_mut().insert(id.id().to_string());
+            } else if app.saved_show_ids_set().contains(id.id()) {
+              app.saved_show_ids_set_mut().remove(id.id());
             }
           };
         }
@@ -1761,7 +1766,7 @@ impl LibraryNetwork for Network {
     match self.library_remove_uris(&uris).await {
       Ok(_) => {
         let mut app = self.app.lock().await;
-        app.saved_show_ids_set.remove(show_id.id());
+        app.saved_show_ids_set_mut().remove(show_id.id());
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -1772,7 +1777,9 @@ impl LibraryNetwork for Network {
     match self.library_save_uris(&uris).await {
       Ok(_) => {
         let mut app = self.app.lock().await;
-        app.saved_show_ids_set.insert(show_id.id().to_string());
+        app
+          .saved_show_ids_set_mut()
+          .insert(show_id.id().to_string());
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -1798,7 +1805,7 @@ impl LibraryNetwork for Network {
         if !saved_shows.items.is_empty() {
           let domain_page =
             crate::infra::network::mapping::map_page(&saved_shows, |s| ShowInfo::from(&s.show));
-          app.library.saved_shows.add_pages(domain_page);
+          app.library_mut().saved_shows.add_pages(domain_page);
         }
         // Bump even on an empty page (see saved-albums note above).
         app
@@ -1860,7 +1867,7 @@ impl LibraryNetwork for Network {
         let status_message = {
           let mut app = self.app.lock().await;
           let playlist_name = app
-            .all_playlists
+            .all_playlists()
             .iter()
             .find(|playlist| playlist.id.as_deref() == Some(playlist_id.id()))
             .map(|playlist| playlist.name.clone());
@@ -1928,7 +1935,7 @@ impl LibraryNetwork for Network {
 
     let is_liked = {
       let app = self.app.lock().await;
-      app.liked_song_ids_set.contains(id_str)
+      app.liked_song_ids_set().contains(id_str)
     };
 
     if is_liked {
@@ -1936,14 +1943,14 @@ impl LibraryNetwork for Network {
         self.handle_error(anyhow!(e)).await;
       } else {
         let mut app = self.app.lock().await;
-        app.liked_song_ids_set.remove(id_str);
+        app.liked_song_ids_set_mut().remove(id_str);
         app.liked_state_epoch = app.liked_state_epoch.wrapping_add(1);
       }
     } else if let Err(e) = self.library_save_uris(&[uri]).await {
       self.handle_error(anyhow!(e)).await;
     } else {
       let mut app = self.app.lock().await;
-      app.liked_song_ids_set.insert(id_str.to_string());
+      app.liked_song_ids_set_mut().insert(id_str.to_string());
       app.liked_state_epoch = app.liked_state_epoch.wrapping_add(1);
     }
   }
@@ -2083,23 +2090,56 @@ mod tests {
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
 
+  #[tokio::test]
+  async fn a_completed_playlist_fetch_publishes_the_full_list_under_a_new_library_revision() {
+    use crate::core::app::DisplayDomain;
+    use crate::core::test_helpers::playlist_info;
+    let mut app = App::default();
+    app.user_config.behavior.pin_community_playlist = false;
+    let generation = app.playlist_refresh_generation;
+    let before = app.display_revisions().get(DisplayDomain::Library);
+    let app = Arc::new(Mutex::new(app));
+
+    finish_playlists_fetch(
+      AuthCodePkceSpotify::new(rspotify::Credentials::default(), rspotify::OAuth::default()),
+      Arc::clone(&app),
+      std::path::PathBuf::new(),
+      vec![playlist_info("00000000000000000000p1", "P1", "me", false)],
+      false,
+      50,
+      generation,
+      (None, 0, None),
+      (None, 0, None),
+      (Vec::new(), None, Vec::new()),
+    )
+    .await;
+
+    let app = app.lock().await;
+    assert!(app.display_revisions().get(DisplayDomain::Library) > before);
+    assert_eq!(app.all_playlists()[0].name, "P1");
+    assert_eq!(app.playlist_folder_items().len(), 1);
+  }
+
   #[test]
   fn playlist_access_classifies_by_owner_only() {
     use crate::core::test_helpers::{playlist_info, user_info};
 
     let mut app = App::default();
-    app.user = Some(user_info("me"));
+    *app.user_mut() = Some(user_info("me"));
     let mut external = playlist_info("external", "External", "other", false);
     external.public = Some(true);
-    app.all_playlists = vec![
+    *app.all_playlists_mut() = vec![
       playlist_info("owned", "Owned", "me", false),
       // Another user's collaborative playlist: the flag does not prove the
       // current user collaborates, so this stays External (regression: a
       // followed collaborative playlist hit the error page on 403).
       playlist_info("collab", "Collaborative", "other", true),
     ];
-    app.search_results.playlists = Some(Paged {
-      items: vec![external],
+    app.set_search_results(crate::core::app::SearchResult {
+      playlists: Some(Paged {
+        items: vec![external],
+        ..Default::default()
+      }),
       ..Default::default()
     });
 
@@ -2115,15 +2155,15 @@ mod tests {
 
     // No current user: even an owned-looking playlist cannot be proven.
     let mut app = App::default();
-    app.all_playlists = vec![playlist_info("owned", "Owned", "me", false)];
+    *app.all_playlists_mut() = vec![playlist_info("owned", "Owned", "me", false)];
     assert_eq!(playlist_access(&app, "owned"), PlaylistAccess::Unknown);
 
     // Current user but playlist without owner metadata.
     let mut app = App::default();
-    app.user = Some(user_info("me"));
+    *app.user_mut() = Some(user_info("me"));
     let mut ownerless = playlist_info("ownerless", "Ownerless", "me", false);
     ownerless.owner_id = None;
-    app.all_playlists = vec![ownerless];
+    *app.all_playlists_mut() = vec![ownerless];
     assert_eq!(playlist_access(&app, "ownerless"), PlaylistAccess::Unknown);
   }
 
@@ -2194,11 +2234,11 @@ mod tests {
     // Keep this test about folder-first ordering; the community pin is covered
     // by its own tests.
     app.user_config.behavior.pin_community_playlist = false;
-    app.all_playlists = vec![
+    *app.all_playlists_mut() = vec![
       playlist_info("00000000000000000000p0", "P0", "me", false),
       playlist_info("00000000000000000000p1", "P1", "me", false),
     ];
-    app.playlist_folder_items = vec![
+    *app.playlist_folder_items_mut() = vec![
       PlaylistFolderItem::Playlist {
         index: 0,
         current_id: 0,
@@ -2535,14 +2575,14 @@ fn reconcile_playlist_selection(
   preferred_folder_id: usize,
   preferred_selected_index: Option<usize>,
 ) {
-  if app.playlist_folder_items.is_empty() {
+  if app.playlist_folder_items().is_empty() {
     app.current_playlist_folder_id = 0;
     app.view.selected_playlist_index = None;
     return;
   }
 
   let folder_has_visible = |folder_id: usize, app: &App| {
-    app.playlist_folder_items.iter().any(|item| match item {
+    app.playlist_folder_items().iter().any(|item| match item {
       PlaylistFolderItem::Folder(folder) => folder.current_id == folder_id,
       PlaylistFolderItem::Playlist { current_id, .. } => *current_id == folder_id,
       PlaylistFolderItem::CommunityPin => false,
@@ -2562,7 +2602,7 @@ fn reconcile_playlist_selection(
       .enumerate()
       .find_map(|(display_idx, item)| match item {
         PlaylistFolderItem::Playlist { index, .. } => app
-          .all_playlists
+          .all_playlists()
           .get(*index)
           .filter(|playlist| playlist.id.as_deref() == Some(playlist_id))
           .map(|_| display_idx),
@@ -2576,9 +2616,9 @@ fn reconcile_playlist_selection(
     }
 
     let mut target_folder: Option<usize> = None;
-    for item in &app.playlist_folder_items {
+    for item in app.playlist_folder_items() {
       if let PlaylistFolderItem::Playlist { index, current_id } = item {
-        if let Some(playlist) = app.all_playlists.get(*index) {
+        if let Some(playlist) = app.all_playlists().get(*index) {
           if playlist.id.as_deref() == Some(playlist_id) {
             target_folder = Some(*current_id);
             break;
@@ -2595,7 +2635,7 @@ fn reconcile_playlist_selection(
         .enumerate()
         .find_map(|(idx, item)| match item {
           PlaylistFolderItem::Playlist { index, .. } => app
-            .all_playlists
+            .all_playlists()
             .get(*index)
             .filter(|playlist| playlist.id.as_deref() == Some(playlist_id))
             .map(|_| idx),

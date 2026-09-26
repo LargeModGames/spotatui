@@ -16,7 +16,7 @@ impl App {
   /// every arm follows.
   pub fn apply(&mut self, action: Action) -> ActionOutcome {
     let outcome = self.apply_action(action);
-    self.note_playback_change();
+    self.note_display_changes();
     outcome
   }
 
@@ -134,7 +134,7 @@ impl App {
         ));
       }
       Action::UnfollowPlaylist(playlist_id) => {
-        let user_id = self.user.as_ref().map(|u| u.id.clone());
+        let user_id = self.user().as_ref().map(|u| u.id.clone());
         if let Some(user_id) = user_id {
           self.dispatch(IoEvent::UserUnfollowPlaylist(user_id, playlist_id));
         } else {

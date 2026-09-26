@@ -12,13 +12,13 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       app.view.local_playlists_index = common_key_events::on_down_press_handler(
-        &app.local_playlists,
+        app.local_playlists(),
         Some(app.view.local_playlists_index),
       );
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       app.view.local_playlists_index = common_key_events::on_up_press_handler(
-        &app.local_playlists,
+        app.local_playlists(),
         Some(app.view.local_playlists_index),
       );
     }
@@ -27,15 +27,15 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::middle_event(k) => {
       app.view.local_playlists_index =
-        common_key_events::on_middle_press_handler(&app.local_playlists);
+        common_key_events::on_middle_press_handler(app.local_playlists());
     }
     k if common_key_events::low_event(k) => {
       app.view.local_playlists_index =
-        common_key_events::on_low_press_handler(&app.local_playlists);
+        common_key_events::on_low_press_handler(app.local_playlists());
     }
     Key::Enter => {
       let uri = app
-        .local_playlists
+        .local_playlists()
         .get(app.view.local_playlists_index)
         .map(|folder| folder.uri.clone());
       super::playlist::open_source_playlist(app, uri);
@@ -61,7 +61,7 @@ mod tests {
     first.uri = "file:///music/first".to_string();
     let mut second = playlist_info("second", "Second", "me", false);
     second.uri = "file:///music/second".to_string();
-    app.local_playlists = vec![first, second];
+    *app.local_playlists_mut() = vec![first, second];
     app.view.local_playlists_index = 1;
 
     handler(Key::Enter, &mut app);

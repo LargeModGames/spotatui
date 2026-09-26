@@ -542,7 +542,7 @@ async fn music_root(app: &Arc<Mutex<App>>) -> Option<String> {
   root
 }
 
-/// Scan the music root's folders into `app.local_playlists`.
+/// Scan the music root's folders into `app.local_playlists()`.
 ///
 /// `LocalSource`'s methods are async but do blocking filesystem I/O, so they run
 /// on the blocking pool (via `block_on`) rather than stalling the executor.
@@ -557,7 +557,7 @@ async fn load_local_playlists(app: &Arc<Mutex<App>>) {
   match result {
     Ok(Ok(playlists)) => {
       let mut app = app.lock().await;
-      app.local_playlists = playlists;
+      *app.local_playlists_mut() = playlists;
       app.view.local_playlists_index = 0;
     }
     Ok(Err(e)) => set_error(app, format!("Cannot scan music folder: {e}")).await,

@@ -535,8 +535,9 @@ impl App {
     None
   }
 
-  /// Bump the Playback revision when the shown playback changed; position is not part of it.
-  pub(crate) fn note_playback_change(&mut self) {
+  /// Bump the Playback and Queue revisions when what a frontend shows of them
+  /// changed; the playback position is not part of it.
+  pub(crate) fn note_display_changes(&mut self) {
     let snapshot =
       crate::infra::media_metadata::current_playback_snapshot(self).map(|mut snapshot| {
         snapshot.progress_ms = 0;
@@ -554,6 +555,18 @@ impl App {
     if view != self.playback_view {
       self.playback_view = view;
       self.display_revisions.bump(DisplayDomain::Playback);
+    }
+
+    if self.queue_view.0 != self.queue
+      || self.queue_view.1 != self.native_queue
+      || self.queue_view.2.as_ref() != self.queue_now_track()
+    {
+      self.queue_view = (
+        self.queue.clone(),
+        self.native_queue.clone(),
+        self.queue_now_track().cloned(),
+      );
+      self.display_revisions.bump(DisplayDomain::Queue);
     }
   }
 }
@@ -766,6 +779,22 @@ mod tests {
   }
 
   #[test]
+  fn a_native_queue_change_moves_the_queue_revision_once() {
+    let mut app = make_app_simple();
+    app.note_display_changes();
+    let rev = app.display_revisions().get(DisplayDomain::Queue);
+
+    app.native_queue.push(TrackInfo::from(&full_track(
+      "0000000000000000000001",
+      "Queued",
+    )));
+    app.note_display_changes();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Queue), rev + 1);
+    app.note_display_changes();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Queue), rev + 1);
+  }
+
+  #[test]
   fn a_position_change_alone_leaves_the_playback_revision() {
     let mut app = make_app_simple();
     app.is_streaming_active = true;
@@ -776,19 +805,19 @@ mod tests {
     });
     app.native_is_playing = Some(true);
     app.runtime_state.volume_percent = 40;
-    app.note_playback_change();
+    app.note_display_changes();
     let seen = app.display_revisions().get(DisplayDomain::Playback);
 
     app.song_progress_ms = 30_000;
-    app.note_playback_change();
+    app.note_display_changes();
     assert_eq!(app.display_revisions().get(DisplayDomain::Playback), seen);
 
     app.native_is_playing = Some(false);
-    app.note_playback_change();
+    app.note_display_changes();
     app.runtime_state.volume_percent = 20;
-    app.note_playback_change();
+    app.note_display_changes();
     app.liked_song_ids_set.insert("track".to_string());
-    app.note_playback_change();
+    app.note_display_changes();
     assert_eq!(
       app.display_revisions().get(DisplayDomain::Playback),
       seen + 3

@@ -96,7 +96,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .map(|item| {
         let mut album_artist = String::new();
         if let Some(album_id) = &item.id {
-          if app.saved_album_ids_set.contains(album_id.as_str()) {
+          if app.saved_album_ids_set().contains(album_id.as_str()) {
             album_artist.push_str(&app.user_config.padded_liked_icon());
           }
         }
@@ -127,7 +127,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|item| {
           let mut artist = String::new();
           if let Some(artist_id) = &item.id {
-            if app.followed_artist_ids_set.contains(artist_id.as_str()) {
+            if app.followed_artist_ids_set().contains(artist_id.as_str()) {
               artist.push_str(&app.user_config.padded_liked_icon());
             }
           }

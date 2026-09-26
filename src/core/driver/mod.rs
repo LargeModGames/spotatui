@@ -340,8 +340,7 @@ impl Driver {
               ));
             } else {
               app.desired_lyrics_identity = None;
-              app.lyrics = None;
-              app.lyrics_status = crate::core::app::LyricsStatus::NotFound;
+              app.set_lyrics(crate::core::app::LyricsStatus::NotFound, None, false);
               app
                 .plugin_data_generations
                 .bump(crate::core::app::PluginDataKind::Lyrics);
@@ -350,8 +349,7 @@ impl Driver {
           None => {
             app.desired_lyrics_identity = None;
             // Nothing is playing: reset so no stale lyrics linger.
-            app.lyrics = None;
-            app.lyrics_status = crate::core::app::LyricsStatus::NotStarted;
+            app.set_lyrics(crate::core::app::LyricsStatus::NotStarted, None, false);
             app
               .plugin_data_generations
               .bump(crate::core::app::PluginDataKind::Lyrics);
@@ -850,7 +848,7 @@ impl Driver {
       }
     }
 
-    app.note_playback_change();
+    app.note_display_changes();
   }
 
   /// The one-shot startup dispatch, fired by the frontend right after its

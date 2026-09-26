@@ -12,7 +12,7 @@ use super::*;
 /// `view_writes_outside_tui` ratchet in `src/gates.rs` counts those writes and
 /// exists to burn them down to zero. The table cursors (`track_table_index`, the
 /// `search_*` fields, `recently_played_index`, `library_selected`) are reset
-/// through `App` methods such as `set_track_table` and `clamp_search_cursors`,
+/// through `App` methods such as `set_track_table` and `set_search_results`,
 /// so a producer never writes them.
 ///
 /// Add a field here only when it is presentation state. A pending operation or
@@ -53,7 +53,7 @@ pub struct ViewState {
   pub local_playlists_index: usize,
 
   // Table cursors. A producer that replaces a list resets or clamps these
-  // through an `App` method (`set_track_table`, `clamp_search_cursors`, ...),
+  // through an `App` method (`set_track_table`, `set_search_results`, ...),
   // never directly.
   /// The row under the cursor in the shared track table.
   pub track_table_index: usize,

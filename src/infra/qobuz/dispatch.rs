@@ -308,13 +308,13 @@ async fn begin_login(app: &Arc<Mutex<App>>) {
 // Browse + search
 // ---------------------------------------------------------------------------
 
-/// Fetch the sidebar rows (favorites, playlists, albums) into `app.qobuz_playlists`.
+/// Fetch the sidebar rows (favorites, playlists, albums) into `app.qobuz_playlists()`.
 async fn load_qobuz_playlists(app: &Arc<Mutex<App>>) {
   let Some(source) = build_source(app, WhenLoggedOut::Login).await else {
     return;
   };
   match source.playlists().await {
-    Ok(playlists) => app.lock().await.qobuz_playlists = playlists,
+    Ok(playlists) => *app.lock().await.qobuz_playlists_mut() = playlists,
     Err(e) => report(app, "library", e).await,
   }
 }
@@ -619,7 +619,7 @@ pub(crate) async fn start_qobuz_queue(
   let tracks = {
     let guard = app.lock().await;
     let search = guard
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.as_slice());

@@ -380,7 +380,7 @@ fn reconcile_native_idle_device_if_preferred(
   let saved_device_matches_native = saved_device_matches_native_player(
     client_config.device_id.as_deref(),
     Some(&native_device_id),
-    app.devices.as_ref(),
+    app.devices(),
     player.device_name(),
   );
   let Some(native_preference_update) = native_idle_device_preference_update(
@@ -739,7 +739,7 @@ async fn transfer_playback_backend(network: &Network, device_id: &str) -> Playba
   let is_native_transfer = if let Some(ref player) = player {
     let native_name = player.device_name().to_lowercase();
     let app = network.app.lock().await;
-    let matches_cached_device = app.devices.as_ref().is_some_and(|payload| {
+    let matches_cached_device = app.devices().is_some_and(|payload| {
       payload
         .devices
         .iter()
@@ -780,12 +780,12 @@ async fn should_activate_native_streaming_for_playback(network: &Network) -> boo
   let saved_device_matches_native = saved_device_matches_native_player(
     saved_device_id,
     native_device_id,
-    app.devices.as_ref(),
+    app.devices(),
     native_name,
   );
 
   let saved_external_confirmed_available = saved_device_id.is_some_and(|saved| {
-    app.devices.as_ref().is_some_and(|payload| {
+    app.devices().is_some_and(|payload| {
       payload.devices.iter().any(|device| {
         device.id.as_deref() == Some(saved) && !device.name.eq_ignore_ascii_case(native_name)
       })
@@ -1523,7 +1523,7 @@ impl PlaybackNetwork for Network {
         let saved_device_matches_native = saved_device_matches_native_player(
           self.client_config.device_id.as_deref(),
           Some(&native_device_id),
-          app.devices.as_ref(),
+          app.devices(),
           player.device_name(),
         );
         let activation_pending = app.native_activation_pending;
@@ -1809,7 +1809,7 @@ impl PlaybackNetwork for Network {
                 let saved_device_matches_native = saved_device_matches_native_player(
                   self.client_config.device_id.as_deref(),
                   Some(&native_device_id),
-                  app.devices.as_ref(),
+                  app.devices(),
                   player.device_name(),
                 );
                 let native_preference_update = native_device_preference_update(
@@ -2429,7 +2429,7 @@ impl PlaybackNetwork for Network {
       let saved_device_matches_native = saved_device_matches_native_player(
         self.client_config.device_id.as_deref(),
         Some(&native_device_id),
-        app.devices.as_ref(),
+        app.devices(),
         player.device_name(),
       );
       let native_preference_update = native_device_preference_update(
@@ -2506,7 +2506,7 @@ impl PlaybackNetwork for Network {
         let saved_device_matches_native = saved_device_matches_native_player(
           self.client_config.device_id.as_deref(),
           Some(&native_device_id),
-          app.devices.as_ref(),
+          app.devices(),
           player.device_name(),
         );
         let recent_activation = app
@@ -2596,7 +2596,7 @@ impl PlaybackNetwork for Network {
 
             if native_confirmed || name_seen {
               let mut app = self.app.lock().await;
-              app.devices = Some(payload);
+              app.set_devices(payload);
               app
                 .plugin_data_generations
                 .bump(crate::core::app::PluginDataKind::Devices);

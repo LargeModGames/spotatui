@@ -7,7 +7,7 @@ const PARTY_CODE_LEN: usize = 6;
 const PARTY_NAME_MAX_LEN: usize = 32;
 
 pub fn handler(key: Key, app: &mut App) {
-  match app.party_status {
+  match app.party_status() {
     PartyStatus::Disconnected | PartyStatus::Connecting => {
       handle_disconnected_menu(key, app);
     }
@@ -23,7 +23,7 @@ pub fn handler(key: Key, app: &mut App) {
 fn handle_disconnected_menu(key: Key, app: &mut App) {
   if app.view.party_input.is_empty()
     && app.view.party_join_name.is_empty()
-    && !app.party_status.eq(&PartyStatus::Connecting)
+    && !app.party_status().eq(&PartyStatus::Connecting)
   {
     match key {
       Key::Esc => {

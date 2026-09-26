@@ -1859,7 +1859,7 @@ mod tests {
     let playlist_uri = app
       .lock()
       .await
-      .subsonic_playlists
+      .subsonic_playlists()
       .first()
       .unwrap()
       .uri

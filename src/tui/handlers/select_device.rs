@@ -28,7 +28,7 @@ pub fn handler(key: Key, app: &mut App) {
           common_key_events::on_down_press_handler(&Source::ALL, Some(app.view.source_list_index));
       }
       SourceFocus::Devices => {
-        if let Some(p) = &app.devices {
+        if let Some(p) = app.devices() {
           if let Some(selected_device_index) = app.view.selected_device_index {
             let next_index =
               common_key_events::on_down_press_handler(&p.devices, Some(selected_device_index));
@@ -44,7 +44,7 @@ pub fn handler(key: Key, app: &mut App) {
             common_key_events::on_up_press_handler(&Source::ALL, Some(app.view.source_list_index));
         }
         SourceFocus::Devices => {
-          if let Some(p) = &app.devices {
+          if let Some(p) = app.devices() {
             if let Some(selected_device_index) = app.view.selected_device_index {
               let next_index =
                 common_key_events::on_up_press_handler(&p.devices, Some(selected_device_index));
@@ -56,7 +56,7 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::high_event(k) => {
       if app.view.source_device_focus == SourceFocus::Devices {
-        if let Some(_p) = &app.devices {
+        if let Some(_p) = app.devices() {
           if app.view.selected_device_index.is_some() {
             app.view.selected_device_index = Some(common_key_events::on_high_press_handler());
           }
@@ -65,7 +65,7 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::middle_event(k) => {
       if app.view.source_device_focus == SourceFocus::Devices {
-        if let Some(p) = &app.devices {
+        if let Some(p) = app.devices() {
           if app.view.selected_device_index.is_some() {
             let next_index = common_key_events::on_middle_press_handler(&p.devices);
             app.view.selected_device_index = Some(next_index);
@@ -75,7 +75,7 @@ pub fn handler(key: Key, app: &mut App) {
     }
     k if common_key_events::low_event(k) => {
       if app.view.source_device_focus == SourceFocus::Devices {
-        if let Some(p) = &app.devices {
+        if let Some(p) = app.devices() {
           if app.view.selected_device_index.is_some() {
             let next_index = common_key_events::on_low_press_handler(&p.devices);
             app.view.selected_device_index = Some(next_index);
@@ -125,7 +125,7 @@ fn transfer_to_selected_device(app: &mut App) {
     return;
   };
 
-  let Some(devices) = &app.devices else {
+  let Some(devices) = app.devices() else {
     app.set_status_message("No playback devices found", 4);
     return;
   };

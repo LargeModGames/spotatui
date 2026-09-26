@@ -497,8 +497,8 @@ mod tests {
     );
     app.view.track_table_index = 1;
     app.track_table.tracks = page.items.iter().cloned().collect();
-    app.library.saved_tracks.upsert_page_by_offset(page);
-    app.library.saved_tracks.index = 0;
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
+    app.library_mut().saved_tracks.index = 0;
 
     let (uris, offset) = saved_tracks_playback_request(&app).unwrap();
 
@@ -521,14 +521,14 @@ mod tests {
       false,
     );
     app
-      .library
+      .library_mut()
       .saved_tracks
       .upsert_page_by_offset(first_page.clone());
     app
-      .library
+      .library_mut()
       .saved_tracks
       .upsert_page_by_offset(second_page.clone());
-    app.library.saved_tracks.index = 1;
+    app.library_mut().saved_tracks.index = 1;
     app.view.track_table_index = 3;
     app.track_table.tracks = first_page
       .items
@@ -558,14 +558,14 @@ mod tests {
       false,
     );
     app
-      .library
+      .library_mut()
       .saved_tracks
       .upsert_page_by_offset(first_page.clone());
     app
-      .library
+      .library_mut()
       .saved_tracks
       .upsert_page_by_offset(second_page.clone());
-    app.library.saved_tracks.index = 1;
+    app.library_mut().saved_tracks.index = 1;
     app.view.track_table_index = 3;
     app.track_table.tracks = first_page
       .items
@@ -594,8 +594,11 @@ mod tests {
       &["0000000000000000000001", "0000000000000000000002"],
       false,
     );
-    app.library.saved_tracks.upsert_page_by_offset(page.clone());
-    app.library.saved_tracks.index = 0;
+    app
+      .library_mut()
+      .saved_tracks
+      .upsert_page_by_offset(page.clone());
+    app.library_mut().saved_tracks.index = 0;
     app.view.track_table_index = 1;
     app.track_table.tracks = page.items.to_vec();
     // Simulate controlling an external Spotify Connect device: any Spotify
@@ -719,8 +722,8 @@ mod tests {
     );
     app.view.track_table_index = 1;
     app.track_table.tracks = page.items.iter().cloned().collect();
-    app.library.saved_tracks.upsert_page_by_offset(page);
-    app.library.saved_tracks.index = 0;
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
+    app.library_mut().saved_tracks.index = 0;
 
     handler(Key::Enter, &mut app);
 
@@ -754,8 +757,8 @@ mod tests {
     );
     app.view.track_table_index = 1;
     app.track_table.tracks = page.items.iter().cloned().collect();
-    app.library.saved_tracks.upsert_page_by_offset(page);
-    app.library.saved_tracks.index = 0;
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
+    app.library_mut().saved_tracks.index = 0;
 
     handler(Key::Down, &mut app);
 
@@ -784,7 +787,7 @@ mod tests {
     );
     // Seeded through App methods and a key press, not field writes: the
     // handler write counter scans this whole file, tests included.
-    app.library.saved_tracks.upsert_page_by_offset(page);
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
     app.set_saved_tracks_to_table_continuous();
     handler(Key::Down, &mut app);
     assert_eq!(app.view.track_table_index, 1);
@@ -809,7 +812,7 @@ mod tests {
       true,
       14,
     );
-    app.library.saved_tracks.upsert_page_by_offset(short);
+    app.library_mut().saved_tracks.upsert_page_by_offset(short);
     app.set_saved_tracks_to_table_continuous();
 
     assert_eq!(app.view.track_table_index, 3);
@@ -821,7 +824,7 @@ mod tests {
     let ids: Vec<String> = (5..15).map(|i| format!("{i:022}")).collect();
     let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
     let last = saved_tracks_page_with_total(4, &ids, false, 14);
-    app.library.saved_tracks.upsert_page_by_offset(last);
+    app.library_mut().saved_tracks.upsert_page_by_offset(last);
     app.set_saved_tracks_to_table_continuous();
 
     assert_eq!(app.view.track_table_index, 11);
@@ -876,7 +879,7 @@ mod tests {
       &["0000000000000000000001", "0000000000000000000002"],
       true,
     );
-    app.library.saved_tracks.upsert_page_by_offset(page);
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
     app.set_saved_tracks_to_table_continuous();
 
     handler(Key::Ctrl('d'), &mut app);
@@ -890,7 +893,7 @@ mod tests {
       &["0000000000000000000003", "0000000000000000000004"],
       false,
     );
-    app.library.saved_tracks.upsert_page_by_offset(next);
+    app.library_mut().saved_tracks.upsert_page_by_offset(next);
     app.set_saved_tracks_to_table_continuous();
 
     assert_eq!(app.view.track_table_index, 0);
@@ -967,8 +970,8 @@ mod tests {
     );
     app.view.track_table_index = 1;
     app.track_table.tracks = page.items.to_vec();
-    app.library.saved_tracks.upsert_page_by_offset(page);
-    app.library.saved_tracks.index = 0;
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
+    app.library_mut().saved_tracks.index = 0;
 
     handler(Key::Down, &mut app);
 
@@ -986,8 +989,8 @@ mod tests {
     );
     app.view.track_table_index = 0;
     app.track_table.tracks = page.items.to_vec();
-    app.library.saved_tracks.upsert_page_by_offset(page);
-    app.library.saved_tracks.index = 0;
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
+    app.library_mut().saved_tracks.index = 0;
 
     handler(Key::Up, &mut app);
 
@@ -1019,11 +1022,11 @@ mod tests {
       &["0000000000000000000001", "0000000000000000000002"],
       false,
     );
-    app.library.saved_tracks.add_pages(page.clone());
-    app.library.saved_tracks.add_pages(page);
-    app.library.saved_tracks.index = 0;
+    app.library_mut().saved_tracks.add_pages(page.clone());
+    app.library_mut().saved_tracks.add_pages(page);
+    app.library_mut().saved_tracks.index = 0;
     app.view.track_table_index = 1;
-    app.track_table.tracks = app.library.saved_tracks.pages[0].items.to_vec();
+    app.track_table.tracks = app.library().saved_tracks.pages[0].items.to_vec();
 
     let (uris, offset) = saved_tracks_playback_request(&app).unwrap();
 

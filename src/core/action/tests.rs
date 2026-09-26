@@ -674,7 +674,7 @@ fn follow_playlist_uses_the_unknown_owner_fallback() {
 #[test]
 fn unfollow_playlist_resolves_the_current_user() {
   let (mut app, rx) = app_with_channel();
-  app.user = Some(UserInfo {
+  *app.user_mut() = Some(UserInfo {
     id: "me-123".to_string(),
     display_name: None,
     country: None,
@@ -1246,7 +1246,7 @@ fn load_more_saved_tracks_fetches_the_missing_continuous_page() {
     &["0000000000000000000001", "0000000000000000000002"],
     true,
   );
-  app.library.saved_tracks.upsert_page_by_offset(page);
+  app.library_mut().saved_tracks.upsert_page_by_offset(page);
 
   app.apply(Action::LoadMore(ListTarget::SavedTracks));
 
@@ -1260,7 +1260,7 @@ fn load_more_saved_tracks_fetches_the_missing_continuous_page() {
 fn load_more_saved_tracks_is_a_noop_at_the_end_of_the_list() {
   let (mut app, rx) = app_with_channel();
   let page = track_page(0, &["0000000000000000000001"], false);
-  app.library.saved_tracks.upsert_page_by_offset(page);
+  app.library_mut().saved_tracks.upsert_page_by_offset(page);
 
   app.apply(Action::LoadMore(ListTarget::SavedTracks));
 
@@ -1271,7 +1271,7 @@ fn load_more_saved_tracks_is_a_noop_at_the_end_of_the_list() {
 fn load_more_does_not_touch_pending_track_table_selection() {
   let (mut app, rx) = app_with_channel();
   let page = track_page(0, &["0000000000000000000001"], false);
-  app.library.saved_tracks.upsert_page_by_offset(page);
+  app.library_mut().saved_tracks.upsert_page_by_offset(page);
   app.select_row_when_next_page_lands(9);
 
   app.apply(Action::LoadMore(ListTarget::SavedTracks));
@@ -1292,7 +1292,7 @@ fn load_more_saved_tracks_does_not_refetch_an_in_flight_page() {
     &["0000000000000000000001", "0000000000000000000002"],
     true,
   );
-  app.library.saved_tracks.upsert_page_by_offset(page);
+  app.library_mut().saved_tracks.upsert_page_by_offset(page);
 
   app.apply(Action::LoadMore(ListTarget::SavedTracks));
   assert!(matches!(
@@ -1375,7 +1375,7 @@ fn open_album_from_search_pins_the_album_search_context() {
 fn open_saved_album_with_a_complete_cached_tracklist_opens_from_the_cache() {
   let (mut app, rx) = app_with_channel();
   app
-    .library
+    .library_mut()
     .saved_albums
     .upsert_page_by_offset(saved_albums_page(2, 2));
 
@@ -1399,7 +1399,7 @@ fn open_saved_album_with_a_complete_cached_tracklist_opens_from_the_cache() {
 fn open_saved_album_with_a_truncated_cached_tracklist_refetches_the_full_album() {
   let (mut app, rx) = app_with_channel();
   app
-    .library
+    .library_mut()
     .saved_albums
     .upsert_page_by_offset(saved_albums_page(50, 199));
 
@@ -1420,7 +1420,7 @@ fn open_saved_album_with_a_truncated_cached_tracklist_refetches_the_full_album()
 fn open_saved_album_with_an_unknown_id_is_a_silent_noop() {
   let (mut app, rx) = app_with_channel();
   app
-    .library
+    .library_mut()
     .saved_albums
     .upsert_page_by_offset(saved_albums_page(2, 2));
 
@@ -1635,7 +1635,7 @@ fn search_active_source_routes_by_the_active_source() {
 #[test]
 fn search_active_source_resolves_a_loaded_users_country() {
   let (mut app, rx) = app_with_channel();
-  app.user = Some(crate::core::app::UserInfo {
+  *app.user_mut() = Some(crate::core::app::UserInfo {
     id: "user1".to_string(),
     display_name: None,
     country: Some("US".to_string()),
@@ -1837,7 +1837,7 @@ fn open_add_track_dialog_without_a_selection_is_a_noop() {
 fn open_add_track_dialog_stages_the_selected_row_for_the_picker() {
   let (mut app, rx) = app_with_channel();
   app.active_source = Source::YouTube;
-  app.youtube_playlists = vec![PlaylistInfo {
+  *app.youtube_playlists_mut() = vec![PlaylistInfo {
     uri: "youtube:playlist:y1".to_string(),
     ..playlist_info("y1", "Local List", "owner", false)
   }];
@@ -1880,15 +1880,15 @@ fn open_add_track_dialog_without_destinations_requests_them() {
 #[test]
 fn open_add_track_dialog_for_a_named_track_opens_the_picker() {
   let (mut app, rx) = app_with_channel();
-  app.user = Some(UserInfo {
+  *app.user_mut() = Some(UserInfo {
     id: "spotatui-owner".to_string(),
     ..Default::default()
   });
-  app.playlists = Some(Paged {
+  *app.playlists_mut() = Some(Paged {
     total: 1,
     ..Default::default()
   });
-  app.all_playlists = vec![playlist_info(
+  *app.all_playlists_mut() = vec![playlist_info(
     "37i9dQZF1DXcBWIGoYBM5M",
     "Owned Playlist",
     "spotatui-owner",
@@ -1942,7 +1942,7 @@ fn open_remove_track_dialog_stages_the_spotify_removal_with_position() {
       .unwrap()
       .into_static(),
   );
-  app.all_playlists = vec![playlist_info(
+  *app.all_playlists_mut() = vec![playlist_info(
     "37i9dQZF1DX4WYpdgoIcn6",
     "My List",
     "owner",
@@ -1977,7 +1977,7 @@ fn open_remove_track_dialog_without_a_position_reports_an_error() {
       .unwrap()
       .into_static(),
   );
-  app.all_playlists = vec![playlist_info(
+  *app.all_playlists_mut() = vec![playlist_info(
     "37i9dQZF1DX4WYpdgoIcn6",
     "My List",
     "owner",
@@ -2001,7 +2001,7 @@ fn open_remove_track_dialog_youtube_routes_the_local_edit() {
   let (mut app, rx) = app_with_channel();
   app.track_table.context = Some(crate::core::app::TrackTableContext::YouTubePlaylist);
   app.youtube_open_playlist = Some("youtube:playlist:y1".to_string());
-  app.youtube_playlists = vec![PlaylistInfo {
+  *app.youtube_playlists_mut() = vec![PlaylistInfo {
     uri: "youtube:playlist:y1".to_string(),
     ..playlist_info("y1", "Local List", "owner", false)
   }];
@@ -2029,7 +2029,7 @@ fn open_remove_track_dialog_youtube_routes_the_local_edit() {
 fn app_with_qobuz_playlist() -> (App, Receiver<IoEvent>) {
   let (mut app, rx) = app_with_channel();
   app.active_source = Source::Qobuz;
-  app.qobuz_playlists = vec![PlaylistInfo {
+  *app.qobuz_playlists_mut() = vec![PlaylistInfo {
     uri: "qobuz:playlist:9".to_string(),
     ..playlist_info("9", "Mine", "owner", false)
   }];
@@ -2059,7 +2059,7 @@ fn open_playlist_sync_picker_pushes_the_picker_dialog_for_a_qobuz_playlist() {
 fn open_playlist_sync_picker_refuses_a_local_playlist() {
   let (mut app, _rx) = app_with_channel();
   app.active_source = Source::Local;
-  app.local_playlists = vec![PlaylistInfo {
+  *app.local_playlists_mut() = vec![PlaylistInfo {
     uri: "file:///music/Jazz".to_string(),
     ..playlist_info("jazz", "Jazz", "local", false)
   }];
@@ -2221,12 +2221,12 @@ fn open_library_ai_dj_opens_the_screen_through_app() {
 fn open_library_liked_songs_resets_the_cache_and_fetches() {
   let (mut app, rx) = app_with_channel();
   let page = track_page(0, &["0000000000000000000001"], false);
-  app.library.saved_tracks.upsert_page_by_offset(page);
+  app.library_mut().saved_tracks.upsert_page_by_offset(page);
 
   app.apply(Action::OpenLibrary(LibraryTarget::LikedSongs));
 
   assert_eq!(app.get_current_route().id, RouteId::TrackTable);
-  assert!(app.library.saved_tracks.pages.is_empty(), "cache reset");
+  assert!(app.library().saved_tracks.pages.is_empty(), "cache reset");
   assert!(matches!(
     rx.try_recv(),
     Ok(IoEvent::GetCurrentSavedTracks(None))
@@ -2417,7 +2417,7 @@ fn open_add_playing_track_dialog_without_playback_reports_no_track() {
 fn open_add_playing_track_dialog_stages_the_playing_track() {
   let (mut app, rx) = app_with_channel();
   app.active_source = Source::YouTube;
-  app.youtube_playlists = vec![PlaylistInfo {
+  *app.youtube_playlists_mut() = vec![PlaylistInfo {
     uri: "youtube:playlist:y1".to_string(),
     ..playlist_info("y1", "Local List", "owner", false)
   }];
@@ -2498,19 +2498,24 @@ fn leave_party_dispatches_the_leave() {
 #[test]
 fn toggle_party_control_mode_flips_the_session_and_tells_the_relay() {
   let (mut app, rx) = app_with_channel();
-  app.party_session = Some(PartySession {
+  app.set_party_session(Some(PartySession {
     role: PartyRole::Host,
     code: "ABC123".to_string(),
     guests: Vec::new(),
     control_mode: ControlMode::HostOnly,
     host_name: "Host".to_string(),
-  });
+  }));
+  let before = app.display_revisions().get(DisplayDomain::Party);
 
   app.apply(Action::TogglePartyControlMode);
+  assert_eq!(
+    app.display_revisions().get(DisplayDomain::Party),
+    before + 1
+  );
 
   // The relay handler only sends the message; the popup renders from this record.
   assert_eq!(
-    app.party_session.as_ref().map(|s| s.control_mode.clone()),
+    app.party_session().map(|s| s.control_mode.clone()),
     Some(ControlMode::SharedControl)
   );
   match rx.try_recv() {
@@ -2521,7 +2526,7 @@ fn toggle_party_control_mode_flips_the_session_and_tells_the_relay() {
   app.apply(Action::TogglePartyControlMode);
 
   assert_eq!(
-    app.party_session.as_ref().map(|s| s.control_mode.clone()),
+    app.party_session().map(|s| s.control_mode.clone()),
     Some(ControlMode::HostOnly)
   );
   match rx.try_recv() {
@@ -2536,7 +2541,7 @@ fn toggle_party_control_mode_without_a_session_dispatches_nothing() {
 
   app.apply(Action::TogglePartyControlMode);
 
-  assert!(app.party_session.is_none());
+  assert!(app.party_session().is_none());
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
 }
 
@@ -2654,13 +2659,13 @@ fn open_playlist_folder_scopes_the_visible_items() {
   use crate::core::app::{PlaylistFolder, PlaylistFolderItem};
   let (mut app, _rx) = app_with_channel();
   app.user_config.behavior.pin_community_playlist = false;
-  app.all_playlists = vec![playlist_info(
+  *app.all_playlists_mut() = vec![playlist_info(
     "37i9dQZF1DXcBWIGoYBM5M",
     "Inside",
     "spotatui-owner",
     false,
   )];
-  app.playlist_folder_items = vec![
+  *app.playlist_folder_items_mut() = vec![
     PlaylistFolderItem::Folder(PlaylistFolder {
       name: "Mixes".to_string(),
       current_id: 0,
@@ -2707,17 +2712,19 @@ fn remove_radio_station_removes_the_saved_copy_and_reports_it() {
     name: "Groove Salad".to_string(),
     url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
   }];
-  app.radio_stations = vec![radio_station_row(
+  *app.radio_stations_mut() = vec![radio_station_row(
     "Groove Salad",
     "https://ice1.somafm.com/groovesalad-128-mp3",
   )];
+  let before = app.display_revisions().get(DisplayDomain::Library);
 
   app.apply(Action::RemoveRadioStation(
     "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
   ));
 
   assert!(app.runtime_state.radio_stations.is_empty());
-  assert!(app.radio_stations.is_empty(), "the sidebar row goes too");
+  assert!(app.radio_stations().is_empty(), "the sidebar row goes too");
+  assert!(app.display_revisions().get(DisplayDomain::Library) > before);
   assert_eq!(
     app.status_message(),
     Some("Removed saved radio station: Groove Salad")
@@ -2733,20 +2740,22 @@ fn remove_radio_station_reports_a_config_owned_station_without_removing() {
     name: "Configured Groove".to_string(),
     url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
   }];
-  app.radio_stations = vec![radio_station_row(
+  *app.radio_stations_mut() = vec![radio_station_row(
     "Configured Groove",
     "https://ice1.somafm.com/groovesalad-128-mp3",
   )];
+  let before = app.display_revisions().get(DisplayDomain::Library);
 
   app.apply(Action::RemoveRadioStation(
     "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
   ));
 
-  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(app.radio_stations().len(), 1);
   assert_eq!(
     app.status_message(),
     Some("Radio station is configured in config.yml: Configured Groove")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]
@@ -2762,10 +2771,11 @@ fn remove_radio_station_removes_only_the_saved_copy_of_a_configured_station() {
     name: "Runtime Duplicate".to_string(),
     url: "https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
   }];
-  app.radio_stations = vec![radio_station_row(
+  *app.radio_stations_mut() = vec![radio_station_row(
     "Configured Groove",
     "https://ice1.somafm.com/groovesalad-128-mp3",
   )];
+  let before = app.display_revisions().get(DisplayDomain::Library);
 
   app.apply(Action::RemoveRadioStation(
     "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
@@ -2773,11 +2783,12 @@ fn remove_radio_station_removes_only_the_saved_copy_of_a_configured_station() {
 
   assert!(app.runtime_state.radio_stations.is_empty());
   // Config still supplies the row, so the sidebar keeps it.
-  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(app.radio_stations().len(), 1);
   assert_eq!(
     app.status_message(),
     Some("Removed saved radio station: Runtime Duplicate")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]
@@ -2785,20 +2796,22 @@ fn remove_radio_station_reports_an_unfavorited_station() {
   let dir = tempfile::tempdir().unwrap();
   let (mut app, _rx) = app_with_channel();
   app.state_path = Some(dir.path().join("state.yml"));
-  app.radio_stations = vec![radio_station_row(
+  *app.radio_stations_mut() = vec![radio_station_row(
     "Groove Salad",
     "https://ice1.somafm.com/groovesalad-128-mp3",
   )];
+  let before = app.display_revisions().get(DisplayDomain::Library);
 
   app.apply(Action::RemoveRadioStation(
     "radio:https://ice1.somafm.com/groovesalad-128-mp3".to_string(),
   ));
 
-  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(app.radio_stations().len(), 1);
   assert_eq!(
     app.status_message(),
     Some("Radio station is not favorited: Groove Salad")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]
@@ -2806,18 +2819,20 @@ fn remove_radio_station_without_a_stream_url_reports_it() {
   let dir = tempfile::tempdir().unwrap();
   let (mut app, _rx) = app_with_channel();
   app.state_path = Some(dir.path().join("state.yml"));
-  app.radio_stations = vec![radio_station_row(
+  *app.radio_stations_mut() = vec![radio_station_row(
     "Groove Salad",
     "https://ice1.somafm.com/groovesalad-128-mp3",
   )];
+  let before = app.display_revisions().get(DisplayDomain::Library);
 
   app.apply(Action::RemoveRadioStation("not-a-radio-uri".to_string()));
 
-  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(app.radio_stations().len(), 1);
   assert_eq!(
     app.status_message(),
     Some("Radio station has no stream URL")
   );
+  assert_eq!(app.display_revisions().get(DisplayDomain::Library), before);
 }
 
 #[test]
@@ -2837,7 +2852,7 @@ fn favorite_radio_station_persists_it_and_lists_it_in_the_sidebar() {
     app.runtime_state.radio_stations[0].url,
     "https://ice1.somafm.com/groovesalad-128-mp3"
   );
-  assert_eq!(app.radio_stations.len(), 1);
+  assert_eq!(app.radio_stations().len(), 1);
   assert_eq!(
     app.status_message(),
     Some("Favorited radio station: Groove Salad")
@@ -2856,7 +2871,7 @@ fn favorite_radio_station_without_a_stream_url_reports_it() {
   app.apply(Action::FavoriteRadioStation(station));
 
   assert!(app.runtime_state.radio_stations.is_empty());
-  assert!(app.radio_stations.is_empty(), "no sidebar row is added");
+  assert!(app.radio_stations().is_empty(), "no sidebar row is added");
   assert_eq!(
     app.status_message(),
     Some("Radio station has no stream URL")
@@ -2921,24 +2936,30 @@ fn episodes_page(offset: u32, limit: u32, names: &[&str]) -> Paged<EpisodeInfo> 
 #[test]
 fn load_more_saved_shows_flips_to_a_cached_page() {
   let (mut app, rx) = app_with_channel();
-  app.library.saved_shows.add_pages(shows_page(0, 20, &["A"]));
   app
-    .library
+    .library_mut()
+    .saved_shows
+    .add_pages(shows_page(0, 20, &["A"]));
+  app
+    .library_mut()
     .saved_shows
     .add_pages(shows_page(20, 20, &["B"]));
   // `add_pages` leaves the visible index on the tail; start from the first.
-  app.library.saved_shows.index = 0;
+  app.library_mut().saved_shows.index = 0;
 
   app.apply(Action::LoadMore(ListTarget::SavedShows));
 
-  assert_eq!(app.library.saved_shows.index, 1);
+  assert_eq!(app.library().saved_shows.index, 1);
   assert!(rx.try_recv().is_err(), "a cached page needs no fetch");
 }
 
 #[test]
 fn load_more_saved_shows_fetches_the_next_offset() {
   let (mut app, rx) = app_with_channel();
-  app.library.saved_shows.add_pages(shows_page(0, 20, &["A"]));
+  app
+    .library_mut()
+    .saved_shows
+    .add_pages(shows_page(0, 20, &["A"]));
 
   app.apply(Action::LoadMore(ListTarget::SavedShows));
 
@@ -2965,18 +2986,18 @@ fn load_more_show_episodes_flips_to_a_cached_page() {
   });
   app.episode_table_context = EpisodeTableContext::Simplified;
   app
-    .library
+    .library_mut()
     .show_episodes
     .add_pages(episodes_page(0, 20, &["A"]));
   app
-    .library
+    .library_mut()
     .show_episodes
     .add_pages(episodes_page(20, 20, &["B"]));
-  app.library.show_episodes.index = 0;
+  app.library_mut().show_episodes.index = 0;
 
   app.apply(Action::LoadMore(ListTarget::ShowEpisodes));
 
-  assert_eq!(app.library.show_episodes.index, 1);
+  assert_eq!(app.library().show_episodes.index, 1);
   assert!(rx.try_recv().is_err(), "a cached page needs no fetch");
 }
 
@@ -2988,7 +3009,7 @@ fn load_more_show_episodes_fetches_the_next_offset() {
   });
   app.episode_table_context = EpisodeTableContext::Simplified;
   app
-    .library
+    .library_mut()
     .show_episodes
     .add_pages(episodes_page(0, 20, &["A"]));
 
@@ -3015,7 +3036,7 @@ fn load_more_show_episodes_reads_the_full_show_context() {
   });
   app.episode_table_context = EpisodeTableContext::Full;
   app
-    .library
+    .library_mut()
     .show_episodes
     .add_pages(episodes_page(0, 20, &["A"]));
 
@@ -3031,7 +3052,7 @@ fn load_more_show_episodes_reads_the_full_show_context() {
 fn load_more_show_episodes_without_a_selected_show_is_a_noop() {
   let (mut app, rx) = app_with_channel();
   app
-    .library
+    .library_mut()
     .show_episodes
     .add_pages(episodes_page(0, 20, &["A"]));
 

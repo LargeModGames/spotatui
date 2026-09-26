@@ -208,7 +208,7 @@ async fn publish_playlists(app: &Arc<Mutex<App>>, file: &super::playlists::Playl
     .iter()
     .map(super::playlists::playlist_to_info)
     .collect();
-  app.lock().await.youtube_playlists = infos;
+  *app.lock().await.youtube_playlists_mut() = infos;
 }
 
 /// Load `youtube_playlists.yml` into the sidebar.
@@ -293,7 +293,7 @@ fn find_video_row(app: &App, video_ref: &str) -> Option<TrackInfo> {
       || t.uri.as_deref() == Some(uri.as_str())
   };
   app
-    .search_results
+    .search_results()
     .tracks
     .as_ref()
     .and_then(|p| p.items.iter().find(matches))
@@ -460,7 +460,7 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
   let tracks = {
     let guard = app.lock().await;
     let search = guard
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.as_slice());
@@ -835,9 +835,12 @@ mod tests {
       let mut guard = app.lock().await;
       let mut live = video("youtube:live12345", "24/7 Lofi Radio");
       live.duration_ms = 0;
-      guard.search_results.tracks = Some(Paged {
-        items: vec![live],
-        total: 1,
+      guard.set_search_results(crate::core::app::SearchResult {
+        tracks: Some(Paged {
+          items: vec![live],
+          total: 1,
+          ..Default::default()
+        }),
         ..Default::default()
       });
     }
@@ -876,28 +879,32 @@ mod tests {
 
     // Empty file → empty sidebar list.
     assert!(route_youtube_event(&app, &IoEvent::GetYouTubePlaylists).await);
-    assert!(app.lock().await.youtube_playlists.is_empty());
+    assert!(app.lock().await.youtube_playlists().is_empty());
 
     // Create a playlist; the sidebar refreshes.
     assert!(route_youtube_event(&app, &IoEvent::CreateYouTubePlaylist("Focus".to_string())).await);
     let playlist_uri = {
       let guard = app.lock().await;
-      assert_eq!(guard.youtube_playlists.len(), 1);
-      assert_eq!(guard.youtube_playlists[0].name, "Focus");
-      guard.youtube_playlists[0].uri.clone()
+      assert_eq!(guard.youtube_playlists().len(), 1);
+      assert_eq!(guard.youtube_playlists()[0].name, "Focus");
+      guard.youtube_playlists()[0].uri.clone()
     };
 
     // Fake a search view holding the video's metadata, then add it by id —
     // exactly what the picker dialog dispatches.
     {
       let mut guard = app.lock().await;
-      guard.search_results.tracks = Some(Paged {
-        items: vec![video("youtube:vid1234", "Cool Song")],
-        total: 1,
+      // The search row's id field carries the bare video id.
+      let mut row = video("youtube:vid1234", "Cool Song");
+      row.id = Some("vid1234".to_string());
+      guard.set_search_results(crate::core::app::SearchResult {
+        tracks: Some(Paged {
+          items: vec![row],
+          total: 1,
+          ..Default::default()
+        }),
         ..Default::default()
       });
-      // The search row's id field carries the bare video id.
-      guard.search_results.tracks.as_mut().unwrap().items[0].id = Some("vid1234".to_string());
     }
     assert!(
       route_youtube_event(
@@ -907,7 +914,7 @@ mod tests {
       .await
     );
     assert_eq!(
-      app.lock().await.youtube_playlists[0].track_count,
+      app.lock().await.youtube_playlists()[0].track_count,
       1,
       "sidebar count must refresh after an add"
     );
@@ -920,7 +927,7 @@ mod tests {
       )
       .await
     );
-    assert_eq!(app.lock().await.youtube_playlists[0].track_count, 1);
+    assert_eq!(app.lock().await.youtube_playlists()[0].track_count, 1);
 
     // Open the playlist into the shared track table.
     assert!(route_youtube_event(&app, &IoEvent::GetYouTubeTracks(playlist_uri.clone())).await);
@@ -952,14 +959,14 @@ mod tests {
         guard.track_table.tracks.is_empty(),
         "open table must refresh"
       );
-      assert_eq!(guard.youtube_playlists[0].track_count, 0);
+      assert_eq!(guard.youtube_playlists()[0].track_count, 0);
     }
 
     // Delete the playlist; the sidebar refreshes and the open marker clears.
     assert!(route_youtube_event(&app, &IoEvent::DeleteYouTubePlaylist(playlist_uri)).await);
     {
       let guard = app.lock().await;
-      assert!(guard.youtube_playlists.is_empty());
+      assert!(guard.youtube_playlists().is_empty());
       assert!(guard.youtube_open_playlist.is_none());
     }
 
@@ -989,7 +996,7 @@ mod tests {
     let uris: Vec<String> = app
       .lock()
       .await
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .expect("search populated the songs block")

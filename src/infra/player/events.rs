@@ -330,7 +330,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           app.set_status_message("Native streaming recovered.", 6);
         }
         // A playlist refresh while parked had no session for the folders.
-        if reacquired && app._playlist_folder_nodes.is_none() {
+        if reacquired && app.playlist_folder_nodes().is_none() {
           app.dispatch(IoEvent::GetPlaylists);
         }
       }
@@ -1206,7 +1206,7 @@ async fn handle_player_events(
     }
 
     if notes_playback {
-      app.lock().await.note_playback_change();
+      app.lock().await.note_display_changes();
     }
 
     // A failed in-place reconnect owns no viable Spirc. Runs after event
@@ -1464,7 +1464,7 @@ async fn disconnect_streaming_player(
   app_lock.current_playback_context = None;
   app_lock.set_status_message(status_message, 8);
   app_lock.dispatch(IoEvent::GetCurrentPlayback);
-  app_lock.note_playback_change();
+  app_lock.note_display_changes();
 
   shared_position.store(0, Ordering::Relaxed);
   shared_is_playing.store(false, Ordering::Relaxed);

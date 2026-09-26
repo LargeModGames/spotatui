@@ -301,6 +301,7 @@ impl MetadataNetwork for Network {
         ArtistBlock::TopTracks
       },
     });
+    app.bump_display(crate::core::app::DisplayDomain::Artist);
     app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
   }
 
@@ -345,6 +346,7 @@ impl MetadataNetwork for Network {
             selected_index: 0,
           });
           app.album_table_context = crate::core::app::AlbumTableContext::Simplified;
+          app.bump_display(crate::core::app::DisplayDomain::Artist);
           app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
         }
         Err(e) => self.handle_error(anyhow!(e)).await,
@@ -393,6 +395,7 @@ impl MetadataNetwork for Network {
           selected_index: 0,
         });
         app.album_table_context = crate::core::app::AlbumTableContext::Full;
+        app.bump_display(crate::core::app::DisplayDomain::Artist);
         app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
@@ -416,13 +419,14 @@ impl MetadataNetwork for Network {
         if !episodes.items.is_empty() {
           let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
           let mut app = self.app.lock().await;
-          app.library.show_episodes = ScrollableResultPages::new();
-          app.library.show_episodes.add_pages(domain_page);
+          app.library_mut().show_episodes = ScrollableResultPages::new();
+          app.library_mut().show_episodes.add_pages(domain_page);
 
           app.selected_show_simplified = Some(SelectedShow { show: *show });
 
           app.episode_table_context = EpisodeTableContext::Simplified;
 
+          app.bump_display(crate::core::app::DisplayDomain::Artist);
           app.push_navigation_stack(RouteId::PodcastEpisodes, ActiveBlock::EpisodeTable);
         }
       }
@@ -448,6 +452,7 @@ impl MetadataNetwork for Network {
         app.selected_show_full = Some(selected_show);
 
         app.episode_table_context = EpisodeTableContext::Full;
+        app.bump_display(crate::core::app::DisplayDomain::Artist);
         app.push_navigation_stack(RouteId::PodcastEpisodes, ActiveBlock::EpisodeTable);
       }
       Err(e) => {
@@ -471,7 +476,7 @@ impl MetadataNetwork for Network {
         if !episodes.items.is_empty() {
           let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
           let mut app = self.app.lock().await;
-          app.library.show_episodes.add_pages(domain_page);
+          app.library_mut().show_episodes.add_pages(domain_page);
         }
       }
       Err(e) => {
@@ -495,7 +500,7 @@ impl MetadataNetwork for Network {
         let domain_page =
           crate::infra::network::mapping::map_cursor_page(&res.artists, |a| ArtistInfo::from(a));
         let mut app = self.app.lock().await;
-        app.library.saved_artists.add_pages(domain_page);
+        app.library_mut().saved_artists.add_pages(domain_page);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -522,7 +527,9 @@ impl MetadataNetwork for Network {
         let mut app = self.app.lock().await;
         for (id, is_following) in artist_ids.iter().zip(is_following) {
           if is_following {
-            app.followed_artist_ids_set.insert(id.id().to_string());
+            app
+              .followed_artist_ids_set_mut()
+              .insert(id.id().to_string());
           }
         }
       }
@@ -652,6 +659,11 @@ mod tests {
       );
 
       let artist_id = ArtistId::from_id("artist").unwrap();
+      let before = app
+        .lock()
+        .await
+        .display_revisions()
+        .get(crate::core::app::DisplayDomain::Artist);
 
       network
         .get_artist(artist_id, "Test Artist".to_string(), None)
@@ -666,6 +678,12 @@ mod tests {
         .as_ref()
         .expect("app.artist should be populated for a recoverable related-artists error");
       assert_eq!(artist.artist_name, "Test Artist");
+      assert!(
+        app_guard
+          .display_revisions()
+          .get(crate::core::app::DisplayDomain::Artist)
+          > before
+      );
       assert!(
         artist.related_artists.is_empty(),
         "related_artists should be empty when error is recovered"

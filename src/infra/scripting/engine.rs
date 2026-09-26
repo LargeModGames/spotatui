@@ -570,7 +570,7 @@ impl ScriptEngine {
       // belongs to the previous track - see `lyrics_state_is_current`.
       if req.kind == PluginDataKind::Lyrics
         && matches!(
-          app.lyrics_status,
+          app.lyrics_status(),
           LyricsStatus::Found | LyricsStatus::NotFound
         )
         && crate::core::plugin_api::lyrics_state_is_current(app)

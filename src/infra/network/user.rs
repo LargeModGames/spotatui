@@ -106,7 +106,7 @@ impl UserNetwork for Network {
         // market signal available; mirror the existing read in `get_user_country`.
         #[allow(deprecated)]
         let country = user.country.map(|c| <&'static str>::from(c).to_string());
-        app.user = Some(UserInfo {
+        *app.user_mut() = Some(UserInfo {
           id: user.id.id().to_string(),
           display_name: user.display_name.clone(),
           // Store the ISO 3166-1 alpha-2 code as a plain string so no rspotify
@@ -163,7 +163,7 @@ impl UserNetwork for Network {
             .filter(|index| *index < result.devices.len())
             .or(Some(0))
         };
-        app.devices = Some(result);
+        app.set_devices(result);
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::Devices);

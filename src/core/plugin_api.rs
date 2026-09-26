@@ -600,8 +600,7 @@ pub fn playback_state(app: &App) -> Option<PlaybackState> {
 /// Return a list of available devices from [`App`]'s cached device payload.
 pub fn device_list(app: &App) -> Vec<DeviceInfo> {
   app
-    .devices
-    .as_ref()
+    .devices()
     .map(|payload| {
       payload
         .devices
@@ -663,13 +662,13 @@ pub fn route_name(route: &crate::core::app::Route) -> String {
 
 /// The user's playlists (full list, folder structure flattened away).
 pub fn playlists_snapshot(app: &App) -> Vec<PlaylistInfo> {
-  app.all_playlists.clone()
+  app.all_playlists().clone()
 }
 
 /// Saved ("liked") tracks fetched so far, in library order.
 pub fn saved_tracks_snapshot(app: &App) -> Vec<TrackInfo> {
   app
-    .library
+    .library()
     .saved_tracks
     .pages
     .iter()
@@ -680,7 +679,7 @@ pub fn saved_tracks_snapshot(app: &App) -> Vec<TrackInfo> {
 /// Saved albums fetched so far, in library order.
 pub fn saved_albums_snapshot(app: &App) -> Vec<SavedAlbumInfo> {
   app
-    .library
+    .library()
     .saved_albums
     .pages
     .iter()
@@ -691,7 +690,7 @@ pub fn saved_albums_snapshot(app: &App) -> Vec<SavedAlbumInfo> {
 /// Saved shows fetched so far, in library order.
 pub fn saved_shows_snapshot(app: &App) -> Vec<ShowInfo> {
   app
-    .library
+    .library()
     .saved_shows
     .pages
     .iter()
@@ -731,31 +730,31 @@ pub fn queue_snapshot(app: &App) -> QueueSnapshot {
 pub fn search_results_snapshot(app: &App) -> SearchResults {
   SearchResults {
     tracks: app
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     albums: app
-      .search_results
+      .search_results()
       .albums
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     artists: app
-      .search_results
+      .search_results()
       .artists
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     playlists: app
-      .search_results
+      .search_results()
       .playlists
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     shows: app
-      .search_results
+      .search_results()
       .shows
       .as_ref()
       .map(|p| p.items.clone())
@@ -795,7 +794,7 @@ pub fn lyrics_state_is_current(app: &App) -> bool {
 /// Lyrics for the current track, with the fetch status spelled out.
 pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
   use crate::core::app::LyricsStatus;
-  let status = match app.lyrics_status {
+  let status = match app.lyrics_status() {
     LyricsStatus::NotStarted => "not_started",
     LyricsStatus::Loading => "loading",
     LyricsStatus::Found => "found",
@@ -804,8 +803,7 @@ pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
   LyricsSnapshot {
     status: status.to_string(),
     lines: app
-      .lyrics
-      .as_ref()
+      .lyrics()
       .map(|lines| {
         lines
           .iter()

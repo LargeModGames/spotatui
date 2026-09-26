@@ -9,7 +9,7 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      if let Some(episodes) = &mut app.library.show_episodes.get_results(None) {
+      if let Some(episodes) = app.library().show_episodes.get_results(None) {
         let next_index = common_key_events::on_down_press_handler(
           &episodes.items,
           Some(app.view.episode_list_index),
@@ -18,7 +18,7 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      if let Some(episodes) = &mut app.library.show_episodes.get_results(None) {
+      if let Some(episodes) = app.library().show_episodes.get_results(None) {
         let next_index = common_key_events::on_up_press_handler(
           &episodes.items,
           Some(app.view.episode_list_index),
@@ -27,19 +27,19 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     k if common_key_events::high_event(k) => {
-      if let Some(_episodes) = app.library.show_episodes.get_results(None) {
+      if let Some(_episodes) = app.library().show_episodes.get_results(None) {
         let next_index = common_key_events::on_high_press_handler();
         app.view.episode_list_index = next_index;
       }
     }
     k if common_key_events::middle_event(k) => {
-      if let Some(episodes) = app.library.show_episodes.get_results(None) {
+      if let Some(episodes) = app.library().show_episodes.get_results(None) {
         let next_index = common_key_events::on_middle_press_handler(&episodes.items);
         app.view.episode_list_index = next_index;
       }
     }
     k if common_key_events::low_event(k) => {
-      if let Some(episodes) = app.library.show_episodes.get_results(None) {
+      if let Some(episodes) = app.library().show_episodes.get_results(None) {
         let next_index = common_key_events::on_low_press_handler(&episodes.items);
         app.view.episode_list_index = next_index;
       }
@@ -61,7 +61,7 @@ pub fn handler(key: Key, app: &mut App) {
 }
 
 fn jump_to_end(app: &mut App) {
-  if let Some(episodes) = app.library.show_episodes.get_results(None) {
+  if let Some(episodes) = app.library().show_episodes.get_results(None) {
     let last_idx = episodes.items.len() - 1;
     app.view.episode_list_index = last_idx;
   }
@@ -69,12 +69,16 @@ fn jump_to_end(app: &mut App) {
 
 fn on_enter(app: &mut App) {
   let selected_index = app.view.episode_list_index;
-  let request = app.library.show_episodes.get_results(None).map(|episodes| {
-    common_key_events::uri_playback_request(
-      episodes.items.iter().map(|episode| episode.uri.clone()),
-      selected_index,
-    )
-  });
+  let request = app
+    .library()
+    .show_episodes
+    .get_results(None)
+    .map(|episodes| {
+      common_key_events::uri_playback_request(
+        episodes.items.iter().map(|episode| episode.uri.clone()),
+        selected_index,
+      )
+    });
   if let Some((uris, offset)) = request {
     app.apply(Action::PlayUris { uris, offset });
   }
@@ -106,7 +110,7 @@ fn jump_to_start(app: &mut App) {
 
 fn toggle_sort_by_date(app: &mut App) {
   //TODO: reverse whole list and not just currently visible episodes
-  let selected_id = match app.library.show_episodes.get_results(None) {
+  let selected_id = match app.library().show_episodes.get_results(None) {
     Some(episodes) => episodes
       .items
       .get(app.view.episode_list_index)
@@ -114,12 +118,12 @@ fn toggle_sort_by_date(app: &mut App) {
     None => None,
   };
 
-  if let Some(episodes) = app.library.show_episodes.get_mut_results(None) {
+  if let Some(episodes) = app.library_mut().show_episodes.get_mut_results(None) {
     episodes.items.reverse();
   }
 
   if let Some(id) = selected_id {
-    if let Some(episodes) = app.library.show_episodes.get_results(None) {
+    if let Some(episodes) = app.library().show_episodes.get_results(None) {
       app.view.episode_list_index = episodes.items.iter().position(|e| e.id == id).unwrap_or(0);
     }
   } else {
@@ -156,7 +160,7 @@ mod tests {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     let limit = episodes.len() as u32;
-    app.library.show_episodes.add_pages(Paged {
+    app.library_mut().show_episodes.add_pages(Paged {
       items: episodes,
       offset: 0,
       limit,
@@ -203,7 +207,7 @@ mod tests {
     handler(Key::Char('S'), &mut app);
 
     let names: Vec<&str> = app
-      .library
+      .library()
       .show_episodes
       .get_results(None)
       .unwrap()

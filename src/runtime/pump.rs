@@ -201,7 +201,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         // or YouTube content leaves the UI stuck on the loading indicator.
         let mut app = network.app.lock().await;
         app.is_loading = false;
-        app.note_playback_change();
+        app.note_display_changes();
       }
     }
     network.process_party_messages().await;
@@ -294,7 +294,7 @@ mod tests {
       ..Default::default()
     });
     app.claim_decoded_sink(crate::core::source::Source::Qobuz);
-    app.note_playback_change();
+    app.note_display_changes();
     let seen = app.display_revisions().get(DisplayDomain::Playback);
     let app = Arc::new(Mutex::new(app));
     let dir = tempfile::tempdir().unwrap();

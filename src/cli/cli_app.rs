@@ -31,7 +31,7 @@ impl CliApp {
     // The IoEvent handler defers to a detached worker (it must not block the
     // TUI's serial pump); the CLI needs the answer before returning.
     self.net.resolve_liked_state_now(&[id.to_string()]).await?;
-    Ok(self.net.app.lock().await.liked_song_ids_set.contains(id))
+    Ok(self.net.app.lock().await.liked_song_ids_set().contains(id))
   }
 
   pub fn format_output(&self, mut format: String, values: Vec<Format>) -> String {
@@ -122,7 +122,7 @@ impl CliApp {
   pub async fn set_device(&mut self, name: String) -> Result<()> {
     // Change the device if specified by user
     let app = self.net.app.lock().await;
-    if let Some(dp) = &app.devices {
+    if let Some(dp) = app.devices() {
       for d in &dp.devices {
         if d.name == name {
           // Save the id of the device
@@ -182,7 +182,7 @@ impl CliApp {
   pub async fn list(&mut self, item: Type, format: &str) -> String {
     match item {
       Type::Device => {
-        if let Some(devices) = &self.net.app.lock().await.devices {
+        if let Some(devices) = self.net.app.lock().await.devices() {
           devices
             .devices
             .iter()
@@ -203,7 +203,7 @@ impl CliApp {
       }
       Type::Playlist => {
         self.net.handle_network_event(IoEvent::GetPlaylists).await;
-        if let Some(playlists) = &self.net.app.lock().await.playlists {
+        if let Some(playlists) = &self.net.app.lock().await.playlists() {
           playlists
             .items
             .iter()
@@ -255,7 +255,7 @@ impl CliApp {
   pub async fn transfer_playback(&mut self, device: &str) -> Result<()> {
     // Get the device id by name
     let mut id = String::new();
-    if let Some(devices) = &self.net.app.lock().await.devices {
+    if let Some(devices) = self.net.app.lock().await.devices() {
       for d in &devices.devices {
         if d.name == device {
           if let Some(device_id) = &d.id {
@@ -533,7 +533,8 @@ impl CliApp {
     // Get the uri of the first found
     // item + the offset or return an error message
     let uri = {
-      let results = &self.net.app.lock().await.search_results;
+      let app = self.net.app.lock().await;
+      let results = app.search_results();
       match item {
         Type::Track => {
           if let Some(r) = &results.tracks {
@@ -612,7 +613,7 @@ impl CliApp {
     let app = self.net.app.lock().await;
     match item {
       Type::Playlist => {
-        if let Some(results) = &app.search_results.playlists {
+        if let Some(results) = &app.search_results().playlists {
           results
             .items
             .iter()
@@ -629,7 +630,7 @@ impl CliApp {
         }
       }
       Type::Track => {
-        if let Some(results) = &app.search_results.tracks {
+        if let Some(results) = &app.search_results().tracks {
           results
             .items
             .iter()
@@ -646,7 +647,7 @@ impl CliApp {
         }
       }
       Type::Artist => {
-        if let Some(results) = &app.search_results.artists {
+        if let Some(results) = &app.search_results().artists {
           results
             .items
             .iter()
@@ -663,7 +664,7 @@ impl CliApp {
         }
       }
       Type::Show => {
-        if let Some(results) = &app.search_results.shows {
+        if let Some(results) = &app.search_results().shows {
           results
             .items
             .iter()
@@ -680,7 +681,7 @@ impl CliApp {
         }
       }
       Type::Album => {
-        if let Some(results) = &app.search_results.albums {
+        if let Some(results) = &app.search_results().albums {
           results
             .items
             .iter()

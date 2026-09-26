@@ -394,7 +394,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   {
     let devices_vec = devices.devices;
     let mut app_mut = ctx.app.lock().await;
-    app_mut.devices = Some(rspotify::model::device::DevicePayload {
+    app_mut.set_devices(rspotify::model::device::DevicePayload {
       devices: devices_vec.clone(),
     });
     devices_snapshot = Some(devices_vec);
