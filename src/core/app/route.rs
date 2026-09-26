@@ -239,6 +239,9 @@ impl App {
   /// playback (routing goes by URI scheme). Sidebar data loading and any
   /// view resets stay with the caller.
   pub fn set_active_source(&mut self, source: Source) {
+    if self.active_source != source {
+      self.display_revisions.bump(DisplayDomain::Source);
+    }
     self.active_source = source;
     self.runtime_state.active_source = source;
     // The Spotify scope reaches disk when the login succeeds (see
@@ -293,6 +296,7 @@ impl App {
         active_block: next_active_block,
         hovered_block: next_active_block,
       });
+      self.display_revisions.bump(DisplayDomain::Route);
     }
   }
 
@@ -302,6 +306,7 @@ impl App {
       None
     } else {
       let popped = self.navigation_stack.pop();
+      self.display_revisions.bump(DisplayDomain::Route);
       // Leaving the error screen dismisses the error. Done here rather than in
       // a key handler so every back path clears it (the escape key, the
       // configurable back key, a script's `Back`), and so a frontend with no
@@ -334,9 +339,13 @@ impl App {
   /// Cannot empty the stack: the bottom frame is `DEFAULT_ROUTE` (Home) or a
   /// `RouteId::STARTUP_OPTIONS` route, and `Error` is in neither.
   pub(super) fn drop_error_routes(&mut self) {
+    let before = self.navigation_stack.len();
     self
       .navigation_stack
       .retain(|route| !(route.id == RouteId::Error && route.active_block == ActiveBlock::Error));
+    if self.navigation_stack.len() != before {
+      self.display_revisions.bump(DisplayDomain::Route);
+    }
   }
 
   pub fn get_current_route(&self) -> &Route {
@@ -354,11 +363,15 @@ impl App {
     hovered_block: Option<ActiveBlock>,
   ) {
     let current_route = self.get_current_route_mut();
+    let before = (current_route.active_block, current_route.hovered_block);
     if let Some(active_block) = active_block {
       current_route.active_block = active_block;
     }
     if let Some(hovered_block) = hovered_block {
       current_route.hovered_block = hovered_block;
+    }
+    if (current_route.active_block, current_route.hovered_block) != before {
+      self.display_revisions.bump(DisplayDomain::Route);
     }
   }
 
@@ -633,5 +646,57 @@ mod tests {
       rx.try_recv(),
       Ok(IoEvent::GetPlaylistItems(id, _)) if id == "37i9dQZF1DX4WYpdgoIcn6"
     ));
+  }
+
+  fn route_rev(app: &App) -> u64 {
+    app.display_revisions().get(DisplayDomain::Route)
+  }
+
+  #[test]
+  fn pushing_a_new_route_bumps_the_route_revision_and_a_repeat_push_does_not() {
+    let mut app = make_app_simple();
+    let rev = route_rev(&app);
+
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::Input);
+    assert_eq!(route_rev(&app), rev + 1);
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::Input);
+    assert_eq!(route_rev(&app), rev + 1);
+  }
+
+  #[test]
+  fn popping_a_route_bumps_the_route_revision_and_popping_the_last_does_not() {
+    let mut app = make_app_simple();
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::Input);
+    let rev = route_rev(&app);
+
+    app.pop_navigation_stack();
+    assert_eq!(route_rev(&app), rev + 1);
+    app.pop_navigation_stack();
+    assert_eq!(route_rev(&app), rev + 1);
+  }
+
+  #[test]
+  fn changing_the_current_route_state_bumps_the_route_revision_once() {
+    let mut app = make_app_simple();
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Empty));
+    let rev = route_rev(&app);
+
+    app.set_current_route_state(Some(ActiveBlock::Library), None);
+    assert_eq!(route_rev(&app), rev + 1);
+    app.set_current_route_state(Some(ActiveBlock::Library), None);
+    assert_eq!(route_rev(&app), rev + 1);
+  }
+
+  #[test]
+  fn switching_the_browse_source_bumps_the_source_revision_once() {
+    let mut app = make_app_simple();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    let rev = app.display_revisions().get(DisplayDomain::Source);
+
+    app.set_active_source(Source::Local);
+    assert_eq!(app.display_revisions().get(DisplayDomain::Source), rev + 1);
+    app.set_active_source(Source::Local);
+    assert_eq!(app.display_revisions().get(DisplayDomain::Source), rev + 1);
   }
 }

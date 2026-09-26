@@ -98,7 +98,11 @@ impl App {
     #[cfg(feature = "art-decode")]
     if let Some(transition) = self.theme_transition.as_mut() {
       transition.advance(elapsed);
-      self.user_config.theme = transition.current();
+      let current = transition.current();
+      if self.user_config.theme != current {
+        self.user_config.theme = current;
+        self.display_revisions.bump(DisplayDomain::Theme);
+      }
       if transition.is_complete() {
         self.theme_transition = None;
         // A finished fade-out means the user's own theme is back in place.

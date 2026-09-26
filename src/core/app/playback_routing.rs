@@ -534,8 +534,29 @@ impl App {
     }
     None
   }
-}
 
+  /// Bump the Playback revision when the shown playback changed; position is not part of it.
+  pub(crate) fn note_playback_change(&mut self) {
+    let snapshot =
+      crate::infra::media_metadata::current_playback_snapshot(self).map(|mut snapshot| {
+        snapshot.progress_ms = 0;
+        snapshot
+      });
+    let liked = snapshot
+      .as_ref()
+      .and_then(|snapshot| snapshot.item_id.as_ref())
+      .is_some_and(|id| self.liked_song_ids_set.contains(id));
+    let device = self
+      .current_playback_context
+      .as_ref()
+      .map(|ctx| ctx.device.name.clone());
+    let view = (snapshot, self.desired_volume(), device, liked);
+    if view != self.playback_view {
+      self.playback_view = view;
+      self.display_revisions.bump(DisplayDomain::Playback);
+    }
+  }
+}
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -744,6 +765,35 @@ mod tests {
     assert!(app.active_source_position_ms().is_none());
   }
 
+  #[test]
+  fn a_position_change_alone_leaves_the_playback_revision() {
+    let mut app = make_app_simple();
+    app.is_streaming_active = true;
+    app.last_track_id = Some("track".to_string());
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "Track".to_string(),
+      ..Default::default()
+    });
+    app.native_is_playing = Some(true);
+    app.runtime_state.volume_percent = 40;
+    app.note_playback_change();
+    let seen = app.display_revisions().get(DisplayDomain::Playback);
+
+    app.song_progress_ms = 30_000;
+    app.note_playback_change();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Playback), seen);
+
+    app.native_is_playing = Some(false);
+    app.note_playback_change();
+    app.runtime_state.volume_percent = 20;
+    app.note_playback_change();
+    app.liked_song_ids_set.insert("track".to_string());
+    app.note_playback_change();
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Playback),
+      seen + 3
+    );
+  }
   #[test]
   fn releasing_the_claim_hands_the_sink_back_to_spotify() {
     let mut app = make_app_simple();

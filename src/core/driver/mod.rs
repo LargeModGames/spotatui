@@ -849,6 +849,8 @@ impl Driver {
         }
       }
     }
+
+    app.note_playback_change();
   }
 
   /// The one-shot startup dispatch, fired by the frontend right after its

@@ -218,6 +218,8 @@ impl Default for App {
       pending_playlist_sync_remove: None,
       pending_plugin_commands: Vec::new(),
       plugin_data_generations: PluginDataGenerations::default(),
+      display_revisions: DisplayRevisions::default(),
+      playback_view: (None, 0, None, false),
       plugin_screens: std::collections::BTreeMap::new(),
       pending_plugin_screen_keys: Vec::new(),
       plugin_playbar_segments: std::collections::BTreeMap::new(),

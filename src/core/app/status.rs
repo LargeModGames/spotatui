@@ -90,7 +90,9 @@ impl App {
 
   /// Drop the live status message and its error priority.
   pub(crate) fn clear_status_message(&mut self) {
-    self.status_message = None;
+    if self.status_message.take().is_some() {
+      self.display_revisions.bump(DisplayDomain::Status);
+    }
     self.status_message_expires_at = None;
     self.status_message_is_error = false;
   }
@@ -108,6 +110,7 @@ impl App {
     let ttl = self.scaled_status_ttl(ttl_secs);
     self.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl));
     self.status_message_is_error = false;
+    self.display_revisions.bump(DisplayDomain::Status);
   }
 
   /// Set an error status message. Errors always replace whatever is currently shown
@@ -118,6 +121,7 @@ impl App {
     let ttl = self.scaled_status_ttl(ttl_secs);
     self.status_message_expires_at = Some(Instant::now() + Duration::from_secs(ttl));
     self.status_message_is_error = true;
+    self.display_revisions.bump(DisplayDomain::Status);
   }
 
   /// Scale a status-message TTL by `status_message_ttl_percent` (default 100
@@ -139,6 +143,7 @@ impl App {
     self.push_navigation_stack(RouteId::Error, ActiveBlock::Error);
     self.api_error = e.to_string();
     self.api_error_expires_at = Some(Instant::now() + API_ERROR_TTL);
+    self.display_revisions.bump(DisplayDomain::Status);
   }
 
   /// Dismiss the live error: the message, its lifetime, and every navigation
@@ -146,6 +151,9 @@ impl App {
   /// with no route stack has one call to make. Dropping the frames is what
   /// stops a cleared message from leaving an error page with nothing on it.
   pub fn clear_api_error(&mut self) {
+    if !self.api_error.is_empty() || self.api_error_expires_at.is_some() {
+      self.display_revisions.bump(DisplayDomain::Status);
+    }
     self.api_error.clear();
     self.api_error_expires_at = None;
     self.drop_error_routes();
@@ -305,5 +313,65 @@ mod tests {
 
     assert_eq!(app.status_message.as_deref(), Some("now playing"));
     assert!(!app.status_message_is_error);
+  }
+
+  fn status_rev(app: &App) -> u64 {
+    app.display_revisions().get(DisplayDomain::Status)
+  }
+
+  fn route_rev(app: &App) -> u64 {
+    app.display_revisions().get(DisplayDomain::Route)
+  }
+
+  #[test]
+  fn a_status_write_bumps_the_status_revision_unless_a_live_error_blocks_it() {
+    let mut app = make_app_simple();
+    let start = status_rev(&app);
+
+    app.set_status_message("now playing", 4);
+    assert_eq!(status_rev(&app), start + 1);
+    app.set_error_status_message("plugin error", 6);
+    assert_eq!(status_rev(&app), start + 2);
+    app.set_status_message("blocked", 4);
+    assert_eq!(status_rev(&app), start + 2);
+  }
+
+  #[test]
+  fn clearing_a_live_status_message_bumps_the_status_revision_once() {
+    let mut app = make_app_simple();
+    app.set_status_message("x", 4);
+    let rev = status_rev(&app);
+
+    app.clear_status_message();
+    assert_eq!(status_rev(&app), rev + 1);
+    app.clear_status_message();
+    assert_eq!(status_rev(&app), rev + 1);
+  }
+
+  #[test]
+  fn raising_and_dismissing_an_error_bump_status_and_route_once_each() {
+    let mut app = make_app_simple();
+    let (s0, r0) = (status_rev(&app), route_rev(&app));
+
+    app.handle_error(anyhow::anyhow!("boom"));
+    assert_eq!((status_rev(&app), route_rev(&app)), (s0 + 1, r0 + 1));
+    app.clear_api_error();
+    assert_eq!((status_rev(&app), route_rev(&app)), (s0 + 2, r0 + 2));
+    app.clear_api_error();
+    assert_eq!((status_rev(&app), route_rev(&app)), (s0 + 2, r0 + 2));
+  }
+
+  #[test]
+  fn an_expired_error_on_screen_bumps_status_for_the_clear_and_the_handoff() {
+    let mut app = make_app_simple();
+    app.handle_error(anyhow::anyhow!("boom"));
+    let (s0, r0) = (status_rev(&app), route_rev(&app));
+
+    app.expire_api_error();
+    assert_eq!((status_rev(&app), route_rev(&app)), (s0, r0));
+
+    app.api_error_expires_at = Some(Instant::now() - Duration::from_secs(1));
+    app.expire_api_error();
+    assert_eq!((status_rev(&app), route_rev(&app)), (s0 + 2, r0 + 1));
   }
 }

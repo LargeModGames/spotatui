@@ -15,6 +15,12 @@ impl App {
   /// Apply one frontend-neutral action. See the module doc for the rules
   /// every arm follows.
   pub fn apply(&mut self, action: Action) -> ActionOutcome {
+    let outcome = self.apply_action(action);
+    self.note_playback_change();
+    outcome
+  }
+
+  fn apply_action(&mut self, action: Action) -> ActionOutcome {
     match action {
       Action::Play => {
         if !effective_is_playing(self) {
@@ -247,11 +253,7 @@ impl App {
       },
       Action::ShowPopup(popup) => self.show_plugin_popup(popup),
       Action::ClosePopup => self.close_plugin_popup(),
-      Action::SetTheme(pairs) => {
-        for (field, color) in pairs {
-          self.user_config.theme.set(field, color);
-        }
-      }
+      Action::SetTheme(pairs) => self.set_theme_colors(pairs),
       Action::SaveSettings => {
         return ActionOutcome::SettingsSaved {
           saved: self.save_settings_from_items(),

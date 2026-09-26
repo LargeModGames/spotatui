@@ -291,6 +291,20 @@ mod tests {
     }
 
     #[test]
+    fn a_theme_fade_bumps_the_theme_revision_on_each_changing_tick_until_it_completes() {
+      let mut app = app_with_adaptive_on();
+      app.set_cover_art_palette(PALETTE);
+      let rev = app.display_revisions().get(DisplayDomain::Theme);
+
+      app.update_on_tick(Duration::from_millis(400));
+      assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 1);
+      app.update_on_tick(Duration::from_secs(2));
+      assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 2);
+      app.update_on_tick(Duration::from_secs(2));
+      assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 2);
+    }
+
+    #[test]
     fn save_from_another_category_keeps_the_base_theme() {
       let mut app = app_with_adaptive_on();
       let user = app.user_config.theme;
@@ -307,7 +321,9 @@ mod tests {
         description: String::new(),
         value: SettingValue::Number(app.user_config.behavior.seek_milliseconds as i64),
       }];
+      let theme_rev = app.display_revisions().get(DisplayDomain::Theme);
       app.apply_settings_changes();
+      assert_eq!(app.display_revisions().get(DisplayDomain::Theme), theme_rev);
 
       assert_eq!(app.user_theme(), user, "base drifted to the blended theme");
 

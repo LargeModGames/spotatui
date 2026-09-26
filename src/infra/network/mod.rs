@@ -1141,6 +1141,7 @@ impl Network {
     {
       let mut app = self.app.lock().await;
       app.is_loading = false;
+      app.note_playback_change();
     }
   }
 
