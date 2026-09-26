@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 /// to the on-disk `config.yml` format, which stays hand-parsed by
 /// [`parse_theme_item`] / [`color_to_string`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum Color {
   Reset,
   Black,
@@ -102,6 +103,7 @@ impl Default for Theme {
 /// parallel string whitelists silently dropped the write on a typo.
 #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum ThemeField {
   Active,
   Banner,
@@ -222,6 +224,31 @@ impl Theme {
       ThemeField::HighlightedLyrics => self.highlighted_lyrics = color,
       ThemeField::AnalysisBar => self.analysis_bar = color,
       ThemeField::AnalysisBarText => self.analysis_bar_text = color,
+    }
+  }
+
+  /// Read one field by [`ThemeField`].
+  #[cfg(feature = "gui")]
+  pub fn get(&self, field: ThemeField) -> Color {
+    match field {
+      ThemeField::Active => self.active,
+      ThemeField::Banner => self.banner,
+      ThemeField::ErrorBorder => self.error_border,
+      ThemeField::ErrorText => self.error_text,
+      ThemeField::Hint => self.hint,
+      ThemeField::Hovered => self.hovered,
+      ThemeField::Inactive => self.inactive,
+      ThemeField::PlaybarBackground => self.playbar_background,
+      ThemeField::PlaybarProgress => self.playbar_progress,
+      ThemeField::PlaybarProgressText => self.playbar_progress_text,
+      ThemeField::PlaybarText => self.playbar_text,
+      ThemeField::Selected => self.selected,
+      ThemeField::Text => self.text,
+      ThemeField::Background => self.background,
+      ThemeField::Header => self.header,
+      ThemeField::HighlightedLyrics => self.highlighted_lyrics,
+      ThemeField::AnalysisBar => self.analysis_bar,
+      ThemeField::AnalysisBarText => self.analysis_bar_text,
     }
   }
 }
@@ -648,9 +675,7 @@ pub fn color_to_string(color: Color) -> String {
 /// `Reset` means "the frontend's default"; a caller that needs distinct
 /// foreground and background defaults uses two palettes differing only in
 /// `reset`.
-// No production caller until a second frontend needs concrete RGB; exercised
-// by tests today.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
   /// RGB for [`Color::Reset`].
@@ -690,9 +715,7 @@ impl Default for Palette {
 /// Resolve any [`Color`] to concrete RGB. `Rgb` passes through; named ANSI
 /// colors and `Reset` come from `palette`; `Indexed` follows the xterm-256
 /// layout (16 palette entries, 6×6×6 color cube, 24-step gray ramp).
-// No production caller until a second frontend needs concrete RGB; exercised
-// by tests today.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
 pub fn resolve(color: Color, palette: &Palette) -> [u8; 3] {
   match color {
     Color::Reset => palette.reset,

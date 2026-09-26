@@ -2,6 +2,7 @@ use super::*;
 
 /// Time range for Top Tracks/Artists in Discover feature
 #[derive(Clone, PartialEq, Eq, Debug, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum DiscoverTimeRange {
   /// Last 4 weeks
   Short,

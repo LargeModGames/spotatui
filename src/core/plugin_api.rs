@@ -16,6 +16,7 @@ pub const API_VERSION: u32 = 6;
 
 /// A popup dialog produced by a plugin.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct PluginPopup {
   pub title: String,
   pub lines: Vec<PopupLine>,
@@ -23,6 +24,7 @@ pub struct PluginPopup {
 
 /// A single line in a [`PluginPopup`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct PopupLine {
   pub text: String,
   pub fg: Option<crate::core::theme::Color>,
@@ -31,6 +33,7 @@ pub struct PopupLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct TrackInfo {
   pub uri: Option<String>,
   pub name: String,
@@ -82,6 +85,7 @@ pub struct PlaybackState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct DeviceInfo {
   pub id: Option<String>,
   pub name: String,
@@ -119,6 +123,7 @@ pub struct PlaylistInfo {
 /// Reused by [`TrackInfo`], [`AlbumInfo`], and [`ArtistInfo`]. `id` is `None`
 /// for local/unknown sources or when the API omits it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct ArtistRef {
   pub id: Option<String>,
   pub name: String,
@@ -168,6 +173,7 @@ pub struct SavedAlbumInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct ShowInfo {
   pub id: Option<String>,
   pub uri: Option<String>,
@@ -185,12 +191,14 @@ pub struct ShowInfo {
 /// `ResumePoint`; carried so the episode list can render the "fully played"
 /// marker and resume position.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct ResumePointInfo {
   pub fully_played: bool,
   pub resume_position_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct EpisodeInfo {
   pub id: Option<String>,
   pub uri: Option<String>,
@@ -244,6 +252,7 @@ pub struct SearchResults {
 /// design: draw runs with `&App` only (the engine is unreachable there), so
 /// plugins publish content via effects and the renderer just reads it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct PluginScreenContent {
   pub title: String,
   pub widgets: Vec<PluginWidget>,
@@ -251,6 +260,7 @@ pub struct PluginScreenContent {
 
 /// A size along one axis: an absolute cell count, or a percentage of the parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum PluginLength {
   Cells(u16),
   /// 1..=100 (validated at the API layer).
@@ -264,6 +274,7 @@ pub enum PluginLength {
 /// that some terminals misbehave when it does (Alacritty's sixel branch is
 /// named explicitly).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum PluginCoverArtFit {
   /// Fit inside the area, keeping the aspect ratio, never upscaling.
   #[default]
@@ -278,6 +289,7 @@ pub enum PluginCoverArtFit {
 /// container's axis is used (the top level is an implicit vertical stack).
 /// `None` means "share the remaining space evenly".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct PluginWidget {
   pub kind: PluginWidgetKind,
   pub width: Option<PluginLength>,
@@ -298,6 +310,7 @@ impl PluginWidget {
 /// The content of a [`PluginWidget`]. `Row`/`Column` are pure layout containers:
 /// they draw no border and no title, they only split their area.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum PluginWidgetKind {
   Paragraph {
     lines: Vec<PopupLine>,
@@ -334,6 +347,7 @@ pub enum PluginWidgetKind {
 /// serde shape (`{ Track = {...} }`) is hostile to Lua, so queue items are
 /// flattened into an explicit `kind` plus at most one populated payload field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct QueueItemSnapshot {
   /// `"track"` or `"episode"`.
   pub kind: String,
@@ -362,6 +376,7 @@ impl QueueItemSnapshot {
 
 /// The playback queue as exposed to plugins.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct QueueSnapshot {
   #[serde(default)]
   pub currently_playing: Option<QueueItemSnapshot>,
@@ -600,8 +615,7 @@ pub fn playback_state(app: &App) -> Option<PlaybackState> {
 /// Return a list of available devices from [`App`]'s cached device payload.
 pub fn device_list(app: &App) -> Vec<DeviceInfo> {
   app
-    .devices
-    .as_ref()
+    .devices()
     .map(|payload| {
       payload
         .devices
@@ -649,6 +663,7 @@ pub fn route_name(route: &crate::core::app::Route) -> String {
     RouteId::Friends => "friends",
     RouteId::LocalBrowser => "local_browser",
     RouteId::Stats => "stats",
+    RouteId::PlaylistSync => "playlist_sync",
     #[cfg(feature = "ai-dj")]
     RouteId::AiDj => "ai_dj",
     RouteId::PluginScreen(name) => return format!("plugin:{name}"),
@@ -662,13 +677,13 @@ pub fn route_name(route: &crate::core::app::Route) -> String {
 
 /// The user's playlists (full list, folder structure flattened away).
 pub fn playlists_snapshot(app: &App) -> Vec<PlaylistInfo> {
-  app.all_playlists.clone()
+  app.all_playlists().clone()
 }
 
 /// Saved ("liked") tracks fetched so far, in library order.
 pub fn saved_tracks_snapshot(app: &App) -> Vec<TrackInfo> {
   app
-    .library
+    .library()
     .saved_tracks
     .pages
     .iter()
@@ -679,7 +694,7 @@ pub fn saved_tracks_snapshot(app: &App) -> Vec<TrackInfo> {
 /// Saved albums fetched so far, in library order.
 pub fn saved_albums_snapshot(app: &App) -> Vec<SavedAlbumInfo> {
   app
-    .library
+    .library()
     .saved_albums
     .pages
     .iter()
@@ -690,7 +705,7 @@ pub fn saved_albums_snapshot(app: &App) -> Vec<SavedAlbumInfo> {
 /// Saved shows fetched so far, in library order.
 pub fn saved_shows_snapshot(app: &App) -> Vec<ShowInfo> {
   app
-    .library
+    .library()
     .saved_shows
     .pages
     .iter()
@@ -730,31 +745,31 @@ pub fn queue_snapshot(app: &App) -> QueueSnapshot {
 pub fn search_results_snapshot(app: &App) -> SearchResults {
   SearchResults {
     tracks: app
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     albums: app
-      .search_results
+      .search_results()
       .albums
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     artists: app
-      .search_results
+      .search_results()
       .artists
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     playlists: app
-      .search_results
+      .search_results()
       .playlists
       .as_ref()
       .map(|p| p.items.clone())
       .unwrap_or_default(),
     shows: app
-      .search_results
+      .search_results()
       .shows
       .as_ref()
       .map(|p| p.items.clone())
@@ -794,7 +809,7 @@ pub fn lyrics_state_is_current(app: &App) -> bool {
 /// Lyrics for the current track, with the fetch status spelled out.
 pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
   use crate::core::app::LyricsStatus;
-  let status = match app.lyrics_status {
+  let status = match app.lyrics_status() {
     LyricsStatus::NotStarted => "not_started",
     LyricsStatus::Loading => "loading",
     LyricsStatus::Found => "found",
@@ -803,8 +818,7 @@ pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
   LyricsSnapshot {
     status: status.to_string(),
     lines: app
-      .lyrics
-      .as_ref()
+      .lyrics()
       .map(|lines| {
         lines
           .iter()

@@ -1,5 +1,5 @@
 use crate::core::app::{self, ActiveBlock, App, RouteId};
-use crate::core::driver::{DiscordRpcHandle, Driver, MprisHandle, TickEnv};
+use crate::core::driver::{Driver, TickEnv};
 use crate::core::user_config::UserConfig;
 use crate::infra::network::IoEvent;
 use crate::tui::event::{self, Key};
@@ -16,10 +16,11 @@ use crossterm::{
 };
 use log::info;
 use ratatui::backend::Backend;
+use ratatui::DefaultTerminal;
 use std::{
   cmp::{max, min},
   io::stdout,
-  sync::{atomic::AtomicU64, Arc},
+  sync::Arc,
   time::Instant,
 };
 use tokio::sync::Mutex;
@@ -315,56 +316,33 @@ mod tests {
   }
 }
 
-#[cfg(feature = "streaming")]
-async fn pause_native_playback_before_exit(app: &Arc<Mutex<App>>) {
-  let player = {
-    let mut app = app.lock().await;
-    if !app.is_streaming_active {
-      return;
-    }
-
-    let Some(player) = app.streaming_player.clone() else {
-      return;
-    };
-
-    let is_playing = app.native_is_playing.unwrap_or_else(|| {
-      app
-        .current_playback_context
-        .as_ref()
-        .map(|context| context.is_playing)
-        .unwrap_or(false)
-    });
-
-    if !is_playing {
-      return;
-    }
-
-    app.native_is_playing = Some(false);
-    if let Some(context) = app.current_playback_context.as_mut() {
-      context.is_playing = false;
-    }
-
-    player
-  };
-
-  player.pause();
-  tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+/// The terminal state `start_ui` leaves for the exit path; fields drop in the order the old locals did.
+pub struct TerminalSession {
+  _events: event::Events,
+  _terminal: DefaultTerminal,
+  keyboard_enhancement_enabled: bool,
 }
 
+impl TerminalSession {
+  /// Undoes the terminal setup of `start_ui`.
+  pub fn restore(&self, driver: &mut Driver) {
+    if let Some(title) = driver.window_title_reset() {
+      let _ = execute!(stdout(), SetTitle(title));
+    }
+    let _ = execute!(stdout(), DisableMouseCapture);
+    if self.keyboard_enhancement_enabled {
+      let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    }
+    ratatui::restore();
+  }
+}
+
+/// Runs the terminal loop; the returned session keeps the terminal alive until the exit path restores it.
 pub async fn start_ui(
   user_config: UserConfig,
   app: &Arc<Mutex<App>>,
-  shared_position: Option<Arc<AtomicU64>>,
-  mpris_manager: MprisHandle,
-  discord_rpc_manager: DiscordRpcHandle,
-  history_collector: crate::infra::history::HistoryCollectorHandle,
-) -> Result<()> {
-  info!("ui thread initialized");
-  // The driver owns everything the app must do on a timer (see
-  // `core::driver`); this loop's job shrinks to drawing frames, reading
-  // events, and calling `driver.tick` at the configured tick rate.
-  let mut driver = Driver::new(shared_position, mpris_manager, discord_rpc_manager);
-
+  driver: &mut Driver,
+) -> Result<TerminalSession> {
   let mut terminal = ratatui::init();
   // Probe the terminal's image protocol only now that the terminal is set up;
   // `App` construction must not touch stdout.
@@ -444,7 +422,7 @@ pub async fn start_ui(
         && app.user_config.behavior.banner_gradient)
         || current_route.active_block == ActiveBlock::Analysis
         || (current_route.id == RouteId::LyricsView
-          && app.lyrics_status == crate::core::app::LyricsStatus::Found)
+          && app.lyrics_status() == crate::core::app::LyricsStatus::Found)
         || app.view.liked_song_animation_frame.is_some()
         || app.theme_fade_active();
       let current_tick_rate = if animation_active {
@@ -587,83 +565,9 @@ pub async fn start_ui(
     }
   }
 
-  // Capture the exact final position of a non-Spotify session on a graceful
-  // quit (the throttled in-loop save is up to a few seconds stale). Done
-  // synchronously before teardown so the player is still alive to read from.
-  {
-    let session = app.lock().await.current_persisted_session();
-    if let Some(session) = session {
-      if let Ok(path) = crate::core::persisted_playback::default_session_path() {
-        if let Err(e) = crate::core::persisted_playback::save(&path, &session) {
-          log::warn!("[session] failed to persist playback session on exit: {e}");
-        }
-      }
-    }
-  }
-
-  {
-    let mut app = app.lock().await;
-    driver.on_quit(&mut app);
-  }
-
-  // A volume/resize/shuffle change may still be inside its debounce window;
-  // persist it before the process exits.
-  {
-    let mut app = app.lock().await;
-    app.flush_state_save(true);
-  }
-
-  #[cfg(feature = "streaming")]
-  pause_native_playback_before_exit(app).await;
-
-  // Stop the collector and all network work it owns before the final sync and
-  // clear. In particular, a pause-triggered now-playing push must not race the
-  // exit clear and recreate a stale public widget.
-  history_collector.shutdown().await;
-
-  // Restore the terminal before the exit network calls: there is no reason to
-  // hold the alternate screen and raw mode while waiting on HTTP.
-  if let Some(title) = driver.window_title_reset() {
-    let _ = execute!(stdout(), SetTitle(title));
-  }
-  let _ = execute!(stdout(), DisableMouseCapture);
-  if keyboard_enhancement_enabled {
-    let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
-  }
-  ratatui::restore();
-
-  // Sync history to cloud on exit
-  let sync_token_opt = {
-    let app_guard = app.lock().await;
-    app_guard.user_config.behavior.sync_token.clone()
-  };
-
-  if let Some(token) = sync_token_opt {
-    info!("Synchronizing listening history to cloud before exit...");
-    // Keep the clear strictly last after the collector has stopped: now-playing
-    // updates are upserts, so a late push would otherwise recreate a stale
-    // "paused" card on the public widget.
-    //
-    // Each call is bounded separately rather than sharing one budget, so a slow
-    // history upload cannot starve the clear. Without these the shared client
-    // allows a 10s connect plus a 30s request, stalling quit for up to a minute
-    // on a half-open connection.
-    let history_sync = crate::infra::history::sync_history_to_cloud(&token);
-    match tokio::time::timeout(std::time::Duration::from_secs(2), history_sync).await {
-      Ok(Err(e)) => log::warn!("failed to run exit history cloud sync: {}", e),
-      Err(_) => log::warn!("exit history cloud sync timed out; records will sync next run"),
-      Ok(Ok(())) => {}
-    }
-
-    let clear_now_playing = crate::infra::history::clear_now_playing_from_cloud(&token);
-    match tokio::time::timeout(std::time::Duration::from_secs(1), clear_now_playing).await {
-      Ok(Err(e)) => log::warn!("failed to clear now-playing on exit: {}", e),
-      Err(_) => log::warn!("clearing now-playing on exit timed out"),
-      Ok(Ok(())) => {}
-    }
-  }
-
-  driver.clear_presence();
-
-  Ok(())
+  Ok(TerminalSession {
+    _events: events,
+    _terminal: terminal,
+    keyboard_enhancement_enabled,
+  })
 }

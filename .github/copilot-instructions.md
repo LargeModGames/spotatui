@@ -9,7 +9,7 @@ This file is maintained as three near-identical copies: `CLAUDE.md`, `AGENTS.md`
 # Full build (native streaming + audio viz + Lua scripting + OS integrations)
 cargo run
 
-# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's seven legs
+# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's eight legs
 cargo run --no-default-features --features telemetry,tui
 
 # With the alternative sources (Local/Subsonic/Radio/YouTube/Qobuz). These are NOT
@@ -28,7 +28,7 @@ cargo test --no-default-features --features telemetry,tui
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
 (`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` on `ubuntu-latest`
-across a **seven-leg** feature matrix, plus one `macos-latest` job (below):
+across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
 
 | Leg | Features |
 |-----|----------|
@@ -37,8 +37,9 @@ across a **seven-leg** feature matrix, plus one `macos-latest` job (below):
 | `mcp-only` | `telemetry,tui,mcp-server` |
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
-| `headless` | `telemetry` - one of two legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
+| `headless` | `telemetry` - one of three legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
 | `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its two entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
+| `gui` | `telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris` - the third leg without `tui`: the Linux feature set a `spotatui-gui` build carries. `check`, `clippy` and `test` |
 
 - `mcp-only` and `ai-dj-only` matter more than their size suggests: both enable
   `dj-core` **without** `streaming` (a combination nothing else covers), and each
@@ -70,6 +71,9 @@ across a **seven-leg** feature matrix, plus one `macos-latest` job (below):
   `action_refs_in_tui_handlers`) may only rise. `src/gates.rs` pins every value
   exactly, so move the baseline in the same PR that moves the number, in the
   ratchet's direction only.
+- `.github/workflows/gui.yml` gates the `gui/` frontend on every PR: run
+  `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`,
+  `npm test` and `npm run build` in `gui/`; the cargo gate above does not cover it.
 
 ## Run a Single Test
 
@@ -85,18 +89,19 @@ the slim build, check the `N filtered out` count actually says your test ran.
 ## Architecture
 
 One cargo package: a `[lib]` (`src/lib.rs`, private modules, public API =
-`run_cli`) plus two `[[bin]]` shims in `src/bin/` - `spotatui` (console) and
-`spotatui-gui`, a placeholder behind the off-by-default `gui` feature that
-exists to own the crate-root `windows_subsystem` attribute. Five top-level
-units under `src/`:
+`run_cli`, plus `run_gui` under `gui`) plus two `[[bin]]` shims in `src/bin/` -
+`spotatui` (console) and `spotatui-gui`, the browser frontend behind the
+off-by-default `gui` feature, which also owns the crate-root
+`windows_subsystem` attribute. Six top-level units under `src/`:
 
 | Unit | Role |
 |------|------|
 | `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), the shared action vocabulary (`action/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
 | `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
+| `gui/` | Browser frontend (feature `gui`): the loopback page server with its Host/Origin/launch-code checks (`server.rs`), the JSON push protocol over the display revisions (`protocol.rs`), the socket bridge to the tick loop (`bridge.rs`), and the first-launch questions over the socket (`onboarding.rs`, a blocking `Onboarding` that waits for the page); `build.rs` embeds `gui/dist` |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
-| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` its sole caller, plus the boot auth rule `spotify_auth_mode`: interactive only right after the client wizard or `--reconfigure-auth`, a subcommand needs a cached token, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui`) |
+| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` and `run_gui` its callers, plus the boot auth rule `spotify_auth_mode`: interactive only right after the client wizard or `--reconfigure-auth`, a subcommand needs a cached token, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui` or `gui`), `gui.rs::run_gui` (the browser frontend: the loopback server first, boot with the first-launch questions answered in the page, then a tick loop with no terminal), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
 
 ### Data flow
 
@@ -197,7 +202,7 @@ Rules when working in here:
   and `core/app/` (a network or source handler, a script effect, the CLI) that
   resets or clamps a cursor is counted by `view_writes_outside_tui`, which may only
   fall: a producer that replaces a list resets its cursor through an `App` method
-  (`set_track_table`, `clamp_search_cursors`), never by writing `view` itself. A
+  (`set_track_table`, `set_search_results`), never by writing `view` itself. A
   new field goes in `view` only if it is presentation state; a pending operation,
   or anything a second frontend would also need, stays on `App`.
 - `dispatch` pins the global loading spinner; long work with its own progress
@@ -218,9 +223,25 @@ next, previous, shuffle, repeat, volume) end on `dispatch_spotify_fallback`,
 which answers "Nothing is playing" instead of a Spotify dispatch when no
 session exists.
 
-- Starting a decoded source (Local/Subsonic/Qobuz/Radio/YouTube) only **pauses**
-  librespot - the native flag stays true, so driving librespot directly resumes
-  the wrong player.
+- A decoded start (Local/Subsonic/Qobuz/Radio/YouTube) **parks** librespot when
+  spotatui owned the sink (the active Connect device, a Spotify queue slot, a
+  failed backend) and only **pauses** it otherwise (an idle device under a
+  phone, a decoded queue slot over a Spotify context). A paused librespot keeps
+  the native flag true, so driving it directly resumes the wrong player.
+- A park (`App::release_native_for_decoded`, then `App::park_native_backend`)
+  shuts librespot down, removes it from `App` and sets the private
+  `native_parked` marker; the Spotify context and the recovery snapshot stay.
+  A shut-down player never resumes. An explicit Spotify start (unless another
+  device plays the cached playback), a queued Spotify item, Enter on the
+  parked device row, or a bare resume while the parked device held the
+  playback (`App::native_parked_here`) sends a reacquire request
+  (`App::reacquire_parked_backend`), and the recovery loop rebuilds the
+  backend and replays. Without the marker, a start after a park reaches the
+  Web API and the saved-device retry, which can start the phone. The rebuild
+  install refuses a new player while parked under a decoded owner
+  (`App::accept_rebuilt_native_backend`). Any other transport on the parked
+  device answers "Press play to resume Spotify", or "Reconnecting native
+  streaming…" once its rebuild is pending.
 - A decoded start claims the sink (`App::claim_decoded_sink`) before it pauses
   librespot, and `active_decoded_source()` reads the claim: the owner is
   `Decoded` from the first line of the start, through a failed start or a lost
@@ -229,6 +250,25 @@ session exists.
   context) reaches `Network::start_playback`, which releases it. A bare resume
   never releases it, so a media key or Space during a download cannot resume
   librespot.
+- Every hand-over of the sink away from librespot goes through
+  `App::pause_native_playback` (the park calls it too), never a bare
+  `player.pause()`: it clears the native play intent with the pause, so a
+  backend rebuild under the new owner comes back idle instead of restoring
+  Spotify over it. A path that loads librespot again afterwards re-arms the
+  intent (`play_queued_spotify`, `resume_native_shuffle_session`), or the stall
+  watchdog disarms on the false intent and a stalled load never rebuilds.
+- The decoded *queue* path claims the sink as well (`release_librespot`).
+  `resume_or_finish` releases that claim only where no decoded context resumes
+  (nothing suspended, a Spotify context, a lost device). A resumed decoded
+  context keeps it: only `start_*_queue` sets the claim, `play_index` does not.
+- A native entry point asks one of two predicates before it drives librespot.
+  `App::native_should_drive()` is false under a decoded owner and true under a
+  Spotify queue slot, whose track librespot plays.
+  `App::native_context_should_drive()` is also false under any queue slot; it
+  guards the paths that restore or continue the *cached* context (the restore,
+  the end-of-track continuation, the shuffle-session handlers). The recovery
+  rebuild itself is never refused: every sender removes the player before it
+  sends, so a refusal there loses the backend for the process.
 - While the native queue slot owns the sink, `current_playback_context` names the
   *suspended* context's track. Inside `core/app/`, resolve the playing *track*
   through `App::playing_item()` (`core/app/playback_routing.rs`): it answers
@@ -333,8 +373,9 @@ directly, and TUI handlers adopt it as the conversion sub-PRs land
   file has a value for it (an `Unbound` one also goes into the `UNBOUND`
   pin, which a producer scan of `src/tui/` checks). Feature-gate an arm's
   body, never the arm: clippy skips a match when any arm carries a `#[cfg]`.
-- `Action` derives serde (the future frontend wire shape); a payload type
-  added to it must stay serde-derivable.
+- `Action` derives serde (the frontend wire shape); a payload type added to it
+  must stay serde-derivable and carry the `ts_rs::TS` `cfg_attr` line (see
+  Testing conventions), and the change needs regenerated `gui/src/bindings/`.
 
 ### Paginated results
 
@@ -428,7 +469,7 @@ same predicate the row uses, so the two cannot disagree.
 
 ### Config & on-disk files
 
-Five files, five owners - a value that changes as the app runs goes in state,
+Six files, six owners - a value that changes as the app runs goes in state,
 never config:
 
 | File | Owner | Contents |
@@ -437,6 +478,7 @@ never config:
 | `client.yml` (config dir) | `core/config.rs` | Spotify app credentials |
 | `state.yml` (state dir) | `core/state.rs` | machine-written runtime values |
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
+| `playlist_sync.yml` (state dir) | `core/playlist_sync/store.rs` | playlist links + match cache |
 | `qobuz_credentials.yml` (config dir) | `infra/qobuz/auth.rs` | the Qobuz login token (feature `qobuz`) |
 
 - All paths resolve through `core/paths.rs`, never `dirs::` directly.
@@ -461,8 +503,8 @@ never config:
   every shipped binary enables it), the five sources, and the DJ features.
 - `tui` gates `mod tui` and owns the terminal-only crates (ratatui, crossterm,
   tui-bar-graph, colorgrad - the last also pulled by `art-decode` for the
-  adaptive-theme HSV math). `gui` is a reserved placeholder that only gates the
-  `spotatui-gui` bin shim.
+  adaptive-theme HSV math). `gui` gates `mod gui` (the browser frontend's
+  loopback page server, with `httparse`), `run_gui` and the `spotatui-gui` bin shim.
 - Cover art is two features: `art-decode` is the frontend-agnostic decode half
   (`dep:image`, fills `core::art::CoverArtStore`, feeds the adaptive theme;
   never enabled by hand); `cover-art` layers the ratatui-image terminal
@@ -585,8 +627,13 @@ working in those directories.
 ### Testing conventions
 
 - Tests are colocated (`#[cfg(test)] mod tests`) - there is no `tests/` dir. The
-  only dev-dependency is `tempfile`: HTTP tests bind a real `127.0.0.1:0`
+  dev-dependencies are `tempfile` and `ts-rs`: HTTP tests bind a real `127.0.0.1:0`
   listener into an injected base-URL field; UI tests use ratatui's `TestBackend`.
+- `gui/src/bindings/` is generated. `Action`, every type it reaches and the GUI
+  protocol types derive `ts_rs::TS` under `cfg_attr(all(test, feature = "gui"), ...)`;
+  a `gui` test run rewrites the directory. Commit the result: the `gui` test leg
+  fails on any difference. A GUI protocol type never reuses the name of another
+  exported type, and a type's doc comment lands in its binding.
 - `App::new` is `#[cfg(test)]`-only (production uses `App::new_with_state`).
   `App::default()` has no IoEvent channel and `dispatch` silently drops events -
   tests asserting on IoEvents use the house pattern

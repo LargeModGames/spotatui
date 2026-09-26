@@ -315,3 +315,43 @@ here, and `Ctrl-g` reopens that picker. It never touches `dj_api_key` or
 
 Setup, tools, and troubleshooting: [`docs/mcp-setup.md`](mcp-setup.md) and
 [`docs/ai-dj.md`](ai-dj.md).
+
+## Logging
+
+Every run writes a log file to the OS temp directory, one per process id:
+`$TMPDIR/spotatui_logs/spotatuilog<pid>` (`%TEMP%\spotatui_logs\...` on Windows).
+spotatui prints the path when it starts and again when it exits, so you never
+have to guess which file belongs to the run you just had.
+
+Two ways to make it more detailed:
+
+| | Effect |
+| :--- | :--- |
+| `--debug` | Raises spotatui's own modules to `debug` and logs every Spotify Web API request: method, path with query, status, and duration |
+| `SPOTATUI_LOG=<level>` | `error`, `warn`, `info` (default), `debug`, or `trace`. Unparsable values are ignored with a warning |
+
+Both may be given; the more verbose of the two wins. `trace` additionally logs
+API response bodies and turns on librespot's playback logging, which is loud
+enough to be worth reaching for only when a maintainer asks.
+
+Third-party dependencies (reqwest, hyper, rustls, ...) stay at `info`
+regardless, so raising the level does not bury your own logs under TLS and HTTP
+chatter. The embedded librespot crates are the exception: they follow
+spotatui's own level, and the noisy playback one joins only at `trace`.
+
+**What gets redacted.** spotatui never logs request headers, so your access
+token is not in there. Values under keys such as `access_token`,
+`refresh_token`, `password`, and `secret` are replaced in any JSON body it does
+log, and your search terms are blanked out of the logged query string. Request
+bodies appear only once the level is `debug` — through either `--debug` or
+`SPOTATUI_LOG` — never in the warning a failed request writes on its own. That
+list is maintained by hand and cannot be complete: a `debug` log can still
+contain your display name, and a `trace` log can contain your country, because
+Spotify returns it from `GET /v1/me`. Skim the file before you attach it to a
+public issue.
+
+If spotatui panics it writes `spotatui_panic.log` to the state directory
+(`~/.local/state/spotatui/` on Linux) with the panic message, a backtrace, and
+up to the last 200 log lines from the last 64 KiB, and prints that path. That
+single file is usually
+enough for a bug report.

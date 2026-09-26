@@ -16,7 +16,7 @@
 //! Subsonic playback owns a single piece of state, [`App::subsonic_playback`],
 //! and never writes Spotify/librespot fields — the playbar reads progress/pause
 //! live from the player. Only one backend holds the audio device at a time:
-//! starting Subsonic pauses librespot **and** tears down any local session; the
+//! starting Subsonic pauses or parks librespot **and** tears down any local session; the
 //! reciprocal teardown lives in the local and network start paths.
 //!
 //! ## Streaming
@@ -30,7 +30,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
@@ -149,6 +149,17 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
 /// taken from the `SPOTATUI_SUBSONIC_PASSWORD` env var when set. Returns `None`
 /// (after surfacing a status message) when no server URL is configured.
 pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource> {
+  match build_sync_source(app).await {
+    Ok(source) => Some(source),
+    Err(e) => {
+      set_error(app, e.to_string()).await;
+      None
+    }
+  }
+}
+
+/// A source for the playlist sync, with the unconfigured case left to the caller.
+pub(crate) async fn build_sync_source(app: &Arc<Mutex<App>>) -> Result<SubsonicSource> {
   let (url, username, config_password) = {
     let guard = app.lock().await;
     let behavior = &guard.user_config.behavior;
@@ -160,12 +171,9 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource
   };
 
   let Some(url) = url else {
-    set_error(
-      app,
-      "No Subsonic server configured (set behavior.subsonic_url)".to_string(),
-    )
-    .await;
-    return None;
+    return Err(anyhow!(
+      "No Subsonic server configured (set behavior.subsonic_url)"
+    ));
   };
 
   // Env override takes precedence over the plaintext config field.
@@ -174,14 +182,14 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> Option<SubsonicSource
     .or(config_password)
     .unwrap_or_default();
 
-  Some(SubsonicSource::new(
+  Ok(SubsonicSource::new(
     url,
     username.unwrap_or_default(),
     password,
   ))
 }
 
-/// Fetch the user's server playlists into `app.subsonic_playlists`.
+/// Fetch the user's server playlists into `app.subsonic_playlists()`.
 async fn load_subsonic_playlists(app: &Arc<Mutex<App>>) {
   let Some(source) = build_source(app).await else {
     return;
@@ -189,7 +197,7 @@ async fn load_subsonic_playlists(app: &Arc<Mutex<App>>) {
   match source.playlists().await {
     Ok(playlists) => {
       let mut app = app.lock().await;
-      app.subsonic_playlists = playlists;
+      *app.subsonic_playlists_mut() = playlists;
     }
     Err(e) => set_error(app, format!("Cannot load Subsonic playlists: {e}")).await,
   }
@@ -242,14 +250,10 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
 
 /// Release the other backends so only subsonic holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // Pause native Spotify so librespot releases the device.
+  // Take the sink from native Spotify so no rebuild resumes it under this
+  // source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.release_native_for_decoded();
   // The other decoded sources never see this subsonic: start (the pump's
   // `!handled_subsonic` short-circuit), so their sessions are torn down here.
   let players = app
@@ -308,7 +312,7 @@ async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx:
   let tracks = {
     let guard = app.lock().await;
     let search = guard
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.as_slice());
@@ -589,7 +593,7 @@ mod tests {
     let playlist_uri = app
       .lock()
       .await
-      .subsonic_playlists
+      .subsonic_playlists()
       .first()
       .expect("demo has playlists")
       .uri
@@ -670,7 +674,7 @@ mod tests {
     let uris: Vec<String> = app
       .lock()
       .await
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .expect("search populated the songs block")

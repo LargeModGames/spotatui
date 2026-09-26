@@ -425,7 +425,7 @@ impl App {
         SettingItem {
           id: "behavior.enable_global_song_count".to_string(),
           name: "Global Song Counter".to_string(),
-          description: "Contribute to the anonymous worldwide song counter. No personal info, song names, or history are sent; only a simple increment when a new song starts.".to_string(),
+          description: "Contribute to the anonymous worldwide song counter. No personal info, song names, or history are sent; only a simple increment once a song has played for 30 seconds (one per 2.5 minutes of radio).".to_string(),
           value: SettingValue::Bool(self.user_config.behavior.enable_global_song_count),
         },
         #[cfg(feature = "self-update")]

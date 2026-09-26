@@ -8,6 +8,7 @@ use crate::core::plugin_api::{
 use crate::core::requirement::{availability, Availability, Capability, Requirement};
 use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
 use crate::core::source::Source;
+use crate::core::spotify_access::{RestrictedEndpoint, SpotifyKeyTier};
 use crate::core::state::{
   PersistedRuntimeState, RadioStationAddOutcome, RadioStationConfig, RuntimeState,
 };
@@ -21,8 +22,7 @@ use anyhow::anyhow;
 use rspotify::{
   model::enums::Country,
   model::{
-    context::CurrentPlaybackContext, device::DevicePayload, idtypes::PlaylistId, track::FullTrack,
-    PlayableItem,
+    context::CurrentPlaybackContext, device::DevicePayload, idtypes::PlaylistId, PlayableItem,
   },
   prelude::*, // Adds Id trait for .id() method
 };
@@ -61,7 +61,8 @@ use crate::core::test_helpers::{playlist_info, user_info};
 use chrono::Duration as ChronoDuration;
 #[cfg(test)]
 use rspotify::model::{
-  artist::SimplifiedArtist, idtypes::TrackId, page::Page, track::SavedTrack, SimplifiedAlbum,
+  artist::SimplifiedArtist, idtypes::TrackId, page::Page, track::FullTrack, track::SavedTrack,
+  SimplifiedAlbum,
 };
 #[cfg(test)]
 use std::collections::HashMap;
@@ -71,6 +72,7 @@ use std::sync::mpsc::channel;
 mod album_theme;
 mod construction;
 mod discover;
+mod display_revisions;
 mod dj;
 mod friends;
 mod help;
@@ -88,6 +90,7 @@ mod playback_routing;
 pub(crate) use playback_routing::{PlaybackOwner, NOTHING_PLAYING_STATUS};
 mod playlist_folders;
 mod playlist_pages;
+mod playlist_sync;
 mod playlists;
 mod plugins;
 mod queue;
@@ -105,10 +108,12 @@ mod transport;
 mod view;
 mod volume;
 
+mod spotify_session;
 #[cfg(test)]
 mod test_support;
 
 pub use discover::*;
+pub use display_revisions::*;
 pub use friends::*;
 pub use help::*;
 pub use keybindings::*;
@@ -169,7 +174,7 @@ pub struct App {
   /// The next Playing event will see this flag and immediately pause.
   #[allow(dead_code)]
   pub pending_stop_after_track: bool,
-  pub devices: Option<DevicePayload>,
+  devices: Option<DevicePayload>,
   pub queue: Option<QueueState>,
   /// The native cross-source playback queue (FIFO). Unlike [`Self::queue`]
   /// (a read-only mirror of Spotify's Web-API queue), this is owned by the app
@@ -225,7 +230,7 @@ pub struct App {
   /// generation counter that invalidates in-flight background work.
   #[cfg(feature = "dj-core")]
   pub dj: crate::infra::dj::DjState,
-  pub liked_song_ids_set: HashSet<String>,
+  liked_song_ids_set: HashSet<String>,
   /// Liked-state lookups pending for the detached contains worker, as bare
   /// base62 track ids (deduped). The `CurrentUserSavedTracksContains` handler
   /// enqueues here instead of resolving on the serial IoEvent pump.
@@ -236,10 +241,10 @@ pub struct App {
   /// Bumped on every local like/unlike so a detached liked-state read that
   /// started before the mutation is re-read instead of clobbering it.
   pub liked_state_epoch: u64,
-  pub followed_artist_ids_set: HashSet<String>,
-  pub saved_album_ids_set: HashSet<String>,
-  pub saved_show_ids_set: HashSet<String>,
-  pub library: Library,
+  followed_artist_ids_set: HashSet<String>,
+  saved_album_ids_set: HashSet<String>,
+  saved_show_ids_set: HashSet<String>,
+  library: Library,
   pub playlist_offset: u32,
   // Each item carries its absolute playlist position (`page.offset + raw slot
   // index`) alongside the playable. The position is computed in the mapping
@@ -250,13 +255,13 @@ pub struct App {
   pub playlist_track_table_id: Option<PlaylistId<'static>>,
   pub active_playlist_track_filter: Option<String>,
   pub pending_playlist_track_search: Option<String>,
-  pub playlists: Option<Paged<PlaylistInfo>>,
+  playlists: Option<Paged<PlaylistInfo>>,
   /// The Recently Played page. Its cursor is `view.recently_played_index`.
   pub recently_played:
     Option<crate::core::pagination::CursorPaged<crate::core::plugin_api::TrackInfo>>,
   pub recommendations_seed: String,
   pub recommendations_context: Option<RecommendationsContext>,
-  pub search_results: SearchResult,
+  search_results: SearchResult,
   pub selected_album_simplified: Option<SelectedAlbum>,
   pub selected_album_full: Option<SelectedFullAlbum>,
   pub song_progress_ms: u128,
@@ -283,26 +288,26 @@ pub struct App {
   pub episode_table_context: EpisodeTableContext,
   pub selected_show_simplified: Option<SelectedShow>,
   pub selected_show_full: Option<SelectedFullShow>,
-  pub user: Option<UserInfo>,
+  user: Option<UserInfo>,
   /// Folders under the configured music dir that hold audio, shown by the
   /// Local Files browser. Its cursor is `view.local_playlists_index`.
-  pub local_playlists: Vec<PlaylistInfo>,
+  local_playlists: Vec<PlaylistInfo>,
   /// The user's Subsonic server playlists shown by the Subsonic browser.
   /// Populated by `GetSubsonicPlaylists` dispatch.
-  pub subsonic_playlists: Vec<PlaylistInfo>,
+  subsonic_playlists: Vec<PlaylistInfo>,
   /// The Qobuz sidebar rows (favorites, playlists, albums) shown by the Qobuz
   /// browser. Populated by `GetQobuzPlaylists` dispatch.
-  pub qobuz_playlists: Vec<PlaylistInfo>,
+  qobuz_playlists: Vec<PlaylistInfo>,
   /// The user's configured internet-radio stations (as playable rows, uri
   /// `radio:<url>`) shown by the sidebar when the Radio source is active.
   /// Populated by `GetRadioStations` dispatch.
   /// Unconditional (domain type) because the sidebar match arms key on the
   /// unconditional `Source::Radio` variant even in the slim build.
-  pub radio_stations: Vec<TrackInfo>,
+  radio_stations: Vec<TrackInfo>,
   /// The user's local YouTube playlists (from `youtube_playlists.yml`), shown
   /// by the sidebar when the YouTube source is active. Unconditional for the
   /// same slim-build reason as [`radio_stations`](Self::radio_stations).
-  pub youtube_playlists: Vec<PlaylistInfo>,
+  youtube_playlists: Vec<PlaylistInfo>,
   /// The `youtube:playlist:` URI currently open in the shared track table, so
   /// the remove-track flow knows which playlist to edit.
   pub youtube_open_playlist: Option<String>,
@@ -330,14 +335,14 @@ pub struct App {
 
   pub active_announcement: Option<Announcement>,
   pending_announcements: Vec<Announcement>,
-  pub lyrics: Option<Vec<(u128, String)>>,
-  pub lyrics_status: LyricsStatus,
+  lyrics: Option<Vec<(u128, String)>>,
+  lyrics_status: LyricsStatus,
   /// Title/artist pair whose lyrics response is currently desired. Detached
   /// service responses must match this before mutating visible state.
   pub desired_lyrics_identity: Option<(String, String)>,
   /// Whether the current `lyrics` carry real LRC timestamps rather than
   /// synthesized evenly-spaced ones derived from plain lyrics.
-  pub lyrics_synced: bool,
+  lyrics_synced: bool,
   pub global_song_count: Option<u64>,
   pub global_song_count_failed: bool,
   // Settings screen state
@@ -406,9 +411,9 @@ pub struct App {
   /// True when the current status message is an error (blocks normal message overwrites)
   status_message_is_error: bool,
   /// Listening party status
-  pub party_status: PartyStatus,
+  party_status: PartyStatus,
   /// Active listening party session data
-  pub party_session: Option<PartySession>,
+  party_session: Option<PartySession>,
   /// Pending track table selection to apply when new page loads
   pending_track_table_selection: Option<PendingTrackSelection>,
   /// Maps visible track table rows to source playlist item positions.
@@ -419,11 +424,11 @@ pub struct App {
   /// Pending track removal info in remove-from-playlist confirmation flow
   pub pending_playlist_track_removal: Option<PendingPlaylistTrackRemoval>,
   /// Full flat list of all user playlists (all pages combined)
-  pub all_playlists: Vec<PlaylistInfo>,
+  all_playlists: Vec<PlaylistInfo>,
   /// Folder tree from rootlist (None if not fetched or streaming disabled)
-  pub _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
+  _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
   /// Flattened folder+playlist items for display navigation
-  pub playlist_folder_items: Vec<PlaylistFolderItem>,
+  playlist_folder_items: Vec<PlaylistFolderItem>,
   /// Backing storage for the injected community-playlist pin so display methods
   /// can hand out a `&PlaylistFolderItem`. Never stored in
   /// `playlist_folder_items`.
@@ -507,7 +512,7 @@ pub struct App {
   /// (a failed start, a lost output device), cleared when an explicit Spotify
   /// start takes the sink. Covers the window in which every `*_playback` field
   /// is `None` for a source the user asked for.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(test, feature = "audio-decode"))]
   decoded_sink_claim: Option<Source>,
   /// Sender used to recover native streaming when a stale/disconnected player is detected.
   #[cfg(feature = "streaming")]
@@ -524,6 +529,10 @@ pub struct App {
   /// to the full-screen error.
   #[cfg(feature = "streaming")]
   pub native_backend_pending: bool,
+  /// librespot was shut down for another source; the next Spotify start
+  /// rebuilds it.
+  #[cfg(feature = "streaming")]
+  native_parked: bool,
   /// Armed when a native load is issued; a Playing/TrackChanged event disarms
   /// it. If it fires, the session is a zombie (passes `is_connected` but
   /// silently drops Spirc commands) and recovery is forced.
@@ -559,12 +568,32 @@ pub struct App {
   // Create Playlist form state
   pub create_playlist_tracks: Vec<TrackInfo>,
   pub create_playlist_search_results: Vec<TrackInfo>,
+  /// Whether a playlist-sync run owns the single slot right now.
+  playlist_sync_in_flight: bool,
+  /// The links as the last run loaded them, for the sync screen.
+  playlist_sync_links: Vec<crate::core::playlist_sync::Link>,
+  /// The last finished run.
+  playlist_sync_last_report: Option<crate::core::playlist_sync::SyncReport>,
+  /// The playlist the open mirror picker is for.
+  pending_playlist_sync_master: Option<crate::core::playlist_sync::Endpoint>,
+  /// The link id the open remove-link confirm is for.
+  pending_playlist_sync_remove: Option<String>,
   /// Commands queued by keybindings for the scripting engine to run.
   pub pending_plugin_commands: Vec<String>,
   /// Per-domain write counters driving async plugin data reads (see
   /// [`PluginDataKind`]). Ungated: the network layer bumps them in every build;
   /// only the scripting engine reads them.
   pub plugin_data_generations: PluginDataGenerations,
+  display_revisions: DisplayRevisions,
+  /// The playback view the Playback revision last counted: snapshot without position, volume, device, liked.
+  playback_view: (
+    Option<crate::infra::media_metadata::PlaybackSnapshot>,
+    u32,
+    Option<String>,
+    bool,
+  ),
+  /// The queue view the Queue revision last counted: the Spotify mirror, the native queue, the playing slot.
+  queue_view: (Option<QueueState>, Vec<TrackInfo>, Option<TrackInfo>),
   /// Retained content of plugin-registered custom screens, keyed by screen
   /// name. Written by script effects; read by the draw loop.
   pub plugin_screens:
@@ -579,6 +608,9 @@ pub struct App {
   /// Where this run's log file is being written, resolved once here so draw
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,
+  /// The Spotify API tier learned for this client ID; `Full` until an endpoint
+  /// refuses it. Private: read through [`App::spotify_endpoint_blocked`].
+  spotify_key_tier: SpotifyKeyTier,
 }
 
 impl App {
@@ -621,5 +653,11 @@ impl App {
   // Close the IO channel to allow the network thread to exit gracefully
   pub fn close_io_channel(&mut self) {
     self.io_tx = None;
+    // App-side rebuild requests stop here; the install check refuses any
+    // build that a player handler still starts.
+    #[cfg(feature = "streaming")]
+    {
+      self.streaming_recovery_tx = None;
+    }
   }
 }

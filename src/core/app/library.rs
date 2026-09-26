@@ -13,6 +13,7 @@ pub(crate) fn library_row_requirements() -> &'static [(LibraryTarget, Requiremen
     ),
     (LibraryTarget::Friends, Requirement::None),
     (LibraryTarget::Stats, Requirement::None),
+    (LibraryTarget::PlaylistSync, Requirement::None),
     (
       LibraryTarget::LikedSongs,
       Requirement::Source(Source::Spotify),
@@ -28,6 +29,100 @@ pub(crate) fn library_row_requirements() -> &'static [(LibraryTarget, Requiremen
     #[cfg(feature = "ai-dj")]
     (LibraryTarget::AiDj, Requirement::None),
   ]
+}
+
+impl App {
+  // Library display state. Every write goes through a `_mut` accessor, which bumps the Library revision.
+
+  pub(crate) fn library(&self) -> &Library {
+    &self.library
+  }
+
+  pub(crate) fn library_mut(&mut self) -> &mut Library {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.library
+  }
+
+  pub(crate) fn playlists(&self) -> &Option<Paged<PlaylistInfo>> {
+    &self.playlists
+  }
+
+  pub(crate) fn playlists_mut(&mut self) -> &mut Option<Paged<PlaylistInfo>> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.playlists
+  }
+
+  pub(crate) fn all_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.all_playlists
+  }
+
+  pub(crate) fn all_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.all_playlists
+  }
+
+  pub(crate) fn playlist_folder_items(&self) -> &Vec<PlaylistFolderItem> {
+    &self.playlist_folder_items
+  }
+
+  pub(crate) fn playlist_folder_items_mut(&mut self) -> &mut Vec<PlaylistFolderItem> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.playlist_folder_items
+  }
+
+  pub(crate) fn liked_song_ids_set(&self) -> &HashSet<String> {
+    &self.liked_song_ids_set
+  }
+
+  pub(crate) fn liked_song_ids_set_mut(&mut self) -> &mut HashSet<String> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.liked_song_ids_set
+  }
+
+  pub(crate) fn followed_artist_ids_set(&self) -> &HashSet<String> {
+    &self.followed_artist_ids_set
+  }
+
+  pub(crate) fn followed_artist_ids_set_mut(&mut self) -> &mut HashSet<String> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.followed_artist_ids_set
+  }
+
+  pub(crate) fn saved_album_ids_set(&self) -> &HashSet<String> {
+    &self.saved_album_ids_set
+  }
+
+  pub(crate) fn saved_album_ids_set_mut(&mut self) -> &mut HashSet<String> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.saved_album_ids_set
+  }
+
+  pub(crate) fn saved_show_ids_set(&self) -> &HashSet<String> {
+    &self.saved_show_ids_set
+  }
+
+  pub(crate) fn saved_show_ids_set_mut(&mut self) -> &mut HashSet<String> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.saved_show_ids_set
+  }
+
+  pub(crate) fn user(&self) -> &Option<UserInfo> {
+    &self.user
+  }
+
+  pub(crate) fn user_mut(&mut self) -> &mut Option<UserInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.user
+  }
+
+  pub(crate) fn playlist_folder_nodes(&self) -> &Option<Vec<PlaylistFolderNode>> {
+    &self._playlist_folder_nodes
+  }
+
+  pub(crate) fn playlist_folder_nodes_mut(&mut self) -> &mut Option<Vec<PlaylistFolderNode>> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self._playlist_folder_nodes
+  }
 }
 
 impl App {
@@ -111,6 +206,18 @@ pub struct Artist {
   pub artist_selected_block: ArtistBlock,
 }
 
+impl Artist {
+  /// Whether the RelatedArtists block has anything to show.
+  pub fn related_artists_visible(&self) -> bool {
+    !self.related_artists.is_empty()
+  }
+
+  /// Whether the TopTracks block has anything to show
+  pub fn top_tracks_visible(&self) -> bool {
+    !self.top_tracks.is_empty()
+  }
+}
+
 impl App {
   /// Sort the recently-played track list in place per `recently_played_sort`.
   /// `Default` keeps the API's play order (a re-fetch restores it).
@@ -186,7 +293,7 @@ impl App {
     let sort_state = self.album_sort;
 
     // Sort library.saved_albums pages
-    for page in &mut self.library.saved_albums.pages {
+    for page in &mut self.library_mut().saved_albums.pages {
       match sort_state.field {
         SortField::Name => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
           a.album.name.to_lowercase()
@@ -215,7 +322,7 @@ impl App {
     }
 
     // Sort library.saved_artists pages
-    for page in &mut self.library.saved_artists.pages {
+    for page in &mut self.library_mut().saved_artists.pages {
       sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.name.to_lowercase());
     }
 
@@ -223,6 +330,7 @@ impl App {
     sort_by_key_with_order(&mut self.artists, sort_state.order, |a| {
       a.name.to_lowercase()
     });
+    self.display_revisions.bump(DisplayDomain::Artist);
   }
 
   pub(crate) fn reload_stats(&mut self) {
@@ -267,7 +375,7 @@ impl App {
       }
     }
 
-    self.library.saved_tracks.index = active_index;
+    self.library_mut().saved_tracks.index = active_index;
     self.replace_track_table_tracks(tracks);
     self.track_table.context = Some(TrackTableContext::SavedTracks);
   }
@@ -275,7 +383,7 @@ impl App {
   pub fn reset_saved_tracks_view(&mut self) {
     self.saved_tracks_prefetch_generation = self.saved_tracks_prefetch_generation.wrapping_add(1);
     self.saved_tracks_prefetch_in_flight.clear();
-    self.library.saved_tracks.clear();
+    self.library_mut().saved_tracks.clear();
     self.pending_track_table_selection = None;
     self.view.track_table_index = 0;
     self.track_table.tracks.clear();
@@ -311,6 +419,9 @@ impl App {
       LibraryTarget::Stats => {
         self.reload_stats();
         self.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
+      }
+      LibraryTarget::PlaylistSync => {
+        self.push_navigation_stack(RouteId::PlaylistSync, ActiveBlock::PlaylistSync);
       }
       LibraryTarget::LikedSongs => {
         self.reset_saved_tracks_view();
@@ -376,6 +487,7 @@ impl App {
 
   pub fn set_saved_artists_to_table(&mut self, saved_artists_page: &CursorPaged<ArtistInfo>) {
     self.artists = saved_artists_page.items.clone();
+    self.display_revisions.bump(DisplayDomain::Artist);
   }
 
   pub fn get_current_user_saved_artists_next(&mut self) {
@@ -387,7 +499,7 @@ impl App {
     {
       Some(saved_artists) => {
         self.set_saved_artists_to_table(&saved_artists);
-        self.library.saved_artists.index += 1
+        self.library_mut().saved_artists.index += 1
       }
       None => {
         if let Some(saved_artists) = &self.library.saved_artists.clone().get_results(None) {
@@ -403,7 +515,7 @@ impl App {
 
   pub fn get_current_user_saved_artists_previous(&mut self) {
     if self.library.saved_artists.index > 0 {
-      self.library.saved_artists.index -= 1;
+      self.library_mut().saved_artists.index -= 1;
     }
 
     if let Some(saved_artists) = &self.library.saved_artists.get_results(None).cloned() {
@@ -432,25 +544,46 @@ impl App {
   }
 
   pub fn get_current_user_saved_albums_next(&mut self) {
-    match self
+    let Some(current) = self.library.saved_albums.get_results(None) else {
+      return;
+    };
+    if !current.has_next() {
+      return;
+    }
+    let next_offset = current.offset + current.limit;
+    if self
       .library
       .saved_albums
       .get_results(Some(self.library.saved_albums.index + 1))
-      .cloned()
+      .is_some()
     {
-      Some(_) => self.library.saved_albums.index += 1,
-      None => {
-        if let Some(saved_albums) = &self.library.saved_albums.get_results(None) {
-          let offset = Some(saved_albums.offset + saved_albums.limit);
-          self.dispatch(IoEvent::GetCurrentUserSavedAlbums(offset));
-        }
+      self.library_mut().saved_albums.index += 1;
+    } else {
+      self.dispatch(IoEvent::GetCurrentUserSavedAlbums(Some(next_offset)));
+    }
+    // Back to the top row, where the next page opens.
+    self.view.album_list_index = 0;
+  }
+
+  /// Show a fetched saved-albums page; one whose offset is already cached replaces that copy.
+  pub(crate) fn store_saved_albums_page(&mut self, page: Paged<SavedAlbumInfo>) {
+    let albums = &mut self.library_mut().saved_albums;
+    match albums
+      .pages
+      .iter()
+      .position(|cached| cached.offset == page.offset)
+    {
+      Some(slot) => {
+        albums.pages[slot] = page;
+        albums.index = slot;
       }
+      None => albums.add_pages(page),
     }
   }
 
   pub fn get_current_user_saved_albums_previous(&mut self) {
     if self.library.saved_albums.index > 0 {
-      self.library.saved_albums.index -= 1;
+      self.library_mut().saved_albums.index -= 1;
     }
   }
 
@@ -485,6 +618,7 @@ impl App {
       selected_index: 0,
     });
     self.album_table_context = AlbumTableContext::Full;
+    self.display_revisions.bump(DisplayDomain::Artist);
     self.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
   }
 
@@ -512,7 +646,7 @@ impl App {
       .get_results(Some(self.library.saved_shows.index + 1))
       .cloned()
     {
-      Some(_) => self.library.saved_shows.index += 1,
+      Some(_) => self.library_mut().saved_shows.index += 1,
       None => {
         if let Some(saved_shows) = &self.library.saved_shows.get_results(None) {
           let offset = Some(saved_shows.offset + saved_shows.limit);
@@ -524,7 +658,7 @@ impl App {
 
   pub fn get_current_user_saved_shows_previous(&mut self) {
     if self.library.saved_shows.index > 0 {
-      self.library.saved_shows.index -= 1;
+      self.library_mut().saved_shows.index -= 1;
     }
   }
 
@@ -539,7 +673,7 @@ impl App {
       .get_results(Some(self.library.show_episodes.index + 1))
       .cloned()
     {
-      Some(_) => self.library.show_episodes.index += 1,
+      Some(_) => self.library_mut().show_episodes.index += 1,
       None => {
         if let Some(show_episodes) = &self.library.show_episodes.get_results(None) {
           let offset = Some(show_episodes.offset + show_episodes.limit);
@@ -551,7 +685,7 @@ impl App {
 
   pub fn get_episode_table_previous(&mut self) {
     if self.library.show_episodes.index > 0 {
-      self.library.show_episodes.index -= 1;
+      self.library_mut().show_episodes.index -= 1;
     }
   }
 
@@ -782,5 +916,106 @@ mod tests {
       }
       _ => panic!("expected playlist sort fetch"),
     }
+  }
+
+  fn saved_album_page(offset: u32, ids: &[&str], has_next: bool) -> Paged<SavedAlbumInfo> {
+    Paged {
+      items: ids
+        .iter()
+        .map(|id| SavedAlbumInfo {
+          album: crate::core::plugin_api::AlbumInfo {
+            id: Some(id.to_string()),
+            ..Default::default()
+          },
+          added_at: String::new(),
+        })
+        .collect(),
+      offset,
+      limit: ids.len() as u32,
+      total: 6,
+      next: has_next.then(|| "https://example.com/me/albums?next".to_string()),
+      previous: None,
+    }
+  }
+
+  #[test]
+  fn saved_albums_next_fetches_the_following_offset_and_resets_the_cursor() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetCurrentUserSavedAlbums(Some(2)))
+    ));
+    assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn saved_albums_next_on_the_final_page_fetches_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], false));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.view.album_list_index, 1);
+    assert_eq!(app.library.saved_albums.index, 0);
+  }
+
+  #[test]
+  fn saved_albums_next_flips_to_a_cached_page_without_fetching() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(0, &["a1", "a2"], true));
+    app
+      .library
+      .saved_albums
+      .upsert_page_by_offset(saved_album_page(2, &["a3", "a4"], true));
+    app.view.album_list_index = 1;
+
+    app.get_current_user_saved_albums_next();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.library.saved_albums.index, 1);
+    assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn a_saved_albums_page_fetched_again_replaces_its_cached_copy() {
+    let mut app = App::default();
+    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true));
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
+
+    // Reopening Albums fetches the first page again.
+    app.store_saved_albums_page(saved_album_page(0, &["b1", "b2"], true));
+
+    let albums = &app.library.saved_albums;
+    assert_eq!(albums.pages.len(), 2);
+    assert_eq!(albums.index, 0);
+    assert_eq!(albums.pages[0].items[0].album.id.as_deref(), Some("b1"));
+
+    // The next page is still one step forward, not stuck behind a duplicate.
+    app.get_current_user_saved_albums_next();
+    assert_eq!(app.library.saved_albums.index, 1);
+
+    // A second response for the same offset does not append a copy.
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
+    assert_eq!(app.library.saved_albums.pages.len(), 2);
+    assert_eq!(app.library.saved_albums.index, 1);
   }
 }

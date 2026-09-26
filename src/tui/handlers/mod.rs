@@ -29,6 +29,7 @@ mod mouse;
 mod party;
 mod playbar;
 mod playlist;
+mod playlist_sync;
 mod plugin_screen;
 mod podcasts;
 mod queue_menu;
@@ -570,6 +571,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Stats => {
       stats::handler(key, app);
     }
+    ActiveBlock::PlaylistSync => {
+      playlist_sync::handler(key, app);
+    }
     #[cfg(feature = "ai-dj")]
     ActiveBlock::AiDj => {
       ai_dj::handler(key, app);
@@ -698,6 +702,45 @@ mod tests {
     app
   }
 
+  fn seed_desk_speaker(app: &mut App) {
+    app.set_devices(DevicePayload {
+      devices: vec![Device {
+        id: Some("device-1".to_string()),
+        is_active: false,
+        is_private_session: false,
+        is_restricted: false,
+        name: "Desk Speaker".to_string(),
+        _type: DeviceType::Computer,
+        volume_percent: Some(42),
+      }],
+    });
+    app.view.selected_device_index = Some(0);
+    app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+  }
+
+  #[test]
+  fn keys_on_the_playlist_sync_block_reach_its_handler() {
+    use crate::core::playlist_sync::{Endpoint, Link};
+    let mut app = App::default_connected();
+    app.set_playlist_sync_links(vec![Link {
+      id: "aaaaaaaaaaaa".to_string(),
+      master: Endpoint {
+        source: crate::core::source::Source::Spotify,
+        playlist_uri: "spotify:playlist:1".to_string(),
+        name: "Road Trip".to_string(),
+      },
+      mirrors: Vec::new(),
+    }]);
+    app.push_navigation_stack(RouteId::PlaylistSync, ActiveBlock::PlaylistSync);
+
+    handle_block_events(Key::Char('D'), &mut app);
+
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(crate::core::app::DialogContext::RemovePlaylistSyncLinkConfirm)
+    );
+  }
+
   #[test]
   fn search_key_on_the_error_page_dismisses_the_error_first() {
     let mut app = App::default_connected();
@@ -772,19 +815,7 @@ mod tests {
   fn enter_on_device_selector_dispatches_transfer_and_exits() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.devices = Some(DevicePayload {
-      devices: vec![Device {
-        id: Some("device-1".to_string()),
-        is_active: false,
-        is_private_session: false,
-        is_restricted: false,
-        name: "Desk Speaker".to_string(),
-        _type: DeviceType::Computer,
-        volume_percent: Some(42),
-      }],
-    });
-    app.view.selected_device_index = Some(0);
-    app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+    seed_desk_speaker(&mut app);
 
     handle_app(Key::Enter, &mut app);
 
@@ -803,6 +834,19 @@ mod tests {
       app.status_message(),
       Some("Switching playback to Desk Speaker")
     );
+  }
+
+  #[test]
+  fn enter_on_device_selector_under_a_decoded_owner_refuses_the_transfer() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    seed_desk_speaker(&mut app);
+    app.claim_decoded_sink(crate::core::source::Source::YouTube);
+
+    handle_app(Key::Enter, &mut app);
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some("Another source owns playback"));
   }
 
   #[test]
@@ -1067,23 +1111,26 @@ mod tests {
       config_file_path: dir.path().join("config.yml"),
     });
     app.state_path = Some(dir.path().join("state.yml"));
-    app.search_results.tracks = Some(Paged {
-      items: vec![TrackInfo {
-        uri: Some("radio:https://example.com/stream".to_string()),
-        name: "Example FM".to_string(),
-        artists: vec![],
-        album: String::new(),
-        duration_ms: 0,
-        id: None,
-        album_id: None,
-        artist_refs: vec![],
-        is_playable: true,
-        is_local: false,
-        track_number: 0,
-        explicit: false,
-        image_url: None,
-      }],
-      total: 1,
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(Paged {
+        items: vec![TrackInfo {
+          uri: Some("radio:https://example.com/stream".to_string()),
+          name: "Example FM".to_string(),
+          artists: vec![],
+          album: String::new(),
+          duration_ms: 0,
+          id: None,
+          album_id: None,
+          artist_refs: vec![],
+          is_playable: true,
+          is_local: false,
+          track_number: 0,
+          explicit: false,
+          image_url: None,
+        }],
+        total: 1,
+        ..Default::default()
+      }),
       ..Default::default()
     });
     app.view.search_selected_tracks_index = Some(0);

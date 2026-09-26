@@ -26,10 +26,10 @@ pub fn handler(key: Key, app: &mut App) {
 /// Scroll the browsed line by `delta`, entering manual mode from the
 /// currently playing line when auto-follow was active.
 pub(super) fn scroll_by(app: &mut App, delta: i64) {
-  if app.lyrics_status != LyricsStatus::Found {
+  if app.lyrics_status() != LyricsStatus::Found {
     return;
   }
-  let Some(lyrics) = &app.lyrics else {
+  let Some(lyrics) = app.lyrics() else {
     return;
   };
   if lyrics.is_empty() {
@@ -48,17 +48,17 @@ pub(super) fn scroll_by(app: &mut App, delta: i64) {
 /// Shift lyric timing relative to playback, for correcting misaligned LRC
 /// files. Positive delta shows lyrics earlier.
 fn nudge_timing(app: &mut App, delta_ms: i64) {
-  if app.lyrics_status != LyricsStatus::Found {
+  if app.lyrics_status() != LyricsStatus::Found {
     return;
   }
   app.view.lyrics_view.timing_offset_ms += delta_ms;
 }
 
 fn jump_to(app: &mut App, index: usize) {
-  if app.lyrics_status != LyricsStatus::Found {
+  if app.lyrics_status() != LyricsStatus::Found {
     return;
   }
-  let Some(lyrics) = &app.lyrics else {
+  let Some(lyrics) = app.lyrics() else {
     return;
   };
   if lyrics.is_empty() {

@@ -47,6 +47,60 @@ pub enum CreatePlaylistFocus {
 }
 
 impl App {
+  // The per-source sidebar lists, part of the Library display state.
+
+  pub(crate) fn local_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.local_playlists
+  }
+
+  #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
+  pub(crate) fn local_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.local_playlists
+  }
+
+  pub(crate) fn subsonic_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.subsonic_playlists
+  }
+
+  #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
+  pub(crate) fn subsonic_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.subsonic_playlists
+  }
+
+  pub(crate) fn qobuz_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.qobuz_playlists
+  }
+
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  pub(crate) fn qobuz_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.qobuz_playlists
+  }
+
+  pub(crate) fn radio_stations(&self) -> &Vec<TrackInfo> {
+    &self.radio_stations
+  }
+
+  #[cfg_attr(not(feature = "internet-radio"), allow(dead_code))]
+  pub(crate) fn radio_stations_mut(&mut self) -> &mut Vec<TrackInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.radio_stations
+  }
+
+  pub(crate) fn youtube_playlists(&self) -> &Vec<PlaylistInfo> {
+    &self.youtube_playlists
+  }
+
+  #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
+  pub(crate) fn youtube_playlists_mut(&mut self) -> &mut Vec<PlaylistInfo> {
+    self.display_revisions.bump(DisplayDomain::Library);
+    &mut self.youtube_playlists
+  }
+}
+
+impl App {
   pub fn clear_playlist_track_dialog_state(&mut self) {
     self.pending_playlist_track_add = None;
     self.pending_playlist_track_removal = None;
@@ -58,6 +112,9 @@ impl App {
     self.view.dialog = None;
     self.view.confirm = false;
     self.pending_keybinding_persist = None;
+    self.pending_playlist_sync_master = None;
+    self.pending_playlist_sync_remove = None;
+    self.view.playlist_sync_picker_index = 0;
     self.clear_playlist_track_dialog_state();
   }
 
@@ -399,6 +456,33 @@ impl App {
       .all_playlists
       .get(index)
       .and_then(|playlist| playlist.id.clone())
+  }
+
+  /// The highlighted sidebar playlist as a sync endpoint, for the active source.
+  pub fn selected_sidebar_playlist_endpoint(&self) -> Option<crate::core::playlist_sync::Endpoint> {
+    let index = self.view.selected_playlist_index?;
+    let playlist = match self.active_source {
+      Source::Spotify => {
+        let display_index = index.checked_sub(1)?;
+        match self.get_playlist_display_item_at(display_index)? {
+          PlaylistFolderItem::Playlist { index, .. } => self.all_playlists.get(*index)?,
+          PlaylistFolderItem::Folder(_) | PlaylistFolderItem::CommunityPin => return None,
+        }
+      }
+      // The Qobuz sidebar also lists the favorites row and favorite albums.
+      Source::Qobuz => self
+        .qobuz_playlists
+        .get(index)
+        .filter(|playlist| playlist.uri.starts_with("qobuz:playlist:"))?,
+      Source::Subsonic => self.subsonic_playlists.get(index)?,
+      Source::YouTube => self.youtube_playlists.get(index)?,
+      Source::Local | Source::Radio => return None,
+    };
+    Some(crate::core::playlist_sync::Endpoint {
+      source: self.active_source,
+      playlist_uri: playlist.uri.clone(),
+      name: playlist.name.clone(),
+    })
   }
 
   /// The highlighted search-result playlist's Spotify id.

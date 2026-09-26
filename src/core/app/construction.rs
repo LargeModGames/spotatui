@@ -172,7 +172,7 @@ impl Default for App {
       radio_playback: None,
       #[cfg(feature = "youtube")]
       youtube_playback: None,
-      #[cfg(feature = "audio-decode")]
+      #[cfg(any(test, feature = "audio-decode"))]
       decoded_sink_claim: None,
       #[cfg(feature = "streaming")]
       streaming_recovery_tx: None,
@@ -180,6 +180,8 @@ impl Default for App {
       pending_start_playback: None,
       #[cfg(feature = "streaming")]
       native_backend_pending: false,
+      #[cfg(feature = "streaming")]
+      native_parked: false,
       #[cfg(feature = "streaming")]
       native_load_watchdog: None,
       #[cfg(feature = "streaming")]
@@ -209,13 +211,22 @@ impl Default for App {
       last_friends_refresh_at: Instant::now(),
       create_playlist_tracks: Vec::new(),
       create_playlist_search_results: Vec::new(),
+      playlist_sync_in_flight: false,
+      playlist_sync_links: Vec::new(),
+      playlist_sync_last_report: None,
+      pending_playlist_sync_master: None,
+      pending_playlist_sync_remove: None,
       pending_plugin_commands: Vec::new(),
       plugin_data_generations: PluginDataGenerations::default(),
+      display_revisions: DisplayRevisions::default(),
+      playback_view: (None, 0, None, false),
+      queue_view: Default::default(),
       plugin_screens: std::collections::BTreeMap::new(),
       pending_plugin_screen_keys: Vec::new(),
       plugin_playbar_segments: std::collections::BTreeMap::new(),
       plugin_popup: None,
       log_path: crate::core::paths::app_log_path().display().to_string(),
+      spotify_key_tier: SpotifyKeyTier::default(),
     }
   }
 }
@@ -238,11 +249,24 @@ impl App {
     self
   }
 
+  /// This app with sidebar playlist row `index` highlighted, for tests.
+  #[cfg(test)]
+  pub(crate) fn with_sidebar_playlist(mut self, index: usize) -> App {
+    self.view.selected_playlist_index = Some(index);
+    self
+  }
+
   /// This app with a Spotify playback context, for tests.
   #[cfg(all(test, feature = "tui"))]
   pub(crate) fn with_playback(mut self, context: CurrentPlaybackContext) -> App {
     self.current_playback_context = Some(context);
     self
+  }
+
+  /// Mark the native backend parked with no player, for tests.
+  #[cfg(all(test, feature = "streaming"))]
+  pub(crate) fn seed_native_parked(&mut self) {
+    self.native_parked = true;
   }
 
   #[cfg(test)]
@@ -257,6 +281,7 @@ impl App {
       RuntimeState::default(),
       None,
       spotify_token_expiry,
+      SpotifyKeyTier::default(),
     )
   }
 
@@ -266,6 +291,7 @@ impl App {
     runtime_state: RuntimeState,
     state_path: Option<PathBuf>,
     spotify_token_expiry: Option<SystemTime>,
+    spotify_key_tier: SpotifyKeyTier,
   ) -> App {
     // Read the persisted active source before moving runtime_state into the struct,
     // so the restored value overrides the Source::default() set by App::default().
@@ -333,6 +359,7 @@ impl App {
       album_sort,
       artist_sort,
       recently_played_sort,
+      spotify_key_tier,
       #[cfg(feature = "ai-dj")]
       dj: crate::infra::dj::DjState {
         avoid_library: dj_avoid_library,

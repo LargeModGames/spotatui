@@ -74,6 +74,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 - **Synced lyrics.** Line-by-line lyrics that follow playback.
 - **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
 - **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
+- **[Playlist sync](docs/playlist-sync.md).** Link one playlist as the master and mirror it onto Spotify, Qobuz, Subsonic or YouTube. Runs at startup and from `spotatui sync`.
 - **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
 - **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
 - **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
@@ -315,7 +316,7 @@ You can also override the app ID via `SPOTATUI_DISCORD_APP_ID`, or disable it in
 
 ### Anonymous Song Counter
 
-spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment when a new song starts. It is enabled by default and can be disabled with `enable_global_song_count: false` in `config.yml`. This is purely a fun community metric with zero tracking of individual users.
+spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment once a song has played for 30 seconds, from any source (Spotify, local files, Subsonic, Qobuz or YouTube). Internet radio counts one song for every 2.5 minutes of listening. It is enabled by default and can be disabled with `enable_global_song_count: false` in `config.yml`. This is purely a fun community metric with zero tracking of individual users.
 
 ### GitHub Profile Widget
 
@@ -471,6 +472,27 @@ You might get a linking error. If so, you'll probably need to install additional
 sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
+## Reporting a Bug
+
+Run the thing that broke again with `--debug`, then attach the log file:
+
+```bash
+spotatui --debug
+```
+
+spotatui prints the log path on startup and on exit — it lives in your temp
+directory as `spotatui_logs/spotatuilog<pid>`. With `--debug` it records every
+Spotify Web API request (method, path, status, duration), which is what turns
+"it doesn't play" into something diagnosable.
+
+If it crashed instead, `spotatui_panic.log` in the state directory already has
+the panic, a backtrace, and the tail of the log in one file.
+
+Tokens and headers are never written to the log, and known secret fields are
+redacted — but a log can still contain your display name, and a `trace` log
+your country. Have a quick look before posting it publicly. See
+[`docs/configuration.md`](docs/configuration.md#logging) for the details.
+
 ## Help Wanted
 
 **spotatui is currently maintained by a solo developer.** More contributors would be hugely appreciated — and **you don't need to write code to help**:
@@ -541,6 +563,14 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/DinoLeung"><img src="https://avatars.githubusercontent.com/u/7704357?v=4?s=100" width="100px;" alt="Dino Leung"/><br /><sub><b>Dino Leung</b></sub></a><br /><a href="#platform-DinoLeung" title="Packaging/porting to new platform">📦</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/istipisti113"><img src="https://avatars.githubusercontent.com/u/42544437?v=4?s=100" width="100px;" alt="Szabó István"/><br /><sub><b>Szabó István</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=istipisti113" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://alessandrozanni.it/"><img src="https://avatars.githubusercontent.com/u/78210329?v=4?s=100" width="100px;" alt="Alessandro Zanni"/><br /><sub><b>Alessandro Zanni</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=alessandro-zanni" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/nohint404"><img src="https://avatars.githubusercontent.com/u/238106931?v=4?s=100" width="100px;" alt="nohint404"/><br /><sub><b>nohint404</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=nohint404" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TongTong0828"><img src="https://avatars.githubusercontent.com/u/151875930?v=4?s=100" width="100px;" alt="TongTong0828"/><br /><sub><b>TongTong0828</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=TongTong0828" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Hi-1mYara"><img src="https://avatars.githubusercontent.com/u/254750611?v=4?s=100" width="100px;" alt="Hi-1mYara"/><br /><sub><b>Hi-1mYara</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Hi-1mYara" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/commits?author=Hi-1mYara" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Oud-Idk"><img src="https://avatars.githubusercontent.com/u/80905197?v=4?s=100" width="100px;" alt="Oud"/><br /><sub><b>Oud</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Oud-Idk" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://salty-nebula-7f4.notion.site/Yvoolab-3c6f362dc885816bae88f25d128e85cd"><img src="https://avatars.githubusercontent.com/u/202315522?v=4?s=100" width="100px;" alt="Yvoo"/><br /><sub><b>Yvoo</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=yvoolab" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/mschmicking"><img src="https://avatars.githubusercontent.com/u/17197791?v=4?s=100" width="100px;" alt="Maurice Schmicking"/><br /><sub><b>Maurice Schmicking</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=mschmicking" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

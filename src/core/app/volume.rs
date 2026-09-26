@@ -7,6 +7,10 @@ impl App {
       self.set_status_message(NOTHING_PLAYING_STATUS, 4);
       return;
     }
+    if self.native_parked_here() {
+      self.refuse_parked_gesture();
+      return;
+    }
     self.pending_volume = Some(volume);
     if !self.is_volume_change_in_flight {
       self.is_volume_change_in_flight = true;
@@ -233,6 +237,20 @@ impl App {
 #[cfg(test)]
 mod tests {
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_volume_change_on_the_parked_device_sends_no_web_api_volume() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+
+    app.increase_volume();
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.pending_volume.is_none());
+    app.native_backend_pending = true;
+    app.increase_volume();
+    assert_eq!(app.status_message(), Some("Reconnecting native streaming…"));
+  }
 
   // Regression for transport-4: with no Spotify device volume and no pending
   // volume (the state while a decoded source plays, and the whole slim build),

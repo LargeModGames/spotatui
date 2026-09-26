@@ -19,6 +19,8 @@ use crate::core::app::{App, PlaybackOwner, SPOTIFY_NOT_CONNECTED_STATUS};
 use crate::core::auth;
 use crate::core::config::{ClientConfig, NCSPOT_CLIENT_ID};
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
+use crate::core::source::Source;
+use crate::core::spotify_access::RestrictedEndpoint;
 use crate::infra::redirect_uri::{bind_callback_listener, serve_spotify_callback};
 use anyhow::anyhow;
 use rspotify::model::{
@@ -33,7 +35,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-
 // Re-export traits
 use self::library::LibraryNetwork;
 use self::metadata::MetadataNetwork;
@@ -292,6 +293,15 @@ pub enum IoEvent {
   /// Remove a video (bare id or `youtube:` URI) from a local YouTube playlist.
   #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
   RemoveTrackFromYouTubePlaylist(String, String),
+  /// Run the configured playlist-sync links on a detached task.
+  RunPlaylistSync {
+    /// Search again for tracks the last run found no candidate for.
+    retry_unmatched: bool,
+  },
+  /// Create a mirror of the first endpoint's playlist on the source, link it and sync it.
+  LinkPlaylist(crate::core::playlist_sync::Endpoint, Source),
+  /// Forget one playlist-sync link by id; the mirror playlists stay.
+  RemovePlaylistSyncLink(String),
   /// Start an in-TUI Spotify OAuth login: open the browser and spawn the callback
   /// server. Dispatched from the `d` source picker when Spotify is unconfigured.
   /// Runs without a Spotify session (bypasses the auth gate).
@@ -398,6 +408,12 @@ pub struct Network {
   /// The `Retry-After` window every Spotify call checks: the shared gate in
   /// production, a private one in tests.
   rate_gate: requests::ForcedRefreshGate,
+  /// Session-scoped reuse for the external-playlist fallback path (Development
+  /// Mode 403s): confirmed-external classifications and resolved librespot
+  /// playlist contents, shared by foreground fetch, background prefetch,
+  /// sort, and search so each playlist pays classification plus one proto
+  /// download instead of one per page.
+  pub(crate) external_playlist_fallbacks: library::ExternalPlaylistFallbackCache,
   /// Spotify-bound events held back while that window is open. Only the pump
   /// sets `defers_rate_limited`; the CLI has no pump to block and waits inline.
   deferred: Vec<Deferred>,
@@ -446,6 +462,7 @@ impl Network {
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
       rate_gate: requests::shared_forced_refresh_gate().clone(),
+      external_playlist_fallbacks: library::external_playlist_fallback_cache(),
       deferred: Vec::new(),
       defers_rate_limited: false,
     }
@@ -473,6 +490,7 @@ impl Network {
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
       rate_gate: requests::shared_forced_refresh_gate().clone(),
+      external_playlist_fallbacks: library::external_playlist_fallback_cache(),
       deferred: Vec::new(),
       defers_rate_limited: false,
     }
@@ -568,6 +586,9 @@ impl Network {
         | IoEvent::DeleteYouTubePlaylist(_)
         | IoEvent::AddTrackToYouTubePlaylist(..)
         | IoEvent::RemoveTrackFromYouTubePlaylist(..)
+        | IoEvent::RunPlaylistSync { .. }
+        | IoEvent::LinkPlaylist(..)
+        | IoEvent::RemovePlaylistSyncLink(_)
     )
   }
 
@@ -1095,11 +1116,32 @@ impl Network {
       | IoEvent::DeleteYouTubePlaylist(_)
       | IoEvent::AddTrackToYouTubePlaylist(..)
       | IoEvent::RemoveTrackFromYouTubePlaylist(..) => {}
+      IoEvent::RunPlaylistSync { retry_unmatched } => {
+        crate::infra::playlist_sync::spawn_run(
+          self.spotify.clone(),
+          self.token_cache_path.clone(),
+          Arc::clone(&self.app),
+          retry_unmatched,
+        );
+      }
+      IoEvent::LinkPlaylist(master, mirror) => {
+        crate::infra::playlist_sync::spawn_link(
+          self.spotify.clone(),
+          self.token_cache_path.clone(),
+          Arc::clone(&self.app),
+          master,
+          mirror,
+        );
+      }
+      IoEvent::RemovePlaylistSyncLink(id) => {
+        crate::infra::playlist_sync::spawn_remove_link(Arc::clone(&self.app), id);
+      }
     };
 
     {
       let mut app = self.app.lock().await;
       app.is_loading = false;
+      app.note_display_changes();
     }
   }
 
@@ -1226,6 +1268,52 @@ impl Network {
         app.set_status_message(format!("Failed to generate recap: {}", error), 5);
       }
     }
+  }
+
+  /// Record that `endpoint` refused the key in use, and persist the new tier.
+  /// The caller passes the endpoint that refused, so a refusal outside the
+  /// restricted table never reaches this.
+  async fn raise_spotify_key_tier(&self, endpoint: RestrictedEndpoint) {
+    let client_id = self
+      .spotify
+      .as_ref()
+      .map(|spotify| spotify.creds.id.clone());
+    self
+      .app
+      .lock()
+      .await
+      .raise_spotify_key_tier(endpoint, client_id.as_deref());
+  }
+
+  /// [`Self::raise_spotify_key_tier`] plus the status line saying why the
+  /// feature is not there. One entry point for both halves of a refusal.
+  async fn raise_and_remind_unavailable(&self, feature_name: &str, endpoint: RestrictedEndpoint) {
+    self.raise_spotify_key_tier(endpoint).await;
+    self
+      .show_status_message(
+        format!("{feature_name}: {}", endpoint.unavailable_note()),
+        5,
+      )
+      .await;
+  }
+
+  /// [`Self::raise_and_remind_unavailable`] as a pre-check: `true` when the
+  /// funnel would refuse `endpoint`, so the caller returns instead of starting
+  /// the work. Same state and message as a refusal caught after the fact.
+  async fn endpoint_is_out_of_reach(
+    &self,
+    feature_name: &str,
+    endpoint: RestrictedEndpoint,
+  ) -> bool {
+    // A `let`, not an `if` condition: the guard must be dropped before
+    // `raise_and_remind_unavailable` takes the same lock.
+    let blocked = self.app.lock().await.spotify_endpoint_blocked(endpoint);
+    if blocked {
+      self
+        .raise_and_remind_unavailable(feature_name, endpoint)
+        .await;
+    }
+    blocked
   }
 
   async fn show_status_message(&self, message: String, ttl_secs: u64) {
@@ -1451,7 +1539,7 @@ impl Network {
     }
     {
       let mut app = self.app.lock().await;
-      app.party_status = sync::PartyStatus::Connecting;
+      app.set_party_status(sync::PartyStatus::Connecting);
     }
 
     let relay_url = {
@@ -1472,18 +1560,18 @@ impl Network {
         self.party_incoming_rx = Some(incoming_rx);
 
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Hosting;
-        app.party_session = Some(sync::PartySession {
+        app.set_party_status(sync::PartyStatus::Hosting);
+        app.set_party_session(Some(sync::PartySession {
           role: sync::PartyRole::Host,
           code: String::new(),
           guests: Vec::new(),
           control_mode,
           host_name: "Host".to_string(),
-        });
+        }));
       }
       Err(e) => {
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Disconnected;
+        app.set_party_status(sync::PartyStatus::Disconnected);
         app.handle_error(anyhow!("Failed to start party: {}", e));
       }
     }
@@ -1499,7 +1587,7 @@ impl Network {
     }
     {
       let mut app = self.app.lock().await;
-      app.party_status = sync::PartyStatus::Connecting;
+      app.set_party_status(sync::PartyStatus::Connecting);
     }
 
     let relay_url = {
@@ -1515,18 +1603,18 @@ impl Network {
         self.party_incoming_rx = Some(incoming_rx);
 
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Joined;
-        app.party_session = Some(sync::PartySession {
+        app.set_party_status(sync::PartyStatus::Joined);
+        app.set_party_session(Some(sync::PartySession {
           role: sync::PartyRole::Guest,
           code: code.to_uppercase(),
           guests: Vec::new(),
           control_mode: sync::ControlMode::default(),
           host_name: String::new(),
-        });
+        }));
       }
       Err(e) => {
         let mut app = self.app.lock().await;
-        app.party_status = sync::PartyStatus::Disconnected;
+        app.set_party_status(sync::PartyStatus::Disconnected);
         app.handle_error(anyhow!("Failed to join party: {}", e));
       }
     }
@@ -1540,14 +1628,14 @@ impl Network {
     self.party_incoming_rx = None;
 
     let mut app = self.app.lock().await;
-    app.party_status = sync::PartyStatus::Disconnected;
-    app.party_session = None;
+    app.set_party_status(sync::PartyStatus::Disconnected);
+    app.set_party_session(None);
   }
 
   async fn sync_playback(&mut self) {
     let sync_state = {
       let app = self.app.lock().await;
-      let session = match &app.party_session {
+      let session = match app.party_session() {
         Some(s) if s.role == sync::PartyRole::Host => s,
         _ => return,
       };
@@ -1643,19 +1731,19 @@ impl Network {
       match msg {
         sync::SyncMessage::RoomCreated { code, .. } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             session.code = code;
           }
         }
         sync::SyncMessage::JoinedRoom { host_name } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             session.host_name = host_name;
           }
         }
         sync::SyncMessage::GuestJoined { name } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             if !session.guests.contains(&name) {
               session.guests.push(name.clone());
             }
@@ -1664,7 +1752,7 @@ impl Network {
         }
         sync::SyncMessage::GuestLeft { name } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             if let Some(pos) = session.guests.iter().position(|g| g == &name) {
               session.guests.remove(pos);
             }
@@ -1673,7 +1761,7 @@ impl Network {
         }
         sync::SyncMessage::SetControlMode { control_mode } => {
           let mut app = self.app.lock().await;
-          if let Some(session) = &mut app.party_session {
+          if let Some(session) = app.party_session_mut() {
             session.control_mode = match control_mode.as_str() {
               "shared_control" => sync::ControlMode::SharedControl,
               _ => sync::ControlMode::HostOnly,
@@ -1689,16 +1777,16 @@ impl Network {
         sync::SyncMessage::RoomClosed => {
           self.party_connection = None;
           let mut app = self.app.lock().await;
-          app.party_status = sync::PartyStatus::Disconnected;
-          app.party_session = None;
+          app.set_party_status(sync::PartyStatus::Disconnected);
+          app.set_party_session(None);
           app.set_status_message("Party ended".to_string(), 5);
         }
         sync::SyncMessage::Error { message } => {
           self.party_connection = None;
           self.party_incoming_rx = None;
           let mut app = self.app.lock().await;
-          app.party_status = sync::PartyStatus::Disconnected;
-          app.party_session = None;
+          app.set_party_status(sync::PartyStatus::Disconnected);
+          app.set_party_session(None);
           app.handle_error(anyhow!("Party: {}", message));
         }
         _ => {}
@@ -1731,7 +1819,7 @@ impl Network {
     };
     let mut app = self.app.lock().await;
     let follows_host = matches!(
-      &app.party_session,
+      app.party_session(),
       Some(s) if s.role == sync::PartyRole::Guest
     ) && !party_yields_to_local_playback(&app);
     if !follows_host {
@@ -1801,7 +1889,7 @@ impl Network {
   async fn handle_incoming_playback_command(&mut self, action: sync::PlaybackAction) {
     let mut app = self.app.lock().await;
     let relays = matches!(
-      &app.party_session,
+      app.party_session(),
       Some(s) if s.role == sync::PartyRole::Host
     ) && !party_yields_to_local_playback(&app);
     if !relays {
@@ -1835,12 +1923,10 @@ impl Network {
 
 /// The party follows Spotify transport only. Coarser than the transport
 /// guard on purpose: a queued Spotify track keeps librespot, but a guest must
-/// not drive the host's queue slot.
+/// not drive the host's queue slot. A parked native backend has no Spotify
+/// playback to relay or follow.
 fn party_yields_to_local_playback(app: &App) -> bool {
-  matches!(
-    app.playback_owner(),
-    PlaybackOwner::Decoded | PlaybackOwner::Queue
-  )
+  app.playback_owner().owns_local_sink() || app.native_parked_here()
 }
 
 #[cfg(test)]
@@ -1963,6 +2049,32 @@ mod tests {
     for event in [IoEvent::AdvanceNativeQueue, IoEvent::FinishNativeQueue] {
       assert!(!Network::runs_on_service_lane(&event));
       assert!(!Network::event_bypasses_spotify_auth(&event));
+    }
+  }
+
+  #[test]
+  fn the_playlist_sync_events_bypass_auth_and_are_neither_service_lane_nor_transport() {
+    let master = crate::core::playlist_sync::Endpoint {
+      source: Source::Spotify,
+      playlist_uri: "spotify:playlist:1".to_string(),
+      name: "Road Trip".to_string(),
+    };
+    for event in [
+      IoEvent::RunPlaylistSync {
+        retry_unmatched: true,
+      },
+      IoEvent::LinkPlaylist(master, Source::Qobuz),
+      IoEvent::RemovePlaylistSyncLink("aaa".to_string()),
+    ] {
+      assert!(Network::event_bypasses_spotify_auth(&event));
+      assert!(
+        !Network::runs_on_service_lane(&event),
+        "the service lane builds its `Network` with no Spotify client to hand the run"
+      );
+      assert!(
+        !Network::event_is_transport(&event),
+        "a sync drives no sink, so it is never deferred or replayed"
+      );
     }
   }
 
@@ -2197,7 +2309,7 @@ mod tests {
     assert!(network.party_connection.is_none());
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
-    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
+    assert_eq!(*app.party_status(), sync::PartyStatus::Disconnected);
     assert_eq!(app.status_message(), Some(SPOTIFY_NOT_CONNECTED_STATUS));
   }
 
@@ -2213,7 +2325,7 @@ mod tests {
     assert!(network.party_connection.is_none());
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
-    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
+    assert_eq!(*app.party_status(), sync::PartyStatus::Disconnected);
     assert_eq!(app.status_message(), Some(SPOTIFY_NOT_CONNECTED_STATUS));
   }
 
@@ -2225,16 +2337,16 @@ mod tests {
     network.party_incoming_rx = Some(rx);
     {
       let mut app = app.lock().await;
-      app.party_status = sync::PartyStatus::Hosting;
-      app.party_session = Some(party_session(sync::PartyRole::Host));
+      app.set_party_status(sync::PartyStatus::Hosting);
+      app.set_party_session(Some(party_session(sync::PartyRole::Host)));
     }
 
     network.process_party_messages().await;
 
     assert!(network.party_incoming_rx.is_none());
     let app = app.lock().await;
-    assert_eq!(app.party_status, sync::PartyStatus::Disconnected);
-    assert!(app.party_session.is_none());
+    assert_eq!(*app.party_status(), sync::PartyStatus::Disconnected);
+    assert!(app.party_session().is_none());
   }
 
   fn party_session(role: sync::PartyRole) -> sync::PartySession {
@@ -2260,7 +2372,10 @@ mod tests {
       Credentials::default(),
       OAuth::default(),
     ));
-    app.lock().await.party_session = Some(party_session(role));
+    app
+      .lock()
+      .await
+      .set_party_session(Some(party_session(role)));
     network
   }
 
@@ -2377,7 +2492,7 @@ mod tests {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::SyncPlayback)));
     assert!(rx.try_recv().is_err());
 
-    app.lock().await.party_session.as_mut().unwrap().role = sync::PartyRole::Guest;
+    app.lock().await.party_session_mut().unwrap().role = sync::PartyRole::Guest;
     let mut state = host_state();
     if let sync::SyncMessage::SyncState {
       position_ms,
@@ -2421,8 +2536,38 @@ mod tests {
     relay(&mut network, host_state()).await;
     assert!(rx.try_recv().is_err());
 
-    app.lock().await.party_session.as_mut().unwrap().role = sync::PartyRole::Host;
+    app.lock().await.party_session_mut().unwrap().role = sync::PartyRole::Host;
     relay(&mut network, guest_pause()).await;
     assert!(rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn a_relayed_guest_join_bumps_the_party_revision() {
+    use crate::core::app::DisplayDomain;
+    let (app, _rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Host).await;
+    let before = app
+      .lock()
+      .await
+      .display_revisions()
+      .get(DisplayDomain::Party);
+
+    relay(
+      &mut network,
+      sync::SyncMessage::GuestJoined {
+        name: "Guest".to_string(),
+      },
+    )
+    .await;
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.party_session().map(|s| s.guests.clone()),
+      Some(vec!["Guest".to_string()])
+    );
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Party),
+      before + 1
+    );
   }
 }

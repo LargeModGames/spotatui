@@ -17,8 +17,8 @@
 //! ## Device ownership
 //!
 //! Only one backend holds the audio output device at a time (required on
-//! exclusive-ALSA setups, harmless elsewhere). Starting local playback pauses
-//! native Spotify (librespot releases the device when its sink stops); starting
+//! exclusive-ALSA setups, harmless elsewhere). Starting local playback pauses or
+//! parks native Spotify (librespot releases the device when its sink stops); starting
 //! Spotify tears the local session down (dropping it releases the device).
 //!
 //! ## Publish-once
@@ -262,14 +262,10 @@ async fn start_local_queue(app: &Arc<Mutex<App>>, queue: Vec<String>, start_idx:
 
   app.lock().await.claim_decoded_sink(Source::Local);
 
-  // Pause native Spotify so librespot releases the output device.
+  // Take the sink from native Spotify so no rebuild resumes it under this
+  // source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.release_native_for_decoded();
 
   // The other decoded sources never see this file:// start (the pump's
   // `!handled_locally` short-circuit), so their sessions are torn down here.
@@ -546,7 +542,7 @@ async fn music_root(app: &Arc<Mutex<App>>) -> Option<String> {
   root
 }
 
-/// Scan the music root's folders into `app.local_playlists`.
+/// Scan the music root's folders into `app.local_playlists()`.
 ///
 /// `LocalSource`'s methods are async but do blocking filesystem I/O, so they run
 /// on the blocking pool (via `block_on`) rather than stalling the executor.
@@ -561,7 +557,7 @@ async fn load_local_playlists(app: &Arc<Mutex<App>>) {
   match result {
     Ok(Ok(playlists)) => {
       let mut app = app.lock().await;
-      app.local_playlists = playlists;
+      *app.local_playlists_mut() = playlists;
       app.view.local_playlists_index = 0;
     }
     Ok(Err(e)) => set_error(app, format!("Cannot scan music folder: {e}")).await,

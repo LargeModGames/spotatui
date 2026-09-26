@@ -1,8 +1,7 @@
 //! The frontend-neutral bootstrap: logging, the panic hook, the ALSA error
 //! silencer, config/state loading with migrations, Spotify authentication,
-//! and `App` construction. `boot()` is the one entry point; `run_cli()` is
-//! its only caller today, and a future windowed entry point boots through
-//! the same sequence.
+//! and `App` construction. `boot()` is the one entry point; `run_cli()` and
+//! `run_gui()` call it.
 
 use crate::core::app::App;
 use crate::core::auth;
@@ -19,7 +18,6 @@ use crate::core::user_config::{
 use crate::infra::network::IoEvent;
 use anyhow::{Context, Result};
 use backtrace::Backtrace;
-use clap::ArgMatches;
 use log::info;
 #[cfg(feature = "streaming")]
 use rspotify::model::user::PrivateUser;
@@ -68,7 +66,10 @@ pub(super) fn init_audio_backend() {
 #[cfg(not(all(target_os = "linux", feature = "streaming")))]
 pub(super) fn init_audio_backend() {}
 
-pub(super) fn setup_logging() -> anyhow::Result<()> {
+pub(super) fn setup_logging(
+  resolved_level: log::LevelFilter,
+  target_levels: &[(&'static str, log::LevelFilter)],
+) -> anyhow::Result<()> {
   let log_dir = crate::core::paths::app_log_dir();
   let log_path = crate::core::paths::app_log_path();
 
@@ -82,8 +83,14 @@ pub(super) fn setup_logging() -> anyhow::Result<()> {
       e
     )
   })?;
-  // define format of log messages.
-  fern::Dispatch::new()
+  // The global level never goes above `Info`: dependencies (reqwest, hyper,
+  // rustls, h2, ...) are deliberately never pinned individually with
+  // `level_for`, so the global default is what keeps them quiet at
+  // `--debug`/`SPOTATUI_LOG=trace` without a pin list that has to be kept in
+  // sync as dependencies change. Below `Info` (e.g. `SPOTATUI_LOG=warn`) the
+  // requested level applies globally instead, since nothing needs raising.
+  let global_level = resolved_level.min(log::LevelFilter::Info);
+  let mut dispatch = fern::Dispatch::new()
     .format(|out, message, record| {
       out.finish(format_args!(
         "{}[{}][{}] {}",
@@ -93,7 +100,11 @@ pub(super) fn setup_logging() -> anyhow::Result<()> {
         message
       ))
     })
-    .level(log::LevelFilter::Info)
+    .level(global_level);
+  for &(target, level) in target_levels {
+    dispatch = dispatch.level_for(target, level);
+  }
+  dispatch
     .chain(fern::log_file(&log_path)?) // Use the dynamic path
     .apply()
     .map_err(|e| anyhow::anyhow!("Failed to initialize logger: {}", e))?;
@@ -147,8 +158,24 @@ pub(super) fn install_panic_hook() {
         let _ = writeln!(f, "\n==== spotatui panic ====");
         let _ = writeln!(f, "{}", info);
         let _ = writeln!(f, "{:?}", Backtrace::new());
+        // Only the tail (at most the last 64 KiB / 200 lines) is read, never
+        // the whole file: the running log can be megabytes by the time a
+        // panic happens. `read_log_tail` never panics (every fallible step
+        // returns `None`), which matters here — a panic inside a panic hook
+        // aborts the process with no message at all.
+        let log_tail =
+          super::logging::read_log_tail(&crate::core::paths::app_log_path(), 64 * 1024, 200);
+        if let Some(tail) = log_tail {
+          if !tail.is_empty() {
+            let _ = writeln!(f, "\n==== log tail (up to the last 200 lines) ====");
+            let _ = writeln!(f, "{tail}");
+          }
+        }
       }
-      eprintln!("A crash log was written to: {}", path.to_string_lossy());
+      eprintln!(
+        "A crash log was written to: {} (rerun with --debug for a much more detailed log)",
+        path.to_string_lossy()
+      );
     }
     default_hook(info);
 
@@ -299,25 +326,59 @@ enum SpotifyAuthMode {
 
 /// Interactive only right after the client wizard (fresh install,
 /// `--reconfigure-auth`, or the auth-setup migration): the user just asked for
-/// Spotify. A subcommand needs a session; a UI launch never blocks on a browser.
+/// Spotify. Most subcommands need a session; `sync` and a UI launch do not.
 fn spotify_auth_mode(
-  subcommand: bool,
+  subcommand: Option<&str>,
   reconfigure_auth: bool,
   wizard_ran: bool,
 ) -> SpotifyAuthMode {
   if reconfigure_auth || wizard_ran {
     SpotifyAuthMode::Interactive
-  } else if subcommand {
-    SpotifyAuthMode::CachedOrFail
   } else {
-    SpotifyAuthMode::CachedOrNone
+    match subcommand {
+      Some("sync") | None => SpotifyAuthMode::CachedOrNone,
+      Some(_) => SpotifyAuthMode::CachedOrFail,
+    }
+  }
+}
+
+/// Whether this launch forgets the key tier a `403`/`404` saved: whenever the
+/// auth wizard ran, the one gesture that means "ask Spotify again".
+fn forgets_saved_spotify_key_tier(reconfigure_auth: bool, wizard_ran: bool) -> bool {
+  reconfigure_auth || wizard_ran
+}
+
+const TIER_RESET_NOTICE: &str =
+  "Cleared the saved Spotify API restrictions; your app is asked again from scratch.\n";
+
+/// Forget the key tier a refusal saved: the map `App` is built from, and the
+/// saved entry that would bring it back next launch. A still-refused endpoint
+/// is simply learned again.
+fn clear_saved_spotify_key_tier(
+  runtime_state: &mut RuntimeState,
+  state_path: Option<&Path>,
+  onboarding: &dyn Onboarding,
+) {
+  if runtime_state.client_key_tiers.is_empty() {
+    return;
+  }
+  runtime_state.client_key_tiers.clear();
+  onboarding.info(TIER_RESET_NOTICE);
+
+  match state_path {
+    Some(path) => {
+      if let Err(e) = crate::core::state::save_clearing_client_key_tiers(path) {
+        log::warn!("[state] failed to clear the saved Spotify key tier: {e:#}");
+      }
+    }
+    None => log::warn!("[state] no runtime state path; the cleared Spotify key tier was not saved"),
   }
 }
 
 fn global_song_counter_prompt() -> OnboardingPrompt {
   OnboardingPrompt::Confirm {
     title: "Global Song Counter".to_string(),
-    body: "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment when a new song starts".to_string(),
+    body: "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds".to_string(),
     question: "\nWould you like to participate? (Y/n): ".to_string(),
   }
 }
@@ -451,16 +512,29 @@ pub(super) struct Boot {
   pub(super) selected_redirect_uri: String,
 }
 
+/// The launch inputs `boot` reads, built from the command line by `cli::boot_options`.
+pub(super) struct BootOptions {
+  pub(super) config_path: Option<PathBuf>,
+  pub(super) tick_rate: Option<u64>,
+  pub(super) subcommand: Option<String>,
+  pub(super) reconfigure_auth: bool,
+  pub(super) play_file: Option<String>,
+  pub(super) no_update: bool,
+}
+
 /// The shared bootstrap sequence: user config, runtime state, the persisted
 /// playback session, client credentials, Spotify authentication (joined with
 /// the auto-update check), and `App` construction. Frontend-neutral: every
 /// interactive step goes through `onboarding`.
-pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) -> Result<Boot> {
+pub(super) async fn boot(
+  options: BootOptions,
+  onboarding: Arc<dyn Onboarding>,
+  instance_lock: &mut Option<std::fs::File>,
+) -> Result<Boot> {
   // Auto-update on launch: silently check, download, install, and restart.
   // Skip if a CLI subcommand is active or SPOTATUI_SKIP_UPDATE is set (prevents restart loops).
   let mut user_config = UserConfig::new();
-  if let Some(config_file_path) = matches.get_one::<String>("config") {
-    let config_file_path = PathBuf::from(config_file_path);
+  if let Some(config_file_path) = options.config_path {
     let path = UserConfigPaths { config_file_path };
     user_config.path_to_config.replace(path);
   }
@@ -565,17 +639,14 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     None => (None, Vec::new()),
   };
 
-  if let Some(tick_rate) = matches
-    .get_one::<String>("tick-rate")
-    .and_then(|tick_rate| tick_rate.parse().ok())
-  {
+  if let Some(tick_rate) = options.tick_rate {
     user_config.behavior.tick_rate_milliseconds =
       validate_tick_rate_milliseconds(tick_rate, "Tick rate")?;
   }
 
   // Global song counter opt-in (interactive TUI only). Asked before the source
   // picker so the choice applies no matter which source(s) the user sets up.
-  if matches.subcommand_name().is_none() {
+  if options.subcommand.is_none() {
     prompt_global_song_count_opt_in(&mut user_config, onboarding.as_ref())?;
   }
 
@@ -584,7 +655,7 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
   // source and skip Spotify entirely. Must run before `load_config`, which would
   // otherwise launch the Spotify-only auth wizard on a fresh install. Skipped for
   // CLI subcommands (Spotify-only) and when `--reconfigure-auth` is requested.
-  if matches.subcommand_name().is_none() && !matches.get_flag("reconfigure-auth") {
+  if options.subcommand.is_none() && !options.reconfigure_auth {
     crate::core::first_run::run_first_run_picker(
       &mut user_config,
       &mut runtime_state,
@@ -596,13 +667,13 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
   let mut wizard_ran = client_config.load_config(onboarding.as_ref())?;
   info!("client authentication config loaded");
 
-  let reconfigure_auth = matches.get_flag("reconfigure-auth");
+  let reconfigure_auth = options.reconfigure_auth;
 
   if reconfigure_auth {
     onboarding.info("\nReconfiguring client authentication...");
     client_config.reconfigure_auth(onboarding.as_ref())?;
     onboarding.info("Client authentication setup updated.\n");
-  } else if matches.subcommand_name().is_none() && client_config.needs_auth_setup_migration() {
+  } else if options.subcommand.is_none() && client_config.needs_auth_setup_migration() {
     if ask_auth_setup_migration(onboarding.as_ref())? {
       client_config.reconfigure_auth(onboarding.as_ref())?;
       wizard_ran = true;
@@ -615,11 +686,17 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 
   let config_paths = client_config.get_or_build_paths()?;
 
-  let auth_mode = spotify_auth_mode(
-    matches.subcommand_name().is_some(),
-    reconfigure_auth,
-    wizard_ran,
-  );
+  // Before `App` reads the tier below: the wizard running is the one moment a
+  // saved refusal is worth forgetting.
+  if forgets_saved_spotify_key_tier(reconfigure_auth, wizard_ran) {
+    clear_saved_spotify_key_tier(
+      &mut runtime_state,
+      state_path.as_deref(),
+      onboarding.as_ref(),
+    );
+  }
+
+  let auth_mode = spotify_auth_mode(options.subcommand.as_deref(), reconfigure_auth, wizard_ran);
 
   // The GitHub update check runs concurrently with authentication: both are
   // network round trips and neither depends on the other, so the check no
@@ -647,13 +724,16 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
         ),
       }
     },
-    super::cli::run_auto_update(matches, &user_config)
+    super::cli::run_auto_update(
+      options.subcommand.is_some() || options.no_update,
+      &user_config
+    )
   );
 
   // Only now that authentication has released the OAuth callback port and the
   // terminal. Runs before the `?` below so a broken auth state is still allowed
   // to restart into the newer build, which may be what fixes it.
-  super::cli::restart_after_update(installed_update)?;
+  super::cli::restart_after_update(installed_update, instance_lock)?;
 
   let authenticated: Option<auth::AuthenticatedClient> = authenticated?;
 
@@ -703,6 +783,12 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     None => (None, None),
   };
 
+  let current_client_id = spotify
+    .as_ref()
+    .map(|client| client.creds.id.as_str())
+    .unwrap_or(client_config.client_id.as_str());
+  let spotify_key_tier = runtime_state.spotify_key_tier_for(current_client_id);
+
   let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
   info!("app state initialized");
 
@@ -713,12 +799,13 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
     runtime_state.clone(),
     state_path.clone(),
     token_expiry,
+    spotify_key_tier,
   )));
 
   // `--play-file <PATH>`: queue a local file to start once the UI is up. The
   // path is canonicalised to an absolute `file://` URI so the local-files
   // dispatch can route it; an unreadable path is reported as a status message.
-  if let Some(path) = matches.get_one::<String>("play-file") {
+  if let Some(path) = options.play_file.as_deref() {
     match std::fs::canonicalize(path).ok().and_then(|abs| {
       url::Url::from_file_path(abs)
         .ok()
@@ -759,13 +846,14 @@ pub(super) async fn boot(matches: &ArgMatches, onboarding: Arc<dyn Onboarding>) 
 mod tests {
   use super::{
     apply_configured_runtime_defaults, ask_auth_setup_migration, auth_setup_migration_prompt,
-    describe_client_id_notice, global_song_counter_prompt, persist_global_song_count,
-    prompt_global_song_count_opt_in, should_prompt_global_song_count, spotify_auth_mode,
-    SpotifyAuthMode,
+    clear_saved_spotify_key_tier, describe_client_id_notice, forgets_saved_spotify_key_tier,
+    global_song_counter_prompt, persist_global_song_count, prompt_global_song_count_opt_in,
+    should_prompt_global_song_count, spotify_auth_mode, SpotifyAuthMode, TIER_RESET_NOTICE,
   };
   use crate::core::auth;
   use crate::core::limits::MAX_PLAYBAR_ROWS;
   use crate::core::onboarding::OnboardingPrompt;
+  use crate::core::spotify_access::SpotifyKeyTier;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
   use crate::core::test_helpers::ScriptedOnboarding;
   use crate::core::user_config::UserConfig;
@@ -856,7 +944,7 @@ mod tests {
     assert_eq!(title, "Global Song Counter");
     assert_eq!(
       body,
-      "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment when a new song starts"
+      "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds"
     );
     assert_eq!(question, "\nWould you like to participate? (Y/n): ");
 
@@ -1002,20 +1090,84 @@ mod tests {
   #[test]
   fn the_boot_auth_mode_follows_the_wizard_and_the_subcommand() {
     let cases = [
-      (false, true, false, SpotifyAuthMode::Interactive),
-      (true, true, false, SpotifyAuthMode::Interactive),
-      (false, false, true, SpotifyAuthMode::Interactive),
-      (true, false, true, SpotifyAuthMode::Interactive),
-      (true, false, false, SpotifyAuthMode::CachedOrFail),
-      (false, false, false, SpotifyAuthMode::CachedOrNone),
+      (None, true, false, SpotifyAuthMode::Interactive),
+      (Some("play"), true, false, SpotifyAuthMode::Interactive),
+      (None, false, true, SpotifyAuthMode::Interactive),
+      (Some("play"), false, true, SpotifyAuthMode::Interactive),
+      (Some("play"), false, false, SpotifyAuthMode::CachedOrFail),
+      (Some("sync"), false, false, SpotifyAuthMode::CachedOrNone),
+      (None, false, false, SpotifyAuthMode::CachedOrNone),
     ];
 
     for (subcommand, reconfigure_auth, wizard_ran, expected) in cases {
       assert_eq!(
         spotify_auth_mode(subcommand, reconfigure_auth, wizard_ran),
         expected,
-        "subcommand={subcommand} reconfigure_auth={reconfigure_auth} wizard_ran={wizard_ran}"
+        "subcommand={subcommand:?} reconfigure_auth={reconfigure_auth} wizard_ran={wizard_ran}"
       );
     }
+  }
+
+  #[test]
+  fn a_re_auth_is_the_only_thing_that_forgets_a_saved_key_tier() {
+    assert!(forgets_saved_spotify_key_tier(true, false));
+    assert!(forgets_saved_spotify_key_tier(false, true));
+    assert!(forgets_saved_spotify_key_tier(true, true));
+
+    // A plain launch, a subcommand, a declined migration.
+    assert!(!forgets_saved_spotify_key_tier(false, false));
+  }
+
+  #[test]
+  fn re_authentication_forgets_a_tier_saved_from_an_earlier_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let client_id = "0123456789abcdef0123456789abcdef";
+    crate::core::state::save(
+      &path,
+      &PersistedRuntimeState {
+        client_key_tiers: Some(std::collections::BTreeMap::from([(
+          client_id.to_string(),
+          SpotifyKeyTier::Restricted2026,
+        )])),
+        ..PersistedRuntimeState::default()
+      },
+    )
+    .unwrap();
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&crate::core::state::load(&path).unwrap());
+    assert_eq!(
+      runtime.spotify_key_tier_for(client_id),
+      SpotifyKeyTier::Restricted2026
+    );
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    clear_saved_spotify_key_tier(&mut runtime, Some(&path), &onboarding);
+
+    assert_eq!(
+      runtime.spotify_key_tier_for(client_id),
+      SpotifyKeyTier::Full
+    );
+    assert_eq!(
+      crate::core::state::load(&path).unwrap().client_key_tiers,
+      None
+    );
+    assert!(onboarding.saw(TIER_RESET_NOTICE));
+  }
+
+  #[test]
+  fn re_authentication_says_nothing_when_no_tier_was_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let mut runtime = RuntimeState::default();
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    clear_saved_spotify_key_tier(&mut runtime, Some(&path), &onboarding);
+
+    assert!(
+      !path.exists(),
+      "a launch with no saved tier must not write a state file"
+    );
+    assert!(!onboarding.saw(TIER_RESET_NOTICE));
   }
 }

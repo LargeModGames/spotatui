@@ -9,4 +9,6 @@ records which variants have none). Snapshot changes must be additive
 (`#[serde(default)]`, new keys only) - removing/renaming a key breaks
 installed plugins and requires bumping
 `API_VERSION` and updating `docs/scripting.md`. Validation lives in
-`scripting/api.rs`; a failing callback is disabled on one strike.
+`scripting/api.rs`; a failing callback is disabled on one strike. A change to
+a snapshot type that `Action` or the GUI protocol carries also changes
+`gui/src/bindings/`: regenerate it with a `gui` test run.

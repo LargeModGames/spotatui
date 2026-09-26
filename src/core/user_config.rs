@@ -270,56 +270,53 @@ fn parse_key(key: String) -> Result<Key> {
     }
   }
 
-  match key.len() {
-    1 => match key.chars().next() {
-      Some(c) => Ok(Key::Char(c)),
-      None => Err(anyhow!("The key binding is empty")),
-    },
-    _ => {
-      let sections: Vec<&str> = key.split('-').collect();
+  let mut chars = key.chars();
+  if let (Some(c), None) = (chars.next(), chars.next()) {
+    return Ok(Key::Char(c));
+  }
 
-      if sections.len() > 2 {
-        return Err(anyhow!(
-          "Shortcut can only have 2 keys, \"{}\" has {}",
-          key,
-          sections.len()
-        ));
-      }
+  let sections: Vec<&str> = key.split('-').collect();
 
-      match sections[0].to_lowercase().as_str() {
-        "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
-        "alt" => Ok(Key::Alt(modifier_char(&key, &sections)?)),
-        "left" => Ok(Key::Left),
-        "right" => Ok(Key::Right),
-        "up" => Ok(Key::Up),
-        "down" => Ok(Key::Down),
-        "backspace" | "delete" => Ok(Key::Backspace),
-        "del" => Ok(Key::Delete),
-        "esc" | "escape" => Ok(Key::Esc),
-        "pageup" => Ok(Key::PageUp),
-        "pagedown" => Ok(Key::PageDown),
-        "space" => Ok(Key::Char(' ')),
-        "enter" => Ok(Key::Enter),
-        "tab" => Ok(Key::Tab),
-        "home" => Ok(Key::Home),
-        "end" => Ok(Key::End),
-        "ins" | "insert" => Ok(Key::Ins),
-        "f0" => Ok(Key::F0),
-        "f1" => Ok(Key::F1),
-        "f2" => Ok(Key::F2),
-        "f3" => Ok(Key::F3),
-        "f4" => Ok(Key::F4),
-        "f5" => Ok(Key::F5),
-        "f6" => Ok(Key::F6),
-        "f7" => Ok(Key::F7),
-        "f8" => Ok(Key::F8),
-        "f9" => Ok(Key::F9),
-        "f10" => Ok(Key::F10),
-        "f11" => Ok(Key::F11),
-        "f12" => Ok(Key::F12),
-        _ => Err(anyhow!("The key \"{}\" is unknown.", sections[0])),
-      }
-    }
+  if sections.len() > 2 {
+    return Err(anyhow!(
+      "Shortcut can only have 2 keys, \"{}\" has {}",
+      key,
+      sections.len()
+    ));
+  }
+
+  match sections[0].to_lowercase().as_str() {
+    "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
+    "alt" => Ok(Key::Alt(modifier_char(&key, &sections)?)),
+    "left" => Ok(Key::Left),
+    "right" => Ok(Key::Right),
+    "up" => Ok(Key::Up),
+    "down" => Ok(Key::Down),
+    "backspace" | "delete" => Ok(Key::Backspace),
+    "del" => Ok(Key::Delete),
+    "esc" | "escape" => Ok(Key::Esc),
+    "pageup" => Ok(Key::PageUp),
+    "pagedown" => Ok(Key::PageDown),
+    "space" => Ok(Key::Char(' ')),
+    "enter" => Ok(Key::Enter),
+    "tab" => Ok(Key::Tab),
+    "home" => Ok(Key::Home),
+    "end" => Ok(Key::End),
+    "ins" | "insert" => Ok(Key::Ins),
+    "f0" => Ok(Key::F0),
+    "f1" => Ok(Key::F1),
+    "f2" => Ok(Key::F2),
+    "f3" => Ok(Key::F3),
+    "f4" => Ok(Key::F4),
+    "f5" => Ok(Key::F5),
+    "f6" => Ok(Key::F6),
+    "f7" => Ok(Key::F7),
+    "f8" => Ok(Key::F8),
+    "f9" => Ok(Key::F9),
+    "f10" => Ok(Key::F10),
+    "f11" => Ok(Key::F11),
+    "f12" => Ok(Key::F12),
+    _ => Err(anyhow!("The key \"{}\" is unknown.", sections[0])),
   }
 }
 
@@ -1300,7 +1297,13 @@ impl UserConfig {
       self.cover_art_dither_color = match theme.cover_art_dither_color.as_deref() {
         None => None,
         Some(value) if value.trim().eq_ignore_ascii_case("auto") => None,
-        Some(value) => Some(parse_theme_item(value)?),
+        Some(value) => match parse_theme_item(value) {
+          Ok(dither_color) => Some(dither_color),
+          Err(e) => {
+            log::warn!("[config] cover_art_dither_color: {e}; keeping the default");
+            None
+          }
+        },
       };
     }
     // Individual color fields populate the custom_theme — they only
@@ -1308,7 +1311,15 @@ impl UserConfig {
     macro_rules! to_theme_item {
       ($name: ident) => {
         if let Some(theme_item) = theme.$name {
-          self.custom_theme.$name = parse_theme_item(&theme_item)?;
+          match parse_theme_item(&theme_item) {
+            Ok(theme) => self.custom_theme.$name = theme,
+            // An invalid theme config should not inhibit launch:
+            // warn and fall back on a default. (#547)
+            Err(e) => log::warn!(
+              "[config] theme.{}: {e}; keeping the default",
+              stringify!($name)
+            ),
+          }
         }
       };
     }
@@ -2562,6 +2573,18 @@ mod tests {
   }
 
   #[test]
+  fn a_single_non_ascii_character_parses_as_a_char_binding() {
+    use super::parse_key;
+    use crate::core::input::Key;
+
+    for key in ['ö', 'Ö', 'é', 'ß'] {
+      assert_eq!(parse_key(key.to_string()).unwrap(), Key::Char(key));
+    }
+    assert_eq!(parse_key(String::from("ctrl-ö")).unwrap(), Key::Ctrl('ö'));
+    assert!(parse_key(String::from("öö")).is_err());
+  }
+
+  #[test]
   fn malformed_modifier_bindings_error_instead_of_panicking() {
     use super::parse_key;
     // "ctrl"/"alt" without a key (with or without the dash) used to index or
@@ -2594,6 +2617,39 @@ mod tests {
     config.load_keybindings(bindings).unwrap();
     assert_eq!(config.keys.back, default_back);
     assert_eq!(config.keys.move_up, Key::Char('w'));
+  }
+
+  #[test]
+  fn a_malformed_theme_color_keeps_the_default_and_still_loads() {
+    use super::{UserConfig, UserTheme};
+    use crate::core::theme::Color;
+
+    let mut config = UserConfig::new();
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Custom\ntext: '300, 0, 0'\nactive: '1, 2, 3'\n")
+        .expect("UserTheme must deserialize");
+
+    let result = config.load_theme(theme);
+
+    assert!(result.is_ok());
+    assert_eq!(config.theme.text, UserConfig::new().theme.text);
+    assert_eq!(config.theme.active, Color::Rgb(1, 2, 3))
+  }
+
+  #[test]
+  #[cfg(feature = "cover-art")]
+  fn a_malformed_cover_art_dither_color_keeps_the_default_and_still_loads() {
+    use super::{UserConfig, UserTheme};
+
+    let mut config = UserConfig::new();
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Custom\ncover_art_dither_color: '300, 0, 0'\n")
+        .expect("UserTheme must deserialize");
+
+    let result = config.load_theme(theme);
+
+    assert!(result.is_ok());
+    assert_eq!(config.cover_art_dither_color, None)
   }
 
   #[test]

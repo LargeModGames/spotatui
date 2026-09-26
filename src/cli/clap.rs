@@ -5,7 +5,7 @@ fn device_arg() -> Arg {
     .short('d')
     .long("device")
     .value_name("DEVICE")
-    .help("Specifies the spotify device to use")
+    .help("Specifies the Spotify device to use")
 }
 
 fn format_arg() -> Arg {
@@ -16,8 +16,9 @@ fn format_arg() -> Arg {
     .help("Specifies the output format")
     .long_help(
       "There are multiple format specifiers you can use: %a: artist, %b: album, %p: playlist, \
-%t: track, %h: show, %f: flags (shuffle, repeat, like), %s: playback status, %v: volume, %d: current device. \
-Example: spt pb -s -f 'playing on %d at %v%'",
+%t: track, %h: show, %f: flags (shuffle, repeat, like), %s: playback status, %v: volume, %d: current device, \
+%u: URI, %r: progress. \
+Example: spotatui pb -s -f 'playing on %d at %v%'",
     )
 }
 
@@ -28,9 +29,9 @@ pub fn playback_subcommand() -> Command {
     .about("Interacts with the playback of a device")
     .long_about(
       "Use `playback` to interact with the playback of the current or any other device. \
-You can specify another device with `--device`. If no options were provided, spt \
+You can specify another device with `--device`. If no options were provided, spotatui \
 will default to just displaying the current playback. Actually, after every action \
-spt will display the updated playback. The output format is configurable with the \
+spotatui will display the updated playback. The output format is configurable with the \
 `--format` flag. Some options can be used together, other options have to be alone.
 
 Here's a list:
@@ -67,13 +68,13 @@ can be used together
       Arg::new("share-track")
         .long("share-track")
         .action(ArgAction::SetTrue)
-        .help("Returns the url to the current track"),
+        .help("Returns the URL to the current track"),
     )
     .arg(
       Arg::new("share-album")
         .long("share-album")
         .action(ArgAction::SetTrue)
-        .help("Returns the url to the album of the current track"),
+        .help("Returns the URL to the album of the current track"),
     )
     .arg(
       Arg::new("transfer")
@@ -112,8 +113,8 @@ can be used together
         .action(ArgAction::Count)
         .help("Jumps to the next song")
         .long_help(
-          "This jumps to the next song if specied once. If you want to jump, let's say 3 songs \
-forward, you can use `--next` 3 times: `spt pb -nnn`.",
+          "This jumps to the next song if specified once. If you want to jump, let's say 3 songs \
+forward, you can use `--next` 3 times: `spotatui pb -nnn`.",
         ),
     )
     .arg(
@@ -123,9 +124,9 @@ forward, you can use `--next` 3 times: `spt pb -nnn`.",
         .action(ArgAction::Count)
         .help("Jumps to the previous song")
         .long_help(
-          "This jumps to the beginning of the current song if specied once. You probably want to \
-jump to the previous song though, so you can use the previous flag twice: `spt pb -pp`. To jump \
-two songs back, you can use `spt pb -ppp` and so on.",
+          "This jumps to the beginning of the current song if specified once. You probably want to \
+jump to the previous song though, so you can use the previous flag twice: `spotatui pb -pp`. To jump \
+two songs back, you can use `spotatui pb -ppp` and so on.",
         ),
     )
     .arg(
@@ -135,8 +136,8 @@ two songs back, you can use `spt pb -ppp` and so on.",
         .allow_hyphen_values(true)
         .help("Jumps SECONDS forwards (+) or backwards (-)")
         .long_help(
-          "For example: `spt pb --seek +10` jumps ten second forwards, `spt pb --seek -10` ten \
-seconds backwards and `spt pb --seek 10` to the tenth second of the track.",
+          "For example: `spotatui pb --seek +10` jumps ten seconds forwards, `spotatui pb --seek -10` ten \
+seconds backwards and `spotatui pb --seek 10` to the tenth second of the track.",
         ),
     )
     .arg(
@@ -144,7 +145,7 @@ seconds backwards and `spt pb --seek 10` to the tenth second of the track.",
         .short('v')
         .long("volume")
         .value_name("VOLUME")
-        .help("Sets the volume of a device to VOLUME (1 - 100)"),
+        .help("Sets the volume of a device to VOLUME (0 - 100)"),
     )
     .group(
       ArgGroup::new("jumps")
@@ -181,9 +182,9 @@ pub fn play_subcommand() -> Command {
   Command::new("play")
     .version(env!("CARGO_PKG_VERSION"))
     .author(env!("CARGO_PKG_AUTHORS"))
-    .about("Plays a uri or another spotify item by name")
+    .about("Plays a URI or another Spotify item by name")
     .long_about(
-      "If you specify a uri, the type can be inferred. If you want to play something by \
+      "If you specify a URI, the type can be inferred. If you want to play something by \
 name, you have to specify the type: `--track`, `--album`, `--artist`, `--playlist` \
 or `--show`. The first item which was found will be played without confirmation. \
 To add a track to the queue, use `--queue`. To play a random song from a playlist, \
@@ -331,7 +332,7 @@ pub fn search_subcommand() -> Command {
     .author(env!("CARGO_PKG_AUTHORS"))
     .about("Searches for tracks, albums and more")
     .long_about(
-      "This will search for something on spotify and displays you the items. The output \
+      "This will search for something on Spotify and displays you the items. The output \
 format can be changed with the `--format` flag and the limit can be changed with \
 the `--limit` flag (between 1 and 10). The type can't be inferred, so you have to \
 specify it.",

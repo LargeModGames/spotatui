@@ -5,8 +5,9 @@
 //! One tick advances playback state (`App::update_on_tick` plus the debounced
 //! seek/volume/state flushes), refreshes the OAuth token, syncs OS presence
 //! (Discord, MPRIS, window title), detects track changes (lyrics + cover
-//! art), auto-advances the native queue and the decoded sources, persists the
-//! non-Spotify session, and feeds the audio visualizer.
+//! art), counts plays for the global song counter, auto-advances the native
+//! queue and the decoded sources, persists the non-Spotify session, and feeds
+//! the audio visualizer.
 //!
 //! What stays with the frontend, injected through [`TickEnv`] or kept at the
 //! call site: the visualizer bar count (a function of frontend geometry), the
@@ -18,6 +19,7 @@
 //! seconds, instead of leaving a silently frozen playbar.
 
 mod plan;
+mod play_count;
 mod presence;
 
 use crate::core::app::{App, RouteId};
@@ -135,6 +137,7 @@ pub struct Driver {
   /// Last track the shared detector fired lyrics for, so the lookup re-fires
   /// only on an actual track change rather than every tick.
   last_track_identity: Option<TrackIdentity>,
+  play_counter: play_count::PlayCounter,
   /// Cache key (URL / file URI) of the cover art last requested, so the
   /// per-tick cover-art evaluation dispatches a fetch only when the resolved
   /// art changes.
@@ -225,6 +228,7 @@ impl Driver {
       mpris_state: presence::MprisState::default(),
       window_title: presence::WindowTitleState::default(),
       last_track_identity: None,
+      play_counter: play_count::PlayCounter::default(),
       #[cfg(feature = "art-decode")]
       last_cover_art_key: None,
       last_session_save: None,
@@ -306,6 +310,8 @@ impl Driver {
     {
       let snapshot = crate::infra::media_metadata::current_playback_snapshot(app);
 
+      self.play_counter.tick(app, snapshot.as_ref());
+
       // Lyrics fire once per track (identity latch): their inputs — title,
       // artist, duration — ARE the identity, so they are correct at the
       // instant the identity changes.
@@ -334,8 +340,7 @@ impl Driver {
               ));
             } else {
               app.desired_lyrics_identity = None;
-              app.lyrics = None;
-              app.lyrics_status = crate::core::app::LyricsStatus::NotFound;
+              app.set_lyrics(crate::core::app::LyricsStatus::NotFound, None, false);
               app
                 .plugin_data_generations
                 .bump(crate::core::app::PluginDataKind::Lyrics);
@@ -344,8 +349,7 @@ impl Driver {
           None => {
             app.desired_lyrics_identity = None;
             // Nothing is playing: reset so no stale lyrics linger.
-            app.lyrics = None;
-            app.lyrics_status = crate::core::app::LyricsStatus::NotStarted;
+            app.set_lyrics(crate::core::app::LyricsStatus::NotStarted, None, false);
             app
               .plugin_data_generations
               .bump(crate::core::app::PluginDataKind::Lyrics);
@@ -843,6 +847,8 @@ impl Driver {
         }
       }
     }
+
+    app.note_display_changes();
   }
 
   /// The one-shot startup dispatch, fired by the frontend right after its

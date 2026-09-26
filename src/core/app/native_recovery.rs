@@ -225,6 +225,19 @@ impl App {
     self.native_load_watchdog = None;
   }
 
+  /// Arm the play intent, keeping the generation of a restore that already
+  /// wants play.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn arm_native_play_intent(&mut self) {
+    if !self
+      .native_playback_recovery
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.desired_playing)
+    {
+      self.set_native_playback_intent(true);
+    }
+  }
+
   #[cfg(feature = "streaming")]
   pub(crate) fn set_native_recovery_position(&mut self, position_ms: u32) {
     if let Some(snapshot) = self.native_playback_recovery.as_mut() {
@@ -529,6 +542,29 @@ impl App {
 #[cfg(all(test, feature = "streaming"))]
 mod tests {
   use super::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_play_press_keeps_the_generation_of_a_restore_that_already_wants_play() {
+    let mut app = App::default();
+    let generation = app.record_native_playback_request(
+      None,
+      Some(vec!["spotify:track:a".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+    app.arm_native_play_intent();
+    assert!(app.begin_native_playback_restore(generation).is_some());
+
+    app.set_native_playback_intent(false);
+    let paused = app.native_playback_recovery.as_ref().map(|s| s.generation);
+    app.arm_native_play_intent();
+    let snapshot = app.native_playback_recovery.as_ref().unwrap();
+    assert_ne!(Some(snapshot.generation), paused);
+    assert!(snapshot.desired_playing);
+  }
 
   #[cfg(feature = "streaming")]
   #[test]

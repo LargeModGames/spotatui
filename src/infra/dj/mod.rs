@@ -211,6 +211,8 @@ pub struct DjState {
   /// batch queues tracks for a session the user already left. Same idiom as
   /// `App::desired_lyrics_identity` and `App::desired_cover_art_key`.
   pub generation: u64,
+  /// Display revision, bumped by every mutator of what the DJ panel shows.
+  pub revision: u64,
   pub transcript: Vec<DjLine>,
   /// The DJ's own progress flag. Deliberately *not* the global `App::is_loading`:
   /// a brain call can run for a minute or more, and pinning the global spinner
@@ -280,7 +282,12 @@ impl DjState {
   /// Used by `set_dj_vibe` over MCP as well as by the in-TUI vibe shift.
   pub fn bump_generation(&mut self) -> u64 {
     self.generation = self.generation.wrapping_add(1);
+    self.bump_revision();
     self.generation
+  }
+
+  pub fn bump_revision(&mut self) {
+    self.revision = self.revision.wrapping_add(1);
   }
 
   /// Claim the progress flag for a turn about to be dispatched.
@@ -292,6 +299,7 @@ impl DjState {
     self.thinking = true;
     self.turn_kind = kind;
     self.turn_seq = self.turn_seq.wrapping_add(1);
+    self.bump_revision();
     self.turn_seq
   }
 
@@ -311,12 +319,14 @@ impl DjState {
     if self.turn_seq == seq {
       self.thinking = false;
       self.step = None;
+      self.bump_revision();
     }
   }
 
   #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn push_line(&mut self, line: DjLine) {
     self.transcript.push(line);
+    self.bump_revision();
     // The transcript is a conversation, not a log; an unbounded Vec here would
     // grow for the life of the process and re-wrap on every draw.
     const MAX_LINES: usize = 200;

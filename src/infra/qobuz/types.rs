@@ -124,6 +124,12 @@ pub struct Track {
   pub streamable: bool,
   #[serde(default)]
   pub parental_warning: bool,
+  /// The recording id the sync matcher prefers over a title match.
+  #[serde(default)]
+  pub isrc: Option<String>,
+  /// The per-playlist item id `playlist/deleteTracks` takes.
+  #[serde(default, deserialize_with = "de_opt_id")]
+  pub playlist_track_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

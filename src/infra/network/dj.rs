@@ -578,6 +578,7 @@ impl Network {
       let already = app.dj.library_indexing || app.dj.library.is_some();
       if !already {
         app.dj.library_indexing = true;
+        app.dj.bump_revision();
       }
       already
     };
@@ -614,7 +615,7 @@ impl Network {
         .app
         .lock()
         .await
-        .user
+        .user()
         .as_ref()
         .map(|user| user.id.clone())
     };
@@ -918,6 +919,26 @@ mod tests {
       );
     }
   }
+
+  #[tokio::test]
+  async fn a_failed_library_index_moves_the_dj_revision_and_reports_it() {
+    let mut network = unauthenticated_network().await;
+    let before = network.app.lock().await.dj.revision;
+
+    network.dj_index_library().await;
+
+    let app = network.app.lock().await;
+    assert!(
+      app.dj.revision >= before + 2,
+      "the finished crawl needs a revision past the start"
+    );
+    assert!(app
+      .dj
+      .transcript
+      .last()
+      .is_some_and(|line| line.text.contains("could not read your playlists")));
+    assert!(!app.dj.library_indexing);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -964,6 +985,7 @@ mod in_tui {
           if turn.acted && !turn.abandoned && !turn.vibe_set {
             if let Some(vibe) = request.vibe_on_success {
               app.dj.vibe = Some(vibe);
+              app.dj.bump_revision();
             }
           }
           // A refill happens while the listener is on another screen, so the

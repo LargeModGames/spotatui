@@ -566,7 +566,7 @@ fn select_clicked_content_table_item(
 fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
   match active_block {
     ActiveBlock::AlbumList => app
-      .library
+      .library()
       .saved_albums
       .get_results(None)
       .map(|albums| albums.items.len())
@@ -590,19 +590,19 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
       .map(|recently_played| recently_played.items.len())
       .unwrap_or(0),
     ActiveBlock::Artists => app
-      .library
+      .library()
       .saved_artists
       .get_results(None)
       .map(|artists| artists.items.len())
       .unwrap_or(0),
     ActiveBlock::Podcasts => app
-      .library
+      .library()
       .saved_shows
       .get_results(None)
       .map(|shows| shows.items.len())
       .unwrap_or(0),
     ActiveBlock::EpisodeTable => app
-      .library
+      .library()
       .show_episodes
       .get_results(None)
       .map(|episodes| episodes.items.len())
@@ -634,7 +634,10 @@ fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
 fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app: &mut App) {
   match active_block {
     ActiveBlock::AlbumList => app.view.album_list_index = index,
-    ActiveBlock::TrackTable => app.view.track_table_index = index,
+    ActiveBlock::TrackTable => {
+      app.forget_pending_row_selection();
+      app.view.track_table_index = index;
+    }
     ActiveBlock::AlbumTracks => match app.album_table_context {
       crate::core::app::AlbumTableContext::Full => app.view.saved_album_tracks_index = index,
       crate::core::app::AlbumTableContext::Simplified => {
@@ -936,7 +939,7 @@ mod tests {
     // Keep these row-index assertions about real playlists; the community pin
     // is exercised in dedicated tests.
     app.user_config.behavior.pin_community_playlist = false;
-    app.playlist_folder_items = vec![
+    *app.playlist_folder_items_mut() = vec![
       PlaylistFolderItem::Playlist {
         index: 0,
         current_id: 0,
@@ -1003,7 +1006,7 @@ mod tests {
       &page,
       crate::infra::network::mapping::saved_album_info,
     );
-    app.library.saved_albums.add_pages(domain_page);
+    app.library_mut().saved_albums.add_pages(domain_page);
   }
 
   fn open_settings(app: &mut App) {
@@ -1964,6 +1967,17 @@ mod tests {
     assert_eq!(app.view.artists_list_index, 11);
     assert_eq!(app.view.shows_list_index, 12);
     assert_eq!(app.view.episode_list_index, 13);
+  }
+
+  #[test]
+  fn clicking_a_track_row_cancels_a_row_parked_for_a_loading_page() {
+    let mut app = App::default();
+    app.select_row_when_next_page_lands(10);
+
+    set_content_table_selected_index(ActiveBlock::TrackTable, 1, &mut app);
+
+    assert_eq!(app.view.track_table_index, 1);
+    assert_eq!(app.pending_track_table_selection(), None);
   }
 
   #[test]

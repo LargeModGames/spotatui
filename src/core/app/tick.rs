@@ -98,7 +98,11 @@ impl App {
     #[cfg(feature = "art-decode")]
     if let Some(transition) = self.theme_transition.as_mut() {
       transition.advance(elapsed);
-      self.user_config.theme = transition.current();
+      let current = transition.current();
+      if self.user_config.theme != current {
+        self.user_config.theme = current;
+        self.display_revisions.bump(DisplayDomain::Theme);
+      }
       if transition.is_complete() {
         self.theme_transition = None;
         // A finished fade-out means the user's own theme is back in place.
@@ -111,7 +115,7 @@ impl App {
 
     // Periodic party sync: host broadcasts state about every 2 seconds.
     // Keep this before early-return paths so sync still happens during native-streaming fast paths.
-    if self.party_status == PartyStatus::Hosting
+    if *self.party_status() == PartyStatus::Hosting
       && self.last_party_sync_at.elapsed() >= Duration::from_secs(2)
     {
       self.last_party_sync_at = Instant::now();
@@ -190,41 +194,43 @@ impl App {
       {
         self.native_load_watchdog = None;
         const MAX_RECOVERY_ATTEMPTS: u8 = 2;
-        if let Some(pending) = self.pending_start_playback.as_mut() {
-          if pending.recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
-            self.pending_start_playback = None;
-            self.set_status_message(
-              "Native playback did not respond after recovery; request dropped.",
-              8,
-            );
-          } else {
-            pending.recovery_attempts += 1;
-            log::warn!(
-              "no player event within {}s of native load; forcing recovery attempt {}",
-              NATIVE_LOAD_WATCHDOG.as_secs(),
-              pending.recovery_attempts
-            );
-            self.force_native_streaming_recovery(true);
-          }
-        } else if let Some(attempt) = self.native_restore_pending.clone() {
-          let recovery_attempts = self
-            .native_playback_recovery
-            .as_ref()
-            .filter(|snapshot| snapshot.generation == attempt.generation)
-            .map_or(0, |snapshot| snapshot.recovery_attempts);
-          if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
-            self.native_restore_pending = None;
-            self.set_status_message(
-              "Native connection recovered, but playback could not be restored.",
-              8,
-            );
-          } else {
-            log::warn!(
-              "native restore generation {} produced no matching player event; forcing recovery attempt {}",
-              attempt.generation,
-              recovery_attempts + 1
-            );
-            self.force_native_streaming_recovery(true);
+        if self.native_should_drive() {
+          if let Some(pending) = self.pending_start_playback.as_mut() {
+            if pending.recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+              self.pending_start_playback = None;
+              self.set_status_message(
+                "Native playback did not respond after recovery; request dropped.",
+                8,
+              );
+            } else {
+              pending.recovery_attempts += 1;
+              log::warn!(
+                "no player event within {}s of native load; forcing recovery attempt {}",
+                NATIVE_LOAD_WATCHDOG.as_secs(),
+                pending.recovery_attempts
+              );
+              self.force_native_streaming_recovery(true);
+            }
+          } else if let Some(attempt) = self.native_restore_pending.clone() {
+            let recovery_attempts = self
+              .native_playback_recovery
+              .as_ref()
+              .filter(|snapshot| snapshot.generation == attempt.generation)
+              .map_or(0, |snapshot| snapshot.recovery_attempts);
+            if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+              self.native_restore_pending = None;
+              self.set_status_message(
+                "Native connection recovered, but playback could not be restored.",
+                8,
+              );
+            } else {
+              log::warn!(
+                "native restore generation {} produced no matching player event; forcing recovery attempt {}",
+                attempt.generation,
+                recovery_attempts + 1
+              );
+              self.force_native_streaming_recovery(true);
+            }
           }
         }
       }
@@ -344,6 +350,22 @@ mod tests {
     assert!(app.playback_position_ms().is_some());
   }
 
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_decoded_owner_does_not_spend_a_native_load_watchdog_attempt() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.native_load_watchdog = Some(Instant::now() - Duration::from_secs(60));
+    app.claim_decoded_sink(Source::YouTube);
+
+    app.update_on_tick(Duration::from_millis(500));
+
+    let pending = app.pending_start_playback.as_ref().expect("still parked");
+    assert_eq!(pending.recovery_attempts, 0);
+    assert!(app.native_load_watchdog.is_none());
+  }
+
   #[test]
   fn a_live_error_survives_a_tick() {
     let (tx, _rx) = channel();
@@ -409,8 +431,8 @@ mod tests {
 
   #[test]
   fn a_paused_decoded_source_overrides_the_suspended_spotify_state() {
-    // The Spotify-to-decoded handoff only pauses librespot, so both the native
-    // flag and the context it left behind can still read as playing.
+    // A handoff that only pauses librespot (a queue slot) can leave both the
+    // native flag and the context it left behind reading as playing.
     assert!(!playing_for_keepawake(Some(false), Some(true), Some(true)));
   }
 

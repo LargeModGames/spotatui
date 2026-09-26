@@ -59,7 +59,7 @@ impl PlaybackSnapshot {
 pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   // A non-Spotify decoded source (local / subsonic / internet-radio / youtube)
   // owns the audio sink while its `*_playback` field is `Some`. Starting such a
-  // source only *pauses* librespot and never clears the Spotify context, so
+  // source pauses or parks librespot and never clears the Spotify context, so
   // without this branch the snapshot (window title, Discord RPC, and the
   // MPRIS/macOS fallback path) would keep showing the stale paused Spotify
   // track. Progress and play-state are read live from the owning source's
@@ -67,6 +67,10 @@ pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
   #[cfg(feature = "audio-decode")]
   if let Some(snapshot) = source_playback_snapshot(app) {
     return Some(snapshot);
+  }
+  // A decoded source owns the sink with no session to describe yet.
+  if app.active_decoded_source() {
+    return None;
   }
 
   let context = app.current_playback_context.as_ref();
@@ -801,6 +805,15 @@ mod tests {
   #[test]
   fn empty_playback_has_no_snapshot() {
     let app = app();
+
+    assert_eq!(current_playback_snapshot(&app), None);
+  }
+
+  #[test]
+  fn a_decoded_claim_with_no_session_hides_the_suspended_spotify_track() {
+    let mut app = app();
+    app.current_playback_context = Some(playback_context(PlayableItem::Track(track()), true));
+    app.claim_decoded_sink(crate::core::source::Source::YouTube);
 
     assert_eq!(current_playback_snapshot(&app), None);
   }

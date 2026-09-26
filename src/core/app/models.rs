@@ -66,6 +66,13 @@ impl App {
     if track_count > 0 {
       if let Some(pending) = self.pending_track_table_selection.take() {
         self.view.track_table_index = match pending {
+          // Short of the parked row while more pages load: wait for them on the last row.
+          PendingTrackSelection::Index(index)
+            if index >= track_count && self.track_table_has_more_rows() =>
+          {
+            self.pending_track_table_selection = Some(pending);
+            track_count - 1
+          }
           PendingTrackSelection::Index(index) => index.min(track_count.saturating_sub(1)),
         };
       } else {
@@ -91,9 +98,20 @@ impl App {
     }
   }
 
+  pub(crate) fn search_results(&self) -> &SearchResult {
+    &self.search_results
+  }
+
+  /// Replace every search page, keeping each cursor inside its new page.
+  pub(crate) fn set_search_results(&mut self, results: SearchResult) {
+    self.search_results = results;
+    self.clamp_search_cursors();
+    self.display_revisions.bump(DisplayDomain::Search);
+  }
+
   /// Keep every search cursor inside its page after the pages were replaced:
   /// a shorter page must never leave a cursor past its end.
-  pub(crate) fn clamp_search_cursors(&mut self) {
+  fn clamp_search_cursors(&mut self) {
     let pages = &self.search_results;
     clamp_cursor(
       &mut self.view.search_selected_tracks_index,
@@ -127,6 +145,21 @@ impl App {
   /// `replace_track_table_tracks` moves the cursor there.
   pub fn select_row_when_next_page_lands(&mut self, index: usize) {
     self.pending_track_table_selection = Some(PendingTrackSelection::Index(index));
+  }
+
+  /// Drop a row parked for an in-flight page: the user moved on since.
+  pub(crate) fn forget_pending_row_selection(&mut self) {
+    self.pending_track_table_selection = None;
+  }
+
+  fn track_table_has_more_rows(&self) -> bool {
+    match self.track_table.context {
+      Some(TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch) => {
+        self.current_playlist_has_more_tracks()
+      }
+      Some(TrackTableContext::SavedTracks) => self.current_saved_tracks_has_more_tracks(),
+      _ => false,
+    }
   }
 
   #[cfg(test)]
@@ -198,5 +231,28 @@ mod tests {
     let new_page = page_of(5);
     clamp_cursor(&mut index, page_len(&new_page));
     assert_eq!(index, None);
+  }
+
+  #[test]
+  fn replacing_search_results_clamps_a_stale_cursor_and_bumps_the_search_revision() {
+    use crate::core::test_helpers::playlist_info;
+    let mut app = App::default();
+    app.view.search_selected_playlists_index = Some(20);
+    let before = app.display_revisions().get(DisplayDomain::Search);
+
+    app.set_search_results(SearchResult {
+      playlists: Some(Paged {
+        items: vec![playlist_info("p1", "One", "owner", false)],
+        total: 1,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+
+    assert_eq!(app.view.search_selected_playlists_index, Some(0));
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Search),
+      before + 1
+    );
   }
 }

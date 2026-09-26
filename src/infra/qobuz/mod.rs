@@ -24,11 +24,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use tokio::sync::Mutex;
 
+use crate::core::playlist_sync::SyncTrack;
 use crate::core::plugin_api::{ArtistRef, PlaylistInfo, SearchResults, TrackInfo};
-use crate::core::source::{MediaSource, Searcher};
+use crate::core::source::{MediaSource, PlaylistWriter, Searcher};
 use crate::infra::audio::LocalPlayer;
 use stream::cmaf::InitSegment;
 use stream::download;
@@ -105,6 +106,12 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const PAGE_LIMIT: u32 = 500;
 const MAX_ITEMS: usize = 10_000;
 const SEARCH_LIMIT: u32 = 20;
+/// Ids per playlist write call.
+const WRITE_CHUNK: usize = 50;
+/// Playlist writes go out like every endpoint but the two stream-session ones:
+/// GET, unsigned. Both flip here if Qobuz rejects that shape.
+const WRITE_METHOD: Method = Method::Get;
+const SIGN_PLAYLIST_WRITES: bool = false;
 /// Renew the stream session this long before `expires_at`.
 const SESSION_MARGIN_SECS: u64 = 60;
 
@@ -185,6 +192,8 @@ pub struct QobuzSource {
   app_id: String,
   secret: String,
   token: String,
+  /// API root, with its trailing slash; tests point it at a loopback listener.
+  base: String,
   http: Client,
 }
 
@@ -198,7 +207,16 @@ impl QobuzSource {
       app_id: app_id.into(),
       secret: secret.into(),
       token: token.into(),
+      base: API_BASE.to_string(),
       http: shared_qobuz_client(),
+    }
+  }
+
+  #[cfg(test)]
+  fn with_base(base: impl Into<String>) -> Self {
+    QobuzSource {
+      base: base.into(),
+      ..QobuzSource::new("app-id", "secret", "token")
     }
   }
 
@@ -221,7 +239,7 @@ impl QobuzSource {
         sign::request_sig(endpoint, &sig_args, ts, &self.secret),
       ));
     }
-    let url = format!("{API_BASE}{endpoint}");
+    let url = format!("{}{endpoint}", self.base);
     let mut request = match method {
       Method::Get => self.http.get(&url).query(&query),
       Method::PostForm => self.http.post(&url).form(&query),
@@ -253,7 +271,13 @@ impl QobuzSource {
       let excerpt: String = body.chars().take(120).collect();
       return Err(anyhow!("{endpoint} returned HTTP {status}: {excerpt}"));
     }
-    serde_json::from_str(&body).with_context(|| format!("{endpoint} response parse"))
+    // A playlist write may acknowledge with no body at all.
+    let body = if body.trim().is_empty() {
+      "null"
+    } else {
+      body.as_str()
+    };
+    serde_json::from_str(body).with_context(|| format!("{endpoint} response parse"))
   }
 
   async fn get<T: DeserializeOwned>(&self, endpoint: &str, args: &[(&str, String)]) -> Result<T> {
@@ -491,6 +515,80 @@ impl QobuzSource {
     })
     .await
   }
+
+  // -------------------------------------------------------------------------
+  // Playlist writes
+  // -------------------------------------------------------------------------
+
+  /// One playlist write, per [`WRITE_METHOD`] and [`SIGN_PLAYLIST_WRITES`].
+  async fn playlist_write<T: DeserializeOwned>(
+    &self,
+    endpoint: &str,
+    args: &[(&str, String)],
+  ) -> Result<T> {
+    self
+      .request(WRITE_METHOD, endpoint, args, SIGN_PLAYLIST_WRITES, None)
+      .await
+  }
+
+  /// Every track of a playlist with its item ids, which `listing_tracks` drops.
+  async fn playlist_items(&self, playlist_id: &str) -> Result<Vec<types::Track>> {
+    let listing = Listing::Playlist(playlist_id.to_string());
+    let listing = &listing;
+    paginate(|offset| async move {
+      let (page, _) = self.listing_page(listing, offset).await?;
+      let total = page.total as usize;
+      Ok((page.items, total))
+    })
+    .await
+  }
+
+  /// Every track of a playlist as sync candidates, with the ISRC `listing_tracks` drops.
+  pub(crate) async fn sync_playlist_tracks(&self, playlist_uri: &str) -> Result<Vec<SyncTrack>> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    Ok(
+      self
+        .playlist_items(id)
+        .await?
+        .iter()
+        .map(track_to_sync_track)
+        .collect(),
+    )
+  }
+
+  /// Catalog search results as sync candidates, ISRC included.
+  pub(crate) async fn sync_search(&self, query: &str, limit: u32) -> Result<Vec<SyncTrack>> {
+    let found: types::Search = self
+      .get(
+        "catalog/search",
+        &[("query", query.to_string()), ("limit", limit.to_string())],
+      )
+      .await?;
+    Ok(
+      found
+        .tracks
+        .unwrap_or_default()
+        .items
+        .iter()
+        .map(track_to_sync_track)
+        .collect(),
+    )
+  }
+
+  /// Create a private playlist and return its id.
+  pub async fn create_playlist(&self, name: &str) -> Result<String> {
+    let created: types::Playlist = self
+      .playlist_write(
+        "playlist/create",
+        &[
+          ("name", name.to_string()),
+          ("is_public", "false".to_string()),
+          ("is_collaborative", "false".to_string()),
+        ],
+      )
+      .await?;
+    Ok(created.id)
+  }
 }
 
 /// Collect every page of a listing; `fetch(offset)` returns one page's items
@@ -520,6 +618,29 @@ pub fn track_id_from_uri(uri: &str) -> Result<&str> {
   uri
     .strip_prefix(TRACK_PREFIX)
     .ok_or_else(|| anyhow!("Not a qobuz track URI: {}", uri))
+}
+
+/// Strip the `qobuz:playlist:` prefix; favorites and albums are not writable.
+fn playlist_id_from_uri(uri: &str) -> Result<&str> {
+  uri
+    .strip_prefix(PLAYLIST_PREFIX)
+    .ok_or_else(|| anyhow!("Not a qobuz playlist URI: {}", uri))
+}
+
+/// A `qobuz:track:<id>` URI or a bare id.
+fn track_id_of(uri: &str) -> &str {
+  uri.strip_prefix(TRACK_PREFIX).unwrap_or(uri)
+}
+
+/// The playlist item ids of `track_ids`, in playlist order.
+/// The item id of the last occurrence of each wanted track: the sync adds one
+/// row per track, so one row per track goes and an earlier hand-added copy stays.
+fn item_ids_for(items: &[types::Track], track_ids: &[&str]) -> Vec<String> {
+  track_ids
+    .iter()
+    .filter_map(|id| items.iter().rev().find(|t| t.id == *id))
+    .filter_map(|t| t.playlist_track_id.clone())
+    .collect()
 }
 
 fn listing_from_uri(uri: &str) -> Result<Listing> {
@@ -618,6 +739,21 @@ fn track_to_track_info(t: &types::Track, parent: Option<&types::Album>) -> Track
   }
 }
 
+/// Map a Qobuz track onto the sync currency: the bare title, never the version suffix.
+fn track_to_sync_track(t: &types::Track) -> SyncTrack {
+  let performer = t
+    .performer
+    .as_ref()
+    .or(t.album.as_ref().and_then(|a| a.artist.as_ref()));
+  SyncTrack {
+    key: t.id.clone(),
+    isrc: t.isrc.clone(),
+    title: t.title.clone(),
+    artist: performer.map(|n| n.name.clone()).unwrap_or_default(),
+    duration_ms: (t.duration > 0).then_some(t.duration * 1000),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Trait implementations
 // ---------------------------------------------------------------------------
@@ -679,9 +815,116 @@ impl Searcher for QobuzSource {
   }
 }
 
+impl PlaylistWriter for QobuzSource {
+  /// Append tracks, [`WRITE_CHUNK`] ids per call; Qobuz dedupes server-side.
+  async fn add_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()> {
+    let playlist_id = playlist_id_from_uri(playlist_uri)?;
+    let ids: Vec<&str> = track_uris
+      .iter()
+      .map(|uri| track_id_of(uri.as_str()))
+      .collect();
+    for chunk in ids.chunks(WRITE_CHUNK) {
+      let _: IgnoredAny = self
+        .playlist_write(
+          "playlist/addTracks",
+          &[
+            ("playlist_id", playlist_id.to_string()),
+            ("track_ids", chunk.join(",")),
+            ("no_duplicate", "true".to_string()),
+          ],
+        )
+        .await?;
+    }
+    Ok(())
+  }
+
+  /// Remove tracks by playlist item id; the playlist is read first to map them.
+  async fn remove_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()> {
+    let playlist_id = playlist_id_from_uri(playlist_uri)?;
+    if track_uris.is_empty() {
+      return Ok(());
+    }
+    let items = self.playlist_items(playlist_id).await?;
+    let wanted: Vec<&str> = track_uris
+      .iter()
+      .map(|uri| track_id_of(uri.as_str()))
+      .collect();
+    for chunk in item_ids_for(&items, &wanted).chunks(WRITE_CHUNK) {
+      let _: IgnoredAny = self
+        .playlist_write(
+          "playlist/deleteTracks",
+          &[
+            ("playlist_id", playlist_id.to_string()),
+            ("playlist_track_ids", chunk.join(",")),
+          ],
+        )
+        .await?;
+    }
+    Ok(())
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+  use tokio::net::TcpListener;
+
+  /// Serve `responses` in order, collecting each request line and body.
+  async fn serve(
+    responses: Vec<(&'static str, &'static str)>,
+  ) -> (String, tokio::task::JoinHandle<Vec<(String, String)>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/", listener.local_addr().unwrap());
+    let handle = tokio::spawn(async move {
+      let mut seen = Vec::new();
+      for (status, payload) in responses {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (read_half, mut write_half) = stream.split();
+        let mut reader = BufReader::new(read_half);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).await.unwrap();
+        let mut content_length = 0usize;
+        loop {
+          let mut line = String::new();
+          reader.read_line(&mut line).await.unwrap();
+          if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            content_length = value.trim().parse().unwrap_or(0);
+          }
+          if line == "\r\n" || line.is_empty() {
+            break;
+          }
+        }
+        let mut body = vec![0u8; content_length];
+        if content_length > 0 {
+          reader.read_exact(&mut body).await.unwrap();
+        }
+        seen.push((
+          request_line.trim_end().to_string(),
+          String::from_utf8_lossy(&body).to_string(),
+        ));
+        write_half
+          .write_all(
+            format!(
+              "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+              payload.len()
+            )
+            .as_bytes(),
+          )
+          .await
+          .unwrap();
+        write_half.flush().await.unwrap();
+      }
+      seen
+    });
+    (base, handle)
+  }
+
+  /// Request line and body joined, so a param assertion holds under either
+  /// [`WRITE_METHOD`].
+  fn sent(entry: &(String, String)) -> String {
+    format!("{} {}", entry.0, entry.1)
+  }
 
   const USER_PLAYLISTS: &str = r#"{
     "playlists": {
@@ -733,6 +976,48 @@ mod tests {
 
   const FILE_URL: &str = r#"{ "url_template": "https://cdn/$SEGMENT$.m4s", "n_segments": 3,
     "key": "p.d3JhcHBlZA.aXY", "mime_type": "audio/flac", "format_id": 27 }"#;
+
+  const PLAYLIST_ITEMS: &str = r#"{
+    "id": 111, "name": "Morning",
+    "tracks": {
+      "offset": 0, "limit": 500, "total": 3,
+      "items": [
+        { "id": 5001, "title": "A", "isrc": "GBAAA0000001", "playlist_track_id": 90001 },
+        { "id": 5002, "title": "B", "playlist_track_id": 90002 },
+        { "id": 5001, "title": "A", "isrc": "GBAAA0000001", "playlist_track_id": 90003 }
+      ]
+    }
+  }"#;
+
+  const CREATED_PLAYLIST: &str = r#"{ "id": 777, "name": "Mirror", "is_public": false }"#;
+
+  const WRITE_OK: &str = r#"{ "status": "success" }"#;
+
+  const SYNC_PLAYLIST: &str = r#"{
+    "id": 111, "name": "Morning",
+    "tracks": {
+      "offset": 0, "limit": 500, "total": 2,
+      "items": [
+        { "id": 5001, "title": "Around the World", "version": "Radio Edit",
+          "duration": 429, "isrc": "gb-aaa-00-00001",
+          "performer": { "id": 36819, "name": "Daft Punk" } },
+        { "id": 5002, "title": "Veridis Quo",
+          "album": { "id": "0060254730302", "title": "Discovery",
+                     "artist": { "id": 36819, "name": "Daft Punk" } } }
+      ]
+    }
+  }"#;
+
+  const SYNC_SEARCH: &str = r#"{
+    "tracks": {
+      "offset": 0, "limit": 10, "total": 1,
+      "items": [
+        { "id": 5001, "title": "Around the World", "duration": 429,
+          "isrc": "GBAAA0000001",
+          "performer": { "id": 36819, "name": "Daft Punk" } }
+      ]
+    }
+  }"#;
 
   #[test]
   fn user_playlists_map_to_playlist_info() {
@@ -834,6 +1119,164 @@ mod tests {
     };
     assert!(session.is_valid_at(1_000 - SESSION_MARGIN_SECS - 1));
     assert!(!session.is_valid_at(1_000 - SESSION_MARGIN_SECS));
+  }
+
+  #[test]
+  fn playlist_items_carry_isrc_and_their_playlist_track_id() {
+    let playlist: types::Playlist = serde_json::from_str(PLAYLIST_ITEMS).unwrap();
+    let items = playlist.tracks.unwrap().items;
+    assert_eq!(items[0].isrc.as_deref(), Some("GBAAA0000001"));
+    assert_eq!(items[0].playlist_track_id.as_deref(), Some("90001"));
+    assert_eq!(items[1].isrc, None);
+    assert_eq!(items[2].playlist_track_id.as_deref(), Some("90003"));
+    let legacy: types::Playlist = serde_json::from_str(PLAYLIST_TRACKS).unwrap();
+    let legacy = legacy.tracks.unwrap();
+    assert_eq!(legacy.items[0].isrc, None);
+    assert_eq!(legacy.items[0].playlist_track_id, None);
+  }
+
+  #[test]
+  fn item_ids_map_track_ids_to_playlist_item_ids() {
+    let playlist: types::Playlist = serde_json::from_str(PLAYLIST_ITEMS).unwrap();
+    let items = playlist.tracks.unwrap().items;
+    assert_eq!(item_ids_for(&items, &["5001"]), vec!["90003"]);
+    assert_eq!(item_ids_for(&items, &["5002"]), vec!["90002"]);
+    assert!(item_ids_for(&items, &["9999"]).is_empty());
+  }
+
+  #[test]
+  fn playlist_writes_accept_a_track_uri_or_a_bare_id() {
+    assert_eq!(track_id_of("qobuz:track:5001"), "5001");
+    assert_eq!(track_id_of("5001"), "5001");
+  }
+
+  #[test]
+  fn playlist_writes_reject_favorites_and_album_uris() {
+    assert_eq!(playlist_id_from_uri("qobuz:playlist:111").unwrap(), "111");
+    assert!(playlist_id_from_uri(FAVORITES_URI).is_err());
+    assert!(playlist_id_from_uri("qobuz:album:x").is_err());
+  }
+
+  #[tokio::test]
+  async fn create_playlist_sends_an_unsigned_private_playlist() {
+    let (base, server) = serve(vec![("200 OK", CREATED_PLAYLIST)]).await;
+    let id = QobuzSource::with_base(base)
+      .create_playlist("Mirror")
+      .await
+      .unwrap();
+    assert_eq!(id, "777");
+    let seen = server.await.unwrap();
+    assert!(seen[0].0.contains("/playlist/create"));
+    assert!(sent(&seen[0]).contains("name=Mirror"));
+    assert!(sent(&seen[0]).contains("is_public=false"));
+    assert!(sent(&seen[0]).contains("is_collaborative=false"));
+    assert!(!sent(&seen[0]).contains("request_sig"));
+  }
+
+  #[tokio::test]
+  async fn add_tracks_sends_a_comma_list_in_chunks_of_fifty() {
+    let (base, server) = serve(vec![("200 OK", WRITE_OK), ("200 OK", WRITE_OK)]).await;
+    let uris: Vec<String> = (0..51).map(|i| format!("qobuz:track:{i}")).collect();
+    QobuzSource::with_base(base)
+      .add_tracks("qobuz:playlist:111", &uris)
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen[0].0.contains("/playlist/addTracks"));
+    assert!(sent(&seen[0]).contains("playlist_id=111"));
+    assert!(sent(&seen[0]).contains("no_duplicate=true"));
+    assert!(sent(&seen[0]).contains("track_ids=0%2C1%2C2%2C"));
+    assert_eq!(sent(&seen[0]).matches("%2C").count(), 49);
+    assert!(sent(&seen[1]).contains("track_ids=50"));
+    assert_eq!(sent(&seen[1]).matches("%2C").count(), 0);
+  }
+
+  #[tokio::test]
+  async fn add_tracks_accepts_an_empty_success_body() {
+    let (base, server) = serve(vec![("200 OK", "")]).await;
+    QobuzSource::with_base(base)
+      .add_tracks("qobuz:playlist:111", &["qobuz:track:1".to_string()])
+      .await
+      .unwrap();
+    assert_eq!(server.await.unwrap().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn adding_no_tracks_makes_no_request() {
+    QobuzSource::with_base("http://127.0.0.1:1/")
+      .add_tracks("qobuz:playlist:111", &[])
+      .await
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn remove_tracks_reads_the_playlist_then_deletes_item_ids() {
+    let (base, server) = serve(vec![("200 OK", PLAYLIST_ITEMS), ("200 OK", WRITE_OK)]).await;
+    QobuzSource::with_base(base)
+      .remove_tracks("qobuz:playlist:111", &["qobuz:track:5001".to_string()])
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen[0].0.starts_with("GET /playlist/get?"));
+    assert!(seen[0].0.contains("playlist_id=111"));
+    assert!(seen[0].0.contains("extra=tracks"));
+    assert!(seen[1].0.contains("/playlist/deleteTracks"));
+    assert!(sent(&seen[1]).contains("playlist_id=111"));
+    assert!(sent(&seen[1]).contains("playlist_track_ids=90003"));
+  }
+
+  #[tokio::test]
+  async fn sync_playlist_tracks_keeps_the_isrc_and_the_bare_title() {
+    let (base, server) = serve(vec![("200 OK", SYNC_PLAYLIST)]).await;
+    let tracks = QobuzSource::with_base(base)
+      .sync_playlist_tracks("qobuz:playlist:111")
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].0.starts_with("GET /playlist/get?"));
+    assert!(seen[0].0.contains("playlist_id=111"));
+    assert!(seen[0].0.contains("extra=tracks"));
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0].key, "5001");
+    assert_eq!(tracks[0].title, "Around the World");
+    assert_eq!(tracks[0].artist, "Daft Punk");
+    assert_eq!(tracks[0].isrc.as_deref(), Some("gb-aaa-00-00001"));
+    assert_eq!(tracks[0].duration_ms, Some(429_000));
+    assert_eq!(tracks[1].key, "5002");
+    assert_eq!(tracks[1].artist, "Daft Punk");
+    assert_eq!(tracks[1].isrc, None);
+  }
+
+  #[tokio::test]
+  async fn sync_search_sends_the_limit_it_was_given() {
+    let (base, server) = serve(vec![("200 OK", SYNC_SEARCH)]).await;
+    let found = QobuzSource::with_base(base)
+      .sync_search("daft punk around the world", 10)
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].0.starts_with("GET /catalog/search?"));
+    assert!(seen[0].0.contains("query=daft+punk+around+the+world"));
+    assert!(seen[0].0.contains("limit=10"));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].key, "5001");
+    assert_eq!(found[0].isrc.as_deref(), Some("GBAAA0000001"));
+    assert_eq!(found[0].duration_ms, Some(429_000));
+  }
+
+  #[test]
+  fn a_track_with_no_duration_reports_an_unknown_one() {
+    let playlist: types::Playlist = serde_json::from_str(PLAYLIST_ITEMS).unwrap();
+    let items = playlist.tracks.unwrap().items;
+    let track = track_to_sync_track(&items[1]);
+    assert_eq!(track.key, "5002");
+    assert_eq!(track.duration_ms, None);
+    assert_eq!(track.isrc, None);
+    assert_eq!(track.artist, "");
   }
 
   /// Live end to end: scrape the bundle, start a session, stream one track

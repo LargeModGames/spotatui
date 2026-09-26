@@ -213,6 +213,32 @@ jobs:
           echo "Version: $NEW_VERSION"
           sed -i "s/version *= *\"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
 
+  announce-discord:
+    name: Announce on Discord
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Post the release and ping Release Pings
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          TAG: ${{ github.ref_name }}
+          URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          CHANGELOG_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md
+        run: |
+          heading=$(grep -m1 "^## \[$TAG\]" CHANGELOG.md || true)
+          if [ -n "$heading" ]; then
+            anchor=$(printf '%s' "${heading#\#\# }" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9 -' | tr ' ' '-')
+            CHANGELOG_URL="$CHANGELOG_URL#$anchor"
+          fi
+          jq -n --arg tag "$TAG" --arg url "$URL" --arg changelog "$CHANGELOG_URL" '{
+            content: "<@&1534823673851150377> spotatui \($tag) is out: \($url)\nWhat changed: <\($changelog)>",
+            allowed_mentions: {roles: ["1534823673851150377"]}
+          }' | curl -fsS -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK"
+
   publish-cargo:
     name: Publish to crates.io
     needs: release

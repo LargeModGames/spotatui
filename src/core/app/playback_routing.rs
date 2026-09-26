@@ -2,6 +2,9 @@ use super::*;
 
 pub(crate) const NOTHING_PLAYING_STATUS: &str = "Nothing is playing";
 
+/// The status for a Spotify gesture the parked native backend cannot serve.
+const SPOTIFY_PARKED_STATUS: &str = "Press play to resume Spotify";
+
 /// The status shown when a Spotify-bound request finds no session.
 pub(crate) const SPOTIFY_NOT_CONNECTED_STATUS: &str =
   "Spotify not connected. Press `d` and pick Spotify to log in.";
@@ -20,6 +23,16 @@ pub enum PlaybackOwner {
   Spotify,
   /// No player and no session.
   None,
+}
+
+impl PlaybackOwner {
+  /// Whether the native queue slot or a decoded source holds the sink.
+  pub(crate) fn owns_local_sink(self) -> bool {
+    match self {
+      PlaybackOwner::Queue | PlaybackOwner::Decoded => true,
+      PlaybackOwner::NativeSpotify | PlaybackOwner::Spotify | PlaybackOwner::None => false,
+    }
+  }
 }
 
 /// The item a track-level action on "what is playing now" can act on.
@@ -88,40 +101,121 @@ impl App {
     PlaybackOwner::None
   }
 
+  /// Whether librespot is the right player for a command aimed at it. True
+  /// under a Spotify queue slot, whose track librespot plays.
+  pub(crate) fn native_should_drive(&self) -> bool {
+    !self.active_decoded_source()
+  }
+
+  /// Whether a path that restores or continues the cached Spotify context may
+  /// run. Also false under a queue slot, whose direct load suspended it.
+  pub(crate) fn native_context_should_drive(&self) -> bool {
+    self.native_should_drive() && !self.queue_owns_playback()
+  }
+
   /// Record that `source` took the audio sink; its start path calls this
   /// before it pauses librespot.
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(test, feature = "audio-decode"))]
   pub(crate) fn claim_decoded_sink(&mut self, source: Source) {
     self.decoded_sink_claim = Some(source);
   }
 
   /// Spotify takes the sink back: an explicit Spotify start reached the
   /// network layer.
-  #[cfg(feature = "audio-decode")]
   pub(crate) fn release_decoded_sink_claim(&mut self) {
-    self.decoded_sink_claim = None;
+    #[cfg(any(test, feature = "audio-decode"))]
+    {
+      self.decoded_sink_claim = None;
+    }
   }
 
   /// Whether a decoded source holds the sink claim, session or not.
   pub(crate) fn decoded_sink_claimed(&self) -> bool {
-    #[cfg(feature = "audio-decode")]
+    #[cfg(any(test, feature = "audio-decode"))]
     {
       self.decoded_sink_claim.is_some()
     }
-    #[cfg(not(feature = "audio-decode"))]
+    #[cfg(not(any(test, feature = "audio-decode")))]
     {
       false
     }
   }
 
   /// The last arm of a transport chain: the Web API when a session exists,
-  /// otherwise a source-neutral status instead of the "not connected" nag.
+  /// otherwise a source-neutral status instead of the "not connected" nag. A
+  /// parked native backend takes a bare resume as its rebuild and refuses the
+  /// rest.
   pub(crate) fn dispatch_spotify_fallback(&mut self, event: IoEvent) {
     if self.playback_owner() == PlaybackOwner::None {
       self.set_status_message(NOTHING_PLAYING_STATUS, 4);
       return;
     }
+    #[cfg(feature = "streaming")]
+    if self.native_parked_here() {
+      let bare_resume = matches!(event, IoEvent::StartPlayback(None, None, None));
+      if !bare_resume || self.native_backend_pending {
+        // A play press during the rebuild still asks the restore to play.
+        if bare_resume {
+          self.arm_native_play_intent();
+        }
+        self.refuse_parked_gesture();
+      } else if self.native_playback_recovery.is_none() {
+        self.set_status_message(NOTHING_PLAYING_STATUS, 4);
+      } else {
+        // The rebuild restores the snapshot, which now asks to play.
+        self.set_native_playback_intent(true);
+        self.reacquire_parked_backend();
+      }
+      return;
+    }
     self.dispatch(event);
+  }
+
+  /// Answer a Spotify gesture the parked native backend cannot serve.
+  pub(crate) fn refuse_parked_gesture(&mut self) {
+    #[cfg(feature = "streaming")]
+    if self.native_backend_pending {
+      self.set_status_message("Reconnecting native streaming…", 5);
+      return;
+    }
+    self.set_status_message(SPOTIFY_PARKED_STATUS, 4);
+  }
+
+  /// Whether the cached Spotify playback belongs to the parked native backend,
+  /// whoever owns the sink now.
+  pub(crate) fn native_parked_owns_context(&self) -> bool {
+    #[cfg(feature = "streaming")]
+    {
+      self.native_backend_parked()
+        && match self.current_playback_context.as_ref() {
+          Some(ctx) => ctx.device.id.is_some() && ctx.device.id == self.native_device_id,
+          None => self.native_playback_recovery.is_some(),
+        }
+    }
+    #[cfg(not(feature = "streaming"))]
+    {
+      false
+    }
+  }
+
+  /// Whether another Spotify Connect device plays the cached playback.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn spotify_playing_elsewhere(&self) -> bool {
+    self.current_playback_context.as_ref().is_some_and(|ctx| {
+      ctx.is_playing && ctx.device.id.is_some() && ctx.device.id != self.native_device_id
+    })
+  }
+
+  /// Whether Spotify transport would land on the parked native backend.
+  pub(crate) fn native_parked_here(&self) -> bool {
+    #[cfg(feature = "streaming")]
+    {
+      self.native_parked_owns_context() && self.playback_owner() == PlaybackOwner::Spotify
+    }
+    #[cfg(not(feature = "streaming"))]
+    {
+      false
+    }
   }
 
   /// `Some(true)` when a decoded source owns the sink and plays, `Some(false)`
@@ -198,7 +292,9 @@ impl App {
   pub fn spotify_external_device_active(&self) -> bool {
     #[cfg(feature = "streaming")]
     {
-      self.current_playback_context.is_some() && !self.is_native_streaming_active_for_playback()
+      self.current_playback_context.is_some()
+        && !self.is_native_streaming_active_for_playback()
+        && !self.native_parked_owns_context()
     }
     #[cfg(not(feature = "streaming"))]
     {
@@ -209,10 +305,10 @@ impl App {
   /// Whether any decoded-audio source (local file, Subsonic, internet radio, or
   /// YouTube) currently owns the playback session.
   ///
-  /// Starting a non-Spotify source only *pauses* librespot; it never clears
+  /// Starting a non-Spotify source pauses or parks librespot; it never clears
   /// `is_streaming_active` / `current_playback_context`, so
   /// [`is_native_streaming_active_for_playback`](Self::is_native_streaming_active_for_playback)
-  /// stays true while a decoded source owns the rodio sink. The direct-control
+  /// can stay true while a decoded source owns the rodio sink. The direct-control
   /// transport methods (next/prev/volume) use this guard to route to the active
   /// source via `IoEvent` dispatch instead of driving the paused librespot.
   ///
@@ -233,8 +329,8 @@ impl App {
       return false;
     }
     // A decoded start in flight, or a source whose session died with nothing to
-    // replace it, still owns the sink: librespot is paused underneath.
-    #[cfg(feature = "audio-decode")]
+    // replace it, still owns the sink: librespot is paused or parked underneath.
+    #[cfg(any(test, feature = "audio-decode"))]
     if self.decoded_sink_claim.is_some() {
       return true;
     }
@@ -328,6 +424,42 @@ impl App {
     players
   }
 
+  /// Whether the decoded source that owns the sink is between tracks: its
+  /// snapshot can name the next track while the sink still plays the last one.
+  pub(crate) fn decoded_change_pending(&self) -> bool {
+    #[cfg(feature = "audio-decode")]
+    {
+      #[cfg(feature = "audio-decode-queue")]
+      if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = self.queue_now.as_ref() {
+        return d.advancing;
+      }
+      if self.queue_now_is_spotify() {
+        return false;
+      }
+      #[cfg(feature = "local-files")]
+      if let Some(s) = &self.local_playback {
+        return s.advancing;
+      }
+      #[cfg(feature = "subsonic")]
+      if let Some(s) = &self.subsonic_playback {
+        return s.advancing;
+      }
+      #[cfg(feature = "qobuz")]
+      if let Some(s) = &self.qobuz_playback {
+        return s.advancing;
+      }
+      #[cfg(feature = "youtube")]
+      if let Some(s) = &self.youtube_playback {
+        return s.advancing;
+      }
+      false
+    }
+    #[cfg(not(feature = "audio-decode"))]
+    {
+      false
+    }
+  }
+
   /// The player of whichever decoded source (local file, Subsonic, Qobuz,
   /// internet radio, or YouTube) currently owns the session, or `None` when
   /// Spotify (or nothing) owns it. All five decode through the same `LocalPlayer`
@@ -402,12 +534,137 @@ impl App {
     }
     None
   }
-}
 
+  /// Bump the Playback and Queue revisions when what a frontend shows of them
+  /// changed; the playback position is not part of it.
+  pub(crate) fn note_display_changes(&mut self) {
+    let snapshot =
+      crate::infra::media_metadata::current_playback_snapshot(self).map(|mut snapshot| {
+        snapshot.progress_ms = 0;
+        snapshot
+      });
+    let liked = snapshot
+      .as_ref()
+      .and_then(|snapshot| snapshot.item_id.as_ref())
+      .is_some_and(|id| self.liked_song_ids_set.contains(id));
+    let device = self
+      .current_playback_context
+      .as_ref()
+      .map(|ctx| ctx.device.name.clone());
+    let view = (snapshot, self.desired_volume(), device, liked);
+    if view != self.playback_view {
+      self.playback_view = view;
+      self.display_revisions.bump(DisplayDomain::Playback);
+    }
+
+    if self.queue_view.0 != self.queue
+      || self.queue_view.1 != self.native_queue
+      || self.queue_view.2.as_ref() != self.queue_now_track()
+    {
+      self.queue_view = (
+        self.queue.clone(),
+        self.native_queue.clone(),
+        self.queue_now_track().cloned(),
+      );
+      self.display_revisions.bump(DisplayDomain::Queue);
+    }
+  }
+}
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_bare_resume_rebuilds_the_parked_backend_only_while_its_device_holds_the_playback() {
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.toggle_playback();
+    assert!(rx.try_recv().is_err());
+    assert!(recovery_rx
+      .try_recv()
+      .is_ok_and(|request| request.reacquire));
+    assert!(app
+      .native_playback_recovery
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.desired_playing));
+    app.toggle_playback();
+    assert!(recovery_rx.try_recv().is_err());
+
+    // A phone holds the playback: the Web API route of today.
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.current_playback_context = Some(make_external_context());
+    app.is_streaming_active = false;
+    app.toggle_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+    assert!(recovery_rx.try_recv().is_err());
+
+    // Nothing is known to resume: no rebuild.
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.current_playback_context = None;
+    app.native_playback_recovery = None;
+    app.is_streaming_active = false;
+    app.toggle_playback();
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+    assert!(recovery_rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_play_press_during_the_rebuild_asks_the_restore_to_play() {
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.native_backend_pending = true;
+
+    app.toggle_playback();
+
+    assert!(app
+      .native_playback_recovery
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.desired_playing));
+    assert!(recovery_rx.try_recv().is_err());
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some("Reconnecting native streaming…"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_queue_add_is_refused_while_the_parked_device_held_the_playback() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+    app.claim_decoded_sink(Source::YouTube);
+
+    let _ = app.apply(crate::core::action::Action::AddToQueue(
+      "spotify:track:x".to_string(),
+    ));
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some(SPOTIFY_PARKED_STATUS));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn only_a_playing_foreign_device_is_playing_elsewhere() {
+    let (mut app, _rx, _recovery_rx) = parked_native_app();
+    assert!(!app.spotify_playing_elsewhere());
+
+    app.current_playback_context = Some(make_external_context());
+    assert!(app.spotify_playing_elsewhere());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn queueing_a_spotify_track_over_the_parked_device_uses_the_native_queue() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+
+    app.add_track_to_native_queue(queue_track(Some("spotify:track:x"), "X"));
+
+    assert_eq!(app.native_queue.len(), 1);
+    assert!(rx.try_recv().is_err());
+    app.current_playback_context = Some(make_external_context());
+    assert!(app.spotify_external_device_active());
+  }
 
   #[cfg(feature = "streaming")]
   #[test]
@@ -500,7 +757,15 @@ mod tests {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
   }
 
-  #[cfg(feature = "youtube")]
+  #[test]
+  fn only_the_queue_and_a_decoded_source_own_the_local_sink() {
+    assert!(PlaybackOwner::Queue.owns_local_sink());
+    assert!(PlaybackOwner::Decoded.owns_local_sink());
+    assert!(!PlaybackOwner::NativeSpotify.owns_local_sink());
+    assert!(!PlaybackOwner::Spotify.owns_local_sink());
+    assert!(!PlaybackOwner::None.owns_local_sink());
+  }
+
   #[test]
   fn a_claimed_decoded_sink_owns_playback_without_a_session() {
     let mut app = make_app_simple();
@@ -513,7 +778,51 @@ mod tests {
     assert!(app.active_source_position_ms().is_none());
   }
 
-  #[cfg(feature = "youtube")]
+  #[test]
+  fn a_native_queue_change_moves_the_queue_revision_once() {
+    let mut app = make_app_simple();
+    app.note_display_changes();
+    let rev = app.display_revisions().get(DisplayDomain::Queue);
+
+    app.native_queue.push(TrackInfo::from(&full_track(
+      "0000000000000000000001",
+      "Queued",
+    )));
+    app.note_display_changes();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Queue), rev + 1);
+    app.note_display_changes();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Queue), rev + 1);
+  }
+
+  #[test]
+  fn a_position_change_alone_leaves_the_playback_revision() {
+    let mut app = make_app_simple();
+    app.is_streaming_active = true;
+    app.last_track_id = Some("track".to_string());
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "Track".to_string(),
+      ..Default::default()
+    });
+    app.native_is_playing = Some(true);
+    app.runtime_state.volume_percent = 40;
+    app.note_display_changes();
+    let seen = app.display_revisions().get(DisplayDomain::Playback);
+
+    app.song_progress_ms = 30_000;
+    app.note_display_changes();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Playback), seen);
+
+    app.native_is_playing = Some(false);
+    app.note_display_changes();
+    app.runtime_state.volume_percent = 20;
+    app.note_display_changes();
+    app.liked_song_ids_set.insert("track".to_string());
+    app.note_display_changes();
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Playback),
+      seen + 3
+    );
+  }
   #[test]
   fn releasing_the_claim_hands_the_sink_back_to_spotify() {
     let mut app = make_app_simple();
@@ -524,7 +833,7 @@ mod tests {
     assert_eq!(app.playback_owner(), PlaybackOwner::Spotify);
   }
 
-  #[cfg(all(feature = "streaming", feature = "youtube"))]
+  #[cfg(feature = "streaming")]
   #[test]
   fn a_spotify_queue_slot_shadows_the_claim() {
     use crate::infra::queue::QueueNowPlaying;
@@ -536,5 +845,26 @@ mod tests {
 
     assert!(!app.active_decoded_source());
     assert_eq!(app.playback_owner(), PlaybackOwner::Queue);
+  }
+
+  #[test]
+  fn a_decoded_owner_drives_neither_native_predicate() {
+    let mut app = make_app_simple();
+    assert!(app.native_should_drive());
+    assert!(app.native_context_should_drive());
+
+    #[cfg(feature = "streaming")]
+    {
+      app.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+        track: queue_track(Some("spotify:track:queued"), "Queued"),
+      });
+      assert!(app.native_should_drive(), "librespot plays the slot");
+      assert!(!app.native_context_should_drive());
+      app.queue_now = None;
+    }
+
+    app.claim_decoded_sink(Source::Qobuz);
+    assert!(!app.native_should_drive());
+    assert!(!app.native_context_should_drive());
   }
 }

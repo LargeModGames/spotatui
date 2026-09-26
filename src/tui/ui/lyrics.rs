@@ -23,8 +23,8 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   let theme = &app.user_config.theme;
 
   let mut notes: Vec<String> = Vec::new();
-  if app.lyrics_status == LyricsStatus::Found {
-    if !app.lyrics_synced {
+  if app.lyrics_status() == LyricsStatus::Found {
+    if !app.lyrics_synced() {
       notes.push("timing estimated".to_string());
     }
     let offset_ms = app.view.lyrics_view.timing_offset_ms;
@@ -48,12 +48,12 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
     return;
   }
 
-  if app.lyrics_status != LyricsStatus::Found {
+  if app.lyrics_status() != LyricsStatus::Found {
     draw_state_message(f, app, inner_area);
     return;
   }
 
-  let Some(lyrics) = &app.lyrics else {
+  let Some(lyrics) = app.lyrics() else {
     return;
   };
   if lyrics.is_empty() {
@@ -127,7 +127,7 @@ fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Centered two-line message for the non-Found lyric states.
 fn draw_state_message(f: &mut Frame<'_>, app: &App, inner_area: Rect) {
-  let (primary, secondary) = match app.lyrics_status {
+  let (primary, secondary) = match app.lyrics_status() {
     LyricsStatus::Loading => ("Fetching lyrics…", "from LRCLIB"),
     LyricsStatus::NotFound => ("No lyrics for this track", "lyrics provided by LRCLIB"),
     LyricsStatus::NotStarted => ("Nothing playing", "start a track to see lyrics"),
@@ -169,13 +169,15 @@ mod tests {
 
   fn app_with_lyrics() -> App {
     let mut app = App::default();
-    app.lyrics = Some(vec![
-      (0, "first line".to_string()),
-      (10_000, "second line".to_string()),
-      (20_000, "third line".to_string()),
-    ]);
-    app.lyrics_status = LyricsStatus::Found;
-    app.lyrics_synced = true;
+    app.set_lyrics(
+      LyricsStatus::Found,
+      Some(vec![
+        (0, "first line".to_string()),
+        (10_000, "second line".to_string()),
+        (20_000, "third line".to_string()),
+      ]),
+      true,
+    );
     app.song_progress_ms = 11_000;
     app.view.lyrics_view.scroll_pos = 1.0;
     app.push_navigation_stack(RouteId::LyricsView, ActiveBlock::LyricsView);
@@ -241,7 +243,8 @@ mod tests {
   #[test]
   fn title_notes_estimated_timing_for_plain_lyrics() {
     let mut app = app_with_lyrics();
-    app.lyrics_synced = false;
+    let lines = app.lyrics().map(<[_]>::to_vec);
+    app.set_lyrics(LyricsStatus::Found, lines, false);
     let text = buffer_text(&render(&app));
     assert!(
       text.contains("Lyrics (timing estimated)"),
@@ -286,8 +289,7 @@ mod tests {
   #[test]
   fn renders_not_found_state() {
     let mut app = app_with_lyrics();
-    app.lyrics = None;
-    app.lyrics_status = LyricsStatus::NotFound;
+    app.set_lyrics(LyricsStatus::NotFound, None, false);
     let text = buffer_text(&render(&app));
     assert!(
       text.contains("No lyrics for this track"),

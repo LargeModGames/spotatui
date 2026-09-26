@@ -35,10 +35,11 @@ use md5::{Digest, Md5};
 use rand::RngExt;
 use reqwest::Client;
 
+use crate::core::playlist_sync::SyncTrack;
 use crate::core::plugin_api::{
   AlbumInfo, ArtistInfo, ArtistRef, PlaylistInfo, SearchResults, TrackInfo,
 };
-use crate::core::source::{MediaSource, Searcher};
+use crate::core::source::{MediaSource, PlaylistWriter, Searcher};
 use crate::infra::audio::LocalPlayer;
 
 use types::{SubsonicEnvelope, SubsonicResponse};
@@ -52,6 +53,8 @@ const CLIENT_NAME: &str = "spotatui";
 
 const PLAYLIST_PREFIX: &str = "subsonic:playlist:";
 const TRACK_PREFIX: &str = "subsonic:track:";
+/// Repeated params per `updatePlaylist` call; they all ride in one request line.
+const WRITE_CHUNK: usize = 50;
 
 /// Cap on establishing the TCP+TLS connection. A server that never completes the
 /// handshake (captive portal, half-open TCP) fails fast instead of hanging the
@@ -337,6 +340,51 @@ impl SubsonicSource {
       .with_context(|| format!("flushing stream to {}", dest.display()))?;
     Ok(())
   }
+
+  /// Every entry of a playlist; `tracks`, `remove_tracks` and the sync read share it.
+  async fn playlist_entries(&self, id: &str) -> Result<Vec<types::SubsonicSong>> {
+    let url = Self::append_param(
+      &self.endpoint_url("getPlaylist.view"),
+      "id",
+      &url_encode(id),
+    );
+    let detail = self
+      .fetch(&url)
+      .await?
+      .playlist
+      .ok_or_else(|| anyhow!("No playlist in getPlaylist response"))?;
+    Ok(detail.entry)
+  }
+
+  /// Every track of a playlist as sync candidates, with the ISRC `tracks` drops.
+  pub(crate) async fn sync_playlist_tracks(&self, playlist_uri: &str) -> Result<Vec<SyncTrack>> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    Ok(
+      self
+        .playlist_entries(id)
+        .await?
+        .iter()
+        .map(song_to_sync_track)
+        .collect(),
+    )
+  }
+
+  /// `search3.view` songs as sync candidates; albums and artists are asked for as zero.
+  pub(crate) async fn sync_search(&self, query: &str, limit: u32) -> Result<Vec<SyncTrack>> {
+    let encoded = url_encode(query);
+    let base = Self::append_param(&self.endpoint_url("search3.view"), "query", &encoded);
+    let url = format!("{base}&songCount={limit}&albumCount=0&artistCount=0");
+    let resp = self.fetch(&url).await?;
+    Ok(
+      resp
+        .search_result3
+        .unwrap_or_default()
+        .song
+        .iter()
+        .map(song_to_sync_track)
+        .collect(),
+    )
+  }
 }
 
 /// Strip the `subsonic:track:` prefix and return the raw track id.
@@ -355,6 +403,23 @@ fn playlist_id_from_uri(uri: &str) -> Result<&str> {
   uri
     .strip_prefix(PLAYLIST_PREFIX)
     .ok_or_else(|| anyhow!("Not a subsonic playlist URI: {}", uri))
+}
+
+/// A `subsonic:track:<id>` URI or a bare id.
+fn track_id_of(uri: &str) -> &str {
+  uri.strip_prefix(TRACK_PREFIX).unwrap_or(uri)
+}
+
+/// The positions of `track_ids` in the playlist, ascending.
+/// The position of the last occurrence of each wanted song: the sync adds one
+/// row per track, so one row per track goes and an earlier hand-added copy stays.
+fn song_indices_for(entries: &[types::SubsonicSong], track_ids: &[&str]) -> Vec<usize> {
+  let mut indices: Vec<usize> = track_ids
+    .iter()
+    .filter_map(|id| entries.iter().rposition(|s| s.id == *id))
+    .collect();
+  indices.sort_unstable();
+  indices
 }
 
 impl From<&types::SubsonicPlaylist> for PlaylistInfo {
@@ -427,6 +492,17 @@ impl SubsonicSource {
   }
 }
 
+/// Map a Subsonic song onto the sync currency; only the first ISRC survives.
+fn song_to_sync_track(s: &types::SubsonicSong) -> SyncTrack {
+  SyncTrack {
+    key: s.id.clone(),
+    isrc: s.isrc.first().cloned(),
+    title: s.title.clone(),
+    artist: s.artist.clone().unwrap_or_default(),
+    duration_ms: s.duration.filter(|d| *d > 0).map(|d| d * 1000),
+  }
+}
+
 fn album_to_album_info(a: &types::SubsonicAlbum) -> AlbumInfo {
   let artists = a
     .artist
@@ -463,6 +539,68 @@ fn artist_to_artist_info(a: &types::SubsonicArtist) -> ArtistInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Playlist writes
+// ---------------------------------------------------------------------------
+
+impl SubsonicSource {
+  /// Create a playlist and return its new id.
+  pub async fn create_playlist(&self, name: &str) -> Result<String> {
+    let url = Self::append_param(
+      &self.endpoint_url("createPlaylist.view"),
+      "name",
+      &url_encode(name),
+    );
+    let created = self.fetch(&url).await?.playlist.ok_or_else(|| {
+      anyhow!("createPlaylist returned no id; the playlist itself may have been created")
+    })?;
+    Ok(created.id)
+  }
+}
+
+impl PlaylistWriter for SubsonicSource {
+  /// Append tracks, [`WRITE_CHUNK`] `songIdToAdd` params per call.
+  async fn add_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    for chunk in track_uris.chunks(WRITE_CHUNK) {
+      let mut url = Self::append_param(
+        &self.endpoint_url("updatePlaylist.view"),
+        "playlistId",
+        &url_encode(id),
+      );
+      for uri in chunk {
+        url = Self::append_param(&url, "songIdToAdd", &url_encode(track_id_of(uri)));
+      }
+      self.fetch(&url).await?;
+    }
+    Ok(())
+  }
+
+  /// Remove tracks by position, highest first so earlier ones never shift.
+  async fn remove_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()> {
+    let id = playlist_id_from_uri(playlist_uri)?;
+    if track_uris.is_empty() {
+      return Ok(());
+    }
+    let entries = self.playlist_entries(id).await?;
+    let wanted: Vec<&str> = track_uris.iter().map(|uri| track_id_of(uri)).collect();
+    let mut indices = song_indices_for(&entries, &wanted);
+    indices.reverse();
+    for chunk in indices.chunks(WRITE_CHUNK) {
+      let mut url = Self::append_param(
+        &self.endpoint_url("updatePlaylist.view"),
+        "playlistId",
+        &url_encode(id),
+      );
+      for index in chunk {
+        url = Self::append_param(&url, "songIndexToRemove", &index.to_string());
+      }
+      self.fetch(&url).await?;
+    }
+    Ok(())
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Trait implementations
 // ---------------------------------------------------------------------------
 
@@ -486,16 +624,10 @@ impl MediaSource for SubsonicSource {
 
   async fn tracks(&self, playlist_uri: &str) -> Result<Vec<TrackInfo>> {
     let id = playlist_id_from_uri(playlist_uri)?;
-    let url = Self::append_param(&self.endpoint_url("getPlaylist.view"), "id", id);
-    let resp = self.fetch(&url).await?;
-
-    let detail = resp
-      .playlist
-      .ok_or_else(|| anyhow!("No playlist in getPlaylist response"))?;
-
     Ok(
-      detail
-        .entry
+      self
+        .playlist_entries(id)
+        .await?
         .iter()
         .map(|s| self.song_to_track_info(s))
         .collect(),
@@ -555,6 +687,54 @@ fn url_encode(s: &str) -> String {
 mod tests {
   use super::*;
   use crate::infra::subsonic::types::SubsonicEnvelope;
+  use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+  use tokio::net::TcpListener;
+
+  /// Serve `responses` in order, collecting each request target. Subsonic
+  /// writes carry everything in the query string, so no body is read.
+  async fn serve(
+    responses: Vec<(&'static str, &'static str)>,
+  ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let handle = tokio::spawn(async move {
+      let mut seen = Vec::new();
+      for (status, payload) in responses {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (read_half, mut write_half) = stream.split();
+        let mut reader = BufReader::new(read_half);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).await.unwrap();
+        loop {
+          let mut line = String::new();
+          reader.read_line(&mut line).await.unwrap();
+          if line == "\r\n" || line.is_empty() {
+            break;
+          }
+        }
+        seen.push(
+          request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("")
+            .to_string(),
+        );
+        write_half
+          .write_all(
+            format!(
+              "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+              payload.len()
+            )
+            .as_bytes(),
+          )
+          .await
+          .unwrap();
+        write_half.flush().await.unwrap();
+      }
+      seen
+    });
+    (base, handle)
+  }
 
   /// Live end-to-end smoke test against the public Navidrome demo server.
   /// Ignored by default (hits the network); run with:
@@ -727,7 +907,8 @@ mod tests {
             "album": "Weightless",
             "albumId": "alb1",
             "duration": 469,
-            "trackNumber": 1
+            "trackNumber": 1,
+            "isrc": ["GBAYE0601498"]
           },
           {
             "id": "102",
@@ -777,6 +958,72 @@ mod tests {
             "id": "art10",
             "name": "The Beatles"
           }
+        ]
+      }
+    }
+  }"#;
+
+  const SCALAR_ISRC: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": {
+        "id": "7",
+        "name": "Mirror",
+        "songCount": 1,
+        "entry": [{ "id": "101", "title": "A", "isrc": "GBAYE0601498" }]
+      }
+    }
+  }"#;
+
+  const DUPLICATE_ENTRIES: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": {
+        "id": "7",
+        "name": "Mirror",
+        "songCount": 3,
+        "entry": [
+          { "id": "101", "title": "A" },
+          { "id": "102", "title": "B" },
+          { "id": "101", "title": "A" }
+        ]
+      }
+    }
+  }"#;
+
+  const CREATE_PLAYLIST: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": { "id": "42", "name": "Road Trip", "owner": "alice", "songCount": 0 }
+    }
+  }"#;
+
+  const UPDATE_OK: &str = r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
+
+  const SYNC_PLAYLIST: &str = r#"
+  {
+    "subsonic-response": {
+      "status": "ok",
+      "version": "1.16.1",
+      "playlist": {
+        "id": "7",
+        "name": "Mirror",
+        "songCount": 2,
+        "entry": [
+          {
+            "id": "101",
+            "title": "Weightless",
+            "artist": "Marconi Union",
+            "duration": 469,
+            "isrc": ["GBAYE0601498", "GBAYE0601499"]
+          },
+          { "id": "102", "title": "Clair de Lune" }
         ]
       }
     }
@@ -925,5 +1172,131 @@ mod tests {
     let salt = src.generate_salt();
     assert_eq!(salt.len(), 12);
     assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
+  }
+
+  #[test]
+  fn songs_carry_isrc_when_the_server_is_opensubsonic() {
+    let envelope: SubsonicEnvelope = serde_json::from_str(GET_PLAYLIST).unwrap();
+    let entries = envelope.response.playlist.unwrap().entry;
+    assert_eq!(entries[0].isrc, vec!["GBAYE0601498".to_string()]);
+    assert!(entries[1].isrc.is_empty());
+  }
+
+  #[test]
+  fn a_scalar_isrc_parses_instead_of_killing_the_response() {
+    let envelope: SubsonicEnvelope = serde_json::from_str(SCALAR_ISRC).unwrap();
+    let entries = envelope.response.playlist.unwrap().entry;
+    assert_eq!(entries[0].isrc, vec!["GBAYE0601498".to_string()]);
+  }
+
+  #[test]
+  fn song_indices_map_ids_to_every_position() {
+    let envelope: SubsonicEnvelope = serde_json::from_str(DUPLICATE_ENTRIES).unwrap();
+    let entries = envelope.response.playlist.unwrap().entry;
+    assert_eq!(song_indices_for(&entries, &["101"]), vec![2]);
+    assert_eq!(song_indices_for(&entries, &["102"]), vec![1]);
+    assert!(song_indices_for(&entries, &["999"]).is_empty());
+  }
+
+  #[tokio::test]
+  async fn create_playlist_encodes_the_name_and_returns_the_new_id() {
+    let (base, server) = serve(vec![("200 OK", CREATE_PLAYLIST)]).await;
+    let id = SubsonicSource::new(base, "u", String::new())
+      .create_playlist("Road Trip")
+      .await
+      .unwrap();
+    assert_eq!(id, "42");
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/createPlaylist.view?"));
+    assert!(seen[0].contains("u=u&t="));
+    assert!(seen[0].contains("&name=Road+Trip"));
+  }
+
+  #[tokio::test]
+  async fn add_tracks_sends_one_song_id_to_add_per_track() {
+    let (base, server) = serve(vec![("200 OK", UPDATE_OK)]).await;
+    SubsonicSource::new(base, "u", String::new())
+      .add_tracks(
+        "subsonic:playlist:7",
+        &["subsonic:track:101".to_string(), "102".to_string()],
+      )
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/updatePlaylist.view?"));
+    assert!(seen[0].contains("&playlistId=7"));
+    assert!(seen[0].contains("&songIdToAdd=101"));
+    assert!(seen[0].contains("&songIdToAdd=102"));
+  }
+
+  #[tokio::test]
+  async fn remove_tracks_reads_the_playlist_then_removes_the_highest_index_first() {
+    let (base, server) = serve(vec![("200 OK", DUPLICATE_ENTRIES), ("200 OK", UPDATE_OK)]).await;
+    SubsonicSource::new(base, "u", String::new())
+      .remove_tracks("subsonic:playlist:7", &["subsonic:track:101".to_string()])
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen[0].starts_with("/rest/getPlaylist.view?"));
+    assert!(seen[0].contains("&id=7"));
+    assert!(seen[1].starts_with("/rest/updatePlaylist.view?"));
+    assert!(seen[1].contains("&playlistId=7"));
+    assert!(seen[1].contains("&songIndexToRemove=2"));
+    assert!(!seen[1].contains("songIndexToRemove=0"));
+  }
+
+  #[tokio::test]
+  async fn adding_no_tracks_makes_no_request() {
+    SubsonicSource::new("http://127.0.0.1:1", "u", String::new())
+      .add_tracks("subsonic:playlist:7", &[])
+      .await
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn sync_playlist_tracks_takes_the_first_isrc() {
+    let (base, server) = serve(vec![("200 OK", SYNC_PLAYLIST)]).await;
+    let tracks = SubsonicSource::new(base, "u", String::new())
+      .sync_playlist_tracks("subsonic:playlist:7")
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/getPlaylist.view?"));
+    assert!(seen[0].contains("&id=7"));
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0].key, "101");
+    assert_eq!(tracks[0].title, "Weightless");
+    assert_eq!(tracks[0].artist, "Marconi Union");
+    assert_eq!(tracks[0].isrc.as_deref(), Some("GBAYE0601498"));
+    assert_eq!(tracks[0].duration_ms, Some(469_000));
+    assert_eq!(tracks[1].key, "102");
+    assert_eq!(tracks[1].isrc, None);
+    assert_eq!(tracks[1].artist, "");
+    assert_eq!(tracks[1].duration_ms, None);
+  }
+
+  #[tokio::test]
+  async fn sync_search_asks_for_songs_only() {
+    let (base, server) = serve(vec![("200 OK", SEARCH3)]).await;
+    let found = SubsonicSource::new(base, "u", String::new())
+      .sync_search("the beatles yesterday", 10)
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/search3.view?"));
+    assert!(seen[0].contains("&query=the+beatles+yesterday"));
+    assert!(seen[0].contains("&songCount=10"));
+    assert!(seen[0].contains("&albumCount=0"));
+    assert!(seen[0].contains("&artistCount=0"));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].key, "201");
+    assert_eq!(found[0].title, "Yesterday");
+    assert_eq!(found[0].artist, "The Beatles");
+    assert_eq!(found[0].duration_ms, Some(125_000));
   }
 }

@@ -206,6 +206,17 @@ pub(crate) async fn build_playback_source(app: &Arc<Mutex<App>>) -> Option<Qobuz
   build_source(app, WhenLoggedOut::Message).await
 }
 
+/// A source for the playlist sync; the caller reports the logged-out case itself.
+pub(crate) async fn build_sync_source(app: &Arc<Mutex<App>>) -> Result<QobuzSource> {
+  let token = auth::current_token().context("Qobuz is not logged in")?;
+  let constants = constants(app).await.context("Qobuz web player constants")?;
+  Ok(QobuzSource::new(
+    constants.app_id,
+    constants.app_secret,
+    token,
+  ))
+}
+
 /// Report a failed call as one status message; a 401 also clears the token.
 async fn report(app: &Arc<Mutex<App>>, step: &str, err: anyhow::Error) {
   let mut guard = app.lock().await;
@@ -297,13 +308,13 @@ async fn begin_login(app: &Arc<Mutex<App>>) {
 // Browse + search
 // ---------------------------------------------------------------------------
 
-/// Fetch the sidebar rows (favorites, playlists, albums) into `app.qobuz_playlists`.
+/// Fetch the sidebar rows (favorites, playlists, albums) into `app.qobuz_playlists()`.
 async fn load_qobuz_playlists(app: &Arc<Mutex<App>>) {
   let Some(source) = build_source(app, WhenLoggedOut::Login).await else {
     return;
   };
   match source.playlists().await {
-    Ok(playlists) => app.lock().await.qobuz_playlists = playlists,
+    Ok(playlists) => *app.lock().await.qobuz_playlists_mut() = playlists,
     Err(e) => report(app, "library", e).await,
   }
 }
@@ -350,14 +361,10 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
 
 /// Release every other backend so only Qobuz holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // Pause native Spotify so librespot releases the device.
+  // Take the sink from native Spotify so no rebuild resumes it under this
+  // source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.release_native_for_decoded();
   // The other decoded sources never see this `qobuz:` start (the pump
   // short-circuits), so their sessions are torn down here.
   let players = app.lock().await.take_decoded_sessions_except(Source::Qobuz);
@@ -612,7 +619,7 @@ pub(crate) async fn start_qobuz_queue(
   let tracks = {
     let guard = app.lock().await;
     let search = guard
-      .search_results
+      .search_results()
       .tracks
       .as_ref()
       .map(|p| p.items.as_slice());

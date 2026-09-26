@@ -257,9 +257,13 @@ async fn configure_subsonic(
   onboarding: &dyn Onboarding,
 ) -> Result<()> {
   onboarding.info("\nSubsonic / Navidrome setup:");
-  let url = prompt_required(onboarding, "Server URL (e.g. https://demo.navidrome.org)")?;
-  let username = prompt_required(onboarding, "Username")?;
-  let password = prompt_required(onboarding, "Password")?;
+  let url = prompt_required(
+    onboarding,
+    "Server URL (e.g. https://demo.navidrome.org)",
+    false,
+  )?;
+  let username = prompt_required(onboarding, "Username", false)?;
+  let password = prompt_required(onboarding, "Password", true)?;
 
   user_config.behavior.subsonic_url = Some(url.clone());
   user_config.behavior.subsonic_username = Some(username.clone());
@@ -337,11 +341,16 @@ fn configure_local(user_config: &UserConfig, onboarding: &dyn Onboarding) {
 
 // Only credential-collecting sources (currently Subsonic) use this.
 #[cfg(feature = "subsonic")]
-fn prompt_required(onboarding: &dyn Onboarding, label: &str) -> Result<String> {
+fn prompt_required(onboarding: &dyn Onboarding, label: &str, masked: bool) -> Result<String> {
   const MAX_RETRIES: u8 = 5;
   let mut retries = 0;
   loop {
-    let input = onboarding.prompt_line(&format!("  {label}: "))?;
+    let prompt = format!("  {label}: ");
+    let input = if masked {
+      onboarding.prompt_masked(&prompt)?
+    } else {
+      onboarding.prompt_line(&prompt)?
+    };
     let trimmed = input.trim().to_string();
     if !trimmed.is_empty() {
       return Ok(trimmed);
@@ -358,6 +367,21 @@ fn prompt_required(onboarding: &dyn Onboarding, label: &str) -> Result<String> {
 mod tests {
   use super::*;
   use crate::core::test_helpers::ScriptedOnboarding;
+
+  #[cfg(feature = "subsonic")]
+  #[test]
+  fn a_masked_field_is_read_through_the_masked_prompt() {
+    let onboarding = ScriptedOnboarding::with_answers(&["hunter2"]);
+
+    assert_eq!(
+      prompt_required(&onboarding, "Password", true).unwrap(),
+      "hunter2"
+    );
+    assert_eq!(
+      *onboarding.masked_prompts.lock().unwrap(),
+      vec!["  Password: ".to_string()]
+    );
+  }
 
   #[test]
   fn a_failed_config_save_warns_and_continues() {

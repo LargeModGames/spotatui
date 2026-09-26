@@ -1,6 +1,15 @@
 use super::*;
 
 impl App {
+  pub(crate) fn devices(&self) -> Option<&DevicePayload> {
+    self.devices.as_ref()
+  }
+
+  pub(crate) fn set_devices(&mut self, payload: DevicePayload) {
+    self.devices = Some(payload);
+    self.display_revisions.bump(DisplayDomain::Devices);
+  }
+
   /// Pause native streaming playback with the full bookkeeping the pause
   /// branch of [`toggle_playback`](Self::toggle_playback) does: clear any
   /// parked StartPlayback and the load watchdog (either would resume or force
@@ -19,6 +28,36 @@ impl App {
       ctx.is_playing = false;
     }
     self.native_is_playing = Some(false);
+  }
+
+  /// Hand the sink to a decoded source: park librespot when it owned the
+  /// sink, else only pause it.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn release_native_for_decoded(&mut self) {
+    // Before the pause: the device check falls back on the play state.
+    let owned_sink = self.queue_now_is_spotify()
+      || self.is_native_streaming_active_for_playback()
+      || self
+        .streaming_player
+        .as_ref()
+        .is_some_and(|player| !player.is_available());
+    self.pause_native_playback();
+    if !owned_sink {
+      return;
+    }
+    // A bare resume after the park restores from the snapshot.
+    if self.native_playback_recovery.is_none() {
+      let position_ms = u32::try_from(self.song_progress_ms).unwrap_or(u32::MAX);
+      self.prepare_native_playback_recovery(position_ms, false);
+    }
+    self.clear_native_shuffle_session();
+    self.native_track_info = None;
+    self.last_track_id = None;
+    self.native_playback_origin = None;
+    self.native_activation_pending = false;
+    self.last_device_activation = None;
+    self.seek_ms = None;
+    self.park_native_backend();
   }
 
   pub fn toggle_playback(&mut self) {
@@ -141,7 +180,7 @@ impl App {
         if is_playing {
           self.pause_native_playback();
         } else {
-          self.set_native_playback_intent(true);
+          self.arm_native_play_intent();
           player.play();
           // Update UI state immediately
           if let Some(ctx) = &mut self.current_playback_context {
@@ -153,8 +192,11 @@ impl App {
       }
     }
 
-    // Fallback to API-based playback control for external devices
-    let is_playing = if self.is_streaming_active {
+    // Fallback to API-based playback control for external devices. A parked
+    // backend plays nothing, whatever a stale poll says.
+    let is_playing = if self.native_parked_here() {
+      false
+    } else if self.is_streaming_active {
       self
         .native_is_playing
         .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
@@ -177,8 +219,10 @@ impl App {
 
   pub fn previous_track(&mut self) {
     info!("playing previous track or restarting current track");
+    // A skip drops a waiting start, except one that waits for the rebuild of
+    // a parked backend: the skip is refused there.
     #[cfg(feature = "streaming")]
-    {
+    if !self.native_parked_here() {
       self.pending_start_playback = None;
       self.native_load_watchdog = None;
     }
@@ -247,8 +291,10 @@ impl App {
 
   pub fn force_previous_track(&mut self) {
     info!("force skipping to previous track");
+    // A skip drops a waiting start, except one that waits for the rebuild of
+    // a parked backend: the skip is refused there.
     #[cfg(feature = "streaming")]
-    {
+    if !self.native_parked_here() {
       self.pending_start_playback = None;
       self.native_load_watchdog = None;
     }
@@ -295,8 +341,11 @@ impl App {
 
   pub fn next_track(&mut self) {
     info!("skipping to next track");
+    // A skip drops a waiting start, except one that waits for the rebuild of
+    // a parked backend: the skip is refused there, unless queued items take
+    // the sink (their hand-over drops the start).
     #[cfg(feature = "streaming")]
-    {
+    if !self.native_parked_here() {
       self.pending_start_playback = None;
       self.native_load_watchdog = None;
     }
@@ -325,23 +374,23 @@ impl App {
       self.dispatch(IoEvent::NextTrack);
       return;
     }
+    // A native-Spotify context, live or parked, with items waiting in the
+    // queue: suspend it (skip semantics) and hand the sink to the queue instead
+    // of Spirc-advancing the context. (`queue_owns_playback` is already handled
+    // above, so here the context, not a queued track, is playing.)
+    #[cfg(feature = "streaming")]
+    if (self.is_native_streaming_active_for_playback() || self.native_parked_here())
+      && !self.native_queue.is_empty()
+    {
+      self.suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::ManualSkip);
+      self.pause_native_playback();
+      self.song_progress_ms = 0;
+      self.dispatch(IoEvent::AdvanceNativeQueue);
+      return;
+    }
     // Use native streaming player for instant control (bypasses event channel latency)
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
-      // A native-Spotify context is playing with items waiting in the queue:
-      // suspend it (skip semantics) and hand the sink to the queue instead of
-      // Spirc-advancing the context. (`queue_owns_playback` is already handled
-      // above, so here the context, not a queued track, is playing.)
-      if !self.native_queue.is_empty() {
-        self
-          .suspend_native_spotify_context_for_queue(crate::infra::queue::SuspendCause::ManualSkip);
-        if let Some(player) = self.streaming_player.as_ref() {
-          player.pause();
-        }
-        self.song_progress_ms = 0;
-        self.dispatch(IoEvent::AdvanceNativeQueue);
-        return;
-      }
       // A manual Next advances the shuffle session even under repeat-one.
       self.mark_native_shuffle_manual_skip(true);
       if let Some(ref player) = self.streaming_player {
@@ -396,6 +445,16 @@ impl App {
       Some(vec![track_uri]),
       Some(0),
     ));
+  }
+
+  /// Transfer Spotify playback to a Connect device, refused while another
+  /// source owns the sink.
+  pub(crate) fn transfer_playback_to_device(&mut self, device_id: String, persist: bool) {
+    if self.active_decoded_source() {
+      self.set_status_message("Another source owns playback", 4);
+      return;
+    }
+    self.dispatch(IoEvent::TransferPlaybackToDevice(device_id, persist));
   }
 
   pub fn copy_song_url(&mut self) {
@@ -501,6 +560,119 @@ mod tests {
     );
   }
 
+  /// A session another client moved to spotatui has no snapshot: the release
+  /// makes one, so a bare resume after the park has something to restore.
+  #[test]
+  fn releasing_the_native_sink_keeps_a_snapshot_for_the_resume() {
+    use crate::infra::queue::QueueNowPlaying;
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    // A Spotify slot makes librespot own the sink with no player to construct.
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queue_track(Some("spotify:track:queued"), "Queued"),
+    });
+    app.current_playback_context = Some(playing_track_context(full_track(
+      "0000000000000000000001",
+      "T",
+    )));
+    app.song_progress_ms = 42_000;
+    app.native_track_info = Some(NativeTrackInfo::default());
+    let generation = app.native_shuffle_generation;
+
+    app.release_native_for_decoded();
+
+    assert!(app
+      .native_playback_recovery
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.current_track_uri.as_deref()
+        == Some("spotify:track:0000000000000000000001")
+        && snapshot.position_ms == 42_000
+        && !snapshot.desired_playing));
+    assert!(app.native_track_info.is_none());
+    assert_ne!(app.native_shuffle_generation, generation);
+    assert!(recovery_rx.try_recv().is_err());
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn next_on_the_parked_device_sends_nothing_to_the_web_api() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+
+    app.next_track();
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some("Press play to resume Spotify"));
+  }
+
+  #[test]
+  fn next_on_the_parked_device_hands_the_waiting_queue_the_sink() {
+    use crate::core::queue::SuspendedContext;
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+    if let Some(snapshot) = app.native_playback_recovery.as_mut() {
+      snapshot.current_track_uri = Some("spotify:track:0000000000000000000001".to_string());
+    }
+    app
+      .native_queue
+      .push(queue_track(Some("spotify:track:queued"), "Queued"));
+
+    app.next_track();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::AdvanceNativeQueue)));
+    // No mirror queue while parked: the interrupted track is the resume target.
+    assert!(matches!(
+      app.queue_suspended,
+      Some(SuspendedContext::Spotify {
+        context_uri: Some(ref uri),
+        resume_track_uri: Some(ref track),
+      }) if uri == "spotify:playlist:parked"
+        && track == "spotify:track:0000000000000000000001"
+    ));
+  }
+
+  #[test]
+  fn a_refused_skip_keeps_the_start_waiting_for_the_parked_rebuild() {
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+    app.native_backend_pending = true;
+    app.park_start_playback(Some("spotify:playlist:new".to_string()), None, None);
+
+    app.next_track();
+
+    assert!(app.pending_start_playback.is_some());
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.status_message(), Some("Reconnecting native streaming…"));
+  }
+
+  #[test]
+  fn a_stale_playing_answer_for_the_parked_device_still_resumes_on_play() {
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    let mut context = playing_track_context(full_track("0000000000000000000001", "Parked"));
+    context.device.id = Some("spotatui".to_string());
+    app.current_playback_context = Some(context);
+    app.is_streaming_active = false;
+
+    app.toggle_playback();
+
+    assert!(rx.try_recv().is_err());
+    assert!(recovery_rx.try_recv().is_ok());
+  }
+
+  #[test]
+  fn a_release_with_no_native_backend_only_pauses() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_track_info = Some(NativeTrackInfo::default());
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+
+    app.release_native_for_decoded();
+
+    assert!(!app.native_backend_parked());
+    assert!(app.native_track_info.is_some());
+    assert!(app.pending_start_playback.is_none());
+    assert!(rx.try_recv().is_err());
+  }
+
   #[cfg(feature = "streaming")]
   #[test]
   fn toggle_playback_with_spotify_queue_slot_does_not_panic() {
@@ -558,5 +730,24 @@ mod tests {
 
     assert!(rx.try_recv().is_err());
     assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  }
+}
+
+#[cfg(test)]
+mod devices_tests {
+  use super::*;
+
+  #[test]
+  fn caching_a_device_list_bumps_the_devices_revision() {
+    let mut app = App::default();
+    let before = app.display_revisions().get(DisplayDomain::Devices);
+
+    app.set_devices(DevicePayload { devices: vec![] });
+
+    assert_eq!(app.devices().map(|p| p.devices.len()), Some(0));
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Devices),
+      before + 1
+    );
   }
 }

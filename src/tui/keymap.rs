@@ -55,6 +55,7 @@ const RADIO: Requirement = Requirement::Source(Source::Radio);
 const LIKE: Requirement = Requirement::Capability(Capability::Like);
 const PLAYLIST_WRITE: Requirement = Requirement::Capability(Capability::PlaylistWrite);
 const SEARCH: Requirement = Requirement::Capability(Capability::Search);
+const PLAYLIST_SYNC: Requirement = Requirement::Capability(Capability::PlaylistSync);
 
 /// Every help row in display order, before the availability filter.
 pub fn help_entries() -> Vec<HelpEntry> {
@@ -363,6 +364,12 @@ pub fn help_entries() -> Vec<HelpEntry> {
     ),
     row("Delete saved album", Literal("D"), "Library -> Albums").needs(SPOTIFY),
     row("Delete saved playlist", Literal("D"), "Playlist").needs(PLAYLIST_WRITE),
+    row(
+      "Mirror playlist onto another source",
+      Literal("m"),
+      "Playlist",
+    )
+    .needs(PLAYLIST_SYNC),
     row("Remove favorite radio station", Literal("D"), "Radio").needs(RADIO),
     row("Follow an artist/playlist", Literal("w"), "Search result").needs(SPOTIFY),
     row(
@@ -423,6 +430,17 @@ pub fn help_entries() -> Vec<HelpEntry> {
     row("Open Stats screen", Literal("Library sidebar"), "Stats"),
     row("Cycle stats period", Literal("[ / ]"), "Stats"),
     row("Play selected top track", Literal("<Enter>"), "Stats").needs(SESSION),
+    row(
+      "Open Playlist sync screen",
+      Literal("Library sidebar"),
+      "Playlist sync",
+    ),
+    row(
+      "Run every playlist-sync link now",
+      Literal("s"),
+      "Playlist sync",
+    ),
+    row("Remove selected link", Literal("D"), "Playlist sync"),
     row("Open sort menu", Literal(","), "Track/Album/Artist list"),
     row(
       "Open Listening Party menu",
@@ -575,6 +593,10 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::FollowPlaylist(_) => literal("w", "Search result"),
     Action::UnfollowPlaylist(_) => literal("D", "Playlist"),
     Action::DeletePlaylist(_) => literal("D", "Playlist"),
+    Action::OpenPlaylistSyncPicker => literal("m", "Playlist"),
+    Action::LinkPlaylistTo(_) => literal(ENTER, "Mirror playlist picker"),
+    Action::RunPlaylistSync => literal("s", "Playlist sync"),
+    Action::RemovePlaylistSyncLink(_) => literal(ENTER, "Remove link confirmation"),
     Action::ToggleSaveTrack(_) => literal("s", "Selected block"),
     Action::ToggleSaveCurrentItem => binding(|k| k.like_track),
     Action::SaveAlbum(_) => literal("w", "Search result"),
@@ -630,6 +652,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
       | LibraryTarget::RecentlyPlayed
       | LibraryTarget::Friends
       | LibraryTarget::Stats
+      | LibraryTarget::PlaylistSync
       | LibraryTarget::LikedSongs
       | LibraryTarget::Albums
       | LibraryTarget::Artists
@@ -1099,6 +1122,10 @@ mod tests {
       Action::FollowPlaylist(text()),
       Action::UnfollowPlaylist(text()),
       Action::DeletePlaylist(text()),
+      Action::OpenPlaylistSyncPicker,
+      Action::LinkPlaylistTo(Source::Qobuz),
+      Action::RunPlaylistSync,
+      Action::RemovePlaylistSyncLink(text()),
       Action::ToggleSaveTrack(text()),
       Action::ToggleSaveCurrentItem,
       Action::SaveAlbum(text()),

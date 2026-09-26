@@ -6,8 +6,8 @@ use crate::infra::macos_media;
 use crate::infra::mpris;
 use crate::infra::network::IoEvent;
 use crate::infra::player::{
-  get_default_cache_path, PlayerEvent, SessionDisconnectReason, StreamingConfig,
-  StreamingConnectionState, StreamingPlayer,
+  get_default_cache_path, player_build_timeout, PlayerEvent, SessionDisconnectReason,
+  StreamingConfig, StreamingConnectionState, StreamingPlayer,
 };
 use log::{info, warn};
 use std::sync::{
@@ -41,16 +41,20 @@ pub struct StreamingRecoveryRequest {
   pub reselect_device: bool,
   pub restore_playback: bool,
   pub continue_after_track: Option<String>,
+  /// A Spotify start rebuilds a parked backend: restore the snapshot after the
+  /// rebuild, paused or playing as it asks.
+  pub reacquire: bool,
 }
 
 /// Restore intent alone decides the replay: an idle-app queue never matches
 /// the native context (`reselect_device` stays false), and a handoff teardown
-/// must not replay at all (#437).
+/// must not replay at all (#437). A reacquire replays even behind a merged
+/// handoff: a slot published while parked came after it.
 fn should_replay_published_queue_slot(
   request: &StreamingRecoveryRequest,
   queue_now_is_spotify: bool,
 ) -> bool {
-  request.restore_playback && queue_now_is_spotify
+  (request.restore_playback || request.reacquire) && queue_now_is_spotify
 }
 
 fn recovery_needs_native_selection(
@@ -124,6 +128,7 @@ fn recovery_snapshot_summary(app: &App) -> String {
 /// (`restore_playback == false`) stickily vetoes restore/reselect: restoring
 /// over the user's handoff would steal playback back (#437).
 fn merge_recovery_requests(request: &mut StreamingRecoveryRequest, next: StreamingRecoveryRequest) {
+  request.reacquire |= next.reacquire;
   if !request.restore_playback || !next.restore_playback {
     request.reselect_device = false;
     request.restore_playback = false;
@@ -156,6 +161,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       if app.pending_start_playback.is_some() {
         info!("recovery route: replay parked StartPlayback");
         app.replay_pending_start_playback();
+      } else if !app.native_context_should_drive() {
+        info!("recovery route: none - another player owns the sink");
       } else if let Some(previous_track_id) = request.continue_after_track {
         if app.native_transition_has_advanced(&previous_track_id) {
           if let Some(generation) = app.native_playback_restore_generation() {
@@ -196,17 +203,41 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
 
     info!("attempting native streaming recovery");
 
-    match StreamingPlayer::new_cache_only(
-      &ctx.client_config.client_id,
-      &ctx.redirect_uri,
-      streaming_config,
-    )
-    .await
-    {
+    let client_id = ctx.client_config.client_id.clone();
+    let redirect_uri = ctx.redirect_uri.clone();
+    let build = tokio::spawn(async move {
+      StreamingPlayer::new_cache_only(&client_id, &redirect_uri, streaming_config).await
+    });
+    let abort_handle = build.abort_handle();
+    let build_timeout = player_build_timeout();
+    let built = match tokio::time::timeout(build_timeout, build).await {
+      Ok(Ok(result)) => result,
+      Ok(Err(e)) => Err(anyhow::anyhow!("rebuild task failed: {e}")),
+      Err(_) => {
+        abort_handle.abort();
+        Err(anyhow::anyhow!(
+          "rebuild timed out after {}s",
+          build_timeout.as_secs()
+        ))
+      }
+    };
+
+    match built {
       Ok(recovered_player) => {
         let recovered_player = Arc::new(recovered_player);
-        {
+        let reacquired = {
           let mut app = ctx.app.lock().await;
+          let reacquired = app.native_backend_parked();
+          // The frontend is exiting, or a park gave the sink to another
+          // source during the build: nothing would drive this player.
+          if app.io_tx_clone().is_none() || !app.accept_rebuilt_native_backend() {
+            app.native_backend_pending = false;
+            drop(app);
+            info!("native rebuild not installed: exiting, or another source owns the sink");
+            recovered_player.shutdown();
+            tokio::task::spawn_blocking(move || drop(recovered_player));
+            continue;
+          }
           // A disconnected old player may still be referenced here; shut its
           // spirc down before replacing it so it can't leave a ghost device (#297).
           if let Some(old) = app.streaming_player.take() {
@@ -214,9 +245,14 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
               old.shutdown();
             }
           }
+          // The parked player's last events never reached the shared flag.
+          if reacquired {
+            ctx.shared_is_playing.store(false, Ordering::Relaxed);
+          }
           app.streaming_player = Some(Arc::clone(&recovered_player));
           app.native_backend_pending = false;
-        }
+          reacquired
+        };
 
         spawn_player_event_handler(PlayerEventContext {
           player: Arc::clone(&recovered_player),
@@ -246,7 +282,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           replay_queue_slot,
           recovery_snapshot_summary(&app)
         );
-        if recovery_needs_native_selection(&request, replay_queue_slot) {
+        if app.native_should_drive() && recovery_needs_native_selection(&request, replay_queue_slot)
+        {
           app.dispatch(IoEvent::AutoSelectStreamingDevice(
             ctx.client_config.streaming_device_name.clone(),
             false,
@@ -265,6 +302,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           // would trigger the reload guard.
           info!("recovery route: ReplayPublishedSpotifyQueueSlot");
           app.dispatch(IoEvent::ReplayPublishedSpotifyQueueSlot);
+        } else if !app.native_context_should_drive() {
+          info!("recovery route: none - another player owns the sink");
         } else if let Some(previous_track_id) = request.continue_after_track {
           if app.native_transition_has_advanced(&previous_track_id) {
             if let Some(generation) = app.native_playback_restore_generation() {
@@ -277,18 +316,22 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
             info!("recovery route: EnsurePlaybackContinues({previous_track_id})");
             app.dispatch(IoEvent::EnsurePlaybackContinues(previous_track_id));
           }
-        } else if request.reselect_device {
+        } else if request.reselect_device || request.reacquire {
           if let Some(generation) = app.native_playback_restore_generation() {
-            info!("recovery route: RestoreNativePlayback({generation}) (reselect)");
+            info!("recovery route: RestoreNativePlayback({generation}) (reselect or reacquire)");
             app.dispatch(IoEvent::RestoreNativePlayback(generation));
           } else {
-            warn!("recovery route: none - reselect requested but the snapshot is gone");
+            warn!("recovery route: none - restore requested but the snapshot is gone");
             app.set_status_message("Native streaming recovered.", 6);
           }
         } else if request.restore_playback {
           // A handoff rebuild instead keeps the teardown's "moved to another
           // device" message.
           app.set_status_message("Native streaming recovered.", 6);
+        }
+        // A playlist refresh while parked had no session for the folders.
+        if reacquired && app.playlist_folder_nodes().is_none() {
+          app.dispatch(IoEvent::GetPlaylists);
         }
       }
       Err(e) => {
@@ -297,12 +340,17 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         app.native_backend_pending = false;
         app.native_restore_pending = None;
         app.native_load_watchdog = None;
+        // A published Spotify slot waits on this rebuild: show it paused. Space
+        // retries a parked backend.
+        if app.queue_now_is_spotify() {
+          app.native_is_playing = Some(false);
+        }
         if app.pending_start_playback.take().is_some() {
           app.set_status_message(
             format!("Native recovery failed; playback request dropped: {}", e),
             8,
           );
-        } else {
+        } else if app.native_should_drive() {
           app.set_status_message(format!("Native recovery failed: {}", e), 8);
         }
       }
@@ -421,8 +469,15 @@ async fn handle_player_events(
             last_progress_at = Instant::now();
             info!("native streaming fast reconnect generation {} started", generation);
             let mut app = app.lock().await;
-            app.native_backend_pending = true;
-            app.set_status_message("Native streaming connection lost; reconnecting.", 6);
+            // A parked or replaced player must not latch the pending flag.
+            if app
+              .streaming_player
+              .as_ref()
+              .is_some_and(|current| Arc::ptr_eq(current, &player))
+            {
+              app.native_backend_pending = true;
+              app.set_status_message("Native streaming connection lost; reconnecting.", 6);
+            }
           }
           StreamingConnectionState::Connected { generation }
             if session_lost || generation != observed_connection_generation =>
@@ -435,11 +490,17 @@ async fn handle_player_events(
             last_progress_at = Instant::now();
             info!("native streaming fast reconnect generation {} completed", generation);
             let mut app = app.lock().await;
-            app.native_backend_pending = false;
-            if app.native_load_watchdog.is_some() {
-              app.native_load_watchdog = Some(Instant::now());
+            if app
+              .streaming_player
+              .as_ref()
+              .is_some_and(|current| Arc::ptr_eq(current, &player))
+            {
+              app.native_backend_pending = false;
+              if app.native_load_watchdog.is_some() {
+                app.native_load_watchdog = Some(Instant::now());
+              }
+              app.set_status_message("Native streaming connection recovered.", 5);
             }
-            app.set_status_message("Native streaming connection recovered.", 5);
           }
           StreamingConnectionState::Connected { .. } => {}
           StreamingConnectionState::Failed { generation } => {
@@ -473,17 +534,20 @@ async fn handle_player_events(
           last_position = position;
           last_progress_at = Instant::now();
         }
-        let desired_playing = {
+        let (desired_playing, should_drive) = {
           let app = app.lock().await;
-          app
-            .native_playback_recovery
-            .as_ref()
-            .map_or_else(
-              || shared_is_playing.load(Ordering::Relaxed),
-              |snapshot| snapshot.desired_playing,
-            )
+          (
+            app
+              .native_playback_recovery
+              .as_ref()
+              .map_or_else(
+                || shared_is_playing.load(Ordering::Relaxed),
+                |snapshot| snapshot.desired_playing,
+              ),
+            app.native_should_drive(),
+          )
         };
-        if !desired_playing && !session_lost {
+        if !should_drive || (!desired_playing && !session_lost) {
           progress_watchdog_armed = false;
           transport_recovery_pending = false;
           continue;
@@ -543,14 +607,19 @@ async fn handle_player_events(
       _ => {}
     }
 
+    let notes_playback = !matches!(
+      event,
+      PlayerEvent::PositionChanged { .. } | PlayerEvent::Preloading { .. }
+    );
     match event {
       PlayerEvent::Playing {
         play_request_id: _,
         track_id,
         position_ms,
       } => {
-        // While the native queue is mid-handoff or playing a *decoded* track,
-        // librespot must stay paused. The handoff pauses Spirc, but a
+        // While a decoded source or a *decoded* queue slot owns the sink, or the
+        // native queue is mid-handoff, librespot must stay paused. The handoff
+        // pauses Spirc, but a
         // self-advance load (or a stale-slot reissue) already in flight at that
         // moment can complete afterwards and start audio over the queue slot —
         // re-pause instead of accepting the state update. Librespot playing is
@@ -560,25 +629,14 @@ async fn handle_player_events(
         // next one not yet published), it never is. One-shot: a paused Spirc
         // emits no further Playing events, so this can't ping-pong.
         {
-          let stray_over_queue = {
+          let stray_over_owner = {
             let guard = app.lock().await;
-            let decoded_slot = {
-              #[cfg(feature = "audio-decode-queue")]
-              {
-                guard.queue_now_decoded_player().is_some()
-              }
-              // Without a queueable decoded source the slot can never be
-              // decoded (internet radio enables `audio-decode` but is never
-              // queued), so there is nothing to shadow librespot here.
-              #[cfg(not(feature = "audio-decode-queue"))]
-              {
-                false
-              }
-            };
-            !guard.queue_now_is_spotify() && (decoded_slot || guard.queue_suspended.is_some())
+            !guard.native_should_drive()
+              || (!guard.queue_now_is_spotify() && guard.queue_suspended.is_some())
           };
-          if stray_over_queue {
+          if stray_over_owner {
             player.pause();
+            app.lock().await.set_native_playback_intent(false);
             continue;
           }
         }
@@ -855,10 +913,14 @@ async fn handle_player_events(
           windows_media.set_stopped();
         }
 
-        if let Ok(mut app) = app.try_lock() {
+        {
+          let mut app = app.lock().await;
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.is_playing = false;
           }
+          // The next poll copies this flag over the API's play state, so a
+          // stale `Some(true)` would report the stopped player as playing.
+          app.native_is_playing = Some(false);
           app.song_progress_ms = 0;
           app.last_track_id = None;
           app.native_track_info = None;
@@ -1106,6 +1168,8 @@ async fn handle_player_events(
         // that stampede hammers Spotify and can get the account rate-limited.
         if consecutive_unavailable >= UNAVAILABLE_ESCALATION_THRESHOLD {
           player.pause();
+          // A pause during a load emits no Paused event.
+          app.lock().await.native_is_playing = Some(false);
           progress_watchdog_armed = false;
           pending_end_of_track = None;
         }
@@ -1139,6 +1203,10 @@ async fn handle_player_events(
       }
       PlayerEvent::Preloading { .. } => {}
       _ => {}
+    }
+
+    if notes_playback {
+      app.lock().await.note_display_changes();
     }
 
     // A failed in-place reconnect owns no viable Spirc. Runs after event
@@ -1286,6 +1354,7 @@ fn spawn_end_of_track_continuation(
     // alone is not sufficient: a dead connection can stall after that event.
     if playback_transition_generation.load(Ordering::Relaxed) != observed_transition_generation
       || !is_current_streaming_player(&app, &player).await
+      || !app.lock().await.native_context_should_drive()
     {
       return;
     }
@@ -1395,6 +1464,7 @@ async fn disconnect_streaming_player(
   app_lock.current_playback_context = None;
   app_lock.set_status_message(status_message, 8);
   app_lock.dispatch(IoEvent::GetCurrentPlayback);
+  app_lock.note_display_changes();
 
   shared_position.store(0, Ordering::Relaxed);
   shared_is_playing.store(false, Ordering::Relaxed);
@@ -1403,6 +1473,7 @@ async fn disconnect_streaming_player(
     reselect_device,
     restore_playback,
     continue_after_track,
+    reacquire: false,
   })
 }
 
@@ -1519,6 +1590,7 @@ mod tests {
         reselect_device: true,
         restore_playback: true,
         continue_after_track: None,
+        reacquire: false,
       },
     );
     assert!(request.reselect_device);
@@ -1532,10 +1604,30 @@ mod tests {
         reselect_device: false,
         restore_playback: true,
         continue_after_track: Some("newer".to_string()),
+        reacquire: false,
       },
     );
     assert!(request.reselect_device);
     assert_eq!(request.continue_after_track.as_deref(), Some("newer"));
+  }
+
+  #[test]
+  fn a_reacquire_merged_with_a_transport_drop_still_restores_after_the_rebuild() {
+    let mut request = StreamingRecoveryRequest {
+      restore_playback: true,
+      ..StreamingRecoveryRequest::default()
+    };
+    merge_recovery_requests(
+      &mut request,
+      StreamingRecoveryRequest {
+        restore_playback: true,
+        reacquire: true,
+        ..StreamingRecoveryRequest::default()
+      },
+    );
+    assert!(request.reacquire);
+    assert!(request.restore_playback);
+    assert!(!request.reselect_device);
   }
 
   #[test]
@@ -1544,6 +1636,7 @@ mod tests {
       reselect_device: true,
       restore_playback: true,
       continue_after_track: Some("track".to_string()),
+      reacquire: false,
     };
     let handoff = StreamingRecoveryRequest::default();
 

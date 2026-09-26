@@ -1,5 +1,5 @@
 use super::common_key_events;
-use crate::core::action::{Action, OpenTarget};
+use crate::core::action::{Action, ListTarget, OpenTarget};
 use crate::core::app::App;
 use crate::tui::event::Key;
 
@@ -9,33 +9,43 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      if let Some(albums) = &mut app.library.saved_albums.get_results(None) {
+      let on_last_row_with_more =
+        app
+          .library()
+          .saved_albums
+          .get_results(None)
+          .is_some_and(|albums| {
+            app.view.album_list_index + 1 >= albums.items.len() && albums.has_next()
+          });
+      if on_last_row_with_more {
+        app.apply(Action::LoadMore(ListTarget::SavedAlbums));
+      } else if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index =
           common_key_events::on_down_press_handler(&albums.items, Some(app.view.album_list_index));
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      if let Some(albums) = &mut app.library.saved_albums.get_results(None) {
+      if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index =
           common_key_events::on_up_press_handler(&albums.items, Some(app.view.album_list_index));
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::high_event(k) => {
-      if let Some(_albums) = app.library.saved_albums.get_results(None) {
+      if let Some(_albums) = app.library().saved_albums.get_results(None) {
         let next_index = common_key_events::on_high_press_handler();
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::middle_event(k) => {
-      if let Some(albums) = app.library.saved_albums.get_results(None) {
+      if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index = common_key_events::on_middle_press_handler(&albums.items);
         app.view.album_list_index = next_index;
       }
     }
     k if common_key_events::low_event(k) => {
-      if let Some(albums) = app.library.saved_albums.get_results(None) {
+      if let Some(albums) = app.library().saved_albums.get_results(None) {
         let next_index = common_key_events::on_low_press_handler(&albums.items);
         app.view.album_list_index = next_index;
       }
@@ -45,7 +55,9 @@ pub fn handler(key: Key, app: &mut App) {
         app.apply(Action::Open(OpenTarget::SavedAlbum(id)));
       }
     }
-    k if k == app.user_config.keys.next_page => app.get_current_user_saved_albums_next(),
+    k if k == app.user_config.keys.next_page => {
+      app.apply(Action::LoadMore(ListTarget::SavedAlbums));
+    }
     k if k == app.user_config.keys.previous_page => app.get_current_user_saved_albums_previous(),
     Key::Char('D') => {
       if let Some(id) = selected_saved_album_id(app) {
@@ -63,7 +75,7 @@ pub fn handler(key: Key, app: &mut App) {
 /// The album id under the list cursor.
 fn selected_saved_album_id(app: &App) -> Option<String> {
   app
-    .library
+    .library()
     .saved_albums
     .get_results(None)?
     .items
@@ -126,7 +138,7 @@ mod tests {
         .collect(),
       ..AlbumInfo::default()
     };
-    app.library.saved_albums.upsert_page_by_offset(Paged {
+    app.library_mut().saved_albums.upsert_page_by_offset(Paged {
       items: vec![SavedAlbumInfo {
         album,
         added_at: String::new(),
@@ -186,6 +198,49 @@ mod tests {
       ActiveBlock::AlbumTracks
     );
     assert!(rx.try_recv().is_err());
+  }
+
+  /// A two-album first page with the cursor on its last row.
+  fn app_with_album_page(has_next: bool) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let album = |id: &str| SavedAlbumInfo {
+      album: AlbumInfo {
+        id: Some(id.to_string()),
+        ..AlbumInfo::default()
+      },
+      added_at: String::new(),
+    };
+    app.library_mut().saved_albums.upsert_page_by_offset(Paged {
+      items: vec![album("a1"), album("a2")],
+      offset: 0,
+      limit: 2,
+      total: if has_next { 4 } else { 2 },
+      next: has_next.then(|| "https://example.com/me/albums?offset=2".to_string()),
+      previous: None,
+    });
+    app.view.album_list_index = 1;
+    (app, rx)
+  }
+
+  #[test]
+  fn down_on_the_last_saved_album_loads_the_next_page() {
+    let (mut app, rx) = app_with_album_page(true);
+
+    handler(Key::Down, &mut app);
+
+    assert!(rx.try_recv().is_ok(), "the next page is fetched");
+    assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn down_on_the_last_album_of_the_final_page_wraps_to_the_top() {
+    let (mut app, rx) = app_with_album_page(false);
+
+    handler(Key::Down, &mut app);
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.view.album_list_index, 0);
   }
 
   #[test]

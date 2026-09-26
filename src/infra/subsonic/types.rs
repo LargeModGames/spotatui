@@ -8,7 +8,23 @@
 //! The structs here are **private** to the subsonic module; callers work with
 //! the domain types in [`crate::core::plugin_api`].
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// `isrc` is a list on OpenSubsonic, a bare string on some servers, absent on
+/// older ones.
+fn de_one_or_many<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+  #[derive(Deserialize)]
+  #[serde(untagged)]
+  enum OneOrMany {
+    One(String),
+    Many(Vec<String>),
+  }
+  Ok(match Option::<OneOrMany>::deserialize(d)? {
+    Some(OneOrMany::One(s)) => vec![s],
+    Some(OneOrMany::Many(v)) => v,
+    None => Vec::new(),
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Top-level envelope
@@ -130,6 +146,8 @@ pub struct SubsonicSong {
   pub year: Option<u32>,
   #[serde(rename = "coverArt", default)]
   pub cover_art: Option<String>,
+  #[serde(default, deserialize_with = "de_one_or_many")]
+  pub isrc: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

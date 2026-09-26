@@ -642,20 +642,231 @@ pub fn draw_error_screen(f: &mut Frame<'_>, app: &App) {
     )
   ];
 
-  let playing_paragraph = Paragraph::new(playing_text)
-    .wrap(Wrap { trim: true })
+  // The log path gets its own reserved rows instead of a place in the list
+  // above: `api_error` has no length limit, and at 80x24 the margin and the
+  // border leave twelve text lines, so a wrapping API error can fill the
+  // frame on its own. Ordering alone would hold only for errors short enough
+  // to leave room — pinning holds for all of them, which matters because the
+  // user who is reading this screen is the one with something to report.
+  let block = Block::default()
+    .borders(Borders::ALL)
     .style(app.user_config.theme.base_style())
-    .block(
-      Block::default()
-        .borders(Borders::ALL)
-        .style(app.user_config.theme.base_style())
-        .title(Span::styled(
-          "Error",
-          Style::default().fg(app.user_config.theme.error_border.into()),
-        ))
-        .border_style(Style::default().fg(app.user_config.theme.error_border.into())),
+    .title(Span::styled(
+      "Error",
+      Style::default().fg(app.user_config.theme.error_border.into()),
+    ))
+    .border_style(Style::default().fg(app.user_config.theme.error_border.into()));
+  let inner = block.inner(chunks[0]);
+  f.render_widget(block, chunks[0]);
+
+  const LOG_HINT: &str = "Rerun with --debug for more detail. Read it before posting publicly.";
+  let log_label = "Log file: ";
+  let log_text = vec![
+    Line::from(vec![
+      Span::styled(
+        log_label,
+        Style::default().fg(app.user_config.theme.text.into()),
+      ),
+      Span::styled(
+        app.log_path.clone(),
+        Style::default().fg(app.user_config.theme.hint.into()),
+      ),
+    ]),
+    Line::from(Span::styled(
+      LOG_HINT,
+      Style::default().fg(app.user_config.theme.hint.into()),
+    )),
+  ];
+
+  // Measured rather than assumed to be two rows: at 80 columns the margin and
+  // the border leave 68, and a temp-directory log path is routinely longer
+  // than what is left of that after the label. A reserved row count that is
+  // too small would cut the filename off the one line a bug reporter needs.
+  let log_rows = wrapped_rows(&format!("{log_label}{}", app.log_path), inner.width)
+    + wrapped_rows(LOG_HINT, inner.width);
+
+  let sections = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+      Constraint::Min(0),
+      // Capped so a pathological path cannot leave no room for the error
+      // itself, which is the other half of the report.
+      Constraint::Length(log_rows.min(inner.height.saturating_sub(2).max(1))),
+    ])
+    .split(inner);
+
+  f.render_widget(
+    Paragraph::new(playing_text)
+      .wrap(Wrap { trim: true })
+      .style(app.user_config.theme.base_style()),
+    sections[0],
+  );
+  f.render_widget(
+    Paragraph::new(log_text)
+      .wrap(Wrap { trim: true })
+      .style(app.user_config.theme.base_style()),
+    sections[1],
+  );
+}
+
+/// Rows `text` occupies once ratatui has word-wrapped it to `width`: greedy,
+/// and a word longer than a row is broken across rows rather than clipped.
+/// Pure so the reserved height can be tested without a terminal.
+///
+/// Measured in terminal cells rather than characters, because that is what
+/// ratatui wraps on: a path under a CJK user directory is twice as wide as it
+/// is long, and counting characters would reserve too few rows and clip it.
+fn wrapped_rows(text: &str, width: u16) -> u16 {
+  use unicode_width::UnicodeWidthStr;
+
+  let width = usize::from(width);
+  if width == 0 {
+    return 1;
+  }
+
+  let mut rows = 1usize;
+  let mut used = 0usize;
+  for word in text.split_whitespace() {
+    let len = UnicodeWidthStr::width(word);
+    if used > 0 {
+      if used + 1 + len <= width {
+        used += 1 + len;
+        continue;
+      }
+      rows += 1;
+    }
+    // The word now starts a row of its own, and may outgrow it.
+    let overflow = len.saturating_sub(1) / width;
+    rows += overflow;
+    used = len - overflow * width;
+  }
+
+  u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
+#[cfg(test)]
+mod error_screen_tests {
+  use super::*;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  fn rendered_error_screen_at(app: &App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw_error_screen(f, app)).unwrap();
+    let buffer = terminal.backend().buffer();
+
+    (0..height)
+      .map(|y| {
+        (0..width)
+          .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol().to_string()))
+          .collect::<String>()
+      })
+      .collect::<Vec<_>>()
+      .join("\n")
+  }
+
+  fn rendered_error_screen(app: &App) -> String {
+    rendered_error_screen_at(app, 100, 30)
+  }
+
+  #[test]
+  fn error_screen_names_the_log_file_and_the_debug_flag() {
+    let mut app = App::default();
+    app.log_path = "/tmp/spotatui_logs/spotatuilog42".to_string();
+
+    let rendered = rendered_error_screen(&app);
+
+    assert!(
+      rendered.contains("/tmp/spotatui_logs/spotatuilog42"),
+      "the error screen must name the log file a reporter has to attach:\n{rendered}"
     );
-  f.render_widget(playing_paragraph, chunks[0]);
+    assert!(
+      rendered.contains("--debug"),
+      "the error screen must point at the debug mode:\n{rendered}"
+    );
+  }
+
+  /// 80x24 is the floor a terminal is allowed to be, and a wrapping API error
+  /// is the normal case on this screen rather than an exotic one.
+  #[test]
+  fn wrapped_rows_counts_word_wrapping_and_oversized_words() {
+    assert_eq!(wrapped_rows("", 10), 1);
+    assert_eq!(wrapped_rows("short", 10), 1);
+    assert_eq!(wrapped_rows("one two three", 7), 2);
+    // A path is one unbreakable word: 25 characters over rows of 10.
+    assert_eq!(wrapped_rows(&"x".repeat(25), 10), 3);
+    assert_eq!(wrapped_rows(&"x".repeat(20), 10), 2);
+    // Exactly full must not spill into an extra row.
+    assert_eq!(wrapped_rows(&"x".repeat(10), 10), 1);
+    assert_eq!(wrapped_rows("anything", 0), 1);
+    // Double-width characters take two cells each, so half as many fit.
+    assert_eq!(wrapped_rows(&"中".repeat(5), 10), 1);
+    assert_eq!(wrapped_rows(&"中".repeat(6), 10), 2);
+  }
+
+  /// A log path under a CJK user directory is twice as wide as it is long.
+  #[test]
+  fn error_screen_shows_a_double_width_log_path_in_full() {
+    let path = format!("{}/spotatui.log", "中".repeat(65));
+    let mut app = App::default();
+    app.log_path = path.clone();
+
+    let rendered = rendered_error_screen_at(&app, 80, 24);
+    let unbroken = rendered.replace([' ', '\n', '\u{2502}'], "");
+
+    assert!(
+      unbroken.contains(&path),
+      "a double-width path must not be clipped:\n{rendered}"
+    );
+    assert!(
+      rendered.contains("--debug"),
+      "reserving too few rows would push the hint out:\n{rendered}"
+    );
+  }
+
+  /// A temp-directory log path is routinely longer than the columns an 80-wide
+  /// terminal leaves after the label, and a cut-off filename is useless to the
+  /// person filing the report.
+  #[test]
+  fn error_screen_shows_a_long_log_path_in_full() {
+    let path = "/tmp/spotatui_logs/a_very_long_directory_name/spotatuilog_2026_09_24_181205.log";
+    let mut app = App::default();
+    app.log_path = path.to_string();
+    app.handle_error(anyhow::anyhow!(
+      "{}",
+      "Player command failed: No active device found. ".repeat(40)
+    ));
+
+    let rendered = rendered_error_screen_at(&app, 80, 24);
+    // The path wraps across rows, so the row padding and the frame have to go
+    // before the pieces sit next to each other again.
+    let unbroken = rendered.replace([' ', '\n', '\u{2502}'], "");
+
+    assert!(
+      unbroken.contains(path),
+      "the full log path must survive an 80 column terminal:\n{rendered}"
+    );
+  }
+
+  #[test]
+  fn error_screen_still_names_the_log_file_on_a_small_terminal() {
+    let mut app = App::default();
+    app.log_path = "/tmp/spotatui_logs/spotatuilog42".to_string();
+    app.handle_error(anyhow::anyhow!(
+      "{}",
+      "Player command failed: No active device found. ".repeat(40)
+    ));
+
+    let rendered = rendered_error_screen_at(&app, 80, 24);
+
+    assert!(
+      rendered.contains("/tmp/spotatui_logs/spotatuilog42"),
+      "a long error must not push the log path off an 80x24 screen:\n{rendered}"
+    );
+    assert!(
+      rendered.contains("--debug"),
+      "the debug hint must survive the same squeeze:\n{rendered}"
+    );
+  }
 }
 
 pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
@@ -709,8 +920,24 @@ pub fn draw_dialog(f: &mut Frame<'_>, app: &App) {
         draw_confirmation_dialog(f, app, "Save Shortcut Fallback", text, 66);
       }
     }
+    DialogContext::RemovePlaylistSyncLinkConfirm => {
+      if let Some(name) = app.view.dialog.as_ref() {
+        let text = vec![
+          Line::from(Span::raw("Remove the playlist link for:")),
+          Line::from(Span::styled(
+            name.as_str(),
+            Style::default().add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+          )),
+          Line::from(Span::raw("The mirror playlists stay.")),
+        ];
+        draw_confirmation_dialog(f, app, "Remove Link", text, 50);
+      }
+    }
     DialogContext::AddTrackToPlaylistPicker => {
       draw_add_track_to_playlist_picker_dialog(f, app);
+    }
+    DialogContext::PlaylistSyncPicker => {
+      draw_playlist_sync_picker_dialog(f, app);
     }
   }
 }
@@ -845,7 +1072,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       // user's own (no "(collab)" suffix).
       playlist.owner_id.is_none()
         || app
-          .user
+          .user()
           .as_ref()
           .is_some_and(|user| Some(user.id.as_str()) == playlist.owner_id.as_deref())
     };
@@ -890,6 +1117,74 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
 
   let footer = Paragraph::new(format!(
     "Enter add/open | q cancel | {}/{} or arrows move | H/M/L jump",
+    app.user_config.keys.move_down, app.user_config.keys.move_up,
+  ))
+  .style(Style::default().fg(app.user_config.theme.inactive.into()))
+  .alignment(Alignment::Center);
+  f.render_widget(footer, vchunks[2]);
+}
+
+fn draw_playlist_sync_picker_dialog(f: &mut Frame<'_>, app: &App) {
+  let rect = centered_modal_rect(f.area(), 50, 12);
+  f.render_widget(Clear, rect);
+
+  let block = Block::default()
+    .title(Span::styled(
+      "Mirror Playlist",
+      Style::default()
+        .fg(app.user_config.theme.header.into())
+        .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
+    ))
+    .borders(Borders::ALL)
+    .style(app.user_config.theme.base_style())
+    .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
+  f.render_widget(block, rect);
+
+  let vchunks = Layout::default()
+    .direction(Direction::Vertical)
+    .margin(1)
+    .constraints([
+      Constraint::Length(2),
+      Constraint::Min(3),
+      Constraint::Length(1),
+    ])
+    .split(rect);
+
+  let master = app
+    .pending_playlist_sync_master()
+    .map(|endpoint| endpoint.name.as_str())
+    .unwrap_or("Selected playlist");
+
+  let header = Paragraph::new(Line::from(Span::raw(format!("Mirror \"{master}\" onto:"))))
+    .wrap(Wrap { trim: true })
+    .style(app.user_config.theme.base_style());
+  f.render_widget(header, vchunks[0]);
+
+  let sources = app.playlist_sync_picker_sources();
+  if sources.is_empty() {
+    let empty_text = Paragraph::new("No other source can take a mirror")
+      .style(Style::default().fg(app.user_config.theme.inactive.into()))
+      .alignment(Alignment::Center);
+    f.render_widget(empty_text, vchunks[1]);
+  } else {
+    let items: Vec<ListItem> = sources
+      .iter()
+      .map(|source| ListItem::new(Span::raw(source.label())))
+      .collect();
+    let selected = app.view.playlist_sync_picker_index.min(sources.len() - 1);
+    let mut list_state = ListState::default();
+    list_state.select(Some(selected));
+
+    let list = List::new(items)
+      .style(app.user_config.theme.base_style())
+      .highlight_style(Style::default().fg(app.user_config.theme.hovered.into()))
+      .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, vchunks[1], &mut list_state);
+  }
+
+  let footer = Paragraph::new(format!(
+    "Enter mirror | q cancel | {}/{} or arrows move",
     app.user_config.keys.move_down, app.user_config.keys.move_up,
   ))
   .style(Style::default().fg(app.user_config.theme.inactive.into()))
@@ -1200,7 +1495,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
 
   let mut lines: Vec<Line> = Vec::new();
 
-  match &app.party_status {
+  match app.party_status() {
     PartyStatus::Disconnected | PartyStatus::Connecting => {
       if !app.view.party_input.is_empty()
         || app.view.party_input_idx > 0
@@ -1269,7 +1564,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
       } else {
         lines.push(Line::from(Span::styled("Listening Party", active_style)));
         lines.push(Line::from(""));
-        if app.party_status == PartyStatus::Connecting {
+        if *app.party_status() == PartyStatus::Connecting {
           lines.push(Line::from(Span::styled("Connecting...", hint_style)));
         } else {
           lines.push(Line::from(vec![
@@ -1291,7 +1586,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
         active_style,
       )));
       lines.push(Line::from(""));
-      if let Some(session) = &app.party_session {
+      if let Some(session) = app.party_session() {
         let code_display = if session.code.is_empty() {
           "Generating...".to_string()
         } else {
@@ -1339,7 +1634,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
         active_style,
       )));
       lines.push(Line::from(""));
-      if let Some(session) = &app.party_session {
+      if let Some(session) = app.party_session() {
         lines.push(Line::from(vec![
           Span::styled("Host: ", style),
           Span::styled(&session.host_name, style),
@@ -1359,7 +1654,7 @@ pub fn draw_party(f: &mut Frame<'_>, app: &App) {
     }
   }
 
-  let title = match &app.party_status {
+  let title = match app.party_status() {
     PartyStatus::Hosting => "Party (Hosting)",
     PartyStatus::Joined => "Party (Joined)",
     _ => "Party",
@@ -1449,4 +1744,56 @@ fn build_popup_line<'a>(pl: &'a PopupLine) -> Line<'a> {
     style = style.add_modifier(Modifier::ITALIC);
   }
   Line::from(Span::styled(pl.text.clone(), style))
+}
+
+#[cfg(test)]
+mod playlist_sync_picker_tests {
+  use super::*;
+  use crate::core::action::Action;
+  use crate::core::plugin_api::PlaylistInfo;
+  use crate::core::source::Source;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn the_mirror_picker_lists_the_offered_sources() {
+    let mut app = App::default_connected().under_source(Source::Qobuz);
+    app.qobuz_playlists_mut().push(PlaylistInfo {
+      uri: "qobuz:playlist:9".to_string(),
+      name: "Mine".to_string(),
+      owner: "qobuz".to_string(),
+      track_count: 3,
+      id: Some("9".to_string()),
+      owner_id: None,
+      collaborative: false,
+      public: None,
+      image_url: None,
+    });
+    app.view.selected_playlist_index = Some(0);
+    app.apply(Action::OpenPlaylistSyncPicker);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| draw_dialog(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let content: String = (0..24)
+      .flat_map(|y| (0..80).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect();
+
+    assert!(
+      content.contains("Mirror Playlist"),
+      "picker title missing: {content}"
+    );
+    assert!(
+      content.contains("Mirror \"Mine\" onto:"),
+      "picker header missing: {content}"
+    );
+    assert!(
+      content.contains("Spotify"),
+      "the connected session should be offered: {content}"
+    );
+    assert!(
+      !content.contains("Qobuz"),
+      "the master's own source must not be offered: {content}"
+    );
+  }
 }

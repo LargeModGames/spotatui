@@ -1,3 +1,4 @@
+use super::requests::is_transient_network_error;
 use super::{IoEvent, Network};
 use crate::core::app::PlaybackOwner;
 #[cfg(feature = "streaming")]
@@ -371,7 +372,7 @@ fn reconcile_native_idle_device_if_preferred(
   player: &crate::infra::player::StreamingPlayer,
   recovery: &mut NativeIdleRecoveryState,
 ) {
-  if !player.is_connected() {
+  if !player.is_connected() || !app.native_should_drive() {
     return;
   }
 
@@ -379,7 +380,7 @@ fn reconcile_native_idle_device_if_preferred(
   let saved_device_matches_native = saved_device_matches_native_player(
     client_config.device_id.as_deref(),
     Some(&native_device_id),
-    app.devices.as_ref(),
+    app.devices(),
     player.device_name(),
   );
   let Some(native_preference_update) = native_idle_device_preference_update(
@@ -738,7 +739,7 @@ async fn transfer_playback_backend(network: &Network, device_id: &str) -> Playba
   let is_native_transfer = if let Some(ref player) = player {
     let native_name = player.device_name().to_lowercase();
     let app = network.app.lock().await;
-    let matches_cached_device = app.devices.as_ref().is_some_and(|payload| {
+    let matches_cached_device = app.devices().is_some_and(|payload| {
       payload
         .devices
         .iter()
@@ -779,12 +780,12 @@ async fn should_activate_native_streaming_for_playback(network: &Network) -> boo
   let saved_device_matches_native = saved_device_matches_native_player(
     saved_device_id,
     native_device_id,
-    app.devices.as_ref(),
+    app.devices(),
     native_name,
   );
 
   let saved_external_confirmed_available = saved_device_id.is_some_and(|saved| {
-    app.devices.as_ref().is_some_and(|payload| {
+    app.devices().is_some_and(|payload| {
       payload.devices.iter().any(|device| {
         device.id.as_deref() == Some(saved) && !device.name.eq_ignore_ascii_case(native_name)
       })
@@ -803,10 +804,17 @@ async fn should_activate_native_streaming_for_playback(network: &Network) -> boo
   })
 }
 
+/// Whether the start must wait for a rebuilt backend. A parked backend is
+/// rebuilt for an explicit start only: the App side decides a bare resume.
 #[cfg(feature = "streaming")]
-async fn request_native_streaming_recovery_if_disconnected(network: &Network) -> bool {
+async fn request_native_streaming_recovery_if_disconnected(
+  network: &Network,
+  explicit: bool,
+) -> bool {
   let mut app = network.app.lock().await;
+  // A start while another device plays keeps its Connect route.
   app.request_native_streaming_recovery_if_disconnected(true)
+    || (explicit && !app.spotify_playing_elsewhere() && app.reacquire_parked_backend())
 }
 
 #[cfg(feature = "streaming")]
@@ -1013,6 +1021,15 @@ fn native_restore_load_request(snapshot: &NativePlaybackRecoverySnapshot) -> Opt
   }
 }
 
+/// Whether `get_current_playback`'s poll failure is a dropped connection that
+/// should retry quietly instead of escalating to the full-screen error route.
+/// Delegates to the central classifier, kept as its own function so the exact
+/// decision `get_current_playback` makes can be pinned by a test without
+/// building a Spotify client.
+fn current_playback_poll_is_transient(err: &anyhow::Error) -> bool {
+  is_transient_network_error(err)
+}
+
 impl PlaybackNetwork for Network {
   async fn get_current_playback(&mut self) {
     // When using native streaming, the Spotify API returns stale server-side state
@@ -1138,10 +1155,6 @@ impl PlaybackNetwork for Network {
 
                   // Check if this is a new track
                   if app.last_track_id.as_ref() != Some(&track_id_str) {
-                    if app.user_config.behavior.enable_global_song_count {
-                      app.dispatch(IoEvent::IncrementGlobalSongCount);
-                    }
-
                     // Lyrics (and cover art) are now driven by the shared
                     // track-change detector in the UI tick, which works for every
                     // source — see `core/driver/`. No per-source dispatch here.
@@ -1202,6 +1215,16 @@ impl PlaybackNetwork for Network {
           if let Some(ref player) = streaming_player {
             let _ = player.set_shuffle(app.runtime_state.shuffle_enabled);
           }
+        }
+
+        // A parked backend plays nothing, whatever Spotify still reports for
+        // its device.
+        #[cfg(feature = "streaming")]
+        if app.native_backend_parked()
+          && c.device.id.is_some()
+          && c.device.id == app.native_device_id
+        {
+          c.is_playing = false;
         }
 
         if !stale_api_item_for_native {
@@ -1267,16 +1290,7 @@ impl PlaybackNetwork for Network {
           return;
         }
 
-        if err
-          .to_string()
-          .to_lowercase()
-          .contains("error sending request for url")
-          || err.to_string().contains("connection reset")
-          || err.to_string().contains("connection refused")
-          || err.to_string().contains("timed out")
-          || err.to_string().contains("temporary failure")
-          || err.to_string().contains("dns")
-        {
+        if current_playback_poll_is_transient(&err) {
           app.set_status_message(
             "Temporary Spotify network error while polling playback; retrying automatically.",
             5,
@@ -1479,7 +1493,12 @@ impl PlaybackNetwork for Network {
 
     // Check if we should use native streaming for playback
     #[cfg(feature = "streaming")]
-    if request_native_streaming_recovery_if_disconnected(self).await {
+    if request_native_streaming_recovery_if_disconnected(
+      self,
+      context_id.is_some() || uris.is_some(),
+    )
+    .await
+    {
       // Park the request instead of dropping it: the recovery handler replays
       // it once the new session and device selection are in place, so the
       // press that detected the disconnect still plays.
@@ -1504,7 +1523,7 @@ impl PlaybackNetwork for Network {
         let saved_device_matches_native = saved_device_matches_native_player(
           self.client_config.device_id.as_deref(),
           Some(&native_device_id),
-          app.devices.as_ref(),
+          app.devices(),
           player.device_name(),
         );
         let activation_pending = app.native_activation_pending;
@@ -1790,7 +1809,7 @@ impl PlaybackNetwork for Network {
                 let saved_device_matches_native = saved_device_matches_native_player(
                   self.client_config.device_id.as_deref(),
                   Some(&native_device_id),
-                  app.devices.as_ref(),
+                  app.devices(),
                   player.device_name(),
                 );
                 let native_preference_update = native_device_preference_update(
@@ -1922,12 +1941,12 @@ impl PlaybackNetwork for Network {
 
   #[cfg(feature = "streaming")]
   async fn restore_native_playback(&mut self, generation: u64) {
-    if decoded_source_owns_playback(self).await {
-      warn!("native restore {generation} skipped: a decoded source owns playback");
-      return;
-    }
     let (player, snapshot) = {
       let mut app = self.app.lock().await;
+      if !app.native_context_should_drive() {
+        warn!("native restore {generation} skipped: another player owns the sink");
+        return;
+      }
       if app.pending_start_playback.is_some() {
         warn!("native restore {generation} skipped: a parked StartPlayback owns the replay");
         return;
@@ -2365,17 +2384,34 @@ impl PlaybackNetwork for Network {
   }
 
   async fn transfert_playback_to_device(&mut self, device_id: String, persist_device_id: bool) {
-    #[cfg(feature = "streaming")]
-    let backend = transfer_playback_backend(self, &device_id).await;
-    // Only the hand-over to librespot touches the local sink; an external
-    // device stays a valid target.
-    #[cfg(feature = "streaming")]
-    if matches!(backend, PlaybackBackend::Native(_)) && decoded_source_owns_playback(self).await {
+    // Both targets are wrong while a decoded source holds the sink: librespot
+    // is paused or parked underneath, and the Web API transfer starts a second player.
+    if decoded_source_owns_playback(self).await {
       self
         .show_status_message("Another source owns playback".to_string(), 4)
         .await;
       return;
     }
+    // Enter on the parked spotatui row is the explicit rebuild.
+    #[cfg(feature = "streaming")]
+    {
+      let mut app = self.app.lock().await;
+      if app.native_device_id.as_deref() == Some(device_id.as_str())
+        && app.reacquire_parked_device()
+      {
+        if persist_device_id {
+          persist_native_device_id_if_needed(
+            &mut self.client_config,
+            &mut app,
+            &device_id,
+            NativeDevicePreferenceUpdate::Persist,
+          );
+        }
+        return;
+      }
+    }
+    #[cfg(feature = "streaming")]
+    let backend = transfer_playback_backend(self, &device_id).await;
     // A device change moves playback off the session's `from_tracks` load;
     // the app-owned shuffle order no longer describes what plays.
     #[cfg(feature = "streaming")]
@@ -2393,7 +2429,7 @@ impl PlaybackNetwork for Network {
       let saved_device_matches_native = saved_device_matches_native_player(
         self.client_config.device_id.as_deref(),
         Some(&native_device_id),
-        app.devices.as_ref(),
+        app.devices(),
         player.device_name(),
       );
       let native_preference_update = native_device_preference_update(
@@ -2470,7 +2506,7 @@ impl PlaybackNetwork for Network {
         let saved_device_matches_native = saved_device_matches_native_player(
           self.client_config.device_id.as_deref(),
           Some(&native_device_id),
-          app.devices.as_ref(),
+          app.devices(),
           player.device_name(),
         );
         let recent_activation = app
@@ -2560,7 +2596,7 @@ impl PlaybackNetwork for Network {
 
             if native_confirmed || name_seen {
               let mut app = self.app.lock().await;
-              app.devices = Some(payload);
+              app.set_devices(payload);
               app
                 .plugin_data_generations
                 .bump(crate::core::app::PluginDataKind::Devices);
@@ -2577,6 +2613,10 @@ impl PlaybackNetwork for Network {
   }
 
   async fn ensure_playback_continues(&mut self, previous_track_id: String) {
+    if !self.app.lock().await.native_context_should_drive() {
+      info!("continuation for {previous_track_id}: skipped, another player owns the sink");
+      return;
+    }
     #[cfg(feature = "streaming")]
     let native_active = is_native_streaming_active_for_playback(self).await;
     #[cfg(feature = "streaming")]
@@ -2811,6 +2851,83 @@ mod tests {
     assert!(!is_no_active_device_error(&anyhow!(
       "Spotify API 404 Not Found failed: Device not found"
     )));
+  }
+
+  /// Every classifier in this file matches on the *text* of a failure, and
+  /// every test around them hand-builds that text with `anyhow!`. So a change
+  /// to `SpotifyApiError`'s `Display` would stop spotatui recognising "no
+  /// active device" at runtime while all of those tests still passed. This one
+  /// renders a real error value through the real `Display` — endpoint and all
+  /// — and re-asks the classifiers.
+  #[test]
+  fn the_real_error_text_still_reads_as_no_active_device() {
+    let error: anyhow::Error = crate::infra::network::requests::SpotifyApiError {
+      status: reqwest::StatusCode::NOT_FOUND,
+      body: r#"{"error":{"status":404,"message":"Player command failed: No active device found","reason":"NO_ACTIVE_DEVICE"}}"#
+        .to_string(),
+      detail: None,
+      endpoint: Some("PUT /v1/me/player/play?device_id=1a2b3c".to_string()),
+    }
+    .into();
+    let text = error.to_string();
+
+    assert!(is_no_active_device_error(&error), "{text}");
+    // `get_current_playback` classifies inline on the same string.
+    assert!(text.contains("404"), "{text}");
+    assert!(text.contains("Not Found"), "{text}");
+    assert!(
+      !crate::infra::network::requests::is_rate_limited_error(&error),
+      "{text}"
+    );
+    assert!(
+      !crate::infra::network::requests::is_transient_network_error(&error),
+      "{text}"
+    );
+  }
+
+  /// The playback poll's inline branches key off the bare status text.
+  #[test]
+  fn the_real_error_text_still_carries_the_status_the_playback_poll_matches() {
+    for (status, needle) in [
+      (401u16, "401"),
+      (429, "Too Many Requests"),
+      (503, "Service Unavailable"),
+      (504, "504"),
+    ] {
+      let error: anyhow::Error = crate::infra::network::requests::SpotifyApiError {
+        status: reqwest::StatusCode::from_u16(status).unwrap(),
+        body: "upstream said no".to_string(),
+        detail: None,
+        endpoint: Some("GET /v1/me/player?additional_types=episode,track".to_string()),
+      }
+      .into();
+
+      assert!(error.to_string().contains(needle), "{error}");
+    }
+  }
+
+  /// Regression test for `current_playback_poll_is_transient`: it used to
+  /// hand-check `"error sending request for url"`, a needle `without_url()`
+  /// deletes, which fell through to the full-screen error route on a dropped
+  /// connection instead of retrying quietly. Binds a real listener and closes
+  /// it immediately so nothing answers, then rebuilds the exact wrapping
+  /// `get_current_playback` applies around the transport failure - a
+  /// hand-built string using only the old long needle would not have caught
+  /// this regression.
+  #[tokio::test]
+  async fn a_dropped_connection_still_reads_as_transient_after_the_url_is_stripped() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let reqwest_err = reqwest::Client::new()
+      .get(format!("http://{addr}/"))
+      .send()
+      .await
+      .expect_err("nothing listens on the closed port");
+    let err = anyhow!("Spotify API request failed: {}", reqwest_err.without_url());
+
+    assert!(current_playback_poll_is_transient(&err), "{err}");
   }
 
   #[test]
@@ -3061,6 +3178,24 @@ mod tests {
       "{}",
       r#"Spotify API 403 Forbidden failed: {"error":{"status":403,"message":"Player command failed: Restriction violated","reason":"UNKNOWN"}}"#
     )));
+  }
+
+  /// Same acceptance check for the 403 classifier: a real value, the real
+  /// `Display`.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn the_real_error_text_still_reads_as_a_restriction_violation() {
+    let error: anyhow::Error = crate::infra::network::requests::SpotifyApiError {
+      status: reqwest::StatusCode::FORBIDDEN,
+      body: r#"{"error":{"status":403,"message":"Player command failed: Restriction violated","reason":"UNKNOWN"}}"#
+        .to_string(),
+      detail: None,
+      endpoint: Some("POST /v1/me/player/next?device_id=1a2b3c".to_string()),
+    }
+    .into();
+
+    assert!(is_restriction_violated_error(&error), "{error}");
+    assert!(!is_no_active_device_error(&error), "{error}");
   }
 
   #[cfg(feature = "streaming")]
@@ -3525,5 +3660,183 @@ mod tests {
 
     let guard = app.lock().await;
     assert_eq!(guard.status_message(), Some("Queue finished"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_spotify_queue_slot_blocks_a_cached_context_restore() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::queue::QueueNowPlaying;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, rx) = channel();
+    let mut app_state = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    app_state.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queued_track("spotify:track:0000000000000000000001"),
+    });
+    let generation = app_state.record_native_playback_request(
+      Some("spotify:playlist:ctx".to_string()),
+      None,
+      None,
+      true,
+      false,
+      rspotify::model::enums::RepeatState::Off,
+    );
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(app_state));
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_restore_slot_test.json"),
+    );
+
+    network.restore_native_playback(generation).await;
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.lock().await.status_message().is_none());
+  }
+
+  #[tokio::test]
+  async fn a_decoded_owner_refuses_the_end_of_track_continuation() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::source::Source;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    seeded.claim_decoded_sink(Source::YouTube);
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the `me/player` GET panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_continuation_refusal_test.json"),
+    );
+
+    network
+      .ensure_playback_continues("0000000000000000000001".to_string())
+      .await;
+
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn an_explicit_start_waits_for_a_parked_backend_instead_of_the_web_api() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    const PLAYLIST: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+    let (io_tx, rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    seeded.streaming_recovery_tx = Some(recovery_tx);
+    seeded.seed_native_parked();
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the Connect arm's `me/player` PUT panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_parked_start_test.json"),
+    );
+
+    network
+      .start_playback(
+        crate::infra::network::ids::play_context_id(PLAYLIST),
+        None,
+        None,
+      )
+      .await;
+
+    let guard = app.lock().await;
+    assert_eq!(
+      guard
+        .pending_start_playback
+        .as_ref()
+        .and_then(|pending| pending.context_uri.as_deref()),
+      Some(PLAYLIST)
+    );
+    assert!(recovery_rx
+      .try_recv()
+      .is_ok_and(|request| request.reacquire));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_transfer_to_the_parked_native_device_requests_the_rebuild() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, _rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    seeded.streaming_recovery_tx = Some(recovery_tx);
+    seeded.seed_native_parked();
+    seeded.native_device_id = Some("native-device".to_string());
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the `me/player` PUT panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_parked_transfer_test.json"),
+    );
+
+    network
+      .transfert_playback_to_device("native-device".to_string(), false)
+      .await;
+
+    assert!(recovery_rx.try_recv().is_ok());
+    assert_eq!(
+      app.lock().await.status_message(),
+      Some("Reconnecting native streaming…")
+    );
+  }
+
+  #[tokio::test]
+  async fn transfer_to_an_external_device_is_refused_while_a_decoded_source_owns_playback() {
+    use crate::core::app::App;
+    use crate::core::config::ClientConfig;
+    use crate::core::source::Source;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (io_tx, _rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    seeded.claim_decoded_sink(Source::YouTube);
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
+    // No Spotify client: reaching the `me/player` PUT panics in `spotify()`.
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      std::env::temp_dir().join("spotatui_transfer_refusal_test.json"),
+    );
+
+    network
+      .transfert_playback_to_device("external-device".to_string(), true)
+      .await;
+
+    assert_eq!(
+      app.lock().await.status_message(),
+      Some("Another source owns playback")
+    );
+    assert!(network.client_config.device_id.is_none());
   }
 }

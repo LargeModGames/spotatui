@@ -24,7 +24,7 @@ pub async fn handle_matches(
     .handle_network_event(IoEvent::GetCurrentPlayback)
     .await;
 
-  let devices_list = match &cli.net.app.lock().await.devices {
+  let devices_list = match cli.net.app.lock().await.devices() {
     Some(p) => p
       .devices
       .iter()

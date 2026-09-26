@@ -222,7 +222,7 @@ mod tests {
   fn app_on_a_cached_album(album_uri: Option<String>) -> (App, Receiver<IoEvent>) {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.library.saved_albums.upsert_page_by_offset(Paged {
+    app.library_mut().saved_albums.upsert_page_by_offset(Paged {
       items: vec![SavedAlbumInfo {
         album: AlbumInfo {
           id: Some("album1".to_string()),

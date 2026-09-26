@@ -29,6 +29,20 @@ impl App {
     true
   }
 
+  /// Override live theme colors field by field, the runtime `set_theme` path.
+  pub(crate) fn set_theme_colors(
+    &mut self,
+    pairs: Vec<(crate::core::theme::ThemeField, crate::core::theme::Color)>,
+  ) {
+    let before = self.user_config.theme;
+    for (field, color) in pairs {
+      self.user_config.theme.set(field, color);
+    }
+    if self.user_config.theme != before {
+      self.display_revisions.bump(DisplayDomain::Theme);
+    }
+  }
+
   pub(crate) fn cycle_visualizer_style(&mut self) {
     self.user_config.behavior.visualizer_style = self.user_config.behavior.visualizer_style.next();
     // Save the config so the preference persists
@@ -42,8 +56,7 @@ impl App {
     let mut settings_error: Option<String> = None;
     // What is actually on screen right now, put back by the reconciliation at
     // the end so an adaptive-theme fade continues from it.
-    #[cfg(feature = "art-decode")]
-    let cover_theme_live_before = self.user_config.theme;
+    let theme_before = self.user_config.theme;
     #[cfg(feature = "art-decode")]
     let cover_art_theme_before = self.user_config.behavior.cover_art_theme;
     // Run the arms against the user's own colors rather than the live blend:
@@ -782,7 +795,10 @@ impl App {
       }
     }
     #[cfg(feature = "art-decode")]
-    self.reconcile_cover_theme_after_settings(cover_theme_live_before, cover_art_theme_before);
+    self.reconcile_cover_theme_after_settings(theme_before, cover_art_theme_before);
+    if self.user_config.theme != theme_before {
+      self.display_revisions.bump(DisplayDomain::Theme);
+    }
     if let Some(message) = settings_error {
       self.set_status_message(message, 4);
     }
@@ -829,5 +845,40 @@ impl App {
     {
       setting.value = SettingValue::Bool(preset.default_banner_gradient());
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::test_support::*;
+
+  fn setting(id: &str, value: SettingValue) -> SettingItem {
+    SettingItem {
+      id: id.to_string(),
+      name: String::new(),
+      description: String::new(),
+      value,
+    }
+  }
+
+  #[test]
+  fn saving_a_theme_preset_bumps_the_theme_revision_and_an_unrelated_save_does_not() {
+    let mut app = make_app_simple();
+    app.settings_items = vec![setting(
+      "theme.preset",
+      SettingValue::Preset("Dracula".into()),
+    )];
+    let rev = app.display_revisions().get(DisplayDomain::Theme);
+
+    app.apply_settings_changes();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 1);
+
+    app.settings_items = vec![setting(
+      "behavior.seek_milliseconds",
+      SettingValue::Number(5000),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 1);
   }
 }

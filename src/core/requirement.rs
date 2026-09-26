@@ -12,6 +12,7 @@ pub enum Capability {
   Search,
   PlaylistWrite,
   Like,
+  PlaylistSync,
 }
 
 impl Capability {
@@ -20,6 +21,7 @@ impl Capability {
       Capability::Search => source.supports_search(),
       Capability::PlaylistWrite => source.supports_playlist_write(),
       Capability::Like => source.supports_like(),
+      Capability::PlaylistSync => source.supports_playlist_sync(),
     }
   }
 }
@@ -156,6 +158,27 @@ mod tests {
     );
     assert_eq!(
       availability(search, Source::Local, true),
+      Availability::NotForSource(Source::Local)
+    );
+  }
+
+  #[test]
+  fn playlist_sync_needs_a_session_on_spotify_and_a_capable_source_elsewhere() {
+    let sync = Requirement::Capability(Capability::PlaylistSync);
+    assert_eq!(
+      availability(sync, Source::Spotify, false),
+      Availability::NeedsSpotify
+    );
+    assert_eq!(
+      availability(sync, Source::Spotify, true),
+      Availability::Available
+    );
+    assert_eq!(
+      availability(sync, Source::Qobuz, false),
+      Availability::Available
+    );
+    assert_eq!(
+      availability(sync, Source::Local, true),
       Availability::NotForSource(Source::Local)
     );
   }

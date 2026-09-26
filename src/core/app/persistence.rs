@@ -369,6 +369,7 @@ impl App {
     station.name = name;
     station.uri = Some(uri);
     self.radio_stations.push(station);
+    self.display_revisions.bump(DisplayDomain::Library);
     if self.view.selected_playlist_index.is_none() {
       self.view.selected_playlist_index = Some(0);
     }
@@ -431,6 +432,7 @@ impl App {
           self
             .radio_stations
             .retain(|station| station.uri.as_deref() != Some(uri.as_str()));
+          self.display_revisions.bump(DisplayDomain::Library);
         }
         // The saved copy's name, not the sidebar row's: a station configured in
         // config.yml keeps its configured name while its saved duplicate goes.

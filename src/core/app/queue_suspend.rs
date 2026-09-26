@@ -221,6 +221,14 @@ impl App {
       .and_then(|item| match item {
         crate::core::plugin_api::PlayableInfo::Track(t) => t.uri.clone(),
         crate::core::plugin_api::PlayableInfo::Episode(e) => e.uri.clone(),
+      })
+      // A parked backend never refreshes the mirror: resume the interrupted track.
+      .or_else(|| {
+        self
+          .native_playback_recovery
+          .as_ref()
+          .filter(|_| self.native_backend_parked())
+          .and_then(|snapshot| snapshot.current_track_uri.clone())
       });
     if context_uri.is_some() || resume_track_uri.is_some() {
       return (context_uri, resume_track_uri);
@@ -281,10 +289,10 @@ impl App {
   /// jumped, not the context's next one. Position is not preserved — the
   /// Spotify resume path restarts the track. Pauses the streaming player so the
   /// queued track doesn't play over it. A no-op unless native streaming is the
-  /// active playback device.
+  /// active playback device or the parked backend holds the playback.
   #[cfg(feature = "streaming")]
   pub(crate) fn suspend_native_spotify_context_mid_track(&mut self) {
-    if !self.is_native_streaming_active_for_playback() {
+    if !self.is_native_streaming_active_for_playback() && !self.native_parked_here() {
       return;
     }
     // Mid-track semantics for a client-side shuffle session: resume the track
@@ -307,9 +315,7 @@ impl App {
           context_uri,
           resume_track_uri,
         });
-        if let Some(player) = self.streaming_player.as_ref() {
-          player.pause();
-        }
+        self.pause_native_playback();
         return;
       }
     }
@@ -343,9 +349,7 @@ impl App {
       context_uri,
       resume_track_uri,
     });
-    if let Some(player) = self.streaming_player.as_ref() {
-      player.pause();
-    }
+    self.pause_native_playback();
   }
 }
 
@@ -353,6 +357,27 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[test]
+  fn jumping_to_a_queued_item_on_the_parked_device_suspends_the_spotify_context() {
+    use crate::core::queue::SuspendedContext;
+    let (mut app, rx, _recovery_rx) = parked_native_app();
+    app
+      .native_queue
+      .push(queue_track(Some("spotify:track:queued"), "Queued"));
+
+    app.play_queue_item("spotify:track:queued", 0);
+
+    assert!(matches!(
+      app.queue_suspended,
+      Some(SuspendedContext::Spotify {
+        context_uri: Some(ref context),
+        resume_track_uri: Some(ref track),
+      }) if context == "spotify:playlist:parked"
+        && track == "spotify:track:0000000000000000000001"
+    ));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::AdvanceNativeQueue)));
+  }
 
   #[cfg(feature = "streaming")]
   #[allow(deprecated)]
@@ -453,7 +478,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 42,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     };
 
@@ -514,7 +539,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 7,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
 
@@ -549,7 +574,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: true,
       generation: 1,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
 
@@ -580,7 +605,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 2,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
 
@@ -613,7 +638,7 @@ mod tests {
       fetch_complete: true,
       fetch_failed: false,
       generation: 5,
-      pending_reload_index: None,
+      pending_reload: None,
       pending_manual_skip: None,
     });
     // The suspension carries the context captured when it was created; by

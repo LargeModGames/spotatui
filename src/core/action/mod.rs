@@ -53,6 +53,7 @@ mod tests;
 /// is needed ([`Action::Search`] resolves the user country and
 /// [`Action::UnfollowPlaylist`] the user id at apply time).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum Action {
   /// Start playback if it is not already playing (intent, not a toggle).
   Play,
@@ -186,6 +187,14 @@ pub enum Action {
   /// Delete a local `youtube:playlist:` playlist; Spotify playlists leave
   /// through [`Action::UnfollowPlaylist`].
   DeletePlaylist(String),
+  /// Open the picker that mirrors the highlighted sidebar playlist onto another source.
+  OpenPlaylistSyncPicker,
+  /// The picker's Enter: create the mirror playlist on `Source`, link it, and sync it.
+  LinkPlaylistTo(Source),
+  /// Run every playlist-sync link now.
+  RunPlaylistSync,
+  /// Forget one link by id; the mirror playlists stay.
+  RemovePlaylistSyncLink(String),
   /// Save or unsave a track by bare base62 id or `spotify:track:` URI; the
   /// network layer accepts both.
   ToggleSaveTrack(String),
@@ -224,7 +233,8 @@ pub enum Action {
   /// Fetch the next page of a paginated list surface - the shared "hit the
   /// end of the list" consequence that GUI infinite scroll also fires.
   /// Self-guarding: a no-op when no next page exists. Page-flipped surfaces
-  /// (saved shows, show episodes) move the visible page when it is cached.
+  /// (saved albums, saved shows, show episodes) move the visible page when it
+  /// is cached.
   LoadMore(ListTarget),
   /// Sort a list surface by a field, like the sort menu: the field already
   /// in effect flips the direction instead.
@@ -395,6 +405,7 @@ pub enum ActionOutcome {
 /// An absolute repeat mode, mirroring Spotify's three states without the
 /// rspotify type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum RepeatSetting {
   Off,
   Track,
@@ -403,6 +414,7 @@ pub enum RepeatSetting {
 
 /// Surfaces reachable through [`Action::Navigate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum NavTarget {
   Home,
   Queue,
@@ -456,11 +468,14 @@ impl NavTarget {
 /// A paginated list surface [`Action::LoadMore`] can advance. Grows
 /// additively as later screens adopt continuous pagination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum ListTarget {
   /// The open playlist's track table (MyPlaylists / PlaylistSearch).
   PlaylistTracks,
   /// The liked-songs (saved tracks) table.
   SavedTracks,
+  /// The saved-albums list (page-flipped, not continuous).
+  SavedAlbums,
   /// The saved-podcasts list (page-flipped, not continuous).
   SavedShows,
   /// The open show's episode list; the show is resolved at apply time.
@@ -469,6 +484,7 @@ pub enum ListTarget {
 
 /// A resource deep-link [`Action::Open`] can address, by id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum OpenTarget {
   /// Open an album page. `from_search` pins the track table to the
   /// album-search context first, matching the search-results Enter; every
@@ -501,12 +517,14 @@ pub enum OpenTarget {
 /// [`NavTarget`]): adding rows there would expand the published plugin
 /// surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum LibraryTarget {
   #[default]
   Discover,
   RecentlyPlayed,
   Friends,
   Stats,
+  PlaylistSync,
   LikedSongs,
   Albums,
   Artists,
@@ -520,11 +538,12 @@ pub enum LibraryTarget {
 impl LibraryTarget {
   /// Every target, in the order of `library_row_requirements()`.
   #[cfg(test)]
-  pub const ALL: [LibraryTarget; 10] = [
+  pub const ALL: [LibraryTarget; 11] = [
     LibraryTarget::Discover,
     LibraryTarget::RecentlyPlayed,
     LibraryTarget::Friends,
     LibraryTarget::Stats,
+    LibraryTarget::PlaylistSync,
     LibraryTarget::LikedSongs,
     LibraryTarget::Albums,
     LibraryTarget::Artists,
@@ -540,6 +559,7 @@ impl LibraryTarget {
       LibraryTarget::RecentlyPlayed => "Recently Played",
       LibraryTarget::Friends => "Friends",
       LibraryTarget::Stats => "Stats",
+      LibraryTarget::PlaylistSync => "Playlist sync",
       LibraryTarget::LikedSongs => "Liked Songs",
       LibraryTarget::Albums => "Albums",
       LibraryTarget::Artists => "Artists",
@@ -552,6 +572,7 @@ impl LibraryTarget {
 
 /// Which Discover row [`Action::OpenDiscover`] activates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum DiscoverTarget {
   ArtistsMix,
   TopTracks(DiscoverTimeRange),
@@ -560,6 +581,7 @@ pub enum DiscoverTarget {
 /// What [`Action::CopyUrl`] copies; both address the item playing now (an
 /// episode gives its episode / show URL).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum CopyTarget {
   CurrentSong,
   CurrentAlbum,

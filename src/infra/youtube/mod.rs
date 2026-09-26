@@ -27,6 +27,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::core::playlist_sync::SyncTrack;
 use crate::core::plugin_api::{SearchResults, TrackInfo};
 use crate::core::source::Searcher;
 use crate::infra::audio::LocalPlayer;
@@ -201,6 +202,18 @@ impl YouTubeSource {
         .lines()
         .filter_map(|line| serde_json::from_str::<YtVideo>(line).ok())
         .filter(|v| !v.id.is_empty())
+        .collect(),
+    )
+  }
+
+  /// Search results as sync candidates, with the duration left unknown when yt-dlp reports none.
+  pub(crate) async fn sync_search(&self, query: &str) -> Result<Vec<SyncTrack>> {
+    Ok(
+      self
+        .search_videos(query)
+        .await?
+        .iter()
+        .map(video_to_sync_track)
         .collect(),
     )
   }
@@ -401,6 +414,23 @@ fn video_to_track_info(v: &YtVideo) -> TrackInfo {
       .thumbnail
       .clone()
       .or_else(|| Some(thumbnail_url_for_video_id(&v.id))),
+  }
+}
+
+/// Map a search row onto the sync currency; an absent duration stays absent.
+fn video_to_sync_track(v: &YtVideo) -> SyncTrack {
+  SyncTrack {
+    key: v.id.clone(),
+    isrc: None,
+    title: v.title.trim().to_string(),
+    artist: v
+      .channel
+      .as_deref()
+      .or(v.uploader.as_deref())
+      .unwrap_or_default()
+      .trim()
+      .to_string(),
+    duration_ms: v.duration.filter(|s| *s > 0.0).map(|s| (s * 1000.0) as u64),
   }
 }
 

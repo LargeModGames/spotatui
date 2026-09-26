@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, PartialEq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum LyricsStatus {
   #[default]
   NotStarted,
@@ -95,6 +95,30 @@ pub fn active_lyric_index(lyrics: &[(u128, String)], progress_ms: u128) -> usize
 }
 
 impl App {
+  pub fn lyrics(&self) -> Option<&[(u128, String)]> {
+    self.lyrics.as_deref()
+  }
+
+  pub fn lyrics_status(&self) -> LyricsStatus {
+    self.lyrics_status
+  }
+
+  pub fn lyrics_synced(&self) -> bool {
+    self.lyrics_synced
+  }
+
+  pub(crate) fn set_lyrics(
+    &mut self,
+    status: LyricsStatus,
+    lyrics: Option<Vec<(u128, String)>>,
+    synced: bool,
+  ) {
+    self.lyrics_status = status;
+    self.lyrics = lyrics;
+    self.lyrics_synced = synced;
+    self.display_revisions.bump(DisplayDomain::Lyrics);
+  }
+
   /// Playback progress adjusted by the user's lyric timing nudge, for
   /// matching against lyric timestamps.
   pub fn lyric_progress_ms(&self) -> u128 {

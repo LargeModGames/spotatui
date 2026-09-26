@@ -23,10 +23,11 @@
 use super::executor::AppExecutor;
 use super::server;
 use crate::core::app::App;
+use crate::infra::loopback::{generate_token, tokens_match};
 use crate::infra::network::IoEvent;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -110,28 +111,22 @@ fn write_handshake(handshake: &Handshake) -> Result<()> {
   Ok(())
 }
 
-/// Remove the published handshake. Called on shutdown so a relay does not chase
-/// a socket that is gone.
+/// Remove the published handshake if this process wrote it. Called on shutdown
+/// so a relay does not chase a socket that is gone.
 pub fn clear_handshake() {
   if let Ok(path) = handshake_path() {
-    let _ = std::fs::remove_file(path);
+    clear_handshake_at(&path, std::process::id());
   }
 }
 
-fn generate_token() -> Result<String> {
-  // 128 bits straight from the OS CSPRNG, hex-encoded. `SysRng` rather than the
-  // thread RNG so the entropy source is the one the comment claims, with no
-  // userspace state to reason about for a value that authenticates a socket.
-  use rand::rngs::SysRng;
-  use rand::TryRng;
-  let mut rng = SysRng;
-  let high = rng
-    .try_next_u64()
-    .context("could not read from the system random source")?;
-  let low = rng
-    .try_next_u64()
-    .context("could not read from the system random source")?;
-  Ok(format!("{high:016x}{low:016x}"))
+fn clear_handshake_at(path: &Path, pid: u32) {
+  let ours = std::fs::read_to_string(path)
+    .ok()
+    .and_then(|raw| serde_json::from_str::<Handshake>(&raw).ok())
+    .is_some_and(|handshake| handshake.pid == pid);
+  if ours {
+    let _ = std::fs::remove_file(path);
+  }
 }
 
 /// Bind the control listener and serve connections until the process exits.
@@ -237,16 +232,9 @@ async fn serve_connection(
         .map(str::to_string)
     });
 
-  let authorised = presented.as_deref().is_some_and(|token| {
-    // Length-independent comparison is overkill for a loopback socket, but
-    // constant-time-ish beats an early-exit compare and costs nothing.
-    token.len() == expected_token.len()
-      && token
-        .bytes()
-        .zip(expected_token.bytes())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
-  });
+  let authorised = presented
+    .as_deref()
+    .is_some_and(|token| tokens_match(token, &expected_token));
 
   if !authorised {
     let _ = write_half
@@ -265,12 +253,19 @@ mod tests {
   use super::*;
 
   #[test]
-  fn generated_tokens_are_long_and_distinct() {
-    let a = generate_token().unwrap();
-    let b = generate_token().unwrap();
-    assert_eq!(a.len(), 32, "128 bits, hex-encoded");
-    assert_ne!(a, b);
-    assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+  fn clear_handshake_leaves_a_file_another_process_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    let foreign = Handshake {
+      port: 1,
+      token: "t".to_string(),
+      pid: 7,
+    };
+    std::fs::write(&path, serde_json::to_string(&foreign).unwrap()).unwrap();
+
+    clear_handshake_at(&path, 42);
+
+    assert!(path.exists());
   }
 
   #[test]

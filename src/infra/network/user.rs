@@ -1,7 +1,8 @@
-use super::requests::is_rate_limited_error;
+use super::requests::{is_rate_limited_error, is_restricted_client_id_error};
 use super::{ids, IoEvent, Network};
 use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId, UserInfo};
 use crate::core::plugin_api::TrackInfo;
+use crate::core::spotify_access::RestrictedEndpoint;
 use anyhow::anyhow;
 
 use crate::infra::network::mapping::map_cursor_page;
@@ -25,27 +26,48 @@ struct ArtistTopTracksResponse {
 }
 
 #[cfg(feature = "streaming")]
-fn include_native_streaming_device(app: &crate::core::app::App, payload: &mut DevicePayload) {
-  let Some(player) = app.streaming_player.as_ref() else {
-    return;
+fn include_native_streaming_device(
+  app: &crate::core::app::App,
+  parked_device_name: &str,
+  payload: &mut DevicePayload,
+) {
+  let parked = app.native_backend_parked();
+  let (device_name, device_id, is_active, volume_percent) = match app.streaming_player.as_ref() {
+    Some(player) if player.is_available() => (
+      player.device_name(),
+      app
+        .native_device_id
+        .clone()
+        .unwrap_or_else(|| player.device_id()),
+      app.is_streaming_active,
+      player.get_volume(),
+    ),
+    // A parked backend keeps its row: Enter on it is the rebuild.
+    None if parked => {
+      let Some(device_id) = app.native_device_id.clone() else {
+        return;
+      };
+      (
+        parked_device_name,
+        device_id,
+        false,
+        app.runtime_state.volume_percent,
+      )
+    }
+    _ => return,
   };
 
-  if !player.is_available() {
-    return;
-  }
-
-  let device_name = player.device_name();
-  let device_id = app
-    .native_device_id
-    .clone()
-    .unwrap_or_else(|| player.device_id());
-
-  if let Some(device) = payload
-    .devices
-    .iter_mut()
-    .find(|device| device.name.eq_ignore_ascii_case(device_name))
-  {
-    if device.id.is_none() {
+  // The parked row matches by id: another device can carry the same name.
+  if let Some(device) = payload.devices.iter_mut().find(|device| {
+    if parked {
+      device.id.as_deref() == Some(device_id.as_str())
+    } else {
+      device.name.eq_ignore_ascii_case(device_name)
+    }
+  }) {
+    if parked {
+      device.is_active = false;
+    } else if device.id.is_none() {
       device.id = Some(device_id);
     }
     return;
@@ -53,12 +75,12 @@ fn include_native_streaming_device(app: &crate::core::app::App, payload: &mut De
 
   payload.devices.push(Device {
     id: Some(device_id),
-    is_active: app.is_streaming_active,
+    is_active,
     is_private_session: false,
     is_restricted: false,
     name: device_name.to_string(),
     _type: DeviceType::Computer,
-    volume_percent: Some(player.get_volume().into()),
+    volume_percent: Some(volume_percent.into()),
   });
 }
 
@@ -84,7 +106,7 @@ impl UserNetwork for Network {
         // market signal available; mirror the existing read in `get_user_country`.
         #[allow(deprecated)]
         let country = user.country.map(|c| <&'static str>::from(c).to_string());
-        app.user = Some(UserInfo {
+        *app.user_mut() = Some(UserInfo {
           id: user.id.id().to_string(),
           display_name: user.display_name.clone(),
           // Store the ISO 3166-1 alpha-2 code as a plain string so no rspotify
@@ -124,7 +146,11 @@ impl UserNetwork for Network {
         {
           let recovering = app.request_native_streaming_recovery_if_disconnected(true);
           if !recovering {
-            include_native_streaming_device(&app, &mut result);
+            include_native_streaming_device(
+              &app,
+              &self.client_config.streaming_device_name,
+              &mut result,
+            );
           }
         }
 
@@ -137,7 +163,7 @@ impl UserNetwork for Network {
             .filter(|index| *index < result.devices.len())
             .or(Some(0))
         };
-        app.devices = Some(result);
+        app.set_devices(result);
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::Devices);
@@ -190,6 +216,15 @@ impl UserNetwork for Network {
   }
 
   async fn get_top_artists_mix(&mut self) {
+    // The mix is built from each artist's top tracks, so a key without that
+    // endpoint cannot build it at all - refuse before the fan-out.
+    if self
+      .endpoint_is_out_of_reach("Top Artists Mix", RestrictedEndpoint::ArtistTopTracks)
+      .await
+    {
+      return;
+    }
+
     // Set loading state
     {
       let mut app = self.app.lock().await;
@@ -226,12 +261,20 @@ impl UserNetwork for Network {
       }
     });
     let mut all_tracks = Vec::new();
-    for res in futures::future::join_all(track_fetches)
-      .await
-      .into_iter()
-      .flatten()
-    {
-      all_tracks.extend(res.tracks);
+    for res in futures::future::join_all(track_fetches).await.into_iter() {
+      match res {
+        Ok(res) => all_tracks.extend(res.tracks),
+        Err(e) if is_restricted_client_id_error(&e) => {
+          self
+            .raise_and_remind_unavailable("Top Artists Mix", RestrictedEndpoint::ArtistTopTracks)
+            .await;
+          self.app.lock().await.discover_loading = false;
+          return;
+        }
+        Err(e) => {
+          log::warn!("top-tracks fetch failed for one mix artist: {e}");
+        }
+      }
     }
 
     // 3. Shuffle
@@ -282,5 +325,89 @@ impl UserNetwork for Network {
         self.handle_error(anyhow!(e)).await;
       }
     }
+  }
+}
+
+#[cfg(all(test, feature = "streaming"))]
+mod tests {
+  use super::*;
+  use crate::core::app::App;
+  use crate::core::config::ClientConfig;
+  use crate::core::user_config::UserConfig;
+  use std::path::PathBuf;
+  use std::sync::mpsc::channel;
+  use std::sync::Arc;
+  use std::time::SystemTime;
+  use tokio::sync::Mutex;
+
+  #[tokio::test]
+  async fn the_mix_short_circuits_when_the_key_lost_top_tracks() {
+    // The mix is built from `artists/{id}/top-tracks`, so that endpoint - not
+    // `me/top/artists`, which survived - decides whether it can run at all.
+    let app = Arc::new(Mutex::new(App::default()));
+    app
+      .lock()
+      .await
+      .raise_spotify_key_tier(RestrictedEndpoint::ArtistTopTracks, None);
+    let mut network = Network::new(None, ClientConfig::new(), &app, PathBuf::new());
+
+    network.get_top_artists_mix().await;
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.status_message(),
+      Some("Top Artists Mix: removed by Spotify for apps registered after 2026-02-11")
+    );
+    assert_ne!(app.get_current_route().id, RouteId::Error);
+  }
+
+  #[test]
+  fn a_parked_backend_keeps_its_row_in_the_device_list() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.seed_native_parked();
+    app.native_device_id = Some("native-device".to_string());
+    let mut payload = DevicePayload { devices: vec![] };
+
+    include_native_streaming_device(&app, "spotatui", &mut payload);
+
+    assert_eq!(payload.devices.len(), 1);
+    let row = &payload.devices[0];
+    assert_eq!(row.id.as_deref(), Some("native-device"));
+    assert_eq!(row.name, "spotatui");
+    assert!(!row.is_active);
+  }
+
+  #[test]
+  fn a_parked_row_matches_by_id_not_by_name() {
+    let device = |id: &str| Device {
+      id: Some(id.to_string()),
+      is_active: true,
+      is_private_session: false,
+      is_restricted: false,
+      name: "spotatui".to_string(),
+      _type: DeviceType::Computer,
+      volume_percent: Some(50),
+    };
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.seed_native_parked();
+    app.native_device_id = Some("native-device".to_string());
+
+    // Another computer with the same device name.
+    let mut payload = DevicePayload {
+      devices: vec![device("other-computer")],
+    };
+    include_native_streaming_device(&app, "spotatui", &mut payload);
+    assert_eq!(payload.devices.len(), 2);
+    assert_eq!(payload.devices[1].id.as_deref(), Some("native-device"));
+
+    // Spotify still lists the parked device as active.
+    let mut payload = DevicePayload {
+      devices: vec![device("native-device")],
+    };
+    include_native_streaming_device(&app, "spotatui", &mut payload);
+    assert_eq!(payload.devices.len(), 1);
+    assert!(!payload.devices[0].is_active);
   }
 }

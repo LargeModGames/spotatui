@@ -1,13 +1,28 @@
 //! The command-line surface: clap assembly, the self-update plumbing, and
 //! CLI-mode dispatch of one subcommand against the network layer.
 
-use super::bootstrap::Boot;
+use super::bootstrap::{Boot, BootOptions};
 use crate::cli;
 use crate::core::banner::BANNER;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::Network;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgMatches, Command as ClapApp};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+pub(super) fn boot_options(matches: &ArgMatches) -> BootOptions {
+  BootOptions {
+    config_path: matches.get_one::<String>("config").map(PathBuf::from),
+    tick_rate: matches
+      .get_one::<String>("tick-rate")
+      .and_then(|tick_rate| tick_rate.parse().ok()),
+    subcommand: matches.subcommand_name().map(str::to_owned),
+    reconfigure_auth: matches.get_flag("reconfigure-auth"),
+    play_file: matches.get_one::<String>("play-file").cloned(),
+    no_update: cfg!(feature = "self-update") && matches.get_flag("no-update"),
+  }
+}
 
 pub(super) fn build_clap_app() -> ClapApp {
   // `mut` is only exercised by the feature-gated subcommand additions below.
@@ -60,12 +75,28 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
         .value_parser(["bash", "zsh", "fish", "power-shell", "elvish"])
         .value_name("SHELL"),
     )
+    .arg(
+      Arg::new("debug")
+        .long("debug")
+        .global(true)
+        .action(clap::ArgAction::SetTrue)
+        .help("Enable verbose debug logging for bug reports (also SPOTATUI_LOG=debug)")
+        .long_help(
+          "Enable verbose debug logging for spotatui and the native streaming crates it embeds \
+(equivalent to SPOTATUI_LOG=debug). At this level the log records identifying details such as \
+your Spotify user id and playlist ids. SPOTATUI_LOG=trace goes further and adds raw audio packet \
+activity and full API response bodies, which include your country. Access \
+tokens and request headers are never logged, but read through the file before posting it \
+publicly.",
+        ),
+    )
     // Control spotify from the command line
     .subcommand(cli::playback_subcommand())
     .subcommand(cli::play_subcommand())
     .subcommand(cli::list_subcommand())
     .subcommand(cli::history_subcommand())
-    .subcommand(cli::search_subcommand()),
+    .subcommand(cli::search_subcommand())
+    .subcommand(cli::sync_subcommand()),
   );
 
   #[cfg(feature = "scripting")]
@@ -84,6 +115,9 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
 /// CLI mode: run one subcommand against the network layer and print its
 /// result.
 pub(super) async fn run_subcommand(boot: Boot, cmd: &str, matches: &ArgMatches) -> Result<()> {
+  if cmd == "sync" {
+    return run_sync(boot, matches).await;
+  }
   let app = boot.app;
   // Held (unread) for the length of the command; see the field doc on `Boot`.
   let _sync_io_rx = boot.sync_io_rx;
@@ -98,6 +132,29 @@ pub(super) async fn run_subcommand(boot: Boot, cmd: &str, matches: &ArgMatches) 
   let cli_result = cli::handle_matches(matches, cmd.to_string(), network, boot.user_config).await;
   app.lock().await.flush_state_save(true);
   println!("{}", cli_result?);
+  Ok(())
+}
+
+/// The `sync` subcommand: no device probe, no Spotify requirement, its own exit signal.
+async fn run_sync(boot: Boot, matches: &ArgMatches) -> Result<()> {
+  let app = boot.app;
+  // Held (unread) for the length of the command; see the field doc on `Boot`.
+  let _sync_io_rx = boot.sync_io_rx;
+  let args = cli::sync_args(matches);
+  let ctx = crate::infra::playlist_sync::SyncContext::new(
+    boot.spotify,
+    boot.token_cache_path,
+    Arc::clone(&app),
+  );
+  let run = crate::infra::playlist_sync::run_guarded(ctx, args.link, args.dry_run, true);
+  let report = tokio::spawn(run)
+    .await
+    .context("playlist sync task failed")?;
+  app.lock().await.flush_state_save(true);
+  println!("{}", report.printable());
+  if report.failed() {
+    return Err(anyhow!("playlist sync failed"));
+  }
   Ok(())
 }
 
@@ -158,13 +215,9 @@ pub(super) async fn handle_self_update_command(_matches: &ArgMatches) -> Result<
 /// releases it. See `restart_after_update`, which the caller invokes once
 /// authentication has finished.
 #[cfg(feature = "self-update")]
-pub(super) async fn run_auto_update(
-  matches: &ArgMatches,
-  user_config: &UserConfig,
-) -> Option<String> {
-  if matches.subcommand_name().is_some()
+pub(super) async fn run_auto_update(skip: bool, user_config: &UserConfig) -> Option<String> {
+  if skip
     || std::env::var_os("SPOTATUI_SKIP_UPDATE").is_some()
-    || matches.get_flag("no-update")
     || user_config.behavior.disable_auto_update
   {
     return None;
@@ -208,10 +261,7 @@ pub(super) async fn run_auto_update(
 }
 
 #[cfg(not(feature = "self-update"))]
-pub(super) async fn run_auto_update(
-  _matches: &ArgMatches,
-  _user_config: &UserConfig,
-) -> Option<String> {
+pub(super) async fn run_auto_update(_skip: bool, _user_config: &UserConfig) -> Option<String> {
   None
 }
 
@@ -222,8 +272,13 @@ pub(super) async fn run_auto_update(
 /// will need. The child repeats startup from scratch, so anything this process
 /// still owns (the OAuth callback port on 8989, stdin, the terminal) it would
 /// contend with. Authentication persists its token before returning, so the
-/// child reuses it rather than opening a second browser login.
-pub(super) fn restart_after_update(new_version: Option<String>) -> Result<()> {
+/// child reuses it rather than opening a second browser login. The
+/// single-instance lock is released just before the re-exec, since the child
+/// takes it again while this process waits.
+pub(super) fn restart_after_update(
+  new_version: Option<String>,
+  instance_lock: &mut Option<std::fs::File>,
+) -> Result<()> {
   let Some(new_version) = new_version else {
     return Ok(());
   };
@@ -236,6 +291,7 @@ pub(super) fn restart_after_update(new_version: Option<String>) -> Result<()> {
   let exe = std::env::current_exe()
     .context("failed to get current executable path while restarting after an update")?;
   let args: Vec<String> = std::env::args().skip(1).collect();
+  drop(instance_lock.take());
   let status = std::process::Command::new(&exe)
     .args(&args)
     .env("SPOTATUI_SKIP_UPDATE", "1")
@@ -246,6 +302,99 @@ pub(super) fn restart_after_update(new_version: Option<String>) -> Result<()> {
       eprintln!("Failed to restart after update: {}", e);
       eprintln!("Please restart spotatui manually.");
       std::process::exit(1);
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// `--debug` is the flag every bug report in issue #566 is going to be asked
+  /// for, and the help text is the only place a user learns that the log can
+  /// carry personal data. Renaming either is a silent regression otherwise:
+  /// nothing else in the suite builds the clap app.
+  #[test]
+  fn debug_flag_parses_and_defaults_to_off() {
+    let app = build_clap_app();
+    let matches = app
+      .clone()
+      .try_get_matches_from(["spotatui", "--debug"])
+      .expect("--debug must parse");
+    assert!(matches.get_flag("debug"));
+
+    let matches = app
+      .try_get_matches_from(["spotatui"])
+      .expect("no args must parse");
+    assert!(!matches.get_flag("debug"));
+  }
+
+  /// `--debug` needs `global(true)` to parse after a subcommand
+  /// (`spotatui playback --status --debug`), not just before one. `run_cli`
+  /// reads it off the root `ArgMatches` (`matches.get_flag("debug")` in
+  /// `runtime/mod.rs`), and clap copies a global flag's value back up to
+  /// every parent level it was propagated through, so that read keeps working
+  /// once the flag is placed on the subcommand line instead of the root one.
+  #[test]
+  fn debug_flag_parses_after_a_subcommand() {
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "playback", "--status", "--debug"])
+      .expect("--debug after a subcommand must parse");
+    assert!(matches.get_flag("debug"));
+  }
+
+  #[test]
+  fn debug_flag_long_help_warns_about_personal_data() {
+    let help = build_clap_app()
+      .get_arguments()
+      .find(|arg| arg.get_id() == "debug")
+      .and_then(|arg| arg.get_long_help().or_else(|| arg.get_help()))
+      .map(ToString::to_string)
+      .expect("--debug must document itself");
+    let help = help.to_lowercase();
+    assert!(
+      help.contains("before posting"),
+      "the long help must tell the user to read the log before posting it:\n{help}"
+    );
+    assert!(
+      help.contains("country"),
+      "the long help must name what trace adds to the log:\n{help}"
+    );
+  }
+
+  #[test]
+  fn boot_options_carry_the_launch_flags() {
+    let matches = build_clap_app()
+      .try_get_matches_from([
+        "spotatui",
+        "-c",
+        "x.yml",
+        "-t",
+        "100",
+        "--reconfigure-auth",
+        "--play-file",
+        "a.mp3",
+      ])
+      .unwrap();
+    let options = boot_options(&matches);
+    assert_eq!(options.config_path, Some(PathBuf::from("x.yml")));
+    assert_eq!(options.tick_rate, Some(100));
+    assert_eq!(options.subcommand, None);
+    assert!(options.reconfigure_auth);
+    assert_eq!(options.play_file.as_deref(), Some("a.mp3"));
+    assert!(!options.no_update);
+
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "sync"])
+      .unwrap();
+    assert_eq!(boot_options(&matches).subcommand.as_deref(), Some("sync"));
+
+    #[cfg(feature = "self-update")]
+    {
+      let matches = build_clap_app()
+        .try_get_matches_from(["spotatui", "-U"])
+        .unwrap();
+      assert!(boot_options(&matches).no_update);
     }
   }
 }

@@ -10,7 +10,7 @@
 //!
 //! Radio playback owns a single piece of state, [`App::radio_playback`], and
 //! never writes Spotify/librespot fields. Only one backend holds the audio
-//! device at a time: starting radio pauses librespot **and** tears down any
+//! device at a time: starting radio pauses or parks librespot **and** tears down any
 //! local/Subsonic session; the reciprocal teardowns live in those sources'
 //! start paths.
 //!
@@ -114,7 +114,7 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
 // Browse + search
 // ---------------------------------------------------------------------------
 
-/// Load configured and saved stations into `app.radio_stations` (the sidebar's
+/// Load configured and saved stations into `app.radio_stations()` (the sidebar's
 /// Stations panel). No network.
 async fn load_radio_stations(app: &Arc<Mutex<App>>) {
   let mut guard = app.lock().await;
@@ -126,7 +126,7 @@ async fn load_radio_stations(app: &Arc<Mutex<App>>) {
   .map(|station| config_station_to_track_info(&station.name, &station.url))
   .collect();
   let empty = stations.is_empty();
-  guard.radio_stations = stations;
+  *guard.radio_stations_mut() = stations;
   if empty {
     guard.set_status_message(
       "No radio stations configured or saved; search to add some".to_string(),
@@ -168,13 +168,13 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
 fn snapshot_station(app: &App, uri: &str) -> TrackInfo {
   let matches = |t: &&TrackInfo| t.uri.as_deref() == Some(uri);
   app
-    .radio_stations
+    .radio_stations()
     .iter()
     .find(matches)
     .or_else(|| app.track_table.tracks.iter().find(matches))
     .or_else(|| {
       app
-        .search_results
+        .search_results()
         .tracks
         .as_ref()
         .and_then(|p| p.items.iter().find(matches))
@@ -188,14 +188,10 @@ fn snapshot_station(app: &App, uri: &str) -> TrackInfo {
 
 /// Release the other backends so only radio holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
-  // Pause native Spotify so librespot releases the device.
+  // Take the sink from native Spotify so no rebuild resumes it under this
+  // source.
   #[cfg(feature = "streaming")]
-  {
-    let streaming = app.lock().await.streaming_player.clone();
-    if let Some(player) = streaming {
-      player.pause();
-    }
-  }
+  app.lock().await.release_native_for_decoded();
   // The other decoded sources never see this radio: start (the pump's
   // short-circuit), so their sessions are torn down here.
   let players = app.lock().await.take_decoded_sessions_except(Source::Radio);
@@ -386,7 +382,7 @@ mod tests {
   fn snapshot_prefers_sidebar_station_list() {
     let mut app = test_app();
     let uri = "radio:https://ice1.somafm.com/groovesalad-128-mp3";
-    app.radio_stations = vec![station_row(uri, "Groove Salad")];
+    *app.radio_stations_mut() = vec![station_row(uri, "Groove Salad")];
     app.track_table.tracks = vec![station_row(uri, "Wrong Name")];
     assert_eq!(snapshot_station(&app, uri).name, "Groove Salad");
   }
@@ -395,9 +391,12 @@ mod tests {
   fn snapshot_falls_back_to_search_results() {
     let mut app = test_app();
     let uri = "radio:https://example.com/stream";
-    app.search_results.tracks = Some(Paged {
-      items: vec![station_row(uri, "Searched FM")],
-      total: 1,
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(Paged {
+        items: vec![station_row(uri, "Searched FM")],
+        total: 1,
+        ..Default::default()
+      }),
       ..Default::default()
     });
     assert_eq!(snapshot_station(&app, uri).name, "Searched FM");
@@ -446,7 +445,7 @@ mod tests {
   async fn get_radio_stations_merges_configured_and_saved_lists() {
     let app = Arc::new(Mutex::new(test_app()));
     assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
-    assert!(app.lock().await.radio_stations.is_empty());
+    assert!(app.lock().await.radio_stations().is_empty());
 
     {
       let mut guard = app.lock().await;
@@ -467,13 +466,13 @@ mod tests {
     }
     assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
     let guard = app.lock().await;
-    assert_eq!(guard.radio_stations.len(), 2);
-    assert_eq!(guard.radio_stations[0].name, "Configured Groove");
+    assert_eq!(guard.radio_stations().len(), 2);
+    assert_eq!(guard.radio_stations()[0].name, "Configured Groove");
     assert_eq!(
-      guard.radio_stations[0].uri.as_deref(),
+      guard.radio_stations()[0].uri.as_deref(),
       Some("radio:https://ice1.somafm.com/groovesalad-128-mp3")
     );
-    assert_eq!(guard.radio_stations[1].name, "Secret Agent");
+    assert_eq!(guard.radio_stations()[1].name, "Secret Agent");
   }
 
   /// The station shape that froze the app: a live stream whose codec rodio's
@@ -494,7 +493,7 @@ mod tests {
       }];
     }
     assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
-    let uri = app.lock().await.radio_stations[0].uri.clone().unwrap();
+    let uri = app.lock().await.radio_stations()[0].uri.clone().unwrap();
 
     let started = std::time::Instant::now();
     assert!(route_radio_event(&app, &IoEvent::StartPlayback(Some(uri), None, None)).await);
@@ -532,7 +531,7 @@ mod tests {
       }];
     }
     assert!(route_radio_event(&app, &IoEvent::GetRadioStations).await);
-    let uri = app.lock().await.radio_stations[0].uri.clone().unwrap();
+    let uri = app.lock().await.radio_stations()[0].uri.clone().unwrap();
 
     // Start the station.
     assert!(

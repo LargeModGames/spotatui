@@ -1007,6 +1007,7 @@ mod tests {
       status: reqwest::StatusCode::from_u16(status).unwrap(),
       body: body.to_string(),
       detail: detail.map(str::to_string),
+      endpoint: None,
     }
     .into()
   }

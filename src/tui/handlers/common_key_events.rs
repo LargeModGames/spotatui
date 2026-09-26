@@ -110,6 +110,7 @@ pub fn content_active_block_for_route(route_id: &RouteId) -> Option<ActiveBlock>
     RouteId::PodcastEpisodes => Some(ActiveBlock::EpisodeTable),
     RouteId::Discover => Some(ActiveBlock::Discover),
     RouteId::Stats => Some(ActiveBlock::Stats),
+    RouteId::PlaylistSync => Some(ActiveBlock::PlaylistSync),
     // Without this the right-arrow from the sidebar silently does nothing: the
     // match has a `_ => None` fallthrough, so it compiles either way.
     #[cfg(feature = "ai-dj")]
@@ -143,6 +144,14 @@ pub fn handle_left_event(app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::source::Source;
+
+  #[test]
+  fn the_playlist_sync_route_focuses_its_block_from_the_sidebar() {
+    assert_eq!(
+      content_active_block_for_route(&RouteId::PlaylistSync),
+      Some(ActiveBlock::PlaylistSync)
+    );
+  }
 
   #[test]
   fn test_on_down_press_handler() {

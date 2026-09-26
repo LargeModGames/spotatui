@@ -1,6 +1,6 @@
 use super::common_key_events;
 use crate::core::action::Action;
-use crate::core::app::{ActiveBlock, App, DialogContext, PlaylistPickerRow};
+use crate::core::app::{ActiveBlock, App, DialogContext, PlaylistPickerRow, RouteId};
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -11,10 +11,12 @@ pub fn handler(key: Key, app: &mut App) {
 
   match dialog_context {
     DialogContext::AddTrackToPlaylistPicker => handle_add_to_playlist_picker(key, app),
+    DialogContext::PlaylistSyncPicker => handle_playlist_sync_picker(key, app),
     DialogContext::PlaylistWindow
     | DialogContext::PlaylistSearch
     | DialogContext::RemoveTrackFromPlaylistConfirm
     | DialogContext::PersistKeybindingFallback
+    | DialogContext::RemovePlaylistSyncLinkConfirm
     | DialogContext::YouTubePlaylistWindow => handle_confirmation_dialog(key, app, dialog_context),
   }
 }
@@ -33,7 +35,11 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
             app.persist_open_settings_fallback();
           }
           DialogContext::YouTubePlaylistWindow => handle_youtube_playlist_dialog(app),
+          DialogContext::RemovePlaylistSyncLinkConfirm => {
+            handle_remove_playlist_sync_link_dialog(app);
+          }
           DialogContext::AddTrackToPlaylistPicker => {}
+          DialogContext::PlaylistSyncPicker => {}
         }
       } else if dialog_context == DialogContext::PersistKeybindingFallback {
         app.set_status_message("Using Alt+, for this session only", 4);
@@ -122,6 +128,53 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
   }
 }
 
+/// The mirror picker: pick the source the highlighted playlist is mirrored onto.
+fn handle_playlist_sync_picker(key: Key, app: &mut App) {
+  let rows = app.playlist_sync_picker_sources();
+  let row_count = rows.len();
+  match key {
+    k if common_key_events::down_event(k, &app.user_config.keys) && row_count > 0 => {
+      app.view.playlist_sync_picker_index =
+        common_key_events::on_down_press_handler(&rows, Some(app.view.playlist_sync_picker_index));
+    }
+    k if common_key_events::up_event(k, &app.user_config.keys) && row_count > 0 => {
+      app.view.playlist_sync_picker_index =
+        common_key_events::on_up_press_handler(&rows, Some(app.view.playlist_sync_picker_index));
+    }
+    k if common_key_events::high_event(k) && row_count > 0 => {
+      app.view.playlist_sync_picker_index = common_key_events::on_high_press_handler();
+    }
+    k if common_key_events::middle_event(k) && row_count > 0 => {
+      app.view.playlist_sync_picker_index = common_key_events::on_middle_press_handler(&rows);
+    }
+    k if common_key_events::low_event(k) && row_count > 0 => {
+      app.view.playlist_sync_picker_index = common_key_events::on_low_press_handler(&rows);
+    }
+    Key::Enter => {
+      // No clamp: the offered list follows live state, so a stale cursor picks nothing.
+      let source = rows.get(app.view.playlist_sync_picker_index).copied();
+      if let Some(source) = source {
+        app.apply(Action::LinkPlaylistTo(source));
+      }
+      close_dialog(app);
+      // The run's progress shows on the sync screen, so open it.
+      if source.is_some() {
+        app.push_navigation_stack(RouteId::PlaylistSync, ActiveBlock::PlaylistSync);
+      }
+    }
+    Key::Char('q') => close_dialog(app),
+    _ => {}
+  }
+}
+
+/// Confirmed removal of the highlighted playlist-sync link.
+fn handle_remove_playlist_sync_link_dialog(app: &mut App) {
+  let id = app.pending_playlist_sync_remove().map(str::to_string);
+  if let Some(id) = id {
+    app.apply(Action::RemovePlaylistSyncLink(id));
+  }
+}
+
 fn handle_playlist_dialog(app: &mut App) {
   if let Some(playlist_id) = app.selected_sidebar_playlist_id() {
     app.apply(Action::UnfollowPlaylist(playlist_id));
@@ -139,7 +192,7 @@ fn handle_youtube_playlist_dialog(app: &mut App) {
   let uri = app
     .view
     .selected_playlist_index
-    .and_then(|idx| app.youtube_playlists.get(idx))
+    .and_then(|idx| app.youtube_playlists().get(idx))
     .map(|playlist| playlist.uri.clone());
   if let Some(uri) = uri {
     app.apply(Action::DeletePlaylist(uri));
@@ -193,12 +246,12 @@ mod tests {
   fn add_to_playlist_picker_dispatches_selected_editable_playlist() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.user = Some(user_info("spotatui-owner"));
-    app.playlists = Some(Paged {
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.playlists_mut() = Some(Paged {
       total: 3,
       ..Default::default()
     });
-    app.all_playlists = vec![
+    *app.all_playlists_mut() = vec![
       playlist_info("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
       playlist_info("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
       playlist_info(
@@ -233,12 +286,12 @@ mod tests {
   fn add_to_playlist_picker_navigates_folders_and_filters_uneditable() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.user = Some(user_info("spotatui-owner"));
-    app.all_playlists = vec![
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.all_playlists_mut() = vec![
       playlist_info("37i9dQZF1DXcBWIGoYBM5M", "Owned", "spotatui-owner", false),
       playlist_info("37i9dQZF1DWZqd5JICZI0u", "Followed", "friend-owner", false),
     ];
-    app.playlist_folder_items = vec![
+    *app.playlist_folder_items_mut() = vec![
       PlaylistFolderItem::Folder(PlaylistFolder {
         name: "Mixes".to_string(),
         current_id: 0,
@@ -297,14 +350,14 @@ mod tests {
   fn picker_rows_respect_group_folders_first() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.user = Some(user_info("spotatui-owner"));
-    app.all_playlists = vec![playlist_info(
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.all_playlists_mut() = vec![playlist_info(
       "37i9dQZF1DXcBWIGoYBM5M",
       "Owned",
       "spotatui-owner",
       false,
     )];
-    app.playlist_folder_items = vec![
+    *app.playlist_folder_items_mut() = vec![
       PlaylistFolderItem::Playlist {
         index: 0,
         current_id: 0,
@@ -325,5 +378,68 @@ mod tests {
       app.playlist_picker_items()[0],
       PlaylistPickerRow::Folder(_)
     ));
+  }
+
+  #[test]
+  fn enter_in_the_mirror_picker_links_to_the_highlighted_source() {
+    use crate::core::plugin_api::PlaylistInfo;
+    use crate::core::source::Source;
+
+    let (tx, rx) = channel();
+    let mut app =
+      App::new(tx, UserConfig::new(), Some(SystemTime::now())).under_source(Source::Qobuz);
+    app.qobuz_playlists_mut().push(PlaylistInfo {
+      uri: "qobuz:playlist:9".to_string(),
+      name: "Mine".to_string(),
+      owner: "qobuz".to_string(),
+      track_count: 3,
+      id: Some("9".to_string()),
+      owner_id: None,
+      collaborative: false,
+      public: None,
+      image_url: None,
+    });
+    app.view.selected_playlist_index = Some(0);
+    app.apply(Action::OpenPlaylistSyncPicker);
+    assert!(app.pending_playlist_sync_master().is_some());
+
+    handler(Key::Enter, &mut app);
+
+    assert!(app.pending_playlist_sync_master().is_none());
+    assert!(!matches!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::PlaylistSyncPicker)
+    ));
+    assert_eq!(app.status_message(), Some("Mirroring Mine onto Spotify"));
+    assert_eq!(app.get_current_route().id, RouteId::PlaylistSync);
+    assert!(rx.try_recv().is_ok());
+  }
+
+  #[test]
+  fn confirming_the_remove_dialog_forgets_the_link() {
+    use crate::core::playlist_sync::{Endpoint, Link};
+    use crate::core::source::Source;
+
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.set_playlist_sync_links(vec![Link {
+      id: "aaaaaaaaaaaa".to_string(),
+      master: Endpoint {
+        source: Source::Qobuz,
+        playlist_uri: "qobuz:playlist:9".to_string(),
+        name: "Mine".to_string(),
+      },
+      mirrors: Vec::new(),
+    }]);
+    app.begin_remove_playlist_sync_link();
+    assert_eq!(app.pending_playlist_sync_remove(), Some("aaaaaaaaaaaa"));
+    app.view.confirm = true;
+
+    handler(Key::Enter, &mut app);
+
+    assert_ne!(app.get_current_route().id, RouteId::Dialog);
+    assert!(app.view.dialog.is_none());
+    assert!(app.pending_playlist_sync_remove().is_none());
+    assert!(rx.try_recv().is_ok());
   }
 }

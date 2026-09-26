@@ -1,5 +1,5 @@
 use super::Network;
-use crate::core::app::{Announcement, AnnouncementLevel, LyricsStatus};
+use crate::core::app::{Announcement, AnnouncementLevel, App, LyricsStatus};
 use chrono::{DateTime, Utc};
 use serde::{de::Error as _, Deserialize, Deserializer};
 use std::collections::HashSet;
@@ -80,6 +80,32 @@ pub trait UtilsNetwork {
   async fn fetch_announcements(&mut self);
 }
 
+/// Publish an LRCLIB answer for the current track: synced lyrics first, then
+/// plain lyrics as static text, else not found.
+fn apply_lyrics_response(app: &mut App, lrc_resp: Option<LrcResponse>, duration: f64) {
+  let found = lrc_resp.and_then(|resp| {
+    let synced = resp
+      .syncedLyrics
+      .as_deref()
+      .map(parse_synced_lyrics)
+      .unwrap_or_default();
+    if !synced.is_empty() {
+      return Some((synced, true));
+    }
+    resp
+      .plainLyrics
+      .as_deref()
+      .filter(|text| !text.trim().is_empty())
+      .map(|plain| (synthesize_plain_lyrics(plain, duration), false))
+  });
+  match found {
+    Some((lyrics, synced)) => app.set_lyrics(LyricsStatus::Found, Some(lyrics), synced),
+    None => app.set_lyrics(LyricsStatus::NotFound, None, false),
+  }
+  app
+    .plugin_data_generations
+    .bump(crate::core::app::PluginDataKind::Lyrics);
+}
 impl UtilsNetwork for Network {
   async fn get_lyrics(&mut self, track: String, artists: Vec<String>, duration: f64) {
     // The identity latch and the plugin-facing `lyrics_state_is_current` gate
@@ -94,9 +120,7 @@ impl UtilsNetwork for Network {
       if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
         return;
       }
-      app.lyrics_status = LyricsStatus::Loading;
-      app.lyrics = None;
-      app.lyrics_synced = false;
+      app.set_lyrics(LyricsStatus::Loading, None, false);
     }
 
     let lrc_resp = fetch_lrclib_lyrics(client, &track, &artists, duration).await;
@@ -105,40 +129,7 @@ impl UtilsNetwork for Network {
     if app.desired_lyrics_identity.as_ref() != Some(&request_identity) {
       return;
     }
-    match lrc_resp {
-      Some(lrc_resp) => {
-        // Prefer timestamped ("synced") lyrics. If LRCLIB only has plain
-        // (unsynced) lyrics, still show them as static text rather than
-        // reporting "not found" — many tracks only have plain lyrics.
-        let synced = lrc_resp
-          .syncedLyrics
-          .as_deref()
-          .map(parse_synced_lyrics)
-          .unwrap_or_default();
-
-        if !synced.is_empty() {
-          app.lyrics = Some(synced);
-          app.lyrics_synced = true;
-          app.lyrics_status = LyricsStatus::Found;
-        } else if let Some(plain) = lrc_resp
-          .plainLyrics
-          .as_deref()
-          .filter(|text| !text.trim().is_empty())
-        {
-          app.lyrics = Some(synthesize_plain_lyrics(plain, duration));
-          app.lyrics_synced = false;
-          app.lyrics_status = LyricsStatus::Found;
-        } else {
-          app.lyrics_status = LyricsStatus::NotFound;
-        }
-      }
-      None => {
-        app.lyrics_status = LyricsStatus::NotFound;
-      }
-    }
-    app
-      .plugin_data_generations
-      .bump(crate::core::app::PluginDataKind::Lyrics);
+    apply_lyrics_response(&mut app, lrc_resp, duration);
   }
 
   async fn increment_global_song_count(&mut self) {
@@ -537,9 +528,10 @@ fn parse_announcement_level(level: Option<&str>) -> AnnouncementLevel {
 #[cfg(test)]
 mod tests {
   use super::{
-    artist_query_candidates, parse_synced_lyrics, pick_search_result, synthesize_plain_lyrics,
-    LrcResponse,
+    apply_lyrics_response, artist_query_candidates, parse_synced_lyrics, pick_search_result,
+    synthesize_plain_lyrics, LrcResponse,
   };
+  use crate::core::app::{App, DisplayDomain, LyricsStatus};
 
   #[test]
   fn artist_candidates_single_artist_has_no_fallback() {
@@ -657,5 +649,22 @@ mod tests {
   fn search_returns_none_when_no_result_has_lyrics() {
     let results = vec![search_result(None, Some("   "), Some(200.0))];
     assert!(pick_search_result(results, 200.0).is_none());
+  }
+
+  #[test]
+  fn a_synced_lrclib_response_publishes_lyrics_under_a_new_revision() {
+    let mut app = App::default();
+    let before = app.display_revisions().get(DisplayDomain::Lyrics);
+
+    apply_lyrics_response(
+      &mut app,
+      Some(search_result(Some("[00:01.00] hi"), None, None)),
+      180.0,
+    );
+
+    assert!(app.display_revisions().get(DisplayDomain::Lyrics) > before);
+    assert_eq!(app.lyrics_status(), LyricsStatus::Found);
+    assert_eq!(app.lyrics(), Some(&[(1_000u128, "hi".to_string())][..]));
+    assert!(app.lyrics_synced());
   }
 }

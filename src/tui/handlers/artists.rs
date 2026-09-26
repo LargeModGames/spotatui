@@ -10,7 +10,7 @@ pub fn handler(key: Key, app: &mut App) {
       common_key_events::handle_left_event(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
-      if let Some(artists) = &mut app.library.saved_artists.get_results(None) {
+      if let Some(artists) = app.library().saved_artists.get_results(None) {
         let next_index = common_key_events::on_down_press_handler(
           &artists.items,
           Some(app.view.artists_list_index),
@@ -19,26 +19,26 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
-      if let Some(artists) = &mut app.library.saved_artists.get_results(None) {
+      if let Some(artists) = app.library().saved_artists.get_results(None) {
         let next_index =
           common_key_events::on_up_press_handler(&artists.items, Some(app.view.artists_list_index));
         app.view.artists_list_index = next_index;
       }
     }
     k if common_key_events::high_event(k) => {
-      if let Some(_artists) = &mut app.library.saved_artists.get_results(None) {
+      if let Some(_artists) = app.library().saved_artists.get_results(None) {
         let next_index = common_key_events::on_high_press_handler();
         app.view.artists_list_index = next_index;
       }
     }
     k if common_key_events::middle_event(k) => {
-      if let Some(artists) = &mut app.library.saved_artists.get_results(None) {
+      if let Some(artists) = app.library().saved_artists.get_results(None) {
         let next_index = common_key_events::on_middle_press_handler(&artists.items);
         app.view.artists_list_index = next_index;
       }
     }
     k if common_key_events::low_event(k) => {
-      if let Some(artists) = &mut app.library.saved_artists.get_results(None) {
+      if let Some(artists) = app.library().saved_artists.get_results(None) {
         let next_index = common_key_events::on_low_press_handler(&artists.items);
         app.view.artists_list_index = next_index;
       }
@@ -76,7 +76,7 @@ pub fn handler(key: Key, app: &mut App) {
 /// The row under the cursor; `None` on a missing page.
 fn selected_saved_artist_row(app: &App) -> Option<&ArtistInfo> {
   app
-    .library
+    .library()
     .saved_artists
     .get_results(None)?
     .items
@@ -107,7 +107,7 @@ mod tests {
   fn app_with_saved_artists() -> (App, Receiver<IoEvent>) {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.library.saved_artists.add_pages(CursorPaged {
+    app.library_mut().saved_artists.add_pages(CursorPaged {
       items: vec![
         ArtistInfo {
           id: Some("artist1".to_string()),

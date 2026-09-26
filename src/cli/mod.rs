@@ -6,6 +6,7 @@ mod history;
 mod mcp;
 #[cfg(feature = "scripting")]
 mod plugin;
+mod sync;
 #[cfg(feature = "self-update")]
 mod update;
 mod util;
@@ -16,6 +17,7 @@ pub use self::history::{handle_history_matches, history_subcommand};
 pub use self::mcp::mcp_subcommand;
 #[cfg(feature = "scripting")]
 pub use self::plugin::{handle_plugin_command, plugin_subcommand};
+pub use self::sync::{sync_args, sync_subcommand};
 use cli_app::CliApp;
 pub use handle::handle_matches;
 #[cfg(feature = "self-update")]

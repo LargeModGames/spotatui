@@ -15,6 +15,12 @@ impl App {
   /// Apply one frontend-neutral action. See the module doc for the rules
   /// every arm follows.
   pub fn apply(&mut self, action: Action) -> ActionOutcome {
+    let outcome = self.apply_action(action);
+    self.note_display_changes();
+    outcome
+  }
+
+  fn apply_action(&mut self, action: Action) -> ActionOutcome {
     match action {
       Action::Play => {
         if !effective_is_playing(self) {
@@ -61,9 +67,9 @@ impl App {
         self.start_playback_track_in_context(context, track);
       }
       Action::TransferPlayback { device_id, persist } => {
-        self.dispatch(IoEvent::TransferPlaybackToDevice(device_id, persist));
+        self.transfer_playback_to_device(device_id, persist);
       }
-      Action::AddToQueue(uri) => self.dispatch(IoEvent::AddItemToQueue(uri)),
+      Action::AddToQueue(uri) => self.add_to_spotify_queue(uri),
       Action::QueueTrack(track) => self.add_track_to_native_queue(track),
       Action::PlayQueueItem { uri, position } => self.play_queue_item(&uri, position),
       Action::RemoveFromQueue { uri, position } => {
@@ -128,7 +134,7 @@ impl App {
         ));
       }
       Action::UnfollowPlaylist(playlist_id) => {
-        let user_id = self.user.as_ref().map(|u| u.id.clone());
+        let user_id = self.user().as_ref().map(|u| u.id.clone());
         if let Some(user_id) = user_id {
           self.dispatch(IoEvent::UserUnfollowPlaylist(user_id, playlist_id));
         } else {
@@ -139,6 +145,12 @@ impl App {
         }
       }
       Action::DeletePlaylist(uri) => self.dispatch(IoEvent::DeleteYouTubePlaylist(uri)),
+      Action::OpenPlaylistSyncPicker => self.begin_playlist_sync_picker(),
+      Action::LinkPlaylistTo(source) => self.link_playlist_to(source),
+      Action::RunPlaylistSync => self.dispatch(IoEvent::RunPlaylistSync {
+        retry_unmatched: true,
+      }),
+      Action::RemovePlaylistSyncLink(id) => self.dispatch(IoEvent::RemovePlaylistSyncLink(id)),
       Action::ToggleSaveTrack(uri) => self.dispatch(IoEvent::ToggleSaveTrack(uri)),
       Action::ToggleSaveCurrentItem => self.toggle_save_current_item(),
       Action::SaveAlbum(id) => self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(id)),
@@ -162,6 +174,7 @@ impl App {
       Action::LoadMore(target) => match target {
         super::ListTarget::PlaylistTracks => self.get_playlist_tracks_next(),
         super::ListTarget::SavedTracks => self.get_current_user_saved_tracks_next(),
+        super::ListTarget::SavedAlbums => self.get_current_user_saved_albums_next(),
         super::ListTarget::SavedShows => self.get_current_user_saved_shows_next(),
         super::ListTarget::ShowEpisodes => self.get_episode_table_next(),
       },
@@ -240,11 +253,7 @@ impl App {
       },
       Action::ShowPopup(popup) => self.show_plugin_popup(popup),
       Action::ClosePopup => self.close_plugin_popup(),
-      Action::SetTheme(pairs) => {
-        for (field, color) in pairs {
-          self.user_config.theme.set(field, color);
-        }
-      }
+      Action::SetTheme(pairs) => self.set_theme_colors(pairs),
       Action::SaveSettings => {
         return ActionOutcome::SettingsSaved {
           saved: self.save_settings_from_items(),
