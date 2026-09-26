@@ -153,9 +153,9 @@ pub struct ScriptedOnboarding {
   answers: std::sync::Mutex<std::collections::VecDeque<String>>,
   pub shown: std::sync::Mutex<Vec<String>>,
   pub asked: std::sync::Mutex<Vec<crate::core::onboarding::OnboardingPrompt>>,
-  /// Prompts read through `prompt_secret`, in order.
+  /// Prompts read through `prompt_masked`, in order.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
-  pub secret_prompts: std::sync::Mutex<Vec<String>>,
+  pub masked_prompts: std::sync::Mutex<Vec<String>>,
   interactive: bool,
 }
 
@@ -165,7 +165,7 @@ impl ScriptedOnboarding {
       answers: std::sync::Mutex::new(answers.iter().map(|answer| format!("{answer}\n")).collect()),
       shown: std::sync::Mutex::new(Vec::new()),
       asked: std::sync::Mutex::new(Vec::new()),
-      secret_prompts: std::sync::Mutex::new(Vec::new()),
+      masked_prompts: std::sync::Mutex::new(Vec::new()),
       interactive: true,
     }
   }
@@ -192,8 +192,8 @@ impl crate::core::onboarding::Onboarding for ScriptedOnboarding {
     self.shown.lock().unwrap().push(text.to_string());
   }
 
-  fn prompt_secret(&self, prompt: &str) -> anyhow::Result<String> {
-    self.secret_prompts.lock().unwrap().push(prompt.to_string());
+  fn prompt_masked(&self, prompt: &str) -> anyhow::Result<String> {
+    self.masked_prompts.lock().unwrap().push(prompt.to_string());
     self.prompt_line(prompt)
   }
 

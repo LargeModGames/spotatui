@@ -161,7 +161,7 @@ describe("showsOnboarding", () => {
   it("shows a question asked after boot", () => {
     const pending = {
       seq: 3,
-      ask: { kind: "Line" as const, prompt: "?", secret: false },
+      ask: { kind: "Line" as const, prompt: "?", masked: false },
     };
     expect(
       showsOnboarding({

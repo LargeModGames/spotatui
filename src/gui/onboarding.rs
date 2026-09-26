@@ -34,7 +34,7 @@ pub(crate) struct OnboardingQuestion {
 pub(crate) enum OnboardingAsk {
   Line {
     prompt: String,
-    secret: bool,
+    masked: bool,
   },
   Confirm {
     title: String,
@@ -158,10 +158,10 @@ impl BrowserOnboarding {
   }
 
   /// A typed line comes back the way `read_line` returns it: one line, newline included.
-  fn line(&self, prompt: &str, secret: bool) -> Result<String> {
+  fn line(&self, prompt: &str, masked: bool) -> Result<String> {
     match self.ask_page(OnboardingAsk::Line {
       prompt: prompt.to_string(),
-      secret,
+      masked,
     })? {
       OnboardingReplyAnswer::Line { text } => {
         let line = text.split(['\r', '\n']).next().unwrap_or_default();
@@ -188,7 +188,7 @@ impl Onboarding for BrowserOnboarding {
     self.line(prompt, false)
   }
 
-  fn prompt_secret(&self, prompt: &str) -> Result<String> {
+  fn prompt_masked(&self, prompt: &str) -> Result<String> {
     self.line(prompt, true)
   }
 
@@ -287,23 +287,23 @@ mod tests {
       page.join().unwrap(),
       OnboardingAsk::Line {
         prompt: "Enter the URL you were redirected to: ".to_string(),
-        secret: false
+        masked: false
       }
     );
     assert_eq!(bridge.subscribe().borrow().pending, None);
   }
 
   #[test]
-  fn a_secret_prompt_reaches_the_page_marked_secret() {
+  fn a_masked_prompt_reaches_the_page_marked_masked() {
     let bridge = Arc::new(BrowserOnboarding::new());
     let page = answer_next(&bridge, line("hunter2"));
 
-    assert_eq!(bridge.prompt_secret("  Password: ").unwrap(), "hunter2\n");
+    assert_eq!(bridge.prompt_masked("  Password: ").unwrap(), "hunter2\n");
     assert_eq!(
       page.join().unwrap(),
       OnboardingAsk::Line {
         prompt: "  Password: ".to_string(),
-        secret: true
+        masked: true
       }
     );
   }

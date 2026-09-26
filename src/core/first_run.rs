@@ -341,13 +341,13 @@ fn configure_local(user_config: &UserConfig, onboarding: &dyn Onboarding) {
 
 // Only credential-collecting sources (currently Subsonic) use this.
 #[cfg(feature = "subsonic")]
-fn prompt_required(onboarding: &dyn Onboarding, label: &str, secret: bool) -> Result<String> {
+fn prompt_required(onboarding: &dyn Onboarding, label: &str, masked: bool) -> Result<String> {
   const MAX_RETRIES: u8 = 5;
   let mut retries = 0;
   loop {
     let prompt = format!("  {label}: ");
-    let input = if secret {
-      onboarding.prompt_secret(&prompt)?
+    let input = if masked {
+      onboarding.prompt_masked(&prompt)?
     } else {
       onboarding.prompt_line(&prompt)?
     };
@@ -370,7 +370,7 @@ mod tests {
 
   #[cfg(feature = "subsonic")]
   #[test]
-  fn a_required_secret_is_read_through_the_secret_prompt() {
+  fn a_masked_field_is_read_through_the_masked_prompt() {
     let onboarding = ScriptedOnboarding::with_answers(&["hunter2"]);
 
     assert_eq!(
@@ -378,7 +378,7 @@ mod tests {
       "hunter2"
     );
     assert_eq!(
-      *onboarding.secret_prompts.lock().unwrap(),
+      *onboarding.masked_prompts.lock().unwrap(),
       vec!["  Password: ".to_string()]
     );
   }

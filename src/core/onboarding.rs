@@ -81,7 +81,7 @@ pub trait Onboarding: Send + Sync {
 
   /// [`Self::prompt_line`] for a value the frontend must not echo.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
-  fn prompt_secret(&self, prompt: &str) -> Result<String> {
+  fn prompt_masked(&self, prompt: &str) -> Result<String> {
     self.prompt_line(prompt)
   }
 

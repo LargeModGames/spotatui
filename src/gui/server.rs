@@ -718,7 +718,7 @@ mod tests {
     let question = next_json(&mut first).await;
     assert_eq!(
       question["payload"]["pending"]["ask"],
-      serde_json::json!({ "kind": "Line", "prompt": "Client ID: ", "secret": false })
+      serde_json::json!({ "kind": "Line", "prompt": "Client ID: ", "masked": false })
     );
     // A second page sees the open question and may answer it.
     let mut second = open_page(port, &access).await;

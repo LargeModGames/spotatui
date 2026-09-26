@@ -13,8 +13,8 @@ const render = (ask: OnboardingAsk, transcript = "") =>
   );
 
 describe("Onboarding", () => {
-  it("masks a secret prompt", () => {
-    const html = render({ kind: "Line", prompt: "Password: ", secret: true });
+  it("renders a masked prompt as a password field", () => {
+    const html = render({ kind: "Line", prompt: "Password: ", masked: true });
     expect(html).toContain('type="password"');
     expect(html).toContain("Password: ");
   });

@@ -52,7 +52,7 @@ function Question({
           <label>
             {ask.prompt}
             <input
-              type={ask.secret ? "password" : "text"}
+              type={ask.masked ? "password" : "text"}
               value={text}
               onChange={(event) => setText(event.target.value)}
               autoFocus
