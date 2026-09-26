@@ -1,8 +1,26 @@
 //! Keeps a second UI launch from running beside the first one.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
+
+/// The refusal of a second UI launch: expected, so not reported as a crash.
+#[derive(Debug)]
+pub(super) struct AlreadyRunning {
+  holder: String,
+}
+
+impl std::fmt::Display for AlreadyRunning {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(
+      f,
+      "spotatui is already running{}. Quit it first; Spotify playback can still be controlled with `spotatui playback`.",
+      self.holder
+    )
+  }
+}
+
+impl std::error::Error for AlreadyRunning {}
 
 /// Only a UI launch (no subcommand) locks, so the CLI keeps working beside a running UI.
 pub(super) fn takes_lock(subcommand: Option<&str>) -> bool {
@@ -46,9 +64,7 @@ fn acquire_in(dir: &Path) -> Result<Option<File>> {
         .and_then(|pid| pid.trim().parse::<u32>().ok())
         .map(|pid| format!(" (pid {pid})"))
         .unwrap_or_default();
-      Err(anyhow!(
-        "spotatui is already running{holder}. Quit it first; Spotify playback can still be controlled with `spotatui playback`."
-      ))
+      Err(AlreadyRunning { holder }.into())
     }
     Err(TryLockError::Error(e)) => {
       log::warn!("[instance] running without the single-instance lock: {e}");
@@ -75,8 +91,10 @@ mod tests {
       .unwrap()
       .expect("the first launch takes the lock");
 
-    let error = acquire_in(dir.path()).unwrap_err().to_string();
+    let error = acquire_in(dir.path()).unwrap_err();
 
+    assert!(error.is::<AlreadyRunning>());
+    let error = error.to_string();
     assert!(
       error.contains(&format!("pid {}", std::process::id())),
       "{error}"

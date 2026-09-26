@@ -96,7 +96,7 @@ pub async fn run_cli() -> Result<()> {
   // the bottom. Checked rather than assumed: `setup_logging` is itself one of
   // the steps that can fail, and pointing at a file that was never created
   // sends the reporter looking for something that is not there.
-  if result.is_err() {
+  if result.as_ref().is_err_and(|e| !is_instance_refusal(e)) {
     let path = crate::core::paths::app_log_path();
     if path.is_file() {
       eprintln!(
@@ -252,4 +252,17 @@ async fn run_cli_inner() -> Result<()> {
   );
 
   Ok(())
+}
+
+/// A second UI launch refused by the instance lock is expected, not a failure to report.
+fn is_instance_refusal(error: &anyhow::Error) -> bool {
+  #[cfg(feature = "tui")]
+  {
+    error.is::<instance::AlreadyRunning>()
+  }
+  #[cfg(not(feature = "tui"))]
+  {
+    let _ = error;
+    false
+  }
 }
