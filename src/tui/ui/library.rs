@@ -48,7 +48,10 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // active source instead of Spotify playlists (no write, so no "Add Playlist").
   if app.active_source == Source::Local {
     let items: Vec<String> = if app.local_playlists().is_empty() {
-      vec!["(no folders \u{2014} set music dir, then press `d`)".to_string()]
+      vec![format!(
+        "(no folders \u{2014} set music dir, then press `{}`)",
+        app.user_config.keys.manage_devices
+      )]
     } else {
       app
         .local_playlists()
@@ -72,7 +75,10 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // local-write support, so no "Add Playlist").
   if app.active_source == Source::Subsonic {
     let items: Vec<String> = if app.subsonic_playlists().is_empty() {
-      vec!["(no playlists \u{2014} configure server, then press `d`)".to_string()]
+      vec![format!(
+        "(no playlists \u{2014} configure server, then press `{}`)",
+        app.user_config.keys.manage_devices
+      )]
     } else {
       app
         .subsonic_playlists()
@@ -96,7 +102,10 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // playlists, and the favorite albums, each opening the shared track table.
   if app.active_source == Source::Qobuz {
     let items: Vec<String> = if app.qobuz_playlists().is_empty() {
-      vec!["(not logged in \u{2014} press `d`, pick Qobuz)".to_string()]
+      vec![format!(
+        "(not logged in \u{2014} press `{}`, pick Qobuz)",
+        app.user_config.keys.manage_devices
+      )]
     } else {
       app
         .qobuz_playlists()
@@ -286,6 +295,33 @@ mod tests {
     assert!(
       !content.contains("Liked Songs"),
       "Spotify library entries must be hidden under Local: {content}"
+    );
+  }
+
+  #[test]
+  fn empty_source_sidebars_format_rebound_device_key() {
+    let mut app = App::default_connected();
+    app.user_config.keys.manage_devices = crate::core::config::Key::new('D');
+
+    app.active_source = Source::Local;
+    let content = rendered(&app, Rect::new(0, 0, 60, 40));
+    assert!(
+      content.contains("then press `D`)"),
+      "local sidebar hint must format manage_devices key: {content}"
+    );
+
+    app.active_source = Source::Subsonic;
+    let content = rendered(&app, Rect::new(0, 0, 60, 40));
+    assert!(
+      content.contains("then press `D`)"),
+      "subsonic sidebar hint must format manage_devices key: {content}"
+    );
+
+    app.active_source = Source::Qobuz;
+    let content = rendered(&app, Rect::new(0, 0, 60, 40));
+    assert!(
+      content.contains("press `D`, pick Qobuz"),
+      "qobuz sidebar hint must format manage_devices key: {content}"
     );
   }
 
