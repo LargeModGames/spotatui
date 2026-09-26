@@ -26,7 +26,7 @@ use crate::core::app::App;
 use crate::infra::network::IoEvent;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -110,10 +110,20 @@ fn write_handshake(handshake: &Handshake) -> Result<()> {
   Ok(())
 }
 
-/// Remove the published handshake. Called on shutdown so a relay does not chase
-/// a socket that is gone.
+/// Remove the published handshake if this process wrote it. Called on shutdown
+/// so a relay does not chase a socket that is gone.
 pub fn clear_handshake() {
   if let Ok(path) = handshake_path() {
+    clear_handshake_at(&path, std::process::id());
+  }
+}
+
+fn clear_handshake_at(path: &Path, pid: u32) {
+  let ours = std::fs::read_to_string(path)
+    .ok()
+    .and_then(|raw| serde_json::from_str::<Handshake>(&raw).ok())
+    .is_some_and(|handshake| handshake.pid == pid);
+  if ours {
     let _ = std::fs::remove_file(path);
   }
 }
@@ -271,6 +281,22 @@ mod tests {
     assert_eq!(a.len(), 32, "128 bits, hex-encoded");
     assert_ne!(a, b);
     assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+  }
+
+  #[test]
+  fn clear_handshake_leaves_a_file_another_process_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    let foreign = Handshake {
+      port: 1,
+      token: "t".to_string(),
+      pid: 7,
+    };
+    std::fs::write(&path, serde_json::to_string(&foreign).unwrap()).unwrap();
+
+    clear_handshake_at(&path, 42);
+
+    assert!(path.exists());
   }
 
   #[test]
