@@ -10,6 +10,10 @@
 
 - **Media controls stop showing the paused Spotify track while another source starts**: while Local Files, Subsonic, Internet Radio, YouTube or Qobuz fetches or probes its first track, the media panels (MPRIS, Windows, macOS), Discord, the window title, the lyrics and cover-art panes and the spotatui.com now-playing card show nothing instead of the Spotify track it replaced.
 
+### Fixed
+
+- **A very narrow track table no longer crashes spotatui**: widening the sidebar with `}` until a table pane was under 3 columns wide panicked with "attempt to subtract with overflow" in debug builds and silently wrapped to a huge column width in release builds. The columns now shrink to zero width instead ([#540](https://github.com/LargeModGames/spotatui/issues/540)).
+
 ## [v0.43.0] 2026-09-23
 
 ### Added
