@@ -1,8 +1,7 @@
 //! The frontend-neutral bootstrap: logging, the panic hook, the ALSA error
 //! silencer, config/state loading with migrations, Spotify authentication,
-//! and `App` construction. `boot()` is the one entry point; `run_cli()` is
-//! its only caller today, and a future windowed entry point boots through
-//! the same sequence.
+//! and `App` construction. `boot()` is the one entry point; `run_cli()` and
+//! `run_gui()` call it.
 
 use crate::core::app::App;
 use crate::core::auth;
@@ -1020,6 +1019,28 @@ mod tests {
     assert!(!onboarding.saw("\nWould you like to participate? (Y/n): "));
     assert!(!onboarding.saw("Opted out. You can change this anytime in Settings -> Behavior.\n"));
     assert!(!onboarding.saw("Thank you for participating!\n"));
+  }
+
+  #[cfg(feature = "gui")]
+  #[test]
+  fn the_gui_refuses_the_song_counter_question_instead_of_opting_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut user_config = user_config_at(config_path.clone());
+
+    let error = prompt_global_song_count_opt_in(
+      &mut user_config,
+      &crate::runtime::gui::TerminalSetupRequired,
+    )
+    .unwrap_err();
+
+    assert!(
+      error
+        .to_string()
+        .contains("cannot run the first-launch setup yet"),
+      "{error}"
+    );
+    assert!(!config_path.exists());
   }
 
   #[test]

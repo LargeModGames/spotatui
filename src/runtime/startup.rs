@@ -1,6 +1,6 @@
-//! Launching the interactive frontend: OS media integrations, the deferred
-//! native-streaming startup, persisted-session restore, and the handoff to
-//! the terminal UI's event loop.
+//! Launching an interactive frontend: OS media integrations, the deferred
+//! native-streaming startup, persisted-session restore, and the exit path,
+//! shared by the terminal UI (`launch_ui`) and the browser frontend.
 
 use super::bootstrap::Boot;
 use super::pump::start_tokio;
@@ -20,7 +20,9 @@ use crate::infra::mpris;
 use crate::infra::network::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::infra::player;
+#[cfg(feature = "tui")]
 use crate::tui::runner;
+#[cfg(feature = "tui")]
 use anyhow::Result;
 use log::info;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -188,17 +190,17 @@ fn update_windows_metadata(
 }
 
 /// What `prepare_frontend` hands the frontend that runs next.
-struct FrontendHandles {
-  app: Arc<Mutex<App>>,
-  user_config: UserConfig,
-  shared_position: Option<Arc<AtomicU64>>,
-  mpris: MprisHandle,
-  discord: DiscordRpcHandle,
-  history_collector: crate::infra::history::HistoryCollectorHandle,
+pub(super) struct FrontendHandles {
+  pub(super) app: Arc<Mutex<App>>,
+  pub(super) user_config: UserConfig,
+  pub(super) shared_position: Option<Arc<AtomicU64>>,
+  pub(super) mpris: MprisHandle,
+  pub(super) discord: DiscordRpcHandle,
+  pub(super) history_collector: crate::infra::history::HistoryCollectorHandle,
 }
 
 /// OS media integrations, deferred streaming, session restore and the pump task, shared by every frontend.
-async fn prepare_frontend(boot: Boot) -> FrontendHandles {
+pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   let app = boot.app;
   let sync_io_rx = boot.sync_io_rx;
   let user_config = boot.user_config;
@@ -639,6 +641,7 @@ async fn prepare_frontend(boot: Boot) -> FrontendHandles {
 }
 
 /// Launch the terminal UI on the shared frontend runtime.
+#[cfg(feature = "tui")]
 pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   info!("launching interactive terminal ui");
   let FrontendHandles {
@@ -698,7 +701,7 @@ async fn park_native_playback_before_exit(
 }
 
 /// The exit path after a clean quit; `restore_frontend` runs where the terminal restore always ran.
-async fn shutdown_frontend(
+pub(super) async fn shutdown_frontend(
   app: &Arc<Mutex<App>>,
   driver: &mut Driver,
   history_collector: crate::infra::history::HistoryCollectorHandle,

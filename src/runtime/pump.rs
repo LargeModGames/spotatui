@@ -274,6 +274,44 @@ mod tests {
     assert!(start_playback_has_taker(&IoEvent::NextTrack, false));
   }
 
+  #[cfg(feature = "gui")]
+  #[tokio::test]
+  async fn a_spotify_start_without_a_session_pushes_the_status_channel() {
+    use crate::core::app::{App, SPOTIFY_NOT_CONNECTED_STATUS};
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let (app_tx, _app_rx) = std::sync::mpsc::channel();
+    let app = App::new(app_tx, UserConfig::new(), None);
+    let before = app.display_revisions();
+    let app = Arc::new(Mutex::new(app));
+    let dir = tempfile::tempdir().unwrap();
+    let mut network = Network::new(
+      None,
+      ClientConfig::new(),
+      &app,
+      dir.path().join("token.json"),
+    );
+    let (pump_tx, pump_rx) = std::sync::mpsc::channel();
+    pump_tx
+      .send(IoEvent::StartPlayback(
+        None,
+        Some(vec!["spotify:track:x".to_string()]),
+        Some(0),
+      ))
+      .unwrap();
+    drop(pump_tx);
+
+    start_tokio(pump_rx, &mut network).await;
+
+    let app = app.lock().await;
+    let status = crate::gui::protocol::pushed(&crate::gui::protocol::diff(&before, &app), "status");
+    assert_eq!(status["payload"]["message"], SPOTIFY_NOT_CONNECTED_STATUS);
+    assert_eq!(status["payload"]["is_error"], false);
+  }
+
   #[tokio::test]
   async fn a_routed_event_that_returns_the_sink_moves_the_playback_revision() {
     use crate::core::app::{App, DisplayDomain, NativeTrackInfo};
@@ -296,6 +334,8 @@ mod tests {
     app.claim_decoded_sink(crate::core::source::Source::Qobuz);
     app.note_display_changes();
     let seen = app.display_revisions().get(DisplayDomain::Playback);
+    #[cfg(feature = "gui")]
+    let before = app.display_revisions();
     let app = Arc::new(Mutex::new(app));
     let dir = tempfile::tempdir().unwrap();
     let mut network = Network::new(
@@ -319,5 +359,11 @@ mod tests {
       crate::infra::media_metadata::current_playback_snapshot(&app).map(|s| s.metadata.title),
       Some("Suspended".to_string())
     );
+    #[cfg(feature = "gui")]
+    {
+      let playback =
+        crate::gui::protocol::pushed(&crate::gui::protocol::diff(&before, &app), "playback");
+      assert_eq!(playback["payload"]["item"]["title"], "Suspended");
+    }
   }
 }

@@ -5793,6 +5793,7 @@ dependencies = [
  "futures",
  "hex",
  "hkdf",
+ "httparse",
  "icy-metadata",
  "image",
  "keepawake",

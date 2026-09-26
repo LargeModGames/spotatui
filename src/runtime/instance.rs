@@ -23,6 +23,7 @@ impl std::fmt::Display for AlreadyRunning {
 impl std::error::Error for AlreadyRunning {}
 
 /// Only a UI launch (no subcommand) locks, so the CLI keeps working beside a running UI.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub(super) fn takes_lock(subcommand: Option<&str>) -> bool {
   subcommand.is_none()
 }
