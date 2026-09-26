@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum Message {
+pub(crate) enum ServerMessage {
   Hello {
     payload: HelloPayload,
   },
@@ -49,6 +50,7 @@ pub(crate) enum Message {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct HelloPayload {
   version: &'static str,
   /// Present only on the connect that traded a launch code.
@@ -57,6 +59,7 @@ pub(crate) struct HelloPayload {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct PlaybackPayload {
   item: Option<NowPlaying>,
   volume: u32,
@@ -65,6 +68,7 @@ pub(crate) struct PlaybackPayload {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct NowPlaying {
   title: String,
   artists: Vec<String>,
@@ -79,6 +83,7 @@ pub(crate) struct NowPlaying {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct QueuePayload {
   spotify: QueueSnapshot,
   native: Vec<TrackInfo>,
@@ -86,6 +91,7 @@ pub(crate) struct QueuePayload {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct StatusPayload {
   message: Option<String>,
   is_error: bool,
@@ -93,14 +99,15 @@ pub(crate) struct StatusPayload {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ClientMessage {
   Action { action: Box<Action> },
   Quit,
 }
 
-pub(crate) fn hello(revisions: DisplayRevisions, token: Option<String>) -> Message {
-  Message::Hello {
+pub(crate) fn hello(revisions: DisplayRevisions, token: Option<String>) -> ServerMessage {
+  ServerMessage::Hello {
     payload: HelloPayload {
       version: env!("CARGO_PKG_VERSION"),
       token,
@@ -109,14 +116,14 @@ pub(crate) fn hello(revisions: DisplayRevisions, token: Option<String>) -> Messa
   }
 }
 
-pub(crate) fn tick(app: &App) -> Message {
-  Message::Tick {
+pub(crate) fn tick(app: &App) -> ServerMessage {
+  ServerMessage::Tick {
     payload: app.playback_position_ms().map(|ms| ms as u64),
   }
 }
 
 /// Every channel whose revision moved since `sent`.
-pub(crate) fn diff(sent: &DisplayRevisions, app: &App) -> Vec<Message> {
+pub(crate) fn diff(sent: &DisplayRevisions, app: &App) -> Vec<ServerMessage> {
   let now = app.display_revisions();
   DisplayDomain::ALL
     .into_iter()
@@ -126,7 +133,7 @@ pub(crate) fn diff(sent: &DisplayRevisions, app: &App) -> Vec<Message> {
 }
 
 /// Every channel once.
-pub(crate) fn resync(app: &App) -> Vec<Message> {
+pub(crate) fn resync(app: &App) -> Vec<ServerMessage> {
   let now = app.display_revisions();
   DisplayDomain::ALL
     .into_iter()
@@ -134,17 +141,17 @@ pub(crate) fn resync(app: &App) -> Vec<Message> {
     .collect()
 }
 
-pub(crate) fn encode(message: &Message) -> String {
+pub(crate) fn encode(message: &ServerMessage) -> String {
   serde_json::to_string(message).expect("a protocol message serializes")
 }
 
-fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<Message> {
+fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerMessage> {
   Some(match domain {
-    DisplayDomain::Route => Message::Route {
+    DisplayDomain::Route => ServerMessage::Route {
       rev,
       payload: route_name(app.get_current_route()),
     },
-    DisplayDomain::Status => Message::Status {
+    DisplayDomain::Status => ServerMessage::Status {
       rev,
       payload: StatusPayload {
         message: app.status_message().map(str::to_string),
@@ -154,15 +161,15 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<Message
           .map(str::to_string),
       },
     },
-    DisplayDomain::Theme => Message::Theme {
+    DisplayDomain::Theme => ServerMessage::Theme {
       rev,
       payload: theme_colors(&app.user_config.theme),
     },
-    DisplayDomain::Playback => Message::Playback {
+    DisplayDomain::Playback => ServerMessage::Playback {
       rev,
       payload: playback(app),
     },
-    DisplayDomain::Devices => Message::Devices {
+    DisplayDomain::Devices => ServerMessage::Devices {
       rev,
       payload: device_list(app),
     },
@@ -182,7 +189,7 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<Message
             .collect(),
         })
         .unwrap_or_default();
-      Message::Queue {
+      ServerMessage::Queue {
         rev,
         payload: Box::new(QueuePayload {
           spotify,
@@ -240,7 +247,7 @@ fn theme_colors(theme: &Theme) -> BTreeMap<String, Option<[u8; 3]>> {
 
 /// The first message of that kind, as JSON; panics when none was produced.
 #[cfg(test)]
-pub(crate) fn pushed(messages: &[Message], kind: &str) -> serde_json::Value {
+pub(crate) fn pushed(messages: &[ServerMessage], kind: &str) -> serde_json::Value {
   messages
     .iter()
     .map(|message| serde_json::to_value(message).unwrap())
@@ -262,7 +269,7 @@ mod tests {
     (App::new(tx, UserConfig::new(), Some(SystemTime::now())), rx)
   }
 
-  fn apply_from_page(app: &mut App, text: &str) -> Vec<Message> {
+  fn apply_from_page(app: &mut App, text: &str) -> Vec<ServerMessage> {
     let before = app.display_revisions();
     let ClientMessage::Action { action } = serde_json::from_str(text).unwrap() else {
       panic!("not an action");
@@ -379,5 +386,48 @@ mod tests {
       serde_json::to_value(tick(&app)).unwrap(),
       serde_json::json!({ "kind": "tick", "payload": 1234 })
     );
+  }
+  #[test]
+  fn typescript_bindings_are_written_to_the_frontend_source_tree() {
+    use crate::core::plugin_api::{EpisodeInfo, ResumePointInfo};
+    use ts_rs::TS;
+    fn written<T: TS + 'static>(dir: &std::path::Path, cfg: &ts_rs::Config) {
+      T::export_all(cfg).unwrap();
+      let file = std::fs::read_to_string(dir.join(format!("{}.ts", T::ident(cfg)))).unwrap();
+      assert!(
+        file.contains(&T::decl(cfg)),
+        "{} shares its name with another type",
+        T::ident(cfg)
+      );
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("gui/src/bindings");
+    if dir.exists() {
+      std::fs::remove_dir_all(&dir).unwrap();
+    }
+    let cfg = ts_rs::Config::new()
+      .with_large_int("number")
+      .with_out_dir(dir.clone());
+    written::<Action>(&dir, &cfg);
+    written::<ServerMessage>(&dir, &cfg);
+    written::<ClientMessage>(&dir, &cfg);
+    written::<HelloPayload>(&dir, &cfg);
+    written::<PlaybackPayload>(&dir, &cfg);
+    written::<NowPlaying>(&dir, &cfg);
+    written::<QueuePayload>(&dir, &cfg);
+    written::<StatusPayload>(&dir, &cfg);
+    written::<DisplayRevisions>(&dir, &cfg);
+    written::<DeviceInfo>(&dir, &cfg);
+    written::<QueueSnapshot>(&dir, &cfg);
+    written::<QueueItemSnapshot>(&dir, &cfg);
+    written::<EpisodeInfo>(&dir, &cfg);
+    written::<ResumePointInfo>(&dir, &cfg);
+    for entry in std::fs::read_dir(&dir).unwrap() {
+      let path = entry.unwrap().path();
+      assert!(
+        !std::fs::read_to_string(&path).unwrap().contains("bigint"),
+        "{}",
+        path.display()
+      );
+    }
   }
 }

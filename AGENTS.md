@@ -73,6 +73,9 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
   `action_refs_in_tui_handlers`) may only rise. `src/gates.rs` pins every value
   exactly, so move the baseline in the same PR that moves the number, in the
   ratchet's direction only.
+- `.github/workflows/gui.yml` gates the `gui/` frontend on every PR: run
+  `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`,
+  `npm test` and `npm run build` in `gui/`; the cargo gate above does not cover it.
 
 ## Run a Single Test
 
@@ -372,8 +375,9 @@ directly, and TUI handlers adopt it as the conversion sub-PRs land
   file has a value for it (an `Unbound` one also goes into the `UNBOUND`
   pin, which a producer scan of `src/tui/` checks). Feature-gate an arm's
   body, never the arm: clippy skips a match when any arm carries a `#[cfg]`.
-- `Action` derives serde (the future frontend wire shape); a payload type
-  added to it must stay serde-derivable.
+- `Action` derives serde (the frontend wire shape); a payload type added to it
+  must stay serde-derivable and carry the `ts_rs::TS` `cfg_attr` line (see
+  Testing conventions), and the change needs regenerated `gui/src/bindings/`.
 
 ### Paginated results
 
@@ -625,8 +629,13 @@ working in those directories.
 ### Testing conventions
 
 - Tests are colocated (`#[cfg(test)] mod tests`) - there is no `tests/` dir. The
-  only dev-dependency is `tempfile`: HTTP tests bind a real `127.0.0.1:0`
+  dev-dependencies are `tempfile` and `ts-rs`: HTTP tests bind a real `127.0.0.1:0`
   listener into an injected base-URL field; UI tests use ratatui's `TestBackend`.
+- `gui/src/bindings/` is generated. `Action`, every type it reaches and the GUI
+  protocol types derive `ts_rs::TS` under `cfg_attr(all(test, feature = "gui"), ...)`;
+  a `gui` test run rewrites the directory. Commit the result: the `gui` test leg
+  fails on any difference. A GUI protocol type never reuses the name of another
+  exported type, and a type's doc comment lands in its binding.
 - `App::new` is `#[cfg(test)]`-only (production uses `App::new_with_state`).
   `App::default()` has no IoEvent channel and `dispatch` silently drops events -
   tests asserting on IoEvents use the house pattern

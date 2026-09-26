@@ -138,6 +138,13 @@ jobs:
         with:
           command: test
           args: ${{ matrix.args }}
+      # The gui leg's test run regenerates the TypeScript bindings; any
+      # difference from the committed files (new, changed or deleted) fails.
+      - name: TypeScript bindings match the Rust types
+        if: contains(matrix.args, 'gui')
+        run: |
+          git add --intent-to-add gui/src/bindings
+          git diff --exit-code -- gui/src/bindings
 
   # Line coverage for Codecov. One leg only: the all-sources feature set, so
   # the report covers every subsystem that ships in the Linux release. Keep the

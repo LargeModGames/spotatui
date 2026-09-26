@@ -27,3 +27,7 @@ tags
 # build artifacts from the worker-relay subproject
 worker-relay/node_modules/
 /result
+
+# build artifacts from the gui frontend
+gui/node_modules/
+gui/dist/

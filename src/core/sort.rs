@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// The serde derives on this enum, `SortOrder` and `SortContext` are the
 /// action-vocabulary wire shape: `Action::Sort` carries them directly.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum SortField {
   /// Original API order (no sorting applied)
   #[default]
@@ -133,6 +134,7 @@ impl SortOrder {
 
 /// Context that supports sorting
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum SortContext {
   /// Tracks in a playlist
   PlaylistTracks,
