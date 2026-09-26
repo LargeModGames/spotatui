@@ -68,6 +68,9 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
 - `.github/workflows/gui.yml` gates the `gui/` frontend on every PR: run
   `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`,
   `npm test` and `npm run build` in `gui/`; the cargo gate above does not cover it.
+  `npm run shots` (Playwright, after a one-time `npx playwright install chromium firefox webkit`)
+  renders the page against the fake bridge in `gui/e2e/` and writes one PNG per
+  scene and browser to `gui/shots/`; CI uploads them as the `gui-shots` artifact.
 
 Details: `.github/workflows/AGENTS.md`.
 
