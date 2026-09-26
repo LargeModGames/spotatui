@@ -20,98 +20,52 @@ one query can be walked across tabs.
 
 ## Default Keybindings
 
-| Key         | Action                    |
-| ----------- | ------------------------- |
-| `Space`     | Toggle play/pause         |
-| `n`         | Next track                |
-| `p`         | Previous track            |
-| `+` / `-`   | Volume up/down            |
-| `<` / `>`   | Seek backward/forward     |
-| `/`         | Search                    |
-| `h`/`j`/`k`/`l` | Navigate (vim-style: left/down/up/right) |
-| `Enter`     | Select / confirm          |
-| `a`         | Jump to album             |
-| `A`         | Jump to artist's albums   |
-| `o`         | Jump to context           |
-| `d`         | Switch music source       |
-| `c`         | Copy song URL             |
-| `C`         | Copy album URL            |
-| `Ctrl-r`    | Toggle repeat mode        |
-| `Ctrl-s`    | Toggle shuffle            |
-| `v`         | Audio visualization       |
-| `z`         | Add to queue              |
-| `Q`         | Show queue                |
-| `F`         | Like / save track         |
-| `B`         | Lyrics view               |
-| `T`         | Toggle miniplayer view    |
-| `R`         | Generate recap            |
-| `Ctrl-p`    | Listening party           |
-| `,`         | Open sort menu            |
-| `Alt-,`     | Open settings (`Ctrl-,` on macOS) |
-| `?`         | Show help                 |
-| `q`         | Go back / Quit            |
-| `Ctrl-j`    | Open the AI DJ (`ai-dj` builds) |
-| `Ctrl-t`    | Toggle DJ auto-queue      |
-| `Ctrl-y`    | DJ vibe shift             |
-| `Ctrl-o`    | DJ fresh tracks only      |
-| `Ctrl-g`    | Choose the DJ's AI/model  |
+| Key         | Action                    | Config Name |
+| ----------- | ------------------------- | ----------- |
+| `Space`     | Toggle play/pause         | `toggle_playback` |
+| `n`         | Next track                | `next_track` |
+| `p`         | Previous track            | `previous_track` |
+| `+`         | Volume up                 | `volume_up` |
+| `-`         | Volume down               | `volume_down` |
+| `<`         | Seek backward             | `seek_backwards` |
+| `>`         | Seek forward              | `seek_forwards` |
+| `/`         | Search                    | `search` |
+| `h`         | Move left                 | `left` |
+| `j`         | Move down                 | `down` |
+| `k`         | Move up                   | `up` |
+| `l`         | Move right                | `right` |
+| `H`         | Jump to top / start       | `jump_to_start` |
+| `L`         | Jump to bottom / end      | `jump_to_end` |
+| `Enter`     | Select / confirm          | `select` |
+| `a`         | Jump to album             | `jump_to_album` |
+| `A`         | Jump to artist's albums   | `jump_to_artist_album` |
+| `o`         | Jump to context           | `jump_to_context` |
+| `d`         | Switch music source       | `switch_device` |
+| `c`         | Copy song URL             | `copy_song_url` |
+| `C`         | Copy album URL            | `copy_album_url` |
+| `Ctrl-r`    | Toggle repeat mode        | `repeat` |
+| `Ctrl-s`    | Toggle shuffle            | `shuffle` |
+| `v`         | Audio visualization       | `audio_analysis` |
+| `z`         | Add to queue              | `queue` |
+| `Q`         | Show queue                | `show_queue` |
+| `F`         | Like / save track         | `like` |
+| `B`         | Lyrics view               | `lyrics` |
+| `T`         | Toggle miniplayer view    | `toggle_miniplayer` |
+| `R`         | Generate recap            | `recap` |
+| `Ctrl-p`    | Listening party           | `listening_party` |
+| `,`         | Open sort menu            | `sort` |
+| `Alt-,`     | Open settings (`Ctrl-,` on macOS) | `open_settings` |
+| `?`         | Show help                 | `help` |
+| `q`         | Go back / Quit            | `back` |
+| `Ctrl-c`    | Quit immediately          | `quit` |
+| `Ctrl-j`    | Open the AI DJ (`ai-dj` builds) | `dj_open` |
+| `Ctrl-t`    | Toggle DJ auto-queue      | `dj_toggle_auto_queue` |
+| `Ctrl-y`    | DJ vibe shift             | `dj_vibe_shift` |
+| `Ctrl-o`    | DJ fresh tracks only      | `dj_toggle_fresh_only` |
+| `Ctrl-g`    | Choose the DJ's AI/model  | `dj_pick_model` |
 
 ## Customizing Keybindings
 
 Edit `config.yml` in the spotatui app config directory (`$XDG_CONFIG_HOME/spotatui`
 when `XDG_CONFIG_HOME` is set to an absolute path, or `~/.config/spotatui` when
 it is unset or not absolute):
-
-```yaml
-keybindings:
-  back: "q"
-  jump_to_album: "a"
-  toggle_playback: " "
-  # ... etc
-```
-
-The `keybindings:` section rebinds around 40 named actions in total; see
-[`examples/config.example.yml`](../examples/config.example.yml) and
-[`docs/configuration.md`](configuration.md) for the full picture of how the
-config file is structured.
-
-### Key Format
-
-- Single keys: `"a"`, `"/"`, `" "` (space)
-- With Ctrl: `"ctrl-q"`, `"ctrl-s"`
-- With Alt: `"alt-,"`, `"alt-s"`
-- With Shift: Use capital letter `"A"`, `"C"`
-- Special keys: `"enter"`, `"esc"`, `"tab"`
-
-> **Note:** Three-key combinations like `ctrl-alt-q` are not supported.
-
-## AI DJ keys
-
-Only present in builds with the `ai-dj` feature. All five are rebindable as
-`dj_open`, `dj_toggle_auto_queue`, `dj_vibe_shift`, `dj_toggle_fresh_only`, and
-`dj_pick_model`.
-
-| Action | Default | Config key |
-|---|---|---|
-| Open the AI DJ screen | `Ctrl-j` | `dj_open` |
-| Toggle continuous auto-queue | `Ctrl-t` | `dj_toggle_auto_queue` |
-| Vibe shift (drop the DJ's queued tail, change direction) | `Ctrl-y` | `dj_vibe_shift` |
-| Toggle "only tracks I don't already have" | `Ctrl-o` | `dj_toggle_fresh_only` |
-| Choose which AI and model the DJ uses | `Ctrl-g` | `dj_pick_model` |
-
-On the DJ screen itself the prompt takes every printable key, so `j`/`k` type
-rather than navigate; scroll the transcript with the arrow and page keys. `Esc`
-clears a half-typed prompt, and leaves the screen when the prompt is already empty.
-
-The four action keys other than `dj_open` still work while the prompt has focus,
-because they carry a modifier. If you rebind one to a bare character, that character
-types instead, since a typing surface has to be able to contain it.
-
-While the AI/model picker is open it is modal and takes every key: `↑`/`↓` (or
-`j`/`k`) move, `1`-`9` pick a numbered row, `Enter` chooses, and `Esc` steps back
-one step at a time, closing the picker from the first step and keeping whatever
-brain you already had. Nothing else reaches the DJ or the rest of the app, so a
-keypress cannot start background work with the backend you are mid-way through
-replacing.
-
-See [`docs/ai-dj.md`](ai-dj.md).
