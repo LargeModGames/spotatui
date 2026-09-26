@@ -9,9 +9,8 @@ use super::streaming::launch::{
   cache_streaming_credentials, deferred_streaming_startup, DeferredStreamingContext,
 };
 use crate::core::app::App;
-use crate::core::user_config::StartupBehavior;
-#[cfg(feature = "discord-rpc")]
-use crate::core::user_config::UserConfig;
+use crate::core::driver::{Driver, MprisHandle};
+use crate::core::user_config::{StartupBehavior, UserConfig};
 #[cfg(feature = "discord-rpc")]
 use crate::infra::discord_rpc;
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
@@ -21,6 +20,7 @@ use crate::infra::mpris;
 use crate::infra::network::{IoEvent, Network};
 #[cfg(feature = "streaming")]
 use crate::infra::player;
+use crate::tui::runner;
 use anyhow::Result;
 use log::info;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -187,10 +187,18 @@ fn update_windows_metadata(
   }
 }
 
-/// Launch the terminal UI: OS media integrations, the deferred native
-/// streaming startup, persisted-session restore, the network task driving
-/// the IoEvent pump, and finally the blocking UI event loop.
-pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
+/// What `prepare_frontend` hands the frontend that runs next.
+struct FrontendHandles {
+  app: Arc<Mutex<App>>,
+  user_config: UserConfig,
+  shared_position: Option<Arc<AtomicU64>>,
+  mpris: MprisHandle,
+  discord: DiscordRpcHandle,
+  history_collector: crate::infra::history::HistoryCollectorHandle,
+}
+
+/// OS media integrations, deferred streaming, session restore and the pump task, shared by every frontend.
+async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   let app = boot.app;
   let sync_io_rx = boot.sync_io_rx;
   let user_config = boot.user_config;
@@ -211,7 +219,6 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   #[cfg(feature = "streaming")]
   let selected_redirect_uri = boot.selected_redirect_uri;
 
-  info!("launching interactive terminal ui");
   #[cfg(feature = "streaming")]
   cache_streaming_credentials(
     &client_config,
@@ -615,24 +622,51 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
 
     start_tokio(sync_io_rx, &mut network).await;
   });
+  FrontendHandles {
+    app: cloned_app,
+    user_config,
+    #[cfg(feature = "streaming")]
+    shared_position: Some(shared_position_for_ui),
+    #[cfg(not(feature = "streaming"))]
+    shared_position: None,
+    #[cfg(all(feature = "mpris", target_os = "linux"))]
+    mpris: mpris_for_ui,
+    #[cfg(not(all(feature = "mpris", target_os = "linux")))]
+    mpris: None,
+    discord: discord_rpc_manager,
+    history_collector,
+  }
+}
+
+/// Launch the terminal UI on the shared frontend runtime.
+pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
+  info!("launching interactive terminal ui");
+  let FrontendHandles {
+    app,
+    user_config,
+    shared_position,
+    mpris,
+    discord,
+    history_collector,
+  } = prepare_frontend(boot).await;
   // The UI must run in the "main" thread
   info!("starting terminal ui event loop");
-  #[cfg(feature = "streaming")]
-  let shared_pos_for_start_ui: Option<Arc<AtomicU64>> = Some(shared_position_for_ui);
-  #[cfg(not(feature = "streaming"))]
-  let shared_pos_for_start_ui: Option<Arc<AtomicU64>> = None;
-  let ui_result = crate::tui::runner::start_ui(
-    user_config,
-    &cloned_app,
-    shared_pos_for_start_ui,
-    #[cfg(all(feature = "mpris", target_os = "linux"))]
-    mpris_for_ui,
-    #[cfg(not(all(feature = "mpris", target_os = "linux")))]
-    None,
-    discord_rpc_manager,
-    history_collector,
-  )
-  .await;
+  info!("ui thread initialized");
+  // The driver owns everything the app must do on a timer (see
+  // `core::driver`); the terminal loop's job shrinks to drawing frames,
+  // reading events, and calling `driver.tick` at the configured tick rate.
+  let mut driver = Driver::new(shared_position, mpris, discord);
+  let ui_result = match runner::start_ui(user_config, &app, &mut driver).await {
+    Ok(session) => {
+      shutdown_frontend(&app, &mut driver, history_collector, |driver| {
+        session.restore(driver)
+      })
+      .await;
+      Ok(())
+    }
+    Err(e) => Err(e),
+  };
+  drop(driver);
   // Unpublish the control file on the way out, whether the UI exited cleanly
   // or not: leaving it behind sends the next `spotatui mcp` at a port nothing
   // is listening on, which reads as a broken MCP server rather than an absent
@@ -640,12 +674,127 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   #[cfg(feature = "mcp-server")]
   crate::infra::mcp::clear_handshake();
   if ui_result.is_err() {
-    let mut app = cloned_app.lock().await;
+    let mut app = app.lock().await;
     app.flush_state_save(true);
   }
   ui_result?;
 
   Ok(())
+}
+
+/// Parks the native backend at exit, so other clients see the Connect device
+/// go inactive; returns the channel that reports the session teardown.
+#[cfg(feature = "streaming")]
+async fn park_native_playback_before_exit(
+  app: &Arc<Mutex<App>>,
+) -> Option<librespot_playback::player::PlayerEventChannel> {
+  let mut app = app.lock().await;
+  let player = app.streaming_player.as_ref()?;
+  // Reconnecting or failed: no spirc is left to report the teardown.
+  let events = player.is_connected().then(|| player.get_event_channel());
+  app.pause_native_playback();
+  app.park_native_backend();
+  events
+}
+
+/// The exit path after a clean quit; `restore_frontend` runs where the terminal restore always ran.
+async fn shutdown_frontend(
+  app: &Arc<Mutex<App>>,
+  driver: &mut Driver,
+  history_collector: crate::infra::history::HistoryCollectorHandle,
+  restore_frontend: impl FnOnce(&mut Driver),
+) {
+  // Capture the exact final position of a non-Spotify session on a graceful
+  // quit (the throttled in-loop save is up to a few seconds stale). Done
+  // synchronously before teardown so the player is still alive to read from.
+  {
+    let session = app.lock().await.current_persisted_session();
+    if let Some(session) = session {
+      if let Ok(path) = crate::core::persisted_playback::default_session_path() {
+        if let Err(e) = crate::core::persisted_playback::save(&path, &session) {
+          log::warn!("[session] failed to persist playback session on exit: {e}");
+        }
+      }
+    }
+  }
+
+  {
+    let mut app = app.lock().await;
+    driver.on_quit(&mut app);
+  }
+
+  // A volume/resize/shuffle change may still be inside its debounce window;
+  // persist it before the process exits.
+  {
+    let mut app = app.lock().await;
+    app.flush_state_save(true);
+  }
+
+  #[cfg(feature = "streaming")]
+  let native_teardown = park_native_playback_before_exit(app).await;
+
+  // Stop the collector and all network work it owns before the final sync and
+  // clear. In particular, a pause-triggered now-playing push must not race the
+  // exit clear and recreate a stale public widget.
+  history_collector.shutdown().await;
+
+  // Restore the frontend before the exit network calls: there is no reason to
+  // hold the alternate screen and raw mode while waiting on HTTP.
+  restore_frontend(driver);
+
+  // Sync history to cloud on exit
+  let sync_token_opt = {
+    let app_guard = app.lock().await;
+    app_guard.user_config.behavior.sync_token.clone()
+  };
+
+  if let Some(token) = sync_token_opt {
+    info!("Synchronizing listening history to cloud before exit...");
+    // Keep the clear strictly last after the collector has stopped: now-playing
+    // updates are upserts, so a late push would otherwise recreate a stale
+    // "paused" card on the public widget.
+    //
+    // Each call is bounded separately rather than sharing one budget, so a slow
+    // history upload cannot starve the clear. Without these the shared client
+    // allows a 10s connect plus a 30s request, stalling quit for up to a minute
+    // on a half-open connection.
+    let history_sync = crate::infra::history::sync_history_to_cloud(&token);
+    match tokio::time::timeout(std::time::Duration::from_secs(2), history_sync).await {
+      Ok(Err(e)) => log::warn!("failed to run exit history cloud sync: {}", e),
+      Err(_) => log::warn!("exit history cloud sync timed out; records will sync next run"),
+      Ok(Ok(())) => {}
+    }
+
+    let clear_now_playing = crate::infra::history::clear_now_playing_from_cloud(&token);
+    match tokio::time::timeout(std::time::Duration::from_secs(1), clear_now_playing).await {
+      Ok(Err(e)) => log::warn!("failed to clear now-playing on exit: {}", e),
+      Err(_) => log::warn!("clearing now-playing on exit timed out"),
+      Ok(Ok(())) => {}
+    }
+  }
+
+  driver.clear_presence();
+
+  // Last, so the terminal restore and the exit HTTP calls overlap the
+  // teardown the park started.
+  #[cfg(feature = "streaming")]
+  if let Some(mut events) = native_teardown {
+    use crate::infra::player::{PlayerEvent, SessionDisconnectReason};
+    let teardown = async {
+      while let Some(event) = events.recv().await {
+        if matches!(
+          event,
+          PlayerEvent::SessionDisconnected {
+            reason: SessionDisconnectReason::LocalCommand,
+            ..
+          }
+        ) {
+          break;
+        }
+      }
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), teardown).await;
+  }
 }
 
 /// Resume a persisted non-Spotify playback session at launch.

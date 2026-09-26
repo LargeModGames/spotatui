@@ -19,7 +19,6 @@ use crate::core::user_config::{
 use crate::infra::network::IoEvent;
 use anyhow::{Context, Result};
 use backtrace::Backtrace;
-use clap::ArgMatches;
 use log::info;
 #[cfg(feature = "streaming")]
 use rspotify::model::user::PrivateUser;
@@ -514,20 +513,29 @@ pub(super) struct Boot {
   pub(super) selected_redirect_uri: String,
 }
 
+/// The launch inputs `boot` reads, built from the command line by `cli::boot_options`.
+pub(super) struct BootOptions {
+  pub(super) config_path: Option<PathBuf>,
+  pub(super) tick_rate: Option<u64>,
+  pub(super) subcommand: Option<String>,
+  pub(super) reconfigure_auth: bool,
+  pub(super) play_file: Option<String>,
+  pub(super) no_update: bool,
+}
+
 /// The shared bootstrap sequence: user config, runtime state, the persisted
 /// playback session, client credentials, Spotify authentication (joined with
 /// the auto-update check), and `App` construction. Frontend-neutral: every
 /// interactive step goes through `onboarding`.
 pub(super) async fn boot(
-  matches: &ArgMatches,
+  options: BootOptions,
   onboarding: Arc<dyn Onboarding>,
   instance_lock: &mut Option<std::fs::File>,
 ) -> Result<Boot> {
   // Auto-update on launch: silently check, download, install, and restart.
   // Skip if a CLI subcommand is active or SPOTATUI_SKIP_UPDATE is set (prevents restart loops).
   let mut user_config = UserConfig::new();
-  if let Some(config_file_path) = matches.get_one::<String>("config") {
-    let config_file_path = PathBuf::from(config_file_path);
+  if let Some(config_file_path) = options.config_path {
     let path = UserConfigPaths { config_file_path };
     user_config.path_to_config.replace(path);
   }
@@ -632,17 +640,14 @@ pub(super) async fn boot(
     None => (None, Vec::new()),
   };
 
-  if let Some(tick_rate) = matches
-    .get_one::<String>("tick-rate")
-    .and_then(|tick_rate| tick_rate.parse().ok())
-  {
+  if let Some(tick_rate) = options.tick_rate {
     user_config.behavior.tick_rate_milliseconds =
       validate_tick_rate_milliseconds(tick_rate, "Tick rate")?;
   }
 
   // Global song counter opt-in (interactive TUI only). Asked before the source
   // picker so the choice applies no matter which source(s) the user sets up.
-  if matches.subcommand_name().is_none() {
+  if options.subcommand.is_none() {
     prompt_global_song_count_opt_in(&mut user_config, onboarding.as_ref())?;
   }
 
@@ -651,7 +656,7 @@ pub(super) async fn boot(
   // source and skip Spotify entirely. Must run before `load_config`, which would
   // otherwise launch the Spotify-only auth wizard on a fresh install. Skipped for
   // CLI subcommands (Spotify-only) and when `--reconfigure-auth` is requested.
-  if matches.subcommand_name().is_none() && !matches.get_flag("reconfigure-auth") {
+  if options.subcommand.is_none() && !options.reconfigure_auth {
     crate::core::first_run::run_first_run_picker(
       &mut user_config,
       &mut runtime_state,
@@ -663,13 +668,13 @@ pub(super) async fn boot(
   let mut wizard_ran = client_config.load_config(onboarding.as_ref())?;
   info!("client authentication config loaded");
 
-  let reconfigure_auth = matches.get_flag("reconfigure-auth");
+  let reconfigure_auth = options.reconfigure_auth;
 
   if reconfigure_auth {
     onboarding.info("\nReconfiguring client authentication...");
     client_config.reconfigure_auth(onboarding.as_ref())?;
     onboarding.info("Client authentication setup updated.\n");
-  } else if matches.subcommand_name().is_none() && client_config.needs_auth_setup_migration() {
+  } else if options.subcommand.is_none() && client_config.needs_auth_setup_migration() {
     if ask_auth_setup_migration(onboarding.as_ref())? {
       client_config.reconfigure_auth(onboarding.as_ref())?;
       wizard_ran = true;
@@ -692,7 +697,7 @@ pub(super) async fn boot(
     );
   }
 
-  let auth_mode = spotify_auth_mode(matches.subcommand_name(), reconfigure_auth, wizard_ran);
+  let auth_mode = spotify_auth_mode(options.subcommand.as_deref(), reconfigure_auth, wizard_ran);
 
   // The GitHub update check runs concurrently with authentication: both are
   // network round trips and neither depends on the other, so the check no
@@ -720,7 +725,10 @@ pub(super) async fn boot(
         ),
       }
     },
-    super::cli::run_auto_update(matches, &user_config)
+    super::cli::run_auto_update(
+      options.subcommand.is_some() || options.no_update,
+      &user_config
+    )
   );
 
   // Only now that authentication has released the OAuth callback port and the
@@ -798,7 +806,7 @@ pub(super) async fn boot(
   // `--play-file <PATH>`: queue a local file to start once the UI is up. The
   // path is canonicalised to an absolute `file://` URI so the local-files
   // dispatch can route it; an unreadable path is reported as a status message.
-  if let Some(path) = matches.get_one::<String>("play-file") {
+  if let Some(path) = options.play_file.as_deref() {
     match std::fs::canonicalize(path).ok().and_then(|abs| {
       url::Url::from_file_path(abs)
         .ok()

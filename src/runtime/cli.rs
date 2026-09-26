@@ -1,14 +1,28 @@
 //! The command-line surface: clap assembly, the self-update plumbing, and
 //! CLI-mode dispatch of one subcommand against the network layer.
 
-use super::bootstrap::Boot;
+use super::bootstrap::{Boot, BootOptions};
 use crate::cli;
 use crate::core::banner::BANNER;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::Network;
 use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgMatches, Command as ClapApp};
+use std::path::PathBuf;
 use std::sync::Arc;
+
+pub(super) fn boot_options(matches: &ArgMatches) -> BootOptions {
+  BootOptions {
+    config_path: matches.get_one::<String>("config").map(PathBuf::from),
+    tick_rate: matches
+      .get_one::<String>("tick-rate")
+      .and_then(|tick_rate| tick_rate.parse().ok()),
+    subcommand: matches.subcommand_name().map(str::to_owned),
+    reconfigure_auth: matches.get_flag("reconfigure-auth"),
+    play_file: matches.get_one::<String>("play-file").cloned(),
+    no_update: cfg!(feature = "self-update") && matches.get_flag("no-update"),
+  }
+}
 
 pub(super) fn build_clap_app() -> ClapApp {
   // `mut` is only exercised by the feature-gated subcommand additions below.
@@ -201,13 +215,9 @@ pub(super) async fn handle_self_update_command(_matches: &ArgMatches) -> Result<
 /// releases it. See `restart_after_update`, which the caller invokes once
 /// authentication has finished.
 #[cfg(feature = "self-update")]
-pub(super) async fn run_auto_update(
-  matches: &ArgMatches,
-  user_config: &UserConfig,
-) -> Option<String> {
-  if matches.subcommand_name().is_some()
+pub(super) async fn run_auto_update(skip: bool, user_config: &UserConfig) -> Option<String> {
+  if skip
     || std::env::var_os("SPOTATUI_SKIP_UPDATE").is_some()
-    || matches.get_flag("no-update")
     || user_config.behavior.disable_auto_update
   {
     return None;
@@ -251,10 +261,7 @@ pub(super) async fn run_auto_update(
 }
 
 #[cfg(not(feature = "self-update"))]
-pub(super) async fn run_auto_update(
-  _matches: &ArgMatches,
-  _user_config: &UserConfig,
-) -> Option<String> {
+pub(super) async fn run_auto_update(_skip: bool, _user_config: &UserConfig) -> Option<String> {
   None
 }
 
@@ -353,5 +360,41 @@ mod tests {
       help.contains("country"),
       "the long help must name what trace adds to the log:\n{help}"
     );
+  }
+
+  #[test]
+  fn boot_options_carry_the_launch_flags() {
+    let matches = build_clap_app()
+      .try_get_matches_from([
+        "spotatui",
+        "-c",
+        "x.yml",
+        "-t",
+        "100",
+        "--reconfigure-auth",
+        "--play-file",
+        "a.mp3",
+      ])
+      .unwrap();
+    let options = boot_options(&matches);
+    assert_eq!(options.config_path, Some(PathBuf::from("x.yml")));
+    assert_eq!(options.tick_rate, Some(100));
+    assert_eq!(options.subcommand, None);
+    assert!(options.reconfigure_auth);
+    assert_eq!(options.play_file.as_deref(), Some("a.mp3"));
+    assert!(!options.no_update);
+
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "sync"])
+      .unwrap();
+    assert_eq!(boot_options(&matches).subcommand.as_deref(), Some("sync"));
+
+    #[cfg(feature = "self-update")]
+    {
+      let matches = build_clap_app()
+        .try_get_matches_from(["spotatui", "-U"])
+        .unwrap();
+      assert!(boot_options(&matches).no_update);
+    }
   }
 }
