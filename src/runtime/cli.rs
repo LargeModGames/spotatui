@@ -14,9 +14,7 @@ use std::sync::Arc;
 pub(super) fn boot_options(matches: &ArgMatches) -> BootOptions {
   BootOptions {
     config_path: matches.get_one::<String>("config").map(PathBuf::from),
-    tick_rate: matches
-      .get_one::<String>("tick-rate")
-      .and_then(|tick_rate| tick_rate.parse().ok()),
+    tick_rate: matches.get_one::<u64>("tick-rate").copied(),
     subcommand: matches.subcommand_name().map(str::to_owned),
     reconfigure_auth: matches.get_flag("reconfigure-auth"),
     play_file: matches.get_one::<String>("play-file").cloned(),
@@ -44,6 +42,7 @@ pub(super) fn build_clap_app() -> ClapApp {
       Arg::new("tick-rate")
         .short('t')
         .long("tick-rate")
+        .value_parser(clap::value_parser!(u64).range(1..=999))
         .help("Set the normal UI tick rate in milliseconds.")
         .long_help(
           "Specify the normal UI tick rate in milliseconds. Lower values refresh non-animated \
@@ -360,6 +359,19 @@ mod tests {
       help.contains("country"),
       "the long help must name what trace adds to the log:\n{help}"
     );
+  }
+
+  #[test]
+  fn tick_rate_flag_rejects_invalid_values() {
+    for bad in ["fast", "250ms", "1.5", "-5", "0", "1000"] {
+      let err = build_clap_app()
+        .try_get_matches_from(["spotatui", &format!("--tick-rate={bad}")])
+        .expect_err("invalid tick-rate must be rejected at parse time");
+      assert!(
+        err.to_string().contains("tick-rate"),
+        "error must name the flag: {err}"
+      );
+    }
   }
 
   #[test]
