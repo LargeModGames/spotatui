@@ -276,12 +276,13 @@ fn parse_key(key: String) -> Result<Key> {
   }
 
   // Split on the first dash only: the key after a modifier may be '-' itself
-  // ("ctrl--"). A dash inside a longer suffix is still a third key.
+  // ("ctrl--"). Any other dash in the suffix is a third key.
   let sections: Vec<&str> = key.splitn(2, '-').collect();
+  let is_modifier = matches!(sections[0].to_lowercase().as_str(), "ctrl" | "alt");
 
   if sections
     .get(1)
-    .is_some_and(|rest| rest.len() > 1 && rest.contains('-'))
+    .is_some_and(|rest| rest.contains('-') && !(is_modifier && *rest == "-"))
   {
     return Err(anyhow!(
       "Shortcut can only have 2 keys, \"{}\" has {}",
@@ -2613,7 +2614,7 @@ mod tests {
     assert_eq!(parse_key(String::from("ctrl--")).unwrap(), Key::Ctrl('-'));
     assert_eq!(parse_key(String::from("alt--")).unwrap(), Key::Alt('-'));
     assert_eq!(parse_key(String::from("-")).unwrap(), Key::Char('-'));
-    for bad in ["ctrl-a-b", "alt--a", "f1-a-b"] {
+    for bad in ["ctrl-a-b", "alt--a", "f1-a-b", "f1--", "left--"] {
       assert!(
         parse_key(bad.to_string()).is_err(),
         "{bad:?} must not parse"
