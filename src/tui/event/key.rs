@@ -84,11 +84,12 @@ impl From<event::KeyEvent> for Key {
 
       // Terminals using the kitty keyboard protocol send Shift+letter as lowercase
       // char with SHIFT modifier; normalise to uppercase so Key::Char('P') works.
+      // A letter whose uppercase is more than one char (`ß` → `SS`) stays as is.
       event::KeyEvent {
         code: event::KeyCode::Char(c),
         modifiers: event::KeyModifiers::SHIFT,
         ..
-      } if c.is_ascii_lowercase() => Key::Char(c.to_ascii_uppercase()),
+      } if c.is_lowercase() => Key::Char(single_char_uppercase(c).unwrap_or(c)),
 
       event::KeyEvent {
         code: event::KeyCode::Char(c),
@@ -97,5 +98,45 @@ impl From<event::KeyEvent> for Key {
 
       _ => Key::Unknown,
     }
+  }
+}
+
+/// The uppercase form of `c` when it is exactly one char, `None` otherwise.
+fn single_char_uppercase(c: char) -> Option<char> {
+  let mut upper = c.to_uppercase();
+  match (upper.next(), upper.next()) {
+    (Some(u), None) => Some(u),
+    _ => None,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+  fn shifted(c: char) -> Key {
+    Key::from(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT))
+  }
+
+  #[test]
+  fn shift_with_a_lowercase_non_ascii_letter_gives_its_uppercase_char() {
+    assert_eq!(shifted('ö'), Key::Char('Ö'));
+    assert_eq!(shifted('é'), Key::Char('É'));
+  }
+
+  #[test]
+  fn shift_with_eszett_stays_eszett_because_its_uppercase_is_two_chars() {
+    assert_eq!(shifted('ß'), Key::Char('ß'));
+  }
+
+  #[test]
+  fn shift_with_an_ascii_letter_still_gives_its_uppercase_char() {
+    assert_eq!(shifted('p'), Key::Char('P'));
+  }
+
+  #[test]
+  fn shift_with_an_uppercase_letter_leaves_it_unchanged() {
+    assert_eq!(shifted('Ö'), Key::Char('Ö'));
   }
 }
