@@ -82,16 +82,11 @@ impl From<event::KeyEvent> for Key {
         ..
       } => Key::Ctrl(c),
 
-      // Terminals using the kitty keyboard protocol send Shift+letter as lowercase
-      // char with SHIFT modifier; normalise to uppercase so Key::Char('P') works.
-      // A letter whose uppercase is more than one char (`ß` → `SS`) stays as is.
-      // Windows console input has already applied Caps Lock XOR Shift, so preserve it there.
-      #[cfg(not(windows))]
       event::KeyEvent {
         code: event::KeyCode::Char(c),
         modifiers: event::KeyModifiers::SHIFT,
         ..
-      } if c.is_lowercase() => Key::Char(single_char_uppercase(c).unwrap_or(c)),
+      } => Key::Char(shifted_char(c, cfg!(windows))),
 
       event::KeyEvent {
         code: event::KeyCode::Char(c),
@@ -103,13 +98,16 @@ impl From<event::KeyEvent> for Key {
   }
 }
 
-/// The uppercase form of `c` when it is exactly one char, `None` otherwise.
-#[cfg(not(windows))]
-fn single_char_uppercase(c: char) -> Option<char> {
+/// Apply Shift casing unless the input source has already done so.
+fn shifted_char(c: char, shift_already_applied: bool) -> char {
+  if shift_already_applied || !c.is_lowercase() {
+    return c;
+  }
+
   let mut upper = c.to_uppercase();
   match (upper.next(), upper.next()) {
-    (Some(u), None) => Some(u),
-    _ => None,
+    (Some(u), None) => u,
+    _ => c,
   }
 }
 
@@ -122,34 +120,27 @@ mod tests {
     Key::from(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT))
   }
 
-  #[cfg(not(windows))]
   #[test]
-  fn shift_with_a_lowercase_non_ascii_letter_gives_its_uppercase_char() {
-    assert_eq!(shifted('ö'), Key::Char('Ö'));
-    assert_eq!(shifted('é'), Key::Char('É'));
-  }
-
-  #[cfg(not(windows))]
-  #[test]
-  fn shift_with_eszett_stays_eszett_because_its_uppercase_is_two_chars() {
-    assert_eq!(shifted('ß'), Key::Char('ß'));
-  }
-
-  #[cfg(windows)]
-  #[test]
-  fn windows_shift_with_lowercase_char_preserves_console_result() {
-    assert_eq!(shifted('a'), Key::Char('a'));
-    assert_eq!(shifted('ö'), Key::Char('ö'));
-  }
-
-  #[cfg(not(windows))]
-  #[test]
-  fn shift_with_an_ascii_letter_still_gives_its_uppercase_char() {
-    assert_eq!(shifted('p'), Key::Char('P'));
+  fn shifted_char_uppercases_lowercase_when_shift_is_not_applied() {
+    assert_eq!(shifted_char('p', false), 'P');
+    assert_eq!(shifted_char('ö', false), 'Ö');
+    assert_eq!(shifted_char('é', false), 'É');
   }
 
   #[test]
-  fn shift_with_an_uppercase_letter_leaves_it_unchanged() {
-    assert_eq!(shifted('Ö'), Key::Char('Ö'));
+  fn shifted_char_preserves_multi_char_uppercase() {
+    assert_eq!(shifted_char('ß', false), 'ß');
+  }
+
+  #[test]
+  fn shifted_char_preserves_console_resolved_casing() {
+    assert_eq!(shifted_char('a', true), 'a');
+    assert_eq!(shifted_char('ö', true), 'ö');
+    assert_eq!(shifted_char('A', true), 'A');
+  }
+
+  #[test]
+  fn shifted_char_preserves_already_uppercase_input() {
+    assert_eq!(shifted_char('Ö', false), 'Ö');
   }
 }
