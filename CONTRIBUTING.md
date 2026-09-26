@@ -86,6 +86,19 @@ a plain `cargo test` with default features, and passes `--locked` - regenerate
 - Include screenshots for UI changes
 - Keep commits logical; squashing welcome but not required
 
+### Using AI Tools
+
+AI tools are welcome. How you wrote the code matters less than whether you checked it. You are the author of your PR, whatever wrote the first draft:
+
+- Read your whole diff before you open the PR, and be ready to explain any line of it.
+- Run the checks yourself and paste their output under Testing. Do not claim a check you did not run.
+- For a `good first issue`, do what the issue asks and run every command under "Done when".
+- Change only what the issue is about. No unrelated rewrites or deletions.
+- Write the description yourself: what changed and why. A copy of the issue text or generic filler tells a reviewer nothing.
+- Take one `good first issue` at a time, and wait for a review before you open the next PR.
+
+PRs that ignore the issue, delete unrelated content, or claim checks that were never run are closed without a detailed review. Accounts that open PRs in bulk and do not read the reviews are blocked.
+
 ---
 
 ## Recognition

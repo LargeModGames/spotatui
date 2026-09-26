@@ -1,9 +1,7 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
-
-This file is maintained as three near-identical copies: `CLAUDE.md`, `AGENTS.md`, and
-`.github/copilot-instructions.md` (only the opening lines differ). Edit all three together.
+This file provides guidance to coding agents (Claude Code, Codex, Copilot and others)
+when working with code in this repository. `CLAUDE.md` imports it: edit this file only.
 
 ## Build & Run
 
@@ -19,6 +17,11 @@ cargo run --no-default-features --features telemetry,tui
 # (or list them individually) to exercise the first-run source picker and playback.
 cargo run --features all-sources
 ```
+
+## Opening a PR
+
+Before you open a PR, read `CONTRIBUTING.md` and follow its "Using AI Tools" section.
+Show your user the full diff and the PR text first, and never open a PR on your own.
 
 ## CI Checks (run before opening a PR)
 
@@ -43,23 +46,12 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
 | `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its two entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
 | `gui` | `telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris` - the third leg without `tui`: the Linux feature set a `spotatui-gui` build carries. `check`, `clippy` and `test` |
 
-- `mcp-only` and `ai-dj-only` matter more than their size suggests: both enable
-  `dj-core` **without** `streaming` (a combination nothing else covers), and each
-  front door has to build without the other.
-- Reproducing legs locally: `cargo test` reproduces `default`. For `all-sources`,
-  copy the exact `--no-default-features --features …` string out of `ci.yml` -
-  `cargo test --features all-sources` is **not** it (the alias only adds the five
-  sources on top of default), and the leg includes `audio-viz` (PipeWire), so it
-  only compiles on Linux.
 - Every CI leg passes `--locked`; the local commands do not. Regenerate
   `Cargo.lock` after any `Cargo.toml` edit or all legs fail at once.
 - CI runs `clippy` on the **bin target only** (no `--all-targets`), so lints in
   `#[cfg(test)]` code are not gated. Run `cargo test` to compile test code. A
   test-only helper whose production caller is compiled out on some leg needs
   `#[allow(dead_code)]`.
-- The `all-sources` leg must stay in sync with `cd.yml`'s Linux release row
-  (macOS releases ship the same five sources but a different
-  backend/OS-integration set).
 - One further job, `macos`, runs `check` + `clippy` (no `test`) on
   `macos-latest` with cd.yml's macOS release feature set. It is the only leg
   that compiles the `#[cfg(target_os = "macos")]` arms, the portaudio playback
@@ -76,6 +68,8 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
 - `.github/workflows/gui.yml` gates the `gui/` frontend on every PR: run
   `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`,
   `npm test` and `npm run build` in `gui/`; the cargo gate above does not cover it.
+
+Details: `.github/workflows/AGENTS.md`.
 
 ## Run a Single Test
 
@@ -133,28 +127,7 @@ Mouse input enters via `handlers::mouse_handler`.
 `runtime/pump.rs::start_tokio` drains IoEvents serially. Three structural gates, all
 worth knowing before adding an event:
 
-- **Source routing**: non-Spotify playback is routed by URI scheme *before* the
-  Spotify handler, in this order: `route_queue_event` → `route_local_event`
-  (`file:`) → `route_subsonic_event` (`subsonic:`) → `route_qobuz_event`
-  (`qobuz:`) → `route_radio_event` (`radio:`) → `route_youtube_event`
-  (`youtube:`) → `Network::handle_network_event`.
-  This is what keeps `infra/network/` Spotify-only.
-- **Claim gate**: before the routers, `start_playback_has_taker` drops a
-  `StartPlayback` whose URI scheme (`core::queue::queue_item_source`) names no
-  compiled-in source and that no Spotify session can take. The routers'
-  foreign-start teardown arms therefore only run for a real source-to-source
-  handoff.
-- **Service lane**: `Network::runs_on_service_lane` lists events that run on a
-  detached task so slow, source-agnostic work cannot head-of-line-block the serial
-  pump. The service lane's `Network` is built with **no Spotify client** - adding a
-  `self.spotify()` call to a service-lane handler panics.
-- **Auth gate**: `Network::event_bypasses_spotify_auth` lists events whose handlers
-  never need a Spotify session.
-- **Replay**: `Network::event_is_transport` lists events that drive whoever owns
-  the sink. One held back by a rate-limit window is stamped with the
-  `PlaybackOwner` at deferral time, dropped at the flush when the owner changed,
-  and otherwise re-sent on the pump's channel so the routers see it.
-  A new IoEvent must be classified against all three lists.
+The gates and the rule for a new IoEvent: `src/infra/network/AGENTS.md`.
 
 ### Navigation / routing
 
@@ -170,24 +143,9 @@ worth knowing before adding an event:
 
 ### The `core/app/` module folder
 
-`App` was one 10,920-line file; it is now 37 files. The struct stays **flat** - all
-171 fields declared once in `src/core/app/mod.rs` (27 of them feature-gated), plus
-the 81 presentation fields grouped in `App.view` - and its ~270 methods are split
-across 36 sibling modules by concern, each with its own `impl App` block. The
-boundaries are organizational, not architectural.
-
-Rules when working in here:
-
 - **Import from `crate::core::app`, never the submodule path.** `mod.rs` re-exports
   every module that declares public items, so `use crate::core::app::{App, RouteId,
   ActiveBlock}` works no matter which file an item lives in.
-- **Child modules open with `use super::*;`** and declare no other top-level
-  imports; all external imports live in `mod.rs`. When a type is only importable
-  under a feature that does not gate the function, use a **function-local** `use`
-  instead of adding a top-level import.
-- **A private helper called from a sibling module needs `pub(super)`**; one reached
-  from `tui/` or `infra/` needs `pub(crate)`. Private *fields* need nothing - they
-  are declared in `mod.rs` and visible to all descendants.
 - **A field with no writer outside `core/app/` is private.** `pub_fields_on_app`
   counts the `pub` ones and may only fall. An outside reader gets an intent-named
   getter (`status_message()`, `api_error()`); a handler mutates shared state only
@@ -195,7 +153,6 @@ Rules when working in here:
 - **Feature-gate the method body, not the call site**, when a predicate must exist
   in every build: `#[cfg(any(...))] { … } #[cfg(not(any(...)))] { false }` inside
   one ungated `fn` (see `queue_owns_playback`), so callers never need their own `#[cfg]`.
-- New `impl App` methods go to the concern module that owns that state, not `mod.rs`.
 - **Presentation state lives in `App.view: ViewState`** (`core/app/view.rs`): cursor
   and selection indices (the track table, search, Recently Played and sidebar
   cursors included), scroll offsets, edit buffers, focus, popup flags, the help
@@ -210,9 +167,7 @@ Rules when working in here:
 - `dispatch` pins the global loading spinner; long work with its own progress
   surface uses `dispatch_without_spinner`.
 
-Tests are colocated (`#[cfg(test)] mod tests`) in most - not all - modules. Shared
-fixtures are `pub(super) fn`s in `test_support.rs`, imported as
-`use crate::core::app::test_support::*;`.
+More rules for this folder: `src/core/app/AGENTS.md`.
 
 ### Playback ownership
 
@@ -225,62 +180,7 @@ next, previous, shuffle, repeat, volume) end on `dispatch_spotify_fallback`,
 which answers "Nothing is playing" instead of a Spotify dispatch when no
 session exists.
 
-- A decoded start (Local/Subsonic/Qobuz/Radio/YouTube) **parks** librespot when
-  spotatui owned the sink (the active Connect device, a Spotify queue slot, a
-  failed backend) and only **pauses** it otherwise (an idle device under a
-  phone, a decoded queue slot over a Spotify context). A paused librespot keeps
-  the native flag true, so driving it directly resumes the wrong player.
-- A park (`App::release_native_for_decoded`, then `App::park_native_backend`)
-  shuts librespot down, removes it from `App` and sets the private
-  `native_parked` marker; the Spotify context and the recovery snapshot stay.
-  A shut-down player never resumes. An explicit Spotify start (unless another
-  device plays the cached playback), a queued Spotify item, Enter on the
-  parked device row, or a bare resume while the parked device held the
-  playback (`App::native_parked_here`) sends a reacquire request
-  (`App::reacquire_parked_backend`), and the recovery loop rebuilds the
-  backend and replays. Without the marker, a start after a park reaches the
-  Web API and the saved-device retry, which can start the phone. The rebuild
-  install refuses a new player while parked under a decoded owner
-  (`App::accept_rebuilt_native_backend`). Any other transport on the parked
-  device answers "Press play to resume Spotify", or "Reconnecting native
-  streaming…" once its rebuild is pending.
-- A decoded start claims the sink (`App::claim_decoded_sink`) before it pauses
-  librespot, and `active_decoded_source()` reads the claim: the owner is
-  `Decoded` from the first line of the start, through a failed start or a lost
-  output device, until the source's queue runs out (the driver's teardown, the
-  queue's exhausted-context resume) or an explicit Spotify start (a URI or a
-  context) reaches `Network::start_playback`, which releases it. A bare resume
-  never releases it, so a media key or Space during a download cannot resume
-  librespot.
-- Every hand-over of the sink away from librespot goes through
-  `App::pause_native_playback` (the park calls it too), never a bare
-  `player.pause()`: it clears the native play intent with the pause, so a
-  backend rebuild under the new owner comes back idle instead of restoring
-  Spotify over it. A path that loads librespot again afterwards re-arms the
-  intent (`play_queued_spotify`, `resume_native_shuffle_session`), or the stall
-  watchdog disarms on the false intent and a stalled load never rebuilds.
-- The decoded *queue* path claims the sink as well (`release_librespot`).
-  `resume_or_finish` releases that claim only where no decoded context resumes
-  (nothing suspended, a Spotify context, a lost device). A resumed decoded
-  context keeps it: only `start_*_queue` sets the claim, `play_index` does not.
-- A native entry point asks one of two predicates before it drives librespot.
-  `App::native_should_drive()` is false under a decoded owner and true under a
-  Spotify queue slot, whose track librespot plays.
-  `App::native_context_should_drive()` is also false under any queue slot; it
-  guards the paths that restore or continue the *cached* context (the restore,
-  the end-of-track continuation, the shuffle-session handlers). The recovery
-  rebuild itself is never refused: every sender removes the player before it
-  sends, so a refusal there loses the backend for the process.
-- While the native queue slot owns the sink, `current_playback_context` names the
-  *suspended* context's track. Inside `core/app/`, resolve the playing *track*
-  through `App::playing_item()` (`core/app/playback_routing.rs`): it answers
-  with the slot's `TrackInfo` (`uri`, `album_id`, `artist_refs`; a slot has
-  no play context) and refuses a decoded owner. Outside `core/app/` read the
-  `PlaybackSnapshot` (`infra/media_metadata.rs`), never the field:
-  `direct_playback_context_reads` counts every other reader and may only fall.
-- Radio is in `active_decoded_source` but deliberately out of
-  `active_queueable_decoded_source` (repeat/shuffle) and
-  `active_source_position_ms` (seek).
+Details: `src/core/app/AGENTS.md`.
 
 ### Native streaming (feature `streaming`, in `default`)
 
@@ -296,33 +196,10 @@ session) lives in `src/core/app/native_{backend,recovery,shuffle}.rs`.
   `SessionDisconnectReason` API the app depends on - it cannot be swapped for
   upstream 0.8. All seven crates are `=`-pinned in lockstep; bump them together
   when the fork publishes a new version.
-- Direct spirc `load` is the **primary** route for all native starts, context ones
-  included - a `me/player/play` round trip would head-of-line-block the serial
-  pump (#386). The Web API route (`start_native_context_via_api`) is a fallback
-  only for context starts the direct load rejected or the watchdog is replaying.
-  A native URI-list start must never go through the Web API.
-- Anything that replaces or drops a `StreamingPlayer` must call
-  `player.shutdown()` first; the Connect device id is persisted in
-  `<cache>/device_id`. Both exist to stop ghost Connect devices (#297).
-- Session teardowns are classified by librespot's disconnect reason, never
-  inferred: external handoff → rebuild idle, unexpected → restore playback,
-  local → stop. The handoff veto is sticky (#437).
-- Every background native write is generation-guarded
-  (`native_playback_generation`, `native_shuffle_generation`) and event handlers
-  confirm `Arc::ptr_eq` against the current player before writing - stale writes
-  from a replaced backend are the recurring bug class.
-- librespot reports full `spotify:track:<id>` URIs while app state uses bare
-  base62 ids: normalize with `base62_id_of` at the event boundary
-  (`spotify:local:` URIs stay whole).
 - Verify native playback changes with the full `cargo run` build, not only the
   slim telemetry build.
 
-### Listening Party / sync
-
-`src/infra/network/sync.rs` is pure WebSocket transport (`SyncMessage`,
-`PartyConnection`); lifecycle logic lives in `src/infra/network/mod.rs`. Handlers
-dispatch `StartParty` / `JoinParty` / `SetPartyControlMode` / `LeaveParty`;
-`SyncPlayback` is fired by `App::on_tick` every 2s while hosting, not by a handler.
+Details: `src/infra/player/AGENTS.md`.
 
 ## Key Conventions
 
@@ -355,29 +232,8 @@ directly, and TUI handlers adopt it as the conversion sub-PRs land
 - No rspotify type and no raw `IoEvent` payload in `Action` - payloads are
   strings, scalars, and `core::plugin_api` snapshot types. Address by
   identity (URIs, ids, names), never by list ordinal.
-- Every arm delegates to the same ownership-aware `App` method the
-  equivalent keybinding uses. Playback starts go through
-  `App::start_playback_uris` / `start_playback_context` /
-  `start_playback_track_in_context` - never a hand-built
-  `IoEvent::StartPlayback` in an arm.
-- No catch-all match arm under `src/core/action/` or in `tui/keymap.rs`:
-  both deny `clippy::wildcard_enum_match_arm` and
-  `clippy::match_wildcard_for_single_variants` (a named binding like
-  `_other =>` counts as a wildcard; `matches!` and `Option`/`Result`
-  scrutinees are exempt), and `wildcard_arms_in_action_tree` pins the
-  action tree at 0 by a raw text scan that includes tests, comments, and
-  string literals. CI clippy never compiles tests, so write a test
-  catch-all as `_other =>` and only on a `Result`/`Option` scrutinee.
-- Every `Action` variant has an arm in `tui/keymap.rs::default_binding`,
-  naming the key or gesture that produces it; a variant no gesture produces
-  is `Exposure::Unbound("reason")`. A new variant is a compile error until
-  it has an arm, and a test failure until `sample_actions()` in the same
-  file has a value for it (an `Unbound` one also goes into the `UNBOUND`
-  pin, which a producer scan of `src/tui/` checks). Feature-gate an arm's
-  body, never the arm: clippy skips a match when any arm carries a `#[cfg]`.
-- `Action` derives serde (the frontend wire shape); a payload type added to it
-  must stay serde-derivable and carry the `ts_rs::TS` `cfg_attr` line (see
-  Testing conventions), and the change needs regenerated `gui/src/bindings/`.
+
+The other rules: `src/core/action/AGENTS.md`.
 
 ### Paginated results
 
@@ -423,23 +279,13 @@ hint*: the terminal frontend draws it full-screen, another frontend may render
   showing it together - a cleared string under a surviving frame renders as an
   error page with nothing on it. `pop_navigation_stack` already calls it when
   the frame it pops is `Error`.
-- Nothing else clears `api_error`. `update_on_tick` retires it once the
-  lifetime passes, handing the text to the status bar only when the error frame
-  is the current screen, so a frontend with no dismissal gesture does not latch
-  the first failure forever. The CLI never ticks, so its latch is intact.
 - A non-empty `api_error` is the CLI's only failure signal for every subcommand
   that reaches the bottom of `handle_matches` (`src/cli/handle.rs`; the two
   `share-*` flags return early and bypass it). Moving a call site off
   `handle_error` turns a failing CLI command into exit 0 unless that site is
   provably unreachable from the CLI.
-- Demote a site to `set_error_status_message` only when all three hold: it
-  fires from the tick or a self-refreshing retry loop (so every retry restamps
-  the lifetime and the backstop can never win), it is provably unreachable as a
-  CLI exit signal, and the failed operation is bookkeeping rather than the thing
-  the user asked for. `flush_state_save` is the only site that qualifies today,
-  and it latches its report to once per failure run - repeating it at the retry
-  rate would hold `status_message_is_error` and silently drop every ordinary
-  status message for the rest of the session.
+
+The other two rules: `src/core/app/AGENTS.md`.
 
 ### Dialog state cleanup
 
@@ -532,10 +378,24 @@ See `.claude/skills/add-tui-screen/SKILL.md`.
 
 ### Domain-specific conventions
 
-`src/infra/dj/CLAUDE.md` (DJ lanes/guards/avoid-library filter),
-`src/infra/mcp/CLAUDE.md` (MCP server), `src/infra/scripting/CLAUDE.md` (Lua
-plugins), and `src/cli/CLAUDE.md` (CLI subcommands) load automatically when
-working in those directories.
+Before you change one of these areas, read its file. Claude Code loads it when it
+reads a file in that directory. Other agents must open it.
+
+| Area | Read first |
+|------|------------|
+| DJ lanes, guards, avoid-library filter | `src/infra/dj/AGENTS.md` |
+| MCP server | `src/infra/mcp/AGENTS.md` |
+| Lua plugins | `src/infra/scripting/AGENTS.md` |
+| CLI subcommands | `src/cli/AGENTS.md` |
+| CI workflows and legs | `.github/workflows/AGENTS.md` |
+| `core/app/` layout, playback ownership, error reporting | `src/core/app/AGENTS.md` |
+| A new `Action` variant | `src/core/action/AGENTS.md` |
+| A new `IoEvent`, the listening party | `src/infra/network/AGENTS.md` |
+| Native streaming (librespot) | `src/infra/player/AGENTS.md` |
+| `LocalPlayer`, macOS playback, output-device loss | `src/infra/audio/AGENTS.md` |
+| Decoded repeat/shuffle | `src/infra/queue/AGENTS.md` |
+| Radio tune-in | `src/infra/radio/AGENTS.md` |
+| Qobuz streaming | `src/infra/qobuz/AGENTS.md` |
 
 ### Alternative sources (Local / Subsonic / Radio / YouTube / Qobuz)
 
@@ -543,57 +403,6 @@ working in those directories.
   (`src/infra/audio/player.rs`) - the only file where rodio types appear.
   Subsonic and YouTube download each track to a `NamedTempFile` first (YouTube by
   shelling out to `yt-dlp`); Radio streams through a non-seekable ring buffer.
-- Qobuz (`src/infra/qobuz/`) plays each track through the web player's
-  encrypted CMAF stream while it downloads: `stream/progressive.rs` is a
-  `stream-download` source that yields the decrypted segments (and restarts at
-  a seek), rebuilt as a FLAC `NamedTempFile` the session keeps. The fetch runs
-  off the pump behind a `fetch_id` guard; a superseded stream is dropped, which
-  cancels its download. The transport (`sign.rs`, `stream/`) is pure and unit
-  tested. The three web-player constants are scraped at runtime (`auth.rs`),
-  cached in `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars;
-  they are never embedded. Failures are status messages, never `handle_error`.
-- All three platforms play decoded sources. macOS was gated off in
-  `LocalPlayer` until rodio 0.22 / cpal 0.17 were measured on CoreAudio; the
-  SIGSEGVs behind that gate (#9/#20) were librespot's own rodio-backend, which
-  is why librespot still uses portaudio-backend there and this player does not.
-- Losing the output device has **two** shapes and only one is an error. cpal
-  reports the device being *removed* (`DeviceNotAvailable`); it cannot report the
-  common case - the OS moving its **default output** elsewhere (headphones out,
-  AirPods in the case), which leaves the stream bound to a device nobody hears.
-  So `LocalPlayer` both raises a `lost` flag from its own cpal error callback
-  *and* remembers the device name it opened, comparing it against the current
-  default in `device_lost()`. It then *refuses* `play_file`/`play_prepared`/
-  `stop`/`seek`: those wait on rodio's audio callback with no timeout, and they
-  run on the serial pump, so blocking one wedges the whole app rather than just
-  falling silent. Every such wait also goes through `bounded()`, which re-asks
-  the device every 3s rather than timing out blind - a dead device and a source
-  stalled on the network are indistinguishable from the caller's side, and
-  Qobuz's stream stall alone is 60s.
-  The driver's tick polls `device_lost()` (one device read a second), calls
-  `LocalPlayer::recover_device()` to rebuild on the new default device (a
-  spaced, bounded retry - a Bluetooth output takes seconds to come back), and
-  restages the track: it sets the session's `resume_at` (the seek, and paused
-  only when `device_removed()` says cpal saw a *removal* or the session was
-  already paused - a default that merely moved means the user plugged
-  something in and keeps playing) and dispatches `ReplayCurrentTrack`. The
-  path that stages the track applies `resume_at` itself
-  (`infra::queue::restage`), so no `Seek` or `PausePlayback` is ever queued
-  blind behind work that ends in `play()`. That recovery must stay *before*
-  every advance block: a dead sink never drains, so `is_finished()` is false
-  and would otherwise read as a still-playing track. The queue slot has no
-  replay event: a removal clears `queue_slot_desired_playing`, which the
-  paths that stage the next item and the suspended context's resume read,
-  and a device given up on hands the slot to `FinishNativeQueue` (the same
-  teardown a drained queue runs) rather than dropping `queue_now`. Every
-  `LocalPlayer` wait runs off the `App` lock (`stop_detached`,
-  `stop_detached_holding`, `spawn_blocking`): the runner takes that lock on
-  every frame.
-- Repeat/shuffle for decoded sources live in the pure module
-  `src/infra/queue/mod.rs` (`advance_decision`, `resume_index_after_queue`, …);
-  state is player-global on `App` (`decoded_repeat`, `decoded_shuffle`).
-  Repeat-one affects auto-advance only, never a manual skip. Note
-  `resume_index_after_queue` returning `None` means "context exhausted, tear
-  down" - the *opposite* of `advance_index`'s `None` ("clamp, no-op").
 - Set the `advancing` flag synchronously before dispatching a track change: the
   sink is empty for the whole decode/download, and the tick would otherwise
   re-fire auto-advance and skip several tracks.
@@ -605,26 +414,14 @@ working in those directories.
 - OS integrations (MPRIS, SMTC, macOS Now Playing, Discord RPC, window title) all
   read one `PlaybackSnapshot` from `infra/media_metadata.rs`, which checks
   decoded sources first so the paused Spotify track is not published.
-- Radio tune-in has **three** unbounded steps, all on the serial pump, and all
-  three are capped in `infra/radio/stream.rs`: connect (`CONNECT_TIMEOUT`),
-  response headers (`HEADER_TIMEOUT`), and the format probe (`PROBE_TIMEOUT`).
-  The probe is the subtle one - rodio's symphonia scans for a start-of-stream
-  marker and a live stream never ends, so a codec it does not register scans
-  forever. Its `AdtsReader` claims only MPEG-4 ADTS (`ff f1`), not MPEG-2
-  (`ff f9`), which much European radio uses. On timeout the fix is to call
-  `OpenedStream::cancel` - stopping the *download*, not the reader: a probe
-  waiting for bytes parks inside `read`, so a flag checked between reads is
-  never seen, while cancelling marks the stream done, wakes every waiter, and
-  lets the probe thread and its download go. Only `prepare_stream` runs inside
-  the timed closure: `timeout` abandons a `spawn_blocking` closure but cannot
-  stop it, and the radio player is shared, so a probe that matched just after
-  the deadline would otherwise append the new station to the live sink. The
-  `play_prepared` happens after the timeout check.
 - YouTube is unofficial-fragile by design: when it breaks, the fix is a newer
   `yt-dlp`, not a spotatui release. One in-repo mitigation: a failed download
   retries once through the embedded player clients (`web_embedded,tv_embedded`),
   which PO-token enforcement leaves tokenless for embeddable videos - most
   label uploads. A non-embeddable gated video still fails.
+
+Details: `src/infra/audio/AGENTS.md` (`LocalPlayer`, output-device loss),
+`src/infra/queue/AGENTS.md`, `src/infra/radio/AGENTS.md`, `src/infra/qobuz/AGENTS.md`.
 
 ### Testing conventions
 

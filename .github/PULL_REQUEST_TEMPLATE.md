@@ -4,7 +4,7 @@
 
 # Testing
 
-<!-- List the commands you ran and their output. Example:
+<!-- List the commands you ran yourself and their output. For a good first issue, run every command under "Done when". Example:
 - cargo fmt --all
 - cargo clippy --locked -- -D warnings
 - cargo test --locked
