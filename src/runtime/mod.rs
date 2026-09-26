@@ -113,15 +113,8 @@ pub async fn run_cli() -> Result<()> {
   result
 }
 
-async fn run_cli_inner() -> Result<()> {
-  let mut clap_app = cli::build_clap_app();
-
-  let matches = clap_app.clone().get_matches();
-
-  // Logging depends on the parsed flags (`--debug`), so it moves here from
-  // being the very first statement. Accepted consequence: a clap usage error
-  // above (bad flag, `--help`, `--version`) exits before any log file exists.
-  let debug_flag = matches.get_flag("debug");
+/// Opens the log at the level `--debug` or `SPOTATUI_LOG` asks for, then writes the startup header.
+fn start_logging(debug_flag: bool) -> Result<()> {
   let env_log_value = std::env::var("SPOTATUI_LOG").ok();
   let (log_level, log_level_warning) =
     logging::resolve_log_level(debug_flag, env_log_value.as_deref());
@@ -144,6 +137,18 @@ async fn run_cli_inner() -> Result<()> {
       std::env::var_os("WT_SESSION").is_some(),
     )
   );
+  Ok(())
+}
+
+async fn run_cli_inner() -> Result<()> {
+  let mut clap_app = cli::build_clap_app();
+
+  let matches = clap_app.clone().get_matches();
+
+  // Logging depends on the parsed flags (`--debug`), so it moves here from
+  // being the very first statement. Accepted consequence: a clap usage error
+  // above (bad flag, `--help`, `--version`) exits before any log file exists.
+  start_logging(matches.get_flag("debug"))?;
 
   info!("spotatui {} starting up", env!("CARGO_PKG_VERSION"));
   bootstrap::init_audio_backend();

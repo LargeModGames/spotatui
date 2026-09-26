@@ -50,7 +50,8 @@ impl Onboarding for TerminalSetupRequired {
 }
 
 pub async fn run_gui() -> Result<()> {
-  bootstrap::setup_logging()?;
+  // No clap here: the crash notice's "rerun with --debug" must still work.
+  super::start_logging(std::env::args().skip(1).any(|arg| arg == "--debug"))?;
   log::info!("spotatui-gui {} starting up", env!("CARGO_PKG_VERSION"));
   bootstrap::init_audio_backend();
   bootstrap::install_panic_hook();
