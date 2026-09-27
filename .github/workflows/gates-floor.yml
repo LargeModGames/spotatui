@@ -17,9 +17,11 @@ on:
 permissions:
   contents: read
 
+# A newer push cancels the older run: the newer run measures the newest main,
+# and the older run would only be rejected as non-fast-forward at the push.
 concurrency:
   group: gates-floor
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   measure:
