@@ -1498,6 +1498,8 @@ impl Network {
       let mut app = self.app.lock().await;
       app.spotify_token_expiry = expiry;
       app.spotify_connected = true;
+      // `LikedSongs.available` reads the flag; a page must learn it can fetch now.
+      app.bump_display(crate::core::app::DisplayDomain::LikedSongs);
       if app.active_source == crate::core::source::Source::Spotify {
         app.persist_active_source();
       }

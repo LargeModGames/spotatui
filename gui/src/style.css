@@ -673,13 +673,18 @@ kbd {
   padding: 0 20px;
 }
 
+/* Below 1100 px the queue moves under the table, capped, so it stays reachable. */
 @media (max-width: 1100px) {
   .library {
     grid-template-columns: 236px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   .upnext {
-    display: none;
+    grid-column: 1 / -1;
+    max-height: 30vh;
+    border-left: 0;
+    border-top: 1px solid var(--rule);
   }
 }
 
