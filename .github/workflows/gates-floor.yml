@@ -13,7 +13,6 @@ on:
     # The bot commit touches only this file, so it does not start another run.
     paths-ignore:
       - tools/gates.count
-  workflow_dispatch:
 
 permissions:
   contents: read
