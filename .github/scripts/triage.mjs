@@ -113,6 +113,8 @@ async function callModel() {
       temperature: 0,
       // Roomy enough for the richer JSON so the object is never truncated.
       max_tokens: 900,
+      // Thinking is on by default and its tokens count against max_tokens.
+      thinking: { type: "disabled" },
       // If the API ever rejects this field, drop it — the parser below already
       // tolerates a model that wraps its JSON in a Markdown fence.
       response_format: { type: "json_object" },
