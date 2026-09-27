@@ -34,15 +34,8 @@ impl CliApp {
     Ok(self.net.app.lock().await.liked_song_ids_set().contains(id))
   }
 
-  pub fn format_output(&self, mut format: String, values: Vec<Format>) -> String {
-    for val in values {
-      format = format.replace(val.get_placeholder(), &val.inner(self.config.clone()));
-    }
-    // Replace unsupported flags with 'None'
-    for p in &["%a", "%b", "%t", "%p", "%h", "%u", "%d", "%v", "%f", "%s"] {
-      format = format.replace(p, "None");
-    }
-    format.trim().to_string()
+  pub fn format_output(&self, format: String, values: Vec<Format>) -> String {
+    super::util::render_format(&format, &values, &self.config)
   }
 
   // spotatui playback -t
