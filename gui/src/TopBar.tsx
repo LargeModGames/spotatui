@@ -37,7 +37,9 @@ export function TopBar({
       <div className="status">
         <span className="device">
           <span className={connected && device ? "dot on" : "dot"} />
-          {device ?? "No device"}
+          <span className="device-name" title={device ?? undefined}>
+            {device ?? "No device"}
+          </span>
         </span>
         <button type="button" className="queue-button">
           Queue {queued} <kbd>q</kbd>

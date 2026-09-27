@@ -92,11 +92,13 @@ kbd {
   font-weight: 400;
 }
 
+/* The search field gives up its width before the device name does. */
 .search {
   flex-grow: 1;
+  flex-shrink: 100;
   display: flex;
   align-items: center;
-  min-width: 0;
+  min-width: 34px;
 }
 
 .search button {
@@ -135,9 +137,9 @@ kbd {
 
 .status {
   display: flex;
-  flex-shrink: 0;
   align-items: center;
   gap: 18px;
+  min-width: 0;
   white-space: nowrap;
   font: 11px var(--mono);
   color: var(--secondary);
@@ -147,11 +149,18 @@ kbd {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.device-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dot {
   width: 7px;
   height: 7px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--quiet);
 }
@@ -161,6 +170,7 @@ kbd {
 }
 
 .queue-button {
+  flex-shrink: 0;
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--rule);

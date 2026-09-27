@@ -20,9 +20,22 @@ test("playing", async ({ page }) => {
   await shot(page, "playing");
 });
 
-test("playing at 800 px", async ({ page }) => {
+test("playing at 800 px on a long device name", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
-  await openWith(page, playing);
+  await openWith(
+    page,
+    playing.map((message) =>
+      message.kind === "playback"
+        ? {
+            ...message,
+            payload: {
+              ...message.payload,
+              device: "Living Room Speaker Group",
+            },
+          }
+        : message,
+    ),
+  );
   await page.getByText("He Won't Go").waitFor();
   await shot(page, "playing-narrow");
 });
