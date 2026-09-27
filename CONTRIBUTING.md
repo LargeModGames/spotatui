@@ -53,7 +53,8 @@ Love customization? Add a new theme preset! Check out `ThemePreset` in `src/core
 2. Install platform dependencies from [Development](README.md#development):
    - OpenSSL
    - `xorg-dev` (Linux; clipboard support)
-   - PipeWire dev libraries (Linux; audio visualization)
+   - ALSA + pkg-config (Linux glibc; default build)
+   - PipeWire dev libraries (Linux; optional, for `--features audio-viz`)
    - `portaudio` via Homebrew (macOS)
 3. Clone your fork and create a topic branch from `main`
 
@@ -76,9 +77,11 @@ cargo clippy --no-default-features --features telemetry,tui -- -D warnings
 cargo test --no-default-features --features telemetry,tui
 ```
 
-CI runs a wider seven-leg feature matrix plus a macOS job (see `.github/workflows/ci.yml`), including
+CI runs a wider eight-leg feature matrix plus a macOS job (see `.github/workflows/ci.yml`), including
 a plain `cargo test` with default features, and passes `--locked` - regenerate
 `Cargo.lock` if you touch `Cargo.toml`. See `AGENTS.md` for the full matrix.
+A change under `gui/` must also pass the npm checks in `.github/workflows/gui.yml` (run in `gui/`):
+`npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test`, `npm run build`.
 
 ### PR Tips
 - Add/adjust tests when changing behavior
