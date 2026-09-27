@@ -42,7 +42,7 @@ pub(super) fn build_clap_app() -> ClapApp {
       Arg::new("tick-rate")
         .short('t')
         .long("tick-rate")
-        .value_parser(clap::value_parser!(u64).range(1..=999))
+        .value_parser(clap::value_parser!(u64))
         .help("Set the normal UI tick rate in milliseconds.")
         .long_help(
           "Specify the normal UI tick rate in milliseconds. Lower values refresh non-animated \
@@ -363,7 +363,7 @@ mod tests {
 
   #[test]
   fn tick_rate_flag_rejects_invalid_values() {
-    for bad in ["fast", "250ms", "1.5", "-5", "0", "1000"] {
+    for bad in ["fast", "250ms", "1.5", "-5"] {
       let err = build_clap_app()
         .try_get_matches_from(["spotatui", &format!("--tick-rate={bad}")])
         .expect_err("invalid tick-rate must be rejected at parse time");
@@ -372,6 +372,16 @@ mod tests {
         "error must name the flag: {err}"
       );
     }
+  }
+
+  #[test]
+  fn out_of_range_tick_rate_still_reaches_boot_options() {
+    // The 1..=999 range check stays in `bootstrap.rs`, shared with `config.yml`
+    // loading, so an out-of-range value must still parse here and reach boot.
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "-t", "5000"])
+      .expect("out-of-range tick-rate must parse; the range check lives in bootstrap");
+    assert_eq!(boot_options(&matches).tick_rate, Some(5000));
   }
 
   #[test]
