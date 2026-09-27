@@ -1,6 +1,6 @@
 import { test } from "@playwright/test";
 import { openWith, shot } from "./bridge";
-import { hello, onboarding, playing } from "./fixtures";
+import { hello, idle, onboarding, playing } from "./fixtures";
 
 test("expired", async ({ page }) => {
   await page.goto("/");
@@ -18,4 +18,10 @@ test("playing", async ({ page }) => {
   await openWith(page, playing);
   await page.getByText("He Won't Go").waitFor();
   await shot(page, "playing");
+});
+
+test("idle", async ({ page }) => {
+  await openWith(page, idle);
+  await page.getByText("Nothing is queued").waitFor();
+  await shot(page, "idle");
 });

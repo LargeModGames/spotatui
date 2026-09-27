@@ -50,11 +50,16 @@ export const onboarding: ServerMessage = {
   },
 };
 
-function track(name: string, seconds: number): TrackInfo {
+function track(
+  name: string,
+  seconds: number,
+  uri = `file:///music/Adele/21/${name}.flac`,
+  artist = "Adele",
+): TrackInfo {
   return {
-    uri: null,
+    uri,
     name,
-    artists: ["Adele"],
+    artists: [artist],
     album: "21",
     duration_ms: seconds * 1000,
     id: null,
@@ -74,14 +79,14 @@ const nowPlaying: NowPlaying = {
   album: "21",
   image_url: null,
   duration_ms: 242973,
-  uri: null,
+  uri: "file:///music/Adele/21/Set Fire to the Rain.flac",
   is_playing: false,
   is_live: false,
   shuffle: false,
-  repeat: "Off",
+  repeat: "off",
 };
 
-/** Adele's 21 from song 5, paused at 1:40, so the frame does not move between runs. */
+/** Adele's 21 from song 5, paused at 1:40, so the frame does not move between runs; one queued song per other source. */
 export const playing: ServerMessage[] = [
   hello,
   { kind: "route", rev: 1, payload: "Home" },
@@ -103,7 +108,33 @@ export const playing: ServerMessage[] = [
         track("One and Only", 348),
         track("Lovesong", 316),
         track("Someone Like You", 285),
+        track("Freeze", 487, "spotify:track:freeze", "Kygo"),
+        track("On the Nature of Daylight", 372, "qobuz:track:1", "Max Richter"),
+        track("Tum Hi Ho", 262, "subsonic:track:1", "Arijit Singh"),
+        track("Cornfield Chase", 126, "youtube:cornfield", "Hans Zimmer"),
+        track("Film score radio", 0, "radio:https://radio.example/score", ""),
       ],
+      spotify: { currently_playing: null, items: [] },
+    },
+  },
+];
+
+/** A booted app with nothing playing, no device and an empty queue. */
+export const idle: ServerMessage[] = [
+  hello,
+  { kind: "route", rev: 1, payload: "Home" },
+  {
+    kind: "playback",
+    rev: 1,
+    payload: { item: null, volume: 50, device: null, liked: false },
+  },
+  { kind: "tick", payload: null },
+  {
+    kind: "queue",
+    rev: 1,
+    payload: {
+      now: null,
+      native: [],
       spotify: { currently_playing: null, items: [] },
     },
   },

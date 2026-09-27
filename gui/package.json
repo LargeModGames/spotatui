@@ -12,6 +12,9 @@
     "shots": "vite build && playwright test"
   },
   "dependencies": {
+    "@fontsource/hanken-grotesk": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

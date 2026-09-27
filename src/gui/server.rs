@@ -325,6 +325,8 @@ fn content_type(name: &str) -> &'static str {
     Some("js") => "text/javascript",
     Some("css") => "text/css",
     Some("svg") => "image/svg+xml",
+    Some("woff2") => "font/woff2",
+    Some("woff") => "font/woff",
     _ => "application/octet-stream",
   }
 }
@@ -537,6 +539,13 @@ mod tests {
     assert!(get(port, request("POST", "/"))
       .await
       .starts_with("HTTP/1.1 405"));
+  }
+
+  #[test]
+  fn bundled_fonts_are_served_with_a_font_type() {
+    let font = "assets/hanken-grotesk-latin-400-normal-abc123";
+    assert_eq!(content_type(&format!("{font}.woff2")), "font/woff2");
+    assert_eq!(content_type(&format!("{font}.woff")), "font/woff");
   }
 
   #[tokio::test]

@@ -1,26 +1,16 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import type { Action } from "./bindings/Action";
-import type { NowPlaying as Item } from "./bindings/NowPlaying";
 import type { TrackInfo } from "./bindings/TrackInfo";
-import { showsOnboarding, type Connection, type Position } from "./connection";
+import { showsOnboarding, type Connection } from "./connection";
+import { clock, sourceOf } from "./format";
 import { Onboarding } from "./Onboarding";
+import { PlayerBar } from "./PlayerBar";
+import { SourceBadge } from "./SourceBadge";
+import { TopBar } from "./TopBar";
 
-/** A placeholder page that exercises the bridge; not a design. */
+/** The page: the top bar, the content area and the player bar. */
 export function App({ connection }: { connection: Connection }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
-  const theme = state.channels.theme?.payload;
-
-  useEffect(() => {
-    const style = document.documentElement.style;
-    const fields = Object.entries(theme ?? {});
-    for (const [field, rgb] of fields) {
-      if (rgb) style.setProperty(`--${field}`, `rgb(${rgb.join(" ")})`);
-    }
-    // A field back at Reset falls back to the page default.
-    return () => {
-      for (const [field] of fields) style.removeProperty(`--${field}`);
-    };
-  }, [theme]);
 
   // The channels arrive once boot is done; before that the transcript is the page.
   const booted = state.channels.route !== undefined;
@@ -45,20 +35,23 @@ export function App({ connection }: { connection: Connection }) {
 
   const send = (action: Action) => connection.send({ type: "action", action });
   const queue = state.channels.queue?.payload;
-  const item = state.channels.playback?.payload.item ?? null;
+  const playback = state.channels.playback?.payload ?? null;
+  const upNext = [
+    ...(queue?.native ?? []),
+    ...(queue?.spotify.items ?? []).flatMap((item) =>
+      item.track ? [item.track] : [],
+    ),
+  ];
   return (
-    <main>
-      <Queue
-        tracks={[
-          ...(queue?.now ? [queue.now] : []),
-          ...(queue?.native ?? []),
-          ...(queue?.spotify.items ?? []).flatMap((item) =>
-            item.track ? [item.track] : [],
-          ),
-        ]}
+    <main className="shell">
+      <TopBar
+        device={playback?.device ?? null}
+        connected={state.connected}
+        queued={upNext.length}
       />
-      <NowPlaying
-        item={item}
+      <UpNext tracks={upNext} />
+      <PlayerBar
+        playback={playback}
         position={state.position}
         connected={state.connected}
         send={send}
@@ -67,69 +60,32 @@ export function App({ connection }: { connection: Connection }) {
   );
 }
 
-function Queue({ tracks }: { tracks: TrackInfo[] }) {
+/** The queue after the playing track; the content area until the Library screen exists. */
+function UpNext({ tracks }: { tracks: TrackInfo[] }) {
   return (
-    <ol className="queue">
-      {tracks.map((track, index) => (
-        <li key={`${index}-${track.uri ?? track.name}`}>
-          <span>{track.name}</span>{" "}
-          <span className="hint">{track.artists.join(", ")}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function NowPlaying({
-  item,
-  position,
-  connected,
-  send,
-}: {
-  item: Item | null;
-  position: Position | null;
-  connected: boolean;
-  send: (action: Action) => void;
-}) {
-  const playing = item?.is_playing ?? false;
-  const ms = usePosition(position, playing);
-  return (
-    <footer className="bar">
-      {item?.image_url && (
-        <img src={item.image_url} alt="" width={56} height={56} />
+    <section className="upnext" aria-label="Up next">
+      <h1>Up next</h1>
+      {tracks.length === 0 ? (
+        <p className="empty">Nothing is queued.</p>
+      ) : (
+        <ol>
+          {tracks.map((track, index) => {
+            const source = sourceOf(track.uri);
+            return (
+              <li key={`${index}-${track.uri ?? track.name}`}>
+                <span className="n">{index + 1}</span>
+                <span className="name">
+                  <b>{track.name}</b> <span>{track.artists.join(", ")}</span>
+                </span>
+                <span>{source && <SourceBadge source={source} />}</span>
+                <span className="time">
+                  {track.duration_ms > 0 && clock(track.duration_ms)}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
       )}
-      <div className="meta">
-        <strong>{item?.title ?? "Nothing playing"}</strong>
-        <span className="hint">{item?.artists.join(", ")}</span>
-        <progress
-          max={item?.duration_ms || 1}
-          value={Math.min(ms, item?.duration_ms ?? 0)}
-        />
-      </div>
-      <button disabled={!connected} onClick={() => send("PreviousTrack")}>
-        Previous
-      </button>
-      <button disabled={!connected} onClick={() => send("TogglePlayback")}>
-        {playing ? "Pause" : "Play"}
-      </button>
-      <button disabled={!connected} onClick={() => send("NextTrack")}>
-        Next
-      </button>
-    </footer>
+    </section>
   );
-}
-
-/** The position interpolated per animation frame from the last tick while playing. */
-function usePosition(position: Position | null, playing: boolean): number {
-  const [now, setNow] = useState(() => performance.now());
-  useEffect(() => {
-    if (!playing) return;
-    let frame = requestAnimationFrame(function step(time) {
-      setNow(time);
-      frame = requestAnimationFrame(step);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [playing]);
-  if (!position || position.ms === null) return 0;
-  return playing ? position.ms + Math.max(0, now - position.at) : position.ms;
 }
