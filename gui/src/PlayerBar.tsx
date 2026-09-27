@@ -22,6 +22,8 @@ export function PlayerBar({
   const duration = item?.duration_ms ?? 0;
   const elapsed = usePosition(position, playing);
   const ms = duration ? Math.min(elapsed, duration) : elapsed;
+  const length = item?.is_live ? "live" : clock(duration);
+  const volume = playback?.volume ?? 0;
   const source = sourceOf(item?.uri ?? null);
   const repeat = item?.repeat ?? "off";
   return (
@@ -116,11 +118,14 @@ export function PlayerBar({
         <div className="progress">
           <span>{clock(ms)}</span>
           <Meter
+            label="Seek"
             ratio={duration ? ms / duration : 0}
+            text={`${clock(ms)} of ${length}`}
             disabled={!connected || !duration}
             onPick={(ratio) => send({ SeekTo: Math.round(ratio * duration) })}
+            onStep={(up) => send(up ? "SeekForward" : "SeekBackward")}
           />
-          <span>{item?.is_live ? "live" : clock(duration)}</span>
+          <span>{length}</span>
         </div>
       </div>
       <div className="side">
@@ -129,33 +134,62 @@ export function PlayerBar({
           <path d="M15.5 8.5a5 5 0 0 1 0 7" />
         </Icon>
         <Meter
-          ratio={(playback?.volume ?? 0) / 100}
+          label="Volume"
+          ratio={volume / 100}
+          text={`${volume}%`}
           disabled={!connected}
           onPick={(ratio) => send({ SetVolume: Math.round(ratio * 100) })}
+          onStep={(up) => send(up ? "VolumeUp" : "VolumeDown")}
         />
       </div>
     </footer>
   );
 }
 
-/** A thin bar; a click sends the fraction of its width left of the pointer. */
+const STEP_KEYS: Record<string, boolean> = {
+  ArrowRight: true,
+  ArrowUp: true,
+  ArrowLeft: false,
+  ArrowDown: false,
+};
+
+/** A thin slider: a click picks the fraction of its width left of the pointer, an arrow key steps. */
 function Meter({
+  label,
   ratio,
+  text,
   disabled,
   onPick,
+  onStep,
 }: {
+  label: string;
   ratio: number;
+  text: string;
   disabled: boolean;
   onPick: (ratio: number) => void;
+  onStep: (up: boolean) => void;
 }) {
   return (
     <div
       className="meter"
-      aria-hidden="true"
+      role="slider"
+      tabIndex={disabled ? -1 : 0}
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(clamp(ratio) * 100)}
+      aria-valuetext={text}
+      aria-disabled={disabled}
       onClick={(event) => {
         if (disabled) return;
         const box = event.currentTarget.getBoundingClientRect();
         onPick(clamp((event.clientX - box.left) / box.width));
+      }}
+      onKeyDown={(event) => {
+        const up = STEP_KEYS[event.key];
+        if (disabled || up === undefined) return;
+        event.preventDefault();
+        onStep(up);
       }}
     >
       <div style={{ width: `${clamp(ratio) * 100}%` }} />

@@ -37,6 +37,14 @@ describe("PlayerBar", () => {
     expect(html).toContain('aria-label="Play"');
   });
 
+  it("exposes seek and volume as focusable sliders", () => {
+    const html = player(song);
+    expect(html).toMatch(/role="slider" tabindex="0" aria-label="Seek"/);
+    expect(html).toContain('aria-valuetext="1:40 of 4:03"');
+    expect(html).toMatch(/role="slider" tabindex="0" aria-label="Volume"/);
+    expect(html).toContain('aria-valuetext="72%"');
+  });
+
   it("marks shuffle and repeat one as pressed", () => {
     const html = player({ ...song, shuffle: true, repeat: "track" });
     expect(html).toContain('aria-label="Shuffle" aria-pressed="true"');

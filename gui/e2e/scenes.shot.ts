@@ -20,6 +20,13 @@ test("playing", async ({ page }) => {
   await shot(page, "playing");
 });
 
+test("playing at 800 px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, playing);
+  await page.getByText("He Won't Go").waitFor();
+  await shot(page, "playing-narrow");
+});
+
 test("idle", async ({ page }) => {
   await openWith(page, idle);
   await page.getByText("Nothing is queued").waitFor();
