@@ -715,8 +715,7 @@ pub async fn prefetch_saved_tracks_page_task(
     let domain_page =
       crate::infra::network::mapping::map_page(&page, |st| TrackInfo::from(&st.track));
     app_guard
-      .library_mut()
-      .saved_tracks
+      .saved_tracks_mut()
       .upsert_page_by_offset(domain_page);
     app_guard.set_saved_tracks_to_table_continuous();
     let Some(candidate_next_offset) = next_offset else {
@@ -1621,10 +1620,7 @@ impl LibraryNetwork for Network {
         populate_liked_song_ids_from_saved_tracks(app.liked_song_ids_set_mut(), &saved_tracks);
         let domain_page =
           crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
-        let saved_tracks_index = app
-          .library_mut()
-          .saved_tracks
-          .upsert_page_by_offset(domain_page);
+        let saved_tracks_index = app.saved_tracks_mut().upsert_page_by_offset(domain_page);
         app.set_saved_tracks_to_table_continuous();
         app
           .plugin_data_generations

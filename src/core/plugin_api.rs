@@ -96,6 +96,7 @@ pub struct DeviceInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct PlaylistInfo {
   pub uri: String,
   pub name: String,

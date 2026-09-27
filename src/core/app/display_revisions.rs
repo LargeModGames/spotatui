@@ -13,6 +13,9 @@ pub enum DisplayDomain {
   Lyrics,
   Artist,
   Library,
+  /// The Liked Songs page cache, apart from `Library`: a background chain
+  /// fetches every page, and a frontend must not resend the list per bump.
+  LikedSongs,
   Queue,
 }
 
@@ -32,13 +35,14 @@ pub struct DisplayRevisions {
   lyrics: u64,
   artist: u64,
   library: u64,
+  liked: u64,
   queue: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 12] = [
+  pub const ALL: [DisplayDomain; 13] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -50,6 +54,7 @@ impl DisplayDomain {
     DisplayDomain::Lyrics,
     DisplayDomain::Artist,
     DisplayDomain::Library,
+    DisplayDomain::LikedSongs,
     DisplayDomain::Queue,
   ];
 }
@@ -68,6 +73,7 @@ impl DisplayRevisions {
       DisplayDomain::Lyrics => &mut self.lyrics,
       DisplayDomain::Artist => &mut self.artist,
       DisplayDomain::Library => &mut self.library,
+      DisplayDomain::LikedSongs => &mut self.liked,
       DisplayDomain::Queue => &mut self.queue,
     };
     *slot = slot.wrapping_add(1);
@@ -87,6 +93,7 @@ impl DisplayRevisions {
       DisplayDomain::Lyrics => self.lyrics,
       DisplayDomain::Artist => self.artist,
       DisplayDomain::Library => self.library,
+      DisplayDomain::LikedSongs => self.liked,
       DisplayDomain::Queue => self.queue,
     }
   }

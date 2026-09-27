@@ -145,7 +145,7 @@ async fn apply_selections(
 
 /// The sources whose Cargo feature is compiled into this build, in display order.
 /// Spotify is always present.
-fn compiled_in_sources() -> Vec<Source> {
+pub(crate) fn compiled_in_sources() -> Vec<Source> {
   // `mut` is unused in a Spotify-only (slim) build where every push is cfg'd out.
   #[cfg_attr(not(feature = "audio-decode"), allow(unused_mut))]
   let mut options = vec![Source::Spotify];

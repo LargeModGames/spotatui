@@ -4,9 +4,12 @@
 
 use crate::core::action::Action;
 use crate::core::app::{App, DisplayDomain, DisplayRevisions};
+use crate::core::first_run::compiled_in_sources;
 use crate::core::plugin_api::{
-  device_list, route_name, DeviceInfo, PlaybackState, QueueItemSnapshot, QueueSnapshot, TrackInfo,
+  device_list, route_name, DeviceInfo, PlaybackState, PlaylistInfo, QueueItemSnapshot,
+  QueueSnapshot, TrackInfo,
 };
+use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
 use crate::gui::onboarding::{OnboardingReply, OnboardingView};
 use serde::{Deserialize, Serialize};
@@ -38,6 +41,21 @@ pub(crate) enum ServerMessage {
   Status {
     rev: u64,
     payload: StatusPayload,
+  },
+  /// The browse scope; never the playing source.
+  Source {
+    rev: u64,
+    payload: SourcePayload,
+  },
+  /// The sidebar lists of every source.
+  Library {
+    rev: u64,
+    payload: Box<SourcePlaylists>,
+  },
+  /// Liked Songs, on its own channel: the page cache grows page by page.
+  Liked {
+    rev: u64,
+    payload: Box<LikedSongs>,
   },
   /// Field name to RGB; `null` is `Reset`, the page's own default.
   Theme {
@@ -101,6 +119,41 @@ pub(crate) struct StatusPayload {
   message: Option<String>,
   is_error: bool,
   api_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SourcePayload {
+  active: Source,
+  /// The sources compiled into this build, in display order.
+  compiled: Vec<Source>,
+}
+
+/// Liked Songs cached from the top with no gap; `LoadMore(SavedTracks)` fetches the next page.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct LikedSongs {
+  tracks: Vec<TrackInfo>,
+  /// The library's total as Spotify reports it; 0 before the first page.
+  total: u32,
+  has_more: bool,
+  /// False without a Spotify session: the list cannot load.
+  available: bool,
+  /// False until the first page landed; an empty list before that is still loading.
+  loaded: bool,
+}
+
+/// Every source's sidebar list; the page shows the one for the active source.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SourcePlaylists {
+  spotify: Vec<PlaylistInfo>,
+  local: Vec<PlaylistInfo>,
+  subsonic: Vec<PlaylistInfo>,
+  qobuz: Vec<PlaylistInfo>,
+  youtube: Vec<PlaylistInfo>,
+  /// Stations are playable rows (`radio:<url>`), not playlists.
+  radio: Vec<TrackInfo>,
 }
 
 #[derive(Deserialize)]
@@ -208,13 +261,49 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
         }),
       }
     }
-    DisplayDomain::Source
-    | DisplayDomain::Party
+    DisplayDomain::Source => ServerMessage::Source {
+      rev,
+      payload: SourcePayload {
+        active: app.active_source,
+        compiled: compiled_in_sources(),
+      },
+    },
+    DisplayDomain::Library => ServerMessage::Library {
+      rev,
+      payload: Box::new(playlists(app)),
+    },
+    DisplayDomain::LikedSongs => ServerMessage::Liked {
+      rev,
+      payload: Box::new(liked(app)),
+    },
+    DisplayDomain::Party
     | DisplayDomain::Search
     | DisplayDomain::Lyrics
-    | DisplayDomain::Artist
-    | DisplayDomain::Library => return None,
+    | DisplayDomain::Artist => return None,
   })
+}
+
+fn liked(app: &App) -> LikedSongs {
+  let (tracks, _, has_more) = app.saved_tracks_prefix();
+  let pages = &app.library().saved_tracks.pages;
+  LikedSongs {
+    tracks,
+    total: pages.first().map_or(0, |page| page.total),
+    has_more,
+    available: app.spotify_connected,
+    loaded: !pages.is_empty(),
+  }
+}
+
+fn playlists(app: &App) -> SourcePlaylists {
+  SourcePlaylists {
+    spotify: app.all_playlists().clone(),
+    local: app.local_playlists().clone(),
+    subsonic: app.subsonic_playlists().clone(),
+    qobuz: app.qobuz_playlists().clone(),
+    youtube: app.youtube_playlists().clone(),
+    radio: app.radio_stations().clone(),
+  }
 }
 
 fn playback(app: &App) -> PlaybackPayload {
@@ -268,7 +357,9 @@ pub(crate) fn pushed(messages: &[ServerMessage], kind: &str) -> serde_json::Valu
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::action::NavTarget;
+  use crate::core::action::{ListTarget, NavTarget};
+  use crate::core::pagination::Paged;
+  use crate::core::test_helpers::playlist_info;
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use std::sync::mpsc::Receiver;
@@ -303,7 +394,7 @@ mod tests {
 
     assert_eq!(
       kinds,
-      ["route", "status", "theme", "playback", "devices", "queue"]
+      ["route", "status", "source", "theme", "playback", "devices", "library", "liked", "queue"]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
     assert_eq!(
@@ -387,6 +478,96 @@ mod tests {
     );
   }
 
+  fn liked_page(offset: u32, limit: u32, total: u32, has_next: bool) -> Paged<TrackInfo> {
+    Paged {
+      items: (offset..offset + limit)
+        .map(|n| TrackInfo {
+          uri: Some(format!("spotify:track:{n}")),
+          name: format!("Track {n}"),
+          artists: vec![],
+          album: String::new(),
+          duration_ms: 1000,
+          id: None,
+          album_id: None,
+          artist_refs: vec![],
+          is_playable: true,
+          is_local: false,
+          track_number: 0,
+          explicit: false,
+          image_url: None,
+        })
+        .collect(),
+      offset,
+      limit,
+      total,
+      next: has_next.then(|| "next".to_string()),
+      previous: None,
+    }
+  }
+
+  #[test]
+  fn a_loaded_liked_songs_page_pushes_the_liked_channel_and_not_the_library() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+    assert_eq!(pushed(&resync(&app), "liked")["payload"]["loaded"], false);
+
+    app
+      .saved_tracks_mut()
+      .upsert_page_by_offset(liked_page(0, 1, 3, true));
+
+    let messages = diff(&before, &app);
+    let liked = &pushed(&messages, "liked")["payload"];
+    assert_eq!(liked["tracks"][0]["name"], "Track 0");
+    assert_eq!(liked["total"], 3);
+    assert_eq!(liked["has_more"], true);
+    assert_eq!(liked["loaded"], true);
+    assert!(messages
+      .iter()
+      .all(|message| serde_json::to_value(message).unwrap()["kind"] != "library"));
+  }
+
+  #[test]
+  fn load_more_from_the_page_fetches_the_next_liked_songs_page() {
+    let (mut app, rx) = app();
+    app
+      .saved_tracks_mut()
+      .upsert_page_by_offset(liked_page(0, 1, 3, true));
+
+    apply_from_page(
+      &mut app,
+      &action_frame(Action::LoadMore(ListTarget::SavedTracks)),
+    );
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetCurrentSavedTracks(Some(1)))
+    ));
+  }
+
+  #[test]
+  fn a_source_picked_on_the_page_pushes_the_scope_and_fetches_its_sidebar() {
+    let (mut app, rx) = app();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+
+    let messages = apply_from_page(&mut app, &action_frame(Action::SelectSource(Source::Local)));
+
+    assert_eq!(pushed(&messages, "source")["payload"]["active"], "Local");
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetLocalPlaylists)));
+  }
+
+  #[test]
+  fn every_sources_playlists_ride_the_library_channel() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    *app.subsonic_playlists_mut() = vec![playlist_info("p1", "Mix", "me", false)];
+
+    let playlists = &pushed(&diff(&before, &app), "library")["payload"];
+    assert_eq!(playlists["subsonic"][0]["name"], "Mix");
+    assert_eq!(playlists["spotify"], serde_json::json!([]));
+  }
+
   #[test]
   fn a_tick_carries_the_position_and_no_revision() {
     let (mut app, _rx) = app();
@@ -425,6 +606,10 @@ mod tests {
     written::<NowPlaying>(&dir, &cfg);
     written::<QueuePayload>(&dir, &cfg);
     written::<StatusPayload>(&dir, &cfg);
+    written::<SourcePayload>(&dir, &cfg);
+    written::<LikedSongs>(&dir, &cfg);
+    written::<SourcePlaylists>(&dir, &cfg);
+    written::<PlaylistInfo>(&dir, &cfg);
     written::<DisplayRevisions>(&dir, &cfg);
     written::<DeviceInfo>(&dir, &cfg);
     written::<QueueSnapshot>(&dir, &cfg);

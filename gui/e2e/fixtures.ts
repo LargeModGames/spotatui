@@ -1,4 +1,5 @@
 import type { NowPlaying } from "../src/bindings/NowPlaying";
+import type { PlaylistInfo } from "../src/bindings/PlaylistInfo";
 import type { ServerMessage } from "../src/bindings/ServerMessage";
 import type { Source } from "../src/bindings/Source";
 import type { TrackInfo } from "../src/bindings/TrackInfo";
@@ -15,6 +16,7 @@ const revisions = {
   lyrics: 1,
   artist: 1,
   library: 1,
+  liked: 1,
   queue: 1,
 };
 
@@ -115,6 +117,139 @@ export const playing: ServerMessage[] = [
         track("Film score radio", 0, "radio:https://radio.example/score", ""),
       ],
       spotify: { currently_playing: null, items: [] },
+    },
+  },
+];
+
+function playlist(
+  name: string,
+  uri: string,
+  track_count: number,
+): PlaylistInfo {
+  return {
+    uri,
+    name,
+    owner: "jay",
+    track_count,
+    id: null,
+    owner_id: null,
+    collaborative: false,
+    public: null,
+    image_url: null,
+  };
+}
+
+const likedRows: [string, string, string, number, string?][] = [
+  ["Firework", "Katy Perry", "Teenage Dream", 228],
+  [
+    'Suite from "How to Train Your Dragon"',
+    "John Powell",
+    "Film Suites, Vol. 1",
+    602,
+  ],
+  ["Freeze", "Kygo", "Freeze", 487],
+  ["Set Fire to the Rain", "Adele", "21", 243, nowPlaying.uri ?? undefined],
+  [
+    "Angels For Each Other",
+    "Martin Garrix, Arijit Singh",
+    "Angels For Each Other",
+    215,
+  ],
+  [
+    "On the Nature of Daylight",
+    "Max Richter",
+    "The Blue Notebooks (15 Years)",
+    372,
+  ],
+  ["Tum Hi Ho", "Arijit Singh, Mithoon", "Aashiqui 2", 262],
+  ["Firestone", "Kygo, Conrad Sewell", "Cloud Nine", 272],
+  [
+    "Clair-Obscur",
+    "Lorien Testard, Alice Duport-Percier",
+    "Clair Obscur: Expedition 33",
+    219,
+  ],
+  ["Someone Like You", "Adele", "21", 285],
+  ["Faded", "Alan Walker", "Different World", 212],
+  ["Nuvole Bianche", "Ludovico Einaudi", "Una Mattina", 358],
+  ["Levels", "Avicii", "Levels", 200],
+  ["When We Were Young", "Adele", "25", 291],
+  ["Wake Me Up", "Avicii", "True", 247],
+];
+
+/** The browse scope and the Spotify Liked Songs of a five-source build. */
+export const library: ServerMessage[] = [
+  {
+    kind: "source",
+    rev: 1,
+    payload: {
+      active: "Spotify",
+      compiled: ["Spotify", "YouTube", "Subsonic", "Radio", "Local", "Qobuz"],
+    },
+  },
+  {
+    kind: "library",
+    rev: 1,
+    payload: {
+      spotify: [
+        playlist("Film scores", "spotify:playlist:1", 142),
+        playlist("Kygo & friends", "spotify:playlist:2", 87),
+        playlist("Bollywood love songs", "spotify:playlist:3", 64),
+        playlist("Gym: EDM", "spotify:playlist:4", 51),
+        playlist("Discover Weekly", "spotify:playlist:5", 30),
+      ],
+      local: [playlist("Soundtrack CD rips", "file:///music/rips", 318)],
+      subsonic: [],
+      qobuz: [],
+      youtube: [],
+      radio: [],
+    },
+  },
+  {
+    kind: "liked",
+    rev: 1,
+    payload: {
+      tracks: likedRows.map(([name, artist, album, seconds, uri], index) => ({
+        ...track(name, seconds, uri ?? `spotify:track:${index}`, artist),
+        album,
+        is_local: false,
+      })),
+      total: 1180,
+      has_more: true,
+      available: true,
+      loaded: true,
+    },
+  },
+];
+
+/** No Spotify session: the Liked Songs list cannot load, and the sidebar is bare. */
+export const libraryUnavailable: ServerMessage[] = [
+  {
+    kind: "source",
+    rev: 1,
+    payload: { active: "Local", compiled: ["Spotify", "Local"] },
+  },
+  {
+    kind: "library",
+    rev: 1,
+    payload: {
+      spotify: [],
+      local: [],
+      subsonic: [],
+      qobuz: [],
+      youtube: [],
+      radio: [],
+    },
+  },
+  {
+    kind: "liked",
+    rev: 1,
+    payload: {
+      tracks: [],
+      total: 0,
+      has_more: false,
+      available: false,
+      loaded: false,
     },
   },
 ];

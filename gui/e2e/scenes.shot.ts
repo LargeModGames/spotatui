@@ -1,6 +1,13 @@
 import { test } from "@playwright/test";
 import { openWith, shot } from "./bridge";
-import { hello, idle, onboarding, playing } from "./fixtures";
+import {
+  hello,
+  idle,
+  library,
+  libraryUnavailable,
+  onboarding,
+  playing,
+} from "./fixtures";
 
 test("expired", async ({ page }) => {
   await page.goto("/");
@@ -15,16 +22,15 @@ test("onboarding", async ({ page }) => {
 });
 
 test("playing", async ({ page }) => {
-  await openWith(page, playing);
-  await page.getByText("He Won't Go").waitFor();
+  await openWith(page, [...playing, ...library]);
+  await page.getByText("Wake Me Up").waitFor();
   await shot(page, "playing");
 });
 
 test("playing at 800 px on a long device name", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
-  await openWith(
-    page,
-    playing.map((message) =>
+  await openWith(page, [
+    ...playing.map((message) =>
       message.kind === "playback"
         ? {
             ...message,
@@ -35,8 +41,9 @@ test("playing at 800 px on a long device name", async ({ page }) => {
           }
         : message,
     ),
-  );
-  await page.getByText("He Won't Go").waitFor();
+    ...library,
+  ]);
+  await page.getByText("Wake Me Up").waitFor();
   await shot(page, "playing-narrow");
 });
 
@@ -44,4 +51,10 @@ test("idle", async ({ page }) => {
   await openWith(page, idle);
   await page.getByText("Nothing is queued").waitFor();
   await shot(page, "idle");
+});
+
+test("library without a Spotify session", async ({ page }) => {
+  await openWith(page, [...idle, ...libraryUnavailable]);
+  await page.getByText("needs a Spotify session").waitFor();
+  await shot(page, "library-unavailable");
 });

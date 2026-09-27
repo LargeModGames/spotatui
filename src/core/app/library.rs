@@ -355,11 +355,14 @@ impl App {
     self.set_stats_period(period);
   }
 
-  pub fn set_saved_tracks_to_table_continuous(&mut self) {
+  /// The saved tracks cached from offset 0 up to the first gap, the index of that
+  /// run's last page, and whether a page follows it.
+  pub(crate) fn saved_tracks_prefix(&self) -> (Vec<TrackInfo>, usize, bool) {
     let mut tracks = Vec::new();
     let mut expected_offset = 0;
     let mut seen_offsets = HashSet::new();
     let mut active_index = 0;
+    let mut has_more = false;
 
     for (page_index, page) in self.library.saved_tracks.pages.iter().enumerate() {
       if page.offset != expected_offset || !seen_offsets.insert(page.offset) {
@@ -369,13 +372,25 @@ impl App {
       tracks.extend(page.items.iter().cloned());
       expected_offset = expected_offset.saturating_add(page.limit);
       active_index = page_index;
+      has_more = page.next.is_some();
 
-      if page.next.is_none() {
+      if !has_more {
         break;
       }
     }
 
-    self.library_mut().saved_tracks.index = active_index;
+    (tracks, active_index, has_more)
+  }
+
+  /// The Liked Songs page cache; a write bumps `LikedSongs`, not `Library`.
+  pub(crate) fn saved_tracks_mut(&mut self) -> &mut ScrollableResultPages<Paged<TrackInfo>> {
+    self.display_revisions.bump(DisplayDomain::LikedSongs);
+    &mut self.library.saved_tracks
+  }
+
+  pub fn set_saved_tracks_to_table_continuous(&mut self) {
+    let (tracks, active_index, _) = self.saved_tracks_prefix();
+    self.library.saved_tracks.index = active_index;
     self.replace_track_table_tracks(tracks);
     self.track_table.context = Some(TrackTableContext::SavedTracks);
   }
@@ -383,7 +398,7 @@ impl App {
   pub fn reset_saved_tracks_view(&mut self) {
     self.saved_tracks_prefetch_generation = self.saved_tracks_prefetch_generation.wrapping_add(1);
     self.saved_tracks_prefetch_in_flight.clear();
-    self.library_mut().saved_tracks.clear();
+    self.saved_tracks_mut().clear();
     self.pending_track_table_selection = None;
     self.view.track_table_index = 0;
     self.track_table.tracks.clear();
@@ -1017,5 +1032,46 @@ mod tests {
     app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
     assert_eq!(app.library.saved_albums.pages.len(), 2);
     assert_eq!(app.library.saved_albums.index, 1);
+  }
+
+  #[test]
+  fn saved_tracks_prefix_stops_at_the_first_gap_in_the_cache() {
+    let mut app = App::default();
+    let page = |offset: u32, ids: &[&str]| Paged {
+      items: ids
+        .iter()
+        .map(|id| TrackInfo::from(&full_track(id, id)))
+        .collect(),
+      offset,
+      limit: 2,
+      total: 6,
+      next: Some("next".to_string()),
+      previous: None,
+    };
+    app
+      .library
+      .saved_tracks
+      .upsert_page_by_offset(page(0, &["t1", "t2"]));
+    app
+      .library
+      .saved_tracks
+      .upsert_page_by_offset(page(4, &["t5", "t6"]));
+
+    let (tracks, last_page, has_more) = app.saved_tracks_prefix();
+
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(last_page, 0);
+    assert!(has_more);
+    assert_eq!(App::default().saved_tracks_prefix(), (vec![], 0, false));
+
+    let mut last = page(2, &["t3", "t4"]);
+    last.next = None;
+    app.library.saved_tracks.upsert_page_by_offset(last);
+
+    let (tracks, last_page, has_more) = app.saved_tracks_prefix();
+
+    assert_eq!(tracks.len(), 4);
+    assert_eq!(last_page, 1);
+    assert!(!has_more);
   }
 }
