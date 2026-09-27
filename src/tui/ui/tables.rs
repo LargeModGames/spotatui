@@ -384,7 +384,18 @@ pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       offset,
       highlight_state,
     )
-  };
+  } else {
+    draw_table(
+      f,
+      app,
+      layout_chunk,
+      ("Podcasts", &header),
+      &[],
+      app.view.shows_list_index,
+      0,
+      highlight_state,
+    )
+  }
 }
 
 pub fn draw_album_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
@@ -585,7 +596,18 @@ pub fn draw_album_list(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       offset,
       highlight_state,
     )
-  };
+  } else {
+    draw_table(
+      f,
+      app,
+      layout_chunk,
+      ("Saved Albums", &header),
+      &[],
+      selected_song_index,
+      0,
+      highlight_state,
+    )
+  }
 }
 
 pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
@@ -599,6 +621,27 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::EpisodeTable,
   );
 
+  let title = match &app.episode_table_context {
+    EpisodeTableContext::Simplified => match &app.selected_show_simplified {
+      Some(selected_show) => {
+        format!(
+          "{} by {}",
+          selected_show.show.name, selected_show.show.publisher
+        )
+      }
+      None => "Episodes".to_owned(),
+    },
+    EpisodeTableContext::Full => match &app.selected_show_full {
+      Some(selected_show) => {
+        format!(
+          "{} by {}",
+          selected_show.show.name, selected_show.show.publisher
+        )
+      }
+      None => "Episodes".to_owned(),
+    },
+  };
+
   if let Some(episodes) = app.library().show_episodes.get_results(None) {
     let (offset, visible) = visible_window(
       app,
@@ -611,27 +654,6 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .map(|episode| episode_table_item(episode, &columns, app))
       .collect::<Vec<TableItem>>();
 
-    let title = match &app.episode_table_context {
-      EpisodeTableContext::Simplified => match &app.selected_show_simplified {
-        Some(selected_show) => {
-          format!(
-            "{} by {}",
-            selected_show.show.name, selected_show.show.publisher
-          )
-        }
-        None => "Episodes".to_owned(),
-      },
-      EpisodeTableContext::Full => match &app.selected_show_full {
-        Some(selected_show) => {
-          format!(
-            "{} by {}",
-            selected_show.show.name, selected_show.show.publisher
-          )
-        }
-        None => "Episodes".to_owned(),
-      },
-    };
-
     draw_table(
       f,
       app,
@@ -642,23 +664,34 @@ pub fn draw_show_episodes(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       offset,
       highlight_state,
     );
-  };
+  } else {
+    draw_table(
+      f,
+      app,
+      layout_chunk,
+      (&title, &header),
+      &[],
+      app.view.episode_list_index,
+      0,
+      highlight_state,
+    );
+  }
 }
 
 pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let columns = table_columns(app, TableColumnSet::RecentlyPlayed, layout_chunk.width);
   let header = table_header(TableId::RecentlyPlayed, &columns);
 
+  let current_route = app.get_current_route();
+
+  let highlight_state = (
+    current_route.active_block == ActiveBlock::RecentlyPlayed,
+    current_route.hovered_block == ActiveBlock::RecentlyPlayed,
+  );
+
+  let selected_song_index = app.view.recently_played_index;
+
   if let Some(recently_played) = &app.recently_played {
-    let current_route = app.get_current_route();
-
-    let highlight_state = (
-      current_route.active_block == ActiveBlock::RecentlyPlayed,
-      current_route.hovered_block == ActiveBlock::RecentlyPlayed,
-    );
-
-    let selected_song_index = app.view.recently_played_index;
-
     let (offset, visible) = visible_window(
       app,
       layout_chunk,
@@ -680,7 +713,18 @@ pub fn draw_recently_played_table(f: &mut Frame<'_>, app: &App, layout_chunk: Re
       offset,
       highlight_state,
     )
-  };
+  } else {
+    draw_table(
+      f,
+      app,
+      layout_chunk,
+      ("Recently Played Tracks", &header),
+      &[],
+      selected_song_index,
+      0,
+      highlight_state,
+    )
+  }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -806,8 +850,12 @@ mod tests {
   use ratatui::{backend::TestBackend, Terminal};
 
   fn rendered(app: &App, area: Rect) -> String {
+    rendered_with(app, area, draw_local_browser)
+  }
+
+  fn rendered_with(app: &App, area: Rect, draw: fn(&mut Frame<'_>, &App, Rect)) -> String {
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
-    terminal.draw(|f| draw_local_browser(f, app, area)).unwrap();
+    terminal.draw(|f| draw(f, app, area)).unwrap();
     let buffer = terminal.backend().buffer();
     (0..area.height)
       .flat_map(|y| (0..area.width).map(move |x| (x, y)))
@@ -945,5 +993,34 @@ mod tests {
       content.contains("local_music_path"),
       "empty browser should hint at the config key: {content}"
     );
+  }
+
+  fn assert_empty_titled_table(draw: fn(&mut Frame<'_>, &App, Rect), title: &str) {
+    let app = App::default();
+    let content = rendered_with(&app, Rect::new(0, 0, 80, 8), draw);
+    assert!(
+      content.contains(title),
+      "pane should show the {title:?} title before data loads: {content}"
+    );
+  }
+
+  #[test]
+  fn album_list_draws_an_empty_titled_table_before_data_loads() {
+    assert_empty_titled_table(draw_album_list, "Saved Albums");
+  }
+
+  #[test]
+  fn podcast_table_draws_an_empty_titled_table_before_data_loads() {
+    assert_empty_titled_table(draw_podcast_table, "Podcasts");
+  }
+
+  #[test]
+  fn recently_played_draws_an_empty_titled_table_before_data_loads() {
+    assert_empty_titled_table(draw_recently_played_table, "Recently Played Tracks");
+  }
+
+  #[test]
+  fn show_episodes_draws_an_empty_titled_table_before_data_loads() {
+    assert_empty_titled_table(draw_show_episodes, "Episodes");
   }
 }

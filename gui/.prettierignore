@@ -1,3 +1,6 @@
 dist
 src/bindings
 package-lock.json
+shots
+test-results
+playwright-report
