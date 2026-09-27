@@ -281,7 +281,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --no-default-features --features "$FEATURES" -- -D warnings
 
-  # The src/gates.rs test pins tools/gates.count to the measured counters; this
+  # The src/gates.rs test pins the coupling counters in tools/gates.count to the
+  # measured values and holds the adoption counters as floors (gates-floor.yml
+  # raises those on main); this
   # job closes the remaining hole by comparing the file against the merge-base,
   # so a PR cannot raise a coupling baseline or lower the test floor alongside
   # the code that would need it. Pull requests only: pushes to main have no base

@@ -7,11 +7,14 @@
 //! `App` fields any module can still write, reads of the cached Spotify
 //! playback context that bypass the ownership resolver).
 //!
-//! `tools/gates.count` holds the measured baselines, and the test below pins
-//! every counter to its baseline exactly, so a PR that moves a number must
-//! also move the file. The direction is enforced by
-//! `tools/check_gates_ratchet.sh` against the merge base: coupling counters
-//! may only fall, while the two adoption counters may only rise.
+//! `tools/gates.count` holds the measured baselines. The test below pins every
+//! coupling counter to its baseline exactly, so a PR that moves one must also
+//! move the file. The two adoption counters are floors: a PR that adds tests
+//! leaves the file alone, and the `gates-floor` workflow raises the floors on
+//! `main` after the merge (`GATES_BLESS=1` does the same locally). The
+//! direction is enforced by `tools/check_gates_ratchet.sh` against the merge
+//! base: coupling counters may only fall, while the adoption counters may only
+//! rise.
 //! `test_attribute_total` is the first adoption counter, so a refactor cannot
 //! silently delete a test module's worth of tests (it is a text count over
 //! `src/`, so it catches deletions, not a module that still compiles under a
@@ -238,6 +241,9 @@ fn count_public_app_fields(source: &str) -> usize {
     .count()
 }
 
+/// Counters checked as floors; `tools/check_gates_ratchet.sh` lists the same two in `RISE_ONLY`.
+const ADOPTION_COUNTERS: [&str; 2] = ["action_refs_in_tui_handlers", "test_attribute_total"];
+
 fn load_baselines() -> BTreeMap<String, usize> {
   let path = repo_root().join("tools").join("gates.count");
   let text = read_source(&path);
@@ -358,12 +364,24 @@ fn ratchet_counters_match_the_checked_in_baselines() {
     ("test_attribute_total", test_attribute_total),
   ];
 
+  let bless = std::env::var_os("GATES_BLESS").is_some();
   let mut baselines = load_baselines();
+  let mut raised = Vec::new();
   let mut report = String::new();
   for (name, actual) in measured {
+    let is_floor = ADOPTION_COUNTERS.contains(&name);
     match baselines.remove(name) {
       None => report.push_str(&format!(
         "{name}: missing from tools/gates.count (measured {actual})\n"
+      )),
+      Some(baseline) if is_floor && actual > baseline => {
+        if bless {
+          raised.push((name, actual));
+        }
+      }
+      Some(baseline) if is_floor && actual < baseline => report.push_str(&format!(
+        "{name}: floor {baseline}, measured {actual}; the adoption counters may \
+         only rise, so restore what the PR removed\n"
       )),
       Some(baseline) if baseline != actual => report.push_str(&format!(
         "{name}: baseline {baseline}, measured {actual}; move the baseline in \
@@ -379,6 +397,41 @@ fn ratchet_counters_match_the_checked_in_baselines() {
     ));
   }
   assert!(report.is_empty(), "\nratchet violations:\n{report}");
+  if !raised.is_empty() {
+    let path = root.join("tools").join("gates.count");
+    fs::write(&path, raise_floors(&read_source(&path), &raised))
+      .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+  }
+}
+
+/// Rewrites the value on each `name = N` line in `raised`, keeping the comment column.
+fn raise_floors(text: &str, raised: &[(&str, usize)]) -> String {
+  let mut out = String::new();
+  for line in text.lines() {
+    let (code, comment) = match line.split_once('#') {
+      Some((code, comment)) => (code, Some(comment)),
+      None => (line, None),
+    };
+    let floor = code
+      .split_once('=')
+      .and_then(|(key, _)| raised.iter().find(|(name, _)| *name == key.trim()));
+    match (floor, comment) {
+      (Some((name, value)), Some(comment)) => {
+        let code = format!("{name} = {value}");
+        let width = code.len().max(line.len() - comment.len() - 1);
+        out.push_str(&format!("{code:<width$}"));
+        if !out.ends_with(' ') {
+          out.push(' ');
+        }
+        out.push('#');
+        out.push_str(comment);
+      }
+      (Some((name, value)), None) => out.push_str(&format!("{name} = {value}")),
+      (None, _) => out.push_str(line),
+    }
+    out.push('\n');
+  }
+  out
 }
 
 #[test]
@@ -461,4 +514,22 @@ fn action_ref_matcher_is_word_bounded_and_stops_at_the_test_module() {
                #[cfg(all(test, feature = \"x\"))]\n\
                mod tests { fn t() { app.apply(Action::Play); } }\n";
   assert_eq!(count_production_action_refs(gated), 1);
+}
+
+#[test]
+fn raise_floors_rewrites_only_the_named_lines_and_keeps_the_comment_column() {
+  let src = "# header\n\
+             a = 5      # coupling\n\
+             b = 9      # adoption\n\
+             c = 99999  # adoption\n\
+             d = 1\n";
+  let raised = raise_floors(src, &[("b", 12), ("c", 1234567), ("d", 2)]);
+  assert_eq!(
+    raised,
+    "# header\n\
+     a = 5      # coupling\n\
+     b = 12     # adoption\n\
+     c = 1234567 # adoption\n\
+     d = 2\n"
+  );
 }

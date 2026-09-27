@@ -1,10 +1,12 @@
 # Ratchet baselines for the GUI substrate migration, asserted by src/gates.rs
 # on every cargo test leg (see its module doc for what each counter measures).
 #
-# src/gates.rs pins every value here exactly, so a PR that moves a counter must
-# move the file with it. tools/check_gates_ratchet.sh enforces the direction
-# against the merge base: coupling counters may only fall toward their target,
-# the two adoption counters may only rise.
+# src/gates.rs pins every coupling counter here exactly, so a PR that moves one
+# must move the file with it. The two adoption counters are floors: a PR that
+# adds tests leaves them alone, and .github/workflows/gates-floor.yml raises
+# them on main after the merge. tools/check_gates_ratchet.sh enforces the
+# direction against the merge base: coupling counters may only fall toward
+# their target, the adoption counters may only rise.
 
 crate_tui_refs_outside_tui = 2         # target 0
 app_field_writes_in_tui_handlers = 147 # target 0 (writes into app.view do not count)
@@ -15,4 +17,4 @@ view_writes_outside_tui = 12           # target 0 (producers outside tui/ and co
 pub_fields_on_app = 117                # target 1 (App.view stays public for the frontend; the rest go through App methods)
 direct_playback_context_reads = 88     # target 0 (readers of App::current_playback_context outside the ownership resolver and the snapshot builder, which are excluded)
 action_refs_in_tui_handlers = 189      # adoption: may only rise
-test_attribute_total = 2300            # adoption: may only rise
+test_attribute_total = 2301            # adoption: may only rise

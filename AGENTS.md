@@ -62,9 +62,10 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
 - A pull_request-only `Gates ratchet` job diffs `tools/gates.count` against the
   merge-base (`tools/check_gates_ratchet.sh`): coupling counters may only fall;
   the two adoption counters (`test_attribute_total`,
-  `action_refs_in_tui_handlers`) may only rise. `src/gates.rs` pins every value
-  exactly, so move the baseline in the same PR that moves the number, in the
-  ratchet's direction only.
+  `action_refs_in_tui_handlers`) may only rise. `src/gates.rs` pins each
+  coupling counter exactly, so move its baseline in the same PR that moves the
+  number. The adoption counters are floors: do not edit them in a PR, because
+  `.github/workflows/gates-floor.yml` raises them on `main` after the merge.
 - `.github/workflows/gui.yml` gates the `gui/` frontend on every PR: run
   `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`,
   `npm test` and `npm run build` in `gui/`; the cargo gate above does not cover it.
