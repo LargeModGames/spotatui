@@ -68,7 +68,7 @@ key and its default from `UserConfig::new`. The five AI DJ keys live in the
 | Generate recap | `R` | `generate_recap` |
 
 A few keys in the help menu are fixed and have no config name: the sort menu
-(`` ` ``), the visualizer style picker (`V`), list jumps `H` / `M` / `L`, the
+(`,`), the visualizer style picker (`V`), list jumps `H` / `M` / `L`, the
 layout keys (`{` / `}`, `(` / `)`, `|`), `s` (save the selected track), and
 `w` (add a track to a playlist). They cannot be rebound from
 `config.yml`.
