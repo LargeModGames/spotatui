@@ -339,11 +339,7 @@ pub fn render_format(format: &str, values: &[Format], conf: &UserConfig) -> Stri
   let mut out = String::new();
   let mut chars = format.chars().peekable();
   while let Some(c) = chars.next() {
-    if c == '%'
-      && chars
-        .peek()
-        .is_some_and(|n| "abtphudvfsr".contains(*n))
-    {
+    if c == '%' && chars.peek().is_some_and(|n| "abtphudvfsr".contains(*n)) {
       let specifier = *chars.peek().unwrap();
       let placeholder = format!("%{}", specifier);
       let rendered = values
