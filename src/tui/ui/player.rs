@@ -1612,7 +1612,10 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
     Line::from(Span::raw(
       "Your choices are cached so you can jump straight back in when you next open `spotatui`.",
     )),
-    Line::from(Span::raw("Reopen this screen any time by pressing `d`.")),
+    Line::from(Span::raw(format!(
+      "Reopen this screen any time by pressing `{}`.",
+      app.user_config.keys.manage_devices
+    ))),
   ];
 
   let instructions = Paragraph::new(instructions_text)
@@ -1749,6 +1752,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::tui::event::Key;
   use chrono::Utc;
   use rspotify::model::{
     context::{Actions, CurrentPlaybackContext},
@@ -2256,6 +2260,17 @@ mod tests {
     assert!(
       content.contains("Spotify") && content.contains("Local Files"),
       "both source rows should still render at 40x18: {content}"
+    );
+  }
+
+  #[test]
+  fn device_picker_names_the_configured_reopen_key() {
+    let mut app = App::default();
+    app.user_config.keys.manage_devices = Key::Char('D');
+    let content = render_picker(&app, 120, 40);
+    assert!(
+      content.contains("pressing `D`"),
+      "reopen hint should name the rebound key: {content}"
     );
   }
 }
