@@ -443,6 +443,16 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "TrevorSatori",
+      "name": "Trevor Satori",
+      "avatar_url": "https://avatars.githubusercontent.com/u/80570915?v=4",
+      "profile": "https://github.com/TrevorSatori",
+      "contributions": [
+        "code",
+        "bug"
+      ]
     }
   ],
   "contributorsPerLine": 7,
