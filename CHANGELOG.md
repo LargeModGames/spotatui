@@ -16,6 +16,8 @@
 
 ### Fixed
 
+- **Artist pages open again**: Spotify now allows at most 10 albums per page for an artist's albums and answers a larger page with `400 Invalid limit`. spotatui asked for 50, so opening any artist showed an error page. It now asks for 10 per page and still loads every album, so an artist with a very large catalog takes longer to open ([#589](https://github.com/LargeModGames/spotatui/issues/589)).
+
 - **Stats "Last 10 Days" uses your local date**: the panel on the Stats screen and the day list in the HTML listening recap labelled each play with its UTC date, while the streak strip and the hour chart already used local time. Outside UTC, plays near midnight landed on the wrong day: in UTC-5 a track played after 19:00 showed up under tomorrow, and in UTC+10 everything before 10:00 counted as yesterday. Days now follow your local date ([#602](https://github.com/LargeModGames/spotatui/issues/602)).
 
 - **`--completions powershell` works**: the README lists powershell among the supported shells, but only `power-shell` parsed, so `--completions powershell` failed with an invalid-value error. `powershell` is now the listed value, and `power-shell` still works ([#606](https://github.com/LargeModGames/spotatui/issues/606)).

@@ -205,7 +205,8 @@ impl MetadataNetwork for Network {
 
       let mut album_items = Vec::new();
       let mut offset = 0u32;
-      let limit = 50u32;
+      // Spotify rejects a limit above 10 here with 400 "Invalid limit".
+      let limit = 10u32;
       loop {
         let mut query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
         if let Some(country) = country {
@@ -806,6 +807,110 @@ mod tests {
         Some("Second"),
         "the second artist page must have completed"
       );
+    })
+    .await
+    .expect("test timed out");
+  }
+
+  fn album_json(n: u32) -> String {
+    format!(
+      r#"{{"album_type":"album","artists":[],"external_urls":{{}},"href":null,"id":"album{n}","images":[],"name":"Album {n}"}}"#
+    )
+  }
+
+  #[tokio::test]
+  async fn get_artist_pages_albums_ten_at_a_time_and_keeps_every_album() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+      let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+
+      let server = tokio::spawn(async move {
+        for _ in 0..4 {
+          let (mut stream, _) = listener.accept().await.unwrap();
+          let request = read_http_request(&mut stream).await;
+          let request_line = request.lines().next().unwrap_or_default().to_string();
+
+          let (status, body) = if request_line.contains("/top-tracks") {
+            ("200 OK", r#"{"tracks":[]}"#.to_string())
+          } else if request_line.contains("/related-artists") {
+            ("200 OK", r#"{"artists":[]}"#.to_string())
+          } else if request_line.contains("/albums") {
+            let query = request_line
+              .split_whitespace()
+              .nth(1)
+              .and_then(|path| path.split_once('?'))
+              .map_or("", |(_, query)| query);
+            let param = |key: &str| {
+              query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
+            };
+            match (param("limit"), param("offset")) {
+              (Some("10"), Some("0")) => {
+                let items: Vec<String> = (0..10).map(album_json).collect();
+                (
+                  "200 OK",
+                  format!(
+                    r#"{{"items":[{}],"total":12,"limit":10,"offset":0,"href":"","next":"more","previous":null}}"#,
+                    items.join(",")
+                  ),
+                )
+              }
+              (Some("10"), Some("10")) => {
+                let items: Vec<String> = (10..12).map(album_json).collect();
+                (
+                  "200 OK",
+                  format!(
+                    r#"{{"items":[{}],"total":12,"limit":10,"offset":10,"href":"","next":null,"previous":null}}"#,
+                    items.join(",")
+                  ),
+                )
+              }
+              _ => (
+                "400 Bad Request",
+                r#"{"error":{"status":400,"message":"Invalid limit"}}"#.to_string(),
+              ),
+            }
+          } else {
+            panic!("unexpected request: {request}");
+          };
+
+          let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+          );
+          stream.write_all(response.as_bytes()).await.unwrap();
+        }
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let app = Arc::new(Mutex::new(App::new(
+        tx,
+        UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+      let mut network = Network::new(
+        Some(spotify),
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+
+      network
+        .get_artist(ArtistId::from_id("artist").unwrap(), "Test Artist".to_string(), None)
+        .await;
+
+      server.await.unwrap();
+
+      let app_guard = app.lock().await;
+      assert_eq!(app_guard.get_current_route().id, RouteId::Artist);
+      let artist = app_guard
+        .artist
+        .as_ref()
+        .expect("the artist page must open");
+      assert_eq!(artist.albums.items.len(), 12);
     })
     .await
     .expect("test timed out");
