@@ -579,6 +579,7 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
       <td align="center" valign="top" width="14.28%"><a href="http://wanjinhao1.github.io"><img src="https://avatars.githubusercontent.com/u/34562501?v=4?s=100" width="100px;" alt="Kratos"/><br /><sub><b>Kratos</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=wanjinhao1" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/niukanen1"><img src="https://avatars.githubusercontent.com/u/57656076?v=4?s=100" width="100px;" alt="niukanen1"/><br /><sub><b>niukanen1</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=niukanen1" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/TrevorSatori"><img src="https://avatars.githubusercontent.com/u/80570915?v=4?s=100" width="100px;" alt="Trevor Satori"/><br /><sub><b>Trevor Satori</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=TrevorSatori" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/issues?q=author%3ATrevorSatori" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/drakeo338"><img src="https://avatars.githubusercontent.com/u/328244157?v=4?s=100" width="100px;" alt="Y.B."/><br /><sub><b>Y.B.</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=drakeo338" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
