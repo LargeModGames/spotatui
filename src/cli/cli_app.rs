@@ -715,8 +715,8 @@ fn playlist_items_total(playlist: &PlaylistItemsTotal) -> Option<u32> {
   playlist
     .items
     .as_ref()
-    .or(playlist.tracks.as_ref())
     .and_then(|ref_| ref_.total)
+    .or_else(|| playlist.tracks.as_ref().and_then(|ref_| ref_.total))
 }
 
 fn first_result_uri(results: &SearchResult, item: &Type, name: &str) -> Result<String> {
@@ -1045,6 +1045,15 @@ mod tests {
     let payload = serde_json::json!({ "items": { "total": 0 } });
     let total = playlist_items_total(&serde_json::from_value(payload).unwrap());
     assert_eq!(total, Some(0));
+  }
+
+  #[test]
+  fn an_items_object_without_a_total_falls_back_to_tracks() {
+    // Some shapes carry an empty items object next to a tracks ref with the
+    // real total: the fallback must read tracks.total, not give up.
+    let payload = serde_json::json!({ "items": {}, "tracks": { "total": 50 } });
+    let total = playlist_items_total(&serde_json::from_value(payload).unwrap());
+    assert_eq!(total, Some(50));
   }
 
   #[test]
