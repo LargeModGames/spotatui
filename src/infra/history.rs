@@ -876,17 +876,28 @@ pub fn filter_listens_for_period(
   listens: &[ListenRecord],
   period: RecapPeriod,
 ) -> Vec<ListenRecord> {
-  let now = Utc::now();
+  filter_listens_for_period_at(listens, period, Local::now())
+}
+
+fn filter_listens_for_period_at<Tz: TimeZone>(
+  listens: &[ListenRecord],
+  period: RecapPeriod,
+  now: DateTime<Tz>,
+) -> Vec<ListenRecord> {
+  let tz = now.timezone();
+  let (year, month) = (now.year(), now.month());
+  let now_utc = now.with_timezone(&Utc);
   listens
     .iter()
     .filter(|record| record.qualified)
     .filter(|record| match period {
-      RecapPeriod::SevenDays => record.ended_at >= now - Duration::days(7),
-      RecapPeriod::ThirtyDays => record.ended_at >= now - Duration::days(30),
+      RecapPeriod::SevenDays => record.ended_at >= now_utc - Duration::days(7),
+      RecapPeriod::ThirtyDays => record.ended_at >= now_utc - Duration::days(30),
       RecapPeriod::Month => {
-        record.ended_at.year() == now.year() && record.ended_at.month() == now.month()
+        let local = record.ended_at.with_timezone(&tz);
+        local.year() == year && local.month() == month
       }
-      RecapPeriod::Year => record.ended_at.year() == now.year(),
+      RecapPeriod::Year => record.ended_at.with_timezone(&tz).year() == year,
       RecapPeriod::All => true,
     })
     .cloned()
@@ -2582,6 +2593,55 @@ mod tests {
     let filtered = filter_listens_for_period(&records, RecapPeriod::All);
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].title, "Track 21");
+  }
+
+  fn titles(records: &[ListenRecord]) -> Vec<&str> {
+    records.iter().map(|record| record.title.as_str()).collect()
+  }
+
+  #[test]
+  fn month_period_uses_the_local_month_east_of_utc() {
+    let mut kept = record_at(1, 60_000, true);
+    kept.ended_at = Utc.with_ymd_and_hms(2026, 9, 30, 22, 30, 0).unwrap();
+    let mut dropped = record_at(2, 60_000, true);
+    dropped.ended_at = Utc.with_ymd_and_hms(2026, 9, 30, 21, 30, 0).unwrap();
+    let now = FixedOffset::east_opt(2 * 3600)
+      .unwrap()
+      .with_ymd_and_hms(2026, 10, 1, 1, 0, 0)
+      .unwrap();
+    let filtered = filter_listens_for_period_at(&[kept, dropped], RecapPeriod::Month, now);
+    assert_eq!(titles(&filtered), ["Track 1"]);
+  }
+
+  #[test]
+  fn month_period_uses_the_local_month_west_of_utc() {
+    let mut afternoon = record_at(1, 60_000, true);
+    afternoon.ended_at = Utc.with_ymd_and_hms(2026, 9, 30, 15, 0, 0).unwrap();
+    let mut evening = record_at(2, 60_000, true);
+    evening.ended_at = Utc.with_ymd_and_hms(2026, 10, 1, 0, 30, 0).unwrap();
+    let mut last_month = record_at(3, 60_000, true);
+    last_month.ended_at = Utc.with_ymd_and_hms(2026, 9, 1, 2, 0, 0).unwrap();
+    let now = FixedOffset::west_opt(5 * 3600)
+      .unwrap()
+      .with_ymd_and_hms(2026, 9, 30, 20, 0, 0)
+      .unwrap();
+    let filtered =
+      filter_listens_for_period_at(&[afternoon, evening, last_month], RecapPeriod::Month, now);
+    assert_eq!(titles(&filtered), ["Track 1", "Track 2"]);
+  }
+
+  #[test]
+  fn year_period_uses_the_local_year_across_new_year() {
+    let mut kept = record_at(1, 60_000, true);
+    kept.ended_at = Utc.with_ymd_and_hms(2026, 12, 31, 23, 10, 0).unwrap();
+    let mut dropped = record_at(2, 60_000, true);
+    dropped.ended_at = Utc.with_ymd_and_hms(2026, 12, 31, 22, 0, 0).unwrap();
+    let now = FixedOffset::east_opt(3600)
+      .unwrap()
+      .with_ymd_and_hms(2027, 1, 1, 0, 30, 0)
+      .unwrap();
+    let filtered = filter_listens_for_period_at(&[kept, dropped], RecapPeriod::Year, now);
+    assert_eq!(titles(&filtered), ["Track 1"]);
   }
 
   #[test]
