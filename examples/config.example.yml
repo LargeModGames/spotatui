@@ -1,7 +1,7 @@
 # Example spotatui config.yml. Every field is optional — omit anything to keep
-# the built-in default. Most typos log a warning and fall back to the default,
-# but a few out-of-range numbers stop spotatui at startup — see
-# "Safe by default" in docs/configuration.md.
+# the built-in default. Most invalid values log a warning and fall back to the
+# default. A misspelled key is usually ignored. A few out-of-range numbers
+# stop spotatui at startup — see docs/configuration.md#safe-by-default.
 # Full reference: docs/configuration.md
 
 behavior:
