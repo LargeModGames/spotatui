@@ -5,9 +5,7 @@ use crate::infra::network::{IoEvent, Network};
 use super::util::{Flag, Format, FormatType, JumpDirection, Type};
 
 use anyhow::{anyhow, Result};
-use rspotify::model::{
-  context::CurrentPlaybackContext, idtypes::Id, playlist::FullPlaylist, PlayableItem,
-};
+use rspotify::model::{context::CurrentPlaybackContext, idtypes::Id, PlayableItem};
 
 pub struct CliApp {
   pub net: Network,
@@ -465,11 +463,14 @@ impl CliApp {
         if let Ok(playlist_id) = rspotify::model::idtypes::PlaylistId::from_id(id_str) {
           match self
             .net
-            .spotify_get_typed::<FullPlaylist>(&format!("playlists/{}", playlist_id.id()), &[])
+            .spotify_get_typed::<PlaylistItemsTotal>(
+              &format!("playlists/{}", playlist_id.id()),
+              &[],
+            )
             .await
           {
             Ok(p) => {
-              let Some(offset) = random_offset(p.items.total) else {
+              let Some(offset) = random_offset(playlist_items_total(p)) else {
                 self
                   .net
                   .app
@@ -670,6 +671,34 @@ impl CliApp {
   }
 }
 
+// The `--random` offset only needs the playlist's track count. The migrated
+// Web API response no longer carries the item page in the shape rspotify's
+// `FullPlaylist` expects (the network boundary hands out a `tracks` stub
+// without `items`), so decoding the whole playlist model fails. The minimal
+// local shape avoids asking rspotify to deserialize a response with no item
+// page - same approach as `PlaylistAccessMetadata`.
+#[derive(Debug, serde::Deserialize)]
+struct PlaylistItemsTotal {
+  #[serde(default)]
+  items: Option<PlaylistTotalRef>,
+  #[serde(default)]
+  tracks: Option<PlaylistTotalRef>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PlaylistTotalRef {
+  #[serde(default)]
+  total: u32,
+}
+
+fn playlist_items_total(playlist: PlaylistItemsTotal) -> u32 {
+  playlist
+    .items
+    .or(playlist.tracks)
+    .map(|ref_| ref_.total)
+    .unwrap_or(0)
+}
+
 fn first_result_uri(results: &SearchResult, item: &Type, name: &str) -> Result<String> {
   let (kind, id) = match item {
     Type::Track => {
@@ -758,7 +787,9 @@ fn parse_query_limit(max: &str, ceiling: u32) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
-  use super::{first_result_uri, parse_query_limit, random_offset, SearchResult, Type};
+  use super::{
+    first_result_uri, parse_query_limit, playlist_items_total, random_offset, SearchResult, Type,
+  };
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ShowInfo, TrackInfo};
   use crate::core::test_helpers::{full_track, playlist_info};
@@ -927,6 +958,38 @@ mod tests {
   #[test]
   fn a_random_offset_into_an_empty_playlist_is_none() {
     assert_eq!(random_offset(0), None);
+  }
+
+  #[test]
+  fn the_playlist_total_survives_a_migrated_playlist_response() {
+    // After Spotify's API migration `playlists/{id}` no longer carries the
+    // item page in the shape rspotify's `FullPlaylist` expects, and the
+    // network boundary hands out the synthesized `tracks` stub. Decoding that
+    // payload as `FullPlaylist` failed with "missing field `items`".
+    let mut payload = serde_json::json!({
+      "collaborative": false,
+      "description": "",
+      "external_urls": { "spotify": "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M" },
+      "href": "",
+      "id": "37i9dQZF1DXcBWIGoYBM5M",
+      "images": [],
+      "name": "Today's Top Hits",
+      "owner": {
+        "external_urls": { "spotify": "https://open.spotify.com/user/spotify" },
+        "href": "",
+        "id": "spotify",
+        "type": "user",
+        "uri": "spotify:user:spotify"
+      },
+      "public": false,
+      "snapshot_id": "abc",
+      "type": "playlist",
+      "uri": "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M",
+      "tracks": { "href": "", "total": 50 }
+    });
+    crate::infra::network::requests::normalize_spotify_payload(&mut payload);
+    let total: u32 = playlist_items_total(serde_json::from_value(payload).unwrap());
+    assert_eq!(total, 50);
   }
 
   #[test]
