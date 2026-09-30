@@ -8,7 +8,7 @@ import type { Position } from "./connection";
 import { clock, sourceOf } from "./format";
 import { KeyHints } from "./KeyHints";
 import { clampCursor } from "./libraryModel";
-import { queueKey } from "./queueModel";
+import { type QueueCursor, queueKey, queueRow } from "./queueModel";
 import "./Session.css";
 import {
   estimates,
@@ -44,7 +44,10 @@ export function Session({
   const ms = usePosition(position, running);
   const [inspect, setInspect] = useState<Marker | null>(null);
   const [earlierWant, setEarlierWant] = useState(0);
-  const [nextWant, setNextWant] = useState(0);
+  const [nextWant, setNextWant] = useState<QueueCursor>({
+    index: 0,
+    uri: null,
+  });
   // The estimates move by the minute; a clock in state keeps the render pure.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -67,7 +70,7 @@ export function Session({
   );
   const newestFirst = [...plays].reverse();
   const earlier = clampCursor(earlierWant, newestFirst.length);
-  const next = clampCursor(nextWant, native.length);
+  const next = queueRow(native, nextWant);
 
   const onEarlierKey = (event: KeyboardEvent<HTMLOListElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -254,7 +257,7 @@ export function Session({
                       start={starts[index] ?? null}
                       selected={index === next}
                       movable
-                      onPick={() => setNextWant(index)}
+                      onPick={() => setNextWant({ index, uri: track.uri })}
                     />
                   ))}
                 </ol>
