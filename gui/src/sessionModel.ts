@@ -2,7 +2,18 @@ import type { Action } from "./bindings/Action";
 import type { SessionPlay } from "./bindings/SessionPlay";
 import type { Source } from "./bindings/Source";
 import type { TrackInfo } from "./bindings/TrackInfo";
+import type { Position } from "./connection";
 import { sourceOf } from "./format";
+
+/** The playback position at page-clock time `page`, carried on from the last server position. */
+export function positionAt(
+  position: Position | null,
+  running: boolean,
+  page: number,
+): number {
+  if (position?.ms == null) return 0;
+  return position.ms + (running ? page - position.at : 0);
+}
 
 /** A gap of this length or more between two plays, or inside one, is a pause. */
 const PAUSE_MS = 60_000;

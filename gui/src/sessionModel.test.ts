@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { SessionPlay } from "./bindings/SessionPlay";
 import type { TrackInfo } from "./bindings/TrackInfo";
-import { estimates, headline, markers, replayRun } from "./sessionModel";
+import {
+  estimates,
+  headline,
+  markers,
+  positionAt,
+  replayRun,
+} from "./sessionModel";
 
 const MIN = 60_000;
 
@@ -90,5 +96,28 @@ describe("sessionModel", () => {
 
   it("counts the songs and the sources, the playing one included", () => {
     expect(headline([], "spotify:track:1")).toBe("0 songs · 1 source");
+  });
+});
+
+describe("positionAt", () => {
+  it("carries the position on only while playing", () => {
+    expect(positionAt({ ms: 1000, at: 500 }, true, 2500)).toBe(3000);
+    expect(positionAt({ ms: 1000, at: 500 }, false, 2500)).toBe(1000);
+    expect(positionAt(null, true, 2500)).toBe(0);
+  });
+
+  it("gives the same start estimate for samples taken at different times", () => {
+    const position = { ms: MIN, at: 0 };
+    const sample = (wall: number, page: number) =>
+      estimates(
+        {
+          durationMs: 4 * MIN,
+          positionMs: positionAt(position, true, page),
+          running: true,
+        },
+        wall,
+        [queued(180)],
+      );
+    expect(sample(1_000_000, 0)).toEqual(sample(1_010_000, 10_000));
   });
 });

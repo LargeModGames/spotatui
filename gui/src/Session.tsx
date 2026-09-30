@@ -14,6 +14,7 @@ import {
   estimates,
   headline,
   markers,
+  positionAt,
   replayRun,
   timeOfDay,
   type Marker,
@@ -43,17 +44,26 @@ export function Session({
   const running = item?.is_playing ?? false;
   const ms = usePosition(position, running);
   const [inspect, setInspect] = useState<Marker | null>(null);
-  const [earlierWant, setEarlierWant] = useState(0);
+  // The Earlier cursor names its play, so a new finished play does not move it to another.
+  const [earlierAt, setEarlierAt] = useState<number | null>(null);
   const [nextWant, setNextWant] = useState<QueueCursor>({
     index: 0,
     uri: null,
   });
-  // The estimates move by the minute; a clock in state keeps the render pure.
-  const [now, setNow] = useState(() => Date.now());
+  // The estimates move by the minute; a clock in state keeps the render pure. The wall clock
+  // and the page clock are sampled together, so the position below is taken at that same moment.
+  const [now, setNow] = useState(() => ({
+    wall: Date.now(),
+    page: performance.now(),
+  }));
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    const timer = window.setInterval(
+      () => setNow({ wall: Date.now(), page: performance.now() }),
+      30_000,
+    );
     return () => window.clearInterval(timer);
   }, []);
+  const sampledMs = positionAt(position, running, now.page);
 
   const native = queue?.native ?? [];
   const found = markers(plays);
@@ -62,14 +72,21 @@ export function Session({
   const starts = estimates(
     {
       durationMs: item?.is_live ? 0 : (item?.duration_ms ?? 0),
-      positionMs: ms,
+      positionMs: sampledMs,
       running,
     },
-    now,
+    now.wall,
     upNext,
   );
   const newestFirst = [...plays].reverse();
-  const earlier = clampCursor(earlierWant, newestFirst.length);
+  const earlier = Math.max(
+    newestFirst.findIndex((play) => play.started_at_ms === earlierAt),
+    newestFirst.length > 0 ? 0 : -1,
+  );
+  const pickEarlier = (row: number) => {
+    const play = newestFirst[clampCursor(row, newestFirst.length)];
+    if (play) setEarlierAt(play.started_at_ms);
+  };
   const next = queueRow(native, nextWant);
 
   const onEarlierKey = (event: KeyboardEvent<HTMLOListElement>) => {
@@ -78,9 +95,9 @@ export function Session({
       const action = replayRun(plays, plays.length - 1 - earlier);
       if (action) send(action);
     } else if (event.key === "j" || event.key === "ArrowDown")
-      setEarlierWant(clampCursor(earlier + 1, newestFirst.length));
+      pickEarlier(earlier + 1);
     else if (event.key === "k" || event.key === "ArrowUp")
-      setEarlierWant(clampCursor(earlier - 1, newestFirst.length));
+      pickEarlier(earlier - 1);
     else return;
     event.preventDefault();
   };
@@ -207,7 +224,7 @@ export function Session({
                     id={`earlier-${index}`}
                     role="option"
                     aria-selected={index === earlier}
-                    onClick={() => setEarlierWant(index)}
+                    onClick={() => pickEarlier(index)}
                     onDoubleClick={() => {
                       const action = replayRun(plays, plays.length - 1 - index);
                       if (action) send(action);
