@@ -17,6 +17,8 @@
   border-radius: 2px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
   font-family: var(--mono);
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
 }
 
 .palette-input {
@@ -139,6 +141,7 @@
 @media (max-width: 800px) {
   .palette {
     top: 60px;
+    max-height: calc(100vh - 76px);
   }
 
   .palette-lists {

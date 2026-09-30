@@ -213,6 +213,15 @@ export function pushRecent(list: string[], entry: string): string[] {
   );
 }
 
+/** This browser's storage, or one that keeps nothing when the browser blocks access. */
+export function pageStorage(): Pick<Storage, "getItem" | "setItem"> {
+  try {
+    return window.localStorage;
+  } catch {
+    return { getItem: () => null, setItem: () => {} };
+  }
+}
+
 /** Recent commands from this browser; empty when storage is blocked. */
 export function loadRecent(storage: Pick<Storage, "getItem">): string[] {
   try {

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import type { Action } from "./bindings/Action";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { SearchPayload } from "./bindings/SearchPayload";
@@ -46,7 +52,12 @@ export function CommandMode({
   const [cursor, setCursor] = useState(0);
   // Digits type into the argument until ArrowDown moves into the results.
   const [picking, setPicking] = useState(false);
-  const [sent, setSent] = useState<{ query: string; rev: number } | null>(null);
+  // The pending search; Shift+Enter on it plays the first playable answer.
+  const [sent, setSent] = useState<{
+    query: string;
+    rev: number;
+    playNow: boolean;
+  } | null>(null);
   const [recent] = useState(() => loadRecent(storage));
   const [recall, setRecall] = useState(-1);
 
@@ -56,9 +67,11 @@ export function CommandMode({
   );
   const parsed = parse(input);
   const link = spotifyLink(input);
+  // Rows show only for results that answer this query, not for any later search update.
   const answered =
     sent !== null &&
     sent.query === parsed.arg &&
+    search?.query === sent.query &&
     searchRev !== null &&
     searchRev > sent.rev;
   const rows =
@@ -101,12 +114,25 @@ export function CommandMode({
     if (rows.length > 0) return runRow(rows[Math.max(pick, 0)], playNow);
     if (parsed.verb !== "device" && parsed.arg) {
       send({ SearchActiveSource: parsed.arg });
-      setSent({ query: parsed.arg, rev: searchRev ?? 0 });
+      setSent({ query: parsed.arg, rev: searchRev ?? 0, playNow });
       setCursor(0);
     }
   };
 
+  // A Shift+Enter search plays its first playable answer once the answer lands.
+  const playAnswer = useEffectEvent(() => {
+    const action = rows
+      .map((row) => actionFor(parsed, row, search, true))
+      .find((each) => each != null);
+    if (action) finish(action);
+  });
+  const playsAnswer = answered && sent?.playNow === true;
+  useEffect(() => {
+    if (playsAnswer) playAnswer();
+  }, [playsAnswer]);
+
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) return;
     const { key } = event;
     if (key === "Escape") {
       event.preventDefault();

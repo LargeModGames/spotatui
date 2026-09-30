@@ -5,6 +5,7 @@ import type { DeviceInfo } from "./bindings/DeviceInfo";
 import { shellKey, type Area, type ShellKey } from "./areas";
 import type { State } from "./connection";
 import { CommandMode } from "./CommandMode";
+import { pageStorage } from "./commandModel";
 import { Library } from "./Library";
 import { upNext } from "./libraryModel";
 import { sourceOf } from "./format";
@@ -149,7 +150,7 @@ export function Shell({
           searchRev={channels.search?.rev ?? null}
           source={channels.source?.payload ?? null}
           devices={channels.devices?.payload ?? NO_DEVICES}
-          storage={window.localStorage}
+          storage={pageStorage()}
           send={send}
           onSearch={(text) => {
             setQuery(text);

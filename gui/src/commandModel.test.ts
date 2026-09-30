@@ -6,6 +6,7 @@ import {
   complete,
   directAction,
   loadRecent,
+  pageStorage,
   parse,
   pushRecent,
   rowsFor,
@@ -30,6 +31,7 @@ const track = (name: string, uri: string): TrackInfo => ({
 
 const search: SearchPayload = {
   ran: true,
+  query: "adele",
   tracks: [
     track("Rolling in the Deep", "spotify:track:1"),
     track("Station", "radio:https://radio.example"),
@@ -204,5 +206,13 @@ describe("recent", () => {
         },
       }),
     ).toEqual([]);
+  });
+});
+
+describe("pageStorage", () => {
+  it("keeps nothing when the browser storage cannot be reached", () => {
+    const storage = pageStorage();
+    storage.setItem("spotatui.commands", "[]");
+    expect(storage.getItem("spotatui.commands")).toBeNull();
   });
 });
