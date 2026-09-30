@@ -105,7 +105,7 @@ export function Session({
                 <Fragment key={`${at}-${entry.started_at_ms}`}>
                   {marks.map((marker, stack) => (
                     <button
-                      key={marker.kind}
+                      key={`${marker.kind}-${stack}`}
                       type="button"
                       className={`marker ${marker.kind}`}
                       style={{ marginTop: stack * 14 }}
