@@ -76,8 +76,6 @@ impl App {
 
   pub(crate) fn liked_song_ids_set_mut(&mut self) -> &mut HashSet<String> {
     self.display_revisions.bump(DisplayDomain::Library);
-    // The liked marks of a search land after its results.
-    self.display_revisions.bump(DisplayDomain::Search);
     &mut self.liked_song_ids_set
   }
 

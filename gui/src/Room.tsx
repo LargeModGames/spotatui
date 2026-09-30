@@ -30,7 +30,7 @@ export function Room({
   album,
   lyrics,
   upNext,
-  queueNow,
+  queueAhead,
   showLyrics,
   active,
   send,
@@ -41,19 +41,20 @@ export function Room({
   album: AlbumInfo | null;
   lyrics: LyricsPayload | null;
   upNext: TrackInfo[];
-  queueNow: boolean;
+  queueAhead: boolean;
   showLyrics: boolean;
   active: boolean;
   send: (action: Action) => void;
 }) {
   const playing = item?.is_playing ?? false;
-  const ms = usePosition(position, playing);
+  // A hidden Room keeps no animation frame running.
+  const ms = usePosition(position, playing && active);
   const onAlbum =
     album !== null && playingIndex(album.tracks, item, album.name) >= 0;
   const shown = onAlbum ? album : null;
   const tracks = shown?.tracks ?? [];
   const index = playingIndex(tracks, item, shown?.name ?? null);
-  const inOrder = albumContext(shown, item, queueNow);
+  const inOrder = albumContext(shown, item, queueAhead);
 
   // The album is fetched by the playing track's id, once per track, while the Room is open and
   // the socket is up (a send without a socket is dropped).
@@ -201,6 +202,7 @@ export function Room({
           <Sides
             tracks={tracks}
             index={index}
+            inOrder={inOrder}
             albumUri={shown?.uri ?? null}
             send={send}
           />
@@ -209,7 +211,7 @@ export function Room({
             {!item
               ? "Play an album and it opens here."
               : trackId
-                ? "Loading the album…"
+                ? "The album of this song is not loaded."
                 : "The tracklist shows for Spotify albums."}
           </p>
         )}
@@ -221,10 +223,10 @@ export function Room({
             <kbd>from your queue</kbd>
           </div>
           <div className="platter">
-            {next.map((entry) => {
+            {next.map((entry, place) => {
               const from = sourceOf(entry.uri);
               return (
-                <div key={entry.title}>
+                <div key={`${place}-${entry.title}`}>
                   {entry.image ? (
                     <img src={entry.image} alt="" />
                   ) : (
@@ -252,11 +254,14 @@ export function Room({
 function Sides({
   tracks,
   index,
+  inOrder,
   albumUri,
   send,
 }: {
   tracks: TrackInfo[];
   index: number;
+  /// Rows before the playing one count as played only when the album plays in order.
+  inOrder: boolean;
   albumUri: string | null;
   send: (action: Action) => void;
 }) {
@@ -266,7 +271,8 @@ function Sides({
       <li className="side-label">{label}</li>
       {rows.map((track, row) => {
         const at = offset + row;
-        const state = at === index ? "now" : at < index ? "done" : "";
+        const state =
+          at === index ? "now" : inOrder && at < index ? "done" : "";
         return (
           <li key={`${at}-${track.uri}`}>
             <button
@@ -302,10 +308,15 @@ function Lyrics({ lyrics, ms }: { lyrics: LyricsPayload | null; ms: number }) {
   const lines = lyrics?.lines ?? [];
   const current = synced ? activeLyric(lines, ms) : -1;
   const panel = useRef<HTMLOListElement>(null);
+  // Scrolls the lyrics list alone; scrollIntoView would move the whole Room with it.
   useLayoutEffect(() => {
-    panel.current
-      ?.querySelector('[aria-current="true"]')
-      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const list = panel.current;
+    const line = list?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!list || !line) return;
+    list.scrollTo({
+      top: line.offsetTop - list.offsetTop - list.clientHeight / 2,
+      behavior: "smooth",
+    });
   }, [current]);
 
   if (!lyrics || lyrics.status === "loading" || lyrics.status === "not_started")

@@ -22,12 +22,12 @@ export function playingIndex(
 
 /**
  * The album is what plays next only when it is the Spotify context, in order,
- * with no queue slot in front of it.
+ * with nothing from the queue in front of it.
  */
 export function albumContext(
   album: AlbumInfo | null,
   item: NowPlaying | null,
-  queueNow: boolean,
+  queueAhead: boolean,
 ): boolean {
   return (
     album !== null &&
@@ -35,7 +35,7 @@ export function albumContext(
     album.uri !== null &&
     item.context_uri === album.uri &&
     !item.shuffle &&
-    !queueNow &&
+    !queueAhead &&
     playingIndex(album.tracks, item, album.name) >= 0
   );
 }

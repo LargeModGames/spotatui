@@ -714,26 +714,14 @@ fn search(app: &App) -> SearchPayload {
       .unwrap_or_default()
   }
   let results = app.search_results();
-  let tracks = items(&results.tracks);
-  let liked = tracks
-    .iter()
-    .filter(|track| {
-      track
-        .uri
-        .as_deref()
-        .is_some_and(|uri| uri.starts_with("spotify:track:"))
-    })
-    .filter_map(|track| track.id.clone())
-    .filter(|id| app.liked_song_ids_set().contains(id))
-    .collect();
   SearchPayload {
     ran: results.tracks.is_some(),
     query: results.query.clone(),
-    tracks,
+    tracks: items(&results.tracks),
     artists: items(&results.artists),
     albums: items(&results.albums),
     playlists: items(&results.playlists),
-    liked,
+    liked: app.search_liked_ids(),
   }
 }
 
@@ -777,7 +765,12 @@ fn playback(app: &App) -> PlaybackPayload {
         .repeat
         .map(PlaybackState::repeat_from)
         .unwrap_or_else(|| "off".to_string()),
-      context_uri: snapshot.context_uri.clone(),
+      // A queue slot plays over a suspended context it does not belong to.
+      context_uri: if app.queue_owns_playback() {
+        None
+      } else {
+        snapshot.context_uri.clone()
+      },
     }),
     volume: *volume,
     device: device.clone(),
@@ -1106,9 +1099,22 @@ mod tests {
     let before = app.display_revisions();
 
     app.liked_song_ids_set_mut().insert("0".to_string());
+    app.note_display_changes();
 
     let search = &pushed(&diff(&before, &app), "search")["payload"];
     assert_eq!(search["liked"], serde_json::json!(["0"]));
+    assert_eq!(search["query"], "kygo");
+    let marked = app.display_revisions();
+
+    app
+      .liked_song_ids_set_mut()
+      .insert("not-in-the-results".to_string());
+    app.note_display_changes();
+
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Search),
+      marked.get(DisplayDomain::Search)
+    );
   }
 
   fn stats_data() -> crate::infra::history::StatsData {

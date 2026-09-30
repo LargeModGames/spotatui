@@ -64,15 +64,25 @@ describe("sessionModel", () => {
     ).toEqual([null]);
   });
 
-  it("marks a source change and a pause of a minute or more", () => {
+  it("marks a source change and a gap of a minute or more", () => {
     const plays = [
       play("Firework", "spotify:track:1", 0),
       play("Rolling in the Deep", "file:///21/01.flac", 10 * MIN),
     ];
     expect(markers(plays)).toEqual([
-      { kind: "pause", at: 4 * MIN, before: 1, minutes: 6 },
+      { kind: "gap", at: 4 * MIN, before: 1, minutes: 6 },
       { kind: "source", at: 10 * MIN, before: 1, from: "Spotify", to: "Local" },
     ]);
+  });
+
+  it("draws no source change for a play without a source", () => {
+    expect(
+      markers([
+        play("a", "spotify:track:1", 0),
+        play("b", null, 4 * MIN),
+        play("c", "spotify:track:2", 8 * MIN),
+      ]),
+    ).toEqual([]);
   });
 
   it("marks a pause inside a play", () => {

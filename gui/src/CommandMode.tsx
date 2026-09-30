@@ -90,8 +90,8 @@ export function CommandMode({
     send("RefreshDevices");
   }, [parsed.verb, send]);
 
-  const finish = (action: Action) => {
-    send(action);
+  const finish = (action: Action | null) => {
+    if (action) send(action);
     saveRecent(storage, pushRecent(recent, input));
     onClose();
   };
@@ -105,8 +105,9 @@ export function CommandMode({
     if (link) return finish(link);
     if (parsed.verb === null || parsed.verb === "search") {
       if (!parsed.arg) return;
+      // The Search screen runs it, so its own waiting state and cursor follow.
       onSearch(parsed.arg);
-      return finish({ SearchActiveSource: parsed.arg });
+      return finish(null);
     }
     if (parsed.verb === "source" || parsed.verb === "party") {
       const action = directAction(parsed, compiled);
@@ -136,6 +137,8 @@ export function CommandMode({
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return;
     const { key } = event;
+    // Shift keeps the digit in `code` while `key` turns into a symbol.
+    const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
     if (key === "Escape") {
       event.preventDefault();
       onClose();
@@ -165,9 +168,9 @@ export function CommandMode({
       );
       setRecall(next);
       setInput(next < 0 ? draft : recent[next]);
-    } else if (picking && /^[1-9]$/.test(key)) {
+    } else if (picking && rows.length > 0 && digit) {
       event.preventDefault();
-      runRow(rows[Number(key) - 1], event.shiftKey);
+      runRow(rows[Number(digit) - 1], event.shiftKey);
     } else if (key.length === 1) {
       setPicking(false);
     }
@@ -208,6 +211,7 @@ export function CommandMode({
               setInput(event.target.value);
               setRecall(-1);
               setCursor(0);
+              setPicking(false);
             }}
             onKeyDown={onKeyDown}
           />

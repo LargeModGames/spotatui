@@ -41,8 +41,3 @@ export function scopeLabel(source: Source): string {
 export function otherSources(compiled: Source[], active: Source): Source[] {
   return compiled.filter((source) => source !== active && source !== "Local");
 }
-
-/** Radio stations play, but the queue refuses them. */
-export function queueable(uri: string | null): boolean {
-  return uri !== null && !uri.startsWith("radio:");
-}

@@ -43,6 +43,12 @@ export const Stats = memo(function Stats({
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // A focused tab or button acts on its own Enter and space.
+    if (
+      event.target instanceof HTMLButtonElement &&
+      (event.key === "Enter" || event.key === " ")
+    )
+      return;
     const play = (uri: string | null) => {
       if (playable(uri)) send({ PlayUris: { uris: [uri], offset: 0 } });
     };
@@ -78,9 +84,8 @@ export const Stats = memo(function Stats({
   return (
     <div
       className="stats"
-      tabIndex={0}
-      data-focus
-      aria-label="Stats"
+      tabIndex={-1}
+      data-focus={tracks.length === 0 ? true : undefined}
       onKeyDown={onKeyDown}
     >
       <div className="stats-head">
@@ -101,7 +106,11 @@ export const Stats = memo(function Stats({
         <kbd>[ ] change period · e export</kbd>
       </div>
       {!stats?.loaded ? (
-        <p className="empty">{stats?.loading ? "Loading…" : ""}</p>
+        <p className="empty">
+          {stats?.loading
+            ? "Loading…"
+            : "Your listening history is not loaded."}
+        </p>
       ) : noHistory ? (
         <p className="empty">
           No listening history recorded yet. Play something!
@@ -168,7 +177,13 @@ export const Stats = memo(function Stats({
                 <div className="eyebrow list-head">
                   <span>TOP TRACKS</span>
                 </div>
-                <div role="listbox" aria-label="Top tracks">
+                <div
+                  role="listbox"
+                  aria-label="Top tracks"
+                  tabIndex={0}
+                  data-focus
+                  aria-activedescendant={`stats-track-${cursor}`}
+                >
                   {tracks.map((row, index) => (
                     <Track
                       key={`${index}-${row.uri ?? row.title}`}
@@ -225,7 +240,12 @@ function Track({
   return (
     <div
       role="option"
+      id={`stats-track-${index}`}
       aria-selected={selected}
+      aria-disabled={playable(row.uri) ? undefined : true}
+      title={
+        playable(row.uri) ? undefined : "Only Spotify tracks play from Stats"
+      }
       className="line track"
       onClick={onPick}
       onDoubleClick={onPlay}

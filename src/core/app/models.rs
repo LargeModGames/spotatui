@@ -101,6 +101,33 @@ impl App {
     }
   }
 
+  /// The Spotify track ids among the search results that are in Liked Songs.
+  pub(crate) fn search_liked_ids(&self) -> Vec<String> {
+    self
+      .search_results
+      .tracks
+      .iter()
+      .flat_map(|page| &page.items)
+      .filter(|track| {
+        track
+          .uri
+          .as_deref()
+          .is_some_and(|uri| uri.starts_with("spotify:track:"))
+      })
+      .filter_map(|track| track.id.clone())
+      .filter(|id| self.liked_song_ids_set.contains(id))
+      .collect()
+  }
+
+  /// Bump Search when the liked marks of its results change; they land after the results.
+  pub(super) fn note_search_liked_changes(&mut self) {
+    let liked = self.search_liked_ids();
+    if liked != self.search_liked_view {
+      self.search_liked_view = liked;
+      self.display_revisions.bump(DisplayDomain::Search);
+    }
+  }
+
   pub(crate) fn search_results(&self) -> &SearchResult {
     &self.search_results
   }

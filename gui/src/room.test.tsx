@@ -68,7 +68,7 @@ const render = (
       album={album}
       lyrics={patch.lyrics ?? null}
       upNext={[]}
-      queueNow={false}
+      queueAhead={false}
       showLyrics={patch.showLyrics ?? false}
       active={false}
       send={() => {}}

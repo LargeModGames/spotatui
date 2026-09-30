@@ -536,15 +536,23 @@ export const room: ServerMessage[] = [
     rev: 2,
     payload: {
       now: null,
-      native: [
-        track("Firestone", 272, "spotify:track:k1", "Kygo"),
-        track("Stay", 239, "spotify:track:k2", "Kygo"),
-        track("Suite", 602, "file:///music/powell/01.flac", "John Powell"),
-      ].map((entry, index) => ({
-        ...entry,
-        album: index < 2 ? "Cloud Nine" : "Film Suites, Vol. 1",
-      })),
-      spotify: { currently_playing: null, items: [] },
+      native: [],
+      spotify: {
+        currently_playing: null,
+        items: [
+          track("Firestone", 272, "spotify:track:k1", "Kygo"),
+          track("Stay", 239, "spotify:track:k2", "Kygo"),
+          track("Suite", 602, "spotify:track:p1", "John Powell"),
+        ].map((entry, index) => ({
+          kind: "track" as const,
+          track: {
+            ...entry,
+            album: index < 2 ? "Cloud Nine" : "Film Suites, Vol. 1",
+            is_local: false,
+          },
+          episode: null,
+        })),
+      },
     },
   },
 ];

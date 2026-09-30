@@ -142,7 +142,7 @@
   box-shadow: inset 2px 0 0 var(--amber);
 }
 
-.stats:focus-visible .line.track[aria-selected="true"] {
+.stats [role="listbox"]:focus-visible .line.track[aria-selected="true"] {
   outline: 1px solid var(--amber);
   outline-offset: -1px;
 }
@@ -264,4 +264,8 @@
   .stats-head kbd {
     display: none;
   }
+}
+
+.stats .line.track[aria-disabled="true"] .name b {
+  color: var(--secondary);
 }

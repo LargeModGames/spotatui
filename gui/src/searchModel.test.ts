@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SearchPayload } from "./bindings/SearchPayload";
-import {
-  otherSources,
-  queueable,
-  scopeLabel,
-  tabHasResults,
-  year,
-} from "./searchModel";
+import { otherSources, scopeLabel, tabHasResults, year } from "./searchModel";
 
 const empty: SearchPayload = {
   ran: true,
@@ -35,11 +29,5 @@ describe("searchModel", () => {
   it("disables a tab with no results but never Everything", () => {
     expect(tabHasResults(empty, "Albums")).toBe(false);
     expect(tabHasResults(empty, "Everything")).toBe(true);
-  });
-
-  it("refuses to queue a radio station", () => {
-    expect(queueable("radio:https://radio.example")).toBe(false);
-    expect(queueable("spotify:track:1")).toBe(true);
-    expect(queueable(null)).toBe(false);
   });
 });

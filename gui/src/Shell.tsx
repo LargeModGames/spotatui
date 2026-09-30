@@ -29,6 +29,8 @@ import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 
 const NO_DEVICES: DeviceInfo[] = [];
+/** A search that got no answer stops showing "Searching…" after this long. */
+const PENDING_MS = 10_000;
 const NO_PLAYS: SessionPlay[] = [];
 
 /** The frame: the top bar, the screen of the active area, the player bar and the toast. */
@@ -60,6 +62,39 @@ export function Shell({
   );
   const [overlay, setOverlay] = useState<"queue" | "command" | null>(null);
   const [query, setQuery] = useState("");
+  // A search is answered by results for its own query, or by an error status; after
+  // PENDING_MS the wait ends anyway, because an error can hide behind an earlier one.
+  const [searchPending, setSearchPending] = useState<{
+    query: string;
+    search: number | null;
+    status: number | null;
+  } | null>(null);
+  const searchRev = channels.search?.rev ?? null;
+  const statusRev = channels.status?.rev ?? null;
+  const statusError =
+    (channels.status?.payload.is_error ?? false) ||
+    channels.status?.payload.api_error != null;
+  const searchWaiting =
+    searchPending !== null &&
+    !(
+      channels.search?.payload.query === searchPending.query &&
+      searchRev !== searchPending.search
+    ) &&
+    !(statusError && statusRev !== searchPending.status);
+  useEffect(() => {
+    if (!searchPending) return;
+    const timer = window.setTimeout(() => setSearchPending(null), PENDING_MS);
+    return () => window.clearTimeout(timer);
+  }, [searchPending]);
+  const runSearch = useCallback(
+    (text: string) => {
+      const query = text.trim();
+      if (!query) return;
+      send({ SearchActiveSource: query });
+      setSearchPending({ query, search: searchRev, status: statusRev });
+    },
+    [send, searchRev, statusRev],
+  );
   // Where the Room returns to, and whether it shows the lyrics instead of the sides.
   const [back, setBack] = useState<Area>("library");
   const [showLyrics, setShowLyrics] = useState(false);
@@ -70,13 +105,14 @@ export function Shell({
   }, [area, send]);
 
   // The Web API queue is fetched on request only: on open and on each Spotify track change.
+  const showsQueue =
+    overlay === "queue" ||
+    area === "room" ||
+    area === "session" ||
+    area === "party";
   useEffect(() => {
-    if (
-      (overlay === "queue" || area === "room" || area === "session") &&
-      spotifyPlays
-    )
-      send("RefreshQueue");
-  }, [overlay, area, spotifyPlays, playingUri, send]);
+    if (showsQueue && spotifyPlays) send("RefreshQueue");
+  }, [showsQueue, spotifyPlays, playingUri, send]);
 
   const screens: Partial<Record<Area, ReactNode>> = {
     library: (
@@ -93,12 +129,12 @@ export function Shell({
     search: (
       <Search
         search={channels.search?.payload ?? null}
-        searchRev={channels.search?.rev ?? null}
-        statusRev={channels.status?.rev ?? null}
+        waiting={searchWaiting}
         source={channels.source?.payload ?? null}
         playingUri={playingUri}
         query={query}
         onQuery={setQuery}
+        onRun={runSearch}
         send={send}
       />
     ),
@@ -109,6 +145,7 @@ export function Shell({
         position={state.position}
         queue={queue ?? null}
         upNext={queued}
+        active={area === "session"}
         send={send}
       />
     ),
@@ -127,6 +164,7 @@ export function Shell({
         item={playback?.item ?? null}
         position={state.position}
         queue={queue ?? null}
+        active={area === "party"}
         send={send}
       />
     ),
@@ -138,7 +176,7 @@ export function Shell({
         album={channels.album?.payload.album ?? null}
         lyrics={channels.lyrics?.payload ?? null}
         upNext={queued}
-        queueNow={queue?.now != null}
+        queueAhead={queue?.now != null || (queue?.native.length ?? 0) > 0}
         showLyrics={showLyrics}
         active={area === "room"}
         send={send}
@@ -241,6 +279,7 @@ export function Shell({
           send={send}
           onSearch={(text) => {
             setQuery(text);
+            runSearch(text);
             go("search");
           }}
           onClose={() => setOverlay(null)}
@@ -277,9 +316,11 @@ function describe(event: KeyboardEvent, overlay: boolean): ShellKey {
 }
 
 function isText(element: HTMLElement): boolean {
+  if (element instanceof HTMLInputElement)
+    return element.type !== "checkbox" && element.type !== "radio";
   return (
     element.isContentEditable ||
-    ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
+    ["TEXTAREA", "SELECT"].includes(element.tagName)
   );
 }
 

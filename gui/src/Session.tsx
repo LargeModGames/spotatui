@@ -32,6 +32,7 @@ export function Session({
   position,
   queue,
   upNext,
+  active,
   send,
 }: {
   plays: SessionPlay[];
@@ -39,10 +40,12 @@ export function Session({
   position: Position | null;
   queue: QueuePayload | null;
   upNext: TrackInfo[];
+  active: boolean;
   send: (action: Action) => void;
 }) {
   const running = item?.is_playing ?? false;
-  const ms = usePosition(position, running);
+  // A hidden Session keeps no animation frame running.
+  const ms = usePosition(position, running && active);
   const [inspect, setInspect] = useState<Marker | null>(null);
   // The Earlier cursor names its play, so a new finished play does not move it to another.
   const [earlierAt, setEarlierAt] = useState<number | null>(null);
@@ -103,7 +106,7 @@ export function Session({
   };
 
   return (
-    <div className="session" data-focus tabIndex={-1}>
+    <div className="session" tabIndex={-1}>
       <div className="session-head">
         <h1>This session</h1>
         <span>{headline(plays, item?.uri ?? null)}</span>
@@ -141,6 +144,20 @@ export function Session({
                 </Fragment>
               );
             })}
+            {found
+              .filter((mark) => mark.before === plays.length)
+              .map((marker, stack) => (
+                <button
+                  key={`last-${marker.kind}-${stack}`}
+                  type="button"
+                  className={`marker ${marker.kind}`}
+                  style={{ marginTop: stack * 14 }}
+                  aria-label={markerTitle(marker)}
+                  onClick={() => setInspect(marker)}
+                >
+                  <span>{markerLabel(marker)}</span>
+                </button>
+              ))}
           </div>
         </div>
         <div className="lane now">
@@ -189,10 +206,7 @@ export function Session({
           role="dialog"
           aria-label="Marker details"
         >
-          <span className="eyebrow">
-            {inspect.kind === "source" ? "SOURCE CHANGE" : "PAUSED"} ·{" "}
-            {timeOfDay(inspect.at)}
-          </span>
+          <span className="eyebrow">{markerHeading(inspect, plays)}</span>
           <span>{markerDetail(inspect, plays)}</span>
           <button type="button" onClick={() => setInspect(null)}>
             Close
@@ -214,6 +228,7 @@ export function Session({
               aria-label="Earlier"
               aria-activedescendant={`earlier-${earlier}`}
               tabIndex={0}
+              data-focus
               onKeyDown={onEarlierKey}
             >
               {newestFirst.map((entry, index) => {
@@ -257,6 +272,7 @@ export function Session({
                   aria-label="Your queue"
                   aria-activedescendant={`session-q-${next}`}
                   tabIndex={0}
+                  data-focus={newestFirst.length === 0 ? true : undefined}
                   onKeyDown={(event) => {
                     if (event.ctrlKey || event.metaKey || event.altKey) return;
                     const press = queueKey(event.key, next, native);
@@ -359,18 +375,32 @@ function NextRow({
 }
 
 function markerLabel(marker: Marker): string {
-  return marker.kind === "source"
-    ? `${(marker.from ?? "?").toUpperCase()} → ${(marker.to ?? "?").toUpperCase()}`
+  if (marker.kind === "source")
+    return `${(marker.from ?? "?").toUpperCase()} → ${(marker.to ?? "?").toUpperCase()}`;
+  return marker.kind === "gap"
+    ? `${marker.minutes} min gap`
     : `paused ${marker.minutes} min`;
 }
 
 function markerTitle(marker: Marker): string {
-  return `${marker.kind === "source" ? "Source change" : "Pause"} at ${timeOfDay(marker.at)}`;
+  if (marker.kind === "pause") return `Paused about ${marker.minutes} min`;
+  const what = marker.kind === "source" ? "Source change" : "Gap";
+  return `${what} at ${timeOfDay(marker.at)}`;
+}
+
+/** A pause inside a play has a length but no known clock time, so it names the song. */
+function markerHeading(marker: Marker, plays: SessionPlay[]): string {
+  if (marker.kind === "pause")
+    return `PAUSED · DURING ${(plays[marker.before - 1]?.title ?? "A SONG").toUpperCase()}`;
+  const what = marker.kind === "source" ? "SOURCE CHANGE" : "GAP";
+  return `${what} · ${timeOfDay(marker.at)}`;
 }
 
 function markerDetail(marker: Marker, plays: SessionPlay[]): string {
   const after = plays[marker.before];
   if (marker.kind === "pause")
-    return `Playback stopped for about ${marker.minutes} min${after ? `, then ${after.title} played` : ""}.`;
-  return `${marker.from ?? "Unknown"} → ${marker.to ?? "unknown"}. ${after ? `${after.title} played from ${marker.to ?? "another source"}.` : ""}`;
+    return `The song was paused for about ${marker.minutes} min in total.`;
+  if (marker.kind === "gap")
+    return `Nothing was recorded for about ${marker.minutes} min: playback stopped, or it played something the history does not keep, such as an episode.${after ? ` Then ${after.title} played.` : ""}`;
+  return `${marker.from} → ${marker.to}.${after ? ` ${after.title} played from ${marker.to}.` : ""}`;
 }

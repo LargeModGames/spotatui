@@ -10,6 +10,7 @@ const render = (party: PartyPayload | null) =>
       item={null}
       position={null}
       queue={null}
+      active={false}
       send={() => {}}
     />,
   );

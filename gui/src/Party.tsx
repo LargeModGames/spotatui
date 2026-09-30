@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import type { Action } from "./bindings/Action";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { PartyPayload } from "./bindings/PartyPayload";
@@ -9,7 +9,6 @@ import { clock, sourceOf } from "./format";
 import { KeyHints } from "./KeyHints";
 import "./Party.css";
 import {
-  CODE_LENGTH,
   headline,
   joinRequest,
   listeners,
@@ -26,15 +25,25 @@ export function Party({
   item,
   position,
   queue,
+  active,
   send,
 }: {
   party: PartyPayload | null;
   item: NowPlaying | null;
   position: Position | null;
   queue: QueuePayload | null;
+  active: boolean;
   send: (action: Action) => void;
 }) {
   const room = party?.room ?? null;
+  // Starting, joining or leaving swaps the view under the focused button; the new view takes the keyboard.
+  const view = room ? "room" : "start";
+  useEffect(() => {
+    if (!active) return;
+    document
+      .querySelector<HTMLElement>('[data-area="party"] [data-focus]')
+      ?.focus();
+  }, [view, active]);
   if (!party || !room) return <Start party={party} send={send} />;
   return (
     <Room
@@ -43,6 +52,7 @@ export function Party({
       item={item}
       position={position}
       queue={queue}
+      active={active}
       send={send}
     />
   );
@@ -60,7 +70,10 @@ function Start({
   const available = party?.available ?? false;
   const connecting = party?.phase === "connecting";
   const join = joinRequest(code, name);
-  const disabled = !available || connecting;
+  // A click waits for the next party push, so a double click cannot open two rooms.
+  const [clickedFor, setClickedFor] = useState<PartyPayload | null>(null);
+  const pending = clickedFor !== null && clickedFor === party;
+  const disabled = !available || connecting || pending;
   return (
     <div className="party" data-focus tabIndex={-1}>
       <div className="party-head">
@@ -85,7 +98,10 @@ function Start({
             type="button"
             className="primary"
             disabled={disabled}
-            onClick={() => send("StartParty")}
+            onClick={() => {
+              setClickedFor(party);
+              send("StartParty");
+            }}
           >
             Start a party
           </button>
@@ -96,7 +112,10 @@ function Start({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (join && !disabled) send(join);
+              if (join && !disabled) {
+                setClickedFor(party);
+                send(join);
+              }
             }}
           >
             <label>
@@ -104,7 +123,6 @@ function Start({
               <input
                 type="text"
                 value={code}
-                maxLength={CODE_LENGTH}
                 placeholder="ABC123"
                 autoComplete="off"
                 disabled={disabled}
@@ -137,6 +155,7 @@ function Room({
   item,
   position,
   queue,
+  active,
   send,
 }: {
   party: PartyPayload;
@@ -144,12 +163,17 @@ function Room({
   item: NowPlaying | null;
   position: Position | null;
   queue: QueuePayload | null;
+  active: boolean;
   send: (action: Action) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [want, setWant] = useState<QueueCursor>({ index: 0, uri: null });
   const playingUri = item?.uri ?? null;
   const live = relaying(room, queue?.now != null, playingUri);
+  // A guest follows only while its own sink plays the Spotify track the host sent.
+  const following =
+    room.host ||
+    (queue?.now == null && /^spotify:(track|episode):/.test(playingUri ?? ""));
   const native = queue?.native ?? [];
   const mirror =
     sourceOf(playingUri) === "Spotify"
@@ -158,7 +182,7 @@ function Room({
         )
       : [];
   const cursor = queueRow(native, want);
-  const elapsed = usePosition(position, item?.is_playing ?? false);
+  const elapsed = usePosition(position, (item?.is_playing ?? false) && active);
 
   const copy = () => {
     if (!room.code) return;
@@ -181,7 +205,11 @@ function Room({
       event.altKey
     )
       return;
-    if (event.target instanceof HTMLInputElement) return;
+    if (
+      event.target instanceof HTMLInputElement &&
+      event.target.type !== "checkbox"
+    )
+      return;
     if (event.key === "y") copy();
     else if (event.key === "L") leave();
     else if (event.key === "c" && room.host) send("TogglePartyControlMode");
@@ -208,7 +236,11 @@ function Room({
             <button type="button" className="danger" onClick={leave}>
               End party
             </button>
-            <button type="button" onClick={() => setConfirming(false)}>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => setConfirming(false)}
+            >
               Keep it
             </button>
           </span>
@@ -220,7 +252,9 @@ function Room({
       </div>
       <div className="party-room">
         <section aria-label="Everyone hears">
-          <span className="eyebrow">EVERYONE HEARS</span>
+          <span className="eyebrow">
+            {following ? "EVERYONE HEARS" : "YOU HEAR"}
+          </span>
           <div className="hears">
             {item?.image_url ? (
               <img className="cover big" src={item.image_url} alt="" />
@@ -244,6 +278,12 @@ function Room({
             <p className="hint">
               Guests follow Spotify songs only. They keep the last one until you
               play Spotify again.
+            </p>
+          )}
+          {!following && (
+            <p className="hint">
+              You stopped following the host: your own playback has the speaker.
+              Play a Spotify song or wait for the next one to follow again.
             </p>
           )}
           <span className="eyebrow rule">

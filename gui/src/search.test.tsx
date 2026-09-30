@@ -51,12 +51,12 @@ const render = (search: SearchPayload | null) =>
   renderToStaticMarkup(
     <Search
       search={search}
-      searchRev={1}
-      statusRev={1}
+      waiting={false}
       source={{ active: "Spotify", compiled: ["Spotify", "Local", "YouTube"] }}
       playingUri="spotify:track:2"
       query="kygo"
       onQuery={() => {}}
+      onRun={() => {}}
       send={() => {}}
     />,
   );

@@ -393,6 +393,8 @@ pub struct App {
   /// The range `discover_top_tracks` belongs to; `None` before a landing or after a terminal clear.
   discover_top_tracks_range: Option<DiscoverTimeRange>,
   discover_view: DiscoverView,
+  /// The liked marks the Search revision last counted.
+  search_liked_view: Vec<String>,
   /// Period shown on the Stats screen
   pub stats_period: RecapPeriod,
   /// Whether we're currently loading stats data

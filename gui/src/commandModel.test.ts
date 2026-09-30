@@ -119,11 +119,12 @@ describe("rows and actions", () => {
     });
   });
 
-  it("queues the whole track, skips stations, and plays it now on shift enter", () => {
+  it("queues the whole track and plays it now on shift enter", () => {
     const parsed = parse("queue adele");
     const rows = rowsFor(parsed, search, []);
     expect(rows.map((row) => row.title)).toEqual([
       "Rolling in the Deep",
+      "Station",
       "Someone Like You",
     ]);
     expect(actionFor(parsed, rows[0], search, false)).toEqual({

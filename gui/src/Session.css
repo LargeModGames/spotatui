@@ -79,6 +79,8 @@
   position: relative;
   display: flex;
   align-items: flex-start;
+  /* The past runs up to NOW: an overflow drops the oldest covers, not the newest. */
+  justify-content: flex-end;
   gap: 16px;
   min-height: 150px;
   padding-top: 20px;
@@ -86,7 +88,7 @@
 }
 
 .lane.upcoming .covers {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .covers .more {
@@ -188,15 +190,18 @@
   background: var(--amber);
 }
 
-.marker.pause {
+.marker.pause,
+.marker.gap {
   border-left-color: var(--secondary);
 }
 
-.marker.pause span {
+.marker.pause span,
+.marker.gap span {
   color: var(--secondary);
 }
 
-.marker.pause::after {
+.marker.pause::after,
+.marker.gap::after {
   background: var(--ink);
   border: 1.5px solid var(--secondary);
 }

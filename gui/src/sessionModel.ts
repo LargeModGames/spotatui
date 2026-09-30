@@ -39,7 +39,8 @@ export function estimates(
 }
 
 export interface Marker {
-  kind: "source" | "pause";
+  /// `gap` is time between two plays: playback stopped, or it played something the history does not keep.
+  kind: "source" | "pause" | "gap";
   /** Unix milliseconds. */
   at: number;
   /** The play the marker stands before. */
@@ -49,7 +50,7 @@ export interface Marker {
   minutes?: number;
 }
 
-/** Source changes and pauses between the plays, oldest first. */
+/** Source changes, gaps between plays and pauses inside one, oldest first. */
 export function markers(plays: SessionPlay[]): Marker[] {
   const found: Marker[] = [];
   plays.forEach((play, index) => {
@@ -58,14 +59,15 @@ export function markers(plays: SessionPlay[]): Marker[] {
       const gap = play.started_at_ms - previous.ended_at_ms;
       if (gap >= PAUSE_MS)
         found.push({
-          kind: "pause",
+          kind: "gap",
           at: previous.ended_at_ms,
           before: index,
           minutes: Math.round(gap / 60_000),
         });
       const from = sourceOf(previous.uri);
       const to = sourceOf(play.uri);
-      if (from !== to)
+      // A Spotify local file has no URI and so no source; it is no change.
+      if (from && to && from !== to)
         found.push({
           kind: "source",
           at: play.started_at_ms,

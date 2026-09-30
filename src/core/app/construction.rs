@@ -15,6 +15,7 @@ impl Default for App {
       discover_loading: false,
       discover_top_tracks_range: None,
       discover_view: DiscoverView::default(),
+      search_liked_view: Vec::new(),
       stats_period: RecapPeriod::ThirtyDays,
       stats_loading: false,
       stats_data: None,

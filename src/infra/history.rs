@@ -394,7 +394,8 @@ fn artist_movements(period: &[RankedEntry], all_time: &[RankedEntry]) -> Vec<Art
       .map(|(index, entry)| (entry.display.clone(), index as u32 + 1))
       .collect()
   };
-  let ranks = artist_ranks(period, all_time);
+  // Only the top ten are compared; ranking the whole period would cost P times A lookups.
+  let ranks = artist_ranks(&period[..period.len().min(MOVEMENT_TOP as usize)], all_time);
   let mut movements = Vec::new();
 
   let climber = top(period)

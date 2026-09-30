@@ -4,7 +4,7 @@ import type { SearchPayload } from "./bindings/SearchPayload";
 import type { Source } from "./bindings/Source";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import { playRequest } from "./libraryModel";
-import { queueable, year } from "./searchModel";
+import { year } from "./searchModel";
 
 export type Verb = "search" | "play" | "queue" | "source" | "device" | "party";
 export type Kind = "song" | "album" | "artist";
@@ -119,17 +119,15 @@ export function rowsFor(
       }));
   }
   if (!search || (parsed.verb !== "play" && parsed.verb !== "queue")) return [];
-  const songs: Row[] = search.tracks
-    .filter((track) => parsed.verb !== "queue" || queueable(track.uri))
-    .map((track) => ({
-      kind: "song",
-      title: track.name,
-      meta: [track.artists.join(", "), track.album && `from ${track.album}`]
-        .filter(Boolean)
-        .join(" · "),
-      uri: track.uri,
-      track,
-    }));
+  const songs: Row[] = search.tracks.map((track) => ({
+    kind: "song",
+    title: track.name,
+    meta: [track.artists.join(", "), track.album && `from ${track.album}`]
+      .filter(Boolean)
+      .join(" · "),
+    uri: track.uri,
+    track,
+  }));
   if (parsed.verb === "queue" || parsed.kind === "song")
     return songs.slice(0, MAX_ROWS);
   const albums: Row[] = search.albums.map((album) => ({

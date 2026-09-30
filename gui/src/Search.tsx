@@ -1,7 +1,6 @@
 import {
   memo,
   useCallback,
-  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -18,7 +17,6 @@ import { clampCursor, playRequest, step } from "./libraryModel";
 import "./Search.css";
 import {
   otherSources,
-  queueable,
   scopeLabel,
   TABS,
   tabHasResults,
@@ -27,57 +25,45 @@ import {
 } from "./searchModel";
 import { SourceBadge } from "./SourceBadge";
 
-/** A search that got no answer stops showing "Searching…" after this long. */
-const PENDING_MS = 10_000;
-
 /** The Search screen: the query, the result tabs, the top artist and albums, and the tracks. */
 export const Search = memo(function Search({
   search,
-  searchRev,
-  statusRev,
+  waiting,
   source,
   playingUri,
   query,
   onQuery,
+  onRun,
   send,
 }: {
   search: SearchPayload | null;
-  searchRev: number | null;
-  statusRev: number | null;
+  /// A search this page ran has no answer yet.
+  waiting: boolean;
   source: SourcePayload | null;
   playingUri: string | null;
   query: string;
   onQuery: (query: string) => void;
+  /// Runs a search; the shell owns the waiting state, so the palette's searches show it too.
+  onRun: (query: string) => void;
   send: (action: Action) => void;
 }) {
   const [chosenTab, setTab] = useState<Tab>("Everything");
   // A tab the new results leave empty falls back to Everything instead of hiding them.
   const tab: Tab =
     search && tabHasResults(search, chosenTab) ? chosenTab : "Everything";
-  const [want, setWant] = useState(0);
-  // A search is answered by its results or by a status message; an error status can swallow both.
-  const [pending, setPending] = useState<{
-    search: number | null;
-    status: number | null;
-  } | null>(null);
-  const waiting =
-    pending !== null &&
-    pending.search === searchRev &&
-    pending.status === statusRev;
-  useEffect(() => {
-    if (!pending) return;
-    const timer = window.setTimeout(() => setPending(null), PENDING_MS);
-    return () => window.clearTimeout(timer);
-  }, [pending]);
+  // The cursor belongs to one result set; new results start it at the top.
+  const [wantFor, setWantFor] = useState<{ query: string | null; row: number }>(
+    {
+      query: null,
+      row: 0,
+    },
+  );
+  const want = wantFor.query === (search?.query ?? null) ? wantFor.row : 0;
+  const setWant = (row: number) =>
+    setWantFor({ query: search?.query ?? null, row });
 
   const list = useRef<HTMLDivElement>(null);
-  const run = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    send({ SearchActiveSource: trimmed });
-    setPending({ search: searchRev, status: statusRev });
-    setWant(0);
-  };
+  const run = onRun;
 
   const active = source?.active ?? null;
   const compiled = source?.compiled ?? [];
@@ -367,7 +353,8 @@ const ResultTracks = memo(function ResultTracks({
     if (event.key === "q") {
       event.preventDefault();
       const track = tracks[cursor];
-      if (track && queueable(track.uri)) send({ QueueTrack: track });
+      // The app refuses a station itself and says why.
+      if (track) send({ QueueTrack: track });
       return;
     }
     const move = step(event.key, cursor, tracks.length, false);

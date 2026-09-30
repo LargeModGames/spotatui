@@ -23,6 +23,7 @@ const render = (plays: SessionPlay[]) =>
       position={null}
       queue={null}
       upNext={[]}
+      active={false}
       send={() => {}}
     />,
   );
