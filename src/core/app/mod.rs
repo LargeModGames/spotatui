@@ -390,6 +390,9 @@ pub struct App {
   pub discover_artists_mix: Vec<TrackInfo>,
   /// Whether we're currently loading discover data
   pub discover_loading: bool,
+  /// The range `discover_top_tracks` belongs to; `None` before a landing or after a terminal clear.
+  discover_top_tracks_range: Option<DiscoverTimeRange>,
+  discover_view: DiscoverView,
   /// Period shown on the Stats screen
   pub stats_period: RecapPeriod,
   /// Whether we're currently loading stats data

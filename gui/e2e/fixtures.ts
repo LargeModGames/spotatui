@@ -21,6 +21,7 @@ const revisions = {
   stats: 1,
   album: 1,
   session: 1,
+  discover: 1,
 };
 
 export const hello: ServerMessage = {
@@ -581,5 +582,43 @@ export const session: ServerMessage[] = [
       uri,
       image_url: null,
     })),
+  },
+];
+
+/** Six months of top tracks, two of them liked. */
+export const discover: ServerMessage[] = [
+  {
+    kind: "discover",
+    rev: 1,
+    payload: {
+      available: true,
+      loading: false,
+      top_tracks_range: "Medium",
+      top_tracks: (
+        [
+          ["Freeze", "Kygo", "Freeze", 487],
+          ["My Heart Will Go On", "Céline Dion", "Let's Talk About Love", 280],
+          ["Life is a Highway", "Rascal Flatts", "Cars", 276],
+          ["Firestone", "Kygo, Conrad Sewell", "Cloud Nine", 272],
+          [
+            "Rewrite The Stars",
+            "Zac Efron, Zendaya",
+            "The Greatest Showman",
+            217,
+          ],
+          ["Einaudi: Experience", "Daniel Hope", "Recomposed", 318],
+          ["Superheroes", "The Script", "No Sound Without Silence", 245],
+          ["Lose Somebody", "Kygo, OneRepublic", "Golden Hour", 199],
+        ] as const
+      ).map(([name, artist, album, seconds], index) => ({
+        ...track(name, seconds, `spotify:track:d${index}`, artist),
+        id: `d${index}`,
+        album,
+        is_local: false,
+      })),
+      artists_mix: [],
+      artists_mix_available: true,
+      liked_ids: ["d0", "d3"],
+    },
   },
 ];

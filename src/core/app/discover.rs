@@ -39,6 +39,20 @@ impl DiscoverTimeRange {
   }
 }
 
+/// What a frontend shows for Discover; compared on every display pass, so every writer is caught.
+#[derive(Clone, Default, PartialEq)]
+pub struct DiscoverView {
+  /// The range the cached top tracks belong to.
+  pub range: Option<DiscoverTimeRange>,
+  pub loading: bool,
+  pub available: bool,
+  pub mix_available: bool,
+  pub top_tracks: Vec<TrackInfo>,
+  pub artists_mix: Vec<TrackInfo>,
+  /// The ids among both lists that are in Liked Songs.
+  pub liked_ids: Vec<String>,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum RecommendationsContext {
   Artist,
@@ -103,18 +117,72 @@ impl App {
     if self.discover_loading {
       return;
     }
-    let (cached, event) = match target {
-      DiscoverTarget::ArtistsMix => (&self.discover_artists_mix, IoEvent::GetTopArtistsMix),
-      DiscoverTarget::TopTracks(range) => {
-        (&self.discover_top_tracks, IoEvent::GetUserTopTracks(range))
-      }
+    let (cached, event, hit) = match target {
+      DiscoverTarget::ArtistsMix => (&self.discover_artists_mix, IoEvent::GetTopArtistsMix, true),
+      DiscoverTarget::TopTracks(range) => (
+        &self.discover_top_tracks,
+        IoEvent::GetUserTopTracks(range),
+        // The terminal empties the cache when its range changes; another frontend asks by range.
+        self
+          .discover_top_tracks_range
+          .is_none_or(|cached| cached == range),
+      ),
     };
-    if cached.is_empty() {
+    if cached.is_empty() || !hit {
       self.dispatch(event);
     } else {
       let tracks = cached.clone();
       self.show_tracks_in_table(tracks, TrackTableContext::DiscoverPlaylist);
     }
+  }
+
+  pub(crate) fn set_discover_top_tracks(
+    &mut self,
+    range: DiscoverTimeRange,
+    tracks: Vec<TrackInfo>,
+  ) {
+    self.discover_top_tracks = tracks;
+    self.discover_top_tracks_range = Some(range);
+  }
+
+  /// Bump Discover when anything its view reads changed.
+  pub(super) fn note_discover_changes(&mut self) {
+    let liked_ids: Vec<String> = self
+      .discover_top_tracks
+      .iter()
+      .chain(&self.discover_artists_mix)
+      .filter_map(|track| track.id.clone())
+      .filter(|id| self.liked_song_ids_set.contains(id))
+      .collect();
+    let mix_available = !self
+      .spotify_endpoint_blocked(crate::core::spotify_access::RestrictedEndpoint::ArtistTopTracks);
+    let view = &self.discover_view;
+    if view.range == self.discover_top_tracks_range
+      && view.loading == self.discover_loading
+      && view.available == self.spotify_connected
+      && view.mix_available == mix_available
+      && view.liked_ids == liked_ids
+      && view.top_tracks == self.discover_top_tracks
+      && view.artists_mix == self.discover_artists_mix
+    {
+      return;
+    }
+    self.discover_view = DiscoverView {
+      range: self.discover_top_tracks_range,
+      loading: self.discover_loading,
+      available: self.spotify_connected,
+      mix_available,
+      top_tracks: self.discover_top_tracks.clone(),
+      artists_mix: self.discover_artists_mix.clone(),
+      liked_ids,
+    };
+    self.display_revisions.bump(DisplayDomain::Discover);
+  }
+
+  /// The Discover view the Discover revision counted.
+  #[cfg(feature = "gui")]
+  pub(crate) fn discover_view(&self) -> &DiscoverView {
+    &self.discover_view
   }
 
   /// Open the shared track table on `tracks` with the cursor on the top row.

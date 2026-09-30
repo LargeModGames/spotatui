@@ -22,6 +22,7 @@ pub enum DisplayDomain {
   Album,
   /// The plays finished since this process started.
   Session,
+  Discover,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -45,12 +46,13 @@ pub struct DisplayRevisions {
   stats: u64,
   album: u64,
   session: u64,
+  discover: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 16] = [
+  pub const ALL: [DisplayDomain; 17] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -67,6 +69,7 @@ impl DisplayDomain {
     DisplayDomain::Stats,
     DisplayDomain::Album,
     DisplayDomain::Session,
+    DisplayDomain::Discover,
   ];
 }
 
@@ -89,6 +92,7 @@ impl DisplayRevisions {
       DisplayDomain::Stats => &mut self.stats,
       DisplayDomain::Album => &mut self.album,
       DisplayDomain::Session => &mut self.session,
+      DisplayDomain::Discover => &mut self.discover,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -112,6 +116,7 @@ impl DisplayRevisions {
       DisplayDomain::Stats => self.stats,
       DisplayDomain::Album => self.album,
       DisplayDomain::Session => self.session,
+      DisplayDomain::Discover => self.discover,
     }
   }
 }

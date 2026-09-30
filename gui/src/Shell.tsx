@@ -7,6 +7,7 @@ import { shellKey, type Area, type ShellKey } from "./areas";
 import type { State } from "./connection";
 import { CommandMode } from "./CommandMode";
 import { pageStorage } from "./commandModel";
+import { Discover } from "./Discover";
 import { Library } from "./Library";
 import { upNext } from "./libraryModel";
 import { sourceOf } from "./format";
@@ -100,6 +101,14 @@ export function Shell({
         position={state.position}
         queue={queue ?? null}
         upNext={queued}
+        send={send}
+      />
+    ),
+    discover: (
+      <Discover
+        discover={channels.discover?.payload ?? null}
+        active={area === "discover"}
+        playingUri={playingUri}
         send={send}
       />
     ),

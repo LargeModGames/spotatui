@@ -568,6 +568,7 @@ impl App {
       );
       self.display_revisions.bump(DisplayDomain::Queue);
     }
+    self.note_discover_changes();
   }
 }
 #[cfg(test)]

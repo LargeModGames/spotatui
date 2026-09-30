@@ -13,6 +13,8 @@ impl Default for App {
       discover_top_tracks: vec![],
       discover_artists_mix: vec![],
       discover_loading: false,
+      discover_top_tracks_range: None,
+      discover_view: DiscoverView::default(),
       stats_period: RecapPeriod::ThirtyDays,
       stats_loading: false,
       stats_data: None,
