@@ -38,12 +38,12 @@ export function LibrarySidebar({
             {section}
           </a>
         ))}
-        <a className="health-row" onClick={onOpenHealth}>
+        <button type="button" className="health-row" onClick={onOpenHealth}>
           Library health
           {unmatched > 0 && (
             <span className="count warn">{unmatched} unmatched</span>
           )}
-        </a>
+        </button>
       </nav>
       <div className="playlists">
         <span className="eyebrow">

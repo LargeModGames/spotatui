@@ -43,6 +43,15 @@ export const Library = memo(function Library({
 }) {
   // The health sub-page replaces the grid; the Liked Songs cursor stays in this state.
   const [health, setHealth] = useState(false);
+  // Closing the sub-page hands the keyboard back to Liked Songs.
+  const leaveHealth = useCallback(() => {
+    setHealth(false);
+    requestAnimationFrame(() =>
+      document
+        .querySelector<HTMLElement>('[data-area="library"] [data-focus]')
+        ?.focus(),
+    );
+  }, []);
   const tracks = liked?.tracks ?? NO_TRACKS;
   const hasMore = liked?.has_more ?? false;
   // The wanted row; a `j` past the end lands on the first row the next page brings.
@@ -96,9 +105,7 @@ export const Library = memo(function Library({
   const active = source?.active ?? null;
   const rows = playlists && active ? playlistsFor(playlists, active) : [];
   if (health)
-    return (
-      <LibraryHealth sync={sync} send={send} onBack={() => setHealth(false)} />
-    );
+    return <LibraryHealth sync={sync} send={send} onBack={leaveHealth} />;
   return (
     <div className="library">
       <LibrarySidebar

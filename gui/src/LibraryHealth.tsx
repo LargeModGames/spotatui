@@ -32,42 +32,49 @@ export function LibraryHealth({
   const links = sync?.links ?? [];
   const running = sync?.running ?? false;
   const [id, setId] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  // The confirm names its link, so a run that reorders the links cannot redirect it.
+  const [confirmId, setConfirmId] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  useEffect(() => root.current?.focus(), []);
+  useEffect(() => {
+    const list = root.current?.querySelector<HTMLElement>("[data-focus]");
+    (list ?? root.current)?.focus();
+  }, []);
   const index = selectedIndex(links, id);
   const link = links[index] ?? null;
+  const confirming = link !== null && confirmId === link.id;
+  const remove = () => {
+    if (link) send({ RemovePlaylistSyncLink: link.id });
+    setConfirmId(null);
+  };
 
   const pick = (next: number) => {
     const target = links[Math.min(Math.max(next, 0), links.length - 1)];
     if (target) setId(target.id);
-    setConfirming(false);
+    setConfirmId(null);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key;
-    if (confirming && (key === "Enter" || key === "y") && link) {
-      send({ RemovePlaylistSyncLink: link.id });
-      setConfirming(false);
-    } else if (key === "Escape" && confirming) setConfirming(false);
+    // A focused button acts on its own Enter and space.
+    if (
+      event.target instanceof HTMLButtonElement &&
+      (key === "Enter" || key === " ")
+    )
+      return;
+    if (confirming && (key === "Enter" || key === "y")) remove();
+    else if (key === "Escape" && confirming) setConfirmId(null);
     else if (key === "Escape" || key === "Backspace") onBack();
     else if (key === "j" || key === "ArrowDown") pick(index + 1);
     else if (key === "k" || key === "ArrowUp") pick(index - 1);
     else if (key === "s" && !running) send("RunPlaylistSync");
-    else if (key === "D" && link) setConfirming(true);
+    else if (key === "D" && link) setConfirmId(link.id);
     else return;
     event.preventDefault();
   };
 
   return (
-    <div
-      ref={root}
-      className="health"
-      tabIndex={-1}
-      data-focus
-      onKeyDown={onKeyDown}
-    >
+    <div ref={root} className="health" tabIndex={-1} onKeyDown={onKeyDown}>
       <section className="health-main">
         <button type="button" className="eyebrow crumb" onClick={onBack}>
           LIBRARY / LIBRARY HEALTH
@@ -112,6 +119,8 @@ export function LibraryHealth({
             <div
               role="listbox"
               aria-label="Linked playlists"
+              tabIndex={0}
+              data-focus
               aria-activedescendant={link ? `link-${link.id}` : undefined}
             >
               {links.map((entry, row) => (
@@ -202,22 +211,19 @@ export function LibraryHealth({
               </button>
               {confirming ? (
                 <>
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={() => {
-                      send({ RemovePlaylistSyncLink: link.id });
-                      setConfirming(false);
-                    }}
-                  >
+                  <button type="button" className="danger" onClick={remove}>
                     Remove the link
                   </button>
-                  <button type="button" onClick={() => setConfirming(false)}>
+                  <button
+                    type="button"
+                    autoFocus
+                    onClick={() => setConfirmId(null)}
+                  >
                     Keep it
                   </button>
                 </>
               ) : (
-                <button type="button" onClick={() => setConfirming(true)}>
+                <button type="button" onClick={() => setConfirmId(link.id)}>
                   Remove link
                 </button>
               )}
