@@ -54,14 +54,16 @@ export function Room({
   const index = playingIndex(tracks, item);
   const inOrder = albumContext(shown, item, queueNow);
 
-  // The album is fetched by the playing track's id, once per track, while the Room is open.
+  // The album is fetched by the playing track's id, once per track, while the Room is open and
+  // the socket is up (a send without a socket is dropped).
   const fetched = useRef<string | null>(null);
   const trackId = spotifyTrackId(item?.uri ?? null);
   useEffect(() => {
-    if (!active || !trackId || onAlbum || fetched.current === trackId) return;
+    if (!active || !connected || !trackId || onAlbum) return;
+    if (fetched.current === trackId) return;
     fetched.current = trackId;
     send({ Open: { TrackAlbum: trackId } });
-  }, [active, trackId, onAlbum, send]);
+  }, [active, connected, trackId, onAlbum, send]);
 
   const title = shown?.name ?? item?.album ?? "";
   const artist =
