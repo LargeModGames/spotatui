@@ -41,6 +41,8 @@ export const Library = memo(function Library({
   playingUri,
   upNext,
   sync,
+  statusRev,
+  statusError,
   send,
 }: {
   playlists: SourcePlaylists | null;
@@ -50,6 +52,8 @@ export const Library = memo(function Library({
   playingUri: string | null;
   upNext: TrackInfo[];
   sync: PlaylistSyncPayload | null;
+  statusRev: number | null;
+  statusError: boolean;
   send: (action: Action) => void;
 }) {
   // The health sub-page replaces the grid; the Liked Songs cursor stays in this state.
@@ -65,10 +69,22 @@ export const Library = memo(function Library({
   }, []);
   const active = source?.active ?? null;
   const rows = playlists && active ? playlistsFor(playlists, active) : [];
-  // The opened sidebar row; none (or a row of another source) shows Liked Songs.
+  // The wanted row; a `j` past the end lands on the first row the next page brings.
+  const [want, setWant] = useState(0);
+  // The opened sidebar row; none shows Liked Songs, and a source switch goes back to it.
   const [openUri, setOpenUri] = useState<string | null>(null);
+  // The status revision when the row was opened: a later error means the open failed.
+  const [openedAt, setOpenedAt] = useState<number | null>(null);
+  const [openFor, setOpenFor] = useState(active);
+  if (openFor !== active) {
+    setOpenFor(active);
+    setOpenUri(null);
+    setWant(0);
+  }
   const opened = rows.find((row) => row.uri === openUri) ?? null;
   const landed = opened !== null && table?.uri === opened.uri;
+  const failed =
+    opened !== null && !landed && statusError && statusRev !== openedAt;
   const tracks = opened
     ? landed
       ? table.tracks
@@ -77,8 +93,6 @@ export const Library = memo(function Library({
   const hasMore = opened
     ? landed && table.has_more
     : (liked?.has_more ?? false);
-  // The wanted row; a `j` past the end lands on the first row the next page brings.
-  const [want, setWant] = useState(0);
   const cursor = clampCursor(want, tracks.length);
 
   // Liked Songs load on demand, once per page load, as the terminal does on Enter.
@@ -106,9 +120,10 @@ export const Library = memo(function Library({
       send(action);
       if (active === "Radio") return;
       setOpenUri(row.uri);
+      setOpenedAt(statusRev);
       setWant(0);
     },
-    [active, send],
+    [active, statusRev, send],
   );
 
   const play = useCallback(
@@ -194,7 +209,9 @@ export const Library = memo(function Library({
             {opened
               ? landed
                 ? "This playlist is empty."
-                : `Loading ${opened.name}…`
+                : failed
+                  ? `Could not load ${opened.name}. Choose it again to retry.`
+                  : `Loading ${opened.name}…`
               : !available
                 ? "Liked Songs needs a Spotify session."
                 : loaded

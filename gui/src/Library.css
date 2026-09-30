@@ -58,6 +58,7 @@
 }
 
 .sections nav a[aria-current],
+.sections nav button[aria-current],
 .playlists button[aria-current] {
   color: var(--text);
   font-weight: 700;
@@ -306,7 +307,7 @@
   }
 }
 
-.sections .health-row {
+.sections nav button {
   display: flex;
   align-items: center;
   justify-content: space-between;

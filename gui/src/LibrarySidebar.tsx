@@ -33,16 +33,21 @@ export function LibrarySidebar({
   return (
     <aside className="sections" aria-label="Library">
       <nav>
-        {SECTIONS.map((section, index) => (
-          <a
-            key={section}
-            aria-current={index === 0 && openUri === null ? "page" : undefined}
-            onClick={index === 0 ? onOpenLiked : undefined}
-          >
-            {section}
-          </a>
-        ))}
-        <button type="button" className="health-row" onClick={onOpenHealth}>
+        {SECTIONS.map((section, index) =>
+          index === 0 ? (
+            <button
+              key={section}
+              type="button"
+              aria-current={openUri === null ? "page" : undefined}
+              onClick={onOpenLiked}
+            >
+              {section}
+            </button>
+          ) : (
+            <a key={section}>{section}</a>
+          ),
+        )}
+        <button type="button" onClick={onOpenHealth}>
           Library health
           {unmatched > 0 && (
             <span className="count warn">{unmatched} unmatched</span>

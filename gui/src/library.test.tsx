@@ -70,6 +70,8 @@ const render = (songs: LikedSongs | null, playingUri: string | null = null) =>
       playingUri={playingUri}
       upNext={[]}
       sync={null}
+      statusRev={null}
+      statusError={false}
       send={() => {}}
     />,
   );
@@ -80,7 +82,9 @@ describe("Library", () => {
     expect(html).toContain("PLAYLISTS · LOCAL");
     expect(html).toContain("Soundtrack CD rips");
     expect(html).toContain('class="count">318<');
-    expect(html).toMatch(/aria-current="page">Liked Songs</);
+    expect(html).toMatch(
+      /<button type="button" aria-current="page">Liked Songs</,
+    );
     expect(html).toMatch(/<button type="button" title="Soundtrack CD rips">/);
   });
 

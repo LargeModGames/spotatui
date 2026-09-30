@@ -125,6 +125,8 @@ export function Shell({
         playingUri={playingUri}
         upNext={queued}
         sync={channels.playlist_sync?.payload ?? null}
+        statusRev={statusRev}
+        statusError={statusError}
         send={send}
       />
     ),
