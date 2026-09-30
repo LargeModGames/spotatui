@@ -88,6 +88,13 @@ export const Discover = memo(function Discover({
   const liked = new Set(discover?.liked_ids ?? []);
   const available = discover?.available ?? false;
   const blocked = list === "mix" && discover?.artists_mix_available === false;
+  const notice = blocked
+    ? "The top artists mix is not available with this Spotify app key."
+    : rows.length === 0
+      ? loading
+        ? "Loading…"
+        : "Nothing here yet."
+      : null;
   const heading =
     list === "mix"
       ? "Top artists mix"
@@ -144,6 +151,10 @@ export const Discover = memo(function Discover({
                 </div>
               )}
             </div>
+            {/* The status stays mounted outside the list, which may hold only options. */}
+            <p className={notice ? "empty" : "sr-only"} role="status">
+              {notice}
+            </p>
             {/* The list stays mounted in every state, so it keeps the keyboard across a range change. */}
             <div
               ref={listRef}
@@ -157,16 +168,6 @@ export const Discover = memo(function Discover({
               data-focus
               onKeyDown={onKeyDown}
             >
-              {blocked ? (
-                <p className="empty">
-                  The top artists mix is not available with this Spotify app
-                  key.
-                </p>
-              ) : rows.length === 0 ? (
-                <p className="empty">
-                  {loading ? "Loading…" : "Nothing here yet."}
-                </p>
-              ) : null}
               {!blocked &&
                 rows.map((track, index) => {
                   const now = playingUri !== null && track.uri === playingUri;

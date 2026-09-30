@@ -49,6 +49,14 @@ describe("Discover", () => {
     expect(html).toContain("Add 2 to queue");
   });
 
+  it("keeps the status outside the list, which holds only options", () => {
+    const html = render({ ...payload, top_tracks: [] });
+    expect(html).toContain(
+      '<p class="empty" role="status">Nothing here yet.</p>',
+    );
+    expect(html).toMatch(/role="listbox"[^>]*><\/div>/);
+  });
+
   it("asks for a Spotify session without one", () => {
     expect(render({ ...payload, available: false })).toContain(
       "Discover needs a Spotify session.",
