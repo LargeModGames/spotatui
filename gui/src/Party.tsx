@@ -161,7 +161,12 @@ function Room({
   const elapsed = usePosition(position, item?.is_playing ?? false);
 
   const copy = () => {
-    if (room.code) void navigator.clipboard?.writeText(room.code);
+    if (!room.code) return;
+    const failed = () =>
+      send({ NotifyError: ["Could not copy the party code.", 4] });
+    const write = navigator.clipboard?.writeText(room.code);
+    if (!write) return failed();
+    write.then(() => send({ Notify: ["Copied the party code.", 3] }), failed);
   };
   const leave = () => {
     if (room.host && !confirming) setConfirming(true);
