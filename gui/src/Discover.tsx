@@ -40,12 +40,13 @@ export const Discover = memo(function Discover({
   const rows = rowsFor(discover, list, range);
   const cursor = clampCursor(want, rows.length);
 
-  // One request at a time; the guard lifts when a fetch ends, so a failure does not loop.
+  // The last target asked for. It stays set after a failure or an empty answer, so
+  // nothing loops; choosing the list or the range again lifts it for one retry.
   const requested = useRef<string | null>(null);
   const loading = discover?.loading ?? false;
-  useEffect(() => {
-    if (!loading) requested.current = null;
-  }, [loading, discover?.top_tracks_range]);
+  const retry = (target: string) => {
+    if (requested.current === target) requested.current = null;
+  };
   useEffect(() => {
     if (!active || !discover) return;
     const action = fetchFor(discover, list, range, requested.current);
@@ -103,14 +104,20 @@ export const Discover = memo(function Discover({
                 <button
                   type="button"
                   aria-pressed={list === "top"}
-                  onClick={() => setList("top")}
+                  onClick={() => {
+                    retry(range);
+                    setList("top");
+                  }}
                 >
                   Your top tracks
                 </button>
                 <button
                   type="button"
                   aria-pressed={list === "mix"}
-                  onClick={() => setList("mix")}
+                  onClick={() => {
+                    retry("mix");
+                    setList("mix");
+                  }}
                 >
                   Top artists mix
                 </button>
@@ -122,7 +129,10 @@ export const Discover = memo(function Discover({
                       key={entry.range}
                       type="button"
                       aria-pressed={entry.range === range}
-                      onClick={() => setRange(entry.range)}
+                      onClick={() => {
+                        retry(entry.range);
+                        setRange(entry.range);
+                      }}
                     >
                       {entry.label}
                     </button>
@@ -130,26 +140,31 @@ export const Discover = memo(function Discover({
                 </div>
               )}
             </div>
-            {blocked ? (
-              <p className="empty">
-                The top artists mix is not available with this Spotify app key.
-              </p>
-            ) : rows.length === 0 ? (
-              <p className="empty">
-                {loading ? "Loading…" : "Nothing here yet."}
-              </p>
-            ) : (
-              <div
-                ref={listRef}
-                className="discover-rows"
-                role="listbox"
-                aria-label={heading}
-                aria-activedescendant={`discover-${cursor}`}
-                tabIndex={0}
-                data-focus
-                onKeyDown={onKeyDown}
-              >
-                {rows.map((track, index) => {
+            {/* The list stays mounted in every state, so it keeps the keyboard across a range change. */}
+            <div
+              ref={listRef}
+              className="discover-rows"
+              role="listbox"
+              aria-label={heading}
+              aria-activedescendant={
+                rows.length > 0 ? `discover-${cursor}` : undefined
+              }
+              tabIndex={0}
+              data-focus
+              onKeyDown={onKeyDown}
+            >
+              {blocked ? (
+                <p className="empty">
+                  The top artists mix is not available with this Spotify app
+                  key.
+                </p>
+              ) : rows.length === 0 ? (
+                <p className="empty">
+                  {loading ? "Loading…" : "Nothing here yet."}
+                </p>
+              ) : null}
+              {!blocked &&
+                rows.map((track, index) => {
                   const now = playingUri !== null && track.uri === playingUri;
                   return (
                     <div
@@ -177,8 +192,7 @@ export const Discover = memo(function Discover({
                     </div>
                   );
                 })}
-              </div>
-            )}
+            </div>
           </section>
           <aside aria-label="This list">
             <span className="eyebrow">IN THIS LIST</span>
