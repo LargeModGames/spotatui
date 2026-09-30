@@ -391,7 +391,7 @@ pub struct App {
   /// Period shown on the Stats screen
   pub stats_period: RecapPeriod,
   /// Whether we're currently loading stats data
-  pub stats_loading: bool,
+  stats_loading: bool,
   /// Aggregated listening stats for the Stats screen
   pub stats_data: Option<StatsData>,
   /// Cached listening streak summary (Home strip + Stats screen)

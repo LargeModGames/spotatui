@@ -337,7 +337,28 @@ impl App {
 
   pub(crate) fn reload_stats(&mut self) {
     self.stats_loading = true;
+    self.display_revisions.bump(DisplayDomain::Stats);
     self.dispatch(IoEvent::LoadListeningStats(self.stats_period));
+  }
+
+  pub(crate) fn stats_loading(&self) -> bool {
+    self.stats_loading
+  }
+
+  /// Cycling periods quickly can race two loads; only the response for the
+  /// currently selected period lands.
+  pub(crate) fn land_listening_stats(&mut self, period: RecapPeriod, stats: StatsData) {
+    if self.stats_period != period {
+      return;
+    }
+    self.stats_data = Some(stats);
+    self.stats_loading = false;
+    self.display_revisions.bump(DisplayDomain::Stats);
+  }
+
+  pub(crate) fn fail_listening_stats(&mut self) {
+    self.stats_loading = false;
+    self.display_revisions.bump(DisplayDomain::Stats);
   }
 
   /// The period is written before the fetch: the result handler only accepts

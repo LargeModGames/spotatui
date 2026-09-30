@@ -295,6 +295,8 @@ pub enum Action {
   /// selected period on the Stats screen when that screen is current, 30
   /// days anywhere else.
   GenerateRecap,
+  /// Generate a listening recap for the selected Stats period, whatever the route.
+  GenerateStatsRecap,
   /// Step the Stats period through its ring and reload; relative because the
   /// period type is not part of the wire shape.
   CycleStatsPeriod {

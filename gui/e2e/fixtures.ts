@@ -18,6 +18,7 @@ const revisions = {
   library: 1,
   liked: 1,
   queue: 1,
+  stats: 1,
 };
 
 export const hello: ServerMessage = {
@@ -332,6 +333,97 @@ export const search: ServerMessage[] = [
       })),
       playlists: [],
       liked: ["f1", "f2"],
+    },
+  },
+];
+
+function statsRow(title: string, artist: string | null = null) {
+  return {
+    title,
+    artist,
+    uri: null,
+    listened_ms: 1,
+    all_time_rank: null,
+    new: false,
+  };
+}
+
+/** The Stats of the canvas: 30 days selected, three movements. */
+export const stats: ServerMessage[] = [
+  {
+    kind: "stats",
+    rev: 2,
+    payload: {
+      period: "30d",
+      loading: false,
+      loaded: true,
+      plays: [
+        ["7d", 293],
+        ["30d", 1043],
+        ["month", 980],
+        ["year", 3810],
+        ["all", 4324],
+      ].map(([period, plays]) => ({
+        period: String(period),
+        plays: Number(plays),
+      })),
+      top_artists: (
+        [
+          ["Kygo", 1],
+          ["John Powell", 2],
+          ["Martin Garrix", 3],
+          ["Alan Walker", 9],
+          ["Adele", 8],
+          ["Ed Sheeran", 6],
+          ["Avicii", 4],
+          ["Sasha Alex Sloan", 7],
+          ["James Horner", 31],
+          ["Dean Lewis", 11],
+        ] as const
+      ).map(([title, rank], index) => ({
+        ...statsRow(title),
+        all_time_rank: rank,
+        new: index === 8,
+      })),
+      top_albums: [
+        "Cloud Nine",
+        "Film Suites, Vol. 1",
+        "Golden Hour",
+        "Aashiqui 2",
+        "How to Train Your Dragon (Original Motion Picture Soundtrack)",
+        "True",
+        '"Avatar" Music From The Motion Picture',
+        "How to Train Your Dragon 2 (Music from the Motion Picture)",
+        "25",
+        "KYGO",
+      ].map((title) => statsRow(title)),
+      top_tracks: [
+        ['My Heart Will Go On (Love Theme from "Titanic")', "Céline Dion"],
+        ["Freeze", "Kygo"],
+        ["Life is a Highway", "Rascal Flatts"],
+        [
+          'Becoming one of "The People" Becoming one with Neytiri',
+          "James Horner",
+        ],
+        ["Firestone", "Kygo"],
+        ["Rewrite The Stars", "Zac Efron"],
+        ["Einaudi: Experience", "Daniel Hope"],
+        ["Superheroes", "The Script"],
+        ['Suite from "How to Train Your Dragon"', "John Powell"],
+        ["Lose Somebody", "Kygo"],
+      ].map(([title, artist]) => statsRow(title, artist)),
+      week_tracks: [
+        ['Suite from "How to Train Your Dragon"', "John Powell"],
+        ["Giorgio by Moroder", "Thomas Bangalter"],
+        ["A Million Dreams", "Ziv Zaifman"],
+        ["Freeze", "Kygo"],
+        ['Becoming one of "The People"', "James Horner"],
+      ].map(([title, artist]) => statsRow(title, artist)),
+      movements: [
+        { name: "Alan Walker", kind: "climb", from: 9, to: 4 },
+        { name: "Arijit Singh", kind: "fall", from: 5, to: 14 },
+        { name: "James Horner", kind: "new", from: null, to: 9 },
+      ],
     },
   },
 ];

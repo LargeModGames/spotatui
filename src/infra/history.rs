@@ -234,6 +234,18 @@ impl RecapPeriod {
       .unwrap_or(0);
     Self::ALL_PERIODS[(index + offset) % Self::ALL_PERIODS.len()]
   }
+
+  /// The inverse of [`parse_recap_period`].
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn key(self) -> &'static str {
+    match self {
+      RecapPeriod::SevenDays => "7d",
+      RecapPeriod::ThirtyDays => "30d",
+      RecapPeriod::Month => "month",
+      RecapPeriod::Year => "year",
+      RecapPeriod::All => "all",
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -252,19 +264,185 @@ pub struct StatsData {
   pub top_artists: Vec<RankedEntry>,
   pub top_albums: Vec<RankedEntry>,
   pub days: Vec<RankedEntry>,
+  /// Qualified plays in each of [`RecapPeriod::ALL_PERIODS`], whatever the selected period.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub period_plays: Vec<(RecapPeriod, usize)>,
+  /// The top five tracks of the last 7 days, whatever the selected period.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub week_tracks: Vec<RankedEntry>,
+  /// One per `top_artists` entry, in the same order.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub artist_ranks: Vec<ArtistRank>,
+  /// Empty for [`RecapPeriod::All`].
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub movements: Vec<ArtistMovement>,
+}
+
+/// An artist's rank over all time next to the selected period.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub struct ArtistRank {
+  /// 1-based, by listened time.
+  pub all_time: Option<u32>,
+  /// The artist's first qualified listen falls inside the period.
+  pub new: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub enum MovementKind {
+  Climb,
+  Fall,
+  New,
+}
+
+/// One artist whose rank in the period differs from its all-time rank.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub struct ArtistMovement {
+  pub name: String,
+  pub kind: MovementKind,
+  /// The all-time rank.
+  pub from: Option<u32>,
+  /// The rank in the period; `None` for an artist the period never played.
+  pub to: Option<u32>,
 }
 
 const STATS_LIST_LIMIT: usize = 20;
+const MOVEMENT_TOP: u32 = 10;
+const WEEK_TRACKS: usize = 5;
 
-pub fn build_stats_data(filtered: &[ListenRecord]) -> StatsData {
+/// `filtered` is the selected period's qualified listens and `listens` every recorded one.
+pub fn build_stats_data(
+  filtered: &[ListenRecord],
+  listens: &[ListenRecord],
+  period: RecapPeriod,
+) -> StatsData {
+  let now = Local::now();
+  let qualified: Vec<ListenRecord> = listens
+    .iter()
+    .filter(|record| record.qualified)
+    .cloned()
+    .collect();
+  let week: Vec<ListenRecord> = qualified
+    .iter()
+    .filter(|record| in_period(record, RecapPeriod::SevenDays, &now))
+    .cloned()
+    .collect();
+  let top_artists = aggregate_top_artists(filtered, STATS_LIST_LIMIT);
+  let all_time = aggregate_top_artists(&qualified, usize::MAX);
+  let in_period_ranks = aggregate_top_artists(filtered, usize::MAX);
   StatsData {
     total_plays: filtered.len(),
     total_time_ms: filtered.iter().map(|record| record.listened_ms).sum(),
     top_tracks: aggregate_top_tracks(filtered, STATS_LIST_LIMIT),
-    top_artists: aggregate_top_artists(filtered, STATS_LIST_LIMIT),
+    artist_ranks: artist_ranks(&top_artists, &all_time),
+    movements: if period == RecapPeriod::All {
+      Vec::new()
+    } else {
+      artist_movements(&in_period_ranks, &all_time)
+    },
+    top_artists,
     top_albums: aggregate_top_albums(filtered, STATS_LIST_LIMIT),
     days: aggregate_days(filtered),
+    period_plays: RecapPeriod::ALL_PERIODS
+      .iter()
+      .map(|&each| {
+        let plays = qualified
+          .iter()
+          .filter(|record| in_period(record, each, &now))
+          .count();
+        (each, plays)
+      })
+      .collect(),
+    week_tracks: aggregate_top_tracks(&week, WEEK_TRACKS),
   }
+}
+
+fn rank_of(ranking: &[RankedEntry], name: &str) -> Option<u32> {
+  ranking
+    .iter()
+    .position(|entry| entry.display == name)
+    .map(|index| index as u32 + 1)
+}
+
+fn artist_ranks(top: &[RankedEntry], all_time: &[RankedEntry]) -> Vec<ArtistRank> {
+  top
+    .iter()
+    .map(|entry| {
+      let lifetime = all_time.iter().find(|other| other.display == entry.display);
+      ArtistRank {
+        all_time: rank_of(all_time, &entry.display),
+        new: lifetime.is_some_and(|other| other.value == entry.value),
+      }
+    })
+    .collect()
+}
+
+/// The biggest climber into the period's top ten, the biggest faller out of the
+/// all-time top ten, and the first artist new to the period's top ten.
+fn artist_movements(period: &[RankedEntry], all_time: &[RankedEntry]) -> Vec<ArtistMovement> {
+  let top = |ranking: &[RankedEntry]| -> Vec<(String, u32)> {
+    ranking
+      .iter()
+      .take(MOVEMENT_TOP as usize)
+      .enumerate()
+      .map(|(index, entry)| (entry.display.clone(), index as u32 + 1))
+      .collect()
+  };
+  let ranks = artist_ranks(period, all_time);
+  let mut movements = Vec::new();
+
+  let climber = top(period)
+    .into_iter()
+    .zip(&ranks)
+    .filter(|(_, rank)| !rank.new)
+    .filter_map(|((name, to), rank)| {
+      let from = rank.all_time?;
+      (from > to).then(|| (from - to, name, from, to))
+    })
+    // On a tie, the higher place in the period wins.
+    .max_by(|a, b| a.0.cmp(&b.0).then(b.3.cmp(&a.3)));
+  if let Some((_, name, from, to)) = climber {
+    movements.push(ArtistMovement {
+      name,
+      kind: MovementKind::Climb,
+      from: Some(from),
+      to: Some(to),
+    });
+  }
+
+  let faller = top(all_time)
+    .into_iter()
+    .filter_map(|(name, from)| {
+      let to = rank_of(period, &name);
+      let drop = to.map_or(u32::MAX, |to| to.saturating_sub(from));
+      (drop > 0).then_some((drop, name, from, to))
+    })
+    // Dropping out is the biggest fall; on a tie, the higher all-time place wins.
+    .max_by(|a, b| a.0.cmp(&b.0).then(b.2.cmp(&a.2)));
+  if let Some((_, name, from, to)) = faller {
+    movements.push(ArtistMovement {
+      name,
+      kind: MovementKind::Fall,
+      from: Some(from),
+      to,
+    });
+  }
+
+  if let Some(((name, to), _)) = top(period)
+    .into_iter()
+    .zip(&ranks)
+    .find(|(_, rank)| rank.new)
+  {
+    movements.push(ArtistMovement {
+      name,
+      kind: MovementKind::New,
+      from: None,
+      to: Some(to),
+    });
+  }
+  movements
 }
 
 pub fn compute_streaks(listens: &[ListenRecord]) -> StreakSummary {
@@ -884,24 +1062,27 @@ fn filter_listens_for_period_at<Tz: TimeZone>(
   period: RecapPeriod,
   now: DateTime<Tz>,
 ) -> Vec<ListenRecord> {
-  let tz = now.timezone();
-  let (year, month) = (now.year(), now.month());
-  let now_utc = now.with_timezone(&Utc);
   listens
     .iter()
     .filter(|record| record.qualified)
-    .filter(|record| match period {
-      RecapPeriod::SevenDays => record.ended_at >= now_utc - Duration::days(7),
-      RecapPeriod::ThirtyDays => record.ended_at >= now_utc - Duration::days(30),
-      RecapPeriod::Month => {
-        let local = record.ended_at.with_timezone(&tz);
-        local.year() == year && local.month() == month
-      }
-      RecapPeriod::Year => record.ended_at.with_timezone(&tz).year() == year,
-      RecapPeriod::All => true,
-    })
+    .filter(|record| in_period(record, period, &now))
     .cloned()
     .collect()
+}
+
+fn in_period<Tz: TimeZone>(record: &ListenRecord, period: RecapPeriod, now: &DateTime<Tz>) -> bool {
+  let tz = now.timezone();
+  let now_utc = now.with_timezone(&Utc);
+  match period {
+    RecapPeriod::SevenDays => record.ended_at >= now_utc - Duration::days(7),
+    RecapPeriod::ThirtyDays => record.ended_at >= now_utc - Duration::days(30),
+    RecapPeriod::Month => {
+      let local = record.ended_at.with_timezone(&tz);
+      local.year() == now.year() && local.month() == now.month()
+    }
+    RecapPeriod::Year => record.ended_at.with_timezone(&tz).year() == now.year(),
+    RecapPeriod::All => true,
+  }
 }
 
 /// The raw (unescaped) values the share card shows for one period.
@@ -1964,10 +2145,13 @@ pub struct RankedEntry {
   pub detail: String,
   pub value: u64,
   pub uri: Option<String>,
+  /// A track's title and artists apart; `None` for other entries.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub parts: Option<(String, String)>,
 }
 
 pub fn aggregate_top_tracks(listens: &[ListenRecord], limit: usize) -> Vec<RankedEntry> {
-  let mut totals: BTreeMap<String, (String, u64, u64, Option<String>)> = BTreeMap::new();
+  let mut totals: BTreeMap<String, (String, String, u64, u64, Option<String>)> = BTreeMap::new();
   for record in listens {
     let key = record
       .item_id
@@ -1976,24 +2160,26 @@ pub fn aggregate_top_tracks(listens: &[ListenRecord], limit: usize) -> Vec<Ranke
       .unwrap_or_else(|| format!("{}::{}", record.title, record.artists.join(", ")));
     let entry = totals.entry(key).or_insert_with(|| {
       (
-        format!("{} - {}", record.title, record.artists.join(", ")),
+        record.title.clone(),
+        record.artists.join(", "),
         0,
         0,
         record.item_uri.clone(),
       )
     });
-    entry.1 += record.listened_ms;
-    entry.2 += 1;
+    entry.2 += record.listened_ms;
+    entry.3 += 1;
   }
 
   sort_ranked_entries(
     totals
       .into_values()
-      .map(|(display, listened_ms, plays, uri)| RankedEntry {
-        display,
+      .map(|(title, artists, listened_ms, plays, uri)| RankedEntry {
+        display: format!("{title} - {artists}"),
         detail: format!("{} plays · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
         uri,
+        parts: Some((title, artists)),
       })
       .collect(),
     limit,
@@ -2045,6 +2231,7 @@ pub fn aggregate_top_artists(listens: &[ListenRecord], limit: usize) -> Vec<Rank
         detail: format!("{} track hits · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
         uri: None,
+        parts: None,
       })
       .collect(),
     limit,
@@ -2070,6 +2257,7 @@ pub fn aggregate_top_albums(listens: &[ListenRecord], limit: usize) -> Vec<Ranke
         detail: format!("{} plays · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
         uri: None,
+        parts: None,
       })
       .collect(),
     limit,
@@ -2096,6 +2284,7 @@ fn aggregate_days_in<Tz: TimeZone>(listens: &[ListenRecord], tz: &Tz) -> Vec<Ran
       detail: format_duration(listened_ms),
       value: listened_ms,
       uri: None,
+      parts: None,
     })
     .collect::<Vec<_>>()
     .into_iter()
@@ -2116,6 +2305,7 @@ fn aggregate_hours(listens: &[ListenRecord]) -> Vec<RankedEntry> {
       detail: format_duration(*totals.get(&hour).unwrap_or(&0)),
       value: *totals.get(&hour).unwrap_or(&0),
       uri: None,
+      parts: None,
     })
     .collect()
 }
@@ -2918,10 +3108,119 @@ mod tests {
   #[test]
   fn stats_data_totals_only_reflect_given_records() {
     let records = vec![record_at(20, 100_000, true), record_at(21, 50_000, true)];
-    let stats = build_stats_data(&records);
+    let stats = build_stats_data(&records, &records, RecapPeriod::All);
     assert_eq!(stats.total_plays, 2);
     assert_eq!(stats.total_time_ms, 150_000);
     assert_eq!(stats.top_tracks.len(), 2);
+  }
+
+  fn ranked(names: &[(&str, u64)]) -> Vec<RankedEntry> {
+    names
+      .iter()
+      .map(|(name, value)| RankedEntry {
+        display: name.to_string(),
+        detail: String::new(),
+        value: *value,
+        uri: None,
+        parts: None,
+      })
+      .collect()
+  }
+
+  fn listen_days_ago(days: i64, title: &str, qualified: bool) -> ListenRecord {
+    let mut record = record_at(1, 60_000, qualified);
+    record.ended_at = Utc::now() - Duration::days(days);
+    record.title = title.to_string();
+    record.item_id = Some(title.to_string());
+    record
+  }
+
+  #[test]
+  fn the_biggest_climber_into_the_period_top_ten_names_its_all_time_rank() {
+    let all_time = ranked(&[("A", 90), ("B", 80), ("C", 70), ("D", 60)]);
+    let period = ranked(&[("D", 30), ("A", 20), ("B", 10), ("C", 5)]);
+
+    let movements = artist_movements(&period, &all_time);
+
+    assert_eq!(
+      movements[0],
+      ArtistMovement {
+        name: "D".to_string(),
+        kind: MovementKind::Climb,
+        from: Some(4),
+        to: Some(1),
+      }
+    );
+  }
+
+  #[test]
+  fn an_all_time_artist_the_period_never_played_is_the_faller() {
+    let all_time = ranked(&[("A", 90), ("B", 80), ("C", 70)]);
+    let period = ranked(&[("A", 20), ("C", 10)]);
+
+    let fall = artist_movements(&period, &all_time)
+      .into_iter()
+      .find(|movement| movement.kind == MovementKind::Fall)
+      .unwrap();
+
+    assert_eq!(
+      (fall.name.as_str(), fall.from, fall.to),
+      ("B", Some(2), None)
+    );
+  }
+
+  #[test]
+  fn an_artist_whose_listens_all_fall_in_the_period_is_new() {
+    let all_time = ranked(&[("A", 90), ("N", 30)]);
+    let period = ranked(&[("N", 30), ("A", 10)]);
+
+    assert_eq!(
+      artist_ranks(&period, &all_time),
+      [
+        ArtistRank {
+          all_time: Some(2),
+          new: true
+        },
+        ArtistRank {
+          all_time: Some(1),
+          new: false
+        },
+      ]
+    );
+    assert!(artist_movements(&period, &all_time)
+      .iter()
+      .any(|movement| movement.kind == MovementKind::New && movement.name == "N"));
+  }
+
+  #[test]
+  fn period_plays_and_the_week_count_only_qualified_listens() {
+    let listens = vec![
+      listen_days_ago(1, "Fresh", true),
+      listen_days_ago(1, "Skipped", false),
+      listen_days_ago(20, "Older", true),
+      listen_days_ago(400, "Ancient", true),
+    ];
+    let filtered = filter_listens_for_period(&listens, RecapPeriod::All);
+
+    let stats = build_stats_data(&filtered, &listens, RecapPeriod::All);
+
+    let plays: Vec<_> = stats.period_plays.iter().map(|(_, plays)| *plays).collect();
+    assert_eq!(plays[0], 1);
+    assert_eq!(plays[1], 2);
+    assert_eq!(plays[4], 3);
+    assert_eq!(stats.week_tracks.len(), 1);
+    assert!(stats.movements.is_empty());
+  }
+
+  #[test]
+  fn top_tracks_carry_the_title_and_the_artists_apart() {
+    let tracks = aggregate_top_tracks(&[record_at(3, 60_000, true)], 5);
+
+    assert_eq!(
+      tracks[0].parts,
+      Some(("Track 3".to_string(), "Artist".to_string()))
+    );
+    assert_eq!(tracks[0].display, "Track 3 - Artist");
   }
 
   #[test]

@@ -699,6 +699,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::CopyUrl(CopyTarget::CurrentSong) => binding(|k| k.copy_song_url),
     Action::CopyUrl(CopyTarget::CurrentAlbum) => binding(|k| k.copy_album_url),
     Action::GenerateRecap => binding(|k| k.generate_recap),
+    Action::GenerateStatsRecap => Unbound("the terminal's recap key reads the Stats route"),
     Action::CycleStatsPeriod { .. } => literal("[ / ]", "Stats"),
     Action::RecommendFromTrack(_) => literal("r", "Selected block"),
     Action::RecommendFromArtist { .. } => literal("r", "Selected block"),
@@ -921,6 +922,7 @@ mod tests {
     "AddToQueue",
     "Back",
     "CloseScreen",
+    "GenerateStatsRecap",
     "Notify",
     "NotifyError",
     "Pause",
@@ -1201,6 +1203,7 @@ mod tests {
       Action::JumpToContext,
       Action::CopyUrl(CopyTarget::CurrentSong),
       Action::GenerateRecap,
+      Action::GenerateStatsRecap,
       Action::CycleStatsPeriod { forward: true },
       Action::RecommendFromTrack(track()),
       Action::RecommendFromArtist {

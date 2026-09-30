@@ -12,6 +12,7 @@ import { sourceOf } from "./format";
 import { PlayerBar } from "./PlayerBar";
 import { QueueDrawer } from "./QueueDrawer";
 import { Search } from "./Search";
+import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 
@@ -47,6 +48,11 @@ export function Shell({
   const [overlay, setOverlay] = useState<"queue" | "command" | null>(null);
   const [query, setQuery] = useState("");
 
+  // Stats reload on every visit, as the terminal's Stats row does.
+  useEffect(() => {
+    if (area === "stats") send({ OpenLibrary: "Stats" });
+  }, [area, send]);
+
   // The Web API queue is fetched on request only: on open and on each Spotify track change.
   useEffect(() => {
     if (overlay === "queue" && spotifyPlays) send("RefreshQueue");
@@ -75,6 +81,7 @@ export function Shell({
         send={send}
       />
     ),
+    stats: <Stats stats={channels.stats?.payload ?? null} send={send} />,
   };
   const ready = (target: Area) => target in screens;
   const readyKeys = Object.keys(screens).join(" ");

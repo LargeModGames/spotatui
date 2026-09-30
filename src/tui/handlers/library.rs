@@ -108,7 +108,7 @@ mod tests {
     let (mut app, rx) = app_selecting(LibraryTarget::Stats, Some(SystemTime::now()));
     handler(Key::Enter, &mut app);
     assert_eq!(app.get_current_route().id, RouteId::Stats);
-    assert!(app.stats_loading);
+    assert!(app.stats_loading());
     assert!(matches!(rx.try_recv(), Ok(IoEvent::LoadListeningStats(_))));
   }
 
@@ -118,7 +118,7 @@ mod tests {
     assert!(!app.library_rows().contains(&LibraryTarget::LikedSongs));
     handler(Key::Enter, &mut app);
     assert_eq!(app.get_current_route().id, RouteId::Stats);
-    assert!(app.stats_loading);
+    assert!(app.stats_loading());
   }
 
   #[test]

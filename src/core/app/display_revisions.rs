@@ -17,6 +17,7 @@ pub enum DisplayDomain {
   /// fetches every page, and a frontend must not resend the list per bump.
   LikedSongs,
   Queue,
+  Stats,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -37,12 +38,13 @@ pub struct DisplayRevisions {
   library: u64,
   liked: u64,
   queue: u64,
+  stats: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 13] = [
+  pub const ALL: [DisplayDomain; 14] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -56,6 +58,7 @@ impl DisplayDomain {
     DisplayDomain::Library,
     DisplayDomain::LikedSongs,
     DisplayDomain::Queue,
+    DisplayDomain::Stats,
   ];
 }
 
@@ -75,6 +78,7 @@ impl DisplayRevisions {
       DisplayDomain::Library => &mut self.library,
       DisplayDomain::LikedSongs => &mut self.liked,
       DisplayDomain::Queue => &mut self.queue,
+      DisplayDomain::Stats => &mut self.stats,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -95,6 +99,7 @@ impl DisplayRevisions {
       DisplayDomain::Library => self.library,
       DisplayDomain::LikedSongs => self.liked,
       DisplayDomain::Queue => self.queue,
+      DisplayDomain::Stats => self.stats,
     }
   }
 }

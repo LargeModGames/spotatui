@@ -8,6 +8,7 @@ import {
   onboarding,
   playing,
   search,
+  stats,
 } from "./fixtures";
 
 test("expired", async ({ page }) => {
@@ -112,4 +113,21 @@ test("command mode", async ({ page }) => {
   await page.getByRole("dialog", { name: "Command mode" }).waitFor();
   await page.keyboard.type("play adele");
   await shot(page, "command-mode");
+});
+
+test("stats", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...stats]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("5");
+  await page.getByText("THIS WEEK,").waitFor();
+  await shot(page, "stats");
+});
+
+test("stats at 800 px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, [...playing, ...library, ...stats]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("5");
+  await page.getByText("THIS WEEK,").waitFor();
+  await shot(page, "stats-narrow");
 });

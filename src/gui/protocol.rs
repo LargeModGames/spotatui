@@ -75,6 +75,11 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: String,
   },
+  /// The listening stats of the selected period, from local history.
+  Stats {
+    rev: u64,
+    payload: Box<StatsPayload>,
+  },
 }
 
 #[derive(Serialize)]
@@ -174,6 +179,57 @@ pub(crate) struct SearchPayload {
   playlists: Vec<PlaylistInfo>,
   /// The Spotify track ids among `tracks` that are in Liked Songs.
   liked: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct StatsPayload {
+  /// `7d`, `30d`, `month`, `year` or `all`.
+  period: &'static str,
+  loading: bool,
+  /// False until a load for this period landed.
+  loaded: bool,
+  /// Every period's qualified plays, in the ring order of the period keys.
+  plays: Vec<PeriodPlays>,
+  top_artists: Vec<StatsRow>,
+  top_albums: Vec<StatsRow>,
+  top_tracks: Vec<StatsRow>,
+  /// The top five of the last 7 days, whatever the selected period.
+  week_tracks: Vec<StatsRow>,
+  movements: Vec<StatsMovement>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PeriodPlays {
+  period: &'static str,
+  plays: u32,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct StatsRow {
+  title: String,
+  /// Tracks only.
+  artist: Option<String>,
+  /// Tracks only.
+  uri: Option<String>,
+  listened_ms: u64,
+  /// Artists only: 1-based, by listened time over all history.
+  all_time_rank: Option<u32>,
+  /// Artists only: the first listen falls inside the period.
+  new: bool,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct StatsMovement {
+  name: String,
+  /// `climb`, `fall` or `new`.
+  kind: &'static str,
+  from: Option<u32>,
+  /// `None` for an artist the period never played.
+  to: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -300,8 +356,80 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: Box::new(search(app)),
     },
+    DisplayDomain::Stats => ServerMessage::Stats {
+      rev,
+      payload: Box::new(stats(app)),
+    },
     DisplayDomain::Party | DisplayDomain::Lyrics | DisplayDomain::Artist => return None,
   })
+}
+
+fn stats(app: &App) -> StatsPayload {
+  use crate::infra::history::{MovementKind, RankedEntry};
+  fn row(entry: &RankedEntry) -> StatsRow {
+    let (title, artist) = match &entry.parts {
+      Some((title, artist)) => (title.clone(), Some(artist.clone())),
+      None => (entry.display.clone(), None),
+    };
+    StatsRow {
+      title,
+      artist,
+      uri: entry.uri.clone(),
+      listened_ms: entry.value,
+      all_time_rank: None,
+      new: false,
+    }
+  }
+  let data = app.stats_data.as_ref();
+  let rows = |pick: fn(&crate::infra::history::StatsData) -> &Vec<RankedEntry>| {
+    data.map_or_else(Vec::new, |data| pick(data).iter().map(row).collect())
+  };
+  StatsPayload {
+    period: app.stats_period.key(),
+    loading: app.stats_loading(),
+    loaded: data.is_some(),
+    plays: data.map_or_else(Vec::new, |data| {
+      data
+        .period_plays
+        .iter()
+        .map(|(period, plays)| PeriodPlays {
+          period: period.key(),
+          plays: *plays as u32,
+        })
+        .collect()
+    }),
+    top_artists: data.map_or_else(Vec::new, |data| {
+      data
+        .top_artists
+        .iter()
+        .zip(&data.artist_ranks)
+        .map(|(entry, rank)| StatsRow {
+          all_time_rank: rank.all_time,
+          new: rank.new,
+          ..row(entry)
+        })
+        .collect()
+    }),
+    top_albums: rows(|data| &data.top_albums),
+    top_tracks: rows(|data| &data.top_tracks),
+    week_tracks: rows(|data| &data.week_tracks),
+    movements: data.map_or_else(Vec::new, |data| {
+      data
+        .movements
+        .iter()
+        .map(|movement| StatsMovement {
+          name: movement.name.clone(),
+          kind: match movement.kind {
+            MovementKind::Climb => "climb",
+            MovementKind::Fall => "fall",
+            MovementKind::New => "new",
+          },
+          from: movement.from,
+          to: movement.to,
+        })
+        .collect()
+    }),
+  }
 }
 
 fn search(app: &App) -> SearchPayload {
@@ -448,7 +576,7 @@ mod tests {
       kinds,
       [
         "route", "status", "source", "theme", "playback", "devices", "search", "library", "liked",
-        "queue"
+        "queue", "stats"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -693,6 +821,94 @@ mod tests {
     assert_eq!(search["liked"], serde_json::json!(["0"]));
   }
 
+  fn stats_data() -> crate::infra::history::StatsData {
+    use crate::infra::history::{ArtistRank, RankedEntry, RecapPeriod};
+    let entry = |display: &str, parts: Option<(&str, &str)>| RankedEntry {
+      display: display.to_string(),
+      detail: String::new(),
+      value: 60_000,
+      uri: parts.map(|_| "spotify:track:1".to_string()),
+      parts: parts.map(|(title, artist)| (title.to_string(), artist.to_string())),
+    };
+    crate::infra::history::StatsData {
+      total_plays: 1,
+      total_time_ms: 60_000,
+      top_tracks: vec![entry("Freeze - Kygo", Some(("Freeze", "Kygo")))],
+      top_artists: vec![entry("Kygo", None)],
+      top_albums: vec![],
+      days: vec![],
+      period_plays: vec![(RecapPeriod::SevenDays, 1), (RecapPeriod::All, 9)],
+      week_tracks: vec![],
+      artist_ranks: vec![ArtistRank {
+        all_time: Some(4),
+        new: false,
+      }],
+      movements: vec![],
+    }
+  }
+
+  #[test]
+  fn opening_stats_from_the_page_pushes_the_stats_channel_loading() {
+    let (mut app, rx) = app();
+
+    let messages = apply_from_page(
+      &mut app,
+      &action_frame(Action::OpenLibrary(
+        crate::core::action::LibraryTarget::Stats,
+      )),
+    );
+
+    let stats = &pushed(&messages, "stats")["payload"];
+    assert_eq!(stats["period"], "30d");
+    assert_eq!(stats["loading"], true);
+    assert_eq!(stats["loaded"], false);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::LoadListeningStats(_))));
+  }
+
+  #[test]
+  fn landed_stats_push_rows_with_their_all_time_rank_and_the_track_apart() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.land_listening_stats(app.stats_period, stats_data());
+
+    let stats = &pushed(&diff(&before, &app), "stats")["payload"];
+    assert_eq!(stats["loaded"], true);
+    assert_eq!(stats["top_artists"][0]["all_time_rank"], 4);
+    assert_eq!(stats["top_tracks"][0]["title"], "Freeze");
+    assert_eq!(stats["top_tracks"][0]["artist"], "Kygo");
+    assert_eq!(stats["plays"][1]["period"], "all");
+  }
+
+  #[test]
+  fn a_stats_result_for_a_period_no_longer_selected_is_dropped_without_a_push() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.land_listening_stats(crate::infra::history::RecapPeriod::Year, stats_data());
+
+    assert!(app.stats_data.is_none());
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::Stats),
+      before.get(DisplayDomain::Stats)
+    );
+  }
+
+  #[test]
+  fn a_stats_export_from_the_page_uses_the_selected_period_on_any_route() {
+    let (mut app, rx) = app();
+    app.stats_period = crate::infra::history::RecapPeriod::Year;
+
+    apply_from_page(&mut app, &action_frame(Action::GenerateStatsRecap));
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GenerateRecap(
+        crate::infra::history::RecapPeriod::Year
+      ))
+    ));
+  }
+
   #[test]
   fn a_tick_carries_the_position_and_no_revision() {
     let (mut app, _rx) = app();
@@ -735,6 +951,7 @@ mod tests {
     written::<LikedSongs>(&dir, &cfg);
     written::<SourcePlaylists>(&dir, &cfg);
     written::<SearchPayload>(&dir, &cfg);
+    written::<StatsPayload>(&dir, &cfg);
     written::<ArtistInfo>(&dir, &cfg);
     written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);

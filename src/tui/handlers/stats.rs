@@ -96,10 +96,15 @@ mod tests {
         detail: "1 plays · 1m".to_string(),
         value: 60_000,
         uri,
+        parts: None,
       }],
       top_artists: vec![],
       top_albums: vec![],
       days: vec![],
+      period_plays: vec![],
+      week_tracks: vec![],
+      artist_ranks: vec![],
+      movements: vec![],
     });
     (app, rx)
   }
@@ -134,7 +139,7 @@ mod tests {
     let (mut app, rx) = app_with_track(None);
     handler(Key::Char(']'), &mut app);
     assert_eq!(app.stats_period, RecapPeriod::Month);
-    assert!(app.stats_loading);
+    assert!(app.stats_loading());
     assert!(app.stats_data.is_none());
     assert!(matches!(
       rx.try_recv(),

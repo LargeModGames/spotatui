@@ -235,6 +235,7 @@ impl App {
         super::CopyTarget::CurrentAlbum => self.copy_album_url(),
       },
       Action::GenerateRecap => self.generate_recap(),
+      Action::GenerateStatsRecap => self.generate_stats_recap(),
       Action::CycleStatsPeriod { forward } => self.cycle_stats_period(forward),
       Action::RecommendFromTrack(track) => self.load_recommendations_for_track(track),
       Action::RecommendFromArtist { id, name } => self.load_recommendations_for_artist(id, name),

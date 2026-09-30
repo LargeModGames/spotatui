@@ -972,7 +972,7 @@ mod tests {
 
     fetch_startup_route(&mut app);
 
-    assert!(app.stats_loading);
+    assert!(app.stats_loading());
     assert!(rx
       .try_iter()
       .any(|event| matches!(event, IoEvent::LoadListeningStats(_))));

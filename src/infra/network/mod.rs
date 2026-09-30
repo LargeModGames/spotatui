@@ -1208,7 +1208,7 @@ impl Network {
       let listens = history::load_listens()?;
       let filtered = history::filter_listens_for_period(&listens, period);
       Ok::<_, anyhow::Error>((
-        history::build_stats_data(&filtered),
+        history::build_stats_data(&filtered, &listens, period),
         history::compute_streaks(&listens),
       ))
     })
@@ -1220,15 +1220,10 @@ impl Network {
     match result {
       Ok((stats, streaks)) => {
         app.listening_streaks = Some(streaks);
-        // Cycling periods quickly can race two loads; only the response for
-        // the currently selected period may land.
-        if app.stats_period == period {
-          app.stats_data = Some(stats);
-          app.stats_loading = false;
-        }
+        app.land_listening_stats(period, stats);
       }
       Err(error) => {
-        app.stats_loading = false;
+        app.fail_listening_stats();
         app.handle_error(anyhow!("failed to load listening history: {}", error));
       }
     }

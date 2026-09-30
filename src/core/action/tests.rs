@@ -2116,7 +2116,7 @@ fn open_library_stats_marks_loading_dispatches_and_pushes() {
 
   app.apply(Action::OpenLibrary(LibraryTarget::Stats));
 
-  assert!(app.stats_loading);
+  assert!(app.stats_loading());
   assert_eq!(app.get_current_route().id, RouteId::Stats);
   let expected_period = app.stats_period;
   assert!(
@@ -3310,7 +3310,7 @@ fn cycle_stats_period_walks_the_period_ring_and_reloads() {
   app.apply(Action::CycleStatsPeriod { forward: true });
 
   assert_eq!(app.stats_period, start.next());
-  assert!(app.stats_loading);
+  assert!(app.stats_loading());
   assert!(app.stats_data.is_none());
   match rx.try_recv() {
     Ok(IoEvent::LoadListeningStats(period)) => assert_eq!(period, start.next()),

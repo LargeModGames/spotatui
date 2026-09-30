@@ -499,6 +499,11 @@ impl App {
     };
     self.dispatch(IoEvent::GenerateRecap(period));
   }
+
+  /// A recap of the selected Stats period; a frontend with no Stats route asks for it by name.
+  pub(crate) fn generate_stats_recap(&mut self) {
+    self.dispatch(IoEvent::GenerateRecap(self.stats_period));
+  }
 }
 
 #[cfg(test)]
