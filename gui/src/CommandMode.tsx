@@ -60,6 +60,8 @@ export function CommandMode({
   } | null>(null);
   const [recent] = useState(() => loadRecent(storage));
   const [recall, setRecall] = useState(-1);
+  // The typed command a history walk started from; walking back past the newest entry restores it.
+  const [draft, setDraft] = useState("");
 
   const compiled = source?.compiled ?? [];
   const verbs = (Object.keys(COMMANDS) as Verb[]).filter(
@@ -151,14 +153,18 @@ export function CommandMode({
       event.preventDefault();
       if (pick > 0) setCursor(pick - 1);
       else setPicking(false);
-    } else if (key === "ArrowUp" || (key === "ArrowDown" && recall >= 0)) {
+    } else if (
+      recent.length > 0 &&
+      (key === "ArrowUp" || (key === "ArrowDown" && recall >= 0))
+    ) {
       event.preventDefault();
+      if (recall < 0) setDraft(input);
       const next = Math.min(
         Math.max(recall + (key === "ArrowUp" ? 1 : -1), -1),
         recent.length - 1,
       );
       setRecall(next);
-      setInput(next < 0 ? "" : recent[next]);
+      setInput(next < 0 ? draft : recent[next]);
     } else if (picking && /^[1-9]$/.test(key)) {
       event.preventDefault();
       runRow(rows[Number(key) - 1], event.shiftKey);
