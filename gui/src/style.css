@@ -482,6 +482,10 @@ kbd {
   box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
 }
 
+.drawer:focus {
+  outline: none;
+}
+
 .drawer header {
   display: flex;
   align-items: baseline;
