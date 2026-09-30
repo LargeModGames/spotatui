@@ -1,0 +1,293 @@
+/* The Library screen: sections | Liked Songs | Up next. */
+.library {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr) 300px;
+  min-height: 0;
+}
+
+.library .n,
+.library .time {
+  font: 11px var(--mono);
+  color: var(--quiet);
+}
+
+.library .time {
+  font-size: 12px;
+  color: var(--secondary);
+  text-align: right;
+}
+
+.library .name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.library .name b {
+  font-weight: 600;
+}
+
+.library .name span,
+.library .empty {
+  color: var(--secondary);
+}
+
+.sections {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 20px 0;
+  border-right: 1px solid var(--rule);
+  overflow-y: auto;
+}
+
+.sections nav,
+.playlists {
+  display: flex;
+  flex-direction: column;
+}
+
+.sections a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 20px;
+  color: var(--soft);
+}
+
+.sections nav a[aria-current] {
+  color: var(--text);
+  font-weight: 700;
+  background: var(--line);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.playlists .eyebrow {
+  padding: 0 20px 8px;
+  letter-spacing: 0.14em;
+}
+
+.playlists a {
+  height: 30px;
+}
+
+.playlists .name {
+  flex-grow: 1;
+}
+
+.playlists .count {
+  font: 10px var(--mono);
+  color: var(--quiet);
+}
+
+.liked {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.liked-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 22px 28px 14px;
+}
+
+.liked-head > div {
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.liked-head .eyebrow {
+  letter-spacing: 0.14em;
+}
+
+.liked h1 {
+  margin: 2px 0 0;
+  font: 400 56px/1 var(--serif);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.chips button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--soft);
+}
+
+.chips button[aria-pressed="true"] {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.play-all,
+.shuffle-all {
+  flex-shrink: 0;
+  height: 36px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: transparent;
+}
+
+.play-all {
+  padding: 0 16px;
+  border: none;
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.shuffle-all {
+  padding: 0 14px;
+}
+
+.liked .row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 2.2fr) minmax(0, 1.5fr) 150px 52px;
+  column-gap: 14px;
+  align-items: center;
+  height: 33px;
+  padding: 0 12px;
+}
+
+.liked .head {
+  height: auto;
+  margin: 0 16px;
+  padding: 0 12px 6px;
+  border-bottom: 1px solid var(--rule);
+  scrollbar-gutter: stable;
+  overflow: hidden;
+}
+
+.liked .head > * {
+  font: inherit;
+  color: inherit;
+}
+
+.liked .album {
+  color: var(--secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tracks {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 4px 16px 0;
+}
+
+.tracks:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: -1px;
+}
+
+.tracks .row[aria-selected="true"] {
+  background: var(--line);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.tracks .row[aria-selected="true"] .badge {
+  border-color: var(--amber);
+}
+
+.tracks .row.now .n,
+.tracks .row.now .name b {
+  color: var(--amber);
+}
+
+.tracks .row.now .name b {
+  font-weight: 700;
+}
+
+.liked .empty {
+  flex: 1;
+  margin: 0;
+  padding: 24px 28px;
+}
+
+.upnext {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+}
+
+.upnext h2 {
+  margin: 0;
+  padding: 20px 20px 10px;
+  font: 400 26px var(--serif);
+}
+
+.upnext ol {
+  margin: 0;
+  padding: 0 12px;
+  list-style: none;
+}
+
+.upnext li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.upnext .n {
+  width: 16px;
+}
+
+.upnext .name {
+  flex-grow: 1;
+}
+
+.upnext .time {
+  font-size: 11px;
+}
+
+.upnext .empty {
+  margin: 0;
+  padding: 0 20px;
+}
+
+/* Below 1100 px the queue moves under the table, capped, so it stays reachable. */
+@media (max-width: 1100px) {
+  .library {
+    grid-template-columns: 236px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .upnext {
+    grid-column: 1 / -1;
+    max-height: 30vh;
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+  }
+}
+
+@media (max-width: 900px) {
+  .liked .row {
+    grid-template-columns: 36px minmax(0, 1fr) 150px 52px;
+  }
+
+  .liked .album {
+    display: none;
+  }
+}

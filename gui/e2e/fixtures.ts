@@ -91,7 +91,7 @@ const nowPlaying: NowPlaying = {
 /** Adele's 21 from song 5, paused at 1:40, so the frame does not move between runs; one queued song per other source. */
 export const playing: ServerMessage[] = [
   hello,
-  { kind: "route", rev: 1, payload: "Home" },
+  { kind: "route", rev: 1, payload: "home" },
   {
     kind: "playback",
     rev: 1,
@@ -257,7 +257,7 @@ export const libraryUnavailable: ServerMessage[] = [
 /** A booted app with nothing playing, no device and an empty queue. */
 export const idle: ServerMessage[] = [
   hello,
-  { kind: "route", rev: 1, payload: "Home" },
+  { kind: "route", rev: 1, payload: "home" },
   {
     kind: "playback",
     rev: 1,

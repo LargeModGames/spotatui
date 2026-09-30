@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -10,7 +11,9 @@ import type { LikedSongs } from "./bindings/LikedSongs";
 import type { SourcePayload } from "./bindings/SourcePayload";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
+import { KeyHints } from "./KeyHints";
 import { clampCursor, playlistsFor, playRequest, step } from "./libraryModel";
+import "./Library.css";
 import { LibrarySidebar } from "./LibrarySidebar";
 import { TrackTable } from "./TrackTable";
 import { UpNext } from "./UpNext";
@@ -18,7 +21,7 @@ import { UpNext } from "./UpNext";
 const NO_TRACKS: TrackInfo[] = [];
 
 /** The Library screen: the sections, Liked Songs with the source chips, and the queue aside. */
-export function Library({
+export const Library = memo(function Library({
   playlists,
   liked,
   source,
@@ -67,13 +70,19 @@ export function Library({
         event.preventDefault();
         return;
       }
+      if (event.key === "q") {
+        const track = tracks[cursor];
+        if (track) send({ QueueTrack: track });
+        event.preventDefault();
+        return;
+      }
       const move = step(event.key, cursor, tracks.length, hasMore);
       if (!move) return;
       event.preventDefault();
       setWant(move.next);
       if (move.loadMore) send({ LoadMore: "SavedTracks" });
     },
-    [cursor, tracks.length, hasMore, play, send],
+    [cursor, tracks, hasMore, play, send],
   );
 
   const active = source?.active ?? null;
@@ -128,17 +137,15 @@ export function Library({
             onPlay={play}
           />
         )}
-        <footer className="keys">
-          <kbd>enter play</kbd>
-          <kbd>j k move</kbd>
+        <KeyHints hints={["enter play", "q add to queue", "j k move"]}>
           {liked && liked.total > tracks.length && (
             <span>
               {tracks.length} of {liked.total}
             </span>
           )}
-        </footer>
+        </KeyHints>
       </section>
       <UpNext tracks={upNext} />
     </div>
   );
-}
+});

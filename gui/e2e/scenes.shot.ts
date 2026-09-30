@@ -58,3 +58,21 @@ test("library without a Spotify session", async ({ page }) => {
   await page.getByText("needs a Spotify session").waitFor();
   await shot(page, "library-unavailable");
 });
+
+test("status error", async ({ page }) => {
+  await openWith(page, [
+    ...playing,
+    ...library,
+    {
+      kind: "status",
+      rev: 1,
+      payload: {
+        message: null,
+        is_error: false,
+        api_error: "Spotify refused the request: 403 Forbidden",
+      },
+    },
+  ]);
+  await page.getByRole("alert").waitFor();
+  await shot(page, "status-error");
+});

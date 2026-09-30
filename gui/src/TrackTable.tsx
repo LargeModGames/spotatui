@@ -43,6 +43,7 @@ export const TrackTable = memo(function TrackTable({
         aria-label="Liked Songs"
         aria-activedescendant={cursor >= 0 ? `liked-${cursor}` : undefined}
         tabIndex={0}
+        data-focus
         onKeyDown={onKeyDown}
       >
         {tracks.map((track, index) => {
