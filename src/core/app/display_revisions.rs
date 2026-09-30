@@ -20,6 +20,8 @@ pub enum DisplayDomain {
   Stats,
   /// The album the app holds for its album page, fetched by id.
   Album,
+  /// The plays finished since this process started.
+  Session,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -42,12 +44,13 @@ pub struct DisplayRevisions {
   queue: u64,
   stats: u64,
   album: u64,
+  session: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 15] = [
+  pub const ALL: [DisplayDomain; 16] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -63,6 +66,7 @@ impl DisplayDomain {
     DisplayDomain::Queue,
     DisplayDomain::Stats,
     DisplayDomain::Album,
+    DisplayDomain::Session,
   ];
 }
 
@@ -84,6 +88,7 @@ impl DisplayRevisions {
       DisplayDomain::Queue => &mut self.queue,
       DisplayDomain::Stats => &mut self.stats,
       DisplayDomain::Album => &mut self.album,
+      DisplayDomain::Session => &mut self.session,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -106,6 +111,7 @@ impl DisplayRevisions {
       DisplayDomain::Queue => self.queue,
       DisplayDomain::Stats => self.stats,
       DisplayDomain::Album => self.album,
+      DisplayDomain::Session => self.session,
     }
   }
 }

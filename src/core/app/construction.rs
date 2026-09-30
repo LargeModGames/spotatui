@@ -17,6 +17,7 @@ impl Default for App {
       stats_loading: false,
       stats_data: None,
       listening_streaks: None,
+      session_plays: Vec::new(),
       recap_prompt: None,
       community_pin_item: PlaylistFolderItem::CommunityPin,
       local_playlists: Vec::new(),

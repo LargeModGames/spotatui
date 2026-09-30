@@ -3,7 +3,7 @@
 //! least the last one it applied for that channel. Hello's revisions are informational.
 
 use crate::core::action::Action;
-use crate::core::app::{App, DisplayDomain, DisplayRevisions};
+use crate::core::app::{App, DisplayDomain, DisplayRevisions, SessionPlay};
 use crate::core::first_run::compiled_in_sources;
 use crate::core::plugin_api::{
   device_list, route_name, AlbumInfo, ArtistInfo, DeviceInfo, PlaybackState, PlaylistInfo,
@@ -94,6 +94,11 @@ pub(crate) enum ServerMessage {
   Album {
     rev: u64,
     payload: Box<AlbumPayload>,
+  },
+  /// The plays finished since this process started, oldest first.
+  Session {
+    rev: u64,
+    payload: Vec<SessionPlay>,
   },
 }
 
@@ -446,6 +451,10 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: Box::new(album(app)),
     },
+    DisplayDomain::Session => ServerMessage::Session {
+      rev,
+      payload: app.session_plays().to_vec(),
+    },
     DisplayDomain::Artist => return None,
   })
 }
@@ -727,7 +736,7 @@ mod tests {
       kinds,
       [
         "route", "status", "source", "theme", "playback", "party", "devices", "search", "lyrics",
-        "library", "liked", "queue", "stats", "album"
+        "library", "liked", "queue", "stats", "album", "session"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -1158,6 +1167,28 @@ mod tests {
   }
 
   #[test]
+  fn a_finished_play_pushes_the_session_channel() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.record_session_play(SessionPlay {
+      started_at_ms: 1_000,
+      ended_at_ms: 241_000,
+      listened_ms: 240_000,
+      duration_ms: 243_000,
+      title: "Turning Tables".to_string(),
+      artists: vec!["Adele".to_string()],
+      album: "21".to_string(),
+      uri: Some("file:///21/03.flac".to_string()),
+      image_url: None,
+    });
+
+    let plays = &pushed(&diff(&before, &app), "session")["payload"];
+    assert_eq!(plays[0]["title"], "Turning Tables");
+    assert_eq!(plays[0]["started_at_ms"], 1000);
+  }
+
+  #[test]
   fn a_tick_carries_the_position_and_no_revision() {
     let (mut app, _rx) = app();
     app.song_progress_ms = 1_234;
@@ -1203,6 +1234,7 @@ mod tests {
     written::<PartyPayload>(&dir, &cfg);
     written::<LyricsPayload>(&dir, &cfg);
     written::<AlbumPayload>(&dir, &cfg);
+    written::<SessionPlay>(&dir, &cfg);
     written::<ArtistInfo>(&dir, &cfg);
     written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);

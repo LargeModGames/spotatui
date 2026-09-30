@@ -101,6 +101,7 @@ mod recap;
 mod route;
 mod scrollable_pages;
 mod seek;
+mod session;
 mod settings_apply;
 mod settings_schema;
 mod shuffle_repeat;
@@ -135,6 +136,7 @@ pub use queue::*;
 pub use route::*;
 pub use scrollable_pages::*;
 pub use seek::*;
+pub use session::*;
 pub use settings_schema::*;
 pub use status::*;
 pub use view::*;
@@ -396,6 +398,8 @@ pub struct App {
   pub stats_data: Option<StatsData>,
   /// Cached listening streak summary (Home strip + Stats screen)
   pub listening_streaks: Option<StreakSummary>,
+  /// The plays finished since this process started, oldest first.
+  session_plays: Vec<SessionPlay>,
   /// Pending monthly recap popup (path + listen count)
   recap_prompt: Option<RecapPromptState>,
   /// Current sort state per context

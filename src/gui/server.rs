@@ -603,7 +603,7 @@ mod tests {
     .unwrap();
 
     let mut values = Vec::new();
-    for _ in 0..16 {
+    for _ in 0..17 {
       values.push(next_json(&mut socket).await);
     }
     let kinds: Vec<_> = values.iter().map(|value| value["kind"].clone()).collect();
@@ -625,7 +625,8 @@ mod tests {
         "liked",
         "queue",
         "stats",
-        "album"
+        "album",
+        "session"
       ]
     );
     assert!(values[0]["payload"]["token"].is_string());
@@ -765,14 +766,14 @@ mod tests {
     boot.send_replace(Some(Arc::new(tokio::sync::Mutex::new(app))));
 
     let mut kinds = Vec::new();
-    for _ in 0..14 {
+    for _ in 0..15 {
       kinds.push(next_json(&mut page).await["kind"].clone());
     }
     assert_eq!(
       kinds,
       [
         "route", "status", "source", "theme", "playback", "party", "devices", "search", "lyrics",
-        "library", "liked", "queue", "stats", "album"
+        "library", "liked", "queue", "stats", "album", "session"
       ]
     );
     assert!(

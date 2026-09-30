@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, App, RecapPromptState};
+use crate::core::app::{ActiveBlock, App, RecapPromptState, SessionPlay};
 use crate::infra::media_metadata::{
   current_playback_snapshot, PlaybackItemKind, PlaybackSnapshot, PlaybackSource,
 };
@@ -61,6 +61,9 @@ pub struct ListenRecord {
   pub item_uri: Option<String>,
   pub context_uri: Option<String>,
   pub source: HistoryPlaybackSource,
+  /// The cover for the Session screen; never written to the listens file.
+  #[serde(skip)]
+  pub image_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +93,7 @@ struct ActiveListenSession {
   listened_ms: u64,
   last_progress_ms: u128,
   last_is_playing: bool,
+  image_url: Option<String>,
 }
 
 #[derive(Default)]
@@ -681,6 +685,7 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
 
       match collector.observe(snapshot) {
         Ok(Some(record)) => {
+          app.lock().await.record_session_play(session_play(&record));
           if record.qualified {
             if let Some(totals) = &mut day_totals {
               let date = record.ended_at.with_timezone(&Local).date_naive();
@@ -971,6 +976,7 @@ impl ActiveListenSession {
     let artists = metadata.artists;
     let album = metadata.album;
     let duration_ms = metadata.duration_ms;
+    let image_url = metadata.image_url;
     Self {
       started_at,
       identity,
@@ -986,7 +992,22 @@ impl ActiveListenSession {
       listened_ms: 0,
       last_progress_ms: progress_ms,
       last_is_playing: is_playing,
+      image_url,
     }
+  }
+}
+
+fn session_play(record: &ListenRecord) -> SessionPlay {
+  SessionPlay {
+    started_at_ms: record.started_at.timestamp_millis().max(0) as u64,
+    ended_at_ms: record.ended_at.timestamp_millis().max(0) as u64,
+    listened_ms: record.listened_ms,
+    duration_ms: record.duration_ms,
+    title: record.title.clone(),
+    artists: record.artists.clone(),
+    album: record.album.clone(),
+    uri: record.item_uri.clone(),
+    image_url: record.image_url.clone(),
   }
 }
 
@@ -1007,6 +1028,7 @@ impl ListenRecord {
       item_uri: session.item_uri,
       context_uri: session.context_uri,
       source: session.source,
+      image_url: session.image_url,
     }
   }
 }
@@ -2674,6 +2696,7 @@ mod tests {
       item_uri: Some(format!("spotify:track:id-{day}")),
       context_uri: None,
       source: HistoryPlaybackSource::NativeContext,
+      image_url: None,
     }
   }
 
@@ -3210,6 +3233,17 @@ mod tests {
     assert_eq!(plays[4], 3);
     assert_eq!(stats.week_tracks.len(), 1);
     assert!(stats.movements.is_empty());
+  }
+
+  #[test]
+  fn the_cover_url_stays_out_of_the_listens_file() {
+    let mut record = record_at(3, 60_000, true);
+    record.image_url = Some("https://i.scdn.co/image/abc".to_string());
+
+    let line = serde_json::to_string(&record).unwrap();
+
+    assert!(!line.contains("image_url"));
+    assert_eq!(session_play(&record).image_url, record.image_url);
   }
 
   #[test]

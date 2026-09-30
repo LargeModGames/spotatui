@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Action } from "./bindings/Action";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
+import type { SessionPlay } from "./bindings/SessionPlay";
 import { shellKey, type Area, type ShellKey } from "./areas";
 import type { State } from "./connection";
 import { CommandMode } from "./CommandMode";
@@ -14,11 +15,13 @@ import { PlayerBar } from "./PlayerBar";
 import { QueueDrawer } from "./QueueDrawer";
 import { Room } from "./Room";
 import { Search } from "./Search";
+import { Session } from "./Session";
 import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 
 const NO_DEVICES: DeviceInfo[] = [];
+const NO_PLAYS: SessionPlay[] = [];
 
 /** The frame: the top bar, the screen of the active area, the player bar and the toast. */
 export function Shell({
@@ -60,7 +63,10 @@ export function Shell({
 
   // The Web API queue is fetched on request only: on open and on each Spotify track change.
   useEffect(() => {
-    if ((overlay === "queue" || area === "room") && spotifyPlays)
+    if (
+      (overlay === "queue" || area === "room" || area === "session") &&
+      spotifyPlays
+    )
       send("RefreshQueue");
   }, [overlay, area, spotifyPlays, playingUri, send]);
 
@@ -84,6 +90,16 @@ export function Shell({
         playingUri={playingUri}
         query={query}
         onQuery={setQuery}
+        send={send}
+      />
+    ),
+    session: (
+      <Session
+        plays={channels.session?.payload ?? NO_PLAYS}
+        item={playback?.item ?? null}
+        position={state.position}
+        queue={queue ?? null}
+        upNext={queued}
         send={send}
       />
     ),
@@ -253,9 +269,10 @@ function focusScreen(area: Area) {
   const screen = document.querySelector(`[data-area="${area}"]`);
   const target = screen?.querySelector<HTMLElement>("[data-focus]");
   target?.focus();
-  target
-    ?.querySelector('[aria-selected="true"]')
-    ?.scrollIntoView({ block: "nearest" });
+  if (target?.getAttribute("role") === "listbox")
+    target
+      .querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
 }
 
 /** Leaves a text field; false when none had the keyboard. */

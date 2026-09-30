@@ -11,6 +11,7 @@ import {
   partyNone,
   room,
   search,
+  session,
   stats,
 } from "./fixtures";
 
@@ -183,4 +184,21 @@ test("room at 800 px", async ({ page }) => {
   await page.keyboard.press("r");
   await page.getByText("SIDE A").waitFor();
   await shot(page, "room-narrow");
+});
+
+test("session", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...session]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("4");
+  await page.getByText("This session").waitFor();
+  await shot(page, "session");
+});
+
+test("session at 800 px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, [...playing, ...library, ...session]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("4");
+  await page.getByText("This session").waitFor();
+  await shot(page, "session-narrow");
 });

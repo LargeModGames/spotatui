@@ -20,6 +20,7 @@ const revisions = {
   queue: 1,
   stats: 1,
   album: 1,
+  session: 1,
 };
 
 export const hello: ServerMessage = {
@@ -543,5 +544,42 @@ export const room: ServerMessage[] = [
       })),
       spotify: { currently_playing: null, items: [] },
     },
+  },
+];
+
+const sessionStart = Date.UTC(2026, 8, 29, 17, 40);
+
+/** Four Spotify plays, a six-minute pause, then Adele's 21 from local files. */
+export const session: ServerMessage[] = [
+  {
+    kind: "session",
+    rev: 1,
+    payload: (
+      [
+        ["More Than You Know", "Axwell & Ingrosso", "spotify:track:s1", 0],
+        [
+          "Harder, Better, Faster, Stronger",
+          "Daft Punk",
+          "spotify:track:s2",
+          4,
+        ],
+        ["Shallow", "Lady Gaga", "spotify:track:s3", 8],
+        ["Firework", "Katy Perry", "spotify:track:s4", 12],
+        ["Rolling in the Deep", "Adele", "file:///music/Adele/21/01.flac", 22],
+        ["Rumour Has It", "Adele", "file:///music/Adele/21/02.flac", 26],
+        ["Turning Tables", "Adele", "file:///music/Adele/21/03.flac", 30],
+        ["Don't You Remember", "Adele", "file:///music/Adele/21/04.flac", 34],
+      ] as const
+    ).map(([title, artist, uri, minute]) => ({
+      started_at_ms: sessionStart + minute * 60_000,
+      ended_at_ms: sessionStart + (minute + 4) * 60_000,
+      listened_ms: 4 * 60_000,
+      duration_ms: 4 * 60_000,
+      title,
+      artists: [artist],
+      album: uri.startsWith("file") ? "21" : "",
+      uri,
+      image_url: null,
+    })),
   },
 ];

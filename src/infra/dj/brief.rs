@@ -203,6 +203,7 @@ mod tests {
       // `source_snapshot`, so this field cannot distinguish them. The brief
       // must not depend on it; `item_uri`'s scheme is the real discriminator.
       source: HistoryPlaybackSource::ExternalDevice,
+      image_url: None,
     }
   }
 
