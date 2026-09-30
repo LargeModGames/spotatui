@@ -643,7 +643,6 @@ impl App {
   /// spinner until the service-lane task finishes — the exact UX bug
   /// `DjState::thinking` exists to avoid, and the reason the MCP executor sends
   /// straight down the channel instead of dispatching.
-  #[cfg(feature = "ai-dj")]
   pub fn dispatch_without_spinner(&self, action: IoEvent) {
     if let Some(io_tx) = &self.io_tx {
       if let Err(e) = io_tx.send(action) {

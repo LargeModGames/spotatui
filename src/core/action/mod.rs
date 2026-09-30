@@ -141,6 +141,8 @@ pub enum Action {
     from: usize,
     to: usize,
   },
+  /// Fetch the Spotify queue again without a route change or the spinner.
+  RefreshQueue,
   /// Run a search against the Spotify catalog; the user country is resolved
   /// at apply time. Deliberately source-blind: existing producers (Lua
   /// `spotatui.search`) contracted the Web API search, so browsing scope

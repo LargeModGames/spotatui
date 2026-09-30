@@ -468,3 +468,111 @@ kbd {
   font: 16px/1 var(--sans);
   cursor: pointer;
 }
+
+.drawer {
+  position: fixed;
+  top: 52px;
+  right: 0;
+  bottom: 76px;
+  width: min(400px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--raised);
+  border-left: 1px solid var(--rule);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
+}
+
+.drawer header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 18px 20px 8px;
+}
+
+.drawer h2 {
+  margin: 0;
+  font: 400 26px var(--serif);
+}
+
+.drawer header button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--secondary);
+  font: 18px/1 var(--sans);
+  cursor: pointer;
+}
+
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.drawer .eyebrow {
+  padding: 12px 8px 2px;
+}
+
+.drawer ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drawer ol:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: -1px;
+}
+
+.drawer .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer li[aria-selected="true"] .row {
+  background: var(--line);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.drawer .mirror {
+  opacity: 0.7;
+}
+
+.drawer .name {
+  flex-grow: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drawer .name b {
+  font-weight: 600;
+}
+
+.drawer .name span,
+.drawer .empty {
+  color: var(--secondary);
+}
+
+.drawer .empty {
+  margin: 0;
+  padding: 4px 8px;
+}
+
+.drawer .time {
+  font: 11px var(--mono);
+  color: var(--secondary);
+}
+
+.drawer .keys {
+  padding: 10px 20px;
+}

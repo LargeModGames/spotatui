@@ -5,7 +5,9 @@ import { shellKey, type Area, type ShellKey } from "./areas";
 import type { State } from "./connection";
 import { Library } from "./Library";
 import { upNext } from "./libraryModel";
+import { sourceOf } from "./format";
 import { PlayerBar } from "./PlayerBar";
+import { QueueDrawer } from "./QueueDrawer";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 
@@ -31,7 +33,17 @@ export function Shell({
   const playback = channels.playback?.payload ?? null;
   const playingUri = playback?.item?.uri ?? null;
   const queue = channels.queue?.payload;
-  const queued = useMemo(() => upNext(queue), [queue]);
+  const spotifyPlays = sourceOf(playingUri) === "Spotify";
+  const queued = useMemo(
+    () => upNext(queue, spotifyPlays),
+    [queue, spotifyPlays],
+  );
+  const [overlay, setOverlay] = useState<"queue" | null>(null);
+
+  // The Web API queue is fetched on request only: on open and on each Spotify track change.
+  useEffect(() => {
+    if (overlay === "queue" && spotifyPlays) send("RefreshQueue");
+  }, [overlay, spotifyPlays, playingUri, send]);
 
   const screens: Partial<Record<Area, ReactNode>> = {
     library: (
@@ -50,30 +62,29 @@ export function Shell({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const command = shellKey(describe(event, false));
+      const command = shellKey(describe(event, overlay !== null));
       if (!command) return;
       if (command === "toggle") send("TogglePlayback");
-      else if (command === "escape") blurText();
-      else if (readyKeys.split(" ").includes(command.area)) go(command.area);
+      else if (command === "queue") setOverlay("queue");
+      else if (command === "escape") {
+        if (overlay) setOverlay(null);
+        else blurText();
+      } else if (readyKeys.split(" ").includes(command.area)) go(command.area);
       else return;
       event.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [go, send, readyKeys]);
+  }, [go, send, readyKeys, overlay]);
 
-  // A switch hands the keyboard to the new screen's list; the first render leaves focus alone.
-  const shown = useRef(area);
+  // A switch or a closed overlay hands the keyboard to the screen; the first render leaves focus alone.
+  const shown = useRef({ area, overlay });
   useEffect(() => {
-    if (shown.current === area) return;
-    shown.current = area;
-    const screen = document.querySelector(`[data-area="${area}"]`);
-    const target = screen?.querySelector<HTMLElement>("[data-focus]");
-    target?.focus();
-    target
-      ?.querySelector('[aria-selected="true"]')
-      ?.scrollIntoView({ block: "nearest" });
-  }, [area]);
+    const before = shown.current;
+    shown.current = { area, overlay };
+    if (overlay || (before.area === area && !before.overlay)) return;
+    focusScreen(area);
+  }, [area, overlay]);
 
   return (
     <main className="shell">
@@ -84,6 +95,8 @@ export function Shell({
         device={playback?.device ?? null}
         connected={state.connected}
         queued={queued.length}
+        queueOpen={overlay === "queue"}
+        onQueue={() => setOverlay(overlay === "queue" ? null : "queue")}
       />
       <div className="screens">
         {[...visited].map((seen) => (
@@ -103,6 +116,14 @@ export function Shell({
         connected={state.connected}
         send={send}
       />
+      {overlay === "queue" && (
+        <QueueDrawer
+          queue={queue ?? null}
+          item={playback?.item ?? null}
+          send={send}
+          onClose={() => setOverlay(null)}
+        />
+      )}
       <Toast
         status={channels.status?.payload ?? null}
         route={channels.route?.payload ?? null}
@@ -130,6 +151,15 @@ function isText(element: HTMLElement): boolean {
     element.isContentEditable ||
     ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
   );
+}
+
+function focusScreen(area: Area) {
+  const screen = document.querySelector(`[data-area="${area}"]`);
+  const target = screen?.querySelector<HTMLElement>("[data-focus]");
+  target?.focus();
+  target
+    ?.querySelector('[aria-selected="true"]')
+    ?.scrollIntoView({ block: "nearest" });
 }
 
 function blurText() {

@@ -12,7 +12,7 @@ export const AREAS: { area: Area; label: string; key: string }[] = [
   { area: "party", label: "Party", key: "6" },
 ];
 
-export type ShellCommand = { area: Area } | "toggle" | "escape";
+export type ShellCommand = { area: Area } | "queue" | "toggle" | "escape";
 
 /** A key press as the window handler sees it, reduced to plain data. */
 export interface ShellKey {
@@ -33,6 +33,8 @@ export function shellKey(press: ShellKey): ShellCommand | null {
   if (press.key === "Escape") return "escape";
   if (press.typing || press.overlay) return null;
   if (press.key === " ") return press.interactive ? null : "toggle";
+  // The terminal's queue key; a lower-case q adds the row under the cursor.
+  if (press.key === "Q") return "queue";
   const target = AREAS.find((entry) => entry.key === press.key);
   return target ? { area: target.area } : null;
 }

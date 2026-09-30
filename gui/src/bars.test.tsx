@@ -72,6 +72,8 @@ describe("TopBar", () => {
         device={device}
         connected={connected}
         queued={6}
+        queueOpen={false}
+        onQueue={() => {}}
       />,
     );
 

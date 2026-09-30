@@ -8,6 +8,8 @@ export function TopBar({
   device,
   connected,
   queued,
+  queueOpen,
+  onQueue,
 }: {
   area: Area;
   ready: (area: Area) => boolean;
@@ -15,6 +17,8 @@ export function TopBar({
   device: string | null;
   connected: boolean;
   queued: number;
+  queueOpen: boolean;
+  onQueue: () => void;
 }) {
   return (
     <header className="topbar">
@@ -53,8 +57,14 @@ export function TopBar({
             {device ?? "No device"}
           </span>
         </span>
-        <button type="button" className="queue-button">
-          Queue {queued} <kbd>q</kbd>
+        <button
+          type="button"
+          className="queue-button"
+          aria-expanded={queueOpen}
+          aria-keyshortcuts="Shift+Q"
+          onClick={onQueue}
+        >
+          Queue {queued} <kbd>Q</kbd>
         </button>
       </div>
     </header>

@@ -36,7 +36,7 @@ const empty: SourcePlaylists = {
 };
 
 describe("upNext", () => {
-  it("lists the native queue before the Spotify queue and skips non-track items", () => {
+  it("lists the native queue first, then Spotify tracks only while Spotify plays", () => {
     const queue: QueuePayload = {
       now: null,
       native: [track("Native", "file:///a.flac")],
@@ -52,8 +52,12 @@ describe("upNext", () => {
         ],
       },
     };
-    expect(upNext(queue).map((t) => t.name)).toEqual(["Native", "Spotify"]);
-    expect(upNext(undefined)).toEqual([]);
+    expect(upNext(queue, true).map((t) => t.name)).toEqual([
+      "Native",
+      "Spotify",
+    ]);
+    expect(upNext(queue, false).map((t) => t.name)).toEqual(["Native"]);
+    expect(upNext(undefined, true)).toEqual([]);
   });
 });
 

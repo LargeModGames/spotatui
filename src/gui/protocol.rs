@@ -430,6 +430,18 @@ mod tests {
   }
 
   #[test]
+  fn a_queue_refresh_from_the_page_fetches_the_spotify_queue_without_a_route_push() {
+    let (mut app, rx) = app();
+
+    let messages = apply_from_page(&mut app, &action_frame(Action::RefreshQueue));
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+    assert!(messages
+      .iter()
+      .all(|message| serde_json::to_value(message).unwrap()["kind"] != "route"));
+  }
+
+  #[test]
   fn a_theme_set_from_the_page_pushes_rgb_and_leaves_reset_to_the_page() {
     let (mut app, _rx) = app();
 

@@ -22,11 +22,14 @@ const PLAYLIST_KEYS: Record<
   YouTube: "youtube",
 };
 
-/** The queue after the playing track: the native queue first, then Spotify's. */
-export function upNext(queue: QueuePayload | undefined): TrackInfo[] {
+/** The queue after the playing track: the native queue first, then Spotify's while Spotify plays. */
+export function upNext(
+  queue: QueuePayload | undefined,
+  spotifyPlays: boolean,
+): TrackInfo[] {
   return [
     ...(queue?.native ?? []),
-    ...(queue?.spotify.items ?? []).flatMap((item) =>
+    ...((spotifyPlays && queue?.spotify.items) || []).flatMap((item) =>
       item.track ? [item.track] : [],
     ),
   ];

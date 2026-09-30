@@ -76,3 +76,11 @@ test("status error", async ({ page }) => {
   await page.getByRole("alert").waitFor();
   await shot(page, "status-error");
 });
+
+test("queue drawer", async ({ page }) => {
+  await openWith(page, [...playing, ...library]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("Shift+Q");
+  await page.getByRole("dialog", { name: "Queue" }).waitFor();
+  await shot(page, "queue-drawer");
+});

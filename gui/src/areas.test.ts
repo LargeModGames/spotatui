@@ -40,6 +40,11 @@ describe("shellKey", () => {
     expect(shellKey(press(" ", { interactive: true }))).toBeNull();
   });
 
+  it("capital Q opens the queue and plain q is left to the screen", () => {
+    expect(shellKey(press("Q"))).toBe("queue");
+    expect(shellKey(press("q"))).toBeNull();
+  });
+
   it("an open overlay swallows the area keys but not escape", () => {
     expect(shellKey(press("1", { overlay: true }))).toBeNull();
     expect(shellKey(press("Escape", { overlay: true }))).toBe("escape");
