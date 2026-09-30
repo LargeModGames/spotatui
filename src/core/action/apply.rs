@@ -79,6 +79,7 @@ impl App {
         self.move_queue_item(&uri, from, to);
       }
       Action::RefreshQueue => self.dispatch_without_spinner(IoEvent::GetQueue),
+      Action::RefreshDevices => self.dispatch_without_spinner(IoEvent::GetDevicesSilent),
       Action::Search(query) => {
         let country = self.get_user_country();
         self.dispatch(IoEvent::GetSearchResults(query, country));

@@ -143,6 +143,8 @@ pub enum Action {
   },
   /// Fetch the Spotify queue again without a route change or the spinner.
   RefreshQueue,
+  /// Fetch the Spotify Connect devices without a route change, whatever the browse source.
+  RefreshDevices,
   /// Run a search against the Spotify catalog; the user country is resolved
   /// at apply time. Deliberately source-blind: existing producers (Lua
   /// `spotatui.search`) contracted the Web API search, so browsing scope

@@ -87,7 +87,7 @@ export function CommandMode({
   useEffect(() => {
     if (parsed.verb !== "device" || fetchedDevices.current) return;
     fetchedDevices.current = true;
-    send({ Navigate: "Devices" });
+    send("RefreshDevices");
   }, [parsed.verb, send]);
 
   const finish = (action: Action) => {

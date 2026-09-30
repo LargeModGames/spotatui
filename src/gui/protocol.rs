@@ -497,6 +497,16 @@ mod tests {
   }
 
   #[test]
+  fn a_device_refresh_from_the_page_fetches_devices_under_any_browse_source() {
+    let (mut app, rx) = app();
+    app.active_source = Source::Local;
+
+    apply_from_page(&mut app, &action_frame(Action::RefreshDevices));
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetDevicesSilent)));
+  }
+
+  #[test]
   fn a_theme_set_from_the_page_pushes_rgb_and_leaves_reset_to_the_page() {
     let (mut app, _rx) = app();
 

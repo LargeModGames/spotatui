@@ -585,6 +585,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::RemoveFromQueue { .. } => binding(|k| k.remove_from_queue),
     Action::MoveQueueItem { .. } => literal("J / K", "Queue"),
     Action::RefreshQueue => Unbound("the terminal refreshes the queue by opening it"),
+    Action::RefreshDevices => Unbound("the terminal fetches devices by opening the device picker"),
     Action::Search(_) => Unbound("the search box is source-scoped and produces SearchActiveSource"),
     Action::SearchActiveSource(_) => literal(ENTER, "Search input"),
     Action::SearchPlaylistTracks { .. } => {
@@ -925,6 +926,7 @@ mod tests {
     "Pause",
     "Play",
     "QueueTracks",
+    "RefreshDevices",
     "RefreshQueue",
     "Search",
     "SetDjVibe",
@@ -1129,6 +1131,7 @@ mod tests {
         to: 0,
       },
       Action::RefreshQueue,
+      Action::RefreshDevices,
       Action::Search(text()),
       Action::SearchActiveSource(text()),
       Action::SearchPlaylistTracks {
