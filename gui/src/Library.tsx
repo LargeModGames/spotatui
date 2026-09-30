@@ -72,7 +72,8 @@ export const Library = memo(function Library({
       }
       if (event.key === "q") {
         const track = tracks[cursor];
-        if (track) send({ QueueTrack: track });
+        // A held key repeats; one press queues the row once.
+        if (track && !event.repeat) send({ QueueTrack: track });
         event.preventDefault();
         return;
       }

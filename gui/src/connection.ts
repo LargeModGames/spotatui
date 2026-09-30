@@ -100,6 +100,8 @@ export class Connection {
   }
 
   send(message: ClientMessage): void {
+    // A socket that is still connecting throws on send; the server hello marks it open.
+    if (!this.state.connected) return;
     this.socket?.send(JSON.stringify(message));
   }
 

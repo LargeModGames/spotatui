@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Action } from "./bindings/Action";
 import type { StatusPayload } from "./bindings/StatusPayload";
+import { toastView } from "./toastModel";
 
 /** The api error first, else the status message. Both expire on the server. */
 export function Toast({
@@ -12,31 +13,42 @@ export function Toast({
   route: string | null;
   send: (action: Action) => void;
 }) {
-  // The server hands an expiring error to the status line with the same text; keep it hidden.
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const error = status?.api_error ?? null;
-  if (error && error !== dismissed)
-    return (
-      <div className="toast error" role="alert">
-        <span>{error}</span>
-        <button
-          type="button"
-          aria-label="Dismiss"
-          onClick={() => {
-            // Leaving the error frame clears the error for every frontend.
-            if (route === "error") send("Back");
-            setDismissed(error);
-          }}
-        >
-          ×
-        </button>
-      </div>
-    );
-  const message = status?.message ?? null;
-  if (!message || message === dismissed) return null;
+  const view = toastView(status, dismissed);
+  if (view.held !== dismissed) setDismissed(view.held);
+  const shownError = view.error;
+  const shownMessage = view.message;
   return (
-    <div className={status?.is_error ? "toast error" : "toast"} role="status">
-      <span>{message}</span>
-    </div>
+    <>
+      {/* Live regions stay mounted; a region inserted with its text is not announced. */}
+      <div className="sr-only" role="alert">
+        {shownError}
+      </div>
+      <div className="sr-only" role="status">
+        {shownMessage}
+      </div>
+      {shownError ? (
+        <div className="toast error">
+          <span>{shownError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => {
+              // Leaving the error frame clears the error for every frontend.
+              if (route === "error") send("Back");
+              setDismissed(shownError);
+            }}
+          >
+            ×
+          </button>
+        </div>
+      ) : (
+        shownMessage && (
+          <div className={status?.is_error ? "toast error" : "toast"}>
+            <span>{shownMessage}</span>
+          </div>
+        )
+      )}
+    </>
   );
 }

@@ -41,6 +41,15 @@ const hello = (token: string | null) =>
   });
 
 describe("Connection", () => {
+  it("drops an action sent before the hello", () => {
+    const { connection, sockets } = harness("abc");
+    connection.send({ type: "quit" });
+    expect(sockets[0].sent).toEqual([]);
+    sockets[0].handlers.message(hello("t1"));
+    connection.send({ type: "quit" });
+    expect(sockets[0].sent).toEqual([JSON.stringify({ type: "quit" })]);
+  });
+
   it("connects with the launch code and keeps the token from hello", () => {
     const { connection, sockets, storage } = harness("abc");
     sockets[0].handlers.message(hello("t1"));
@@ -129,6 +138,7 @@ describe("Connection", () => {
 
   it("an action goes out as a typed client message", () => {
     const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
     connection.send({ type: "action", action: "TogglePlayback" });
     expect(sockets[0].sent).toEqual([
       '{"type":"action","action":"TogglePlayback"}',
