@@ -30,6 +30,7 @@ worker-relay/node_modules/
 
 # build artifacts from the gui frontend
 gui/node_modules/
+gui/src/node_modules/
 gui/dist/
 gui/shots/
 gui/test-results/
