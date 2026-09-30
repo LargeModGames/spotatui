@@ -3,14 +3,20 @@ import type { LyricLine } from "./bindings/LyricLine";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { TrackInfo } from "./bindings/TrackInfo";
 
-/** The playing row: by URI, else by title for a Spotify track, which Spotify can relink to another URI. */
+/**
+ * The playing row: by URI, else by title for a Spotify track on this very
+ * album, which Spotify can relink to another URI. A same-titled song on
+ * another album does not match.
+ */
 export function playingIndex(
   tracks: TrackInfo[],
   item: NowPlaying | null,
+  albumName: string | null,
 ): number {
   if (!item) return -1;
   const byUri = tracks.findIndex((track) => track.uri === item.uri);
   if (byUri >= 0 || !item.uri?.startsWith("spotify:")) return byUri;
+  if (albumName === null || albumName !== item.album) return -1;
   return tracks.findIndex((track) => track.name === item.title);
 }
 
@@ -30,7 +36,7 @@ export function albumContext(
     item.context_uri === album.uri &&
     !item.shuffle &&
     !queueNow &&
-    playingIndex(album.tracks, item) >= 0
+    playingIndex(album.tracks, item, album.name) >= 0
   );
 }
 

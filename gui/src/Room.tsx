@@ -48,10 +48,11 @@ export function Room({
 }) {
   const playing = item?.is_playing ?? false;
   const ms = usePosition(position, playing);
-  const onAlbum = album !== null && playingIndex(album.tracks, item) >= 0;
+  const onAlbum =
+    album !== null && playingIndex(album.tracks, item, album.name) >= 0;
   const shown = onAlbum ? album : null;
   const tracks = shown?.tracks ?? [];
-  const index = playingIndex(tracks, item);
+  const index = playingIndex(tracks, item, shown?.name ?? null);
   const inOrder = albumContext(shown, item, queueNow);
 
   // The album is fetched by the playing track's id, once per track, while the Room is open and

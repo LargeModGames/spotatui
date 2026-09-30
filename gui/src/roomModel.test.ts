@@ -59,11 +59,18 @@ const item = (patch: Partial<NowPlaying> = {}): NowPlaying => ({
 
 describe("roomModel", () => {
   it("finds the playing row by uri, else by title", () => {
-    expect(playingIndex(tracks, item())).toBe(1);
-    expect(playingIndex(tracks, item({ uri: "spotify:track:relinked" }))).toBe(
-      1,
-    );
-    expect(playingIndex(tracks, null)).toBe(-1);
+    expect(playingIndex(tracks, item(), "21")).toBe(1);
+    expect(
+      playingIndex(tracks, item({ uri: "spotify:track:relinked" }), "21"),
+    ).toBe(1);
+    expect(playingIndex(tracks, null, "21")).toBe(-1);
+    expect(
+      playingIndex(
+        tracks,
+        item({ uri: "spotify:track:other", album: "25" }),
+        "21",
+      ),
+    ).toBe(-1);
   });
 
   it("treats the album as what plays next only in order and as the context", () => {
