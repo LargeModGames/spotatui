@@ -50,7 +50,10 @@ export const Search = memo(function Search({
   onQuery: (query: string) => void;
   send: (action: Action) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("Everything");
+  const [chosenTab, setTab] = useState<Tab>("Everything");
+  // A tab the new results leave empty falls back to Everything instead of hiding them.
+  const tab: Tab =
+    search && tabHasResults(search, chosenTab) ? chosenTab : "Everything";
   const [want, setWant] = useState(0);
   // A search is answered by its results or by a status message; an error status can swallow both.
   const [pending, setPending] = useState<{
@@ -99,6 +102,7 @@ export const Search = memo(function Search({
             data-focus
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
               if (event.key === "Enter") {
                 event.preventDefault();
                 run(query);
