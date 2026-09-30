@@ -7,7 +7,6 @@ import type { QueuePayload } from "./bindings/QueuePayload";
 import type { Position } from "./connection";
 import { clock, sourceOf } from "./format";
 import { KeyHints } from "./KeyHints";
-import { clampCursor } from "./libraryModel";
 import "./Party.css";
 import {
   CODE_LENGTH,
@@ -18,7 +17,7 @@ import {
   normalizeName,
   relaying,
 } from "./partyModel";
-import { queueKey } from "./queueModel";
+import { type QueueCursor, queueKey, queueRow } from "./queueModel";
 import { usePosition } from "./usePosition";
 
 /** The listening party: host or join, then the room with the listeners and the host's queue. */
@@ -148,7 +147,7 @@ function Room({
   send: (action: Action) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const [want, setWant] = useState(0);
+  const [want, setWant] = useState<QueueCursor>({ index: 0, uri: null });
   const playingUri = item?.uri ?? null;
   const live = relaying(room, queue?.now != null, playingUri);
   const native = queue?.native ?? [];
@@ -158,7 +157,7 @@ function Room({
           entry.track ? [entry.track] : [],
         )
       : [];
-  const cursor = clampCursor(want, native.length);
+  const cursor = queueRow(native, want);
   const elapsed = usePosition(position, item?.is_playing ?? false);
 
   const copy = () => {
@@ -308,7 +307,7 @@ function Room({
                       role="option"
                       aria-selected={index === cursor}
                       className="qrow"
-                      onClick={() => setWant(index)}
+                      onClick={() => setWant({ index, uri: track.uri })}
                     >
                       <span className="n">{index + 1}</span>
                       <span className="name">
