@@ -9,6 +9,7 @@ import { pageStorage } from "./commandModel";
 import { Library } from "./Library";
 import { upNext } from "./libraryModel";
 import { sourceOf } from "./format";
+import { Party } from "./Party";
 import { PlayerBar } from "./PlayerBar";
 import { QueueDrawer } from "./QueueDrawer";
 import { Search } from "./Search";
@@ -82,6 +83,15 @@ export function Shell({
       />
     ),
     stats: <Stats stats={channels.stats?.payload ?? null} send={send} />,
+    party: (
+      <Party
+        party={channels.party?.payload ?? null}
+        item={playback?.item ?? null}
+        position={state.position}
+        queue={queue ?? null}
+        send={send}
+      />
+    ),
   };
   const ready = (target: Area) => target in screens;
   const readyKeys = Object.keys(screens).join(" ");

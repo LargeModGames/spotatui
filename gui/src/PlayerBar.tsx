@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
 import type { Action } from "./bindings/Action";
 import type { PlaybackPayload } from "./bindings/PlaybackPayload";
 import type { Position } from "./connection";
 import { clock, sourceOf } from "./format";
 import { Icon } from "./Icon";
 import { SourceBadge } from "./SourceBadge";
+import { usePosition } from "./usePosition";
 
 export function PlayerBar({
   playback,
@@ -199,19 +199,4 @@ function Meter({
 
 function clamp(ratio: number): number {
   return Math.min(1, Math.max(0, ratio));
-}
-
-/** The position interpolated per animation frame from the last tick while playing. */
-function usePosition(position: Position | null, playing: boolean): number {
-  const [now, setNow] = useState(() => performance.now());
-  useEffect(() => {
-    if (!playing) return;
-    let frame = requestAnimationFrame(function step(time) {
-      setNow(time);
-      frame = requestAnimationFrame(step);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [playing]);
-  if (!position || position.ms === null) return 0;
-  return playing ? position.ms + Math.max(0, now - position.at) : position.ms;
 }

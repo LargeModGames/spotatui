@@ -427,3 +427,31 @@ export const stats: ServerMessage[] = [
     },
   },
 ];
+
+/** No party, with a Spotify session. */
+export const partyNone: ServerMessage[] = [
+  {
+    kind: "party",
+    rev: 1,
+    payload: { phase: "disconnected", room: null, available: true },
+  },
+];
+
+/** A hosted room with two guests. */
+export const partyHosting: ServerMessage[] = [
+  {
+    kind: "party",
+    rev: 2,
+    payload: {
+      phase: "hosting",
+      available: true,
+      room: {
+        host: true,
+        code: "K7Q2ZD",
+        host_name: "Host",
+        guests: ["Alex", "Sam"],
+        shared_control: false,
+      },
+    },
+  },
+];

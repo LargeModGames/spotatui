@@ -38,6 +38,11 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: Box<QueuePayload>,
   },
+  /// The listening party this app hosts or follows.
+  Party {
+    rev: u64,
+    payload: PartyPayload,
+  },
   Status {
     rev: u64,
     payload: StatusPayload,
@@ -179,6 +184,39 @@ pub(crate) struct SearchPayload {
   playlists: Vec<PlaylistInfo>,
   /// The Spotify track ids among `tracks` that are in Liked Songs.
   liked: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PartyPayload {
+  phase: PartyPhase,
+  /// Present while hosting or joined.
+  room: Option<PartyRoom>,
+  /// False without a Spotify session: a party cannot start or join.
+  available: bool,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PartyPhase {
+  Disconnected,
+  Connecting,
+  Hosting,
+  Joined,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PartyRoom {
+  host: bool,
+  /// Empty until the relay answers.
+  code: String,
+  /// Empty until a guest's join lands.
+  host_name: String,
+  guests: Vec<String>,
+  /// Guests may control playback; the host sets it.
+  shared_control: bool,
 }
 
 #[derive(Serialize)]
@@ -360,8 +398,32 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: Box::new(stats(app)),
     },
-    DisplayDomain::Party | DisplayDomain::Lyrics | DisplayDomain::Artist => return None,
+    DisplayDomain::Party => ServerMessage::Party {
+      rev,
+      payload: party(app),
+    },
+    DisplayDomain::Lyrics | DisplayDomain::Artist => return None,
   })
+}
+
+fn party(app: &App) -> PartyPayload {
+  use crate::infra::network::sync::{ControlMode, PartyRole, PartyStatus};
+  PartyPayload {
+    phase: match app.party_status() {
+      PartyStatus::Disconnected => PartyPhase::Disconnected,
+      PartyStatus::Connecting => PartyPhase::Connecting,
+      PartyStatus::Hosting => PartyPhase::Hosting,
+      PartyStatus::Joined => PartyPhase::Joined,
+    },
+    room: app.party_session().map(|session| PartyRoom {
+      host: session.role == PartyRole::Host,
+      code: session.code.clone(),
+      host_name: session.host_name.clone(),
+      guests: session.guests.clone(),
+      shared_control: session.control_mode == ControlMode::SharedControl,
+    }),
+    available: app.spotify_connected,
+  }
 }
 
 fn stats(app: &App) -> StatsPayload {
@@ -575,8 +637,8 @@ mod tests {
     assert_eq!(
       kinds,
       [
-        "route", "status", "source", "theme", "playback", "devices", "search", "library", "liked",
-        "queue", "stats"
+        "route", "status", "source", "theme", "playback", "party", "devices", "search", "library",
+        "liked", "queue", "stats"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -910,6 +972,46 @@ mod tests {
   }
 
   #[test]
+  fn no_party_pushes_a_disconnected_party_that_says_spotify_is_missing() {
+    let (mut app, _rx) = app();
+    app.spotify_connected = false;
+
+    let party = &pushed(&resync(&app), "party")["payload"];
+
+    assert_eq!(party["phase"], "disconnected");
+    assert!(party["room"].is_null());
+    assert_eq!(party["available"], false);
+  }
+
+  #[test]
+  fn a_hosted_party_pushes_its_code_guests_and_control_mode() {
+    use crate::infra::network::sync::{ControlMode, PartyRole, PartySession, PartyStatus};
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.set_party_status(PartyStatus::Hosting);
+    app.set_party_session(Some(PartySession {
+      role: PartyRole::Host,
+      code: "ABC123".to_string(),
+      guests: vec!["Sam".to_string()],
+      control_mode: ControlMode::HostOnly,
+      host_name: "Host".to_string(),
+    }));
+
+    let party = &pushed(&diff(&before, &app), "party")["payload"];
+    assert_eq!(party["phase"], "hosting");
+    assert_eq!(party["room"]["code"], "ABC123");
+    assert_eq!(party["room"]["guests"][0], "Sam");
+    assert_eq!(party["room"]["shared_control"], false);
+
+    let messages = apply_from_page(&mut app, &action_frame(Action::TogglePartyControlMode));
+    assert_eq!(
+      pushed(&messages, "party")["payload"]["room"]["shared_control"],
+      true
+    );
+  }
+
+  #[test]
   fn a_tick_carries_the_position_and_no_revision() {
     let (mut app, _rx) = app();
     app.song_progress_ms = 1_234;
@@ -952,6 +1054,7 @@ mod tests {
     written::<SourcePlaylists>(&dir, &cfg);
     written::<SearchPayload>(&dir, &cfg);
     written::<StatsPayload>(&dir, &cfg);
+    written::<PartyPayload>(&dir, &cfg);
     written::<ArtistInfo>(&dir, &cfg);
     written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);

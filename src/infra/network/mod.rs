@@ -1495,6 +1495,7 @@ impl Network {
       app.spotify_connected = true;
       // `LikedSongs.available` reads the flag; a page must learn it can fetch now.
       app.bump_display(crate::core::app::DisplayDomain::LikedSongs);
+      app.bump_display(crate::core::app::DisplayDomain::Party);
       if app.active_source == crate::core::source::Source::Spotify {
         app.persist_active_source();
       }
@@ -1639,25 +1640,24 @@ impl Network {
       let _ = session;
       // Publish only what a guest can follow: the same owner rule as the
       // command relay, and a Spotify URI (a native `spotify:local:` track has none).
-      if party_yields_to_local_playback(&app) {
-        return;
-      }
-      let Some(snapshot) = crate::infra::media_metadata::current_playback_snapshot(&app) else {
-        return;
+      let followable = if party_yields_to_local_playback(&app) {
+        None
+      } else {
+        crate::infra::media_metadata::current_playback_snapshot(&app).and_then(|snapshot| {
+          let track_uri = snapshot
+            .item_uri
+            .and_then(|uri| ids::playable_id(&uri).map(|id| id.uri()))?;
+          Some(sync::SyncMessage::SyncState {
+            track_uri,
+            position_ms: snapshot.progress_ms as u64,
+            is_playing: snapshot.is_playing,
+            timestamp: sync::now_ms(),
+          })
+        })
       };
-      let Some(track_uri) = snapshot
-        .item_uri
-        .and_then(|uri| ids::playable_id(&uri).map(|id| id.uri()))
-      else {
-        return;
-      };
-
-      sync::SyncMessage::SyncState {
-        track_uri,
-        position_ms: snapshot.progress_ms as u64,
-        is_playing: snapshot.is_playing,
-        timestamp: sync::now_ms(),
-      }
+      // The relay closes a room after 5 minutes without a message, so a host
+      // playing nothing a guest can follow still keeps the room open.
+      followable.unwrap_or(sync::SyncMessage::Heartbeat)
     };
 
     if let Some(conn) = &mut self.party_connection {

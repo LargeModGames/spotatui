@@ -7,6 +7,8 @@ import {
   libraryUnavailable,
   onboarding,
   playing,
+  partyHosting,
+  partyNone,
   search,
   stats,
 } from "./fixtures";
@@ -130,4 +132,29 @@ test("stats at 800 px", async ({ page }) => {
   await page.keyboard.press("5");
   await page.getByText("THIS WEEK,").waitFor();
   await shot(page, "stats-narrow");
+});
+
+test("party start", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...partyNone]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("6");
+  await page.getByText("Join a party").waitFor();
+  await shot(page, "party-start");
+});
+
+test("party hosting", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...partyHosting]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("6");
+  await page.getByText("You host").waitFor();
+  await shot(page, "party-hosting");
+});
+
+test("party hosting at 800 px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, [...playing, ...library, ...partyHosting]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("6");
+  await page.getByText("You host").waitFor();
+  await shot(page, "party-hosting-narrow");
 });
