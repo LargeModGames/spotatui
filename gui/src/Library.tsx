@@ -75,6 +75,8 @@ export const Library = memo(function Library({
   const [openUri, setOpenUri] = useState<string | null>(null);
   // The status revision when the row was opened: a later error means the open failed.
   const [openedAt, setOpenedAt] = useState<number | null>(null);
+  // The row whose open failed; it stays failed after the error expires, until it is opened again.
+  const [failedUri, setFailedUri] = useState<string | null>(null);
   const [openFor, setOpenFor] = useState(active);
   if (openFor !== active) {
     setOpenFor(active);
@@ -83,8 +85,15 @@ export const Library = memo(function Library({
   }
   const opened = rows.find((row) => row.uri === openUri) ?? null;
   const landed = opened !== null && table?.uri === opened.uri;
-  const failed =
-    opened !== null && !landed && statusError && statusRev !== openedAt;
+  if (
+    opened !== null &&
+    !landed &&
+    statusError &&
+    statusRev !== openedAt &&
+    failedUri !== opened.uri
+  )
+    setFailedUri(opened.uri);
+  const failed = opened !== null && !landed && failedUri === opened.uri;
   const tracks = opened
     ? landed
       ? table.tracks
@@ -121,6 +130,7 @@ export const Library = memo(function Library({
       if (active === "Radio") return;
       setOpenUri(row.uri);
       setOpenedAt(statusRev);
+      setFailedUri(null);
       setWant(0);
     },
     [active, statusRev, send],
