@@ -44,8 +44,12 @@ export const Discover = memo(function Discover({
   // nothing loops; choosing the list or the range again lifts it for one retry.
   const requested = useRef<string | null>(null);
   const loading = discover?.loading ?? false;
+  // A retry of the list already shown changes no other state, so it counts here to run the fetch.
+  const [retries, setRetries] = useState(0);
   const retry = (target: string) => {
-    if (requested.current === target) requested.current = null;
+    if (requested.current !== target) return;
+    requested.current = null;
+    setRetries((count) => count + 1);
   };
   useEffect(() => {
     if (!active || !discover) return;
@@ -53,7 +57,7 @@ export const Discover = memo(function Discover({
     if (!action) return;
     requested.current = list === "mix" ? "mix" : range;
     send(action);
-  }, [active, discover, list, range, send]);
+  }, [active, discover, list, range, retries, send]);
 
   const listRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
