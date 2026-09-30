@@ -297,6 +297,7 @@ export const search: ServerMessage[] = [
     rev: 1,
     payload: {
       ran: true,
+      query: "kygo",
       tracks: [
         hit("Freeze", "f1", "Freeze", "Kygo", 487),
         hit("Firestone", "f2", "Cloud Nine", "Kygo, Conrad Sewell", 272),

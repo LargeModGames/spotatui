@@ -852,6 +852,7 @@ mod tests {
         ],
         ..Paged::default()
       }),
+      query: None,
     }
   }
 

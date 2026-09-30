@@ -163,7 +163,10 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> YouTubeSource {
 async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str) {
   let source = build_source(app).await;
   match source.search(query).await {
-    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
+    Ok(results) => app
+      .lock()
+      .await
+      .show_source_search_tracks(query, results.tracks),
     Err(e) => set_error(app, format!("YouTube search failed: {e}")).await,
   }
 }

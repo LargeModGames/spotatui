@@ -166,6 +166,8 @@ pub(crate) struct SourcePlaylists {
 pub(crate) struct SearchPayload {
   /// False until a search landed; empty lists before that mean "not searched".
   ran: bool,
+  /// The query the results answer; the page ignores results for an older query.
+  query: Option<String>,
   tracks: Vec<TrackInfo>,
   artists: Vec<ArtistInfo>,
   albums: Vec<AlbumInfo>,
@@ -324,6 +326,7 @@ fn search(app: &App) -> SearchPayload {
     .collect();
   SearchPayload {
     ran: results.tracks.is_some(),
+    query: results.query.clone(),
     tracks,
     artists: items(&results.artists),
     albums: items(&results.albums),
@@ -664,10 +667,12 @@ mod tests {
     page.items[0].id = Some("0".to_string());
     app.set_search_results(crate::core::app::SearchResult {
       tracks: Some(page),
+      query: Some("kygo".to_string()),
       ..Default::default()
     });
     let landed = &pushed(&diff(&DisplayRevisions::default(), &app), "search")["payload"];
     assert_eq!(landed["ran"], true);
+    assert_eq!(landed["query"], "kygo");
     assert_eq!(landed["tracks"][0]["name"], "Track 0");
     assert_eq!(landed["liked"], serde_json::json!([]));
     let before = app.display_revisions();

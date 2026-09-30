@@ -340,7 +340,10 @@ async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str) {
     return;
   };
   match source.search(query).await {
-    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
+    Ok(results) => app
+      .lock()
+      .await
+      .show_source_search_tracks(query, results.tracks),
     Err(e) => report(app, "search", e).await,
   }
 }

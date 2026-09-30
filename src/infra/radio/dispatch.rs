@@ -142,7 +142,10 @@ async fn load_radio_stations(app: &Arc<Mutex<App>>) {
 async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str) {
   let source = RadioSource::new();
   match source.search(query).await {
-    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
+    Ok(results) => app
+      .lock()
+      .await
+      .show_source_search_tracks(query, results.tracks),
     Err(e) => set_error(app, format!("Radio search failed: {e}")).await,
   }
 }

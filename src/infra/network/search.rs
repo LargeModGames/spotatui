@@ -181,6 +181,7 @@ impl SearchNetwork for Network {
       shows: show_result
         .as_ref()
         .map(|p| map_page(p, |s| ShowInfo::from(s))),
+      query: Some(search_term.clone()),
     });
     app
       .plugin_data_generations

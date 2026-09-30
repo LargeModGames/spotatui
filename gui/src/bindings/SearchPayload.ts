@@ -8,7 +8,11 @@ export type SearchPayload = {
 /**
  * False until a search landed; empty lists before that mean "not searched".
  */
-ran: boolean, tracks: Array<TrackInfo>, artists: Array<ArtistInfo>, albums: Array<AlbumInfo>, playlists: Array<PlaylistInfo>, 
+ran: boolean, 
+/**
+ * The query the results answer; the page ignores results for an older query.
+ */
+query: string | null, tracks: Array<TrackInfo>, artists: Array<ArtistInfo>, albums: Array<AlbumInfo>, playlists: Array<PlaylistInfo>, 
 /**
  * The Spotify track ids among `tracks` that are in Liked Songs.
  */

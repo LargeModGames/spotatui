@@ -10,6 +10,7 @@ import {
 
 const empty: SearchPayload = {
   ran: true,
+  query: "q",
   tracks: [],
   artists: [],
   albums: [],

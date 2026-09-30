@@ -37,6 +37,9 @@ pub enum TrackTableContext {
 /// `search_*` fields.
 #[derive(Default)]
 pub struct SearchResult {
+  /// The query these results answer; `None` for a search that did not name one.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub query: Option<String>,
   pub albums: Option<crate::core::pagination::Paged<crate::core::plugin_api::AlbumInfo>>,
   pub artists: Option<crate::core::pagination::Paged<crate::core::plugin_api::ArtistInfo>>,
   pub playlists: Option<crate::core::pagination::Paged<crate::core::plugin_api::PlaylistInfo>>,

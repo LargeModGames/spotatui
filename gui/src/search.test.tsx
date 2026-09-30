@@ -22,6 +22,7 @@ const track = (name: string, id: string, uri: string): TrackInfo => ({
 
 const results: SearchPayload = {
   ran: true,
+  query: "kygo",
   tracks: [
     track("Firestone", "1", "spotify:track:1"),
     track("Stay", "2", "spotify:track:2"),

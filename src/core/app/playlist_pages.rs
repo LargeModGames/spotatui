@@ -132,7 +132,7 @@ impl App {
     feature = "internet-radio",
     feature = "youtube"
   ))]
-  pub(crate) fn show_source_search_tracks(&mut self, tracks: Vec<TrackInfo>) {
+  pub(crate) fn show_source_search_tracks(&mut self, query: &str, tracks: Vec<TrackInfo>) {
     let total = tracks.len() as u32;
     // No cursor clamp here, unlike set_search_results: the hidden blocks keep
     // their cursors for the next Spotify search, as before.
@@ -142,6 +142,7 @@ impl App {
         total,
         ..Default::default()
       }),
+      query: Some(query.to_string()),
       ..Default::default()
     };
     self.display_revisions.bump(DisplayDomain::Search);
@@ -745,10 +746,13 @@ mod tests {
     let mut app = App::default();
     let before = app.display_revisions().get(DisplayDomain::Search);
 
-    app.show_source_search_tracks(vec![TrackInfo::from(&full_track(
-      "0000000000000000000001",
-      "Hit",
-    ))]);
+    app.show_source_search_tracks(
+      "q",
+      vec![TrackInfo::from(&full_track(
+        "0000000000000000000001",
+        "Hit",
+      ))],
+    );
 
     assert_eq!(
       app.display_revisions().get(DisplayDomain::Search),
