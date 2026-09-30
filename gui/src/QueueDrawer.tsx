@@ -5,8 +5,7 @@ import type { QueuePayload } from "./bindings/QueuePayload";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import { clock, sourceOf } from "./format";
 import { KeyHints } from "./KeyHints";
-import { clampCursor } from "./libraryModel";
-import { queueKey } from "./queueModel";
+import { type QueueCursor, queueKey, queueRow } from "./queueModel";
 import { SourceBadge } from "./SourceBadge";
 
 /** The queue over the current screen: the native queue can be played, moved and removed; Spotify's is read-only. */
@@ -29,13 +28,16 @@ export function QueueDrawer({
         entry.track ? [entry.track] : [],
       )
     : [];
-  const [want, setWant] = useState(0);
-  const cursor = clampCursor(want, native.length);
+  const [want, setWant] = useState<QueueCursor>({ index: 0, uri: null });
+  const cursor = queueRow(native, want);
 
   const list = useRef<HTMLOListElement>(null);
+  const panel = useRef<HTMLElement>(null);
+  // The drawer holds the keyboard even before the queue arrives, and hands it to the list once it does.
+  const hasList = native.length > 0;
   useLayoutEffect(() => {
-    list.current?.focus();
-  }, []);
+    (list.current ?? panel.current)?.focus();
+  }, [hasList]);
   useLayoutEffect(() => {
     list.current
       ?.querySelector('[aria-selected="true"]')
@@ -44,7 +46,20 @@ export function QueueDrawer({
 
   const now = queue?.now ?? null;
   return (
-    <aside className="drawer" role="dialog" aria-label="Queue">
+    <aside
+      ref={panel}
+      className="drawer"
+      role="dialog"
+      aria-label="Queue"
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.key === "Escape" || event.key === "Q") {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+    >
       <header>
         <h2>Queue</h2>
         <button type="button" aria-label="Close" onClick={onClose}>
@@ -76,11 +91,6 @@ export function QueueDrawer({
             tabIndex={0}
             onKeyDown={(event) => {
               if (event.ctrlKey || event.metaKey || event.altKey) return;
-              if (event.key === "Escape" || event.key === "Q") {
-                event.preventDefault();
-                onClose();
-                return;
-              }
               const press = queueKey(event.key, cursor, native);
               if (!press) return;
               event.preventDefault();
@@ -94,7 +104,7 @@ export function QueueDrawer({
                 id={`queue-${index}`}
                 role="option"
                 aria-selected={index === cursor}
-                onClick={() => setWant(index)}
+                onClick={() => setWant({ index, uri: track.uri })}
                 onDoubleClick={() => {
                   if (track.uri)
                     send({
