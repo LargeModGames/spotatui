@@ -12,9 +12,18 @@ import type { PlaylistSyncPayload } from "./bindings/PlaylistSyncPayload";
 import type { SourcePayload } from "./bindings/SourcePayload";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
+import type { TrackTablePayload } from "./bindings/TrackTablePayload";
 import { KeyHints } from "./KeyHints";
 import { unmatchedTotal } from "./healthModel";
-import { clampCursor, playlistsFor, playRequest, step } from "./libraryModel";
+import {
+  clampCursor,
+  listPlayRequest,
+  openRow,
+  playlistsFor,
+  playRequest,
+  step,
+  type SidebarRow,
+} from "./libraryModel";
 import "./Library.css";
 import { LibraryHealth } from "./LibraryHealth";
 import { LibrarySidebar } from "./LibrarySidebar";
@@ -23,10 +32,11 @@ import { UpNext } from "./UpNext";
 
 const NO_TRACKS: TrackInfo[] = [];
 
-/** The Library screen: the sections, Liked Songs with the source chips, and the queue aside. */
+/** The Library screen: the sections, Liked Songs or an opened playlist with the source chips, and the queue aside. */
 export const Library = memo(function Library({
   playlists,
   liked,
+  table,
   source,
   playingUri,
   upNext,
@@ -35,6 +45,7 @@ export const Library = memo(function Library({
 }: {
   playlists: SourcePlaylists | null;
   liked: LikedSongs | null;
+  table: TrackTablePayload | null;
   source: SourcePayload | null;
   playingUri: string | null;
   upNext: TrackInfo[];
@@ -52,8 +63,20 @@ export const Library = memo(function Library({
         ?.focus(),
     );
   }, []);
-  const tracks = liked?.tracks ?? NO_TRACKS;
-  const hasMore = liked?.has_more ?? false;
+  const active = source?.active ?? null;
+  const rows = playlists && active ? playlistsFor(playlists, active) : [];
+  // The opened sidebar row; none (or a row of another source) shows Liked Songs.
+  const [openUri, setOpenUri] = useState<string | null>(null);
+  const opened = rows.find((row) => row.uri === openUri) ?? null;
+  const landed = opened !== null && table?.uri === opened.uri;
+  const tracks = opened
+    ? landed
+      ? table.tracks
+      : NO_TRACKS
+    : (liked?.tracks ?? NO_TRACKS);
+  const hasMore = opened
+    ? landed && table.has_more
+    : (liked?.has_more ?? false);
   // The wanted row; a `j` past the end lands on the first row the next page brings.
   const [want, setWant] = useState(0);
   const cursor = clampCursor(want, tracks.length);
@@ -70,12 +93,33 @@ export const Library = memo(function Library({
     if (available && !loaded && !requested.current) openLiked();
   }, [available, loaded, openLiked]);
 
+  const showLiked = useCallback(() => {
+    setOpenUri(null);
+    setWant(0);
+    openLiked();
+  }, [openLiked]);
+  const onOpenRow = useCallback(
+    (row: SidebarRow) => {
+      if (!active) return;
+      const action = openRow(active, row);
+      if (!action) return;
+      send(action);
+      if (active === "Radio") return;
+      setOpenUri(row.uri);
+      setWant(0);
+    },
+    [active, send],
+  );
+
   const play = useCallback(
     (index: number) => {
-      const action = playRequest(tracks, index);
+      const action =
+        opened && active
+          ? listPlayRequest(active, opened.uri, tracks, index)
+          : playRequest(tracks, index);
       if (action) send(action);
     },
-    [tracks, send],
+    [opened, active, tracks, send],
   );
 
   const onKeyDown = useCallback(
@@ -97,13 +141,12 @@ export const Library = memo(function Library({
       if (!move) return;
       event.preventDefault();
       setWant(move.next);
-      if (move.loadMore) send({ LoadMore: "SavedTracks" });
+      if (move.loadMore)
+        send({ LoadMore: opened ? "PlaylistTracks" : "SavedTracks" });
     },
-    [cursor, tracks, hasMore, play, send],
+    [cursor, tracks, hasMore, opened, play, send],
   );
 
-  const active = source?.active ?? null;
-  const rows = playlists && active ? playlistsFor(playlists, active) : [];
   if (health)
     return <LibraryHealth sync={sync} send={send} onBack={leaveHealth} />;
   return (
@@ -111,15 +154,21 @@ export const Library = memo(function Library({
       <LibrarySidebar
         source={active}
         playlists={rows}
+        openUri={opened?.uri ?? null}
         unmatched={unmatchedTotal(sync?.links ?? [])}
-        onOpenLiked={openLiked}
+        onOpenLiked={showLiked}
+        onOpenRow={onOpenRow}
         onOpenHealth={() => setHealth(true)}
       />
       <section className="liked">
         <div className="liked-head">
           <div>
-            <span className="eyebrow">LIBRARY / LIKED SONGS</span>
-            <h1>Liked Songs</h1>
+            <span className="eyebrow">
+              {opened && active
+                ? `LIBRARY / ${active.toUpperCase()}`
+                : "LIBRARY / LIKED SONGS"}
+            </span>
+            <h1>{opened ? opened.name : "Liked Songs"}</h1>
             <div className="chips" role="group" aria-label="Browse source">
               {(source?.compiled ?? []).map((chip) => (
                 <button
@@ -142,14 +191,19 @@ export const Library = memo(function Library({
         </div>
         {tracks.length === 0 ? (
           <p className="empty">
-            {!available
-              ? "Liked Songs needs a Spotify session."
-              : loaded
-                ? "No liked songs yet."
-                : "Loading Liked Songs…"}
+            {opened
+              ? landed
+                ? "This playlist is empty."
+                : `Loading ${opened.name}…`
+              : !available
+                ? "Liked Songs needs a Spotify session."
+                : loaded
+                  ? "No liked songs yet."
+                  : "Loading Liked Songs…"}
           </p>
         ) : (
           <TrackTable
+            label={opened ? opened.name : "Liked Songs"}
             tracks={tracks}
             cursor={cursor}
             playingUri={playingUri}
@@ -159,7 +213,7 @@ export const Library = memo(function Library({
           />
         )}
         <KeyHints hints={["enter play", "q add to queue", "j k move"]}>
-          {liked && liked.total > tracks.length && (
+          {!opened && liked && liked.total > tracks.length && (
             <span>
               {tracks.length} of {liked.total}
             </span>

@@ -16,6 +16,8 @@ impl Default for App {
       discover_top_tracks_range: None,
       discover_view: DiscoverView::default(),
       search_liked_view: Vec::new(),
+      source_table_uri: None,
+      track_table_view: TrackTableView::default(),
       stats_period: RecapPeriod::ThirtyDays,
       stats_loading: false,
       stats_data: None,

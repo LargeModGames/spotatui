@@ -25,6 +25,8 @@ pub enum DisplayDomain {
   Discover,
   /// The playlist-sync links and the run state.
   PlaylistSync,
+  /// The rows of the shared track table and the list they belong to.
+  TrackTable,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -50,12 +52,13 @@ pub struct DisplayRevisions {
   session: u64,
   discover: u64,
   playlist_sync: u64,
+  track_table: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 18] = [
+  pub const ALL: [DisplayDomain; 19] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -74,6 +77,7 @@ impl DisplayDomain {
     DisplayDomain::Session,
     DisplayDomain::Discover,
     DisplayDomain::PlaylistSync,
+    DisplayDomain::TrackTable,
   ];
 }
 
@@ -98,6 +102,7 @@ impl DisplayRevisions {
       DisplayDomain::Session => &mut self.session,
       DisplayDomain::Discover => &mut self.discover,
       DisplayDomain::PlaylistSync => &mut self.playlist_sync,
+      DisplayDomain::TrackTable => &mut self.track_table,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -123,6 +128,7 @@ impl DisplayRevisions {
       DisplayDomain::Session => self.session,
       DisplayDomain::Discover => self.discover,
       DisplayDomain::PlaylistSync => self.playlist_sync,
+      DisplayDomain::TrackTable => self.track_table,
     }
   }
 }

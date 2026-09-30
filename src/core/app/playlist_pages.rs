@@ -120,7 +120,28 @@ impl App {
       return;
     };
     self.dispatch(event);
+    self.source_table_uri = None;
     self.show_tracks_in_table(Vec::new(), context);
+  }
+
+  /// Show the rows of the decoded-source list `uri` in the shared track table.
+  #[cfg_attr(
+    not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "youtube",
+      feature = "qobuz"
+    )),
+    allow(dead_code)
+  )]
+  pub(crate) fn set_source_track_table(
+    &mut self,
+    uri: &str,
+    tracks: Vec<TrackInfo>,
+    context: TrackTableContext,
+  ) {
+    self.set_track_table(tracks, context);
+    self.source_table_uri = Some(uri.to_string());
   }
 
   /// Show a decoded source's search hits as a songs-only result set with the

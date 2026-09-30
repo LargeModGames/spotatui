@@ -120,6 +120,7 @@ export function Shell({
       <Library
         playlists={channels.library?.payload ?? null}
         liked={channels.liked?.payload ?? null}
+        table={channels.track_table?.payload ?? null}
         source={channels.source?.payload ?? null}
         playingUri={playingUri}
         upNext={queued}

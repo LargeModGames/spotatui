@@ -2,6 +2,7 @@ import { test } from "@playwright/test";
 import { openWith, shot } from "./bridge";
 import {
   discover,
+  filmScores,
   hello,
   idle,
   library,
@@ -59,6 +60,16 @@ test("idle", async ({ page }) => {
   await openWith(page, idle);
   await page.getByText("Nothing is queued").waitFor();
   await shot(page, "idle");
+});
+
+test("library playlist", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...filmScores]);
+  await page.getByRole("button", { name: "Film scores" }).click();
+  await page
+    .getByRole("listbox", { name: "Film scores" })
+    .getByText("Cornfield Chase")
+    .waitFor();
+  await shot(page, "library-playlist");
 });
 
 test("library without a Spotify session", async ({ page }) => {

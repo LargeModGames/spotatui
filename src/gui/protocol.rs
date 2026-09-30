@@ -111,6 +111,11 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: Box<PlaylistSyncPayload>,
   },
+  /// The rows of the shared track table: an opened playlist, folder or listing.
+  TrackTable {
+    rev: u64,
+    payload: Box<TrackTablePayload>,
+  },
 }
 
 #[derive(Serialize)]
@@ -184,6 +189,16 @@ pub(crate) struct LikedSongs {
   available: bool,
   /// False until the first page landed; an empty list before that is still loading.
   loaded: bool,
+}
+
+/// The track table rows; `uri` names the playlist they belong to, and is `null` while it loads.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct TrackTablePayload {
+  uri: Option<String>,
+  tracks: Vec<TrackInfo>,
+  /// `LoadMore(PlaylistTracks)` fetches the next page.
+  has_more: bool,
 }
 
 /// Every source's sidebar list; the page shows the one for the active source.
@@ -536,6 +551,17 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: Box::new(playlist_sync(app)),
     },
+    DisplayDomain::TrackTable => {
+      let view = app.track_table_view();
+      ServerMessage::TrackTable {
+        rev,
+        payload: Box::new(TrackTablePayload {
+          uri: view.uri.clone(),
+          tracks: view.tracks.clone(),
+          has_more: view.has_more,
+        }),
+      }
+    }
     DisplayDomain::Artist => return None,
   })
 }
@@ -859,7 +885,8 @@ mod tests {
         "album",
         "session",
         "discover",
-        "playlist_sync"
+        "playlist_sync",
+        "track_table"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -1344,6 +1371,60 @@ mod tests {
   }
 
   #[test]
+  fn an_opened_source_playlist_names_its_rows_only_after_they_land() {
+    use crate::core::action::OpenTarget;
+    use crate::core::app::TrackTableContext;
+    let (mut app, rx) = app();
+    let uri = "subsonic:playlist:7";
+    app.set_source_track_table(
+      "subsonic:playlist:1",
+      liked_page(0, 2, 2, false).items,
+      TrackTableContext::SubsonicPlaylist,
+    );
+    app.note_display_changes();
+
+    let before = app.display_revisions();
+    app.apply(Action::Open(OpenTarget::SourcePlaylist(uri.to_string())));
+    let loading = &pushed(&diff(&before, &app), "track_table")["payload"];
+    assert!(loading["uri"].is_null());
+    assert_eq!(loading["tracks"], serde_json::json!([]));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetSubsonicTracks(u)) if u == uri));
+
+    let before = app.display_revisions();
+    app.set_source_track_table(
+      uri,
+      liked_page(0, 1, 1, false).items,
+      TrackTableContext::SubsonicPlaylist,
+    );
+    app.note_display_changes();
+    let landed = &pushed(&diff(&before, &app), "track_table")["payload"];
+    assert_eq!(landed["uri"], uri);
+    assert_eq!(landed["tracks"][0]["name"], "Track 0");
+    assert_eq!(landed["has_more"], false);
+  }
+
+  #[test]
+  fn a_spotify_playlist_names_its_rows_once_the_open_is_no_longer_pending() {
+    use crate::core::action::OpenTarget;
+    let (mut app, _rx) = app();
+    let id = "37i9dQZF1DXcBWIGoYBM5M";
+
+    app.apply(Action::Open(OpenTarget::Playlist {
+      id: format!("spotify:playlist:{id}"),
+      from_search: false,
+    }));
+    assert!(app.track_table_view().uri.is_none());
+
+    app.pending_playlist_open = None;
+    let before = app.display_revisions();
+    app.note_display_changes();
+    assert_eq!(
+      pushed(&diff(&before, &app), "track_table")["payload"]["uri"],
+      format!("spotify:playlist:{id}")
+    );
+  }
+
+  #[test]
   fn opening_another_range_from_the_page_fetches_it_instead_of_the_cache() {
     use crate::core::action::DiscoverTarget;
     use crate::core::app::DiscoverTimeRange;
@@ -1467,6 +1548,7 @@ mod tests {
     written::<SessionPlay>(&dir, &cfg);
     written::<DiscoverPayload>(&dir, &cfg);
     written::<PlaylistSyncPayload>(&dir, &cfg);
+    written::<TrackTablePayload>(&dir, &cfg);
     written::<ArtistInfo>(&dir, &cfg);
     written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);

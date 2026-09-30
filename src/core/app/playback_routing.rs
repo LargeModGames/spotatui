@@ -570,6 +570,7 @@ impl App {
     }
     self.note_discover_changes();
     self.note_search_liked_changes();
+    self.note_track_table_changes();
   }
 }
 #[cfg(test)]

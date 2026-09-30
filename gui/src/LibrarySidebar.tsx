@@ -12,18 +12,22 @@ const SECTIONS = [
   "Radio stations",
 ];
 
-/** The library sections, Library health, and the playlists of the active source. Liked Songs and Library health are live. */
+/** The library sections, Library health, and the playlists of the active source. Liked Songs, Library health and the playlists are live. */
 export function LibrarySidebar({
   source,
   playlists,
+  openUri,
   unmatched,
   onOpenLiked,
+  onOpenRow,
   onOpenHealth,
 }: {
   source: Source | null;
   playlists: SidebarRow[];
+  openUri: string | null;
   unmatched: number;
   onOpenLiked: () => void;
+  onOpenRow: (row: SidebarRow) => void;
   onOpenHealth: () => void;
 }) {
   return (
@@ -32,7 +36,7 @@ export function LibrarySidebar({
         {SECTIONS.map((section, index) => (
           <a
             key={section}
-            aria-current={index === 0 ? "page" : undefined}
+            aria-current={index === 0 && openUri === null ? "page" : undefined}
             onClick={index === 0 ? onOpenLiked : undefined}
           >
             {section}
@@ -50,11 +54,17 @@ export function LibrarySidebar({
           PLAYLISTS{source && ` · ${source.toUpperCase()}`}
         </span>
         {playlists.map((row) => (
-          <a key={row.uri} title={row.name}>
+          <button
+            key={row.uri}
+            type="button"
+            title={row.name}
+            aria-current={row.uri === openUri ? "page" : undefined}
+            onClick={() => onOpenRow(row)}
+          >
             {source && <Swatch source={source} />}
             <span className="name">{row.name}</span>
             {row.count !== null && <span className="count">{row.count}</span>}
-          </a>
+          </button>
         ))}
       </div>
     </aside>

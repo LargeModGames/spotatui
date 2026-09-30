@@ -23,6 +23,7 @@ const revisions = {
   session: 1,
   discover: 1,
   playlist_sync: 1,
+  track_table: 1,
 };
 
 export const hello: ServerMessage = {
@@ -683,6 +684,31 @@ export const playlistSync: ServerMessage[] = [
           ],
         },
       ],
+    },
+  },
+];
+
+/** The rows of the Film scores playlist, landed in the track table. */
+export const filmScores: ServerMessage[] = [
+  {
+    kind: "track_table",
+    rev: 1,
+    payload: {
+      uri: "spotify:playlist:1",
+      tracks: [
+        ["Time", "Hans Zimmer", 275],
+        ["Cornfield Chase", "Hans Zimmer", 126],
+        ["Now We Are Free", "Hans Zimmer", 254],
+        ["Concerning Hobbits", "Howard Shore", 175],
+      ].map(([name, artist, seconds], index) =>
+        track(
+          name as string,
+          seconds as number,
+          `spotify:track:f${index}`,
+          artist as string,
+        ),
+      ),
+      has_more: false,
     },
   },
 ];

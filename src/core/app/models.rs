@@ -55,6 +55,15 @@ pub struct TrackTable {
   pub context: Option<TrackTableContext>,
 }
 
+/// The track table as the TrackTable revision last counted it.
+#[derive(Default)]
+pub struct TrackTableView {
+  /// The list the rows belong to; `None` while it loads, or for a table that is not a playlist.
+  pub uri: Option<String>,
+  pub tracks: Vec<TrackInfo>,
+  pub has_more: bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PendingTrackSelection {
   Index(usize),
@@ -126,6 +135,46 @@ impl App {
       self.search_liked_view = liked;
       self.display_revisions.bump(DisplayDomain::Search);
     }
+  }
+
+  /// The playlist the track table holds, once its rows landed.
+  fn track_table_uri(&self) -> Option<String> {
+    match self.track_table.context {
+      Some(TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch)
+        if self.pending_playlist_open.is_none() =>
+      {
+        self.playlist_track_table_id.as_ref().map(|id| id.uri())
+      }
+      Some(
+        TrackTableContext::LocalPlaylist
+        | TrackTableContext::SubsonicPlaylist
+        | TrackTableContext::YouTubePlaylist
+        | TrackTableContext::QobuzPlaylist,
+      ) => self.source_table_uri.clone(),
+      _ => None,
+    }
+  }
+
+  /// Bump TrackTable when its rows or their list change; many producers write the table.
+  pub(super) fn note_track_table_changes(&mut self) {
+    let uri = self.track_table_uri();
+    let has_more = self.track_table_has_more_rows();
+    let view = &self.track_table_view;
+    if view.uri == uri && view.has_more == has_more && view.tracks == self.track_table.tracks {
+      return;
+    }
+    self.track_table_view = TrackTableView {
+      uri,
+      tracks: self.track_table.tracks.clone(),
+      has_more,
+    };
+    self.display_revisions.bump(DisplayDomain::TrackTable);
+  }
+
+  /// The track table the TrackTable revision counted.
+  #[cfg(feature = "gui")]
+  pub(crate) fn track_table_view(&self) -> &TrackTableView {
+    &self.track_table_view
   }
 
   pub(crate) fn search_results(&self) -> &SearchResult {

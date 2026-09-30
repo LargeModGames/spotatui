@@ -4,6 +4,8 @@ import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import {
   clampCursor,
+  listPlayRequest,
+  openRow,
   playlistsFor,
   playRequest,
   step,
@@ -125,5 +127,49 @@ describe("playRequest", () => {
     });
     expect(playRequest(tracks, 1)).toBeNull();
     expect(playRequest([], 0)).toBeNull();
+  });
+});
+
+describe("openRow", () => {
+  const row = (uri: string) => ({ uri, name: "Row", count: null });
+
+  it("opens a Spotify playlist by URI and any other list as a source playlist", () => {
+    expect(openRow("Spotify", row("spotify:playlist:p1"))).toEqual({
+      Open: { Playlist: { id: "spotify:playlist:p1", from_search: false } },
+    });
+    expect(openRow("Subsonic", row("subsonic:playlist:7"))).toEqual({
+      Open: { SourcePlaylist: "subsonic:playlist:7" },
+    });
+  });
+
+  it("plays a station and skips a station with no stream", () => {
+    expect(openRow("Radio", row("radio:https://example.org/live"))).toEqual({
+      PlayUris: { uris: ["radio:https://example.org/live"], offset: null },
+    });
+    expect(openRow("Radio", row("Nameless station"))).toBeNull();
+  });
+});
+
+describe("listPlayRequest", () => {
+  const tracks = [track("A", "spotify:track:a"), track("B", "spotify:track:b")];
+
+  it("plays a Spotify playlist row inside its playlist context", () => {
+    expect(
+      listPlayRequest("Spotify", "spotify:playlist:p1", tracks, 1),
+    ).toEqual({
+      PlayTrackInContext: {
+        context: "spotify:playlist:p1",
+        track: "spotify:track:b",
+      },
+    });
+    expect(
+      listPlayRequest("Spotify", "spotify:playlist:p1", [track("X", null)], 0),
+    ).toBeNull();
+  });
+
+  it("plays a source list as its URIs from the row", () => {
+    expect(listPlayRequest("Qobuz", "qobuz:playlist:1", tracks, 1)).toEqual({
+      PlayUris: { uris: ["spotify:track:a", "spotify:track:b"], offset: 1 },
+    });
   });
 });

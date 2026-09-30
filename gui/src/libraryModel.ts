@@ -77,6 +77,29 @@ export function step(
   }
 }
 
+/** A sidebar row's click: a station plays, any other row opens its list. */
+export function openRow(source: Source, row: SidebarRow): Action | null {
+  if (source === "Radio")
+    return row.uri.startsWith("radio:")
+      ? { PlayUris: { uris: [row.uri], offset: null } }
+      : null;
+  if (source === "Spotify")
+    return { Open: { Playlist: { id: row.uri, from_search: false } } };
+  return { Open: { SourcePlaylist: row.uri } };
+}
+
+/** Play an opened list from `cursor`: a Spotify playlist as its context, a source list as URIs. */
+export function listPlayRequest(
+  source: Source,
+  listUri: string,
+  tracks: TrackInfo[],
+  cursor: number,
+): Action | null {
+  if (source !== "Spotify") return playRequest(tracks, cursor);
+  const track = tracks[cursor]?.uri;
+  return track ? { PlayTrackInContext: { context: listUri, track } } : null;
+}
+
 /** Play the list from `cursor`, the same request the terminal sends from Liked Songs. */
 export function playRequest(
   tracks: TrackInfo[],

@@ -579,7 +579,7 @@ async fn load_local_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
   match result {
     Ok(Ok(tracks)) => {
       let mut app = app.lock().await;
-      app.set_track_table(tracks, TrackTableContext::LocalPlaylist);
+      app.set_source_track_table(playlist_uri, tracks, TrackTableContext::LocalPlaylist);
     }
     Ok(Err(e)) => set_error(app, format!("Cannot read folder: {e}")).await,
     Err(e) => set_error(app, format!("Local track scan failed: {e}")).await,

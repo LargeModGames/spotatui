@@ -212,7 +212,7 @@ async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
   match source.tracks(playlist_uri).await {
     Ok(tracks) => {
       let mut app = app.lock().await;
-      app.set_track_table(tracks, TrackTableContext::SubsonicPlaylist);
+      app.set_source_track_table(playlist_uri, tracks, TrackTableContext::SubsonicPlaylist);
     }
     Err(e) => set_error(app, format!("Cannot load Subsonic playlist: {e}")).await,
   }

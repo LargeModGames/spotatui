@@ -241,7 +241,11 @@ async fn load_playlist_tracks(app: &Arc<Mutex<App>>, uri: &str) {
     .map(super::playlists::stored_to_track_info)
     .collect();
   let mut guard = app.lock().await;
-  guard.set_track_table(rows, crate::core::app::TrackTableContext::YouTubePlaylist);
+  guard.set_source_track_table(
+    uri,
+    rows,
+    crate::core::app::TrackTableContext::YouTubePlaylist,
+  );
   guard.youtube_open_playlist = Some(uri.to_string());
 }
 

@@ -5,6 +5,7 @@ import { SourceBadge } from "./SourceBadge";
 
 /** The `# / TITLE / ALBUM / PLAYS FROM / TIME` table; the cursor row is `aria-selected`. */
 export const TrackTable = memo(function TrackTable({
+  label,
   tracks,
   cursor,
   playingUri,
@@ -12,6 +13,7 @@ export const TrackTable = memo(function TrackTable({
   onPick,
   onPlay,
 }: {
+  label: string;
   tracks: TrackInfo[];
   cursor: number;
   playingUri: string | null;
@@ -40,7 +42,7 @@ export const TrackTable = memo(function TrackTable({
         ref={list}
         className="tracks"
         role="listbox"
-        aria-label="Liked Songs"
+        aria-label={label}
         aria-activedescendant={cursor >= 0 ? `liked-${cursor}` : undefined}
         tabIndex={0}
         data-focus
