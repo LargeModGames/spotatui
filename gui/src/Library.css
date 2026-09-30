@@ -291,3 +291,13 @@
     display: none;
   }
 }
+
+.health-row {
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.sections .count.warn {
+  font: 10px var(--mono);
+  color: var(--amber);
+}

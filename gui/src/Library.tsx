@@ -8,12 +8,15 @@ import {
 } from "react";
 import type { Action } from "./bindings/Action";
 import type { LikedSongs } from "./bindings/LikedSongs";
+import type { PlaylistSyncPayload } from "./bindings/PlaylistSyncPayload";
 import type { SourcePayload } from "./bindings/SourcePayload";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import { KeyHints } from "./KeyHints";
+import { unmatchedTotal } from "./healthModel";
 import { clampCursor, playlistsFor, playRequest, step } from "./libraryModel";
 import "./Library.css";
+import { LibraryHealth } from "./LibraryHealth";
 import { LibrarySidebar } from "./LibrarySidebar";
 import { TrackTable } from "./TrackTable";
 import { UpNext } from "./UpNext";
@@ -27,6 +30,7 @@ export const Library = memo(function Library({
   source,
   playingUri,
   upNext,
+  sync,
   send,
 }: {
   playlists: SourcePlaylists | null;
@@ -34,8 +38,11 @@ export const Library = memo(function Library({
   source: SourcePayload | null;
   playingUri: string | null;
   upNext: TrackInfo[];
+  sync: PlaylistSyncPayload | null;
   send: (action: Action) => void;
 }) {
+  // The health sub-page replaces the grid; the Liked Songs cursor stays in this state.
+  const [health, setHealth] = useState(false);
   const tracks = liked?.tracks ?? NO_TRACKS;
   const hasMore = liked?.has_more ?? false;
   // The wanted row; a `j` past the end lands on the first row the next page brings.
@@ -88,12 +95,18 @@ export const Library = memo(function Library({
 
   const active = source?.active ?? null;
   const rows = playlists && active ? playlistsFor(playlists, active) : [];
+  if (health)
+    return (
+      <LibraryHealth sync={sync} send={send} onBack={() => setHealth(false)} />
+    );
   return (
     <div className="library">
       <LibrarySidebar
         source={active}
         playlists={rows}
+        unmatched={unmatchedTotal(sync?.links ?? [])}
         onOpenLiked={openLiked}
+        onOpenHealth={() => setHealth(true)}
       />
       <section className="liked">
         <div className="liked-head">

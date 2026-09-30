@@ -12,15 +12,19 @@ const SECTIONS = [
   "Radio stations",
 ];
 
-/** The library sections and the playlists of the active source. Only Liked Songs is live. */
+/** The library sections, Library health, and the playlists of the active source. Liked Songs and Library health are live. */
 export function LibrarySidebar({
   source,
   playlists,
+  unmatched,
   onOpenLiked,
+  onOpenHealth,
 }: {
   source: Source | null;
   playlists: SidebarRow[];
+  unmatched: number;
   onOpenLiked: () => void;
+  onOpenHealth: () => void;
 }) {
   return (
     <aside className="sections" aria-label="Library">
@@ -34,6 +38,12 @@ export function LibrarySidebar({
             {section}
           </a>
         ))}
+        <a className="health-row" onClick={onOpenHealth}>
+          Library health
+          {unmatched > 0 && (
+            <span className="count warn">{unmatched} unmatched</span>
+          )}
+        </a>
       </nav>
       <div className="playlists">
         <span className="eyebrow">

@@ -3,4 +3,4 @@
 /**
  * Per-domain revisions that move only when that domain's displayed state changed.
  */
-export type DisplayRevisions = { route: number, status: number, source: number, theme: number, playback: number, party: number, devices: number, search: number, lyrics: number, artist: number, library: number, liked: number, queue: number, stats: number, album: number, session: number, discover: number, };
+export type DisplayRevisions = { route: number, status: number, source: number, theme: number, playback: number, party: number, devices: number, search: number, lyrics: number, artist: number, library: number, liked: number, queue: number, stats: number, album: number, session: number, discover: number, playlist_sync: number, };

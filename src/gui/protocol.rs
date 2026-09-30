@@ -5,6 +5,7 @@
 use crate::core::action::Action;
 use crate::core::app::{App, DiscoverTimeRange, DisplayDomain, DisplayRevisions, SessionPlay};
 use crate::core::first_run::compiled_in_sources;
+use crate::core::playlist_sync::Unmatched;
 use crate::core::plugin_api::{
   device_list, route_name, AlbumInfo, ArtistInfo, DeviceInfo, PlaybackState, PlaylistInfo,
   QueueItemSnapshot, QueueSnapshot, TrackInfo,
@@ -104,6 +105,11 @@ pub(crate) enum ServerMessage {
   Discover {
     rev: u64,
     payload: Box<DiscoverPayload>,
+  },
+  /// The playlist-sync links and the run state.
+  PlaylistSync {
+    rev: u64,
+    payload: Box<PlaylistSyncPayload>,
   },
 }
 
@@ -206,6 +212,40 @@ pub(crate) struct SearchPayload {
   playlists: Vec<PlaylistInfo>,
   /// The Spotify track ids among `tracks` that are in Liked Songs.
   liked: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PlaylistSyncPayload {
+  links: Vec<SyncLinkView>,
+  /// A run owns the sync slot.
+  running: bool,
+  /// The last finished run's summary; it covers only the links that run touched.
+  last_summary: Option<String>,
+  last_failed: bool,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SyncLinkView {
+  id: String,
+  source: Source,
+  name: String,
+  mirrors: Vec<SyncMirrorView>,
+  /// This link's line in the last run, which names a skipped or failed mirror.
+  last_line: Option<String>,
+  last_failed: bool,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SyncMirrorView {
+  source: Source,
+  /// Tracks placed on the mirror; the match cache itself stays on the server.
+  matched: u32,
+  unmatched: Vec<Unmatched>,
+  /// RFC 3339; `null` for a mirror that never finished a run.
+  last_run: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -492,8 +532,46 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
         }),
       }
     }
+    DisplayDomain::PlaylistSync => ServerMessage::PlaylistSync {
+      rev,
+      payload: Box::new(playlist_sync(app)),
+    },
     DisplayDomain::Artist => return None,
   })
+}
+
+fn playlist_sync(app: &App) -> PlaylistSyncPayload {
+  use crate::core::playlist_sync::LinkOutcome;
+  let report = app.playlist_sync_last_report();
+  PlaylistSyncPayload {
+    links: app
+      .playlist_sync_links()
+      .iter()
+      .map(|link| {
+        let last = report.and_then(|report| report.links.iter().find(|run| run.id == link.id));
+        SyncLinkView {
+          id: link.id.clone(),
+          source: link.master.source,
+          name: link.master.name.clone(),
+          mirrors: link
+            .mirrors
+            .iter()
+            .map(|mirror| SyncMirrorView {
+              source: mirror.endpoint.source,
+              matched: mirror.matches.len() as u32,
+              unmatched: mirror.unmatched.clone(),
+              last_run: mirror.last_run.clone(),
+            })
+            .collect(),
+          last_line: last.map(|run| run.line()),
+          last_failed: last.is_some_and(|run| matches!(run.outcome, LinkOutcome::Failed(_))),
+        }
+      })
+      .collect(),
+    running: app.playlist_sync_in_flight(),
+    last_summary: report.map(|report| report.summary()),
+    last_failed: report.is_some_and(|report| report.failed()),
+  }
 }
 
 fn lyrics(app: &App) -> LyricsPayload {
@@ -772,8 +850,23 @@ mod tests {
     assert_eq!(
       kinds,
       [
-        "route", "status", "source", "theme", "playback", "party", "devices", "search", "lyrics",
-        "library", "liked", "queue", "stats", "album", "session", "discover"
+        "route",
+        "status",
+        "source",
+        "theme",
+        "playback",
+        "party",
+        "devices",
+        "search",
+        "lyrics",
+        "library",
+        "liked",
+        "queue",
+        "stats",
+        "album",
+        "session",
+        "discover",
+        "playlist_sync"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -1265,6 +1358,61 @@ mod tests {
   }
 
   #[test]
+  fn loaded_sync_links_push_the_playlist_sync_channel_with_counts_not_the_match_cache() {
+    use crate::core::playlist_sync::{Endpoint, Link, Mirror, UnmatchReason};
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+    let endpoint = |source, name: &str| Endpoint {
+      source,
+      playlist_uri: format!("{name}:1"),
+      name: name.to_string(),
+    };
+
+    app.set_playlist_sync_links(vec![Link {
+      id: "abc123".to_string(),
+      master: endpoint(Source::Spotify, "Road Trip"),
+      mirrors: vec![Mirror {
+        endpoint: endpoint(Source::Qobuz, "Road Trip"),
+        matches: [("a".to_string(), "b".to_string())].into_iter().collect(),
+        unmatched: vec![Unmatched {
+          master_key: "c".to_string(),
+          title: "Levels".to_string(),
+          artist: "Avicii".to_string(),
+          reason: UnmatchReason::NoCandidate,
+        }],
+        last_run: None,
+      }],
+    }]);
+
+    let sync = &pushed(&diff(&before, &app), "playlist_sync")["payload"];
+    let mirror = &sync["links"][0]["mirrors"][0];
+    assert_eq!(sync["links"][0]["name"], "Road Trip");
+    assert_eq!(mirror["source"], "Qobuz");
+    assert_eq!(mirror["matched"], 1);
+    assert_eq!(mirror["unmatched"][0]["reason"], "NoCandidate");
+    assert!(mirror.get("matches").is_none());
+  }
+
+  #[test]
+  fn a_sync_run_in_flight_rides_the_playlist_sync_channel() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    assert!(app.begin_playlist_sync());
+    assert_eq!(
+      pushed(&diff(&before, &app), "playlist_sync")["payload"]["running"],
+      true
+    );
+    let begun = app.display_revisions();
+    assert!(!app.begin_playlist_sync());
+
+    assert_eq!(
+      app.display_revisions().get(DisplayDomain::PlaylistSync),
+      begun.get(DisplayDomain::PlaylistSync)
+    );
+  }
+
+  #[test]
   fn a_tick_carries_the_position_and_no_revision() {
     let (mut app, _rx) = app();
     app.song_progress_ms = 1_234;
@@ -1312,6 +1460,7 @@ mod tests {
     written::<AlbumPayload>(&dir, &cfg);
     written::<SessionPlay>(&dir, &cfg);
     written::<DiscoverPayload>(&dir, &cfg);
+    written::<PlaylistSyncPayload>(&dir, &cfg);
     written::<ArtistInfo>(&dir, &cfg);
     written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);

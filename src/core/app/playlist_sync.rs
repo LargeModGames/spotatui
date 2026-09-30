@@ -7,6 +7,7 @@ impl App {
       return false;
     }
     self.playlist_sync_in_flight = true;
+    self.display_revisions.bump(DisplayDomain::PlaylistSync);
     true
   }
 
@@ -14,11 +15,13 @@ impl App {
   pub fn finish_playlist_sync(&mut self, report: crate::core::playlist_sync::SyncReport) {
     self.playlist_sync_in_flight = false;
     self.playlist_sync_last_report = Some(report);
+    self.display_revisions.bump(DisplayDomain::PlaylistSync);
   }
 
   /// Replace the link snapshot the sync screen reads.
   pub fn set_playlist_sync_links(&mut self, links: Vec<crate::core::playlist_sync::Link>) {
     self.playlist_sync_links = links;
+    self.display_revisions.bump(DisplayDomain::PlaylistSync);
     self.view.playlist_sync_selected_link = self
       .view
       .playlist_sync_selected_link

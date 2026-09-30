@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import type { Action } from "./bindings/Action";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
@@ -79,6 +86,7 @@ export function Shell({
         source={channels.source?.payload ?? null}
         playingUri={playingUri}
         upNext={queued}
+        sync={channels.playlist_sync?.payload ?? null}
         send={send}
       />
     ),
@@ -153,7 +161,8 @@ export function Shell({
     [area, go],
   );
 
-  useEffect(() => {
+  // A layout effect: the keys work from the first painted frame.
+  useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const command = shellKey(describe(event, overlay !== null));
       if (!command) return;

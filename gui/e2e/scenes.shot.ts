@@ -10,6 +10,7 @@ import {
   playing,
   partyHosting,
   partyNone,
+  playlistSync,
   room,
   search,
   session,
@@ -210,4 +211,12 @@ test("discover", async ({ page }) => {
   await page.keyboard.press("3");
   await page.getByText("Lose Somebody").waitFor();
   await shot(page, "discover");
+});
+
+test("library health", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...playlistSync]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.getByText("Library health").click();
+  await page.getByText("LINKED PLAYLIST").waitFor();
+  await shot(page, "library-health");
 });

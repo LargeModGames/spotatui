@@ -68,6 +68,7 @@ const render = (songs: LikedSongs | null, playingUri: string | null = null) =>
       source={source}
       playingUri={playingUri}
       upNext={[]}
+      sync={null}
       send={() => {}}
     />,
   );

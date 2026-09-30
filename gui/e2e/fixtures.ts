@@ -22,6 +22,7 @@ const revisions = {
   album: 1,
   session: 1,
   discover: 1,
+  playlist_sync: 1,
 };
 
 export const hello: ServerMessage = {
@@ -619,6 +620,61 @@ export const discover: ServerMessage[] = [
       artists_mix: [],
       artists_mix_available: true,
       liked_ids: ["d0", "d3"],
+    },
+  },
+];
+
+/** Two linked playlists: one with unmatched tracks on Qobuz, one never synced. */
+export const playlistSync: ServerMessage[] = [
+  {
+    kind: "playlist_sync",
+    rev: 1,
+    payload: {
+      running: false,
+      last_summary: "Playlist sync: 2 links, 3 added, 0 removed, 3 unmatched",
+      last_failed: false,
+      links: [
+        {
+          id: "road",
+          source: "Spotify",
+          name: "Road Trip",
+          last_line: "Road Trip: 3 added, 0 removed, 3 unmatched",
+          last_failed: false,
+          mirrors: [
+            {
+              source: "Qobuz",
+              matched: 61,
+              unmatched: [
+                ["Levels", "Avicii", "NoCandidate"],
+                ["Local demo", "Jay", "NotSyncable"],
+                ["Freeze", "Kygo", "NoCandidate"],
+              ].map(([title, artist, reason], index) => ({
+                master_key: `k${index}`,
+                title,
+                artist,
+                reason: reason as "NoCandidate" | "NotSyncable",
+              })),
+              last_run: "2026-09-29T10:12:00Z",
+            },
+            {
+              source: "YouTube",
+              matched: 64,
+              unmatched: [],
+              last_run: "2026-09-29T10:12:00Z",
+            },
+          ],
+        },
+        {
+          id: "focus",
+          source: "Qobuz",
+          name: "Focus",
+          last_line: "Focus: skipped (Subsonic is not configured)",
+          last_failed: false,
+          mirrors: [
+            { source: "Subsonic", matched: 0, unmatched: [], last_run: null },
+          ],
+        },
+      ],
     },
   },
 ];
