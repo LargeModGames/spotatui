@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Action } from "./bindings/Action";
+import type { DeviceInfo } from "./bindings/DeviceInfo";
 import { shellKey, type Area, type ShellKey } from "./areas";
 import type { State } from "./connection";
+import { CommandMode } from "./CommandMode";
 import { Library } from "./Library";
 import { upNext } from "./libraryModel";
 import { sourceOf } from "./format";
@@ -11,6 +13,8 @@ import { QueueDrawer } from "./QueueDrawer";
 import { Search } from "./Search";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
+
+const NO_DEVICES: DeviceInfo[] = [];
 
 /** The frame: the top bar, the screen of the active area, the player bar and the toast. */
 export function Shell({
@@ -39,7 +43,7 @@ export function Shell({
     () => upNext(queue, spotifyPlays),
     [queue, spotifyPlays],
   );
-  const [overlay, setOverlay] = useState<"queue" | null>(null);
+  const [overlay, setOverlay] = useState<"queue" | "command" | null>(null);
   const [query, setQuery] = useState("");
 
   // The Web API queue is fetched on request only: on open and on each Spotify track change.
@@ -85,6 +89,7 @@ export function Shell({
       if (!command) return;
       if (command === "toggle") send("TogglePlayback");
       else if (command === "queue") setOverlay("queue");
+      else if (command === "command") setOverlay("command");
       else if (command === "search") openSearch();
       else if (command === "escape") {
         if (overlay) setOverlay(null);
@@ -138,6 +143,21 @@ export function Shell({
         connected={state.connected}
         send={send}
       />
+      {overlay === "command" && (
+        <CommandMode
+          search={channels.search?.payload ?? null}
+          searchRev={channels.search?.rev ?? null}
+          source={channels.source?.payload ?? null}
+          devices={channels.devices?.payload ?? NO_DEVICES}
+          storage={window.localStorage}
+          send={send}
+          onSearch={(text) => {
+            setQuery(text);
+            go("search");
+          }}
+          onClose={() => setOverlay(null)}
+        />
+      )}
       {overlay === "queue" && (
         <QueueDrawer
           queue={queue ?? null}

@@ -40,6 +40,10 @@ describe("shellKey", () => {
     expect(shellKey(press(" ", { interactive: true }))).toBeNull();
   });
 
+  it("colon opens command mode", () => {
+    expect(shellKey(press(":"))).toBe("command");
+  });
+
   it("slash opens the search field", () => {
     expect(shellKey(press("/"))).toBe("search");
     expect(shellKey(press("/", { typing: true }))).toBeNull();

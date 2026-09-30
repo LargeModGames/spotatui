@@ -104,3 +104,12 @@ test("search at 800 px", async ({ page }) => {
   await page.keyboard.type("kygo");
   await shot(page, "search-narrow");
 });
+
+test("command mode", async ({ page }) => {
+  await openWith(page, [...playing, ...library]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press(":");
+  await page.getByRole("dialog", { name: "Command mode" }).waitFor();
+  await page.keyboard.type("play adele");
+  await shot(page, "command-mode");
+});
