@@ -58,9 +58,11 @@ export const Search = memo(function Search({
       row: 0,
     },
   );
-  const want = wantFor.query === (search?.query ?? null) ? wantFor.row : 0;
-  const setWant = (row: number) =>
-    setWantFor({ query: search?.query ?? null, row });
+  const resultQuery = search?.query ?? null;
+  // Store the reset, so results for an earlier query start at the top when they come back.
+  if (wantFor.query !== resultQuery) setWantFor({ query: resultQuery, row: 0 });
+  const want = wantFor.query === resultQuery ? wantFor.row : 0;
+  const setWant = (row: number) => setWantFor({ query: resultQuery, row });
 
   const list = useRef<HTMLDivElement>(null);
   const run = onRun;

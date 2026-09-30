@@ -74,13 +74,14 @@ export function Shell({
   const statusError =
     (channels.status?.payload.is_error ?? false) ||
     channels.status?.payload.api_error != null;
-  const searchWaiting =
+  const searchEnded =
     searchPending !== null &&
-    !(
-      channels.search?.payload.query === searchPending.query &&
-      searchRev !== searchPending.search
-    ) &&
-    !(statusError && statusRev !== searchPending.status);
+    ((channels.search?.payload.query === searchPending.query &&
+      searchRev !== searchPending.search) ||
+      (statusError && statusRev !== searchPending.status));
+  // An ended wait is cleared, so a later answer to another query cannot restart it.
+  if (searchEnded) setSearchPending(null);
+  const searchWaiting = searchPending !== null && !searchEnded;
   useEffect(() => {
     if (!searchPending) return;
     const timer = window.setTimeout(() => setSearchPending(null), PENDING_MS);
@@ -161,6 +162,7 @@ export function Shell({
     party: (
       <Party
         party={channels.party?.payload ?? null}
+        connected={state.connected}
         item={playback?.item ?? null}
         position={state.position}
         queue={queue ?? null}

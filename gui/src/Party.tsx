@@ -22,6 +22,7 @@ import { usePosition } from "./usePosition";
 /** The listening party: host or join, then the room with the listeners and the host's queue. */
 export function Party({
   party,
+  connected,
   item,
   position,
   queue,
@@ -29,6 +30,7 @@ export function Party({
   send,
 }: {
   party: PartyPayload | null;
+  connected: boolean;
   item: NowPlaying | null;
   position: Position | null;
   queue: QueuePayload | null;
@@ -44,7 +46,8 @@ export function Party({
       .querySelector<HTMLElement>('[data-area="party"] [data-focus]')
       ?.focus();
   }, [view, active]);
-  if (!party || !room) return <Start party={party} send={send} />;
+  if (!party || !room)
+    return <Start party={party} connected={connected} send={send} />;
   return (
     <Room
       party={party}
@@ -60,9 +63,11 @@ export function Party({
 
 function Start({
   party,
+  connected,
   send,
 }: {
   party: PartyPayload | null;
+  connected: boolean;
   send: (action: Action) => void;
 }) {
   const [code, setCode] = useState("");
@@ -70,10 +75,11 @@ function Start({
   const available = party?.available ?? false;
   const connecting = party?.phase === "connecting";
   const join = joinRequest(code, name);
-  // A click waits for the next party push, so a double click cannot open two rooms.
+  // A click waits for the next party push, so a double click cannot open two rooms. Without a
+  // socket the click would be dropped, so both forms wait; the resync push releases the wait.
   const [clickedFor, setClickedFor] = useState<PartyPayload | null>(null);
   const pending = clickedFor !== null && clickedFor === party;
-  const disabled = !available || connecting || pending;
+  const disabled = !connected || !available || connecting || pending;
   return (
     <div className="party" data-focus tabIndex={-1}>
       <div className="party-head">

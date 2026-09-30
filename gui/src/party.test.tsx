@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { PartyPayload } from "./bindings/PartyPayload";
 import { Party } from "./Party";
 
-const render = (party: PartyPayload | null) =>
+const render = (party: PartyPayload | null, connected = true) =>
   renderToStaticMarkup(
     <Party
       party={party}
+      connected={connected}
       item={null}
       position={null}
       queue={null}
@@ -38,6 +39,16 @@ describe("Party", () => {
     expect(html).toContain("Join a party");
     expect(html).toContain("needs a Spotify session");
     expect(html).toMatch(/class="primary" disabled=""/);
+  });
+
+  it("waits for the socket before it offers host or join", () => {
+    const party: PartyPayload = {
+      phase: "disconnected",
+      room: null,
+      available: true,
+    };
+    expect(render(party)).not.toMatch(/class="primary" disabled=""/);
+    expect(render(party, false)).toMatch(/class="primary" disabled=""/);
   });
 
   it("shows the code, the listeners and the guest control to the host", () => {
