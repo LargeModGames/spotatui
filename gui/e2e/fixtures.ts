@@ -274,3 +274,63 @@ export const idle: ServerMessage[] = [
     },
   },
 ];
+
+function hit(
+  name: string,
+  id: string,
+  album: string,
+  artists: string,
+  seconds: number,
+): TrackInfo {
+  return {
+    ...track(name, seconds, `spotify:track:${id}`, artists),
+    id,
+    album,
+    is_local: false,
+  };
+}
+
+/** A Spotify search for Kygo: an artist, four albums, six songs, two of them liked. */
+export const search: ServerMessage[] = [
+  {
+    kind: "search",
+    rev: 1,
+    payload: {
+      ran: true,
+      tracks: [
+        hit("Freeze", "f1", "Freeze", "Kygo", 487),
+        hit("Firestone", "f2", "Cloud Nine", "Kygo, Conrad Sewell", 272),
+        hit("Stay", "f3", "Cloud Nine", "Kygo, Maty Noyes", 239),
+        hit("Stole the Show", "f4", "Cloud Nine", "Kygo, Parson James", 223),
+        hit("Carry Me", "f5", "Cloud Nine", "Kygo, Julia Michaels", 233),
+        hit("Raging", "f6", "Cloud Nine", "Kygo, Kodaline", 224),
+      ],
+      artists: [
+        {
+          id: "kygo",
+          uri: "spotify:artist:kygo",
+          name: "Kygo",
+          image_url: null,
+        },
+      ],
+      albums: [
+        ["Cloud Nine", "2016-05-13"],
+        ["Kids in Love", "2017-11-03"],
+        ["Golden Hour", "2020-05-29"],
+        ["KYGO", "2024-06-14"],
+      ].map(([name, release_date], index) => ({
+        id: `a${index}`,
+        uri: `spotify:album:a${index}`,
+        name,
+        artists: [{ id: "kygo", name: "Kygo" }],
+        album_type: "album",
+        release_date,
+        total_tracks: null,
+        image_url: null,
+        tracks: [],
+      })),
+      playlists: [],
+      liked: ["f1", "f2"],
+    },
+  },
+];

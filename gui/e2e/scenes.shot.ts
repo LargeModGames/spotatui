@@ -7,6 +7,7 @@ import {
   libraryUnavailable,
   onboarding,
   playing,
+  search,
 } from "./fixtures";
 
 test("expired", async ({ page }) => {
@@ -83,4 +84,23 @@ test("queue drawer", async ({ page }) => {
   await page.keyboard.press("Shift+Q");
   await page.getByRole("dialog", { name: "Queue" }).waitFor();
   await shot(page, "queue-drawer");
+});
+
+test("search", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...search]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("2");
+  await page.getByText("Play Kygo").waitFor();
+  await page.keyboard.type("kygo");
+  await shot(page, "search");
+});
+
+test("search at 800 px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, [...playing, ...library, ...search]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("2");
+  await page.getByText("Play Kygo").waitFor();
+  await page.keyboard.type("kygo");
+  await shot(page, "search-narrow");
 });

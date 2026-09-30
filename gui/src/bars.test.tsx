@@ -69,6 +69,8 @@ describe("TopBar", () => {
         area="library"
         ready={(area) => area === "library"}
         onArea={() => {}}
+        query=""
+        onSearch={() => {}}
         device={device}
         connected={connected}
         queued={6}

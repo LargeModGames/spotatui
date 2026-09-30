@@ -5,8 +5,9 @@ import type { LikedSongs } from "./LikedSongs";
 import type { OnboardingView } from "./OnboardingView";
 import type { PlaybackPayload } from "./PlaybackPayload";
 import type { QueuePayload } from "./QueuePayload";
+import type { SearchPayload } from "./SearchPayload";
 import type { SourcePayload } from "./SourcePayload";
 import type { SourcePlaylists } from "./SourcePlaylists";
 import type { StatusPayload } from "./StatusPayload";
 
-export type ServerMessage = { "kind": "hello", payload: HelloPayload, } | { "kind": "onboarding", payload: OnboardingView, } | { "kind": "tick", payload: number | null, } | { "kind": "playback", rev: number, payload: PlaybackPayload, } | { "kind": "queue", rev: number, payload: QueuePayload, } | { "kind": "status", rev: number, payload: StatusPayload, } | { "kind": "source", rev: number, payload: SourcePayload, } | { "kind": "library", rev: number, payload: SourcePlaylists, } | { "kind": "liked", rev: number, payload: LikedSongs, } | { "kind": "theme", rev: number, payload: { [key in string]: [number, number, number] | null }, } | { "kind": "devices", rev: number, payload: Array<DeviceInfo>, } | { "kind": "route", rev: number, payload: string, };
+export type ServerMessage = { "kind": "hello", payload: HelloPayload, } | { "kind": "onboarding", payload: OnboardingView, } | { "kind": "tick", payload: number | null, } | { "kind": "playback", rev: number, payload: PlaybackPayload, } | { "kind": "queue", rev: number, payload: QueuePayload, } | { "kind": "status", rev: number, payload: StatusPayload, } | { "kind": "source", rev: number, payload: SourcePayload, } | { "kind": "library", rev: number, payload: SourcePlaylists, } | { "kind": "liked", rev: number, payload: LikedSongs, } | { "kind": "theme", rev: number, payload: { [key in string]: [number, number, number] | null }, } | { "kind": "devices", rev: number, payload: Array<DeviceInfo>, } | { "kind": "search", rev: number, payload: SearchPayload, } | { "kind": "route", rev: number, payload: string, };

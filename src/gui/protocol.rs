@@ -6,8 +6,8 @@ use crate::core::action::Action;
 use crate::core::app::{App, DisplayDomain, DisplayRevisions};
 use crate::core::first_run::compiled_in_sources;
 use crate::core::plugin_api::{
-  device_list, route_name, DeviceInfo, PlaybackState, PlaylistInfo, QueueItemSnapshot,
-  QueueSnapshot, TrackInfo,
+  device_list, route_name, AlbumInfo, ArtistInfo, DeviceInfo, PlaybackState, PlaylistInfo,
+  QueueItemSnapshot, QueueSnapshot, TrackInfo,
 };
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
@@ -65,6 +65,11 @@ pub(crate) enum ServerMessage {
   Devices {
     rev: u64,
     payload: Vec<DeviceInfo>,
+  },
+  /// The last search's hits, from whichever source ran it.
+  Search {
+    rev: u64,
+    payload: Box<SearchPayload>,
   },
   Route {
     rev: u64,
@@ -154,6 +159,19 @@ pub(crate) struct SourcePlaylists {
   youtube: Vec<PlaylistInfo>,
   /// Stations are playable rows (`radio:<url>`), not playlists.
   radio: Vec<TrackInfo>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SearchPayload {
+  /// False until a search landed; empty lists before that mean "not searched".
+  ran: bool,
+  tracks: Vec<TrackInfo>,
+  artists: Vec<ArtistInfo>,
+  albums: Vec<AlbumInfo>,
+  playlists: Vec<PlaylistInfo>,
+  /// The Spotify track ids among `tracks` that are in Liked Songs.
+  liked: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -276,11 +294,42 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: Box::new(liked(app)),
     },
-    DisplayDomain::Party
-    | DisplayDomain::Search
-    | DisplayDomain::Lyrics
-    | DisplayDomain::Artist => return None,
+    DisplayDomain::Search => ServerMessage::Search {
+      rev,
+      payload: Box::new(search(app)),
+    },
+    DisplayDomain::Party | DisplayDomain::Lyrics | DisplayDomain::Artist => return None,
   })
+}
+
+fn search(app: &App) -> SearchPayload {
+  fn items<T: Clone>(page: &Option<crate::core::pagination::Paged<T>>) -> Vec<T> {
+    page
+      .as_ref()
+      .map(|page| page.items.clone())
+      .unwrap_or_default()
+  }
+  let results = app.search_results();
+  let tracks = items(&results.tracks);
+  let liked = tracks
+    .iter()
+    .filter(|track| {
+      track
+        .uri
+        .as_deref()
+        .is_some_and(|uri| uri.starts_with("spotify:track:"))
+    })
+    .filter_map(|track| track.id.clone())
+    .filter(|id| app.liked_song_ids_set().contains(id))
+    .collect();
+  SearchPayload {
+    ran: results.tracks.is_some(),
+    tracks,
+    artists: items(&results.artists),
+    albums: items(&results.albums),
+    playlists: items(&results.playlists),
+    liked,
+  }
 }
 
 fn liked(app: &App) -> LikedSongs {
@@ -394,7 +443,10 @@ mod tests {
 
     assert_eq!(
       kinds,
-      ["route", "status", "source", "theme", "playback", "devices", "library", "liked", "queue"]
+      [
+        "route", "status", "source", "theme", "playback", "devices", "search", "library", "liked",
+        "queue"
+      ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
     assert_eq!(
@@ -581,6 +633,52 @@ mod tests {
   }
 
   #[test]
+  fn a_search_before_any_query_reports_it_has_not_run() {
+    let (app, _rx) = app();
+
+    let search = &pushed(&resync(&app), "search")["payload"];
+
+    assert_eq!(search["ran"], false);
+    assert_eq!(search["tracks"], serde_json::json!([]));
+  }
+
+  #[test]
+  fn a_search_typed_on_the_page_dispatches_the_active_sources_search() {
+    let (mut app, rx) = app();
+
+    apply_from_page(
+      &mut app,
+      &action_frame(Action::SearchActiveSource("kygo".to_string())),
+    );
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetSearchResults(query, _)) if query == "kygo"
+    ));
+  }
+
+  #[test]
+  fn a_liked_mark_landing_after_the_results_resends_the_search() {
+    let (mut app, _rx) = app();
+    let mut page = liked_page(0, 1, 1, false);
+    page.items[0].id = Some("0".to_string());
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(page),
+      ..Default::default()
+    });
+    let landed = &pushed(&diff(&DisplayRevisions::default(), &app), "search")["payload"];
+    assert_eq!(landed["ran"], true);
+    assert_eq!(landed["tracks"][0]["name"], "Track 0");
+    assert_eq!(landed["liked"], serde_json::json!([]));
+    let before = app.display_revisions();
+
+    app.liked_song_ids_set_mut().insert("0".to_string());
+
+    let search = &pushed(&diff(&before, &app), "search")["payload"];
+    assert_eq!(search["liked"], serde_json::json!(["0"]));
+  }
+
+  #[test]
   fn a_tick_carries_the_position_and_no_revision() {
     let (mut app, _rx) = app();
     app.song_progress_ms = 1_234;
@@ -621,6 +719,9 @@ mod tests {
     written::<SourcePayload>(&dir, &cfg);
     written::<LikedSongs>(&dir, &cfg);
     written::<SourcePlaylists>(&dir, &cfg);
+    written::<SearchPayload>(&dir, &cfg);
+    written::<ArtistInfo>(&dir, &cfg);
+    written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);
     written::<DisplayRevisions>(&dir, &cfg);
     written::<DeviceInfo>(&dir, &cfg);

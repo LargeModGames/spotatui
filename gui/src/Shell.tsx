@@ -8,6 +8,7 @@ import { upNext } from "./libraryModel";
 import { sourceOf } from "./format";
 import { PlayerBar } from "./PlayerBar";
 import { QueueDrawer } from "./QueueDrawer";
+import { Search } from "./Search";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 
@@ -39,6 +40,7 @@ export function Shell({
     [queue, spotifyPlays],
   );
   const [overlay, setOverlay] = useState<"queue" | null>(null);
+  const [query, setQuery] = useState("");
 
   // The Web API queue is fetched on request only: on open and on each Spotify track change.
   useEffect(() => {
@@ -56,9 +58,26 @@ export function Shell({
         send={send}
       />
     ),
+    search: (
+      <Search
+        search={channels.search?.payload ?? null}
+        searchRev={channels.search?.rev ?? null}
+        statusRev={channels.status?.rev ?? null}
+        source={channels.source?.payload ?? null}
+        playingUri={playingUri}
+        query={query}
+        onQuery={setQuery}
+        send={send}
+      />
+    ),
   };
   const ready = (target: Area) => target in screens;
   const readyKeys = Object.keys(screens).join(" ");
+  // The search field takes the keyboard even when Search is already the area.
+  const openSearch = useCallback(() => {
+    if (area === "search") focusScreen("search");
+    else go("search");
+  }, [area, go]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -66,6 +85,7 @@ export function Shell({
       if (!command) return;
       if (command === "toggle") send("TogglePlayback");
       else if (command === "queue") setOverlay("queue");
+      else if (command === "search") openSearch();
       else if (command === "escape") {
         if (overlay) setOverlay(null);
         else blurText();
@@ -75,7 +95,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [go, send, readyKeys, overlay]);
+  }, [go, send, readyKeys, overlay, openSearch]);
 
   // A switch or a closed overlay hands the keyboard to the screen; the first render leaves focus alone.
   const shown = useRef({ area, overlay });
@@ -94,6 +114,8 @@ export function Shell({
         onArea={go}
         device={playback?.device ?? null}
         connected={state.connected}
+        query={query}
+        onSearch={openSearch}
         queued={queued.length}
         queueOpen={overlay === "queue"}
         onQueue={() => setOverlay(overlay === "queue" ? null : "queue")}

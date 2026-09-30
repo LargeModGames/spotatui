@@ -5,6 +5,8 @@ export function TopBar({
   area,
   ready,
   onArea,
+  query,
+  onSearch,
   device,
   connected,
   queued,
@@ -14,6 +16,8 @@ export function TopBar({
   area: Area;
   ready: (area: Area) => boolean;
   onArea: (area: Area) => void;
+  query: string;
+  onSearch: () => void;
   device: string | null;
   connected: boolean;
   queued: number;
@@ -41,12 +45,14 @@ export function TopBar({
         ))}
       </nav>
       <div className="search">
-        <button type="button">
+        <button type="button" onClick={onSearch}>
           <Icon>
             <circle cx="11" cy="11" r="7" />
             <path d="m20 20-3.5-3.5" />
           </Icon>
-          <span>Search your music, or type a command</span>
+          <span className={query ? "typed" : undefined}>
+            {query || "Search your music, or type a command"}
+          </span>
           <kbd>/ search · : command</kbd>
         </button>
       </div>

@@ -131,6 +131,7 @@ pub struct ArtistRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct ArtistInfo {
   pub id: Option<String>,
   pub uri: Option<String>,
@@ -140,6 +141,7 @@ pub struct ArtistInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct AlbumInfo {
   pub id: Option<String>,
   pub uri: Option<String>,

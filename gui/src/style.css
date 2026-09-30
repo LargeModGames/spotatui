@@ -580,3 +580,7 @@ kbd {
 .drawer .keys {
   padding: 10px 20px;
 }
+
+.search .typed {
+  color: var(--text);
+}
