@@ -19,6 +19,7 @@ const revisions = {
   liked: 1,
   queue: 1,
   stats: 1,
+  album: 1,
 };
 
 export const hello: ServerMessage = {
@@ -87,6 +88,7 @@ const nowPlaying: NowPlaying = {
   is_live: false,
   shuffle: false,
   repeat: "off",
+  context_uri: null,
 };
 
 /** Adele's 21 from song 5, paused at 1:40, so the frame does not move between runs; one queued song per other source. */
@@ -452,6 +454,94 @@ export const partyHosting: ServerMessage[] = [
         guests: ["Alex", "Sam"],
         shared_control: false,
       },
+    },
+  },
+];
+
+const adele21 = [
+  ["Rolling in the Deep", 228],
+  ["Rumour Has It", 223],
+  ["Turning Tables", 250],
+  ["Don't You Remember", 243],
+  ["Set Fire to the Rain", 243],
+  ["He Won't Go", 278],
+  ["Take It All", 228],
+  ["I'll Be Waiting", 241],
+  ["One and Only", 348],
+  ["Lovesong", 316],
+  ["Someone Like You", 285],
+] as const;
+
+/** Adele's 21 on Spotify as the play context, song 5, with lyrics and two albums queued after it. */
+export const room: ServerMessage[] = [
+  {
+    kind: "playback",
+    rev: 2,
+    payload: {
+      item: {
+        ...nowPlaying,
+        uri: "spotify:track:a4",
+        context_uri: "spotify:album:21",
+      },
+      volume: 72,
+      device: "This PC",
+      liked: true,
+    },
+  },
+  {
+    kind: "album",
+    rev: 1,
+    payload: {
+      album: {
+        id: "21",
+        uri: "spotify:album:21",
+        name: "21",
+        artists: [{ id: "adele", name: "Adele" }],
+        album_type: "album",
+        release_date: "2011-01-24",
+        total_tracks: 11,
+        image_url: null,
+        tracks: adele21.map(([name, seconds], index) => ({
+          ...track(name, seconds, `spotify:track:a${index}`),
+          album: "",
+          is_local: false,
+          track_number: index + 1,
+        })),
+      },
+    },
+  },
+  {
+    kind: "lyrics",
+    rev: 1,
+    payload: {
+      status: "found",
+      synced: true,
+      lines: [
+        [0, "I let it fall, my heart"],
+        [9000, "And as it fell, you rose to claim it"],
+        [18000, "It was dark and I was over"],
+        [26000, "Until you kissed my lips and you saved me"],
+        [100000, "But I set fire to the rain"],
+        [106000, "Watched it pour as I touched your face"],
+        [112000, "Well, it burned while I cried"],
+        [118000, "'Cause I heard it screaming out your name"],
+      ].map(([at_ms, text]) => ({ at_ms: Number(at_ms), text: String(text) })),
+    },
+  },
+  {
+    kind: "queue",
+    rev: 2,
+    payload: {
+      now: null,
+      native: [
+        track("Firestone", 272, "spotify:track:k1", "Kygo"),
+        track("Stay", 239, "spotify:track:k2", "Kygo"),
+        track("Suite", 602, "file:///music/powell/01.flac", "John Powell"),
+      ].map((entry, index) => ({
+        ...entry,
+        album: index < 2 ? "Cloud Nine" : "Film Suites, Vol. 1",
+      })),
+      spotify: { currently_playing: null, items: [] },
     },
   },
 ];

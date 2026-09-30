@@ -347,7 +347,7 @@ impl MetadataNetwork for Network {
             selected_index: 0,
           });
           app.album_table_context = crate::core::app::AlbumTableContext::Simplified;
-          app.bump_display(crate::core::app::DisplayDomain::Artist);
+          app.bump_display(crate::core::app::DisplayDomain::Album);
           app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
         }
         Err(e) => self.handle_error(anyhow!(e)).await,
@@ -396,7 +396,7 @@ impl MetadataNetwork for Network {
           selected_index: 0,
         });
         app.album_table_context = crate::core::app::AlbumTableContext::Full;
-        app.bump_display(crate::core::app::DisplayDomain::Artist);
+        app.bump_display(crate::core::app::DisplayDomain::Album);
         app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,

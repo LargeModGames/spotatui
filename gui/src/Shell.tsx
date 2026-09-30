@@ -12,6 +12,7 @@ import { sourceOf } from "./format";
 import { Party } from "./Party";
 import { PlayerBar } from "./PlayerBar";
 import { QueueDrawer } from "./QueueDrawer";
+import { Room } from "./Room";
 import { Search } from "./Search";
 import { Stats } from "./Stats";
 import { Toast } from "./Toast";
@@ -48,6 +49,9 @@ export function Shell({
   );
   const [overlay, setOverlay] = useState<"queue" | "command" | null>(null);
   const [query, setQuery] = useState("");
+  // Where the Room returns to, and whether it shows the lyrics instead of the sides.
+  const [back, setBack] = useState<Area>("library");
+  const [showLyrics, setShowLyrics] = useState(false);
 
   // Stats reload on every visit, as the terminal's Stats row does.
   useEffect(() => {
@@ -56,8 +60,9 @@ export function Shell({
 
   // The Web API queue is fetched on request only: on open and on each Spotify track change.
   useEffect(() => {
-    if (overlay === "queue" && spotifyPlays) send("RefreshQueue");
-  }, [overlay, spotifyPlays, playingUri, send]);
+    if ((overlay === "queue" || area === "room") && spotifyPlays)
+      send("RefreshQueue");
+  }, [overlay, area, spotifyPlays, playingUri, send]);
 
   const screens: Partial<Record<Area, ReactNode>> = {
     library: (
@@ -92,6 +97,20 @@ export function Shell({
         send={send}
       />
     ),
+    room: (
+      <Room
+        item={playback?.item ?? null}
+        position={state.position}
+        connected={state.connected}
+        album={channels.album?.payload.album ?? null}
+        lyrics={channels.lyrics?.payload ?? null}
+        upNext={queued}
+        queueNow={queue?.now != null}
+        showLyrics={showLyrics}
+        active={area === "room"}
+        send={send}
+      />
+    ),
   };
   const ready = (target: Area) => target in screens;
   const readyKeys = Object.keys(screens).join(" ");
@@ -100,6 +119,14 @@ export function Shell({
     if (area === "search") focusScreen("search");
     else go("search");
   }, [area, go]);
+  const openRoom = useCallback(
+    (lyrics: boolean) => {
+      if (area !== "room") setBack(area);
+      setShowLyrics(lyrics);
+      go("room");
+    },
+    [area, go],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -109,16 +136,22 @@ export function Shell({
       else if (command === "queue") setOverlay("queue");
       else if (command === "command") setOverlay("command");
       else if (command === "search") openSearch();
-      else if (command === "escape") {
+      else if (command === "room") {
+        if (area === "room") go(back);
+        else openRoom(false);
+      } else if (command === "lyrics") {
+        if (area === "room") setShowLyrics((shown) => !shown);
+        else openRoom(true);
+      } else if (command === "escape") {
         if (overlay) setOverlay(null);
-        else blurText();
+        else if (!blurText() && area === "room") go(back);
       } else if (readyKeys.split(" ").includes(command.area)) go(command.area);
       else return;
       event.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [go, send, readyKeys, overlay, openSearch]);
+  }, [go, send, readyKeys, overlay, openSearch, openRoom, area, back]);
 
   // A switch or a closed overlay hands the keyboard to the screen; the first render leaves focus alone.
   const shown = useRef({ area, overlay });
@@ -130,7 +163,7 @@ export function Shell({
   }, [area, overlay]);
 
   return (
-    <main className="shell">
+    <main className={area === "room" ? "shell room-shell" : "shell"}>
       <TopBar
         area={area}
         ready={ready}
@@ -155,12 +188,15 @@ export function Shell({
           </div>
         ))}
       </div>
-      <PlayerBar
-        playback={playback}
-        position={state.position}
-        connected={state.connected}
-        send={send}
-      />
+      {area !== "room" && (
+        <PlayerBar
+          playback={playback}
+          position={state.position}
+          connected={state.connected}
+          send={send}
+          onRoom={openRoom}
+        />
+      )}
       {overlay === "command" && (
         <CommandMode
           search={channels.search?.payload ?? null}
@@ -222,7 +258,10 @@ function focusScreen(area: Area) {
     ?.scrollIntoView({ block: "nearest" });
 }
 
-function blurText() {
+/** Leaves a text field; false when none had the keyboard. */
+function blurText(): boolean {
   const active = document.activeElement;
-  if (active instanceof HTMLElement && isText(active)) active.blur();
+  if (!(active instanceof HTMLElement) || !isText(active)) return false;
+  active.blur();
+  return true;
 }

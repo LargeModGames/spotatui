@@ -47,6 +47,7 @@ const item = (uri: string): NowPlaying => ({
   is_live: false,
   shuffle: false,
   repeat: "off",
+  context_uri: null,
 });
 
 const drawer = (uri: string) =>

@@ -40,6 +40,12 @@ describe("shellKey", () => {
     expect(shellKey(press(" ", { interactive: true }))).toBeNull();
   });
 
+  it("r opens the Room and l its lyrics", () => {
+    expect(shellKey(press("r"))).toBe("room");
+    expect(shellKey(press("l"))).toBe("lyrics");
+    expect(shellKey(press("r", { typing: true }))).toBeNull();
+  });
+
   it("colon opens command mode", () => {
     expect(shellKey(press(":"))).toBe("command");
   });

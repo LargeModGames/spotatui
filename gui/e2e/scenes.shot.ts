@@ -9,6 +9,7 @@ import {
   playing,
   partyHosting,
   partyNone,
+  room,
   search,
   stats,
 } from "./fixtures";
@@ -157,4 +158,29 @@ test("party hosting at 800 px", async ({ page }) => {
   await page.keyboard.press("6");
   await page.getByText("You host").waitFor();
   await shot(page, "party-hosting-narrow");
+});
+
+test("room", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...room]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("r");
+  await page.getByText("SIDE A").waitFor();
+  await shot(page, "room");
+});
+
+test("room lyrics", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...room]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("l");
+  await page.getByText("But I set fire to the rain").waitFor();
+  await shot(page, "room-lyrics");
+});
+
+test("room at 800 px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, [...playing, ...library, ...room]);
+  await page.getByText("Wake Me Up").waitFor();
+  await page.keyboard.press("r");
+  await page.getByText("SIDE A").waitFor();
+  await shot(page, "room-narrow");
 });

@@ -85,6 +85,16 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: Box<StatsPayload>,
   },
+  /// The lyrics of the playing track, fetched on every track change.
+  Lyrics {
+    rev: u64,
+    payload: Box<LyricsPayload>,
+  },
+  /// The album the app last fetched for its album page.
+  Album {
+    rev: u64,
+    payload: Box<AlbumPayload>,
+  },
 }
 
 #[derive(Serialize)]
@@ -118,6 +128,8 @@ pub(crate) struct NowPlaying {
   is_live: bool,
   shuffle: bool,
   repeat: String,
+  /// The Spotify play context (album, playlist or artist); `null` for a raw list, a queue slot or another source.
+  context_uri: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -184,6 +196,30 @@ pub(crate) struct SearchPayload {
   playlists: Vec<PlaylistInfo>,
   /// The Spotify track ids among `tracks` that are in Liked Songs.
   liked: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct LyricsPayload {
+  /// `not_started`, `loading`, `found` or `not_found`.
+  status: &'static str,
+  /// False when the line times are estimated from plain lyrics.
+  synced: bool,
+  lines: Vec<LyricLine>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct LyricLine {
+  at_ms: u64,
+  text: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct AlbumPayload {
+  /// With its tracks; `null` before the first album fetch.
+  album: Option<AlbumInfo>,
 }
 
 #[derive(Serialize)]
@@ -402,8 +438,60 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: party(app),
     },
-    DisplayDomain::Lyrics | DisplayDomain::Artist => return None,
+    DisplayDomain::Lyrics => ServerMessage::Lyrics {
+      rev,
+      payload: Box::new(lyrics(app)),
+    },
+    DisplayDomain::Album => ServerMessage::Album {
+      rev,
+      payload: Box::new(album(app)),
+    },
+    DisplayDomain::Artist => return None,
   })
+}
+
+fn lyrics(app: &App) -> LyricsPayload {
+  use crate::core::app::LyricsStatus;
+  LyricsPayload {
+    status: match app.lyrics_status() {
+      LyricsStatus::NotStarted => "not_started",
+      LyricsStatus::Loading => "loading",
+      LyricsStatus::Found => "found",
+      LyricsStatus::NotFound => "not_found",
+    },
+    synced: app.lyrics_synced(),
+    lines: app
+      .lyrics()
+      .unwrap_or_default()
+      .iter()
+      .map(|(at, text)| LyricLine {
+        at_ms: *at as u64,
+        text: text.clone(),
+      })
+      .collect(),
+  }
+}
+
+fn album(app: &App) -> AlbumPayload {
+  use crate::core::app::AlbumTableContext;
+  AlbumPayload {
+    album: match app.album_table_context {
+      AlbumTableContext::Full => app
+        .selected_album_full
+        .as_ref()
+        .map(|selected| selected.album.clone()),
+      AlbumTableContext::Simplified => {
+        app
+          .selected_album_simplified
+          .as_ref()
+          .map(|selected| AlbumInfo {
+            tracks: selected.tracks.items.clone(),
+            total_tracks: Some(selected.tracks.total),
+            ..selected.album.clone()
+          })
+      }
+    },
+  }
 }
 
 fn party(app: &App) -> PartyPayload {
@@ -565,6 +653,7 @@ fn playback(app: &App) -> PlaybackPayload {
         .repeat
         .map(PlaybackState::repeat_from)
         .unwrap_or_else(|| "off".to_string()),
+      context_uri: snapshot.context_uri.clone(),
     }),
     volume: *volume,
     device: device.clone(),
@@ -637,8 +726,8 @@ mod tests {
     assert_eq!(
       kinds,
       [
-        "route", "status", "source", "theme", "playback", "party", "devices", "search", "library",
-        "liked", "queue", "stats"
+        "route", "status", "source", "theme", "playback", "party", "devices", "search", "lyrics",
+        "library", "liked", "queue", "stats", "album"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -1012,6 +1101,63 @@ mod tests {
   }
 
   #[test]
+  fn found_lyrics_push_the_lyrics_channel_with_millisecond_lines() {
+    use crate::core::app::LyricsStatus;
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.set_lyrics(
+      LyricsStatus::Found,
+      Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]),
+      false,
+    );
+
+    let lyrics = &pushed(&diff(&before, &app), "lyrics")["payload"];
+    assert_eq!(lyrics["status"], "found");
+    assert_eq!(lyrics["synced"], false);
+    assert_eq!(lyrics["lines"][1]["at_ms"], 5000);
+  }
+
+  #[test]
+  fn a_fetched_album_rides_the_album_channel_with_its_page_of_tracks() {
+    use crate::core::app::{AlbumTableContext, SelectedAlbum};
+    let (mut app, _rx) = app();
+    assert!(pushed(&resync(&app), "album")["payload"]["album"].is_null());
+    let before = app.display_revisions();
+
+    app.selected_album_simplified = Some(SelectedAlbum {
+      album: AlbumInfo {
+        uri: Some("spotify:album:21".to_string()),
+        name: "21".to_string(),
+        ..AlbumInfo::default()
+      },
+      tracks: liked_page(0, 2, 11, true),
+      selected_index: 0,
+    });
+    app.album_table_context = AlbumTableContext::Simplified;
+    app.bump_display(DisplayDomain::Album);
+
+    let album = &pushed(&diff(&before, &app), "album")["payload"]["album"];
+    assert_eq!(album["name"], "21");
+    assert_eq!(album["tracks"][1]["name"], "Track 1");
+    assert_eq!(album["total_tracks"], 11);
+  }
+
+  #[test]
+  fn opening_the_playing_tracks_album_from_the_page_fetches_it_by_track_id() {
+    let (mut app, rx) = app();
+
+    apply_from_page(
+      &mut app,
+      &action_frame(Action::Open(crate::core::action::OpenTarget::TrackAlbum(
+        "4uLU6hMCjMI75M1A2tKUQC".to_string(),
+      ))),
+    );
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetAlbumForTrack(_))));
+  }
+
+  #[test]
   fn a_tick_carries_the_position_and_no_revision() {
     let (mut app, _rx) = app();
     app.song_progress_ms = 1_234;
@@ -1055,6 +1201,8 @@ mod tests {
     written::<SearchPayload>(&dir, &cfg);
     written::<StatsPayload>(&dir, &cfg);
     written::<PartyPayload>(&dir, &cfg);
+    written::<LyricsPayload>(&dir, &cfg);
+    written::<AlbumPayload>(&dir, &cfg);
     written::<ArtistInfo>(&dir, &cfg);
     written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);

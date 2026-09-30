@@ -656,7 +656,7 @@ impl App {
       selected_index: 0,
     });
     self.album_table_context = AlbumTableContext::Full;
-    self.display_revisions.bump(DisplayDomain::Artist);
+    self.display_revisions.bump(DisplayDomain::Album);
     self.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
   }
 

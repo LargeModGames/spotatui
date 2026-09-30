@@ -1,0 +1,364 @@
+/* The Listening Room: the one screen on paper, with dark amber. */
+.room {
+  --paper: #efe8db;
+  --room-ink: #1b1916;
+  --room-accent: #9a5a00;
+  --room-secondary: #5f574b;
+  --room-done: #7a7263;
+  --room-rule: #d8cfbf;
+  --room-shadow: #cfc5b3;
+  display: grid;
+  grid-template-columns: minmax(260px, 480px) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: 32px 68px;
+  min-height: 0;
+  padding: 36px 56px 24px;
+  overflow-y: auto;
+  background: var(--paper);
+  color: var(--room-ink);
+  outline: none;
+}
+
+.room button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.room button:disabled {
+  cursor: default;
+}
+
+.room kbd,
+.room .eyebrow {
+  color: var(--room-secondary);
+}
+
+.room figure {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+}
+
+.room-cover {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: #2b2926;
+  box-shadow: 10px 10px 0 var(--room-shadow);
+}
+
+.room figcaption {
+  font: 19px/1.35 var(--serif);
+  color: #3a352e;
+}
+
+.room-album {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.room-album > .eyebrow {
+  letter-spacing: 0.18em;
+  color: var(--room-accent);
+}
+
+.room-title {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  min-width: 0;
+}
+
+.room h1 {
+  flex-shrink: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 clamp(64px, 11vw, 210px) / 0.82 var(--serif);
+  letter-spacing: -0.03em;
+}
+
+.room-title > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-bottom: 18px;
+}
+
+.room-artist {
+  font: 44px/1 var(--serif);
+}
+
+.room-title em {
+  font: italic 22px var(--serif);
+  color: var(--room-secondary);
+}
+
+.segments {
+  display: flex;
+  gap: 3px;
+  height: 10px;
+  margin-top: 18px;
+}
+
+.segments > div {
+  flex-basis: 0;
+  background: var(--room-rule);
+}
+
+.segments > div > div {
+  height: 100%;
+  background: var(--room-accent);
+}
+
+.album-clock {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  font: 11px var(--mono);
+  color: var(--room-secondary);
+}
+
+.room-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.room-transport button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--room-ink);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.room-transport .play {
+  width: 56px;
+  height: 56px;
+  border: none;
+  background: var(--room-ink);
+  color: var(--paper);
+}
+
+.room-time {
+  margin-left: 8px;
+  font: 12px var(--mono);
+  color: var(--room-secondary);
+}
+
+.room-keys {
+  margin-left: auto;
+  font: 11px var(--mono);
+  color: var(--room-secondary);
+}
+
+.sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 36px;
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid var(--room-ink);
+}
+
+.sides ol,
+.lyrics ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.side-label {
+  padding-bottom: 4px;
+  font: 10px var(--mono);
+  letter-spacing: 0.2em;
+}
+
+.sides button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 31px;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid var(--room-rule);
+  background: transparent;
+  font-size: 15px;
+  text-align: left;
+}
+
+.sides button.done {
+  color: var(--room-done);
+}
+
+.sides button.now {
+  font-weight: 700;
+  color: var(--room-accent);
+}
+
+.sides .n {
+  width: 20px;
+  font: 11px var(--mono);
+  color: var(--room-done);
+}
+
+.sides .now .n {
+  color: var(--room-accent);
+}
+
+.sides .name {
+  flex-grow: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sides .time {
+  font: 12px var(--mono);
+  color: var(--room-secondary);
+}
+
+.room-note {
+  margin: 18px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--room-ink);
+  font: italic 19px var(--serif);
+  color: var(--room-secondary);
+}
+
+.lyrics {
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid var(--room-ink);
+}
+
+.lyrics ol {
+  max-height: 46vh;
+  overflow-y: auto;
+  font: 26px/1.45 var(--serif);
+  color: var(--room-done);
+}
+
+.lyrics li.sung {
+  color: var(--room-secondary);
+}
+
+.lyrics li[aria-current="true"] {
+  color: var(--room-accent);
+}
+
+.room-platter {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.room-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--room-ink);
+  font: italic 24px var(--serif);
+}
+
+.room-head kbd {
+  font: 11px var(--mono);
+}
+
+.platter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-top: 12px;
+}
+
+.platter > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 220px;
+}
+
+.platter img,
+.platter .tile {
+  width: 50px;
+  height: 50px;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: #2b2926;
+}
+
+.platter > div > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.platter b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platter span span {
+  color: var(--room-secondary);
+}
+
+.platter .from {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 10px var(--mono);
+}
+
+.room .swatch {
+  --text: var(--room-ink);
+}
+
+@media (max-width: 1100px) {
+  .room {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 24px 24px 16px;
+  }
+
+  .room figure {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 24px;
+  }
+
+  .room-cover {
+    width: 160px;
+    flex-shrink: 0;
+  }
+
+  .room-artist {
+    font-size: 30px;
+  }
+}
+
+@media (max-width: 900px) {
+  .sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .room-keys {
+    display: none;
+  }
+}

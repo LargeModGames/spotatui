@@ -15,6 +15,7 @@ const song: NowPlaying = {
   is_live: false,
   shuffle: false,
   repeat: "off",
+  context_uri: null,
 };
 
 const player = (item: NowPlaying | null) =>
@@ -24,6 +25,7 @@ const player = (item: NowPlaying | null) =>
       position={{ ms: 100_000, at: 0 }}
       connected
       send={() => {}}
+      onRoom={() => {}}
     />,
   );
 

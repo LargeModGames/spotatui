@@ -49,6 +49,11 @@ kbd {
   height: 100vh;
 }
 
+/* The Room runs to the bottom edge and draws its own transport. */
+.shell.room-shell {
+  grid-template-rows: 52px minmax(0, 1fr);
+}
+
 .screens,
 .screen {
   display: grid;
@@ -400,6 +405,15 @@ kbd {
   justify-content: flex-end;
   gap: 6px;
   color: var(--secondary);
+}
+
+.side .link {
+  margin-right: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: 11px var(--mono);
+  white-space: nowrap;
 }
 
 .side .meter {

@@ -13,7 +13,14 @@ export const AREAS: { area: Area; label: string; key: string }[] = [
 ];
 
 export type ShellCommand =
-  { area: Area } | "search" | "command" | "queue" | "toggle" | "escape";
+  | { area: Area }
+  | "search"
+  | "command"
+  | "queue"
+  | "room"
+  | "lyrics"
+  | "toggle"
+  | "escape";
 
 /** A key press as the window handler sees it, reduced to plain data. */
 export interface ShellKey {
@@ -38,6 +45,8 @@ export function shellKey(press: ShellKey): ShellCommand | null {
   if (press.key === "Q") return "queue";
   if (press.key === "/") return "search";
   if (press.key === ":") return "command";
+  if (press.key === "r") return "room";
+  if (press.key === "l") return "lyrics";
   const target = AREAS.find((entry) => entry.key === press.key);
   return target ? { area: target.area } : null;
 }

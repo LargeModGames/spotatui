@@ -11,11 +11,13 @@ export function PlayerBar({
   position,
   connected,
   send,
+  onRoom,
 }: {
   playback: PlaybackPayload | null;
   position: Position | null;
   connected: boolean;
   send: (action: Action) => void;
+  onRoom: (lyrics: boolean) => void;
 }) {
   const item = playback?.item ?? null;
   const playing = item?.is_playing ?? false;
@@ -129,6 +131,12 @@ export function PlayerBar({
         </div>
       </div>
       <div className="side">
+        <button type="button" className="link" onClick={() => onRoom(false)}>
+          Room <kbd>r</kbd>
+        </button>
+        <button type="button" className="link" onClick={() => onRoom(true)}>
+          Lyrics <kbd>l</kbd>
+        </button>
         <Icon>
           <path d="M11 5 6 9H2v6h4l5 4V5z" />
           <path d="M15.5 8.5a5 5 0 0 1 0 7" />
