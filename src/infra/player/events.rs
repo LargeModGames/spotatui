@@ -707,7 +707,7 @@ async fn handle_player_events(
         track_id,
         position_ms,
       } => {
-        if app.lock().await.take_play_after_transfer() {
+        if player.take_play_after_transfer() {
           player.play();
           continue;
         }

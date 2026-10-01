@@ -33,6 +33,7 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 const FAST_SESSION_RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const PLAY_AFTER_TRANSFER_WINDOW: Duration = Duration::from_secs(15);
 
 type SpircTaskHandle = tokio::task::JoinHandle<Option<SavedPlaybackState>>;
 
@@ -729,6 +730,7 @@ pub struct StreamingPlayer {
   connection_state_tx: tokio::sync::watch::Sender<StreamingConnectionState>,
   connection_state_rx: tokio::sync::watch::Receiver<StreamingConnectionState>,
   audio_backend_error: Arc<std::sync::Mutex<Option<String>>>,
+  play_after_transfer: std::sync::Mutex<Option<Instant>>,
 }
 
 #[allow(dead_code)]
@@ -981,6 +983,7 @@ impl StreamingPlayer {
       connection_state_tx,
       connection_state_rx,
       audio_backend_error,
+      play_after_transfer: std::sync::Mutex::new(None),
     })
   }
 
@@ -1116,6 +1119,7 @@ impl StreamingPlayer {
 
   /// Pause playback
   pub fn pause(&self) {
+    *self.play_after_transfer_slot() = None;
     if let Err(error) = self.route_command(DeferredPlayerCommand::Pause) {
       warn!("native pause failed: {error}");
     }
@@ -1240,6 +1244,28 @@ impl StreamingPlayer {
   /// can be a no-op when we're not currently active.
   pub fn transfer(&self, request: Option<TransferRequest>) -> Result<()> {
     self.route_command(DeferredPlayerCommand::Transfer(request))
+  }
+
+  /// Pull the last playback over and play it once loaded; a pause cancels it.
+  pub fn transfer_and_play(&self) {
+    *self.play_after_transfer_slot() = Some(Instant::now());
+    let _ = self.transfer(None);
+    self.activate();
+  }
+
+  /// One-shot, for the paused load the transfer ends in.
+  pub fn take_play_after_transfer(&self) -> bool {
+    self
+      .play_after_transfer_slot()
+      .take()
+      .is_some_and(|at| at.elapsed() < PLAY_AFTER_TRANSFER_WINDOW)
+  }
+
+  fn play_after_transfer_slot(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
+    self
+      .play_after_transfer
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
   }
 
   /// Shutdown the player

@@ -2,8 +2,6 @@ use super::*;
 
 #[cfg(feature = "streaming")]
 const FRESH_NATIVE_ACTIVITY_WINDOW: Duration = Duration::from_secs(5);
-#[cfg(feature = "streaming")]
-const PLAY_AFTER_TRANSFER_WINDOW: Duration = Duration::from_secs(15);
 
 /// Longer than a whole player build, so a rebuild never expires the start it
 /// replays.
@@ -73,20 +71,6 @@ impl App {
   #[cfg(feature = "streaming")]
   pub(crate) fn native_handed_off(&self) -> bool {
     self.native_handed_off
-  }
-
-  #[cfg(feature = "streaming")]
-  pub(crate) fn request_play_after_transfer(&mut self) {
-    self.native_play_after_transfer = Some(Instant::now());
-  }
-
-  /// One-shot; a stale request must not override a later pause.
-  #[cfg(feature = "streaming")]
-  pub(crate) fn take_play_after_transfer(&mut self) -> bool {
-    self
-      .native_play_after_transfer
-      .take()
-      .is_some_and(|at| at.elapsed() < PLAY_AFTER_TRANSFER_WINDOW)
   }
 
   #[cfg(feature = "streaming")]

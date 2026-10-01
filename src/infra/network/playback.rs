@@ -1495,6 +1495,17 @@ impl PlaybackNetwork for Network {
     if decoded_source_owns_playback(self).await {
       return;
     }
+    // A handed-off device holds no track: a bare resume pulls the last playback
+    // over first, Spirc ignores a transfer once activated (#693).
+    #[cfg(feature = "streaming")]
+    if context_id.is_none() && uris.is_none() && self.app.lock().await.native_handed_off() {
+      if let Some(player) = current_streaming_player(self).await {
+        info!("resume after handoff: transferring the last playback here");
+        player.transfer_and_play();
+        self.app.lock().await.dispatch(IoEvent::GetCurrentPlayback);
+        return;
+      }
+    }
     let (uris, offset) = if context_id.is_none() {
       match uris {
         Some(track_uris) => {
@@ -1833,18 +1844,6 @@ impl PlaybackNetwork for Network {
                 requested_native_playback_origin(self, &context_id, &uris).await;
               let activation_time = Instant::now();
               let native_device_id = player.device_id();
-              // A handed-off device holds no track: pull the last playback over
-              // first, Spirc ignores a transfer once activated (#693).
-              if context_id.is_none() && uris.is_none() && self.app.lock().await.native_handed_off()
-              {
-                info!("resume after handoff: transferring the last playback here");
-                let _ = player.transfer(None);
-                player.activate();
-                let mut app = self.app.lock().await;
-                app.request_play_after_transfer();
-                app.dispatch(IoEvent::GetCurrentPlayback);
-                return;
-              }
               player.activate();
               self
                 .native_idle_recovery
