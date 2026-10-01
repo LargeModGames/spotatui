@@ -5,22 +5,25 @@ fn sort_playlist_track_matches(matches: &mut [(TrackInfo, usize)], sort_state: S
     return;
   }
 
-  matches.sort_by(|(track_a, position_a), (track_b, position_b)| {
-    let order = match sort_state.field {
-      SortField::Name => track_a.name.cmp(&track_b.name),
-      SortField::Duration => track_a.duration_ms.cmp(&track_b.duration_ms),
-      SortField::Artist => track_a.artists.first().cmp(&track_b.artists.first()),
-      SortField::Album => track_a.album.cmp(&track_b.album),
-      SortField::DateAdded => position_a.cmp(position_b),
-      SortField::Default => std::cmp::Ordering::Equal,
-    };
-
-    if sort_state.order == SortOrder::Descending {
-      order.reverse()
-    } else {
-      order
+  use crate::core::sort::sort_by_key_with_order;
+  match sort_state.field {
+    SortField::Name => {
+      sort_by_key_with_order(matches, sort_state.order, |(t, _)| t.name.to_lowercase())
     }
-  });
+    SortField::Artist => sort_by_key_with_order(matches, sort_state.order, |(t, _)| {
+      t.artists.first().map(|s| s.to_lowercase())
+    }),
+    SortField::Album => {
+      sort_by_key_with_order(matches, sort_state.order, |(t, _)| t.album.to_lowercase())
+    }
+    SortField::Duration => {
+      sort_by_key_with_order(matches, sort_state.order, |(t, _)| t.duration_ms)
+    }
+    SortField::DateAdded => {
+      sort_by_key_with_order(matches, sort_state.order, |(_, position)| *position)
+    }
+    SortField::Default => {}
+  }
 }
 
 impl App {
@@ -676,6 +679,53 @@ mod tests {
     assert!(app.apply_playlist_track_search_results(&playlist_id, "none".to_string(), vec![]));
     assert!(app.track_table.tracks.is_empty());
     assert_eq!(app.playlist_track_positions, Some(vec![]));
+  }
+
+  fn sorted_playlist_search_names(order: SortOrder) -> (Vec<String>, Option<Vec<usize>>) {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.playlist_sort = SortState {
+      field: SortField::Name,
+      order,
+    };
+
+    assert!(app.apply_playlist_track_search_results(
+      &playlist_id,
+      "fruit".to_string(),
+      vec![
+        (track_info("0000000000000000000001", "Banana"), 1),
+        (track_info("0000000000000000000002", "apple"), 2),
+        (track_info("0000000000000000000003", "cherry"), 3),
+      ],
+    ));
+
+    let names = app
+      .track_table
+      .tracks
+      .iter()
+      .map(|track| track.name.clone())
+      .collect();
+    (names, app.playlist_track_positions.clone())
+  }
+
+  #[test]
+  fn playlist_search_results_sort_names_ignoring_case() {
+    let (names, positions) = sorted_playlist_search_names(SortOrder::Ascending);
+
+    assert_eq!(names, vec!["apple", "Banana", "cherry"]);
+    assert_eq!(positions, Some(vec![2, 1, 3]));
+  }
+
+  #[test]
+  fn playlist_search_results_sort_names_descending_ignoring_case() {
+    let (names, positions) = sorted_playlist_search_names(SortOrder::Descending);
+
+    assert_eq!(names, vec!["cherry", "Banana", "apple"]);
+    assert_eq!(positions, Some(vec![3, 1, 2]));
   }
 
   #[test]
