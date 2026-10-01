@@ -583,4 +583,17 @@ mod tests {
 
     assert_eq!(app.native_is_playing, Some(false));
   }
+
+  #[test]
+  fn a_handoff_is_marked_until_cleared() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert!(!app.native_handed_off());
+
+    app.mark_native_handed_off();
+    assert!(app.native_handed_off());
+
+    app.clear_native_handoff();
+    assert!(!app.native_handed_off());
+  }
 }

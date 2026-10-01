@@ -37,6 +37,27 @@ const PLAY_AFTER_TRANSFER_WINDOW: Duration = Duration::from_secs(15);
 
 type SpircTaskHandle = tokio::task::JoinHandle<Option<SavedPlaybackState>>;
 
+/// One-shot play for the paused load a resume-after-handoff transfer ends in (#693).
+#[derive(Debug, Default)]
+struct PlayAfterTransfer(Option<Instant>);
+
+impl PlayAfterTransfer {
+  fn arm(&mut self, now: Instant) {
+    self.0 = Some(now);
+  }
+
+  fn cancel(&mut self) {
+    self.0 = None;
+  }
+
+  fn take(&mut self, now: Instant) -> bool {
+    self
+      .0
+      .take()
+      .is_some_and(|at| now.saturating_duration_since(at) < PLAY_AFTER_TRANSFER_WINDOW)
+  }
+}
+
 struct ActiveConnection {
   spirc: Spirc,
   session: Session,
@@ -730,7 +751,7 @@ pub struct StreamingPlayer {
   connection_state_tx: tokio::sync::watch::Sender<StreamingConnectionState>,
   connection_state_rx: tokio::sync::watch::Receiver<StreamingConnectionState>,
   audio_backend_error: Arc<std::sync::Mutex<Option<String>>>,
-  play_after_transfer: std::sync::Mutex<Option<Instant>>,
+  play_after_transfer: std::sync::Mutex<PlayAfterTransfer>,
 }
 
 #[allow(dead_code)]
@@ -983,7 +1004,7 @@ impl StreamingPlayer {
       connection_state_tx,
       connection_state_rx,
       audio_backend_error,
-      play_after_transfer: std::sync::Mutex::new(None),
+      play_after_transfer: std::sync::Mutex::new(PlayAfterTransfer::default()),
     })
   }
 
@@ -1119,7 +1140,7 @@ impl StreamingPlayer {
 
   /// Pause playback
   pub fn pause(&self) {
-    *self.play_after_transfer_slot() = None;
+    self.play_after_transfer_slot().cancel();
     if let Err(error) = self.route_command(DeferredPlayerCommand::Pause) {
       warn!("native pause failed: {error}");
     }
@@ -1248,20 +1269,17 @@ impl StreamingPlayer {
 
   /// Pull the last playback over and play it once loaded; a pause cancels it.
   pub fn transfer_and_play(&self) {
-    *self.play_after_transfer_slot() = Some(Instant::now());
+    self.play_after_transfer_slot().arm(Instant::now());
     let _ = self.transfer(None);
     self.activate();
   }
 
   /// One-shot, for the paused load the transfer ends in.
   pub fn take_play_after_transfer(&self) -> bool {
-    self
-      .play_after_transfer_slot()
-      .take()
-      .is_some_and(|at| at.elapsed() < PLAY_AFTER_TRANSFER_WINDOW)
+    self.play_after_transfer_slot().take(Instant::now())
   }
 
-  fn play_after_transfer_slot(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
+  fn play_after_transfer_slot(&self) -> std::sync::MutexGuard<'_, PlayAfterTransfer> {
     self
       .play_after_transfer
       .lock()
@@ -1528,7 +1546,8 @@ mod tests {
   use super::{
     get_or_create_device_id, migrate_legacy_streaming_cache_if_unclaimed, new_device_id_string,
     proxy_url_from_candidates, redact_raw_proxy, should_retry_with_fresh_credentials,
-    wait_for_oauth_callback_port, RecoveringSink, StreamingConnectionState,
+    wait_for_oauth_callback_port, PlayAfterTransfer, RecoveringSink, StreamingConnectionState,
+    PLAY_AFTER_TRANSFER_WINDOW,
   };
   use librespot_playback::{audio_backend, convert::Converter, decoder::AudioPacket};
   use std::sync::Arc;
@@ -1832,6 +1851,36 @@ mod tests {
       std::fs::read_to_string(cache_path.join("credentials.json")).unwrap(),
       "legacy credentials"
     );
+  }
+
+  #[test]
+  fn play_after_transfer_fires_once() {
+    let mut pending = PlayAfterTransfer::default();
+    let armed_at = std::time::Instant::now();
+    assert!(!pending.take(armed_at));
+
+    pending.arm(armed_at);
+    assert!(pending.take(armed_at + Duration::from_secs(1)));
+    assert!(!pending.take(armed_at + Duration::from_secs(2)));
+  }
+
+  #[test]
+  fn play_after_transfer_expires() {
+    let mut pending = PlayAfterTransfer::default();
+    let armed_at = std::time::Instant::now();
+
+    pending.arm(armed_at);
+    assert!(!pending.take(armed_at + PLAY_AFTER_TRANSFER_WINDOW));
+  }
+
+  #[test]
+  fn a_pause_cancels_play_after_transfer() {
+    let mut pending = PlayAfterTransfer::default();
+    let armed_at = std::time::Instant::now();
+
+    pending.arm(armed_at);
+    pending.cancel();
+    assert!(!pending.take(armed_at));
   }
 }
 
