@@ -59,6 +59,21 @@ pub struct PendingStartPlayback {
 
 impl App {
   #[cfg(feature = "streaming")]
+  pub(crate) fn mark_native_handed_off(&mut self) {
+    self.native_handed_off = true;
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn clear_native_handoff(&mut self) {
+    self.native_handed_off = false;
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_handed_off(&self) -> bool {
+    self.native_handed_off
+  }
+
+  #[cfg(feature = "streaming")]
   pub fn request_native_streaming_recovery_if_disconnected(
     &mut self,
     reselect_device: bool,
@@ -567,5 +582,18 @@ mod tests {
     app.mark_native_streaming_device_available("device".to_string(), "spotatui".to_string(), 70);
 
     assert_eq!(app.native_is_playing, Some(false));
+  }
+
+  #[test]
+  fn a_handoff_is_marked_until_cleared() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert!(!app.native_handed_off());
+
+    app.mark_native_handed_off();
+    assert!(app.native_handed_off());
+
+    app.clear_native_handoff();
+    assert!(!app.native_handed_off());
   }
 }

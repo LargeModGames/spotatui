@@ -384,6 +384,9 @@ pub struct App {
   /// Whether a native device activation is still in progress
   #[allow(dead_code)]
   pub native_activation_pending: bool,
+  /// Another device took playback over; the idle poll must not reclaim it (#693)
+  #[cfg(feature = "streaming")]
+  native_handed_off: bool,
   /// Top tracks from the user for Discover feature
   pub discover_top_tracks: Vec<TrackInfo>,
   /// Top Artists Mix tracks for Discover feature

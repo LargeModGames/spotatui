@@ -366,6 +366,30 @@ fn persist_native_device_id_if_needed(
 }
 
 #[cfg(feature = "streaming")]
+#[derive(Debug, PartialEq, Eq)]
+enum IdlePollAction {
+  /// Another device took playback over: leave the app state alone (#693).
+  LeaveHandedOff,
+  Register,
+  Reclaim,
+}
+
+#[cfg(feature = "streaming")]
+fn idle_poll_action(
+  handed_off: bool,
+  recovery: &mut NativeIdleRecoveryState,
+  now: Instant,
+) -> IdlePollAction {
+  if handed_off {
+    IdlePollAction::LeaveHandedOff
+  } else if recovery.should_attempt_idle_recovery(now) {
+    IdlePollAction::Reclaim
+  } else {
+    IdlePollAction::Register
+  }
+}
+
+#[cfg(feature = "streaming")]
 fn reconcile_native_idle_device_if_preferred(
   client_config: &mut ClientConfig,
   app: &mut App,
@@ -391,10 +415,18 @@ fn reconcile_native_idle_device_if_preferred(
   };
 
   let now = Instant::now();
-  if recovery.should_attempt_idle_recovery(now) {
-    let _ = player.transfer(None);
-    player.activate();
-    app.last_device_activation = Some(now);
+  match idle_poll_action(app.native_handed_off(), recovery, now) {
+    IdlePollAction::LeaveHandedOff => {
+      log::debug!("idle playback poll: native device was handed off; not reclaiming playback");
+      return;
+    }
+    IdlePollAction::Reclaim => {
+      info!("idle playback poll: transferring playback to the native device");
+      let _ = player.transfer(None);
+      player.activate();
+      app.last_device_activation = Some(now);
+    }
+    IdlePollAction::Register => {}
   }
 
   app.mark_native_streaming_device_available(
@@ -1245,6 +1277,7 @@ impl PlaybackNetwork for Network {
 
           if is_native_device {
             app.native_activation_pending = false;
+            app.clear_native_handoff();
           }
         }
 
@@ -1461,6 +1494,17 @@ impl PlaybackNetwork for Network {
     }
     if decoded_source_owns_playback(self).await {
       return;
+    }
+    // A handed-off device holds no track: a bare resume pulls the last playback
+    // over first, Spirc ignores a transfer once activated (#693).
+    #[cfg(feature = "streaming")]
+    if context_id.is_none() && uris.is_none() && self.app.lock().await.native_handed_off() {
+      if let Some(player) = current_streaming_player(self).await {
+        info!("resume after handoff: transferring the last playback here");
+        player.transfer_and_play();
+        self.app.lock().await.dispatch(IoEvent::GetCurrentPlayback);
+        return;
+      }
     }
     let (uris, offset) = if context_id.is_none() {
       match uris {
@@ -2439,6 +2483,7 @@ impl PlaybackNetwork for Network {
       );
       app.is_streaming_active = true;
       app.native_activation_pending = true;
+      app.clear_native_handoff();
       app.native_playback_origin = None;
       app.native_device_id = Some(native_device_id.clone());
       // Drop the stale previous-device context so playback routing follows the
@@ -3271,6 +3316,40 @@ mod tests {
     assert_eq!(
       native_idle_device_preference_update(Some("phone-device"), false),
       None
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_leaves_a_handed_off_device_alone() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    let started_at = Instant::now();
+
+    // Each rebuild is a new instance and re-arms the attempts.
+    for instance in 1..=4 {
+      recovery.observe_player_instance(Some(instance));
+      let at = started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL * instance as u32;
+      assert_eq!(
+        idle_poll_action(true, &mut recovery, at),
+        IdlePollAction::LeaveHandedOff
+      );
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_reclaims_again_once_the_handoff_is_cleared() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    assert_eq!(
+      idle_poll_action(true, &mut recovery, started_at),
+      IdlePollAction::LeaveHandedOff
+    );
+    assert_eq!(
+      idle_poll_action(false, &mut recovery, started_at),
+      IdlePollAction::Reclaim
     );
   }
 

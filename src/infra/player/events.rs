@@ -707,6 +707,10 @@ async fn handle_player_events(
         track_id,
         position_ms,
       } => {
+        if player.take_play_after_transfer() {
+          player.play();
+          continue;
+        }
         shared_is_playing.store(false, Ordering::Relaxed);
         let track_uri = track_id.to_string();
 
@@ -1121,6 +1125,9 @@ async fn handle_player_events(
             // ptr_eq guard above.)
             app.lock().await.native_backend_pending = false;
           } else {
+            if recovery == SessionDisconnectRecovery::RebuildIdle {
+              app.lock().await.mark_native_handed_off();
+            }
             let _ = recovery_tx.send(request);
           }
         }
