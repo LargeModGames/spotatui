@@ -365,6 +365,16 @@ fn persist_native_device_id_if_needed(
   }
 }
 
+/// A handed-off device is not reclaimed and keeps its attempts (#693).
+#[cfg(feature = "streaming")]
+fn should_reclaim_idle_native_device(
+  handed_off: bool,
+  recovery: &mut NativeIdleRecoveryState,
+  now: Instant,
+) -> bool {
+  !handed_off && recovery.should_attempt_idle_recovery(now)
+}
+
 #[cfg(feature = "streaming")]
 fn reconcile_native_idle_device_if_preferred(
   client_config: &mut ClientConfig,
@@ -391,10 +401,13 @@ fn reconcile_native_idle_device_if_preferred(
   };
 
   let now = Instant::now();
-  if recovery.should_attempt_idle_recovery(now) {
+  if should_reclaim_idle_native_device(app.native_handed_off(), recovery, now) {
+    info!("idle playback poll: transferring playback to the native device");
     let _ = player.transfer(None);
     player.activate();
     app.last_device_activation = Some(now);
+  } else if app.native_handed_off() {
+    log::debug!("idle playback poll: native device was handed off; not reclaiming playback");
   }
 
   app.mark_native_streaming_device_available(
@@ -1245,6 +1258,7 @@ impl PlaybackNetwork for Network {
 
           if is_native_device {
             app.native_activation_pending = false;
+            app.clear_native_handoff();
           }
         }
 
@@ -2439,6 +2453,7 @@ impl PlaybackNetwork for Network {
       );
       app.is_streaming_active = true;
       app.native_activation_pending = true;
+      app.clear_native_handoff();
       app.native_playback_origin = None;
       app.native_device_id = Some(native_device_id.clone());
       // Drop the stale previous-device context so playback routing follows the
@@ -3272,6 +3287,39 @@ mod tests {
       native_idle_device_preference_update(Some("phone-device"), false),
       None
     );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_does_not_reclaim_a_handed_off_device() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    let started_at = Instant::now();
+
+    // Each rebuild is a new instance and re-arms the attempts.
+    for instance in 1..=4 {
+      recovery.observe_player_instance(Some(instance));
+      let at = started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL * instance as u32;
+      assert!(!should_reclaim_idle_native_device(true, &mut recovery, at));
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_reclaims_again_once_the_handoff_is_cleared() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    assert!(!should_reclaim_idle_native_device(
+      true,
+      &mut recovery,
+      started_at
+    ));
+    assert!(should_reclaim_idle_native_device(
+      false,
+      &mut recovery,
+      started_at
+    ));
   }
 
   #[cfg(feature = "streaming")]

@@ -59,6 +59,21 @@ pub struct PendingStartPlayback {
 
 impl App {
   #[cfg(feature = "streaming")]
+  pub(crate) fn mark_native_handed_off(&mut self) {
+    self.native_handed_off = true;
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn clear_native_handoff(&mut self) {
+    self.native_handed_off = false;
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_handed_off(&self) -> bool {
+    self.native_handed_off
+  }
+
+  #[cfg(feature = "streaming")]
   pub fn request_native_streaming_recovery_if_disconnected(
     &mut self,
     reselect_device: bool,

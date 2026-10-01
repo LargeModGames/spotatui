@@ -673,6 +673,7 @@ async fn handle_player_events(
           }
           app_lock.pending_start_playback = None;
           app_lock.native_backend_pending = false;
+          app_lock.clear_native_handoff();
           if restore_confirmed {
             app_lock.set_status_message("Native playback restored.", 5);
           }
@@ -1121,6 +1122,9 @@ async fn handle_player_events(
             // ptr_eq guard above.)
             app.lock().await.native_backend_pending = false;
           } else {
+            if recovery == SessionDisconnectRecovery::RebuildIdle {
+              app.lock().await.mark_native_handed_off();
+            }
             let _ = recovery_tx.send(request);
           }
         }

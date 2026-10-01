@@ -10,7 +10,8 @@
   `<cache>/device_id`. Both exist to stop ghost Connect devices (#297).
 - Session teardowns are classified by librespot's disconnect reason, never
   inferred: external handoff → rebuild idle, unexpected → restore playback,
-  local → stop. The handoff veto is sticky (#437).
+  local → stop. The handoff veto is sticky (#437); the idle poll does not
+  reclaim a handed-off device (#693).
 - Every background native write is generation-guarded
   (`native_playback_generation`, `native_shuffle_generation`) and event handlers
   confirm `Arc::ptr_eq` against the current player before writing - stale writes
