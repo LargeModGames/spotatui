@@ -13,14 +13,22 @@ pub enum QueueItemSource {
   Subsonic,
   YouTube,
   Qobuz,
+  /// A Music.app track. Recognised so it never falls through to Spotify, but
+  /// never queued: the first Apple Music version has no cross-source queue.
+  AppleMusic,
 }
+
+/// Shown when an Apple Music track would go into the cross-source queue.
+pub const APPLE_MUSIC_QUEUE_UNSUPPORTED: &str = "Apple Music tracks can't be queued";
 
 /// Classify a queue item by its URI scheme. Anything that is not a local file,
 /// Subsonic, YouTube, or Qobuz URI is treated as Spotify (the `spotify:track:`
 /// scheme). Radio URIs (`radio:`) are never queued, so they are rejected before
 /// reaching this function.
 pub fn queue_item_source(uri: &str) -> QueueItemSource {
-  if uri.starts_with("file:") {
+  if uri.starts_with("applemusic:") {
+    QueueItemSource::AppleMusic
+  } else if uri.starts_with("file:") {
     QueueItemSource::LocalFile
   } else if uri.starts_with("subsonic:") {
     QueueItemSource::Subsonic
@@ -88,6 +96,7 @@ pub fn missing_source_feature(uri: &str) -> Option<&'static str> {
     QueueItemSource::Subsonic => "subsonic",
     QueueItemSource::YouTube => "youtube",
     QueueItemSource::Qobuz => "qobuz",
+    QueueItemSource::AppleMusic => "apple-music",
     QueueItemSource::Spotify => unreachable!("returned above"),
   })
 }
@@ -101,6 +110,7 @@ pub fn source_label(source: QueueItemSource) -> &'static str {
     QueueItemSource::Subsonic => "Subsonic",
     QueueItemSource::YouTube => "YouTube",
     QueueItemSource::Qobuz => "Qobuz",
+    QueueItemSource::AppleMusic => "Apple Music",
   }
 }
 
@@ -116,6 +126,9 @@ pub fn source_available(source: QueueItemSource) -> bool {
     QueueItemSource::Subsonic => cfg!(feature = "subsonic"),
     QueueItemSource::YouTube => cfg!(feature = "youtube"),
     QueueItemSource::Qobuz => cfg!(feature = "qobuz"),
+    // Whether a start can be routed at all; the queue refuses Apple Music
+    // items separately (see `App::add_track_to_native_queue`).
+    QueueItemSource::AppleMusic => cfg!(all(feature = "apple-music", target_os = "macos")),
   }
 }
 
@@ -209,6 +222,10 @@ mod tests {
       QueueItemSource::YouTube
     );
     assert_eq!(queue_item_source("qobuz:track:42"), QueueItemSource::Qobuz);
+    assert_eq!(
+      queue_item_source("applemusic:0123456789ABCDEF"),
+      QueueItemSource::AppleMusic
+    );
     // Unknown schemes fall back to Spotify.
     assert_eq!(
       queue_item_source("something-else"),
@@ -291,5 +308,22 @@ mod tests {
         "{uri}"
       );
     }
+  }
+
+  #[test]
+  fn an_apple_music_uri_is_never_spotify_and_never_an_agent_queue_track() {
+    let uri = "applemusic:0123456789ABCDEF";
+    assert_ne!(queue_item_source(uri), QueueItemSource::Spotify);
+    // No cross-source queue for Apple Music yet, so agents can't queue it.
+    assert!(!is_playable_track_uri(uri));
+    // A build that can't route it names the feature instead of blaming Spotify.
+    assert_eq!(
+      missing_source_feature(uri),
+      if cfg!(all(feature = "apple-music", target_os = "macos")) {
+        None
+      } else {
+        Some("apple-music")
+      }
+    );
   }
 }

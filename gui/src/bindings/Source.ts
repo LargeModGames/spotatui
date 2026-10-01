@@ -17,4 +17,4 @@
  * variant strings coincide with the `to_config_str()` tokens, while the
  * `state.yml` persistence keeps its own lenient hand-written helpers.
  */
-export type Source = "Spotify" | "Local" | "Subsonic" | "Radio" | "YouTube" | "Qobuz";
+export type Source = "Spotify" | "Local" | "Subsonic" | "Radio" | "YouTube" | "Qobuz" | "AppleMusic";

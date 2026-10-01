@@ -12,7 +12,7 @@ export interface SidebarRow {
 }
 
 const PLAYLIST_KEYS: Record<
-  Exclude<Source, "Radio">,
+  Exclude<Source, "Radio" | "AppleMusic">,
   Exclude<keyof SourcePlaylists, "radio">
 > = {
   Spotify: "spotify",
@@ -40,6 +40,8 @@ export function playlistsFor(
   playlists: SourcePlaylists,
   source: Source,
 ): SidebarRow[] {
+  // Apple Music has no browse screens yet, so no sidebar rows.
+  if (source === "AppleMusic") return [];
   if (source === "Radio")
     return playlists.radio.map((station) => ({
       uri: station.uri ?? station.name,

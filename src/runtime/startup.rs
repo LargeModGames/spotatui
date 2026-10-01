@@ -74,6 +74,11 @@ fn update_macos_metadata(
   last_metadata: &mut Option<MacosMetadata>,
   app: &App,
 ) {
+  // Music publishes its own entry while it owns playback.
+  if app.apple_music_owns_playback() {
+    *last_metadata = None;
+    return;
+  }
   // Local-file playback owns its own state and never populates the Spotify
   // playback context, so Now Playing must read metadata, play state, and
   // position straight from the live local player when local is active. Skipped
@@ -369,6 +374,13 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
         None
       }
     };
+
+  // An Apple Music claim withdraws spotatui's Now Playing entry through it.
+  #[cfg(all(feature = "macos-media", target_os = "macos"))]
+  app
+    .lock()
+    .await
+    .install_macos_media_manager(macos_media_manager.clone());
 
   // Registered without a Spotify session, like MPRIS, so decoded sources get media keys too.
   #[cfg(all(feature = "windows-media", target_os = "windows"))]
@@ -1376,6 +1388,10 @@ async fn handle_macos_media_events(
       continue;
     }
 
+    if route_apple_music_macos_event(&event, &mut *app.lock().await) {
+      continue;
+    }
+
     // A decoded source (local file, Subsonic, radio, or YouTube) owns the
     // session: route transport through the same IoEvents the keyboard uses
     // (intercepted by the per-source route_*_event dispatchers before the
@@ -1427,6 +1443,25 @@ async fn handle_macos_media_events(
       }
     }
   }
+}
+
+/// While Music owns playback, a media key that still reaches spotatui drives
+/// Music through the same transport the keyboard uses. There is no native
+/// player to toggle.
+#[cfg(all(feature = "macos-media", target_os = "macos"))]
+fn route_apple_music_macos_event(event: &macos_media::MacMediaEvent, app: &mut App) -> bool {
+  use macos_media::MacMediaEvent;
+  if !app.apple_music_owns_playback() {
+    return false;
+  }
+  match event {
+    MacMediaEvent::PlayPause => app.toggle_playback(),
+    MacMediaEvent::Play => app.set_apple_music_playing(true),
+    MacMediaEvent::Pause | MacMediaEvent::Stop => app.set_apple_music_playing(false),
+    MacMediaEvent::Next => app.next_track(),
+    MacMediaEvent::Previous => app.previous_track(),
+  }
+  true
 }
 
 /// Route a macOS media transport event through the standard dispatch path when

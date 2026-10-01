@@ -38,6 +38,10 @@ impl App {
   #[cfg(feature = "dj-core")]
   #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
   pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> usize {
+    if self.apple_music_owns_playback() {
+      self.set_status_message(crate::core::queue::APPLE_MUSIC_QUEUE_UNSUPPORTED, 4);
+      return 0;
+    }
     let mut accepted = 0usize;
     for track in tracks {
       // Mirror `add_track_to_native_queue`'s rejections so the count we report
@@ -45,7 +49,7 @@ impl App {
       let Some(uri) = track.uri.clone() else {
         continue;
       };
-      if uri.starts_with("radio:") {
+      if uri.starts_with("radio:") || uri.starts_with("applemusic:") {
         continue;
       }
       let before = self.native_queue.len();

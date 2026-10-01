@@ -22,6 +22,10 @@ impl App {
 
   fn apply_action(&mut self, action: Action) -> ActionOutcome {
     match action {
+      // Music's state is its own intent, which a start still loading has
+      // before any snapshot does.
+      Action::Play if self.apple_music_owns_playback() => self.set_apple_music_playing(true),
+      Action::Pause if self.apple_music_owns_playback() => self.set_apple_music_playing(false),
       Action::Play => {
         if !effective_is_playing(self) {
           self.toggle_playback();
@@ -96,6 +100,9 @@ impl App {
         }
         crate::core::source::Source::Qobuz => {
           self.dispatch(IoEvent::GetQobuzSearchResults(query));
+        }
+        crate::core::source::Source::AppleMusic => {
+          self.browse_apple_music(crate::infra::apple_music::Browse::Search(query));
         }
         // Spotify and Local both land on the Web API search, exactly like
         // the search input's if-chain (which has no Local branch).

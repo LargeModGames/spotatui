@@ -378,11 +378,25 @@ fn cover_playbar_artist_area(
 /// hit-testing accepted only Play/Pause — which left inert Shuffle/Repeat
 /// buttons sitting on the local playbar, inviting a click that did nothing.
 fn playbar_supported_controls(app: &App) -> Vec<PlaybarControl> {
-  playbar_supported_controls_for(
+  let controls = playbar_supported_controls_for(
     app.queue_owns_playback(),
     non_spotify_source_playback_active(app),
     app.active_queueable_decoded_source(),
-  )
+  );
+  if !app.apple_music_owns_playback() {
+    return controls;
+  }
+  apple_music_controls(controls)
+}
+
+/// Music keeps Prev/Next: `App::next_track` and `previous_track` step through
+/// the list a track was started from. Shuffle and repeat stay Music's own.
+fn apple_music_controls(controls: Vec<PlaybarControl>) -> Vec<PlaybarControl> {
+  PLAYBAR_CONTROLS
+    .iter()
+    .copied()
+    .filter(|c| controls.contains(c) || matches!(c, PlaybarControl::Prev | PlaybarControl::Next))
+    .collect()
 }
 
 /// The pure core of [`playbar_supported_controls`], taking the three facts it
@@ -548,9 +562,9 @@ fn playbar_controls_available(app: &App) -> bool {
 /// compile in the slim build (no source features) as well as any single- or
 /// all-sources build.
 fn non_spotify_source_playback_active(app: &App) -> bool {
-  // Slim builds (no source features) never reference `app` below.
-  #[cfg(not(feature = "audio-decode"))]
-  let _ = app;
+  if app.apple_music_owns_playback() {
+    return true;
+  }
 
   #[cfg(feature = "local-files")]
   if app.local_playback.is_some() {
@@ -634,11 +648,6 @@ impl PlaybarProgressLine {
 /// playback, or `None` when nothing is playing or the line is not rendered (e.g.
 /// the single-row playbar, or a terminal too narrow to fit the gauge).
 pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<PlaybarProgressLine> {
-  let item = app
-    .current_playback_context
-    .as_ref()
-    .and_then(|ctx| ctx.item.as_ref())?;
-
   let progress_area = playbar_layout_areas(app, playbar_area).progress_area;
   if progress_area.width == 0 || progress_area.height == 0 {
     return None;
@@ -646,9 +655,17 @@ pub(crate) fn playbar_progress_line(app: &App, playbar_area: Rect) -> Option<Pla
 
   // Duration as shown on the playbar (native track info preferred). Mirrors
   // draw_playbar's `display_duration_ms`, so keep the two in sync (player.rs ~761).
-  let duration_ms = if let Some(native_info) = &app.native_track_info {
+  let duration_ms = if app.apple_music_owns_playback() {
+    crate::infra::media_metadata::current_playback_snapshot(app)?
+      .metadata
+      .duration_ms
+  } else if let Some(native_info) = &app.native_track_info {
     native_info.duration_ms
   } else {
+    let item = app
+      .current_playback_context
+      .as_ref()
+      .and_then(|ctx| ctx.item.as_ref())?;
     match item {
       PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
       PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
@@ -832,8 +849,13 @@ fn extract_track_info(app: &App) -> (Option<String>, Option<String>) {
 /// Extracted from the live player so [`render_local_playbar`] is a pure function
 /// of plain values and can be unit-tested with `TestBackend` (no audio device).
 /// Gated to every build that can render one: the decoded sources plus the
-/// native queue slot (`streaming` covers a queued Spotify track).
-#[cfg(any(feature = "streaming", feature = "audio-decode"))]
+/// native queue slot (`streaming` covers a queued Spotify track), and the
+/// Music app while it owns playback.
+#[cfg(any(
+  feature = "streaming",
+  feature = "audio-decode",
+  feature = "apple-music"
+))]
 struct LocalPlaybarView {
   /// Source name shown in the playbar title, e.g. `"Local"` or `"Subsonic"`.
   source_label: &'static str,
@@ -997,7 +1019,11 @@ fn draw_radio_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   render_local_playbar(f, app, layout_chunk, &view);
 }
 
-#[cfg(any(feature = "streaming", feature = "audio-decode"))]
+#[cfg(any(
+  feature = "streaming",
+  feature = "audio-decode",
+  feature = "apple-music"
+))]
 fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: &LocalPlaybarView) {
   let playbar_areas = playbar_layout_areas(app, layout_chunk);
 
@@ -1160,6 +1186,32 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
 }
 
 pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
+  // The Music app owns playback: show its track, not the paused Spotify one.
+  #[cfg(feature = "apple-music")]
+  if app.apple_music_owns_playback() {
+    let snapshot = crate::infra::media_metadata::current_playback_snapshot(app);
+    let view = LocalPlaybarView {
+      source_label: "Apple Music",
+      name: snapshot
+        .as_ref()
+        .map_or_else(|| "Waiting for Music…".into(), |s| s.metadata.title.clone()),
+      artists: snapshot
+        .as_ref()
+        .map_or_else(String::new, |s| s.primary_artist()),
+      is_playing: snapshot.as_ref().is_some_and(|s| s.is_playing),
+      position_ms: snapshot.as_ref().map_or(0, |s| s.progress_ms),
+      duration_ms: snapshot
+        .as_ref()
+        .map_or(0, |s| u64::from(s.metadata.duration_ms)),
+      volume_percent: app.apple_music_volume(),
+      queue_position: None,
+      live: false,
+      show_modes: false,
+      quality: None,
+    };
+    render_local_playbar(f, app, layout_chunk, &view);
+    return;
+  }
   // The native queue slot owns playback: render the queued track, not the
   // suspended context (whose `*_playback` is still `Some`) and not the stale
   // Spotify context (still cached when a Spotify context was suspended).
@@ -1594,7 +1646,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   let [instructions_area, source_area, devices_area] = f.area().layout(
     &Layout::vertical([
       Constraint::Length(7),
-      Constraint::Length(Source::ALL.len() as u16 + 2),
+      Constraint::Length(Source::picker_sources().len() as u16 + 2),
       Constraint::Min(3),
     ])
     .margin(2),
@@ -1638,7 +1690,7 @@ pub fn draw_device_list(f: &mut Frame<'_>, app: &App) {
   } else {
     app.user_config.theme.inactive
   };
-  let source_items: Vec<ListItem> = Source::ALL
+  let source_items: Vec<ListItem> = Source::picker_sources()
     .iter()
     .map(|s| {
       let is_active = *s == app.active_source;
@@ -1811,6 +1863,27 @@ mod tests {
     assert!(!local.contains(&PlaybarControl::Like));
     let radio = playbar_supported_controls_for(false, true, false);
     assert!(!radio.contains(&PlaybarControl::Shuffle));
+  }
+
+  #[test]
+  fn apple_music_playbar_offers_previous_and_next_but_not_the_modes() {
+    let mut app = App::default();
+    app.claim_apple_music();
+    let controls = playbar_supported_controls(&app);
+    for expected in [
+      PlaybarControl::Prev,
+      PlaybarControl::PlayPause,
+      PlaybarControl::Next,
+    ] {
+      assert!(controls.contains(&expected), "{expected:?} missing");
+    }
+    for absent in [
+      PlaybarControl::Shuffle,
+      PlaybarControl::Repeat,
+      PlaybarControl::Like,
+    ] {
+      assert!(!controls.contains(&absent), "{absent:?} offered");
+    }
   }
 
   #[test]

@@ -84,6 +84,7 @@ impl App {
         Source::Spotify => self.spotify_connected,
         Source::Subsonic => subsonic_configured,
         Source::Qobuz | Source::YouTube | Source::Local | Source::Radio => true,
+        Source::AppleMusic => false,
       })
       .collect()
   }

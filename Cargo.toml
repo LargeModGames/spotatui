@@ -214,6 +214,10 @@ youtube = ["audio-decode-queue", "queue", "queue-download"]
 # Qobuz through its encrypted CMAF stream: each track is decrypted and rebuilt
 # as a FLAC tempfile while it plays through the shared LocalPlayer.
 qobuz = ["audio-decode-queue", "queue", "queue-download", "reqwest/stream", "dep:stream-download", "dep:bytes", "dep:md-5", "dep:sha2", "dep:hex", "dep:base64", "dep:regex", "dep:aes", "dep:cbc", "dep:ctr", "dep:hkdf"]
+# Apple Music on macOS: a remote for the Music app, which plays the audio itself.
+# No decoder and no Apple crates; off by default and not in `all-sources`, since
+# it only works on macOS. The macOS rows in cd.yml and the `macos` CI job enable it.
+apple-music = []
 
 # --- AI DJ / MCP -------------------------------------------------------------
 # Shared tool layer behind both front doors: the taste brief built from the local

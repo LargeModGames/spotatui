@@ -54,12 +54,14 @@ pub enum MacMediaCommand {
   SetPosition(u64),        // position in milliseconds
   SetVolume(u8),           // 0-100 (not directly supported by Now Playing, but kept for API parity)
   SetStopped,
+  SetRemoteOwned(bool),
 }
 
 /// Manager for the macOS Now Playing integration
 pub struct MacMediaManager {
   event_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<MacMediaEvent>>>,
   command_tx: mpsc::UnboundedSender<MacMediaCommand>,
+  remote_owned: tokio::sync::watch::Sender<bool>,
 }
 
 impl MacMediaManager {
@@ -71,6 +73,7 @@ impl MacMediaManager {
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<MacMediaCommand>();
 
+    let (remote_owned, mut remote_on_thread) = tokio::sync::watch::channel(false);
     // Clone event_tx for use in callbacks
     let event_tx = Arc::new(event_tx);
 
@@ -197,7 +200,7 @@ impl MacMediaManager {
         loop {
           tokio::select! {
             Some(cmd) = command_rx.recv() => {
-              handle_now_playing_command(&cmd, &info_center).await;
+              handle_now_playing_command(&cmd, &info_center, &mut remote_on_thread).await;
             }
             _ = interval.tick() => {
               NSRunLoop::currentRunLoop()
@@ -211,7 +214,16 @@ impl MacMediaManager {
     Ok(Self {
       event_rx: std::sync::Mutex::new(Some(event_rx)),
       command_tx,
+      remote_owned,
     })
+  }
+
+  /// Suppress every publisher, including an artwork fetch already in flight.
+  /// Music owns the system entry while spotatui is its remote.
+  pub(crate) fn set_remote_owned(&self, owned: bool) {
+    if self.remote_owned.send_replace(owned) != owned {
+      let _ = self.command_tx.send(MacMediaCommand::SetRemoteOwned(owned));
+    }
   }
 
   /// Take the event receiver for handling external control requests
@@ -269,8 +281,25 @@ impl MacMediaManager {
 
 /// Process a single Now Playing command, updating the info center state.
 /// Must be called from the dedicated macOS media thread that owns `info_center`.
-async fn handle_now_playing_command(cmd: &MacMediaCommand, info_center: &MPNowPlayingInfoCenter) {
+async fn handle_now_playing_command(
+  cmd: &MacMediaCommand,
+  info_center: &MPNowPlayingInfoCenter,
+  remote_owned: &mut tokio::sync::watch::Receiver<bool>,
+) {
+  if let MacMediaCommand::SetRemoteOwned(owned) = cmd {
+    if *owned {
+      unsafe {
+        info_center.setNowPlayingInfo(None);
+        info_center.setPlaybackState(MPNowPlayingPlaybackState::Unknown);
+      }
+    }
+    return;
+  }
+  if *remote_owned.borrow() {
+    return;
+  }
   match cmd {
+    MacMediaCommand::SetRemoteOwned(_) => {}
     MacMediaCommand::SetMetadata {
       title,
       artists,
@@ -279,10 +308,23 @@ async fn handle_now_playing_command(cmd: &MacMediaCommand, info_center: &MPNowPl
       art_url,
     } => {
       let artwork = match art_url.as_deref() {
-        Some(url) => fetch_artwork_from_url(url).await,
+        Some(url) => tokio::select! {
+          biased;
+          // A slow old artwork fetch must not delay removing our OS entry
+          // when Music starts. No Apple metadata is published here.
+          _ = remote_owned.wait_for(|owned| *owned) => None,
+          artwork = fetch_artwork_from_url(url) => artwork,
+        },
         None => None,
       };
 
+      if *remote_owned.borrow() {
+        unsafe {
+          info_center.setNowPlayingInfo(None);
+          info_center.setPlaybackState(MPNowPlayingPlaybackState::Unknown);
+        }
+        return;
+      }
       unsafe {
         let dict: objc2::rc::Retained<NSMutableDictionary<NSString, AnyObject>> =
           NSMutableDictionary::new();

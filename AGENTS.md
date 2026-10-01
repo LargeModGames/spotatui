@@ -176,8 +176,8 @@ More rules for this folder: `src/core/app/AGENTS.md`.
 ### Playback ownership
 
 Multiple players share one UI, and the predicate order is the #1 source of
-regressions. Check in this order: `queue_owns_playback()` /
-`queue_now_is_spotify()`, then `active_decoded_source()`, then
+regressions. Check in this order: `apple_music_owns_playback()`, then
+`queue_owns_playback()` / `queue_now_is_spotify()`, then `active_decoded_source()`, then
 `is_native_streaming_active_for_playback()`. `App::playback_owner()` folds them
 into one `PlaybackOwner`, and the transport chains (play/pause,
 next, previous, shuffle, repeat, volume) end on `dispatch_spotify_fallback`,
@@ -372,6 +372,10 @@ never config:
 - `dj-core` is a shared implementation feature pulled in by `mcp-server` and
   `ai-dj`; none of the three are in `default`, and neither front door may assume
   the other (or `streaming`) is present.
+- `apple-music` is macOS-only and off by default (the macOS CI job and cd.yml's
+  macOS rows enable it). Its code sits behind
+  `all(feature = "apple-music", target_os = "macos")`; the `Source` variant and
+  the `App` state compile everywhere so callers need no `#[cfg]`.
 - `scripting` (mlua Lua plugins) is default-on and gates `src/infra/scripting/` +
   `src/cli/plugin.rs`; the slim gate never compiles it, so verify scripting
   changes with a default `cargo test`.
@@ -423,6 +427,14 @@ reads a file in that directory. Other agents must open it.
   retries once through the embedded player clients (`web_embedded,tv_embedded`),
   which PO-token enforcement leaves tokenless for embeddable videos - most
   label uploads. A non-embeddable gated video still fails.
+
+### Apple Music (feature `apple-music`, macOS only)
+
+Not a decoded source: the Music app plays, with the user's own login and
+library, and spotatui is a remote for it. Every command is one constant JXA
+program (`infra/apple_music/music.js`) run by `osascript` on the Apple Music
+router's own serial worker, never on the pump. Details:
+`src/infra/apple_music/AGENTS.md`.
 
 Details: `src/infra/audio/AGENTS.md` (`LocalPlayer`, output-device loss),
 `src/infra/queue/AGENTS.md`, `src/infra/radio/AGENTS.md`, `src/infra/qobuz/AGENTS.md`.

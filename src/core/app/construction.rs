@@ -27,6 +27,9 @@ impl Default for App {
       community_pin_item: PlaylistFolderItem::CommunityPin,
       local_playlists: Vec::new(),
       subsonic_playlists: Vec::new(),
+      apple_music: Default::default(),
+      #[cfg(all(feature = "macos-media", target_os = "macos"))]
+      macos_media_manager: None,
       qobuz_playlists: Vec::new(),
       radio_stations: Vec::new(),
       youtube_playlists: Vec::new(),

@@ -37,6 +37,7 @@ pub enum HistoryPlaybackSource {
   NativeContext,
   NativeRawList,
   ExternalDevice,
+  AppleMusic,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1070,6 +1071,7 @@ fn history_source_from_snapshot(snapshot: &PlaybackSnapshot) -> HistoryPlaybackS
     PlaybackSource::NativeContext => HistoryPlaybackSource::NativeContext,
     PlaybackSource::NativeRawList => HistoryPlaybackSource::NativeRawList,
     PlaybackSource::ExternalDevice => HistoryPlaybackSource::ExternalDevice,
+    PlaybackSource::AppleMusic => HistoryPlaybackSource::AppleMusic,
   }
 }
 

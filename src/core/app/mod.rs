@@ -72,6 +72,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::channel;
 
 mod album_theme;
+mod apple_music;
 mod construction;
 mod discover;
 mod display_revisions;
@@ -299,6 +300,13 @@ pub struct App {
   /// The user's Subsonic server playlists shown by the Subsonic browser.
   /// Populated by `GetSubsonicPlaylists` dispatch.
   subsonic_playlists: Vec<PlaylistInfo>,
+  /// The Music.app remote: whether it owns playback, the handoff generation
+  /// and the last status it reported.
+  apple_music: crate::infra::apple_music::RemoteState,
+  /// Lets an Apple Music claim withdraw spotatui's own Now Playing entry, so
+  /// Music's is the only one.
+  #[cfg(all(feature = "macos-media", target_os = "macos"))]
+  macos_media_manager: Option<Arc<crate::infra::macos_media::MacMediaManager>>,
   /// The Qobuz sidebar rows (favorites, playlists, albums) shown by the Qobuz
   /// browser. Populated by `GetQobuzPlaylists` dispatch.
   qobuz_playlists: Vec<PlaylistInfo>,
@@ -655,6 +663,8 @@ impl App {
   /// spinner until the service-lane task finishes — the exact UX bug
   /// `DjState::thinking` exists to avoid, and the reason the MCP executor sends
   /// straight down the channel instead of dispatching.
+  /// The Apple Music worker also uses it for the handoff it sends back to the
+  /// pump, which is not a user-visible load.
   pub fn dispatch_without_spinner(&self, action: IoEvent) {
     if let Some(io_tx) = &self.io_tx {
       if let Err(e) = io_tx.send(action) {

@@ -270,7 +270,7 @@ impl Driver {
       app.spotify_token_expiry,
       SystemTime::now(),
       app.auth_refresh_in_progress,
-      app.active_decoded_source(),
+      app.active_decoded_source() || app.apple_music_owns_playback(),
       app.spotify_refresh_retry_at(),
       env.now,
     ) {
@@ -698,9 +698,10 @@ impl Driver {
 
     // A decoded non-Spotify source owns the sink while its `*_playback` is
     // `Some`. Drive `song_progress_ms` from its live player, and do NOT let
-    // the (paused) librespot position below clobber it.
+    // the (paused) librespot position below clobber it. Music's position was
+    // set by `update_on_tick`.
     #[allow(unused_mut)]
-    let mut source_owns_playback = false;
+    let mut source_owns_playback = app.apple_music_owns_playback();
     // The native queue slot owns the sink when playing a decoded track; read
     // progress from its player first (it may share the suspended context's
     // player, in which case a per-source block below reads the same value).

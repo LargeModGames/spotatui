@@ -267,7 +267,7 @@ jobs:
     runs-on: macos-latest
     needs: prepare
     env:
-      FEATURES: "telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz"
+      FEATURES: "telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
     steps:
       - uses: actions/checkout@master
       - uses: dtolnay/rust-toolchain@stable
