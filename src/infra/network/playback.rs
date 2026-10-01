@@ -365,14 +365,28 @@ fn persist_native_device_id_if_needed(
   }
 }
 
-/// A handed-off device is not reclaimed and keeps its attempts (#693).
 #[cfg(feature = "streaming")]
-fn should_reclaim_idle_native_device(
+#[derive(Debug, PartialEq, Eq)]
+enum IdlePollAction {
+  /// Another device took playback over: leave the app state alone (#693).
+  LeaveHandedOff,
+  Register,
+  Reclaim,
+}
+
+#[cfg(feature = "streaming")]
+fn idle_poll_action(
   handed_off: bool,
   recovery: &mut NativeIdleRecoveryState,
   now: Instant,
-) -> bool {
-  !handed_off && recovery.should_attempt_idle_recovery(now)
+) -> IdlePollAction {
+  if handed_off {
+    IdlePollAction::LeaveHandedOff
+  } else if recovery.should_attempt_idle_recovery(now) {
+    IdlePollAction::Reclaim
+  } else {
+    IdlePollAction::Register
+  }
 }
 
 #[cfg(feature = "streaming")]
@@ -401,13 +415,18 @@ fn reconcile_native_idle_device_if_preferred(
   };
 
   let now = Instant::now();
-  if should_reclaim_idle_native_device(app.native_handed_off(), recovery, now) {
-    info!("idle playback poll: transferring playback to the native device");
-    let _ = player.transfer(None);
-    player.activate();
-    app.last_device_activation = Some(now);
-  } else if app.native_handed_off() {
-    log::debug!("idle playback poll: native device was handed off; not reclaiming playback");
+  match idle_poll_action(app.native_handed_off(), recovery, now) {
+    IdlePollAction::LeaveHandedOff => {
+      log::debug!("idle playback poll: native device was handed off; not reclaiming playback");
+      return;
+    }
+    IdlePollAction::Reclaim => {
+      info!("idle playback poll: transferring playback to the native device");
+      let _ = player.transfer(None);
+      player.activate();
+      app.last_device_activation = Some(now);
+    }
+    IdlePollAction::Register => {}
   }
 
   app.mark_native_streaming_device_available(
@@ -1814,6 +1833,18 @@ impl PlaybackNetwork for Network {
                 requested_native_playback_origin(self, &context_id, &uris).await;
               let activation_time = Instant::now();
               let native_device_id = player.device_id();
+              // A handed-off device holds no track: pull the last playback over
+              // first, Spirc ignores a transfer once activated (#693).
+              if context_id.is_none() && uris.is_none() && self.app.lock().await.native_handed_off()
+              {
+                info!("resume after handoff: transferring the last playback here");
+                let _ = player.transfer(None);
+                player.activate();
+                let mut app = self.app.lock().await;
+                app.request_play_after_transfer();
+                app.dispatch(IoEvent::GetCurrentPlayback);
+                return;
+              }
               player.activate();
               self
                 .native_idle_recovery
@@ -3291,7 +3322,7 @@ mod tests {
 
   #[cfg(feature = "streaming")]
   #[test]
-  fn idle_poll_does_not_reclaim_a_handed_off_device() {
+  fn idle_poll_leaves_a_handed_off_device_alone() {
     let mut recovery = NativeIdleRecoveryState::default();
     let started_at = Instant::now();
 
@@ -3299,7 +3330,10 @@ mod tests {
     for instance in 1..=4 {
       recovery.observe_player_instance(Some(instance));
       let at = started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL * instance as u32;
-      assert!(!should_reclaim_idle_native_device(true, &mut recovery, at));
+      assert_eq!(
+        idle_poll_action(true, &mut recovery, at),
+        IdlePollAction::LeaveHandedOff
+      );
     }
   }
 
@@ -3310,16 +3344,14 @@ mod tests {
     recovery.observe_player_instance(Some(1));
     let started_at = Instant::now();
 
-    assert!(!should_reclaim_idle_native_device(
-      true,
-      &mut recovery,
-      started_at
-    ));
-    assert!(should_reclaim_idle_native_device(
-      false,
-      &mut recovery,
-      started_at
-    ));
+    assert_eq!(
+      idle_poll_action(true, &mut recovery, started_at),
+      IdlePollAction::LeaveHandedOff
+    );
+    assert_eq!(
+      idle_poll_action(false, &mut recovery, started_at),
+      IdlePollAction::Reclaim
+    );
   }
 
   #[cfg(feature = "streaming")]

@@ -387,6 +387,9 @@ pub struct App {
   /// Another device took playback over; the idle poll must not reclaim it (#693)
   #[cfg(feature = "streaming")]
   native_handed_off: bool,
+  /// A resume after a handoff loads paused; play it once it is loaded (#693)
+  #[cfg(feature = "streaming")]
+  native_play_after_transfer: Option<Instant>,
   /// Top tracks from the user for Discover feature
   pub discover_top_tracks: Vec<TrackInfo>,
   /// Top Artists Mix tracks for Discover feature
