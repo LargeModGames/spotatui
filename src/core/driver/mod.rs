@@ -21,6 +21,8 @@
 mod plan;
 mod play_count;
 mod presence;
+#[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+mod viz_capture;
 
 use crate::core::app::{App, RouteId};
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
@@ -124,7 +126,7 @@ pub struct Driver {
   #[cfg(feature = "scripting")]
   script_engine: Option<ScriptEngine>,
   #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-  audio_capture: Option<audio::AudioCaptureManager>,
+  audio_capture: viz_capture::VizCapture<audio::AudioCaptureManager>,
   /// Previous tick's `is_streaming_active`, so a native session that ends can
   /// push a final stopped state to MPRIS clients.
   #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -219,7 +221,7 @@ impl Driver {
       #[cfg(feature = "scripting")]
       script_engine,
       #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-      audio_capture: None,
+      audio_capture: viz_capture::VizCapture::new(),
       #[cfg(all(feature = "mpris", target_os = "linux"))]
       prev_is_streaming_active: false,
       #[cfg(feature = "discord-rpc")]
@@ -823,25 +825,25 @@ impl Driver {
     #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
     match env.viz_bars {
       Some(desired_bars) => {
-        if self.audio_capture.is_none() {
-          // Built at the count we are about to ask for, so the first frame
-          // does not immediately throw the fresh cavacore plan away.
-          self.audio_capture = audio::AudioCaptureManager::new(desired_bars);
-          app.audio_capture_active = self.audio_capture.is_some();
-        }
-
-        if let Some(ref capture) = self.audio_capture {
-          if let Some(spectrum) = capture.get_spectrum(desired_bars) {
-            app.spectrum_data = Some(spectrum);
+        // Built at the count we are about to ask for, so the first frame
+        // does not immediately throw the fresh cavacore plan away.
+        let capture = self
+          .audio_capture
+          .poll(app, move || audio::AudioCaptureManager::new(desired_bars));
+        match capture {
+          Some(capture) => {
+            if let Some(spectrum) = capture.get_spectrum(desired_bars) {
+              app.spectrum_data = Some(spectrum);
+            }
+            // Kept outside the spectrum arm: a dead stream must drop the
+            // "Capturing audio" status instead of freezing it on.
+            app.audio_capture_active = capture.is_active();
           }
-          // Kept outside the spectrum arm: a dead stream must drop the
-          // "Capturing audio" status instead of freezing it on.
-          app.audio_capture_active = capture.is_active();
+          None => app.audio_capture_active = false,
         }
       }
       None => {
-        if self.audio_capture.is_some() {
-          self.audio_capture = None;
+        if self.audio_capture.close() {
           app.audio_capture_active = false;
           app.spectrum_data = None;
         }
