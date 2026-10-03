@@ -56,6 +56,8 @@
 
 - **The help menu lists the Library unfollow and show follow keys**: `D` to unfollow an artist (in Library -> Artists, on an artist page's Related artists and in search results), `D` to remove a saved show in Library -> Podcasts, and `s` / `D` to follow and unfollow a show from its episode list all worked but never appeared under `?`. They are listed now, and the `w` row says it also saves an album from its track list and from an artist page's Albums ([#546](https://github.com/LargeModGames/spotatui/issues/546)).
 
+- **Subsonic tracks show their track number**: the Subsonic client read the album track number from a `trackNumber` key that no real server sends, so every Subsonic track showed up as track 0 in spotatui. The OpenSubsonic schema names the field `track`, and spotatui reads it from there now ([#674](https://github.com/LargeModGames/spotatui/issues/674)).
+
 ## [v0.43.0] 2026-09-23
 
 ### Added

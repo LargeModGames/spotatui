@@ -907,7 +907,7 @@ mod tests {
             "album": "Weightless",
             "albumId": "alb1",
             "duration": 469,
-            "trackNumber": 1,
+            "track": 1,
             "isrc": ["GBAYE0601498"]
           },
           {
@@ -918,7 +918,7 @@ mod tests {
             "album": "Suite bergamasque",
             "albumId": "alb2",
             "duration": 328,
-            "trackNumber": 1
+            "track": 1
           }
         ]
       }
@@ -940,7 +940,7 @@ mod tests {
             "album": "Help!",
             "albumId": "alb10",
             "duration": 125,
-            "trackNumber": 13
+            "track": 13
           }
         ],
         "album": [
@@ -1069,6 +1069,19 @@ mod tests {
     let env: SubsonicEnvelope = serde_json::from_str(GET_PLAYLISTS_EMPTY).unwrap();
     let wrapper = env.response.playlists.unwrap();
     assert!(wrapper.playlist.is_none());
+  }
+
+  #[test]
+  fn subsonic_track_number_is_read_from_the_track_key() {
+    let song: types::SubsonicSong =
+      serde_json::from_str(r#"{"id":"1","title":"T","track":7}"#).unwrap();
+    let src = SubsonicSource::new("http://localhost", "user", "sesame");
+    let track = src.song_to_track_info(&song);
+    assert_eq!(track.track_number, 7);
+
+    let song: types::SubsonicSong = serde_json::from_str(r#"{"id":"1","title":"T"}"#).unwrap();
+    let track = src.song_to_track_info(&song);
+    assert_eq!(track.track_number, 0);
   }
 
   #[test]
