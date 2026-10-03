@@ -140,7 +140,7 @@ pub struct SubsonicSong {
   /// Duration in seconds (Subsonic uses seconds, not milliseconds).
   #[serde(default)]
   pub duration: Option<u64>,
-  #[serde(rename = "trackNumber", default)]
+  #[serde(rename = "track", default)]
   pub track_number: Option<u32>,
   #[serde(default)]
   pub year: Option<u32>,
