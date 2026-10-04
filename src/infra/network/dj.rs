@@ -646,7 +646,8 @@ impl Network {
   /// and `search_tracks` all dispatch `DjIndexLibrary` instead of waiting for
   /// this.
   async fn dj_library_index(&mut self) -> Option<DjLibrary> {
-    if let Some(library) = { self.app.lock().await.dj.library.clone() } {
+    let library = self.app.lock().await.dj.library.clone();
+    if let Some(library) = library {
       return Some(library);
     }
     self.dj_index_library().await;
