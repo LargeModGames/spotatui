@@ -2106,6 +2106,11 @@ impl PlaybackNetwork for Network {
       app.pending_start_playback = None;
       app.native_load_watchdog = None;
     }
+    // A pause on the Connect route must not leave a deferred play armed (#693).
+    #[cfg(feature = "streaming")]
+    if let Some(player) = current_streaming_player(self).await {
+      player.cancel_play_after_transfer();
+    }
     // Check if using native streaming
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
