@@ -389,6 +389,15 @@ fn idle_poll_action(
   }
 }
 
+/// A paused external device keeps the resume, like Enter does (#693).
+#[cfg(feature = "streaming")]
+fn handoff_resume_may_pull_back(
+  cached_device_id: Option<&str>,
+  native_device_id: Option<&str>,
+) -> bool {
+  cached_device_id.is_none_or(|id| id.is_empty() || Some(id) == native_device_id)
+}
+
 #[cfg(feature = "streaming")]
 fn reconcile_native_idle_device_if_preferred(
   client_config: &mut ClientConfig,
@@ -1498,12 +1507,23 @@ impl PlaybackNetwork for Network {
     // A handed-off device holds no track: a bare resume pulls the last playback
     // over first, Spirc ignores a transfer once activated (#693).
     #[cfg(feature = "streaming")]
-    if context_id.is_none() && uris.is_none() && self.app.lock().await.native_handed_off() {
+    if context_id.is_none() && uris.is_none() {
       if let Some(player) = current_streaming_player(self).await {
-        info!("resume after handoff: transferring the last playback here");
-        player.transfer_and_play();
-        self.app.lock().await.dispatch(IoEvent::GetCurrentPlayback);
-        return;
+        let pull_back = {
+          let mut app = self.app.lock().await;
+          handoff_resume_may_pull_back(
+            app.cached_playback_device_id(),
+            app.native_device_id.as_deref(),
+          ) && app.take_native_handoff_resume()
+        };
+        if pull_back {
+          info!("resume after handoff: transferring the last playback here");
+          player.transfer_and_play();
+          let mut app = self.app.lock().await;
+          app.set_status_message("Resuming the last playback here\u{2026}", 4);
+          app.dispatch(IoEvent::GetCurrentPlayback);
+          return;
+        }
       }
     }
     let (uris, offset) = if context_id.is_none() {
@@ -3351,6 +3371,37 @@ mod tests {
       idle_poll_action(false, &mut recovery, started_at),
       IdlePollAction::Reclaim
     );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_only_registers_once_the_reclaim_attempts_are_spent() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    assert_eq!(
+      idle_poll_action(false, &mut recovery, started_at),
+      IdlePollAction::Reclaim
+    );
+    assert_eq!(
+      idle_poll_action(false, &mut recovery, started_at + Duration::from_millis(1)),
+      IdlePollAction::Register
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_resume_after_handoff_leaves_a_paused_phone_its_playback() {
+    assert!(!handoff_resume_may_pull_back(Some("phone"), Some("native")));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_resume_after_handoff_pulls_back_when_no_other_device_holds_playback() {
+    assert!(handoff_resume_may_pull_back(None, Some("native")));
+    assert!(handoff_resume_may_pull_back(Some(""), Some("native")));
+    assert!(handoff_resume_may_pull_back(Some("native"), Some("native")));
   }
 
   #[cfg(feature = "streaming")]

@@ -577,6 +577,7 @@ async fn handle_player_events(
     match &event {
       PlayerEvent::Playing { .. } => {
         audibly_playing = true;
+        player.cancel_play_after_transfer();
         pending_end_of_track = None;
         last_progress_at = Instant::now();
         if !session_lost {

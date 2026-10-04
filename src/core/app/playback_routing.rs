@@ -206,6 +206,15 @@ impl App {
     })
   }
 
+  /// Device id of the cached playback, playing or paused.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn cached_playback_device_id(&self) -> Option<&str> {
+    self
+      .current_playback_context
+      .as_ref()
+      .and_then(|ctx| ctx.device.id.as_deref())
+  }
+
   /// Whether Spotify transport would land on the parked native backend.
   pub(crate) fn native_parked_here(&self) -> bool {
     #[cfg(feature = "streaming")]

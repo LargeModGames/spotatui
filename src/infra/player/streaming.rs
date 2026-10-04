@@ -1140,7 +1140,7 @@ impl StreamingPlayer {
 
   /// Pause playback
   pub fn pause(&self) {
-    self.play_after_transfer_slot().cancel();
+    self.cancel_play_after_transfer();
     if let Err(error) = self.route_command(DeferredPlayerCommand::Pause) {
       warn!("native pause failed: {error}");
     }
@@ -1270,13 +1270,21 @@ impl StreamingPlayer {
   /// Pull the last playback over and play it once loaded; a pause cancels it.
   pub fn transfer_and_play(&self) {
     self.play_after_transfer_slot().arm(Instant::now());
-    let _ = self.transfer(None);
+    if let Err(error) = self.transfer(None) {
+      warn!("native transfer after handoff failed: {error}");
+      self.cancel_play_after_transfer();
+    }
     self.activate();
   }
 
   /// One-shot, for the paused load the transfer ends in.
   pub fn take_play_after_transfer(&self) -> bool {
     self.play_after_transfer_slot().take(Instant::now())
+  }
+
+  /// Audio already playing needs no deferred play; a later remote pause must stick.
+  pub fn cancel_play_after_transfer(&self) {
+    self.play_after_transfer_slot().cancel();
   }
 
   fn play_after_transfer_slot(&self) -> std::sync::MutexGuard<'_, PlayAfterTransfer> {

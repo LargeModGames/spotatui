@@ -61,11 +61,21 @@ impl App {
   #[cfg(feature = "streaming")]
   pub(crate) fn mark_native_handed_off(&mut self) {
     self.native_handed_off = true;
+    self.native_handoff_resume_tried = false;
   }
 
   #[cfg(feature = "streaming")]
   pub(crate) fn clear_native_handoff(&mut self) {
     self.native_handed_off = false;
+    self.native_handoff_resume_tried = false;
+  }
+
+  /// True once per handoff: a second resume takes the normal start path.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn take_native_handoff_resume(&mut self) -> bool {
+    let first = self.native_handed_off && !self.native_handoff_resume_tried;
+    self.native_handoff_resume_tried |= first;
+    first
   }
 
   #[cfg(feature = "streaming")]
@@ -595,5 +605,20 @@ mod tests {
 
     app.clear_native_handoff();
     assert!(!app.native_handed_off());
+  }
+
+  #[test]
+  fn only_the_first_resume_after_a_handoff_pulls_playback_back() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert!(!app.take_native_handoff_resume());
+
+    app.mark_native_handed_off();
+    assert!(app.take_native_handoff_resume());
+    assert!(!app.take_native_handoff_resume());
+    assert!(app.native_handed_off());
+
+    app.mark_native_handed_off();
+    assert!(app.take_native_handoff_resume());
   }
 }
