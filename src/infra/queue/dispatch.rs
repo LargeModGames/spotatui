@@ -166,7 +166,9 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
   }
   match event {
     IoEvent::PausePlayback => {
-      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+      // Held across the command: it only queues it, and the lock keeps a
+      // backend replacement from shutting this player down in between.
+      if let Some(player) = app.lock().await.streaming_player.clone() {
         player.pause();
       }
       let mut guard = app.lock().await;
@@ -178,7 +180,7 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       Some(true)
     }
     IoEvent::StartPlayback(None, None, None) => {
-      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+      if let Some(player) = app.lock().await.streaming_player.clone() {
         player.play();
       }
       let mut guard = app.lock().await;
@@ -196,7 +198,7 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       Some(true)
     }
     IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => {
-      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+      if let Some(player) = app.lock().await.streaming_player.clone() {
         player.seek(0);
       }
       Some(true)
@@ -444,7 +446,8 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
   // suspension rather than kept for reuse), so this compiles out without them.
   #[cfg(feature = "audio-decode-queue")]
   {
-    if let Some(p) = { app.lock().await.take_queue_now_decoded_player() } {
+    let player = app.lock().await.take_queue_now_decoded_player();
+    if let Some(p) = player {
       p.stop();
     }
     if let Some(p) = suspended_context_player(app).await {
