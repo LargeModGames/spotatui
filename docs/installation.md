@@ -138,7 +138,7 @@ nix-build
 
 When you start the terminal UI, spotatui checks GitHub Releases. If a newer version is available, it verifies the download against its `.sha256`, installs it, and restarts. Running a subcommand never triggers the check, and neither does the `spotatui-gui` build.
 
-The default `auto_update_delay` is `0`, so an available update installs immediately. You can delay installation with values such as `30s`, `10m`, `2h`, or `7d`. The first launch that sees a new version records the notice; once the delay has passed, the next launch installs it. A newer release restarts the wait.
+The default `auto_update_delay` is `0`, so an available update installs immediately. You can delay installation with values such as `30s`, `10m`, `2h`, or `7d`. The first launch that sees a new version records the notice; while it waits, the terminal prints `Update vX detected — will install in …`. Once the delay has passed, the next launch installs it. A newer release restarts the wait.
 
 To disable automatic updates, set this in `config.yml` or use the Settings row:
 
