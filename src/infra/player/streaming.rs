@@ -1268,13 +1268,16 @@ impl StreamingPlayer {
   }
 
   /// Pull the last playback over and play it once loaded; a pause cancels it.
-  pub fn transfer_and_play(&self) {
+  /// False when the transfer could not be sent.
+  pub fn transfer_and_play(&self) -> bool {
     self.play_after_transfer_slot().arm(Instant::now());
     if let Err(error) = self.transfer(None) {
       warn!("native transfer after handoff failed: {error}");
       self.cancel_play_after_transfer();
+      return false;
     }
     self.activate();
+    true
   }
 
   /// One-shot, for the paused load the transfer ends in.

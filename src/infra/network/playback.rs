@@ -1510,16 +1510,17 @@ impl PlaybackNetwork for Network {
     if context_id.is_none() && uris.is_none() {
       if let Some(player) = current_streaming_player(self).await {
         let pull_back = {
-          let mut app = self.app.lock().await;
+          let app = self.app.lock().await;
           handoff_resume_may_pull_back(
             app.cached_playback_device_id(),
             app.native_device_id.as_deref(),
-          ) && app.take_native_handoff_resume()
+          ) && app.native_handoff_resume_pending()
         };
-        if pull_back {
+        // An unsent transfer keeps the resume for the next press.
+        if pull_back && player.transfer_and_play() {
           info!("resume after handoff: transferring the last playback here");
-          player.transfer_and_play();
           let mut app = self.app.lock().await;
+          app.mark_native_handoff_resume_sent();
           app.set_status_message("Resuming the last playback here\u{2026}", 4);
           app.dispatch(IoEvent::GetCurrentPlayback);
           return;

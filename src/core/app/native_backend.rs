@@ -70,12 +70,15 @@ impl App {
     self.native_handoff_resume_tried = false;
   }
 
-  /// True once per handoff: a second resume takes the normal start path.
+  /// One sent transfer per handoff: a later resume takes the normal start path.
   #[cfg(feature = "streaming")]
-  pub(crate) fn take_native_handoff_resume(&mut self) -> bool {
-    let first = self.native_handed_off && !self.native_handoff_resume_tried;
-    self.native_handoff_resume_tried |= first;
-    first
+  pub(crate) fn native_handoff_resume_pending(&self) -> bool {
+    self.native_handed_off && !self.native_handoff_resume_tried
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn mark_native_handoff_resume_sent(&mut self) {
+    self.native_handoff_resume_tried = true;
   }
 
   #[cfg(feature = "streaming")]
@@ -608,17 +611,21 @@ mod tests {
   }
 
   #[test]
-  fn only_the_first_resume_after_a_handoff_pulls_playback_back() {
+  fn only_the_first_sent_transfer_after_a_handoff_uses_up_the_resume() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    assert!(!app.take_native_handoff_resume());
+    assert!(!app.native_handoff_resume_pending());
 
     app.mark_native_handed_off();
-    assert!(app.take_native_handoff_resume());
-    assert!(!app.take_native_handoff_resume());
+    // A transfer that could not be sent leaves the resume pending.
+    assert!(app.native_handoff_resume_pending());
+    assert!(app.native_handoff_resume_pending());
+
+    app.mark_native_handoff_resume_sent();
+    assert!(!app.native_handoff_resume_pending());
     assert!(app.native_handed_off());
 
     app.mark_native_handed_off();
-    assert!(app.take_native_handoff_resume());
+    assert!(app.native_handoff_resume_pending());
   }
 }
