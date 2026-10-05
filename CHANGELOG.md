@@ -16,6 +16,8 @@
 
 ### Fixed
 
+- **The listening recap keeps a dash in the track title**: `Bohemian Rhapsody - Remastered 2011` used to show as `Bohemian Rhapsody` by `Remastered 2011` on the recap share card, and the Top Tracks list showed the whole line in bold with no artist under it. The recap split each entry on the first ` - `, so a title containing one lost half of itself to the artist slot. It now splits on the last ` - `, where the artist was appended, so the card and the lists show the full title with the real artist, and album names containing a dash stay whole ([#671](https://github.com/LargeModGames/spotatui/issues/671)).
+
 - **Playlist sorting ignores letter case**: sorting a playlist by Name, Artist or Album put every capitalised title before every lowercase one, so `Banana` came before `apple`. The track table and the Ctrl+f search results inside a playlist now both sort without regard to case, so `apple, Banana, cherry` stay in that order ([#600](https://github.com/LargeModGames/spotatui/issues/600), [#672](https://github.com/LargeModGames/spotatui/issues/672)).
 
 - **Artist pages open again**: Spotify now allows at most 10 albums per page for an artist's albums and answers a larger page with `400 Invalid limit`. spotatui asked for 50, so opening any artist showed an error page. It now asks for 10 per page and still loads every album, so an artist with a very large catalog takes longer to open ([#589](https://github.com/LargeModGames/spotatui/issues/589)).
