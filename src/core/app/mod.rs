@@ -6,7 +6,7 @@ use crate::core::plugin_api::{
   ArtistInfo, EpisodeInfo, PlayableInfo, PlaylistInfo, SavedAlbumInfo, ShowInfo, TrackInfo,
 };
 use crate::core::requirement::{availability, Availability, Capability, Requirement};
-use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
+use crate::core::sort::{SortContext, SortField, SortState};
 use crate::core::source::Source;
 use crate::core::spotify_access::{RestrictedEndpoint, SpotifyKeyTier};
 use crate::core::state::{
@@ -57,6 +57,8 @@ use rspotify::model::{
 
 use crate::infra::queue::RepeatMode;
 
+#[cfg(test)]
+use crate::core::sort::SortOrder;
 #[cfg(test)]
 use crate::core::test_helpers::{playlist_info, user_info};
 #[cfg(test)]

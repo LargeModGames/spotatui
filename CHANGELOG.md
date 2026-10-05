@@ -17,6 +17,7 @@
 ### Fixed
 
 - **Playback stays on your phone or car after you move it there**: with native streaming, moving playback from spotatui to a phone or CarPlay lasted about ten seconds before it jumped back to spotatui. While the other device takes over, Spotify briefly reports that nothing plays; the playback poll took that as an idle spotatui and moved playback back to it, and every rebuild of the idle Connect device after the handoff allowed it again. After a handoff spotatui now stays in the device list without taking playback until you pick it yourself, in the device list or from another Spotify app. Play in spotatui while no other device holds the playback picks up the last playback and plays it, with a status message; while your phone holds it paused, Play resumes it there, like Enter ([#693](https://github.com/LargeModGames/spotatui/issues/693)).
+- **Playlist sorting ignores letter case**: sorting a playlist by Name, Artist or Album put every capitalised title before every lowercase one, so `Banana` came before `apple`. The track table and the Ctrl+f search results inside a playlist now both sort without regard to case, so `apple, Banana, cherry` stay in that order ([#600](https://github.com/LargeModGames/spotatui/issues/600), [#672](https://github.com/LargeModGames/spotatui/issues/672)).
 
 - **Artist pages open again**: Spotify now allows at most 10 albums per page for an artist's albums and answers a larger page with `400 Invalid limit`. spotatui asked for 50, so opening any artist showed an error page. It now asks for 10 per page and still loads every album, so an artist with a very large catalog takes longer to open ([#589](https://github.com/LargeModGames/spotatui/issues/589)).
 
@@ -57,6 +58,8 @@
 - **The help menu no longer lists `Ctrl+p` for moving up**: the "Move selection up" and "Scroll lyrics" rows offered `<Ctrl+p>`, but with the default config `Ctrl+p` opens the Listening Party, which is checked first. Both rows now list only the keys that work there ([#599](https://github.com/LargeModGames/spotatui/issues/599)).
 
 - **The help menu lists the Library unfollow and show follow keys**: `D` to unfollow an artist (in Library -> Artists, on an artist page's Related artists and in search results), `D` to remove a saved show in Library -> Podcasts, and `s` / `D` to follow and unfollow a show from its episode list all worked but never appeared under `?`. They are listed now, and the `w` row says it also saves an album from its track list and from an artist page's Albums ([#546](https://github.com/LargeModGames/spotatui/issues/546)).
+
+- **Subsonic tracks show their track number**: the Subsonic client read the album track number from a `trackNumber` key that no real server sends, so every Subsonic track showed up as track 0 in spotatui. The OpenSubsonic schema names the field `track`, and spotatui reads it from there now ([#674](https://github.com/LargeModGames/spotatui/issues/674)).
 
 ## [v0.43.0] 2026-09-23
 

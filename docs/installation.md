@@ -31,6 +31,9 @@ Download from [GitHub Releases](https://github.com/LargeModGames/spotatui/releas
 | --- | --- |
 | Windows 10/11 (64-bit) | `spotatui-windows-x86_64.zip` |
 | Linux (Ubuntu, Arch, Fedora, etc.) | `spotatui-linux-x86_64.tar.gz` |
+| Linux ARM64 (Raspberry Pi 4/5, ARM servers) | `spotatui-linux-aarch64.tar.gz` |
+| Debian/Ubuntu (amd64) | `spotatui_*_amd64.deb` |
+| Debian/Ubuntu (arm64) | `spotatui_*_arm64.deb` |
 | macOS (Intel) | `spotatui-macos-x86_64.tar.gz` |
 | macOS (Apple Silicon M1/M2/M3) | `spotatui-macos-aarch64.tar.gz` |
 
@@ -133,15 +136,22 @@ nix-build
 
 ## Updating
 
-When a new version is available, you'll see a popup notification on startup. To update:
+When you start the terminal UI, spotatui checks GitHub Releases. If a newer version is available, it verifies the download against its `.sha256`, installs it, and restarts. Running a subcommand never triggers the check, and neither does the `spotatui-gui` build.
 
-1. Close spotatui
-2. Run:
-   ```bash
-   spotatui update --install
-   ```
+The default `auto_update_delay` is `0`, so an available update installs immediately. You can delay installation with values such as `30s`, `10m`, `2h`, or `7d`. The first launch that sees a new version records the notice; while it waits, the terminal prints `Update vX detected — will install in …`. Once the delay has passed, the next launch installs it. A newer release restarts the wait.
 
-If you installed via a package manager (AUR, cargo, etc.), update through there instead.
+To disable automatic updates, set this in `config.yml` or use the Settings row:
+
+```yaml
+behavior:
+  disable_auto_update: true
+  # or keep updates enabled, but wait a day before installing:
+  # auto_update_delay: "1d"
+```
+
+To skip the check for one run, use `spotatui --no-update` (or `-U`) or set `SPOTATUI_SKIP_UPDATE`. These options, the `update` subcommand, and the Settings rows are available in builds with the `self-update` feature, which is enabled in the default and release builds.
+
+`spotatui update` shows your current and latest versions. Add `--install` to install the update immediately. If your package manager owns the installation, set `disable_auto_update: true` so spotatui does not replace its binary.
 
 ---
 

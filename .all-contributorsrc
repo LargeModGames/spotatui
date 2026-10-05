@@ -462,6 +462,24 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "uemrey0",
+      "name": "Ufuk Emre Yücetürk",
+      "avatar_url": "https://avatars.githubusercontent.com/u/64688960?v=4",
+      "profile": "https://github.com/uemrey0",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "WaterWhisperer",
+      "name": "WaterWhisperer",
+      "avatar_url": "https://avatars.githubusercontent.com/u/164724580?v=4",
+      "profile": "https://github.com/WaterWhisperer",
+      "contributions": [
+        "doc"
+      ]
     }
   ],
   "contributorsPerLine": 7,
