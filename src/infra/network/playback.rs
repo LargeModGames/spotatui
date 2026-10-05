@@ -2069,6 +2069,11 @@ impl PlaybackNetwork for Network {
         if suppressed_transient_native_command_error(self, &e).await {
           return;
         }
+        // With no active device nothing plays anywhere, so the pause already holds.
+        if is_no_active_device_error(&e) {
+          info!("pause: no active device, nothing to pause");
+          return;
+        }
         let mut app = self.app.lock().await;
         app.handle_error(anyhow!(e));
       }
@@ -2939,6 +2944,53 @@ mod tests {
     assert_eq!(saved_device_retry(true, Some("dev1"), true), None);
     assert_eq!(saved_device_retry(true, None, false), None);
     assert_eq!(saved_device_retry(false, Some("dev1"), false), None);
+  }
+
+  #[tokio::test]
+  async fn pause_with_no_active_device_is_not_an_error() {
+    use crate::core::app::{App, RouteId};
+    use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::Mutex;
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        assert!(request.starts_with("PUT /v1/me/player/pause"), "{request}");
+        let body = r#"{"error":{"status":404,"message":"Player command failed: No active device found","reason":"NO_ACTIVE_DEVICE"}}"#;
+        let response = format!(
+          "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let app = Arc::new(Mutex::new(App::new(
+        tx,
+        crate::core::user_config::UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+      let mut network = Network::new(
+        Some(spotify),
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+
+      network.pause_playback().await;
+      server.await.unwrap();
+
+      let app = app.lock().await;
+      assert_eq!(app.api_error(), "");
+      assert_ne!(app.get_current_route().id, RouteId::Error);
+    })
+    .await
+    .expect("pause test timed out");
   }
 
   #[allow(deprecated)]
