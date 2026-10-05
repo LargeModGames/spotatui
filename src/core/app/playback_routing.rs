@@ -231,6 +231,14 @@ impl App {
       .and_then(|ctx| ctx.device.id.as_deref())
   }
 
+  /// After a handoff, a poll that finds no playback means the other device left (#693).
+  #[cfg(feature = "streaming")]
+  pub(crate) fn forget_handed_off_playback(&mut self) {
+    if self.native_handed_off() {
+      self.current_playback_context = None;
+    }
+  }
+
   /// Whether Spotify transport would land on the parked native backend.
   pub(crate) fn native_parked_here(&self) -> bool {
     #[cfg(feature = "streaming")]
@@ -602,6 +610,33 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn an_empty_poll_after_a_handoff_forgets_the_phone_that_left() {
+    let mut app = App {
+      current_playback_context: Some(make_external_context()),
+      ..Default::default()
+    };
+    app.mark_native_handed_off();
+
+    app.forget_handed_off_playback();
+
+    assert_eq!(app.cached_playback_device_id(), None);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn an_empty_poll_without_a_handoff_keeps_the_cached_playback() {
+    let mut app = App {
+      current_playback_context: Some(make_external_context()),
+      ..Default::default()
+    };
+
+    app.forget_handed_off_playback();
+
+    assert_eq!(app.cached_playback_device_id(), Some("external"));
+  }
 
   #[cfg(feature = "streaming")]
   #[test]
