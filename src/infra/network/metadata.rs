@@ -556,7 +556,7 @@ impl MetadataNetwork for Network {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
   use super::*;
   use crate::core::app::{App, RouteId};
   use crate::core::user_config::UserConfig;
@@ -570,7 +570,10 @@ mod tests {
   use tokio::net::TcpListener;
   use tokio::sync::Mutex;
 
-  async fn spotify_with_access_token(access_token: &str, base_url: String) -> AuthCodePkceSpotify {
+  pub(crate) async fn spotify_with_access_token(
+    access_token: &str,
+    base_url: String,
+  ) -> AuthCodePkceSpotify {
     let mut config = Config::default();
     config.api_base_url = base_url;
 
@@ -596,7 +599,7 @@ mod tests {
     spotify
   }
 
-  async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
+  pub(crate) async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
     let mut buf = vec![0; 4096];
     let n = stream.read(&mut buf).await.unwrap();
     String::from_utf8_lossy(&buf[..n]).to_string()
