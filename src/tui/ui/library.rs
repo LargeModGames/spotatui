@@ -71,6 +71,33 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     return;
   }
 
+  // Apple Music: "All songs" first, then the Music playlists, each opening
+  // the shared track table. Read-only, so no "Add Playlist".
+  if app.active_source == Source::AppleMusic {
+    let items: Vec<String> = if app.apple_music_playlists().is_empty() {
+      vec![format!(
+        "(press `{}`, pick Apple Music to load your library)",
+        app.user_config.keys.manage_devices
+      )]
+    } else {
+      app
+        .apple_music_playlists()
+        .iter()
+        .map(|p| format!("\u{1F3B5} {}", p.name))
+        .collect()
+    };
+    draw_selectable_list(
+      f,
+      app,
+      layout_chunk,
+      "Apple Music",
+      &items,
+      highlight_state,
+      app.view.selected_playlist_index,
+    );
+    return;
+  }
+
   // Subsonic: the sidebar Playlists panel lists the server's playlists (no
   // local-write support, so no "Add Playlist").
   if app.active_source == Source::Subsonic {

@@ -31,6 +31,7 @@ pub enum TrackTableContext {
   SubsonicPlaylist,
   YouTubePlaylist,
   QobuzPlaylist,
+  AppleMusicPlaylist,
 }
 
 /// The five search result pages. Their cursors and focus are `App.view`'s
@@ -97,6 +98,10 @@ impl App {
 
   /// Show `tracks` in the shared table with the cursor on the top row.
   pub(crate) fn set_track_table(&mut self, tracks: Vec<TrackInfo>, context: TrackTableContext) {
+    // Another list replaced the Music one: its later pages must not land here.
+    if context != TrackTableContext::AppleMusicPlaylist {
+      self.cancel_apple_music_browse();
+    }
     self.track_table.tracks = tracks;
     self.track_table.context = Some(context);
     self.view.track_table_index = 0;

@@ -23,6 +23,7 @@ pub enum PlaybackSource {
   NativeContext,
   NativeRawList,
   ExternalDevice,
+  AppleMusic,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +58,29 @@ impl PlaybackSnapshot {
 }
 
 pub fn current_playback_snapshot(app: &App) -> Option<PlaybackSnapshot> {
+  if app.apple_music_owns_playback() {
+    let snapshot = app.apple_music_state().snapshot.as_ref()?;
+    let track = snapshot.track.as_ref()?;
+    return Some(PlaybackSnapshot {
+      metadata: PlaybackMetadata {
+        title: track.name.clone(),
+        artists: track.artists.clone(),
+        album: track.album.clone(),
+        image_url: None,
+        duration_ms: track.duration_ms as u32,
+      },
+      item_kind: PlaybackItemKind::Track,
+      item_id: None,
+      item_uri: track.uri.clone(),
+      context_uri: None,
+      source: PlaybackSource::AppleMusic,
+      progress_ms: app.apple_music_position_ms().into(),
+      is_playing: snapshot.playing,
+      is_live: false,
+      shuffle: false,
+      repeat: None,
+    });
+  }
   // A non-Spotify decoded source (local / subsonic / internet-radio / youtube)
   // owns the audio sink while its `*_playback` field is `Some`. Starting such a
   // source pauses or parks librespot and never clears the Spotify context, so

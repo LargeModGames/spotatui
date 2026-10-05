@@ -19,29 +19,32 @@ pub fn handler(key: Key, app: &mut App) {
         }
       };
     }
-    k if common_key_events::down_event(k, &app.user_config.keys) => match app
-      .view
-      .source_device_focus
-    {
-      SourceFocus::Source => {
-        app.view.source_list_index =
-          common_key_events::on_down_press_handler(&Source::ALL, Some(app.view.source_list_index));
-      }
-      SourceFocus::Devices => {
-        if let Some(p) = app.devices() {
-          if let Some(selected_device_index) = app.view.selected_device_index {
-            let next_index =
-              common_key_events::on_down_press_handler(&p.devices, Some(selected_device_index));
-            app.view.selected_device_index = Some(next_index);
+    k if common_key_events::down_event(k, &app.user_config.keys) => {
+      match app.view.source_device_focus {
+        SourceFocus::Source => {
+          app.view.source_list_index = common_key_events::on_down_press_handler(
+            Source::picker_sources(),
+            Some(app.view.source_list_index),
+          );
+        }
+        SourceFocus::Devices => {
+          if let Some(p) = app.devices() {
+            if let Some(selected_device_index) = app.view.selected_device_index {
+              let next_index =
+                common_key_events::on_down_press_handler(&p.devices, Some(selected_device_index));
+              app.view.selected_device_index = Some(next_index);
+            }
           }
         }
       }
-    },
+    }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       match app.view.source_device_focus {
         SourceFocus::Source => {
-          app.view.source_list_index =
-            common_key_events::on_up_press_handler(&Source::ALL, Some(app.view.source_list_index));
+          app.view.source_list_index = common_key_events::on_up_press_handler(
+            Source::picker_sources(),
+            Some(app.view.source_list_index),
+          );
         }
         SourceFocus::Devices => {
           if let Some(p) = app.devices() {
@@ -94,8 +97,9 @@ pub fn handler(key: Key, app: &mut App) {
 /// Commit the highlighted source as the new active source and close the picker.
 /// This is browse-scope only: it never starts or stops playback.
 fn select_source(app: &mut App) {
-  let source = Source::ALL[app.view.source_list_index];
-  if app.active_source != source {
+  let source = Source::picker_sources()[app.view.source_list_index];
+  // Picking Apple Music again reloads it: Music's library can change under us.
+  if app.active_source != source || source == Source::AppleMusic {
     app.apply(Action::SelectSource(source));
     // Reset the sidebar playlist cursor to the top of the new source's list.
     app.view.selected_playlist_index = Some(0);

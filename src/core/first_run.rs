@@ -159,6 +159,9 @@ pub(crate) fn compiled_in_sources() -> Vec<Source> {
   options.push(Source::Local);
   #[cfg(feature = "qobuz")]
   options.push(Source::Qobuz);
+  // Needs nothing up front: macOS asks for Automation access on first use.
+  #[cfg(all(feature = "apple-music", target_os = "macos"))]
+  options.push(Source::AppleMusic);
   options
 }
 
@@ -367,6 +370,15 @@ fn prompt_required(onboarding: &dyn Onboarding, label: &str, masked: bool) -> Re
 mod tests {
   use super::*;
   use crate::core::test_helpers::ScriptedOnboarding;
+
+  #[test]
+  fn the_first_run_picker_offers_the_same_sources_as_the_d_picker() {
+    let compiled = compiled_in_sources();
+    assert_eq!(
+      compiled.contains(&Source::AppleMusic),
+      Source::picker_sources().contains(&Source::AppleMusic)
+    );
+  }
 
   #[cfg(feature = "subsonic")]
   #[test]

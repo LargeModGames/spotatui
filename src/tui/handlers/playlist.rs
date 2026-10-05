@@ -18,6 +18,7 @@ pub(crate) fn total_display_count(app: &App) -> usize {
     Source::YouTube => app.youtube_playlists().len() + 1,
     Source::Qobuz => app.qobuz_playlists().len(),
     Source::Spotify => app.get_playlist_display_count() + 1,
+    Source::AppleMusic => app.apple_music_playlists().len(),
   }
 }
 
@@ -226,6 +227,14 @@ pub(super) fn activate_selected(app: &mut App) {
     Source::YouTube => open_youtube_playlist(app),
     Source::Qobuz => open_qobuz_folder(app),
     Source::Spotify => open_spotify_row(app),
+    Source::AppleMusic => {
+      let uri = app
+        .view
+        .selected_playlist_index
+        .and_then(|i| app.apple_music_playlists().get(i))
+        .map(|p| p.uri.clone());
+      open_source_playlist(app, uri);
+    }
   }
 }
 

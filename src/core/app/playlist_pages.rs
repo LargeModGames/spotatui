@@ -98,6 +98,11 @@ impl App {
   /// Open a decoded source's playlist or folder in the shared track table,
   /// routed by URI scheme. Leaves the Spotify page cache alone.
   pub(crate) fn open_source_playlist_tracks(&mut self, uri: String) {
+    if uri.starts_with("applemusic:") {
+      self.show_tracks_in_table(Vec::new(), TrackTableContext::AppleMusicPlaylist);
+      self.browse_apple_music(crate::infra::apple_music::Browse::Tracks(uri));
+      return;
+    }
     let (context, event) = if uri.starts_with("file:") {
       (
         TrackTableContext::LocalPlaylist,

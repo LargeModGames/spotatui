@@ -4,6 +4,7 @@ const PREFIXES: [string, Source][] = [
   ["spotify:", "Spotify"],
   ["file://", "Local"],
   ["qobuz:", "Qobuz"],
+  ["applemusic:", "AppleMusic"],
   ["subsonic:", "Subsonic"],
   ["youtube:", "YouTube"],
   ["radio:", "Radio"],

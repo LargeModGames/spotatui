@@ -89,6 +89,7 @@ describe("playlistsFor", () => {
       { uri: "radio:https://radio.example", name: "Score radio", count: null },
     ]);
     expect(playlistsFor(playlists, "Qobuz")).toEqual([]);
+    expect(playlistsFor(playlists, "AppleMusic")).toEqual([]);
   });
 });
 

@@ -228,23 +228,8 @@ pub(crate) fn deferred_streaming_startup(ctx: DeferredStreamingContext) {
     // timed-out init), the pending window is over.
     let mut app = app.lock().await;
     app.native_backend_pending = false;
-    // The Spotify startup Play/Pause runs here, after the device decision:
-    // before init was deferred, the device transfer always completed first,
-    // and firing these earlier 404s with NO_ACTIVE_DEVICE straight onto the
-    // Error screen. A request the user parked during init takes precedence
-    // over the configured startup behavior — their intent is newer.
-    if app.pending_start_playback.is_none() {
-      match spotify_startup_behavior {
-        Some(StartupBehavior::Play) => {
-          app.dispatch(IoEvent::Shuffle(initial_shuffle_enabled));
-          app.dispatch(IoEvent::StartPlayback(None, None, None));
-        }
-        Some(StartupBehavior::Pause) => {
-          app.dispatch(IoEvent::PausePlayback);
-        }
-        Some(StartupBehavior::Continue) | None => {}
-      }
-    }
+    // The Spotify startup Play/Pause runs here, after the device decision.
+    app.run_spotify_startup_behavior(spotify_startup_behavior, initial_shuffle_enabled);
     // A StartPlayback parked during init replays now — against the native
     // backend when it exists, else through the normal Connect path.
     app.replay_pending_start_playback();

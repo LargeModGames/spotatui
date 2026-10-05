@@ -476,7 +476,7 @@ impl App {
         .filter(|playlist| playlist.uri.starts_with("qobuz:playlist:"))?,
       Source::Subsonic => self.subsonic_playlists.get(index)?,
       Source::YouTube => self.youtube_playlists.get(index)?,
-      Source::Local | Source::Radio => return None,
+      Source::Local | Source::Radio | Source::AppleMusic => return None,
     };
     Some(crate::core::playlist_sync::Endpoint {
       source: self.active_source,

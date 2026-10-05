@@ -69,7 +69,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 
 ## Features
 
-- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), [YouTube](#youtube), or [Qobuz](#qobuz). The free sources need no Spotify account; press `d` to switch between them at any time.
+- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), [YouTube](#youtube), [Qobuz](#qobuz), or [Apple Music](#apple-music) on macOS. The free sources need no Spotify account; press `d` to switch between them at any time.
 - **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
 - **Synced lyrics.** Line-by-line lyrics that follow playback.
 - **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
@@ -207,13 +207,15 @@ spotatui is a general music player, not just a Spotify client. Press `d` to open
 | **Internet Radio** | Play icecast/shoutcast streams with live now-playing metadata; search the [radio-browser.info](https://www.radio-browser.info) directory (30k+ stations) | Nothing |
 | **YouTube** | Search YouTube and play audio; build **local playlists** stored in a plain file | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended) |
 | **Qobuz** | Stream your Qobuz library (favorites, playlists, albums, search) at the configured quality, MP3 320 up to FLAC 24/192, through spotatui's own engine | A paid Qobuz account |
+| **Apple Music** | Browse and search your Music library and its playlists; the Music app plays them, spotatui is the remote | macOS and the Music app; your own Apple Music login |
 
 **Resuming your last session:** quit while playing from a non-Spotify source and spotatui restores that track and its position on the next launch, following the `startup_behavior` setting (`continue`, `play`, or `pause`).
 
-**Availability:** included in the Linux, macOS, and Windows release binaries. When building from source, enable them with cargo features:
+**Availability:** included in the Linux, macOS, and Windows release binaries; Apple Music is in the macOS ones only. When building from source, enable them with cargo features:
 
 ```bash
 cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz
+# macOS: add apple-music
 ```
 
 Each source has a few config keys; the essentials are below, and the full reference lives in the [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration).
@@ -257,6 +259,14 @@ behavior:
 ```
 
 Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. spotatui reads the three constants it needs from the Qobuz web player at runtime; when Qobuz changes its web player and the login stops working, set `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` from the bundle instead of waiting for a release.
+
+### Apple Music
+
+macOS only. Pick **Apple Music** in the first-run picker or the `d` menu. Unlike the other sources, the audio does not go through spotatui: the Music app plays the songs with your own Apple Music login and library, and spotatui drives it from the terminal. Music is started in the background and never brought to the front. The first time, macOS asks whether your terminal may control Music; allow it (or later under System Settings > Privacy & Security > Automation).
+
+The sidebar lists **All songs** and your playlists, including Apple Music playlists you added to your library; search looks through your library. Play/pause, next, previous, seek, volume, the media keys and the playbar follow Music. Next and previous step through the playlist or search results a song was started from, and follow Music's shuffle setting. Only one player is audible when you switch inside spotatui: starting a Music song from spotatui pauses Spotify and the other sources, and starting one of those pauses Music first. Pressing play in the Music app itself while another source is playing is not detected.
+
+Not available for Apple Music songs: the queue, the shuffle and repeat toggles (change them in Music), likes, and playlist edits. Songs Music cannot play (no longer available, or a local file that is missing) are listed, but choosing one shows a message instead of playing it, and next and previous skip them: Music would answer them with a dialog that blocks every later start. spotatui never lets Music's volume reach 0 for the same reason.
 
 ## AI DJ
 

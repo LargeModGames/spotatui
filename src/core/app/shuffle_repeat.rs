@@ -173,7 +173,10 @@ impl App {
     // shuffle on the user's real Spotify device for a source they are not
     // listening to, invisibly: the playbar on screen is the decoded one, so
     // nothing would reflect the change.
-    if self.active_decoded_source() || self.queue_owns_playback() {
+    if self.apple_music_owns_playback()
+      || self.active_decoded_source()
+      || self.queue_owns_playback()
+    {
       self.set_status_message("Shuffle does not apply to this source", 2);
       return;
     }
@@ -234,7 +237,10 @@ impl App {
     // See `shuffle`: radio and the queue slot have no repeat of their own, and
     // falling through would cycle repeat on the user's real Spotify device with
     // nothing on screen to show for it.
-    if self.active_decoded_source() || self.queue_owns_playback() {
+    if self.apple_music_owns_playback()
+      || self.active_decoded_source()
+      || self.queue_owns_playback()
+    {
       self.set_status_message("Repeat does not apply to this source", 2);
       return;
     }

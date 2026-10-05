@@ -57,7 +57,7 @@ impl App {
     // sources drive their own playback state, so skip the Spotify poll entirely.
     // A decoded source that owns the sink has paused Spotify: the poll would
     // only spend rate limit and pump time on a context nothing renders.
-    if !self.spotify_connected || self.active_decoded_source() {
+    if !self.spotify_connected || self.apple_music_owns_playback() || self.active_decoded_source() {
       return;
     }
 
@@ -238,11 +238,19 @@ impl App {
 
     self.poll_current_playback();
     let playing_now = self.user_config.behavior.keepawake_enabled
-      && playing_for_keepawake(
-        self.decoded_playing_state(),
-        self.native_is_playing,
-        self.current_playback_context.as_ref().map(|c| c.is_playing),
-      );
+      && if self.apple_music_owns_playback() {
+        self
+          .apple_music
+          .snapshot
+          .as_ref()
+          .is_some_and(|snapshot| snapshot.playing)
+      } else {
+        playing_for_keepawake(
+          self.decoded_playing_state(),
+          self.native_is_playing,
+          self.current_playback_context.as_ref().map(|c| c.is_playing),
+        )
+      };
     match (playing_now, self.keepawake.is_some()) {
       (true, false) => {
         self.keepawake = keepawake::Builder::default()
@@ -256,6 +264,12 @@ impl App {
       }
       (false, true) => self.keepawake = None,
       _ => {}
+    }
+
+    // Music's last reported position, advanced while it plays.
+    if self.apple_music_owns_playback() {
+      self.song_progress_ms = self.apple_music_position_ms() as u128;
+      return;
     }
 
     if let Some(CurrentPlaybackContext {

@@ -62,8 +62,8 @@ fixtures are `pub(super) fn`s in `test_support.rs`, imported as
   (nothing suspended, a Spotify context, a lost device). A resumed decoded
   context keeps it: only `start_*_queue` sets the claim, `play_index` does not.
 - A native entry point asks one of two predicates before it drives librespot.
-  `App::native_should_drive()` is false under a decoded owner and true under a
-  Spotify queue slot, whose track librespot plays.
+  `App::native_should_drive()` is false under an Apple Music or decoded owner
+  and true under a Spotify queue slot, whose track librespot plays.
   `App::native_context_should_drive()` is also false under any queue slot; it
   guards the paths that restore or continue the *cached* context (the restore,
   the end-of-track continuation, the shuffle-session handlers). The recovery

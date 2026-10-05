@@ -6,6 +6,7 @@ describe("sourceOf", () => {
     expect(sourceOf("spotify:track:4uLU6hMCjMI75M1A2tKUQC")).toBe("Spotify");
     expect(sourceOf("file:///music/21/05.flac")).toBe("Local");
     expect(sourceOf("qobuz:track:123")).toBe("Qobuz");
+    expect(sourceOf("applemusic:0123456789ABCDEF")).toBe("AppleMusic");
     expect(sourceOf("subsonic:track:abc")).toBe("Subsonic");
     expect(sourceOf("youtube:dQw4w9WgXcQ")).toBe("YouTube");
     expect(sourceOf("radio:https://example.com/stream")).toBe("Radio");

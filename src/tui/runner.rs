@@ -87,17 +87,20 @@ fn key_reaches_handlers_before_back(app: &App, key: Key) -> bool {
   help_menu_captures_key_before_back(app, key)
 }
 
-/// Where the terminal cursor goes in this frame: inside the search box while
-/// the input block is focused, `None` (hidden) on every other screen. The
-/// frame applies it through `Frame::set_cursor_position`.
+/// Returns the cursor position when the focused search box is drawable.
 fn frame_cursor_position(app: &App, active_block: ActiveBlock) -> Option<(u16, u16)> {
   if active_block != ActiveBlock::Input {
     return None;
   }
-  let cursor_offset = crate::tui::layout::main_layout_margin(app) + 1;
+
+  let input = crate::tui::layout::compute_main_layout(app)?.input?;
+  if input.width < 3 || input.height < 3 {
+    return None;
+  }
+
   Some((
-    cursor_offset + app.view.input_cursor_position - app.view.input_scroll_offset.get(),
-    cursor_offset,
+    input.x + 1 + app.view.input_cursor_position - app.view.input_scroll_offset.get(),
+    input.y + 1,
   ))
 }
 
@@ -172,6 +175,7 @@ fn dispatch_key(key: Key, app: &mut App) -> bool {
 mod tests {
   use super::*;
   use crate::core::app::TrackTableContext;
+  use crate::core::geometry::Viewport;
   use rspotify::model::idtypes::PlaylistId;
   use std::{sync::mpsc::channel, time::SystemTime};
 
@@ -182,6 +186,14 @@ mod tests {
       crate::core::user_config::UserConfig::new(),
       Some(SystemTime::now()),
     )
+  }
+
+  fn search_app(width: u16, height: u16) -> App {
+    let mut app = app();
+    app.view.size = Viewport { width, height };
+    app.view.input_cursor_position = 7;
+    app.view.input_scroll_offset.set(2);
+    app
   }
 
   #[test]
@@ -212,15 +224,73 @@ mod tests {
   // which is the way this protection would realistically be lost.
   #[test]
   fn input_frame_places_the_cursor_after_the_visible_prefix() {
-    let mut app = app();
-    app.view.input_cursor_position = 7;
-    app.view.input_scroll_offset.set(2);
-    let offset = crate::tui::layout::main_layout_margin(&app) + 1;
+    let app = search_app(160, 50);
+    let input = crate::tui::layout::compute_main_layout(&app)
+      .expect("main layout")
+      .input
+      .expect("input area");
 
     assert_eq!(
       frame_cursor_position(&app, ActiveBlock::Input),
-      Some((offset + 5, offset))
+      Some((input.x + 1 + 5, input.y + 1))
     );
+  }
+
+  #[test]
+  fn the_search_cursor_follows_the_input_box_when_the_playbar_is_on_top() {
+    let mut app = search_app(160, 50);
+    app.user_config.behavior.playbar_position = "top".to_string();
+
+    let input = crate::tui::layout::compute_main_layout(&app)
+      .expect("main layout")
+      .input
+      .expect("input area");
+
+    assert_eq!(
+      frame_cursor_position(&app, ActiveBlock::Input),
+      Some((input.x + 6, input.y + 1))
+    );
+  }
+
+  #[test]
+  fn the_search_cursor_follows_the_input_box_when_the_sidebar_is_on_the_right() {
+    let mut app = search_app(160, 50);
+    app.user_config.behavior.sidebar_position = "right".to_string();
+
+    let input = crate::tui::layout::compute_main_layout(&app)
+      .expect("main layout")
+      .input
+      .expect("input area");
+
+    assert_eq!(
+      frame_cursor_position(&app, ActiveBlock::Input),
+      Some((input.x + 6, input.y + 1))
+    );
+  }
+
+  #[test]
+  fn the_search_cursor_follows_the_input_row_in_a_narrow_terminal_with_the_playbar_on_top() {
+    let mut app = search_app(100, 40);
+    app.user_config.behavior.playbar_position = "top".to_string();
+
+    let input = crate::tui::layout::compute_main_layout(&app)
+      .expect("main layout")
+      .input
+      .expect("input area");
+
+    assert_eq!(
+      frame_cursor_position(&app, ActiveBlock::Input),
+      Some((input.x + 6, input.y + 1))
+    );
+  }
+
+  #[test]
+  fn the_search_cursor_stays_hidden_when_the_sidebar_is_hidden() {
+    let mut app = search_app(160, 50);
+    app.user_config.behavior.sidebar_position = "hidden".to_string();
+    app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
+
+    assert_eq!(frame_cursor_position(&app, ActiveBlock::Input), None);
   }
 
   #[test]

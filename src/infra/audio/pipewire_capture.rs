@@ -7,8 +7,15 @@ use pw::spa::param::audio::AudioInfoRaw;
 use pw::spa::pod::Pod;
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
+
+/// How long `new` waits for the capture thread to finish connecting. Setup is
+/// local IPC, so this only bounds a wedged PipeWire. The driver calls `new` on
+/// a background thread, so this wait never holds up the tick.
+const INIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Manages audio capture from PipeWire sink monitors
 pub struct PipeWireCapture {
@@ -24,20 +31,43 @@ impl PipeWireCapture {
     // Built at the rate we request below; the param_changed callback swaps in
     // the rate PipeWire actually negotiates.
     let analyzer = create_shared_analyzer(48000, display_bars);
+    Self::start(analyzer, run_pipewire_capture)
+  }
+
+  /// Runs `run` on the capture thread and waits for it to report whether
+  /// setup succeeded: `run` calls its ready callback just before it blocks
+  /// in the main loop, and returning without calling it is a failed setup.
+  fn start<F>(analyzer: SharedAnalyzer, run: F) -> Option<Self>
+  where
+    F: FnOnce(SharedAnalyzer, Arc<AtomicBool>, Box<dyn FnOnce() + Send>) -> Result<(), pw::Error>
+      + Send
+      + 'static,
+  {
     let active = Arc::new(AtomicBool::new(true));
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
 
     let analyzer_clone = analyzer.clone();
     let active_clone = active.clone();
 
     // PipeWire requires its own thread with a main loop
     let thread = thread::spawn(move || {
-      if let Err(e) = run_pipewire_capture(analyzer_clone, active_clone) {
+      let ready = Box::new(move || {
+        let _ = ready_tx.send(());
+      });
+      if let Err(e) = run(analyzer_clone, active_clone.clone(), ready) {
         log::error!("[audio-viz] PipeWire capture error: {:?}", e);
       }
+      // Setup failed or the main loop ended: either way nothing is captured.
+      active_clone.store(false, Ordering::Relaxed);
     });
 
-    // Give PipeWire a moment to initialize
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // A failed setup drops the sender without sending, which wakes this
+    // immediately; only a hung connect runs into the timeout.
+    if ready_rx.recv_timeout(INIT_TIMEOUT).is_err() {
+      log::warn!("[audio-viz] PipeWire capture did not start; visualizer has no audio");
+      active.store(false, Ordering::Relaxed);
+      return None;
+    }
 
     if active.load(Ordering::Relaxed) {
       Some(Self {
@@ -79,11 +109,32 @@ struct StreamData {
   format: std::sync::Mutex<AudioInfoRaw>,
 }
 
+/// libpipewire's default logger prints to stderr, which draws straight over
+/// the terminal UI (#697: a missing `client.conf` is logged at error level
+/// before the setup fails). The failure still reaches our log through
+/// `run_pipewire_capture`'s error. A user who sets `PIPEWIRE_DEBUG` asked for
+/// libpipewire's own output, so that keeps the level it configures.
+fn quiet_libpipewire_log(pipewire_debug: Option<&std::ffi::OsStr>) {
+  // pw_init (run once) applies PIPEWIRE_DEBUG; run it first so the level set
+  // below is the one that sticks.
+  pw::init();
+  if silences_libpipewire_log(pipewire_debug) {
+    // SAFETY: pw_init has run; pw_log_set_level only stores the global level.
+    unsafe { pw::sys::pw_log_set_level(pw::spa::sys::SPA_LOG_LEVEL_NONE) };
+  }
+}
+
+/// Whether libpipewire's own logging is turned off, given `PIPEWIRE_DEBUG`.
+fn silences_libpipewire_log(pipewire_debug: Option<&std::ffi::OsStr>) -> bool {
+  pipewire_debug.is_none()
+}
+
 fn run_pipewire_capture(
   analyzer: SharedAnalyzer,
   active: Arc<AtomicBool>,
+  ready: Box<dyn FnOnce() + Send>,
 ) -> Result<(), pw::Error> {
-  // pipewire 0.9+ no longer has a separate init() call - initialization happens in MainLoopBox::new()
+  quiet_libpipewire_log(std::env::var_os("PIPEWIRE_DEBUG").as_deref());
   let mainloop = pw::main_loop::MainLoopBox::new(None)?;
   let context = pw::context::ContextBox::new(mainloop.loop_(), None)?;
   let core = context.connect(None)?;
@@ -207,8 +258,53 @@ fn run_pipewire_capture(
     &mut params,
   )?;
 
+  ready();
+
   // Run the main loop - this blocks until quit is called
   mainloop.run();
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn new_returns_none_when_pipewire_setup_fails() {
+    let capture = PipeWireCapture::start(create_shared_analyzer(48000, 32), |_, _, _| {
+      Err(pw::Error::CreationFailed)
+    });
+
+    assert!(capture.is_none());
+  }
+
+  #[test]
+  fn new_returns_an_active_capture_once_setup_reports_ready() {
+    let capture = PipeWireCapture::start(create_shared_analyzer(48000, 32), |_, active, ready| {
+      ready();
+      // Stand-in for the main loop: block until the capture is dropped.
+      while active.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_millis(5));
+      }
+      Ok(())
+    });
+
+    assert!(capture.as_ref().is_some_and(PipeWireCapture::is_active));
+  }
+
+  #[test]
+  fn libpipewire_logging_is_silenced_only_without_pipewire_debug() {
+    assert!(silences_libpipewire_log(None));
+    assert!(!silences_libpipewire_log(Some(std::ffi::OsStr::new("2"))));
+  }
+
+  #[test]
+  fn quieting_libpipewire_sets_its_global_log_level_to_none() {
+    quiet_libpipewire_log(None);
+
+    // SAFETY: a plain read of libpipewire's global level after pw_init.
+    let level = unsafe { pw::sys::pw_log_level };
+    assert_eq!(level, pw::spa::sys::SPA_LOG_LEVEL_NONE);
+  }
 }

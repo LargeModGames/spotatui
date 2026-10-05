@@ -41,6 +41,11 @@ fn start_playback_has_taker(event: &IoEvent, spotify_session: bool) -> bool {
 /// the missing Spotify session.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 fn dropped_start_status(event: &IoEvent) -> String {
+  if start_playback_uri(event).is_some_and(|uri| uri.starts_with("applemusic:"))
+    && !cfg!(target_os = "macos")
+  {
+    return "Apple Music playback needs macOS".to_string();
+  }
   let missing_feature = match start_playback_uri(event) {
     Some(uri) if uri.starts_with("radio:") => {
       (!cfg!(feature = "internet-radio")).then_some("internet-radio")
@@ -80,6 +85,9 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
   // Spotify-bound events that meet a rate limit are held back on the
   // `Network` and flushed here when the window ends, so the pump never sleeps.
   network.defers_rate_limited = true;
+  // Music commands run on this router's own worker, never on the pump.
+  #[cfg(all(feature = "apple-music", target_os = "macos"))]
+  let apple_music = crate::infra::apple_music::dispatch::Router::new(&network.app);
 
   loop {
     let deferred_deadline = network.deferred_deadline().await;
@@ -125,6 +133,27 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         app.is_loading = false;
         continue;
       }
+      // The Apple Music router runs before every other router: while Music owns
+      // playback it takes the transport events, and it holds a start for
+      // another player back until Music acknowledges a pause or a failure
+      // proves that its Apple Event was not delivered. That start
+      // comes back here as `AppleMusicHandoff` and meets the claim gate again.
+      #[cfg(all(feature = "apple-music", target_os = "macos"))]
+      let io_event = {
+        let Some(io_event) = apple_music.route_apple_music_event(io_event).await else {
+          let mut app = network.app.lock().await;
+          app.is_loading = false;
+          app.note_display_changes();
+          continue;
+        };
+        if !start_playback_has_taker(&io_event, network.spotify.is_some()) {
+          let mut app = network.app.lock().await;
+          app.set_status_message(dropped_start_status(&io_event), 6);
+          app.is_loading = false;
+          continue;
+        }
+        io_event
+      };
       // The native queue router runs first: it owns `AdvanceNativeQueue` and
       // the queue slot's transport controls, and relinquishes the slot on an
       // unrelated `StartPlayback` (returning false so the per-source
@@ -260,6 +289,27 @@ mod tests {
 
     assert!(!start_playback_has_taker(&start, true));
     assert!(dropped_start_status(&start).contains("`local-files`"));
+  }
+
+  #[test]
+  fn an_apple_music_start_never_needs_a_spotify_session() {
+    let start = IoEvent::StartPlayback(
+      None,
+      Some(vec!["applemusic:0123456789ABCDEF".to_string()]),
+      Some(0),
+    );
+    let available = cfg!(all(feature = "apple-music", target_os = "macos"));
+
+    assert_eq!(start_playback_has_taker(&start, false), available);
+    assert_eq!(start_playback_has_taker(&start, true), available);
+    if !cfg!(target_os = "macos") {
+      assert_eq!(
+        dropped_start_status(&start),
+        "Apple Music playback needs macOS"
+      );
+    } else if !available {
+      assert!(dropped_start_status(&start).contains("`apple-music`"));
+    }
   }
 
   #[test]

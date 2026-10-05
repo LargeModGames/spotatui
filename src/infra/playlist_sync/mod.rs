@@ -280,7 +280,7 @@ pub(crate) fn missing_sync_feature(source: Source) -> Option<&'static str> {
     Source::Qobuz => (!cfg!(feature = "qobuz")).then_some("qobuz"),
     Source::Subsonic => (!cfg!(feature = "subsonic")).then_some("subsonic"),
     Source::YouTube => (!cfg!(feature = "youtube")).then_some("youtube"),
-    Source::Spotify | Source::Local | Source::Radio => None,
+    Source::Spotify | Source::Local | Source::Radio | Source::AppleMusic => None,
   }
 }
 
@@ -396,7 +396,7 @@ fn refresh_playlists_event(source: Source) -> Option<IoEvent> {
     Source::Qobuz => Some(IoEvent::GetQobuzPlaylists),
     Source::Subsonic => Some(IoEvent::GetSubsonicPlaylists),
     // The YouTube client reloads the sidebar itself after every write.
-    Source::YouTube | Source::Local | Source::Radio => None,
+    Source::YouTube | Source::Local | Source::Radio | Source::AppleMusic => None,
   }
 }
 

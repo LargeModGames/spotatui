@@ -16,7 +16,6 @@ use tokio::sync::Mutex;
 
 use crate::core::app::App;
 use crate::core::plugin_api::TrackInfo;
-#[cfg(feature = "queue")]
 use crate::core::queue::QueueItemSource;
 use crate::core::queue::{queue_item_source, source_available, source_label};
 #[cfg(feature = "audio-decode-queue")]
@@ -38,6 +37,21 @@ use std::time::Duration;
 /// return `false` (the per-source teardowns/starts still run) but first clear
 /// the queue slot so a new play cleanly takes over.
 pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
+  // Music owns playback: the queue slot was cleared by the claim, and an
+  // advance must not start a second player under it.
+  if app.lock().await.apple_music_owns_playback() {
+    if matches!(
+      event,
+      IoEvent::AdvanceNativeQueue | IoEvent::FinishNativeQueue
+    ) {
+      app
+        .lock()
+        .await
+        .set_status_message(crate::core::queue::APPLE_MUSIC_QUEUE_UNSUPPORTED, 4);
+      return true;
+    }
+    return false;
+  }
   if let IoEvent::AdvanceNativeQueue = event {
     advance_native_queue(app).await;
     return true;
@@ -297,6 +311,16 @@ async fn try_play_queued(app: &Arc<Mutex<App>>, track: &TrackInfo) -> bool {
     QueueItemSource::YouTube => play_queued_youtube(app, track, &uri).await,
     #[cfg(feature = "streaming")]
     QueueItemSource::Spotify => play_queued_spotify(app, track, &uri).await,
+    // `add_track_to_native_queue` refuses these; a hand-edited session file
+    // is the only other way in.
+    QueueItemSource::AppleMusic => {
+      set_status(
+        app,
+        crate::core::queue::APPLE_MUSIC_QUEUE_UNSUPPORTED.to_string(),
+      )
+      .await;
+      false
+    }
     // Reached only when a source is `source_available` but its play arm is
     // cfg'd out — impossible (the check above *is* the cfg gate), but the match
     // must be exhaustive across builds.

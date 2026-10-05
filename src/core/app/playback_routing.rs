@@ -16,6 +16,9 @@ pub enum PlaybackOwner {
   Queue,
   /// A decoded source's sink (Local, Subsonic, Qobuz, Radio, YouTube).
   Decoded,
+  /// Music.app plays the audio and publishes its own Now Playing entry;
+  /// spotatui is its remote. There is no `LocalPlayer` behind it.
+  AppleMusic,
   /// librespot as the active Connect device.
   #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
   NativeSpotify,
@@ -30,7 +33,10 @@ impl PlaybackOwner {
   pub(crate) fn owns_local_sink(self) -> bool {
     match self {
       PlaybackOwner::Queue | PlaybackOwner::Decoded => true,
-      PlaybackOwner::NativeSpotify | PlaybackOwner::Spotify | PlaybackOwner::None => false,
+      PlaybackOwner::AppleMusic
+      | PlaybackOwner::NativeSpotify
+      | PlaybackOwner::Spotify
+      | PlaybackOwner::None => false,
     }
   }
 }
@@ -62,7 +68,7 @@ fn resolve_playing_item<'a>(
       Some(track) if slot_is_spotify => PlayingItem::QueuedSpotify(track),
       _ => PlayingItem::NotSpotify,
     },
-    PlaybackOwner::Decoded => PlayingItem::NotSpotify,
+    PlaybackOwner::Decoded | PlaybackOwner::AppleMusic => PlayingItem::NotSpotify,
     PlaybackOwner::NativeSpotify | PlaybackOwner::Spotify => {
       cached_item.map_or(PlayingItem::Nothing, PlayingItem::Spotify)
     }
@@ -85,6 +91,11 @@ impl App {
   }
 
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {
+    // First: a claim holds from the start request until Music acknowledges a
+    // pause, so nothing below can take the sink back in between.
+    if self.apple_music_owns_playback() {
+      return PlaybackOwner::AppleMusic;
+    }
     if self.queue_owns_playback() {
       return PlaybackOwner::Queue;
     }
@@ -104,7 +115,7 @@ impl App {
   /// Whether librespot is the right player for a command aimed at it. True
   /// under a Spotify queue slot, whose track librespot plays.
   pub(crate) fn native_should_drive(&self) -> bool {
-    !self.active_decoded_source()
+    !self.active_decoded_source() && !self.apple_music_owns_playback()
   }
 
   /// Whether a path that restores or continues the cached Spotify context may
@@ -146,6 +157,11 @@ impl App {
   /// parked native backend takes a bare resume as its rebuild and refuses the
   /// rest.
   pub(crate) fn dispatch_spotify_fallback(&mut self, event: IoEvent) {
+    // The Apple Music router in the pump turns it into a Music command.
+    if self.apple_music_owns_playback() {
+      self.dispatch(event);
+      return;
+    }
     if self.playback_owner() == PlaybackOwner::None {
       self.set_status_message(NOTHING_PLAYING_STATUS, 4);
       return;

@@ -37,6 +37,7 @@ pub enum HistoryPlaybackSource {
   NativeContext,
   NativeRawList,
   ExternalDevice,
+  AppleMusic,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1070,6 +1071,7 @@ fn history_source_from_snapshot(snapshot: &PlaybackSnapshot) -> HistoryPlaybackS
     PlaybackSource::NativeContext => HistoryPlaybackSource::NativeContext,
     PlaybackSource::NativeRawList => HistoryPlaybackSource::NativeRawList,
     PlaybackSource::ExternalDevice => HistoryPlaybackSource::ExternalDevice,
+    PlaybackSource::AppleMusic => HistoryPlaybackSource::AppleMusic,
   }
 }
 
@@ -1146,14 +1148,8 @@ impl CardData {
     let (track_title, track_artist) = if top_track_raw == "No data" {
       ("No data".to_string(), "No data".to_string())
     } else {
-      (
-        top_track_raw
-          .split(" - ")
-          .next()
-          .unwrap_or(top_track_raw)
-          .to_string(),
-        top_track_raw.split(" - ").nth(1).unwrap_or("").to_string(),
-      )
+      let (title, artist) = split_track_display(top_track_raw);
+      (title.to_string(), artist.to_string())
     };
 
     Self {
@@ -2153,9 +2149,9 @@ fn render_history_recap_html(
     top_album_title = escape_html(&card.top_album),
     card_js = card.to_js_object(),
     alt_card_js = alt_card.to_js_object(),
-    top_tracks_html = render_ranked_entries(&top_tracks, "No tracks yet."),
-    top_artists_html = render_ranked_entries(&top_artists, "No artists yet."),
-    top_albums_html = render_ranked_entries(&top_albums, "No albums yet."),
+    top_tracks_html = render_ranked_entries(&top_tracks, "No tracks yet.", true),
+    top_artists_html = render_ranked_entries(&top_artists, "No artists yet.", false),
+    top_albums_html = render_ranked_entries(&top_albums, "No albums yet.", false),
     recent_html = render_recent_entries(listens),
     days_html = render_bar_entries(&listening_days),
     hours_html = render_bar_entries(&listening_hours),
@@ -2344,7 +2340,14 @@ fn sort_ranked_entries(mut entries: Vec<RankedEntry>, limit: usize) -> Vec<Ranke
   entries
 }
 
-fn render_ranked_entries(entries: &[RankedEntry], empty_label: &str) -> String {
+/// Split a ranked display back into its title and artist halves on the last
+/// ` - `: `aggregate_top_tracks` always appends the artists at the end, so the
+/// last separator is the one it added, and a ` - ` inside a title survives.
+fn split_track_display(display: &str) -> (&str, &str) {
+  display.rsplit_once(" - ").unwrap_or((display, ""))
+}
+
+fn render_ranked_entries(entries: &[RankedEntry], empty_label: &str, split_artist: bool) -> String {
   if entries.is_empty() {
     return format!(r#"<p class="subtle">{}</p>"#, escape_html(empty_label));
   }
@@ -2353,9 +2356,12 @@ fn render_ranked_entries(entries: &[RankedEntry], empty_label: &str) -> String {
     .iter()
     .enumerate()
     .map(|(i, entry)| {
-      let parts: Vec<&str> = entry.display.split(" - ").collect();
-      let (title, subtitle) = if parts.len() == 2 {
-        (parts[0], format!("<div class=\"entry-artist\">{}</div>", escape_html(parts[1])))
+      let (title, subtitle) = if split_artist {
+        let (title, artist) = split_track_display(&entry.display);
+        (
+          title,
+          format!("<div class=\"entry-artist\">{}</div>", escape_html(artist)),
+        )
       } else {
         (entry.display.as_str(), "".to_string())
       };
@@ -3264,6 +3270,37 @@ mod tests {
     let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
     assert!(!html.contains("html2canvas"));
     assert!(html.contains("getContext('2d')"));
+  }
+
+  #[test]
+  fn recap_card_keeps_a_dash_in_the_top_track_title() {
+    let mut record = record_at(20, 120_000, true);
+    record.title = "Song - Remastered 2011".to_string();
+    let records = [record];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    assert!(html.contains(r#"track: "Song - Remastered 2011", artist: "Artist""#));
+    assert!(html.contains(r#"<div id="card-track-artist" class="track-artist">Artist</div>"#));
+  }
+
+  #[test]
+  fn recap_track_list_keeps_a_dash_in_the_title() {
+    let mut record = record_at(20, 120_000, true);
+    record.title = "Song - Remastered 2011".to_string();
+    let records = [record];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    assert!(html.contains(
+      r#"<span class="rank">#1</span><div class="entry-details"><strong>Song - Remastered 2011</strong><div class="entry-artist">Artist</div>"#
+    ));
+  }
+
+  #[test]
+  fn recap_album_list_keeps_a_dash_in_an_album_name() {
+    let mut record = record_at(20, 120_000, true);
+    record.album = "Live - 1985".to_string();
+    let records = [record];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    assert!(html.contains(r#"<strong>Live - 1985</strong><div class="subtle">"#));
+    assert!(!html.contains(r#"<div class="entry-artist">1985</div>"#));
   }
 
   #[test]

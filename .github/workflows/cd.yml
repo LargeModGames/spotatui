@@ -42,12 +42,12 @@ jobs:
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
           - os: macos-latest # Apple Silicon runner for aarch64
             target: aarch64-apple-darwin
             artifact_prefix: macos-aarch64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_prefix: windows-x86_64
