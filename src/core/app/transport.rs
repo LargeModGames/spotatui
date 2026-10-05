@@ -159,6 +159,13 @@ impl App {
       return;
     }
 
+    // A pulled-back playback plays before Spotify confirms this device (#693).
+    #[cfg(feature = "streaming")]
+    if self.native_handed_off() && self.native_is_playing == Some(true) {
+      self.pause_native_playback();
+      return;
+    }
+
     // Use native streaming player for instant control (bypasses event channel latency)
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
@@ -583,6 +590,36 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn space_pauses_a_pulled_back_playback_before_spotify_confirms_the_device() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.mark_native_handed_off();
+    app.native_is_playing = Some(true);
+
+    app.toggle_playback();
+
+    assert_eq!(app.native_is_playing, Some(false));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn space_after_a_handoff_still_starts_when_nothing_plays_here() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.mark_native_handed_off();
+    app.native_is_playing = Some(false);
+
+    app.toggle_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+  }
 
   /// When the native queue slot owns playback, `next_track` advances the queue
   /// instead of driving the streaming player's own `next`.
