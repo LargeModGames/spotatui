@@ -26,7 +26,10 @@ pub fn handler(key: Key, app: &mut App) {
         | ActiveBlock::Discover
         | ActiveBlock::MyPlaylists
         | ActiveBlock::RecentlyPlayed
-        | ActiveBlock::TrackTable => {
+        | ActiveBlock::TrackTable
+        | ActiveBlock::Stats
+        | ActiveBlock::PlaylistSync
+        | ActiveBlock::LocalBrowser => {
           app.set_current_route_state(None, Some(ActiveBlock::PlayBar));
         }
         _ => {}
@@ -54,7 +57,10 @@ pub fn handler(key: Key, app: &mut App) {
         | ActiveBlock::Home
         | ActiveBlock::Discover
         | ActiveBlock::RecentlyPlayed
-        | ActiveBlock::TrackTable => {
+        | ActiveBlock::TrackTable
+        | ActiveBlock::Stats
+        | ActiveBlock::PlaylistSync
+        | ActiveBlock::LocalBrowser => {
           app.set_current_route_state(None, Some(ActiveBlock::Library));
         }
         _ => {}
@@ -149,6 +155,37 @@ mod tests {
     handler(Key::Left, &mut app);
     let current_route = app.get_current_route();
     assert_eq!(current_route.hovered_block, ActiveBlock::Library);
+  }
+
+  #[test]
+  fn an_unfocused_stats_screen_moves_left_to_the_sidebar() {
+    for block in [
+      ActiveBlock::Stats,
+      ActiveBlock::PlaylistSync,
+      ActiveBlock::LocalBrowser,
+    ] {
+      let mut app = App::default();
+      app.set_current_route_state(Some(ActiveBlock::Empty), Some(block));
+
+      handler(Key::Left, &mut app);
+
+      assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+    }
+  }
+
+  #[test]
+  fn an_unfocused_stats_screen_moves_down_to_the_playbar() {
+    for block in [
+      ActiveBlock::Stats,
+      ActiveBlock::PlaylistSync,
+      ActiveBlock::LocalBrowser,
+    ] {
+      let mut app = App::default();
+      app.set_current_route_state(Some(ActiveBlock::Empty), Some(block));
+
+      handler(Key::Down, &mut app);
+      assert_eq!(app.get_current_route().hovered_block, ActiveBlock::PlayBar);
+    }
   }
 
   #[test]
