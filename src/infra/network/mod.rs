@@ -356,7 +356,7 @@ pub enum IoEvent {
   /// A DJ tool call that needs the live Spotify client, plus the channel to
   /// answer on.
   ///
-  /// Runs on the **serial** lane, not the service lane: resolving a track name
+  /// Runs on the **Spotify** lane, not the service lane: resolving a track name
   /// to a URI needs the real Spotify client, and the service lane deliberately
   /// builds its `Network` with `None` for it. It does bypass the auth *gate* so
   /// the handler can answer an unauthenticated caller with a useful message
@@ -390,7 +390,9 @@ pub enum IoEvent {
   DjTopUp(u64, u64),
   /// Crawl the listener's own playlists for the avoid-library filter.
   ///
-  /// Serial lane: it needs the real Spotify client. Dispatched when the filter is
+  /// Spotify lane: it needs the real Spotify client, and its pages must not hold
+  /// the pump. One lane, so a `queue_tracks(exclude_owned)` behind it finds the
+  /// index built. Dispatched when the filter is
   /// switched on, so the index is usually warm by the time the first batch comes
   /// back from the brain; the resolve step builds it inline if it is not.
   ///
@@ -448,8 +450,9 @@ pub struct Network {
   /// sort, and search so each playlist pays classification plus one proto
   /// download instead of one per page.
   pub(crate) external_playlist_fallbacks: library::ExternalPlaylistFallbackCache,
-  /// Spotify-bound events held back while that window is open. Only the pump
-  /// sets `defers_rate_limited`; the CLI has no pump to block and waits inline.
+  /// Spotify-bound events held back while that window is open. The pump and the
+  /// Spotify lane set `defers_rate_limited` (the lane hands what it holds back
+  /// to the pump); the CLI has no pump to block and waits inline.
   deferred: Vec<Deferred>,
   pub(crate) defers_rate_limited: bool,
 }
@@ -470,6 +473,16 @@ fn owner_still_owns(queued: PlaybackOwner, now: PlaybackOwner) -> bool {
       (queued, now),
       (Spotify | NativeSpotify, Spotify | NativeSpotify)
     )
+}
+
+/// The shared client id's window is shared by every user; only an app of the
+/// user's own gets out of it.
+fn with_rate_limit_hint(e: anyhow::Error, client_id: &str) -> anyhow::Error {
+  if requests::is_rate_limited_error(&e) && client_id == NCSPOT_CLIENT_ID {
+    anyhow!("{e}. Shared client ID: run spotatui --reconfigure-auth to use your own app")
+  } else {
+    e
+  }
 }
 
 impl Network {
@@ -666,6 +679,20 @@ impl Network {
     )
   }
 
+  /// Events that run on the Spotify lane in `start_tokio`: slow Spotify work
+  /// (a library crawl, a catalogue lookup) that needs the real client but no
+  /// order against transport events, so it runs in its own order beside the
+  /// pump. Never a transport event, never an event that writes `Network` state
+  /// the pump reads (a login, the search limits).
+  pub fn runs_on_spotify_lane(io_event: &IoEvent) -> bool {
+    #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+    if matches!(io_event, IoEvent::DjIndexLibrary | IoEvent::DjToolCall(_)) {
+      return true;
+    }
+    let _ = io_event;
+    false
+  }
+
   /// Events that drive whoever owns the sink. One held back by a rate-limit
   /// window is dropped at the flush when the owner changed meanwhile: replayed,
   /// it would reach the player that owned the sink when it was queued. A new
@@ -693,7 +720,7 @@ impl Network {
   }
 
   #[allow(clippy::cognitive_complexity)]
-  pub async fn handle_network_event(&mut self, io_event: IoEvent) {
+  pub async fn handle_network_event(&mut self, mut io_event: IoEvent) {
     let pending_playlist_id = match &io_event {
       IoEvent::GetPlaylistItems(id, _) => Some(id.clone()),
       _ => None,
@@ -704,6 +731,7 @@ impl Network {
     // no Spotify session, point the user at the in-TUI login path instead of
     // failing loudly; otherwise ensure the token is fresh before proceeding.
     let bypass_auth = Self::event_bypasses_spotify_auth(&io_event);
+    let on_spotify_lane = Self::runs_on_spotify_lane(&io_event);
 
     if !bypass_auth {
       if self.spotify.is_none() {
@@ -721,23 +749,10 @@ impl Network {
         }
         return;
       }
-      if let Some(left) = self.rate_gate.rate_limit_remaining().await {
-        if self.defers_rate_limited {
-          if self.deferred.is_empty() {
-            let secs = left.as_secs().max(1);
-            self
-              .show_status_message(format!("Spotify rate limit: waiting {secs}s"), secs)
-              .await;
-          }
-          let owner = self.app.lock().await.playback_owner();
-          self.deferred.push(Deferred {
-            event: io_event,
-            owner,
-          });
-          return;
-        }
-        tokio::time::sleep(left).await;
-      }
+      io_event = match self.hold_back_if_rate_limited(io_event).await {
+        Some(io_event) => io_event,
+        None => return,
+      };
       if !self.ensure_authentication_fresh(false).await {
         if let Some(id) = pending_playlist_id.as_deref() {
           let mut app = self.app.lock().await;
@@ -1189,20 +1204,18 @@ impl Network {
 
     {
       let mut app = self.app.lock().await;
-      app.is_loading = false;
+      // Lane events never set the spinner, and clearing it here would hide a
+      // pump event still in flight.
+      if !on_spotify_lane {
+        app.is_loading = false;
+      }
       app.note_display_changes();
     }
   }
 
   async fn handle_error(&mut self, e: anyhow::Error) {
     let rate_limited = requests::is_rate_limited_error(&e);
-    // The shared client id's window is shared by every user; only an app of
-    // the user's own gets out of it.
-    let e = if rate_limited && self.client_config.client_id == NCSPOT_CLIENT_ID {
-      anyhow!("{e}. Shared client ID: run spotatui --reconfigure-auth to use your own app")
-    } else {
-      e
-    };
+    let e = with_rate_limit_hint(e, &self.client_config.client_id);
     let mut app = self.app.lock().await;
     // The first hit of a window under the pump: every later event is held
     // back, so a status message is enough. The CLI keeps its exit signal.
@@ -1211,6 +1224,53 @@ impl Network {
       return;
     }
     app.handle_error(e);
+  }
+
+  /// Holds a Spotify-bound event back while a rate-limit window is open: queued
+  /// for the pump's flush, or slept out where nothing flushes (the CLI).
+  /// `None` when it was queued.
+  pub(crate) async fn hold_back_if_rate_limited(&mut self, io_event: IoEvent) -> Option<IoEvent> {
+    if Self::event_bypasses_spotify_auth(&io_event) {
+      return Some(io_event);
+    }
+    let left = self.rate_gate.rate_limit_remaining().await;
+    let Some(left) = left else {
+      return Some(io_event);
+    };
+    if !self.defers_rate_limited {
+      tokio::time::sleep(left).await;
+      return Some(io_event);
+    }
+    if self.deferred.is_empty() {
+      let secs = left.as_secs().max(1);
+      self
+        .show_status_message(format!("Spotify rate limit: waiting {secs}s"), secs)
+        .await;
+    }
+    let owner = self.app.lock().await.playback_owner();
+    self.deferred.push(Deferred {
+      event: io_event,
+      owner,
+    });
+    None
+  }
+
+  /// A `Network` for the Spotify lane: the pump's client (its token is shared),
+  /// limits, fallback cache and rate gate, taken per event so a login reaches it.
+  /// It defers like the pump; the lane hands what it defers back to the pump.
+  pub(crate) fn spotify_lane_network(&self) -> Network {
+    let mut lane = Network::new(
+      self.spotify.clone(),
+      self.client_config.clone(),
+      &self.app,
+      self.token_cache_path.clone(),
+    );
+    lane.large_search_limit = self.large_search_limit;
+    lane.small_search_limit = self.small_search_limit;
+    lane.external_playlist_fallbacks = self.external_playlist_fallbacks.clone();
+    lane.rate_gate = self.rate_gate.clone();
+    lane.defers_rate_limited = true;
+    lane
   }
 
   /// When the pump must flush the held-back events: the window's end.
@@ -2069,7 +2129,7 @@ mod tests {
   /// `DjToolCall` is the one event that bypasses the auth gate *without* moving
   /// onto the service lane, so it gets its own assertion.
   ///
-  /// Both halves matter. It must stay on the serial lane because resolving a
+  /// Both halves matter. It must stay off the service lane because resolving a
   /// track name needs the real Spotify client, and the service lane builds its
   /// `Network` with `None` for it. It must bypass the gate so the handler can
   /// answer an unauthenticated caller with a diagnosable message instead of
@@ -2077,7 +2137,7 @@ mod tests {
   /// client through the server, and the in-TUI DJ through its own tool loop.
   #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
   #[test]
-  fn dj_tool_calls_bypass_auth_but_stay_on_the_serial_lane() {
+  fn dj_tool_calls_bypass_auth_and_run_on_the_spotify_lane() {
     let (tx, _rx) = tokio::sync::oneshot::channel();
     let event = IoEvent::DjToolCall(Box::new((
       crate::infra::dj::tools::DjToolCall::GetNowPlaying,
@@ -2088,6 +2148,26 @@ mod tests {
       !Network::runs_on_service_lane(&event),
       "the service lane has no Spotify client, so the resolver could not run there"
     );
+    assert!(Network::runs_on_spotify_lane(&event));
+  }
+
+  /// The crawl and the tool calls share one ordered lane, and nothing on it is
+  /// a transport: the lane runs out of order with the pump.
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+  #[test]
+  fn the_spotify_lane_carries_the_crawl_and_no_transport() {
+    assert!(Network::runs_on_spotify_lane(&IoEvent::DjIndexLibrary));
+    assert!(!Network::runs_on_service_lane(&IoEvent::DjIndexLibrary));
+    assert!(!Network::event_is_transport(&IoEvent::DjIndexLibrary));
+    for event in [
+      IoEvent::NextTrack,
+      IoEvent::Seek(0),
+      IoEvent::RefreshAuthentication,
+      IoEvent::CompleteSpotifyLogin(String::new()),
+      IoEvent::UpdateSearchLimits(1, 1),
+    ] {
+      assert!(!Network::runs_on_spotify_lane(&event));
+    }
   }
 
   /// The queue router consumes both native-queue control events before the

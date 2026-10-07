@@ -853,7 +853,7 @@ mod tests {
   fn opening_the_screen_with_the_filter_already_on_starts_the_crawl() {
     // The config-default path never runs `ToggleDjFreshOnly`, so opening the
     // screen is the only chance to warm the index. Without this the first turn
-    // crawls inline on the serial lane, blocking every other event behind it.
+    // crawls inline inside its first tool call.
     let (tx, rx) = channel();
     let mut config = UserConfig::new();
     config.behavior.dj_avoid_library = true;

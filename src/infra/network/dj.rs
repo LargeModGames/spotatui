@@ -1,9 +1,10 @@
 //! Network-lane handlers for the DJ.
 //!
-//! These run on the **serial** IoEvent lane, which is where the real Spotify
-//! client lives. The service lane deliberately constructs its `Network` with
-//! `None` for the client (`runtime/`), so anything that has to resolve a track
-//! name to a URI belongs here rather than there.
+//! These run on the **Spotify** lane, with a clone of the pump's Spotify client,
+//! so a crawl or a lookup never holds the serial pump. The service lane
+//! deliberately constructs its `Network` with `None` for the client
+//! (`runtime/`), so anything that has to resolve a track name to a URI belongs
+//! here rather than there.
 
 use super::Network;
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
@@ -11,7 +12,7 @@ use crate::core::action::{Action, ActionOutcome};
 use crate::core::plugin_api::TrackInfo;
 use crate::infra::dj::resolve::{self, ResolveReport};
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
-use crate::infra::dj::tools::{DjToolCall, QueueItem, ToolOutcome};
+use crate::infra::dj::tools::{queue_needs_spotify, DjToolCall, QueueItem, ToolOutcome};
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use crate::infra::dj::MAX_BATCH;
 use crate::infra::dj::{library, DjLibrary, DjLine, DjSuggestion};
@@ -26,16 +27,37 @@ use tokio::sync::oneshot;
 /// The tool handlers behind `DjToolCall`, shared by both front doors.
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 impl Network {
+  /// Answers a call with no Spotify item (`!call.needs_network()`) at once,
+  /// with no Spotify client, so it never waits behind Spotify work.
+  pub async fn answer_dj_tool_call_without_spotify(
+    app: &std::sync::Arc<tokio::sync::Mutex<crate::core::app::App>>,
+    call: DjToolCall,
+  ) -> ToolOutcome {
+    let mut network = Network::new(
+      None,
+      crate::core::config::ClientConfig::new(),
+      app,
+      std::path::PathBuf::new(),
+    );
+    network.dj_tool_outcome(call).await
+  }
+
   /// Run a DJ tool call that needs the catalogue, and answer the waiting caller.
   ///
-  /// The responder is a `oneshot`, so every path must send exactly once —
-  /// dropping it silently would leave an MCP client waiting out its timeout with
-  /// no idea why.
+  /// The responder is a `oneshot`, so every path that runs the call must send
+  /// exactly once — dropping it silently would leave an MCP client waiting out
+  /// its timeout with no idea why. A caller that already gave up runs nothing.
   pub async fn run_dj_tool_call(
     &mut self,
     call: DjToolCall,
     responder: oneshot::Sender<ToolOutcome>,
   ) {
+    // The caller timed out while the call waited: running it now would queue or
+    // play behind its back, and a retry would do it twice.
+    if responder.is_closed() {
+      log::debug!("DJ: {} dropped, its caller gave up", call.tool_name());
+      return;
+    }
     let outcome = self.dj_tool_outcome(call).await;
     // The receiver is gone if the MCP client hung up mid-call; that is normal,
     // not an error worth surfacing.
@@ -45,7 +67,7 @@ impl Network {
   async fn dj_tool_outcome(&mut self, call: DjToolCall) -> ToolOutcome {
     // This variant bypasses the generic auth gate so we can say something
     // useful here instead of the caller seeing a dropped channel.
-    if self.spotify.is_none() {
+    if call.needs_network() && self.spotify.is_none() {
       return ToolOutcome::error(
         "spotatui has no Spotify session, so the catalogue is unavailable. Log in from the \
          spotatui UI, then try again.",
@@ -153,6 +175,9 @@ impl Network {
     exclude_owned: bool,
     extra_skip_keys: Vec<String>,
   ) -> ToolOutcome {
+    // Ownership is a Spotify notion: a batch with no Spotify item has nothing the
+    // filter could skip, so it pays for no crawl.
+    let filter_applies = exclude_owned && queue_needs_spotify(&items);
     // Split the two input shapes: exact URIs are looked up as a batch, names go
     // through the fuzzy resolver that drops anything it cannot confidently match.
     let mut uris = Vec::new();
@@ -174,7 +199,7 @@ impl Network {
     // *inside* `resolve_suggestions` and needs these keys to skip a search it can
     // already rule out. The cost of ordering it this way is one wasted crawl in
     // the case where nothing resolves at all, once per process.
-    let library_keys = if exclude_owned {
+    let library_keys = if filter_applies {
       match self.dj_library_index().await {
         Some(library) => library.keys,
         None => {
@@ -231,7 +256,7 @@ impl Network {
     // gate that sees the `uri` entries at all, which never went through a name
     // lookup. Nothing is substituted for a rejected track: the caller named
     // these, so coming back short is the honest answer.
-    if exclude_owned {
+    if filter_applies {
       self.reject_owned_tracks(&mut report).await;
     }
 
@@ -287,6 +312,9 @@ impl Network {
         report.duplicates.join("; ")
       ));
     }
+    if exclude_owned && !filter_applies {
+      text.push_str("\nexclude_owned only checks Spotify tracks, so it skipped nothing here.");
+    }
     ToolOutcome::with_data(
       text,
       json!({
@@ -300,8 +328,8 @@ impl Network {
 
   /// Interrupt playback with one track, after confirming it exists.
   ///
-  /// On the network lane rather than the app-only lane purely for that
-  /// confirmation. Dispatching straight to `StartPlayback` is what the caller
+  /// A Spotify track goes to the Spotify lane purely for that confirmation;
+  /// another source's track has no catalogue and is answered without a client. Dispatching straight to `StartPlayback` is what the caller
   /// ultimately wants, but doing it blind meant a URI the catalogue does not
   /// have stopped playback while the tool reported it was playing — the one
   /// answer an agent cannot recover from, because it has no reason to re-check.
@@ -359,9 +387,9 @@ impl Network {
   /// *asks* for the crawl as its own event instead of running it here.
   ///
   /// That deferral is the point. `search_tracks` is what an agent calls between
-  /// deciding and queueing, and the crawl is seconds of pagination on the serial
-  /// lane; running it inline would stall every other event behind an agent's
-  /// search, which is exactly the bug `ai_dj::open` exists to avoid in the TUI. So
+  /// deciding and queueing, and the crawl is seconds of pagination on the
+  /// Spotify lane; running it inline would hold every tool call behind an
+  /// agent's search, which is exactly the bug `ai_dj::open` exists to avoid. So
   /// the first search of a cold session answers from Liked Songs alone and says
   /// so, and every search after it is complete.
   async fn track_ownership(&self, tracks: &[TrackInfo]) -> Ownership {
@@ -397,10 +425,10 @@ impl Network {
     }
   }
 
-  /// Ask for the playlist crawl on the serial lane, unless it has already run or
+  /// Ask for the playlist crawl on the Spotify lane, unless it has already run or
   /// is running.
   ///
-  /// A channel send, never a call. This runs *on* the serial lane, so the crawl
+  /// A channel send, never a call. This runs *on* the Spotify lane, so the crawl
   /// queues behind the tool call that asked for it rather than extending it; the
   /// channel is unbounded, so the send cannot block the handler it is inside.
   async fn request_library_index(&self) {
@@ -566,7 +594,7 @@ impl Network {
     }
   }
 
-  /// Serial lane: crawl the listener's own playlists for the avoid-library
+  /// Spotify lane: crawl the listener's own playlists for the avoid-library
   /// filter, and cache the result on `App`.
   ///
   /// Idempotent by way of `library_indexing`: the in-TUI toggle, the first turn,
@@ -743,10 +771,50 @@ mod tests {
   async fn app_only_calls_routed_here_by_mistake_are_reported_not_ignored() {
     let mut network = unauthenticated_network().await;
     let (tx, rx) = oneshot::channel();
-    // Reaches the auth check first in this fixture, which still answers; the
-    // point is that the responder is always consumed.
+    // Needs no network, so it skips the auth check and reaches the catch-all
+    // arm, which still answers; the point is that the responder is consumed.
     network.run_dj_tool_call(DjToolCall::SkipTrack, tx).await;
     assert!(rx.await.is_ok());
+  }
+
+  #[cfg(feature = "local-files")]
+  fn local_batch() -> DjToolCall {
+    DjToolCall::QueueTracks {
+      items: vec![QueueItem::Uri("file:/music/a.flac".into())],
+      exclude_owned: true,
+      extra_skip_keys: Vec::new(),
+    }
+  }
+
+  #[cfg(feature = "local-files")]
+  #[tokio::test]
+  async fn a_batch_with_no_spotify_item_queues_without_a_session_or_a_crawl() {
+    let app = Arc::new(Mutex::new(App::default()));
+
+    let outcome = Network::answer_dj_tool_call_without_spotify(&app, local_batch()).await;
+
+    assert!(!outcome.is_error, "{}", outcome.text);
+    assert!(outcome.text.contains("Queued 1"), "{}", outcome.text);
+    assert!(
+      outcome.text.contains("only checks Spotify"),
+      "{}",
+      outcome.text
+    );
+    let app = app.lock().await;
+    assert!(app.dj.library.is_none() && !app.dj.library_indexing);
+    assert_eq!(app.native_queue.len(), 1);
+  }
+
+  #[cfg(feature = "local-files")]
+  #[tokio::test]
+  async fn a_call_whose_caller_gave_up_runs_nothing() {
+    let mut network = unauthenticated_network().await;
+    let (tx, rx) = oneshot::channel();
+    drop(rx);
+
+    network.run_dj_tool_call(local_batch(), tx).await;
+
+    assert_eq!(network.app.lock().await.native_queue.len(), 0);
   }
 
   #[tokio::test]
@@ -960,8 +1028,8 @@ mod in_tui {
     /// Service lane: run one DJ turn.
     ///
     /// The turn loop lives in `dj::agent`; this assembles what it needs and
-    /// reports how it ended. Tool calls that need the catalogue go back down the
-    /// serial lane from inside the loop, because this lane's `Network` has no
+    /// reports how it ended. Tool calls that need the catalogue go down the
+    /// Spotify lane from inside the loop, because this lane's `Network` has no
     /// Spotify client.
     ///
     /// Writes no `you` line: the handler already pushed what the listener typed,

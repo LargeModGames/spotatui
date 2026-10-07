@@ -126,7 +126,7 @@ cover-art pixel support). A frontend that stops ticking is loud, not silent:
 `App::playback_position_ms()` reads stale after 2s and the playbar says so.
 Mouse input enters via `handlers::mouse_handler`.
 
-### The IoEvent pump: source routing, two lanes, an auth gate
+### The IoEvent pump: source routing, three lanes, an auth gate
 
 `runtime/pump.rs::start_tokio` drains IoEvents serially. Three structural gates, all
 worth knowing before adding an event:

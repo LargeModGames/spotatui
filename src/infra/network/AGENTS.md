@@ -1,6 +1,6 @@
-### The IoEvent pump: source routing, two lanes, an auth gate
+### The IoEvent pump: source routing, three lanes, an auth gate
 
-`runtime/pump.rs::start_tokio` drains IoEvents serially. Three structural gates, all
+`runtime/pump.rs::start_tokio` drains IoEvents serially. The structural gates, all
 worth knowing before adding an event:
 
 - **Source routing**: non-Spotify playback is routed by URI scheme *before* the
@@ -19,13 +19,22 @@ worth knowing before adding an event:
   detached task so slow, source-agnostic work cannot head-of-line-block the serial
   pump. The service lane's `Network` is built with **no Spotify client** - adding a
   `self.spotify()` call to a service-lane handler panics.
+- **Spotify lane**: `Network::runs_on_spotify_lane` lists slow Spotify work (the
+  DJ crawl, the DJ tool calls) that runs in order on one worker beside the pump,
+  with a `Network` from `spotify_lane_network` (the pump's client, limits,
+  fallback cache and rate gate, taken per event). The pump holds a lane event
+  back in a rate-limit window before the hand-off, so one flusher keeps the
+  order. Never a transport event, never one that writes `Network` state the pump
+  reads (the login, the search limits). A detached task (the playlist sort and
+  search walks) is the other way off the pump; it needs a staleness check of its
+  own before it writes `App`.
 - **Auth gate**: `Network::event_bypasses_spotify_auth` lists events whose handlers
   never need a Spotify session.
 - **Replay**: `Network::event_is_transport` lists events that drive whoever owns
   the sink. One held back by a rate-limit window is stamped with the
   `PlaybackOwner` at deferral time, dropped at the flush when the owner changed,
   and otherwise re-sent on the pump's channel so the routers see it.
-  A new IoEvent must be classified against all three lists.
+  A new IoEvent must be classified against all four lists.
 
 ### Listening Party / sync
 

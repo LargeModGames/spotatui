@@ -93,8 +93,8 @@ fn is_own_playlist(entry: &PlaylistEntry, owner_id: &str) -> bool {
 
 /// Crawl the listener's own playlists into a [`DjLibrary`].
 ///
-/// Errors only if the playlist listing itself fails. A single unreadable playlist
-/// is skipped and logged: a partial index still filters, while failing the whole
+/// Errors if the playlist listing fails or Spotify rate limits the crawl. A
+/// single unreadable playlist is skipped and logged: a partial index still filters, while failing the whole
 /// crawl would turn the feature off for one bad playlist. A skip marks the index
 /// [`truncated`](DjLibrary::truncated) all the same — the filter is no longer
 /// answering from everything the listener has, and a summary that claimed
@@ -111,6 +111,9 @@ pub async fn build_index(net: &Network, owner_id: &str) -> anyhow::Result<DjLibr
     }
     match collect_playlist(net, &id, &mut library).await {
       Ok(()) => {}
+      // A rate limit fails every later playlist too, and a cached index is never
+      // crawled again: fail the crawl so the next ask retries it.
+      Err(e) if crate::infra::network::requests::is_rate_limited_error(&e) => return Err(e),
       Err(e) => {
         // Keep going, but stop claiming the index is complete: the tracks in
         // this playlist will not be filtered, and only `truncated` says so.

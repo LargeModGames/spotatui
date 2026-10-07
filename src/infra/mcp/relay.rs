@@ -26,8 +26,8 @@ use tokio::net::TcpStream;
 /// the socket.
 ///
 /// Deliberately generous rather than snappy: `queue_tracks(exclude_owned)`
-/// crawls the whole playlist library inline before it answers, and the serial
-/// lane it runs on is head-of-line blocking, so a short deadline would turn a
+/// crawls the whole playlist library inline before it answers, and the Spotify
+/// lane it runs on is ordered, so a short deadline would turn a
 /// slow-but-working call into a false failure. It exists only to bound the
 /// unbounded case — a stopped process or a half-open connection, where nothing
 /// is ever coming and the agent's whole MCP session would otherwise hang.

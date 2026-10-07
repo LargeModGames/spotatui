@@ -6,10 +6,16 @@ publishes it verbatim; the in-TUI brain renders the same table into its prompt.
 - **Lanes**: `AskDj` / `DjTopUp` run on the service lane (a brain call can take
   minutes; they touch only `App` and use `dispatch_without_spinner` - plain
   `dispatch` would pin the global spinner for the whole call). `DjToolCall` /
-  `DjIndexLibrary` run on the serial lane because they need the real Spotify
-  client. `DjToolCall` additionally bypasses the auth gate so an unauthenticated
-  MCP caller gets a diagnosable error instead of a dropped oneshot;
-  `DjIndexLibrary` does not.
+  `DjIndexLibrary` run on the ordered Spotify lane beside the pump because they
+  need the real Spotify client; one lane, so `queue_tracks(exclude_owned)` finds
+  the index a crawl ahead of it built. `DjToolCall` additionally bypasses the
+  auth gate so an unauthenticated MCP caller gets a diagnosable error instead of
+  a dropped oneshot; `DjIndexLibrary` does not.
+- **A call with no Spotify item never reaches the lane**:
+  `DjToolCall::needs_network` reads the URIs, so a `play_now` or `queue_tracks`
+  of other sources' URIs is answered in the executor on a `Network` with no
+  client, with no session needed. `exclude_owned` only checks Spotify tracks.
+  A call whose caller already timed out (`responder.is_closed()`) runs nothing.
 - **Two staleness guards, both load-bearing**: `app.dj.generation` decides whether
   a turn's results are still wanted (re-checked before every mutating tool call);
   `dj.turn_seq` decides who may clear `dj.thinking` - without it an abandoned turn
@@ -27,7 +33,9 @@ publishes it verbatim; the in-TUI brain renders the same table into its prompt.
 - **Where the crawl runs is a latency decision**: `search_tracks` never crawls
   inline - it answers from Liked Songs, dispatches `IoEvent::DjIndexLibrary`, and
   reports `ownership_complete: false` (seconds of pagination inside a tool call
-  would head-of-line-block the serial lane). `queue_tracks(exclude_owned)` is the
+  would hold every tool call behind it on the lane). A 429 fails the crawl
+  instead of caching a short index, because a cached index is never crawled
+  again. `queue_tracks(exclude_owned)` is the
   one caller that crawls inline via `dj_library_index`, and refuses the call
   outright if the crawl fails: it was asked for a guarantee.
 - The taste brief is aggregates and names only - no timestamps, IDs, or identity.

@@ -556,7 +556,7 @@ impl MetadataNetwork for Network {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
   use super::*;
   use crate::core::app::{App, RouteId};
   use crate::core::user_config::UserConfig;

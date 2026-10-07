@@ -1,9 +1,9 @@
 use super::mapping::{map_page, playlist_items_page};
 use super::requests::{
-  is_forbidden_error, is_not_found_error, spotify_api_request_json_for_with_refresh,
-  spotify_get_typed_compat_for_with_refresh,
+  is_forbidden_error, is_not_found_error, is_rate_limited_error,
+  spotify_api_request_json_for_with_refresh, spotify_get_typed_compat_for_with_refresh,
 };
-use super::{IoEvent, Network};
+use super::{with_rate_limit_hint, IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
@@ -1127,6 +1127,114 @@ async fn liked_lookup_worker_task(
   }
 }
 
+/// Pages one playlist-track search reads at most: Spotify's playlist limit.
+const PLAYLIST_SEARCH_MAX_PAGES: u32 = 200;
+const PLAYLIST_SEARCH_PAGE_SIZE: u32 = 50;
+
+struct PlaylistTrackSearch {
+  spotify: AuthCodePkceSpotify,
+  app: Arc<Mutex<App>>,
+  token_cache_path: std::path::PathBuf,
+  fallbacks: ExternalPlaylistFallbackCache,
+  client_id: String,
+  playlist_id: PlaylistId<'static>,
+  query: String,
+}
+
+async fn search_playlist_tracks_task(search: PlaylistTrackSearch, terms: Vec<String>) {
+  let PlaylistTrackSearch {
+    spotify,
+    app,
+    token_cache_path,
+    fallbacks,
+    client_id,
+    playlist_id,
+    query,
+  } = search;
+  let mut offset = 0u32;
+  let mut matches: Vec<(TrackInfo, usize)> = Vec::new();
+  let mut capped = false;
+
+  for page_number in 0.. {
+    if !app
+      .lock()
+      .await
+      .playlist_track_search_is_current(&playlist_id, &query)
+    {
+      return;
+    }
+    if page_number == PLAYLIST_SEARCH_MAX_PAGES {
+      capped = true;
+      break;
+    }
+
+    let page = match fetch_playlist_tracks_page(
+      &spotify,
+      &app,
+      &token_cache_path,
+      &playlist_id,
+      offset,
+      PLAYLIST_SEARCH_PAGE_SIZE,
+      &fallbacks,
+    )
+    .await
+    {
+      Ok(page) => page.into_domain(),
+      Err(error) => {
+        let mut app = app.lock().await;
+        if !app.fail_playlist_track_search(&playlist_id, &query) {
+          return;
+        }
+        match error {
+          PlaylistPageError::UnsupportedExternal => {
+            app.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+          }
+          // A rate limit is a wait, not a failure page: the pump shows it the
+          // same way.
+          PlaylistPageError::Request(error) if is_rate_limited_error(&error) => {
+            app.set_error_status_message(with_rate_limit_hint(error, &client_id).to_string(), 8);
+          }
+          PlaylistPageError::Request(error) => app.handle_error(error),
+        }
+        return;
+      }
+    };
+
+    // See the sort walk: only `next` stops pagination, never the compacted
+    // item count.
+    let next_offset = playlist_page_next_offset(&page, offset);
+    for (position, item) in page.items {
+      if let PlayableInfo::Track(track) = item {
+        if playlist_track_info_matches_terms(&track, &terms) {
+          matches.push((track, position as usize));
+        }
+      }
+    }
+
+    let Some(next_offset) = next_offset else {
+      break;
+    };
+    offset = next_offset;
+  }
+
+  let match_count = matches.len();
+  let mut app = app.lock().await;
+  if app.apply_playlist_track_search_results(&playlist_id, query.clone(), matches) {
+    let scope = if capped {
+      format!(
+        " in the first {} tracks",
+        PLAYLIST_SEARCH_MAX_PAGES * PLAYLIST_SEARCH_PAGE_SIZE
+      )
+    } else {
+      String::new()
+    };
+    app.set_status_message(
+      format!("{match_count} playlist tracks match \"{query}\"{scope}"),
+      3,
+    );
+  }
+}
+
 async fn fetch_all_playlist_tracks_and_sort_task(
   spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
@@ -1583,62 +1691,18 @@ impl LibraryNetwork for Network {
       return;
     }
 
-    let limit = self.large_search_limit;
-    let mut offset = 0u32;
-    let mut matches: Vec<(TrackInfo, usize)> = Vec::new();
-
-    loop {
-      let page = match fetch_playlist_tracks_page(
-        self.spotify(),
-        &self.app,
-        &self.token_cache_path,
-        &playlist_id,
-        offset,
-        limit,
-        &self.external_playlist_fallbacks,
-      )
-      .await
-      {
-        Ok(page) => page.into_domain(),
-        Err(PlaylistPageError::UnsupportedExternal) => {
-          let mut app = self.app.lock().await;
-          app.pending_playlist_track_search = None;
-          app.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
-          return;
-        }
-        Err(PlaylistPageError::Request(error)) => {
-          self.handle_error(error).await;
-          return;
-        }
-      };
-
-      // See the sort walk: only `next` stops pagination, never the compacted
-      // item count.
-      let next_offset = playlist_page_next_offset(&page, offset);
-      for (position, item) in page.items {
-        if let PlayableInfo::Track(track) = item {
-          if playlist_track_info_matches_terms(&track, &terms) {
-            matches.push((track, position as usize));
-          }
-        }
-      }
-
-      let Some(next_offset) = next_offset else {
-        break;
-      };
-      offset = next_offset;
-    }
-
-    let match_count = matches.len();
-    let mut app = self.app.lock().await;
-    if app.apply_playlist_track_search_results(&playlist_id, query.clone(), matches) {
-      app.set_status_message(
-        format!("{match_count} playlist tracks match \"{query}\""),
-        3,
-      );
-    } else {
-      app.pending_playlist_track_search = None;
-    }
+    // Every page pays the pacing floor, so the walk runs detached like the sort
+    // walk; a newer query or another table supersedes it page by page.
+    let search = PlaylistTrackSearch {
+      spotify: self.spotify().clone(),
+      app: Arc::clone(&self.app),
+      token_cache_path: self.token_cache_path.clone(),
+      fallbacks: self.external_playlist_fallbacks.clone(),
+      client_id: self.client_config.client_id.clone(),
+      playlist_id,
+      query,
+    };
+    tokio::spawn(search_playlist_tracks_task(search, terms));
   }
 
   async fn get_current_user_saved_tracks(&mut self, offset: Option<u32>) {
@@ -2139,6 +2203,88 @@ mod tests {
   use chrono::{Duration as ChronoDuration, Utc};
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
+
+  async fn playlist_search_network(base_url: String, query: &str) -> (Network, Arc<Mutex<App>>) {
+    use crate::core::app::TrackTableContext;
+    use crate::infra::network::metadata::tests::spotify_with_access_token;
+    let mut app = App::default();
+    app.reset_playlist_tracks_view(search_playlist_id(), TrackTableContext::MyPlaylists);
+    app.pending_playlist_track_search = Some(query.to_string());
+    let app = Arc::new(Mutex::new(app));
+    let spotify = spotify_with_access_token("token", base_url).await;
+    let network = Network::new(
+      Some(spotify),
+      crate::core::config::ClientConfig::new(),
+      &app,
+      std::path::PathBuf::new(),
+    );
+    (network, app)
+  }
+
+  fn search_playlist_id() -> PlaylistId<'static> {
+    PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static()
+  }
+
+  #[tokio::test]
+  async fn a_playlist_search_returns_before_its_first_page_lands() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (_stream, _) = listener.accept().await.unwrap();
+      tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+    let (mut network, app) = playlist_search_network(base_url, "song").await;
+
+    tokio::time::timeout(
+      Duration::from_secs(1),
+      network.search_playlist_tracks(search_playlist_id(), "song".to_string()),
+    )
+    .await
+    .expect("the search must not hold the pump");
+
+    assert_eq!(
+      app.lock().await.pending_playlist_track_search.as_deref(),
+      Some("song")
+    );
+    server.abort();
+  }
+
+  #[tokio::test]
+  async fn a_failed_playlist_search_ends_its_pending_query_and_reports_the_error() {
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      let body = r#"{"error":{"status":500,"message":"boom"}}"#;
+      let response = format!(
+        "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    let (mut network, app) = playlist_search_network(base_url, "song").await;
+
+    network
+      .search_playlist_tracks(search_playlist_id(), "song".to_string())
+      .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+      while app.lock().await.pending_playlist_track_search.is_some() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the failed search must end");
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert_eq!(app.get_current_route().id, RouteId::Error);
+    assert!(app.active_playlist_track_filter.is_none());
+  }
 
   #[tokio::test]
   async fn a_completed_playlist_fetch_publishes_the_full_list_under_a_new_library_revision() {

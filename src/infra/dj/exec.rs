@@ -2,20 +2,20 @@
 //!
 //! Shared by both front doors, which is why it lives here rather than under
 //! `infra::mcp`: the MCP server drives it for a remote agent, and the in-TUI DJ's
-//! agent loop drives it for the local brain. Anything that only needs the `App`
-//! lock is answered inline; the rest goes down the serial IoEvent lane and waits
-//! on a `oneshot`, because only that lane has the real Spotify client.
+//! agent loop drives it for the local brain. Anything that needs no Spotify
+//! client is answered inline; the rest goes down the Spotify lane and waits on a
+//! `oneshot`, because only the pump's `Network` has the real Spotify client.
 
 use super::tools::{self, DjToolCall, ToolOutcome};
 use crate::core::app::App;
-use crate::infra::network::IoEvent;
+use crate::infra::network::{IoEvent, Network};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
-/// How long to wait for the IoEvent pump to answer a network-backed tool call.
+/// How long to wait for the Spotify lane to answer a network-backed tool call.
 ///
-/// The serial lane can be busy behind other Spotify work, but a caller is waiting
+/// The lane can be busy behind a library crawl, but a caller is waiting
 /// on the other end, so this bounds it rather than hanging them.
 const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
@@ -66,26 +66,27 @@ impl ToolExecutor for AppExecutor {
   async fn call(&self, call: DjToolCall) -> ToolOutcome {
     let spec = tools::spec(call.tool_name());
     let announce = self.announce && !spec.is_some_and(|spec| spec.read_only);
-    // The tool table is the single source of truth for which lane a call needs;
-    // `DjToolCall::needs_network` must agree with it, which a test asserts.
-    debug_assert_eq!(
-      spec.map(|spec| spec.needs_network),
-      Some(call.needs_network()),
-      "tool table and DjToolCall disagree about needing the network"
+    // The tool table says which tools can need the network at all; a call of
+    // one may still not (other sources' URIs), which a test asserts.
+    debug_assert!(
+      spec.is_some_and(|spec| spec.needs_network || !call.needs_network()),
+      "a call needs the network that its tool table entry rules out"
     );
 
-    // Anything that only needs `App` is answered here and now.
+    // Anything that needs no Spotify client is answered here and now.
     if !call.needs_network() {
-      if let Some(outcome) = tools::execute_app_only(&self.app, &call).await {
-        if announce && !outcome.is_error {
-          self.announce(outcome.text.clone()).await;
-        }
-        return outcome;
+      let outcome = match tools::execute_app_only(&self.app, &call).await {
+        Some(outcome) => outcome,
+        None => Network::answer_dj_tool_call_without_spotify(&self.app, call).await,
+      };
+      if announce && !outcome.is_error {
+        self.announce(outcome.text.clone()).await;
       }
+      return outcome;
     }
 
-    // The rest need the real Spotify client, which only exists on the serial
-    // IoEvent lane — the service lane builds a `Network` with `None` for it.
+    // The rest need the real Spotify client, which only exists on the Spotify
+    // lane — the service lane builds a `Network` with `None` for it.
     let (tx, rx) = oneshot::channel();
     // Sent straight down the channel rather than through `App::dispatch`, which
     // would set the global `is_loading` spinner for the duration of the call.

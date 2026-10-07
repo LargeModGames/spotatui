@@ -61,6 +61,18 @@ fn dropped_start_status(event: &IoEvent) -> String {
   }
 }
 
+/// The Spotify lane: one ordered worker, so a tool call behind a library crawl
+/// finds the index built, beside the pump instead of on it.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+async fn run_spotify_lane(mut lane_rx: tokio::sync::mpsc::UnboundedReceiver<(IoEvent, Network)>) {
+  while let Some((io_event, mut lane)) = lane_rx.recv().await {
+    lane.handle_network_event(io_event).await;
+    // A window that opened on the way: the pump holds these back and flushes
+    // them to this lane again when it ends.
+    lane.flush_deferred().await;
+  }
+}
+
 // CLI mode never starts the pump; only a frontend launch does.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Network) {
@@ -88,6 +100,8 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
   // Music commands run on this router's own worker, never on the pump.
   #[cfg(all(feature = "apple-music", target_os = "macos"))]
   let apple_music = crate::infra::apple_music::dispatch::Router::new(&network.app);
+  let (lane_tx, lane_rx) = tokio::sync::mpsc::unbounded_channel();
+  tokio::spawn(run_spotify_lane(lane_rx));
 
   loop {
     let deferred_deadline = network.deferred_deadline().await;
@@ -123,6 +137,16 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       tokio::spawn(async move {
         service_network.handle_network_event(io_event).await;
       });
+      continue;
+    }
+
+    // Slow Spotify work that needs no order against transport events: a crawl
+    // or a catalogue lookup must not hold a Qobuz skip or a seek behind it. A
+    // rate-limit window holds it back here, so one flusher keeps the order.
+    if Network::runs_on_spotify_lane(&io_event) {
+      if let Some(io_event) = network.hold_back_if_rate_limited(io_event).await {
+        let _ = lane_tx.send((io_event, network.spotify_lane_network()));
+      }
       continue;
     }
 
@@ -360,6 +384,72 @@ mod tests {
     let status = crate::gui::protocol::pushed(&crate::gui::protocol::diff(&before, &app), "status");
     assert_eq!(status["payload"]["message"], SPOTIFY_NOT_CONNECTED_STATUS);
     assert_eq!(status["payload"]["is_error"], false);
+  }
+
+  #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+  #[tokio::test]
+  async fn a_routed_event_runs_while_the_dj_crawl_is_in_flight() {
+    use crate::core::app::{App, DisplayDomain};
+    use crate::core::config::ClientConfig;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::metadata::tests::spotify_with_access_token;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (_stream, _) = listener.accept().await.unwrap();
+      tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+    let (app_tx, _app_rx) = std::sync::mpsc::channel();
+    let mut app = App::new(
+      app_tx,
+      UserConfig::new(),
+      Some(std::time::SystemTime::now()),
+    );
+    app.is_streaming_active = true;
+    app.native_track_info = Some(crate::core::app::NativeTrackInfo {
+      name: "Suspended".to_string(),
+      ..Default::default()
+    });
+    app.claim_decoded_sink(crate::core::source::Source::Qobuz);
+    app.note_display_changes();
+    let seen = app.display_revisions().get(DisplayDomain::Playback);
+    let app = Arc::new(Mutex::new(app));
+    let dir = tempfile::tempdir().unwrap();
+    let mut network = Network::new(
+      Some(spotify_with_access_token("token", base_url).await),
+      ClientConfig::new(),
+      &app,
+      dir.path().join("token.json"),
+    );
+    let (pump_tx, pump_rx) = std::sync::mpsc::channel();
+    pump_tx.send(IoEvent::DjIndexLibrary).unwrap();
+    pump_tx.send(IoEvent::FinishNativeQueue).unwrap();
+    drop(pump_tx);
+
+    tokio::time::timeout(Duration::from_secs(2), start_tokio(pump_rx, &mut network))
+      .await
+      .expect("the crawl must not hold the pump");
+
+    assert_eq!(
+      app
+        .lock()
+        .await
+        .display_revisions()
+        .get(DisplayDomain::Playback),
+      seen + 1
+    );
+    tokio::time::timeout(Duration::from_secs(2), async {
+      while !app.lock().await.dj.library_indexing {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the crawl runs on the lane");
+    server.abort();
   }
 
   #[tokio::test]

@@ -6,8 +6,8 @@
 //!
 //! Runs on the **service** lane, where a brain call may take minutes. The tools
 //! themselves do not run here: [`exec::AppExecutor`] answers the read-only ones
-//! from the `App` lock and sends the rest down the serial lane, which is the only
-//! one with a Spotify client.
+//! without a Spotify client and sends the rest down the Spotify lane, which has
+//! one.
 //!
 //! The loop is bounded because every step of an `agent_cli` turn is a fresh
 //! subprocess, so an unbounded turn would spend the listener's subscription and
@@ -225,10 +225,12 @@ impl<E: ToolExecutor> Turn<'_, E> {
         exclude_owned,
         ..
       } => DjToolCall::QueueTracks {
-        items,
         // In-TUI the filter is a toggle the listener set, so it applies whether or
-        // not the model thought to ask. Over MCP the agent decides for itself.
-        exclude_owned: exclude_owned || self.context.avoid_library,
+        // not the model thought to ask, to the Spotify items it can check. Over
+        // MCP the agent decides for itself.
+        exclude_owned: exclude_owned
+          || (self.context.avoid_library && super::tools::queue_needs_spotify(&items)),
+        items,
         // The recently-played window. Enforced here rather than in
         // `App::dj_skip_keys` so an MCP agent told to queue a specific track still
         // gets it, however recently it played.
@@ -361,12 +363,21 @@ mod tests {
     let filtered = context(true);
     let turn = turn(&app, &brain, &filtered, &executor);
 
-    let call = DjToolCall::QueueTracks {
-      items: vec![],
+    use crate::infra::dj::tools::QueueItem;
+    let batch = |uri: &str| DjToolCall::QueueTracks {
+      items: vec![QueueItem::Uri(uri.to_string())],
       exclude_owned: false,
       extra_skip_keys: vec![],
     };
-    match turn.apply_policy(call) {
+    // The filter only checks Spotify tracks, so a batch with none stays unfiltered.
+    assert!(matches!(
+      turn.apply_policy(batch("qobuz:track:1")),
+      DjToolCall::QueueTracks {
+        exclude_owned: false,
+        ..
+      }
+    ));
+    match turn.apply_policy(batch("spotify:track:x")) {
       DjToolCall::QueueTracks {
         exclude_owned,
         extra_skip_keys,
