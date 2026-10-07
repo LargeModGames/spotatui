@@ -153,6 +153,8 @@ pub struct App {
   /// dispatches while we're just waiting for confirmation.
   pub last_dispatched_volume: Option<u8>,
   pub instant_since_last_current_playback_poll: Instant,
+  /// `timestamp` of the playback state the track-end poll already ran for.
+  track_end_polled_for: Option<chrono::DateTime<chrono::Utc>>,
   navigation_stack: Vec<Route>,
   pub spectrum_data: Option<crate::infra::audio::SpectrumData>,
   pub audio_capture_active: bool,

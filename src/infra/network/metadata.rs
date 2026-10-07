@@ -609,7 +609,8 @@ pub(crate) mod tests {
     related_status: &'static str,
     related_status_code: u16,
   ) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    // Generous: every HTTP test shares the API pacing limiter.
+    tokio::time::timeout(Duration::from_secs(30), async {
       let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
       let local_addr = listener.local_addr().unwrap();
       let base_url = format!("http://{local_addr}/v1/");

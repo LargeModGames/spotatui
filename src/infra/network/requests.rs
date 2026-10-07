@@ -32,9 +32,9 @@ static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 ///
 /// A 401 forces a full `POST /api/token`, which under PKCE also *rotates the
 /// refresh token*. Spotify's player service intermittently answers a perfectly
-/// valid token with 401 (issue #395), and the playback poll runs once a second
-/// against an external device, so force-refreshing on every 401 mints a whole
-/// new token family every few seconds — pure churn, and a lost rotated refresh
+/// valid token with 401 (issue #395), and the playback poll runs every few
+/// seconds, so force-refreshing on every 401 mints a whole new token family
+/// every few polls — pure churn, and a lost rotated refresh
 /// token logs the user out. Inside the cooldown the request is retried with the
 /// token already in hand instead.
 const FORCED_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
@@ -175,6 +175,22 @@ fn request_body_for_log(body: Option<&Value>) -> String {
       truncate_for_log(&redact_json(payload).to_string())
     )
   })
+}
+
+/// The line a 429 leaves behind: raw `Retry-After` (before the cap) and `reason`.
+fn rate_limit_line(endpoint: &str, retry_after: Option<&str>, response_body: &str) -> String {
+  let reason = serde_json::from_str::<Value>(response_body)
+    .ok()
+    .and_then(|v| {
+      v.pointer("/error/reason")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    });
+  format!(
+    "Spotify API {endpoint} rate limited: Retry-After {}, reason {}",
+    retry_after.unwrap_or("missing"),
+    reason.as_deref().unwrap_or("none")
+  )
 }
 
 /// Redacted, truncated response body. JSON is redacted key-wise; anything else
@@ -682,10 +698,13 @@ where
       return Ok(Value::Null);
     }
 
-    let retry_after_secs = response
+    let retry_after = response
       .headers()
       .get("retry-after")
       .and_then(|h| h.to_str().ok())
+      .map(str::to_owned);
+    let retry_after_secs = retry_after
+      .as_deref()
       .and_then(|v| v.parse::<u64>().ok())
       .unwrap_or(1);
     // `text()` consumes the response, so everything the branches below need
@@ -774,6 +793,10 @@ where
     }
 
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+      warn!(
+        "{}",
+        rate_limit_line(&endpoint, retry_after.as_deref(), &response_body)
+      );
       let window = retry_after_secs.max(1).min(MAX_RETRY_AFTER.as_secs());
       forced_refresh_gate
         .rate_limit_for(Duration::from_secs(window))
@@ -1622,7 +1645,7 @@ mod tests {
     );
   }
 
-  /// Issue #395: the playback poll runs once a second, and Spotify's player
+  /// Issue #395: the playback poll runs every few seconds, and Spotify's player
   /// service can answer a valid token with 401. Only the first 401 in a cooldown
   /// window may force a (refresh-token-rotating) `POST /api/token`; the next one
   /// retries with the token already in hand.
@@ -2009,6 +2032,21 @@ mod tests {
     assert!(is_rate_limited_error(&first));
     assert!(is_rate_limited_error(&second));
     assert!(second.to_string().contains("retry in"), "{second}");
+  }
+
+  #[test]
+  fn a_429_logs_the_raw_retry_after_and_reason() {
+    let line = rate_limit_line(
+      "/v1/me/player",
+      Some("15242"),
+      r#"{"error":{"status":429,"message":"Too many requests","reason":"QUOTA_EXCEEDED"}}"#,
+    );
+    assert!(line.contains("Retry-After 15242"), "{line}");
+    assert!(line.contains("reason QUOTA_EXCEEDED"), "{line}");
+
+    let line = rate_limit_line("/v1/me/player", None, "");
+    assert!(line.contains("Retry-After missing"), "{line}");
+    assert!(line.contains("reason none"), "{line}");
   }
 
   #[tokio::test]

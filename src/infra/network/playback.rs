@@ -526,6 +526,7 @@ async fn player_command_with_saved_device_retry(
     .spotify_api_request_json(method.clone(), path, query, body.clone())
     .await;
   let Err(e) = result else {
+    network.app.lock().await.poll_playback_soon();
     return result;
   };
 
@@ -544,7 +545,10 @@ async fn player_command_with_saved_device_retry(
     .spotify_api_request_json(method, path, &query, body)
     .await
   {
-    Ok(value) => Ok(value),
+    Ok(value) => {
+      network.app.lock().await.poll_playback_soon();
+      Ok(value)
+    }
     Err(retry_err) => {
       warn!("saved-device retry failed: {retry_err}");
       Err(e)
@@ -2561,6 +2565,7 @@ impl PlaybackNetwork for Network {
         }
       }
       app.current_playback_context = None;
+      app.poll_playback_soon();
 
       #[cfg(feature = "streaming")]
       {
@@ -3067,6 +3072,69 @@ mod tests {
     })
     .await
     .expect("pause test timed out");
+  }
+
+  #[tokio::test]
+  async fn only_a_successful_command_polls_sooner() {
+    use crate::core::app::App;
+    use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::Mutex;
+
+    // Generous: every HTTP test shares the API pacing limiter.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let server = tokio::spawn(async move {
+        let forbidden = r#"{"error":{"status":403,"message":"Restricted device"}}"#;
+        for response in [
+          format!(
+            "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{forbidden}",
+            forbidden.len()
+          ),
+          "HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n".to_string(),
+        ] {
+          let (mut stream, _) = listener.accept().await.unwrap();
+          let request = read_http_request(&mut stream).await;
+          assert!(request.starts_with("POST /v1/me/player/next"), "{request}");
+          stream.write_all(response.as_bytes()).await.unwrap();
+        }
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let app = Arc::new(Mutex::new(App::new(
+        tx,
+        crate::core::user_config::UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+      let network = Network::new(
+        Some(spotify),
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+      let set_at = Instant::now();
+      app.lock().await.instant_since_last_current_playback_poll = set_at;
+      let failed =
+        player_command_with_saved_device_retry(&network, Method::POST, "me/player/next", &[], None)
+          .await;
+      assert!(failed.is_err());
+      assert_eq!(
+        app.lock().await.instant_since_last_current_playback_poll,
+        set_at
+      );
+
+      player_command_with_saved_device_retry(&network, Method::POST, "me/player/next", &[], None)
+        .await
+        .unwrap();
+      server.await.unwrap();
+      // Default 5 s interval: moved back by 4 s, so the poll is due a second on.
+      let polled_ago = app.lock().await.instant_since_last_current_playback_poll.elapsed();
+      assert!(polled_ago >= std::time::Duration::from_secs(4), "{polled_ago:?}");
+    })
+    .await
+    .unwrap();
   }
 
   #[cfg(feature = "streaming")]

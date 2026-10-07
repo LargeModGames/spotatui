@@ -222,6 +222,26 @@ impl App {
     })
   }
 
+  /// Time left in the playing cached track, unless its track-end poll already ran.
+  pub(crate) fn ms_left_for_track_end_poll(&self) -> Option<u128> {
+    let context = self.current_playback_context.as_ref()?;
+    if !context.is_playing || self.track_end_polled_for == Some(context.timestamp) {
+      return None;
+    }
+    let duration_ms = match context.item.as_ref()? {
+      PlayableItem::Track(track) => track.duration.num_milliseconds(),
+      PlayableItem::Episode(episode) => episode.duration.num_milliseconds(),
+      _ => return None,
+    };
+    let progress_ms = context.progress?.num_milliseconds();
+    u128::try_from(duration_ms.saturating_sub(progress_ms)).ok()
+  }
+
+  /// Mark the track-end poll as spent for the cached playback state.
+  pub(crate) fn spend_track_end_poll(&mut self) {
+    self.track_end_polled_for = self.current_playback_context.as_ref().map(|c| c.timestamp);
+  }
+
   /// Device id of the cached playback, playing or paused.
   #[cfg(feature = "streaming")]
   pub(crate) fn cached_playback_device_id(&self) -> Option<&str> {
