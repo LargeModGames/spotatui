@@ -1,6 +1,6 @@
 # Themes
 
-spotatui comes with several built-in theme presets. Access them via `Alt-,` > Theme.
+spotatui comes with several built-in theme presets. Access them via `Alt-,` (`Ctrl-,` on macOS) > Theme.
 
 ## Built-in Presets
 
@@ -18,6 +18,7 @@ spotatui comes with several built-in theme presets. Access them via `Alt-,` > Th
 | Gruvbox          | Warm retro groove colors                    |
 | Gruvbox Light    | Light variant with warm colors              |
 | Catppuccin Mocha | Popular pastel dark theme                   |
+| Tokyo Night      | The [Tokyo Night](https://github.com/folke/tokyonight.nvim) palette |
 
 ## Custom Themes
 
@@ -27,6 +28,7 @@ or `~/.config/spotatui` when it is unset or not absolute):
 
 ```yaml
 theme:
+  preset: "Custom"             # Use the color keys below
   active: "137, 180, 250"      # Current playing song
   banner: "180, 190, 254"      # The "spotatui" banner
   error_border: "243, 139, 168"
@@ -45,6 +47,16 @@ theme:
   highlighted_lyrics: "166, 227, 161"
 ```
 
+spotatui writes `preset:` into `config.yml` every time you save settings. The
+color keys only apply when `preset` is `Custom`, or when there is no `preset:`
+line at all. With a named preset such as `preset: "Nord"`, that preset's colors
+win and the color keys are ignored, so set `preset: "Custom"` before editing
+colors by hand.
+
+Preset names must match the names in the table above exactly, case and
+parentheses included (`"Default (Cyan)"`, `"Tokyo Night"`). Any other value is
+treated as `Custom`.
+
 ### Color Values
 
 **Always use RGB strings** for consistent colors across different terminals:
@@ -57,4 +69,4 @@ text: "205, 214, 244"    # RGB format: "red, green, blue" (0-255)
 
 ## Contributing Themes
 
-Want to add a new theme preset? See [CONTRIBUTING.md](https://github.com/LargeModGames/spotatui/blob/main/CONTRIBUTING.md) and check out `src/core/user_config.rs` for examples.
+Want to add a new theme preset? See [CONTRIBUTING.md](https://github.com/LargeModGames/spotatui/blob/main/CONTRIBUTING.md) and check out `ThemePreset` in `src/core/theme.rs` for examples.

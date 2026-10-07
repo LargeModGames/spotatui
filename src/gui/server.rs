@@ -325,6 +325,8 @@ fn content_type(name: &str) -> &'static str {
     Some("js") => "text/javascript",
     Some("css") => "text/css",
     Some("svg") => "image/svg+xml",
+    Some("woff2") => "font/woff2",
+    Some("woff") => "font/woff",
     _ => "application/octet-stream",
   }
 }
@@ -539,6 +541,13 @@ mod tests {
       .starts_with("HTTP/1.1 405"));
   }
 
+  #[test]
+  fn bundled_fonts_are_served_with_a_font_type() {
+    let font = "assets/hanken-grotesk-latin-400-normal-abc123";
+    assert_eq!(content_type(&format!("{font}.woff2")), "font/woff2");
+    assert_eq!(content_type(&format!("{font}.woff")), "font/woff");
+  }
+
   #[tokio::test]
   async fn a_build_without_the_frontend_answers_503() {
     let (port, _code, _inbox) = start(&[]).await;
@@ -594,7 +603,7 @@ mod tests {
     .unwrap();
 
     let mut values = Vec::new();
-    for _ in 0..8 {
+    for _ in 0..20 {
       values.push(next_json(&mut socket).await);
     }
     let kinds: Vec<_> = values.iter().map(|value| value["kind"].clone()).collect();
@@ -605,10 +614,22 @@ mod tests {
         "onboarding",
         "route",
         "status",
+        "source",
         "theme",
         "playback",
+        "party",
         "devices",
-        "queue"
+        "search",
+        "lyrics",
+        "library",
+        "liked",
+        "queue",
+        "stats",
+        "album",
+        "session",
+        "discover",
+        "playlist_sync",
+        "track_table"
       ]
     );
     assert!(values[0]["payload"]["token"].is_string());
@@ -748,12 +769,31 @@ mod tests {
     boot.send_replace(Some(Arc::new(tokio::sync::Mutex::new(app))));
 
     let mut kinds = Vec::new();
-    for _ in 0..6 {
+    for _ in 0..18 {
       kinds.push(next_json(&mut page).await["kind"].clone());
     }
     assert_eq!(
       kinds,
-      ["route", "status", "theme", "playback", "devices", "queue"]
+      [
+        "route",
+        "status",
+        "source",
+        "theme",
+        "playback",
+        "party",
+        "devices",
+        "search",
+        "lyrics",
+        "library",
+        "liked",
+        "queue",
+        "stats",
+        "album",
+        "session",
+        "discover",
+        "playlist_sync",
+        "track_table"
+      ]
     );
     assert!(
       tokio::time::timeout(Duration::from_millis(300), page.next())

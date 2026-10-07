@@ -8,7 +8,7 @@
 //!
 //! Resolution deliberately does *not* happen here: it needs the real Spotify
 //! client, which the service lane's `Network` does not have. The loop's tool
-//! calls cross to the serial lane through `IoEvent::DjToolCall` instead.
+//! calls cross to the Spotify lane through `IoEvent::DjToolCall` instead.
 
 use super::brain::{
   agent_cli::{AgentCliBrain, PromptDelivery},

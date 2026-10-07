@@ -16,6 +16,9 @@ pub enum PlaybackOwner {
   Queue,
   /// A decoded source's sink (Local, Subsonic, Qobuz, Radio, YouTube).
   Decoded,
+  /// Music.app plays the audio and publishes its own Now Playing entry;
+  /// spotatui is its remote. There is no `LocalPlayer` behind it.
+  AppleMusic,
   /// librespot as the active Connect device.
   #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
   NativeSpotify,
@@ -30,7 +33,10 @@ impl PlaybackOwner {
   pub(crate) fn owns_local_sink(self) -> bool {
     match self {
       PlaybackOwner::Queue | PlaybackOwner::Decoded => true,
-      PlaybackOwner::NativeSpotify | PlaybackOwner::Spotify | PlaybackOwner::None => false,
+      PlaybackOwner::AppleMusic
+      | PlaybackOwner::NativeSpotify
+      | PlaybackOwner::Spotify
+      | PlaybackOwner::None => false,
     }
   }
 }
@@ -62,7 +68,7 @@ fn resolve_playing_item<'a>(
       Some(track) if slot_is_spotify => PlayingItem::QueuedSpotify(track),
       _ => PlayingItem::NotSpotify,
     },
-    PlaybackOwner::Decoded => PlayingItem::NotSpotify,
+    PlaybackOwner::Decoded | PlaybackOwner::AppleMusic => PlayingItem::NotSpotify,
     PlaybackOwner::NativeSpotify | PlaybackOwner::Spotify => {
       cached_item.map_or(PlayingItem::Nothing, PlayingItem::Spotify)
     }
@@ -85,6 +91,11 @@ impl App {
   }
 
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {
+    // First: a claim holds from the start request until Music acknowledges a
+    // pause, so nothing below can take the sink back in between.
+    if self.apple_music_owns_playback() {
+      return PlaybackOwner::AppleMusic;
+    }
     if self.queue_owns_playback() {
       return PlaybackOwner::Queue;
     }
@@ -104,7 +115,7 @@ impl App {
   /// Whether librespot is the right player for a command aimed at it. True
   /// under a Spotify queue slot, whose track librespot plays.
   pub(crate) fn native_should_drive(&self) -> bool {
-    !self.active_decoded_source()
+    !self.active_decoded_source() && !self.apple_music_owns_playback()
   }
 
   /// Whether a path that restores or continues the cached Spotify context may
@@ -146,6 +157,11 @@ impl App {
   /// parked native backend takes a bare resume as its rebuild and refuses the
   /// rest.
   pub(crate) fn dispatch_spotify_fallback(&mut self, event: IoEvent) {
+    // The Apple Music router in the pump turns it into a Music command.
+    if self.apple_music_owns_playback() {
+      self.dispatch(event);
+      return;
+    }
     if self.playback_owner() == PlaybackOwner::None {
       self.set_status_message(NOTHING_PLAYING_STATUS, 4);
       return;
@@ -204,6 +220,23 @@ impl App {
     self.current_playback_context.as_ref().is_some_and(|ctx| {
       ctx.is_playing && ctx.device.id.is_some() && ctx.device.id != self.native_device_id
     })
+  }
+
+  /// Device id of the cached playback, playing or paused.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn cached_playback_device_id(&self) -> Option<&str> {
+    self
+      .current_playback_context
+      .as_ref()
+      .and_then(|ctx| ctx.device.id.as_deref())
+  }
+
+  /// After a handoff, a poll that finds no playback means the other device left (#693).
+  #[cfg(feature = "streaming")]
+  pub(crate) fn forget_handed_off_playback(&mut self) {
+    if self.native_handed_off() {
+      self.current_playback_context = None;
+    }
   }
 
   /// Whether Spotify transport would land on the parked native backend.
@@ -568,12 +601,42 @@ impl App {
       );
       self.display_revisions.bump(DisplayDomain::Queue);
     }
+    self.note_discover_changes();
+    self.note_search_liked_changes();
+    self.note_track_table_changes();
   }
 }
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn an_empty_poll_after_a_handoff_forgets_the_phone_that_left() {
+    let mut app = App {
+      current_playback_context: Some(make_external_context()),
+      ..Default::default()
+    };
+    app.mark_native_handed_off();
+
+    app.forget_handed_off_playback();
+
+    assert_eq!(app.cached_playback_device_id(), None);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn an_empty_poll_without_a_handoff_keeps_the_cached_playback() {
+    let mut app = App {
+      current_playback_context: Some(make_external_context()),
+      ..Default::default()
+    };
+
+    app.forget_handed_off_playback();
+
+    assert_eq!(app.cached_playback_device_id(), Some("external"));
+  }
 
   #[cfg(feature = "streaming")]
   #[test]

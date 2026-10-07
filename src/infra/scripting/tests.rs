@@ -1151,11 +1151,11 @@ fn popup_bad_color_raises() {
     "test",
     r#"spotatui.popup("T", {{ text = "hi", fg = "NotAColor" }})"#,
   );
-  // parse_theme_item falls back to Black on unknown, so this may not error.
-  // The plan says it raises; let's confirm behaviour: if it doesn't raise, the test
-  // documents that parse_theme_item is lenient.
-  // We just ensure no panic occurred.
-  let _ = result;
+  assert!(result.is_err(), "unknown named colors should raise");
+  assert!(
+    engine.shared.effects.borrow().is_empty(),
+    "invalid popup must not be queued"
+  );
 }
 
 #[test]
@@ -1244,15 +1244,15 @@ fn set_theme_unknown_field_raises() {
 #[test]
 fn set_theme_bad_color_raises() {
   let mut engine = ScriptEngine::new().unwrap();
-  // parse_theme_item is lenient (falls back to Black) for unknown named colors.
-  // The API wraps it with map_err, but since parse_theme_item returns Ok for unknowns,
-  // this test documents the actual behaviour.
-  let result = engine.load_source(
-    "test",
-    r#"spotatui.set_theme({ playbar_text = "999, 999, 999" })"#,
-  );
-  // 999 > 255 so u8 parse fails -> should be an error.
-  assert!(result.is_err(), "out-of-range RGB should raise");
+  for color in ["NotAColor", "999, 999, 999", "1, 2, 3, 4"] {
+    let source = format!(r#"spotatui.set_theme({{ playbar_text = "{color}" }})"#);
+    let result = engine.load_source("test", &source);
+    assert!(result.is_err(), "invalid color {color:?} should raise");
+    assert!(
+      engine.shared.effects.borrow().is_empty(),
+      "invalid theme must not be queued"
+    );
+  }
 }
 
 #[cfg(test)]

@@ -109,6 +109,7 @@ pub fn content_active_block_for_route(route_id: &RouteId) -> Option<ActiveBlock>
     RouteId::AlbumList => Some(ActiveBlock::AlbumList),
     RouteId::PodcastEpisodes => Some(ActiveBlock::EpisodeTable),
     RouteId::Discover => Some(ActiveBlock::Discover),
+    RouteId::LocalBrowser => Some(ActiveBlock::LocalBrowser),
     RouteId::Stats => Some(ActiveBlock::Stats),
     RouteId::PlaylistSync => Some(ActiveBlock::PlaylistSync),
     // Without this the right-arrow from the sidebar silently does nothing: the
@@ -150,6 +151,14 @@ mod tests {
     assert_eq!(
       content_active_block_for_route(&RouteId::PlaylistSync),
       Some(ActiveBlock::PlaylistSync)
+    );
+  }
+
+  #[test]
+  fn the_local_files_route_focuses_its_block_from_the_sidebar() {
+    assert_eq!(
+      content_active_block_for_route(&RouteId::LocalBrowser),
+      Some(ActiveBlock::LocalBrowser)
     );
   }
 

@@ -16,7 +16,6 @@ use tokio::sync::Mutex;
 
 use crate::core::app::App;
 use crate::core::plugin_api::TrackInfo;
-#[cfg(feature = "queue")]
 use crate::core::queue::QueueItemSource;
 use crate::core::queue::{queue_item_source, source_available, source_label};
 #[cfg(feature = "audio-decode-queue")]
@@ -38,6 +37,21 @@ use std::time::Duration;
 /// return `false` (the per-source teardowns/starts still run) but first clear
 /// the queue slot so a new play cleanly takes over.
 pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
+  // Music owns playback: the queue slot was cleared by the claim, and an
+  // advance must not start a second player under it.
+  if app.lock().await.apple_music_owns_playback() {
+    if matches!(
+      event,
+      IoEvent::AdvanceNativeQueue | IoEvent::FinishNativeQueue
+    ) {
+      app
+        .lock()
+        .await
+        .set_status_message(crate::core::queue::APPLE_MUSIC_QUEUE_UNSUPPORTED, 4);
+      return true;
+    }
+    return false;
+  }
   if let IoEvent::AdvanceNativeQueue = event {
     advance_native_queue(app).await;
     return true;
@@ -166,7 +180,9 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
   }
   match event {
     IoEvent::PausePlayback => {
-      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+      // Held across the command: it only queues it, and the lock keeps a
+      // backend replacement from shutting this player down in between.
+      if let Some(player) = app.lock().await.streaming_player.clone() {
         player.pause();
       }
       let mut guard = app.lock().await;
@@ -178,7 +194,7 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       Some(true)
     }
     IoEvent::StartPlayback(None, None, None) => {
-      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+      if let Some(player) = app.lock().await.streaming_player.clone() {
         player.play();
       }
       let mut guard = app.lock().await;
@@ -196,7 +212,7 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       Some(true)
     }
     IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => {
-      if let Some(player) = { app.lock().await.streaming_player.clone() } {
+      if let Some(player) = app.lock().await.streaming_player.clone() {
         player.seek(0);
       }
       Some(true)
@@ -295,6 +311,16 @@ async fn try_play_queued(app: &Arc<Mutex<App>>, track: &TrackInfo) -> bool {
     QueueItemSource::YouTube => play_queued_youtube(app, track, &uri).await,
     #[cfg(feature = "streaming")]
     QueueItemSource::Spotify => play_queued_spotify(app, track, &uri).await,
+    // `add_track_to_native_queue` refuses these; a hand-edited session file
+    // is the only other way in.
+    QueueItemSource::AppleMusic => {
+      set_status(
+        app,
+        crate::core::queue::APPLE_MUSIC_QUEUE_UNSUPPORTED.to_string(),
+      )
+      .await;
+      false
+    }
     // Reached only when a source is `source_available` but its play arm is
     // cfg'd out — impossible (the check above *is* the cfg gate), but the match
     // must be exhaustive across builds.
@@ -450,7 +476,8 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
   // suspension rather than kept for reuse), so this compiles out without them.
   #[cfg(feature = "audio-decode-queue")]
   {
-    if let Some(p) = { app.lock().await.take_queue_now_decoded_player() } {
+    let player = app.lock().await.take_queue_now_decoded_player();
+    if let Some(p) = player {
       p.stop();
     }
     if let Some(p) = suspended_context_player(app).await {

@@ -234,13 +234,21 @@ fn play_random_song(app: &mut App) {
           });
         }
       }
-      TrackTableContext::YouTubePlaylist | TrackTableContext::QobuzPlaylist => {
+      TrackTableContext::AppleMusicPlaylist
+      | TrackTableContext::YouTubePlaylist
+      | TrackTableContext::QobuzPlaylist => {
         // Queue the whole playlist and start at a random offset, so
         // Next/Previous and auto-advance keep working within the playlist.
+        // For Music the offset also names which row of a song listed twice.
         let playable_ids: Vec<String> = app
           .track_table
           .tracks
           .iter()
+          // Music: never draw a track it cannot play (it would only be refused).
+          .filter(|track| {
+            app.track_table.context != Some(TrackTableContext::AppleMusicPlaylist)
+              || track.is_playable
+          })
           .filter_map(|track| track.uri.clone())
           .collect();
         if !playable_ids.is_empty() {
@@ -322,7 +330,8 @@ fn on_enter(app: &mut App) {
         }
       }
       TrackTableContext::AlbumSearch => {}
-      TrackTableContext::LocalPlaylist
+      TrackTableContext::AppleMusicPlaylist
+      | TrackTableContext::LocalPlaylist
       | TrackTableContext::SubsonicPlaylist
       | TrackTableContext::YouTubePlaylist
       | TrackTableContext::QobuzPlaylist => {
@@ -615,6 +624,35 @@ mod tests {
       other => panic!("unexpected event: {:?}", event_name(&other)),
     }
     assert!(app.native_queue.is_empty());
+  }
+
+  #[test]
+  fn random_play_in_a_music_playlist_never_draws_a_track_music_cannot_play() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let track = |id: &str, playable: bool| -> TrackInfo {
+      serde_json::from_value(serde_json::json!({
+        "uri": format!("applemusic:{}", id.repeat(16)),
+        "name": id,
+        "artists": [],
+        "album": "",
+        "duration_ms": 1000,
+        "is_playable": playable,
+      }))
+      .unwrap()
+    };
+    // Seeded through App methods: the handler write counter scans this file.
+    app.set_track_table(
+      vec![track("X", false), track("A", true), track("Y", false)],
+      TrackTableContext::AppleMusicPlaylist,
+    );
+    // A drawn unplayable track would be refused with an error and start
+    // nothing; the playable one starts every time.
+    for _ in 0..20 {
+      handler(Key::Char('S'), &mut app);
+      assert!(rx.try_recv().is_ok(), "each press starts a track");
+      assert!(!app.status_message_is_error(), "no track was refused");
+    }
   }
 
   #[test]

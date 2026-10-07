@@ -6,10 +6,12 @@
 # Compares the working tree's tools/gates.count against the version at the
 # merge-base of <base-ref> and HEAD. Coupling counters may only fall or hold;
 # the adoption counters listed in RISE_ONLY may only rise or hold. The
-# src/gates.rs test already pins the file to the measured values, so together
-# the two checks mean a PR can neither drift from reality nor move a baseline
-# the wrong way. A missing file at the merge-base is the documented bootstrap:
-# the check passes with a note.
+# src/gates.rs test already pins the coupling counters to the measured values
+# and holds the adoption counters as floors, so together the two checks mean a
+# PR can neither drift from reality nor move a baseline the wrong way. The
+# gates-floor workflow runs this script against HEAD to validate the raised
+# floors before it commits them. A missing file at the merge-base is the
+# documented bootstrap: the check passes with a note.
 set -euo pipefail
 
 base_ref=${1:?usage: check_gates_ratchet.sh <base-ref>}

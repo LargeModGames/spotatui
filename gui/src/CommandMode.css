@@ -1,0 +1,160 @@
+/* The command palette: a dialog over a dimmed screen. */
+.palette-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(10, 9, 8, 0.72);
+}
+
+.palette {
+  position: absolute;
+  top: 84px;
+  left: 50%;
+  width: min(780px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  background: var(--raised);
+  border: 1px solid var(--amber);
+  border-radius: 2px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  font-family: var(--mono);
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+}
+
+.palette-input {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 60px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.palette-input > span:first-child {
+  color: var(--amber);
+  font-size: 22px;
+}
+
+.palette-input input {
+  flex-grow: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: 20px var(--mono);
+}
+
+.palette-input .tag {
+  padding: 3px 7px;
+  background: var(--amber);
+  color: var(--ink);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+
+.palette-help {
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--secondary);
+  font-size: 11px;
+}
+
+.palette ul {
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+}
+
+.palette li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 42px;
+  padding: 0 20px;
+  cursor: pointer;
+}
+
+.palette li[aria-selected="true"] {
+  background: #26221e;
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.palette li .n {
+  width: 18px;
+  font-size: 12px;
+  color: var(--quiet);
+}
+
+.palette li[aria-selected="true"] .n {
+  color: var(--amber);
+}
+
+.palette li .kind {
+  width: 44px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--quiet);
+}
+
+.palette li .what {
+  flex-grow: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 14px var(--sans);
+}
+
+.palette li .what span {
+  color: var(--secondary);
+}
+
+.palette-lists {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  border-top: 1px solid var(--rule);
+  font-size: 12px;
+}
+
+.palette-lists > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 20px;
+}
+
+.palette .recent {
+  border-right: 1px solid var(--rule);
+}
+
+.palette .verbs b {
+  color: var(--amber);
+  font-weight: 400;
+}
+
+.palette .keys {
+  padding: 10px 20px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 800px) {
+  .palette {
+    top: 60px;
+    max-height: calc(100vh - 76px);
+  }
+
+  .palette-lists {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .palette .recent {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
+}
+
+.palette .verbs span span {
+  font-family: var(--sans);
+  color: var(--quiet);
+}

@@ -141,6 +141,10 @@ pub enum Action {
     from: usize,
     to: usize,
   },
+  /// Fetch the Spotify queue again without a route change or the spinner.
+  RefreshQueue,
+  /// Fetch the Spotify Connect devices without a route change, whatever the browse source.
+  RefreshDevices,
   /// Run a search against the Spotify catalog; the user country is resolved
   /// at apply time. Deliberately source-blind: existing producers (Lua
   /// `spotatui.search`) contracted the Web API search, so browsing scope
@@ -291,6 +295,8 @@ pub enum Action {
   /// selected period on the Stats screen when that screen is current, 30
   /// days anywhere else.
   GenerateRecap,
+  /// Generate a listening recap for the selected Stats period, whatever the route.
+  GenerateStatsRecap,
   /// Step the Stats period through its ring and reload; relative because the
   /// period type is not part of the wire shape.
   CycleStatsPeriod {

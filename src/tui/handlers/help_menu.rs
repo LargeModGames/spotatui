@@ -38,10 +38,10 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       move_page(Direction::Up, app);
     }
-    Key::Ctrl('d') => {
+    k if k == app.user_config.keys.next_page => {
       move_page(Direction::Down, app);
     }
-    Key::Ctrl('u') => {
+    k if k == app.user_config.keys.previous_page => {
       move_page(Direction::Up, app);
     }
     _ => {}
@@ -92,8 +92,28 @@ mod tests {
   use crate::{
     core::app::{ActiveBlock, RouteId},
     core::source::Source,
+    core::user_config::UserConfig,
     tui::{handlers::handle_app, keymap::help_rows, ui::ensure_help_menu_model},
   };
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  #[test]
+  fn rebound_next_page_key_pages_the_help_menu() {
+    let mut config = UserConfig::new();
+    config.keys.next_page = Key::PageDown;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
+    app.view.help_docs_size = 100;
+    app.view.help_menu_max_lines = 10;
+
+    handler(Key::PageDown, &mut app);
+    assert_eq!(app.view.help_menu_page, 1);
+    assert_eq!(app.view.help_menu_offset, 10);
+
+    handler(Key::Ctrl('d'), &mut app);
+    assert_eq!(app.view.help_menu_page, 1, "the literal Ctrl+d is gone");
+  }
 
   #[test]
   fn test_help_menu_pagination() {

@@ -29,8 +29,9 @@ pub struct ToolSpec {
   /// Whether the tool only reads state. Surfaced to MCP clients so they can
   /// decide what to confirm with the user.
   pub read_only: bool,
-  /// Whether executing it needs the live Spotify client (and therefore the
-  /// serial IoEvent lane) rather than just the `App` lock.
+  /// Whether a call of it can need the live Spotify client (and therefore the
+  /// Spotify lane) rather than just the `App` lock. A call with no Spotify
+  /// item never does: see `DjToolCall::needs_network`.
   pub needs_network: bool,
   pub schema: fn() -> Value,
 }
@@ -427,11 +428,20 @@ pub fn parse_call(name: &str, args: &Value) -> Result<DjToolCall, ToolCallError>
 }
 
 impl DjToolCall {
+  /// Whether this call reaches the Spotify catalogue: a search, or a queue or
+  /// play with a Spotify URI or a name to look up. Other sources' URIs are
+  /// queued or played without it.
   pub fn needs_network(&self) -> bool {
-    matches!(
-      self,
-      Self::SearchTracks { .. } | Self::QueueTracks { .. } | Self::PlayNow { .. }
-    )
+    match self {
+      Self::SearchTracks { .. } => true,
+      Self::QueueTracks { items, .. } => queue_needs_spotify(items),
+      Self::PlayNow { uri } => uri.starts_with("spotify:track:"),
+      Self::GetListeningHistory { .. }
+      | Self::GetNowPlaying
+      | Self::GetQueue
+      | Self::SkipTrack
+      | Self::SetDjVibe { .. } => false,
+    }
   }
 
   pub fn tool_name(&self) -> &'static str {
@@ -448,11 +458,20 @@ impl DjToolCall {
   }
 }
 
+/// Whether a queue batch holds a Spotify URI or a name to look up.
+pub fn queue_needs_spotify(items: &[QueueItem]) -> bool {
+  items.iter().any(|item| match item {
+    QueueItem::Uri(uri) => uri.starts_with("spotify:track:"),
+    QueueItem::Named(_) => true,
+  })
+}
+
 /// Execute the calls that only need the `App` lock (plus, for history, a
 /// blocking file read).
 ///
-/// Returns `None` for calls that need the Spotify client; those go through the
-/// serial IoEvent lane instead — see `crate::infra::network::dj`.
+/// Returns `None` for calls that run the network handlers: on the Spotify lane
+/// when they need the client, else in the executor with none — see
+/// `crate::infra::network::dj`.
 pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Option<ToolOutcome> {
   match call {
     DjToolCall::GetListeningHistory { period } => Some(history_outcome(app, *period).await),
@@ -477,10 +496,10 @@ pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Optio
         None => "DJ vibe cleared".to_string(),
       }))
     }
-    // These need the real Spotify client, which only the serial lane has.
-    // `play_now` is among them because it confirms the track exists before
-    // interrupting what is playing: dispatching blind used to report success
-    // for a URI that stopped playback instead of starting it.
+    // These run the network handlers: with the Spotify client on the Spotify
+    // lane, or with none when the call has no Spotify item. `play_now` confirms
+    // a Spotify track exists before interrupting what is playing: dispatching
+    // blind used to report success for a URI that stopped playback instead.
     DjToolCall::SearchTracks { .. }
     | DjToolCall::QueueTracks { .. }
     | DjToolCall::PlayNow { .. } => None,
@@ -991,6 +1010,25 @@ mod tests {
         vibe: Some("mellow".into())
       }
     );
+  }
+
+  #[test]
+  fn a_call_with_no_spotify_item_needs_no_network() {
+    let opaque_play = parse_call("play_now", &json!({"uri": "qobuz:track:1"})).unwrap();
+    let opaque_queue = parse_call(
+      "queue_tracks",
+      &json!({"tracks": [{"uri": "file:/a.flac"}, {"uri": "youtube:abc"}], "exclude_owned": true}),
+    )
+    .unwrap();
+    let named_queue = parse_call(
+      "queue_tracks",
+      &json!({"tracks": [{"uri": "file:/a.flac"}, {"title": "t", "artist": "a"}]}),
+    )
+    .unwrap();
+
+    assert!(!opaque_play.needs_network());
+    assert!(!opaque_queue.needs_network());
+    assert!(named_queue.needs_network());
   }
 
   #[test]

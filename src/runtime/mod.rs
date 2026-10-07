@@ -159,14 +159,8 @@ async fn run_cli_inner() -> Result<()> {
 
   // Shell completions don't need any spotify work
   if let Some(s) = matches.get_one::<String>("completions") {
-    let shell = match s.as_str() {
-      "fish" => Shell::Fish,
-      "bash" => Shell::Bash,
-      "zsh" => Shell::Zsh,
-      "power-shell" => Shell::PowerShell,
-      "elvish" => Shell::Elvish,
-      _ => return Err(anyhow!("no completions available for '{}'", s)),
-    };
+    let shell =
+      completion_shell(s).ok_or_else(|| anyhow!("no completions available for '{}'", s))?;
     generate(shell, &mut clap_app, "spotatui", &mut io::stdout());
     return Ok(());
   }
@@ -274,5 +268,30 @@ fn is_instance_refusal(error: &anyhow::Error) -> bool {
   {
     let _ = error;
     false
+  }
+}
+
+/// The shell for a `--completions` value. clap passes the value as typed, so
+/// the old `power-shell` alias arrives here unchanged and needs its own arm.
+fn completion_shell(name: &str) -> Option<Shell> {
+  match name {
+    "fish" => Some(Shell::Fish),
+    "bash" => Some(Shell::Bash),
+    "zsh" => Some(Shell::Zsh),
+    "powershell" | "power-shell" => Some(Shell::PowerShell),
+    "elvish" => Some(Shell::Elvish),
+    _ => None,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn completion_shell_maps_both_powershell_spellings() {
+    assert_eq!(completion_shell("powershell"), Some(Shell::PowerShell));
+    assert_eq!(completion_shell("power-shell"), Some(Shell::PowerShell));
+    assert_eq!(completion_shell("nushell"), None);
   }
 }

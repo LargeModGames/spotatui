@@ -15,7 +15,7 @@ Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/stat
 
 ## Safe by default
 
-A typo in `config.yml` never prevents the app from starting. Structural mistakes (an unknown sort field, a bad template placeholder, an invalid column id, an icon that is too wide) are logged as warnings and the affected value falls back to its built-in default. Warnings go to the log file whose path is printed at startup, a `spotatui_logs/spotatuilog<pid>` file inside your system temp directory (`%TEMP%` on Windows, `$TMPDIR` where set, otherwise `/tmp`). The startup line reports the resolved path, so copy it from there rather than guessing.
+Most invalid values log a warning and fall back to the default. A misspelled key is usually ignored. Structural mistakes (an unknown sort field, a bad template placeholder, an invalid column id, an icon that is too wide) are logged as warnings and the affected value falls back to its built-in default. Warnings go to the log file whose path is printed at startup, a `spotatui_logs/spotatuilog<pid>` file inside your system temp directory (`%TEMP%` on Windows, `$TMPDIR` where set, otherwise `/tmp`). The startup line reports the resolved path, so copy it from there rather than guessing.
 
 Only two kinds of errors are fatal: YAML syntax errors (the file cannot be parsed at all) and a handful of out-of-range numeric values that bypass the warn-and-fallback policy: `volume_increment` outside 0–100, a tick rate (or animation tick rate) outside 1–999ms, an unparseable `auto_update_delay`, `playback_poll_seconds` below 1, and `like_animation_frames` below 1.
 
@@ -278,7 +278,7 @@ The ▶ now-playing marker attaches to the `title` column, or to the first colum
 
 ## Keybindings, theme, and plugins
 
-The `keybindings:` section rebinds ~40 named actions (`back: q`, `next_track: n`, modifier syntax like `ctrl-s` / `alt-,`), and `theme:` sets a preset plus 16 individual color slots (`"R, G, B"` or named colors) — both are easiest to edit from the in-app Settings screen, which writes them back to this file. `behavior.banner_gradient: false` draws the home-screen banner in the theme's banner color instead of the animated RGB gradient. The Terminal (ANSI) preset defaults this to `false` so the banner follows the terminal palette live (pywal etc.); every other preset defaults to `true`. An explicit `banner_gradient:` value in the config wins over the preset default. `plugin_commands:` maps extra keys to Lua plugin commands. See [`examples/config.example.yml`](../examples/config.example.yml) and the [scripting docs](scripting.md).
+The `keybindings:` section rebinds ~40 named actions (`back: q`, `next_track: n`, modifier syntax like `ctrl-s` / `alt-,`) — the full list of names and defaults is in [`docs/keybindings.md`](keybindings.md) — and `theme:` sets a preset plus 16 individual color slots (`"R, G, B"` or named colors) — both are easiest to edit from the in-app Settings screen, which writes them back to this file. `behavior.banner_gradient: false` draws the home-screen banner in the theme's banner color instead of the animated RGB gradient. The Terminal (ANSI) preset defaults this to `false` so the banner follows the terminal palette live (pywal etc.); every other preset defaults to `true`. An explicit `banner_gradient:` value in the config wins over the preset default. `plugin_commands:` maps extra keys to Lua plugin commands. See [`examples/config.example.yml`](../examples/config.example.yml) and the [scripting docs](scripting.md).
 
 ## AI DJ and the MCP server
 
@@ -289,7 +289,7 @@ them.
 |---|---|---|---|
 | `mcp_enabled` | `mcp-server` | `false` | Open the local MCP control socket so a coding agent can drive playback |
 | `dj_backend` | `ai-dj` | `agent_cli` | `agent_cli`, `anthropic`, or `openai_compat` |
-| `dj_agent_command` | `ai-dj` | `["claude", "-p"]` | argv for `agent_cli`; a bare binary name expands to a known preset (`claude`, `codex`, `agy`, or the legacy `gemini`) |
+| `dj_agent_command` | `ai-dj` | `["claude", "-p"]` | argv for `agent_cli`; a bare binary name expands to a known preset (`claude`, `codex`, `agy`, `copilot`, `opencode`, or the legacy `gemini`) |
 | `dj_agent_model` | `ai-dj` | unset | Model passed as that CLI's own flag (`claude --model haiku`, `agy --model gemini-3.6-flash-low`); unset passes no flag |
 | `dj_agent_prompt_via` | `ai-dj` | unset (the preset decides) | `stdin` or `arg`. `agy` ignores stdin, so leaving this unset is what keeps it working |
 | `dj_agent_timeout_secs` | `ai-dj` | `90` | Clamped to 5–600 |

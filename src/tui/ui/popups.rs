@@ -535,7 +535,11 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
       // While the queue owns playback the last queued track is the "Now playing"
       // row above, so an "empty" hint would contradict it — omit it there.
       items.push(
-        ListItem::new(Span::raw("Queue is empty — press z on a track to add it")).style(style),
+        ListItem::new(Span::raw(format!(
+          "Queue is empty — press {} on a track to add it",
+          app.user_config.keys.add_item_to_queue
+        )))
+        .style(style),
       );
     }
   } else {
@@ -865,6 +869,36 @@ mod error_screen_tests {
     assert!(
       rendered.contains("--debug"),
       "the debug hint must survive the same squeeze:\n{rendered}"
+    );
+  }
+}
+
+#[cfg(test)]
+mod queue_tests {
+  use super::*;
+  use crate::tui::event::Key;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn empty_queue_hint_names_the_configured_add_key() {
+    let mut app = App::default_connected();
+    app.user_config.keys.add_item_to_queue = Key::Char('a');
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal.draw(|f| draw_queue(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let content: String = (0..20)
+      .flat_map(|y| (0..100).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect();
+
+    assert!(
+      content.contains("press a on a track"),
+      "empty queue hint should name the rebound key: {content}"
+    );
+    assert!(
+      !content.contains("press z"),
+      "empty queue hint must not still show the default key: {content}"
     );
   }
 }

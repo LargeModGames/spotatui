@@ -41,6 +41,15 @@ const hello = (token: string | null) =>
   });
 
 describe("Connection", () => {
+  it("drops an action sent before the hello", () => {
+    const { connection, sockets } = harness("abc");
+    connection.send({ type: "quit" });
+    expect(sockets[0].sent).toEqual([]);
+    sockets[0].handlers.message(hello("t1"));
+    connection.send({ type: "quit" });
+    expect(sockets[0].sent).toEqual([JSON.stringify({ type: "quit" })]);
+  });
+
   it("connects with the launch code and keeps the token from hello", () => {
     const { connection, sockets, storage } = harness("abc");
     sockets[0].handlers.message(hello("t1"));
@@ -85,7 +94,7 @@ describe("Connection", () => {
     expect(connection.getState().expired).toBe(true);
   });
 
-  it("a new connection starts from an empty store", () => {
+  it("a resumed connection keeps the store and stays booted", () => {
     const { connection, sockets, retries } = harness("abc");
     sockets[0].handlers.message(hello("t1"));
     sockets[0].handlers.message(
@@ -94,10 +103,19 @@ describe("Connection", () => {
     sockets[0].handlers.close();
     retries[0]();
     sockets[1].handlers.message(hello(null));
-    sockets[1].handlers.message(
+    const state = connection.getState();
+    expect(state.booted).toBe(true);
+    expect(state.channels.route?.payload).toBe("queue");
+  });
+
+  it("the first route message marks the app booted", () => {
+    const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
+    expect(connection.getState().booted).toBe(false);
+    sockets[0].handlers.message(
       JSON.stringify({ kind: "route", rev: 1, payload: "home" }),
     );
-    expect(connection.getState().channels.route?.payload).toBe("home");
+    expect(connection.getState().booted).toBe(true);
   });
 
   it("an onboarding message replaces the questions on show", () => {
@@ -120,6 +138,7 @@ describe("Connection", () => {
 
   it("an action goes out as a typed client message", () => {
     const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
     connection.send({ type: "action", action: "TogglePlayback" });
     expect(sockets[0].sent).toEqual([
       '{"type":"action","action":"TogglePlayback"}',
@@ -143,19 +162,19 @@ describe("showsOnboarding", () => {
     expired: false,
     channels: {},
     position: null,
+    booted: false,
     onboarding: null,
   };
   const view = { transcript: "", pending: null };
-  const route = { kind: "route" as const, rev: 1, payload: "home" };
 
   it("shows the questions until the app has booted", () => {
     expect(showsOnboarding({ ...base, onboarding: view })).toBe(true);
   });
 
   it("hands over to the player once the app has booted", () => {
-    expect(
-      showsOnboarding({ ...base, onboarding: view, channels: { route } }),
-    ).toBe(false);
+    expect(showsOnboarding({ ...base, onboarding: view, booted: true })).toBe(
+      false,
+    );
   });
 
   it("shows a question asked after boot", () => {
@@ -167,7 +186,7 @@ describe("showsOnboarding", () => {
       showsOnboarding({
         ...base,
         onboarding: { transcript: "", pending },
-        channels: { route },
+        booted: true,
       }),
     ).toBe(true);
   });

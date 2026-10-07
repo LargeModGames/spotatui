@@ -437,7 +437,7 @@ fn copy_url(app: &mut App, copy: Action) {
       }
     }
     PlaybackOwner::None => app.set_status_message(NOTHING_PLAYING_STATUS, 4),
-    PlaybackOwner::Queue | PlaybackOwner::Decoded => {
+    PlaybackOwner::AppleMusic | PlaybackOwner::Queue | PlaybackOwner::Decoded => {
       app.set_status_message("Copy URL needs a Spotify track playing", 4)
     }
   }

@@ -13,14 +13,23 @@ impl Default for App {
       discover_top_tracks: vec![],
       discover_artists_mix: vec![],
       discover_loading: false,
+      discover_top_tracks_range: None,
+      discover_view: DiscoverView::default(),
+      search_liked_view: Vec::new(),
+      source_table_uri: None,
+      track_table_view: TrackTableView::default(),
       stats_period: RecapPeriod::ThirtyDays,
       stats_loading: false,
       stats_data: None,
       listening_streaks: None,
+      session_plays: Vec::new(),
       recap_prompt: None,
       community_pin_item: PlaylistFolderItem::CommunityPin,
       local_playlists: Vec::new(),
       subsonic_playlists: Vec::new(),
+      apple_music: Default::default(),
+      #[cfg(all(feature = "macos-media", target_os = "macos"))]
+      macos_media_manager: None,
       qobuz_playlists: Vec::new(),
       radio_stations: Vec::new(),
       youtube_playlists: Vec::new(),
@@ -126,6 +135,10 @@ impl Default for App {
       keepawake: None,
       last_device_activation: None,
       native_activation_pending: false,
+      #[cfg(feature = "streaming")]
+      native_handed_off: false,
+      #[cfg(feature = "streaming")]
+      native_handoff_resume_tried: false,
       // Sort menu defaults
       playlist_sort: SortState::new(),
       album_sort: SortState::new(),
@@ -288,13 +301,17 @@ impl App {
   pub fn new_with_state(
     io_tx: Sender<IoEvent>,
     user_config: UserConfig,
-    runtime_state: RuntimeState,
+    mut runtime_state: RuntimeState,
     state_path: Option<PathBuf>,
     spotify_token_expiry: Option<SystemTime>,
     spotify_key_tier: SpotifyKeyTier,
   ) -> App {
-    // Read the persisted active source before moving runtime_state into the struct,
-    // so the restored value overrides the Source::default() set by App::default().
+    // A saved Apple Music scope can outlive the build that offered it. Restore
+    // only a source the current picker can select, keeping both mirrors in sync.
+    let sources = Source::picker_sources();
+    if !sources.contains(&runtime_state.active_source) {
+      runtime_state.active_source = sources[0];
+    }
     let active_source = runtime_state.active_source;
     // Same reason: read before the move. The config only seeds the DJ's filter;
     // the toggle owns it from then on.
@@ -367,5 +384,48 @@ impl App {
       },
       ..App::default()
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn app_restoring(source: Source) -> App {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    App::new_with_state(
+      tx,
+      UserConfig::new(),
+      RuntimeState {
+        active_source: source,
+        ..RuntimeState::default()
+      },
+      None,
+      None,
+      SpotifyKeyTier::default(),
+    )
+  }
+
+  #[test]
+  fn saved_source_is_preserved_when_the_current_picker_offers_it() {
+    for &source in Source::picker_sources() {
+      let app = app_restoring(source);
+      assert_eq!(app.active_source, source);
+      assert_eq!(app.runtime_state.active_source, source);
+    }
+  }
+
+  #[cfg(not(all(feature = "apple-music", target_os = "macos")))]
+  #[test]
+  fn saved_apple_music_source_falls_back_when_the_build_cannot_offer_it() {
+    let mut app = app_restoring(Source::AppleMusic);
+    let fallback = Source::picker_sources()[0];
+    assert_eq!(app.active_source, fallback);
+    assert_eq!(app.runtime_state.active_source, fallback);
+    app.open_source_device_picker();
+    assert_eq!(
+      Source::picker_sources()[app.view.source_list_index],
+      fallback
+    );
   }
 }

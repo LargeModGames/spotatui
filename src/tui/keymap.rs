@@ -166,12 +166,7 @@ pub fn help_entries() -> Vec<HelpEntry> {
     ),
     row(
       "Move selection up",
-      Custom(|app| {
-        format!(
-          "{} | <Up Arrow Key> | <Ctrl+p>",
-          app.user_config.keys.move_up
-        )
-      }),
+      Custom(|app| format!("{} | <Up Arrow Key>", app.user_config.keys.move_up)),
       "General",
     ),
     row(
@@ -211,7 +206,7 @@ pub fn help_entries() -> Vec<HelpEntry> {
       "Scroll lyrics (pauses auto-follow)",
       Custom(|app| {
         format!(
-          "{}/{} | <Up>/<Down> | <Ctrl+p>/<Ctrl+n>",
+          "{}/{} | <Up>/<Down> | <Ctrl+n>",
           app.user_config.keys.move_up, app.user_config.keys.move_down
         )
       }),
@@ -363,6 +358,13 @@ pub fn help_entries() -> Vec<HelpEntry> {
       "Search input",
     ),
     row("Delete saved album", Literal("D"), "Library -> Albums").needs(SPOTIFY),
+    row(
+      "Unfollow artist",
+      Literal("D"),
+      "Library -> Artists / Artist page -> Related artists / Search result",
+    )
+    .needs(SPOTIFY),
+    row("Remove saved show", Literal("D"), "Library -> Podcasts").needs(SPOTIFY),
     row("Delete saved playlist", Literal("D"), "Playlist").needs(PLAYLIST_WRITE),
     row(
       "Mirror playlist onto another source",
@@ -375,7 +377,7 @@ pub fn help_entries() -> Vec<HelpEntry> {
     row(
       "Save (like) album to library",
       Literal("w"),
-      "Search result",
+      "Search result / Album tracks / Artist page -> Albums",
     )
     .needs(SPOTIFY),
     row(
@@ -389,6 +391,8 @@ pub fn help_entries() -> Vec<HelpEntry> {
       "Selected Show",
     )
     .needs(SPOTIFY),
+    row("Follow show", Literal("s"), "Selected Show").needs(SPOTIFY),
+    row("Unfollow show", Literal("D"), "Selected Show").needs(SPOTIFY),
     row(
       "Add track to queue",
       Binding(|k| k.add_item_to_queue),
@@ -580,6 +584,8 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::PlayQueueItem { .. } => literal(ENTER, "Queue"),
     Action::RemoveFromQueue { .. } => binding(|k| k.remove_from_queue),
     Action::MoveQueueItem { .. } => literal("J / K", "Queue"),
+    Action::RefreshQueue => Unbound("the terminal refreshes the queue by opening it"),
+    Action::RefreshDevices => Unbound("the terminal fetches devices by opening the device picker"),
     Action::Search(_) => Unbound("the search box is source-scoped and produces SearchActiveSource"),
     Action::SearchActiveSource(_) => literal(ENTER, "Search input"),
     Action::SearchPlaylistTracks { .. } => {
@@ -693,6 +699,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::CopyUrl(CopyTarget::CurrentSong) => binding(|k| k.copy_song_url),
     Action::CopyUrl(CopyTarget::CurrentAlbum) => binding(|k| k.copy_album_url),
     Action::GenerateRecap => binding(|k| k.generate_recap),
+    Action::GenerateStatsRecap => Unbound("the terminal's recap key reads the Stats route"),
     Action::CycleStatsPeriod { .. } => literal("[ / ]", "Stats"),
     Action::RecommendFromTrack(_) => literal("r", "Selected block"),
     Action::RecommendFromArtist { .. } => literal("r", "Selected block"),
@@ -886,16 +893,43 @@ mod tests {
     assert_eq!(row[2], "General");
   }
 
+  #[test]
+  fn the_move_up_row_does_not_offer_the_listening_party_key() {
+    let app = App::default_connected();
+    let party = app.user_config.keys.listening_party.to_string();
+    let row = help_rows(&app)
+      .into_iter()
+      .find(|row| row[0] == "Move selection up")
+      .expect("the move-up row");
+    assert!(!row[1].contains(&party), "{}", row[1]);
+    assert!(row[1].contains("<Up Arrow Key>"));
+  }
+
+  #[test]
+  fn the_lyrics_scroll_row_does_not_offer_the_listening_party_key() {
+    let app = App::default_connected();
+    let party = app.user_config.keys.listening_party.to_string();
+    let row = help_rows(&app)
+      .into_iter()
+      .find(|row| row[0] == "Scroll lyrics (pauses auto-follow)")
+      .expect("the lyrics scroll row");
+    assert!(!row[1].contains(&party), "{}", row[1]);
+    assert!(row[1].contains("<Ctrl+n>"));
+  }
+
   /// The variants no terminal gesture produces, in every build.
   const UNBOUND: &[&str] = &[
     "AddToQueue",
     "Back",
     "CloseScreen",
+    "GenerateStatsRecap",
     "Notify",
     "NotifyError",
     "Pause",
     "Play",
     "QueueTracks",
+    "RefreshDevices",
+    "RefreshQueue",
     "Search",
     "SetDjVibe",
     "SetPlaybarSegment",
@@ -1098,6 +1132,8 @@ mod tests {
         from: 0,
         to: 0,
       },
+      Action::RefreshQueue,
+      Action::RefreshDevices,
       Action::Search(text()),
       Action::SearchActiveSource(text()),
       Action::SearchPlaylistTracks {
@@ -1167,6 +1203,7 @@ mod tests {
       Action::JumpToContext,
       Action::CopyUrl(CopyTarget::CurrentSong),
       Action::GenerateRecap,
+      Action::GenerateStatsRecap,
       Action::CycleStatsPeriod { forward: true },
       Action::RecommendFromTrack(track()),
       Action::RecommendFromArtist {

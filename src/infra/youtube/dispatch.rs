@@ -163,7 +163,10 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> YouTubeSource {
 async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str) {
   let source = build_source(app).await;
   match source.search(query).await {
-    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
+    Ok(results) => app
+      .lock()
+      .await
+      .show_source_search_tracks(query, results.tracks),
     Err(e) => set_error(app, format!("YouTube search failed: {e}")).await,
   }
 }
@@ -238,7 +241,11 @@ async fn load_playlist_tracks(app: &Arc<Mutex<App>>, uri: &str) {
     .map(super::playlists::stored_to_track_info)
     .collect();
   let mut guard = app.lock().await;
-  guard.set_track_table(rows, crate::core::app::TrackTableContext::YouTubePlaylist);
+  guard.set_source_track_table(
+    uri,
+    rows,
+    crate::core::app::TrackTableContext::YouTubePlaylist,
+  );
   guard.youtube_open_playlist = Some(uri.to_string());
 }
 

@@ -59,6 +59,34 @@ pub struct PendingStartPlayback {
 
 impl App {
   #[cfg(feature = "streaming")]
+  pub(crate) fn mark_native_handed_off(&mut self) {
+    self.native_handed_off = true;
+    self.native_handoff_resume_tried = false;
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn clear_native_handoff(&mut self) {
+    self.native_handed_off = false;
+    self.native_handoff_resume_tried = false;
+  }
+
+  /// One sent transfer per handoff: a later resume takes the normal start path.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_handoff_resume_pending(&self) -> bool {
+    self.native_handed_off && !self.native_handoff_resume_tried
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn mark_native_handoff_resume_sent(&mut self) {
+    self.native_handoff_resume_tried = true;
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_handed_off(&self) -> bool {
+    self.native_handed_off
+  }
+
+  #[cfg(feature = "streaming")]
   pub fn request_native_streaming_recovery_if_disconnected(
     &mut self,
     reselect_device: bool,
@@ -202,6 +230,14 @@ impl App {
   /// another owner of the sink. An install ends the park.
   #[cfg(feature = "streaming")]
   pub(crate) fn accept_rebuilt_native_backend(&mut self) -> bool {
+    // A rebuild may have started before Music took over. Park it, so an
+    // explicit Spotify start later reacquires it instead of it resuming now.
+    if self.apple_music_owns_playback() {
+      self.park_native_backend();
+      self.native_parked = true;
+      self.native_backend_pending = false;
+      return false;
+    }
     if self.native_parked && !self.native_should_drive() {
       return false;
     }
@@ -230,6 +266,31 @@ impl App {
         parked_at: Instant::now(),
         recovery_attempts: 0,
       });
+    }
+  }
+
+  /// The configured Spotify startup Play/Pause, sent once deferred native
+  /// init is over (before that, the device transfer had not completed and
+  /// these 404'd onto the Error screen). A start the user parked during init
+  /// is newer, and so is Music started meanwhile: routed now, the pause or
+  /// play would reach Music.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn run_spotify_startup_behavior(
+    &mut self,
+    behavior: Option<crate::core::user_config::StartupBehavior>,
+    shuffle: bool,
+  ) {
+    use crate::core::user_config::StartupBehavior;
+    if self.pending_start_playback.is_some() || self.apple_music_owns_playback() {
+      return;
+    }
+    match behavior {
+      Some(StartupBehavior::Play) => {
+        self.dispatch(IoEvent::Shuffle(shuffle));
+        self.dispatch(IoEvent::StartPlayback(None, None, None));
+      }
+      Some(StartupBehavior::Pause) => self.dispatch(IoEvent::PausePlayback),
+      Some(StartupBehavior::Continue) | None => {}
     }
   }
 
@@ -321,6 +382,20 @@ impl App {
 #[cfg(all(test, feature = "streaming"))]
 mod tests {
   use super::*;
+
+  #[test]
+  fn spotify_startup_play_or_pause_never_reaches_music() {
+    use crate::core::user_config::StartupBehavior;
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.run_spotify_startup_behavior(Some(StartupBehavior::Pause), false);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+    // Music started while Spotify was still starting up: nothing is sent.
+    app.claim_apple_music();
+    app.run_spotify_startup_behavior(Some(StartupBehavior::Pause), false);
+    app.run_spotify_startup_behavior(Some(StartupBehavior::Play), true);
+    assert!(rx.try_recv().is_err());
+  }
 
   #[cfg(feature = "streaming")]
   #[test]
@@ -567,5 +642,37 @@ mod tests {
     app.mark_native_streaming_device_available("device".to_string(), "spotatui".to_string(), 70);
 
     assert_eq!(app.native_is_playing, Some(false));
+  }
+
+  #[test]
+  fn a_handoff_is_marked_until_cleared() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert!(!app.native_handed_off());
+
+    app.mark_native_handed_off();
+    assert!(app.native_handed_off());
+
+    app.clear_native_handoff();
+    assert!(!app.native_handed_off());
+  }
+
+  #[test]
+  fn only_the_first_sent_transfer_after_a_handoff_uses_up_the_resume() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert!(!app.native_handoff_resume_pending());
+
+    app.mark_native_handed_off();
+    // A transfer that could not be sent leaves the resume pending.
+    assert!(app.native_handoff_resume_pending());
+    assert!(app.native_handoff_resume_pending());
+
+    app.mark_native_handoff_resume_sent();
+    assert!(!app.native_handoff_resume_pending());
+    assert!(app.native_handed_off());
+
+    app.mark_native_handed_off();
+    assert!(app.native_handoff_resume_pending());
   }
 }

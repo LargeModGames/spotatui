@@ -76,7 +76,7 @@ pub struct ViewState {
 
   // The `d` device/source picker
   pub selected_device_index: Option<usize>,
-  /// Cursor within the Source panel of the `d` picker (index into [`Source::ALL`]).
+  /// Cursor within the Source panel of the `d` picker (index into [`Source::picker_sources`]).
   pub source_list_index: usize,
   /// Which panel of the `d` picker currently has focus.
   pub source_device_focus: SourceFocus,

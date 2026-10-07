@@ -1,4 +1,5 @@
 # Security Policy
+Security contact: @LargeModGames
 
 ## Supported Versions
 

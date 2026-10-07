@@ -366,6 +366,36 @@ fn persist_native_device_id_if_needed(
 }
 
 #[cfg(feature = "streaming")]
+#[derive(Debug, PartialEq, Eq)]
+enum IdlePollAction {
+  /// Another device took playback over: leave the app state alone (#693).
+  LeaveHandedOff,
+  Register,
+  Reclaim,
+}
+
+#[cfg(feature = "streaming")]
+fn idle_poll_action(
+  handed_off: bool,
+  recovery: &mut NativeIdleRecoveryState,
+  now: Instant,
+) -> IdlePollAction {
+  if handed_off {
+    IdlePollAction::LeaveHandedOff
+  } else if recovery.should_attempt_idle_recovery(now) {
+    IdlePollAction::Reclaim
+  } else {
+    IdlePollAction::Register
+  }
+}
+
+/// A paused external device keeps the resume, like Enter does (#693).
+#[cfg(feature = "streaming")]
+fn handoff_resume_may_pull_back(cached_device_id: Option<&str>, native_device_id: &str) -> bool {
+  cached_device_id.is_none_or(|id| id.is_empty() || id == native_device_id)
+}
+
+#[cfg(feature = "streaming")]
 fn reconcile_native_idle_device_if_preferred(
   client_config: &mut ClientConfig,
   app: &mut App,
@@ -391,10 +421,18 @@ fn reconcile_native_idle_device_if_preferred(
   };
 
   let now = Instant::now();
-  if recovery.should_attempt_idle_recovery(now) {
-    let _ = player.transfer(None);
-    player.activate();
-    app.last_device_activation = Some(now);
+  match idle_poll_action(app.native_handed_off(), recovery, now) {
+    IdlePollAction::LeaveHandedOff => {
+      log::debug!("idle playback poll: native device was handed off; not reclaiming playback");
+      return;
+    }
+    IdlePollAction::Reclaim => {
+      info!("idle playback poll: transferring playback to the native device");
+      let _ = player.transfer(None);
+      player.activate();
+      app.last_device_activation = Some(now);
+    }
+    IdlePollAction::Register => {}
   }
 
   app.mark_native_streaming_device_available(
@@ -1245,6 +1283,7 @@ impl PlaybackNetwork for Network {
 
           if is_native_device {
             app.native_activation_pending = false;
+            app.clear_native_handoff();
           }
         }
 
@@ -1260,6 +1299,8 @@ impl PlaybackNetwork for Network {
         }
       }
       Ok(None) => {
+        #[cfg(feature = "streaming")]
+        app.forget_handed_off_playback();
         #[cfg(feature = "streaming")]
         if let Some(player) = streaming_player.as_ref() {
           reconcile_native_idle_device_if_preferred(
@@ -1462,6 +1503,33 @@ impl PlaybackNetwork for Network {
     if decoded_source_owns_playback(self).await {
       return;
     }
+    // A handed-off device holds no track: a bare resume pulls the last playback
+    // over first, Spirc ignores a transfer once activated (#693).
+    #[cfg(feature = "streaming")]
+    if context_id.is_none() && uris.is_none() {
+      if let Some(player) = current_streaming_player(self).await {
+        let pull_back = {
+          let app = self.app.lock().await;
+          // The handoff teardown cleared `native_device_id`; the player still knows its id.
+          handoff_resume_may_pull_back(app.cached_playback_device_id(), &player.device_id())
+            && app.native_handoff_resume_pending()
+        };
+        // An unsent transfer keeps the resume for the next press.
+        if pull_back && player.transfer_and_play() {
+          info!("resume after handoff: transferring the last playback here");
+          // No idle reclaim later; the poll marks the device active once the transfer lands.
+          self
+            .native_idle_recovery
+            .settle_current_episode(Instant::now());
+          let mut app = self.app.lock().await;
+          app.mark_native_handoff_resume_sent();
+          app.native_device_id = Some(player.device_id());
+          app.set_status_message("Resuming the last playback here\u{2026}", 4);
+          app.dispatch(IoEvent::GetCurrentPlayback);
+          return;
+        }
+      }
+    }
     let (uris, offset) = if context_id.is_none() {
       match uris {
         Some(track_uris) => {
@@ -1560,6 +1628,8 @@ impl PlaybackNetwork for Network {
         .settle_current_episode(activation_time);
       {
         let mut app = self.app.lock().await;
+        // Playing here ends the handoff; a later Space must not transfer again.
+        app.clear_native_handoff();
         app.is_streaming_active = true;
         app.last_device_activation = Some(activation_time);
         app.native_activation_pending = false;
@@ -2041,6 +2111,11 @@ impl PlaybackNetwork for Network {
       app.pending_start_playback = None;
       app.native_load_watchdog = None;
     }
+    // A pause on the Connect route must not leave a deferred play armed (#693).
+    #[cfg(feature = "streaming")]
+    if let Some(player) = current_streaming_player(self).await {
+      player.cancel_play_after_transfer();
+    }
     // Check if using native streaming
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
@@ -2067,6 +2142,11 @@ impl PlaybackNetwork for Network {
       Err(e) => {
         #[cfg(feature = "streaming")]
         if suppressed_transient_native_command_error(self, &e).await {
+          return;
+        }
+        // With no active device nothing plays anywhere, so the pause already holds.
+        if is_no_active_device_error(&e) {
+          info!("pause: no active device, nothing to pause");
           return;
         }
         let mut app = self.app.lock().await;
@@ -2439,6 +2519,7 @@ impl PlaybackNetwork for Network {
       );
       app.is_streaming_active = true;
       app.native_activation_pending = true;
+      app.clear_native_handoff();
       app.native_playback_origin = None;
       app.native_device_id = Some(native_device_id.clone());
       // Drop the stale previous-device context so playback routing follows the
@@ -2941,6 +3022,119 @@ mod tests {
     assert_eq!(saved_device_retry(false, Some("dev1"), false), None);
   }
 
+  #[tokio::test]
+  async fn pause_with_no_active_device_is_not_an_error() {
+    use crate::core::app::{App, RouteId};
+    use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::Mutex;
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        assert!(request.starts_with("PUT /v1/me/player/pause"), "{request}");
+        let body = r#"{"error":{"status":404,"message":"Player command failed: No active device found","reason":"NO_ACTIVE_DEVICE"}}"#;
+        let response = format!(
+          "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let app = Arc::new(Mutex::new(App::new(
+        tx,
+        crate::core::user_config::UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+      let mut network = Network::new(
+        Some(spotify),
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+
+      network.pause_playback().await;
+      server.await.unwrap();
+
+      let app = app.lock().await;
+      assert_eq!(app.api_error(), "");
+      assert_ne!(app.get_current_route().id, RouteId::Error);
+    })
+    .await
+    .expect("pause test timed out");
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn an_empty_poll_after_a_handoff_forgets_the_phone_so_space_can_pull_back() {
+    use crate::core::app::App;
+    use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::Mutex;
+
+    // Generous: every HTTP test shares the API pacing limiter.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let server = tokio::spawn(async move {
+        let phone = r#"{"device":{"id":"phone","is_active":true,"is_private_session":false,"is_restricted":false,"name":"iPhone","type":"Smartphone","volume_percent":50},"repeat_state":"off","shuffle_state":false,"context":null,"timestamp":1700000000000,"progress_ms":0,"is_playing":false,"item":null,"currently_playing_type":"track","actions":{"disallows":{}}}"#;
+        for response in [
+          format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{phone}",
+            phone.len()
+          ),
+          "HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n".to_string(),
+        ] {
+          let (mut stream, _) = listener.accept().await.unwrap();
+          let request = read_http_request(&mut stream).await;
+          assert!(request.starts_with("GET /v1/me/player"), "{request}");
+          stream.write_all(response.as_bytes()).await.unwrap();
+        }
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let app = Arc::new(Mutex::new(App::new(
+        tx,
+        crate::core::user_config::UserConfig::new(),
+        Some(std::time::SystemTime::now()),
+      )));
+      app.lock().await.mark_native_handed_off();
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+      let mut network = Network::new(
+        Some(spotify),
+        crate::core::config::ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+
+      // The paused phone still holds the playback: Space must leave it there.
+      network.get_current_playback().await;
+      {
+        let app = app.lock().await;
+        assert!(!handoff_resume_may_pull_back(
+          app.cached_playback_device_id(),
+          "native"
+        ));
+      }
+
+      // The phone left: Spotify reports no playback, so Space may pull back.
+      network.get_current_playback().await;
+      server.await.unwrap();
+      let app = app.lock().await;
+      assert!(handoff_resume_may_pull_back(
+        app.cached_playback_device_id(),
+        "native"
+      ));
+    })
+    .await
+    .expect("handoff poll test timed out");
+  }
+
   #[allow(deprecated)]
   fn full_track(id: &str, name: &str) -> PlayableItem {
     PlayableItem::Track(FullTrack {
@@ -3272,6 +3466,71 @@ mod tests {
       native_idle_device_preference_update(Some("phone-device"), false),
       None
     );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_leaves_a_handed_off_device_alone() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    let started_at = Instant::now();
+
+    // Each rebuild is a new instance and re-arms the attempts.
+    for instance in 1..=4 {
+      recovery.observe_player_instance(Some(instance));
+      let at = started_at + NATIVE_IDLE_RECOVERY_RETRY_INTERVAL * instance as u32;
+      assert_eq!(
+        idle_poll_action(true, &mut recovery, at),
+        IdlePollAction::LeaveHandedOff
+      );
+    }
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_reclaims_again_once_the_handoff_is_cleared() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    assert_eq!(
+      idle_poll_action(true, &mut recovery, started_at),
+      IdlePollAction::LeaveHandedOff
+    );
+    assert_eq!(
+      idle_poll_action(false, &mut recovery, started_at),
+      IdlePollAction::Reclaim
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn idle_poll_only_registers_once_the_reclaim_attempts_are_spent() {
+    let mut recovery = NativeIdleRecoveryState::default();
+    recovery.observe_player_instance(Some(1));
+    let started_at = Instant::now();
+
+    assert_eq!(
+      idle_poll_action(false, &mut recovery, started_at),
+      IdlePollAction::Reclaim
+    );
+    assert_eq!(
+      idle_poll_action(false, &mut recovery, started_at + Duration::from_millis(1)),
+      IdlePollAction::Register
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_resume_after_handoff_leaves_a_paused_phone_its_playback() {
+    assert!(!handoff_resume_may_pull_back(Some("phone"), "native"));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_resume_after_handoff_pulls_back_when_no_other_device_holds_playback() {
+    assert!(handoff_resume_may_pull_back(None, "native"));
+    assert!(handoff_resume_may_pull_back(Some(""), "native"));
+    assert!(handoff_resume_may_pull_back(Some("native"), "native"));
   }
 
   #[cfg(feature = "streaming")]

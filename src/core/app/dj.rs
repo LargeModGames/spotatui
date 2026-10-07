@@ -38,6 +38,10 @@ impl App {
   #[cfg(feature = "dj-core")]
   #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
   pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> usize {
+    if self.apple_music_owns_playback() {
+      self.set_status_message(crate::core::queue::APPLE_MUSIC_QUEUE_UNSUPPORTED, 4);
+      return 0;
+    }
     let mut accepted = 0usize;
     for track in tracks {
       // Mirror `add_track_to_native_queue`'s rejections so the count we report
@@ -45,7 +49,7 @@ impl App {
       let Some(uri) = track.uri.clone() else {
         continue;
       };
-      if uri.starts_with("radio:") {
+      if uri.starts_with("radio:") || uri.starts_with("applemusic:") {
         continue;
       }
       let before = self.native_queue.len();
@@ -90,8 +94,8 @@ impl App {
   /// Every entry point goes through here so the crawl is never left to the
   /// resolve step. `behavior.dj_avoid_library: true` seeds the toggle without
   /// going through `toggle_dj_fresh_only`, so without this the first turn of such
-  /// a session would crawl inline on the serial IoEvent lane — head-of-line
-  /// blocking every other event behind a few seconds of pagination.
+  /// a session would crawl inline inside its first tool call, holding every
+  /// tool call behind a few seconds of pagination.
   /// Moved verbatim from the terminal DJ handler; reached through
   /// `Action::OpenLibrary(LibraryTarget::AiDj)`.
   #[cfg(feature = "ai-dj")]
@@ -134,7 +138,8 @@ impl App {
   #[cfg(feature = "ai-dj")]
   pub(crate) fn request_dj_library_index(&mut self) {
     if self.dj.avoid_library && self.dj.library.is_none() && !self.dj.library_indexing {
-      self.dispatch(IoEvent::DjIndexLibrary);
+      // The crawl reports its own end; the global spinner would pin for it.
+      self.dispatch_without_spinner(IoEvent::DjIndexLibrary);
     }
   }
 

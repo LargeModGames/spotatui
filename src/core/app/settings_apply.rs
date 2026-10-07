@@ -72,7 +72,7 @@ impl App {
         // Behavior settings
         "behavior.seek_milliseconds" => {
           if let SettingValue::Number(v) = &setting.value {
-            self.user_config.behavior.seek_milliseconds = *v as u32;
+            self.user_config.behavior.seek_milliseconds = (*v).clamp(0, i64::from(u32::MAX)) as u32;
           }
         }
         "behavior.volume_increment" => {
@@ -110,12 +110,14 @@ impl App {
         }
         "behavior.table_scroll_padding" => {
           if let SettingValue::Number(v) = &setting.value {
-            self.user_config.behavior.table_scroll_padding = (*v).max(0) as u16;
+            self.user_config.behavior.table_scroll_padding =
+              (*v).clamp(0, i64::from(u16::MAX)) as u16;
           }
         }
         "behavior.like_animation_frames" => {
           if let SettingValue::Number(v) = &setting.value {
-            self.user_config.behavior.like_animation_frames = (*v).max(1) as u8;
+            self.user_config.behavior.like_animation_frames =
+              (*v).clamp(1, i64::from(u8::MAX)) as u8;
           }
         }
         "behavior.enable_text_emphasis" => {
@@ -206,12 +208,14 @@ impl App {
         }
         "behavior.small_terminal_width" => {
           if let SettingValue::Number(v) = &setting.value {
-            self.user_config.behavior.small_terminal_width = (*v).max(1) as u16;
+            self.user_config.behavior.small_terminal_width =
+              (*v).clamp(1, i64::from(u16::MAX)) as u16;
           }
         }
         "behavior.small_terminal_height" => {
           if let SettingValue::Number(v) = &setting.value {
-            self.user_config.behavior.small_terminal_height = (*v).max(1) as u16;
+            self.user_config.behavior.small_terminal_height =
+              (*v).clamp(1, i64::from(u16::MAX)) as u16;
           }
         }
         "behavior.keepawake_enabled" => {
@@ -287,9 +291,14 @@ impl App {
             self.user_config.behavior.shuffle_icon = v.clone();
           }
         }
-        "behavior.playing_icon" => {
+        "behavior.repeat_track_icon" => {
           if let SettingValue::String(v) = &setting.value {
-            self.user_config.behavior.playing_icon = v.clone();
+            self.user_config.behavior.repeat_track_icon = v.clone();
+          }
+        }
+        "behavior.repeat_context_icon" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.repeat_context_icon = v.clone();
           }
         }
         "behavior.paused_icon" => {
@@ -297,7 +306,8 @@ impl App {
             self.user_config.behavior.paused_icon = v.clone();
           }
         }
-        "behavior.gauge_filled_icon"
+        "behavior.playing_icon"
+        | "behavior.gauge_filled_icon"
         | "behavior.gauge_unfilled_icon"
         | "behavior.episode_played_icon"
         | "behavior.sort_ascending_icon"
@@ -320,6 +330,7 @@ impl App {
                 "behavior.sort_descending_icon" => {
                   self.user_config.behavior.sort_descending_icon = v.clone()
                 }
+                "behavior.playing_icon" => self.user_config.behavior.playing_icon = v.clone(),
                 _ => {}
               }
             } else {
@@ -880,5 +891,79 @@ mod tests {
     )];
     app.apply_settings_changes();
     assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 1);
+  }
+
+  #[test]
+  fn like_animation_frames_above_255_saves_as_255_not_zero() {
+    let mut app = make_app_simple();
+    app.settings_items = vec![setting(
+      "behavior.like_animation_frames",
+      SettingValue::Number(256),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.like_animation_frames, 255);
+
+    app.settings_items = vec![setting(
+      "behavior.like_animation_frames",
+      SettingValue::Number(0),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.like_animation_frames, 1);
+  }
+
+  #[test]
+  fn negative_seek_duration_saves_as_zero() {
+    let mut app = make_app_simple();
+    app.settings_items = vec![setting(
+      "behavior.seek_milliseconds",
+      SettingValue::Number(-1),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.seek_milliseconds, 0);
+  }
+
+  #[test]
+  fn u16_settings_above_their_range_save_as_the_maximum() {
+    let mut app = make_app_simple();
+    app.settings_items = vec![
+      setting("behavior.small_terminal_width", SettingValue::Number(65536)),
+      setting("behavior.table_scroll_padding", SettingValue::Number(65536)),
+    ];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.small_terminal_width, u16::MAX);
+    assert_eq!(app.user_config.behavior.table_scroll_padding, u16::MAX);
+  }
+
+  #[test]
+  fn saving_a_two_cell_playing_icon_keeps_the_default_and_reports_it() {
+    let mut app = make_app_simple();
+    app.settings_items = vec![setting(
+      "behavior.playing_icon",
+      SettingValue::String(">>".into()),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.playing_icon, "▶");
+    assert!(app
+      .status_message()
+      .is_some_and(|message| message.contains("one terminal cell")));
+
+    app.settings_items = vec![setting(
+      "behavior.playing_icon",
+      SettingValue::String(String::new()),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.playing_icon, "▶");
+  }
+
+  #[test]
+  fn saving_a_one_cell_playing_icon_applies_it() {
+    let mut app = make_app_simple();
+    app.settings_items = vec![setting(
+      "behavior.playing_icon",
+      SettingValue::String("»".into()),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.playing_icon, "»");
+    assert_eq!(app.status_message(), None);
   }
 }

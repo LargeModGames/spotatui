@@ -1,0 +1,358 @@
+/* The Session screen: a line of past, now and next, then two lists. */
+.session {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 22px 40px 0;
+  overflow-y: auto;
+  outline: none;
+}
+
+.session button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.session-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.session h1 {
+  margin: 0;
+  font: 400 44px var(--serif);
+}
+
+.session-head > span {
+  font: 11px var(--mono);
+  color: var(--secondary);
+}
+
+.session-head kbd {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.timeline {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px minmax(0, 1fr);
+  gap: 24px;
+  margin-top: 18px;
+  padding-bottom: 18px;
+}
+
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 120px;
+  height: 1px;
+  background: #3a352f;
+}
+
+.lane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lane .eyebrow {
+  letter-spacing: 0.16em;
+}
+
+.lane.now .eyebrow {
+  color: var(--amber);
+}
+
+.lane.upcoming .eyebrow {
+  text-align: right;
+}
+
+.covers {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  /* The past runs up to NOW: an overflow drops the oldest covers, not the newest. */
+  justify-content: flex-end;
+  gap: 16px;
+  min-height: 150px;
+  padding-top: 20px;
+  overflow: hidden;
+}
+
+.lane.upcoming .covers {
+  justify-content: flex-start;
+}
+
+.covers .more {
+  align-self: center;
+  font: 10px/1.5 var(--mono);
+  color: var(--quiet);
+  white-space: nowrap;
+}
+
+.cover-card {
+  display: flex;
+  flex-direction: column;
+  width: 88px;
+  flex-shrink: 0;
+}
+
+.cover-card img,
+.cover-card .tile,
+.now-block img,
+.now-block .tile {
+  display: block;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 10px;
+  object-fit: cover;
+  background: #3b3834;
+}
+
+.cover-card > *:not(img):not(.tile),
+.now-block > b,
+.now-block > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-card b {
+  font-weight: 600;
+}
+
+.cover-card span,
+.now-block span {
+  font-size: 11px;
+  color: var(--secondary);
+}
+
+.now-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.now-block img,
+.now-block .tile {
+  width: 200px;
+  height: 200px;
+  outline: 2px solid var(--amber);
+  outline-offset: 4px;
+}
+
+.now-block b {
+  margin-top: 8px;
+  font: 400 26px/1 var(--serif);
+}
+
+.marker {
+  position: relative;
+  align-self: stretch;
+  width: 0;
+  padding: 0;
+  border: none;
+  border-left: 1px dashed var(--amber);
+  background: transparent;
+}
+
+.marker span {
+  position: absolute;
+  z-index: 1;
+  top: -18px;
+  left: -40px;
+  width: auto;
+  padding: 0 4px;
+  background: var(--ink);
+  font: 10px var(--mono);
+  text-align: center;
+  white-space: nowrap;
+  color: var(--amber);
+}
+
+.marker::after {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 71px;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: var(--amber);
+}
+
+.marker.pause,
+.marker.gap {
+  border-left-color: var(--secondary);
+}
+
+.marker.pause span,
+.marker.gap span {
+  color: var(--secondary);
+}
+
+.marker.pause::after,
+.marker.gap::after {
+  background: var(--ink);
+  border: 1.5px solid var(--secondary);
+}
+
+.marker-dialog {
+  position: absolute;
+  top: 110px;
+  left: 150px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 300px;
+  padding: 12px 14px;
+  background: var(--line);
+  border: 1px solid var(--amber);
+  border-radius: 2px;
+}
+
+.marker-dialog .eyebrow {
+  color: var(--amber);
+}
+
+.marker-dialog button {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--secondary);
+  font: 11px var(--mono);
+}
+
+.session-lists {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 80px;
+}
+
+.session .section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.session h2 {
+  margin: 0;
+  font: 400 24px var(--serif);
+}
+
+.session .section-head kbd {
+  font-size: 11px;
+}
+
+.session ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session ol:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: -1px;
+}
+
+.session li {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: center;
+  height: 30px;
+  border-bottom: 1px solid var(--line);
+}
+
+.session-lists section:last-child li {
+  grid-template-columns: 22px 60px minmax(0, 1fr) auto;
+}
+
+.session li[aria-selected="true"] {
+  background: var(--line);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.session .mirror {
+  opacity: 0.7;
+}
+
+.session .at,
+.session .grip {
+  font: 11px var(--mono);
+  color: var(--quiet);
+}
+
+.session .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session .name b {
+  font-weight: 600;
+}
+
+.session .name span,
+.session .empty {
+  color: var(--secondary);
+}
+
+.session .empty {
+  margin: 8px 0 0;
+}
+
+.session .keys {
+  margin-top: auto;
+  padding: 10px 0;
+  border-top: none;
+}
+
+@media (max-width: 1100px) {
+  .timeline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .timeline::before {
+    display: none;
+  }
+
+  .lane.upcoming .covers {
+    justify-content: flex-start;
+  }
+
+  .session-lists {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}
+
+@media (max-width: 900px) {
+  .session {
+    padding: 16px 16px 0;
+  }
+
+  .now-block img,
+  .now-block .tile {
+    width: 120px;
+    height: 120px;
+  }
+
+  .session-head kbd {
+    display: none;
+  }
+}

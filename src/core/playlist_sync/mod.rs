@@ -60,6 +60,7 @@ pub struct Mirror {
 
 /// A master track the last run could not place on a mirror.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct Unmatched {
   pub master_key: String,
   pub title: String,
@@ -69,6 +70,7 @@ pub struct Unmatched {
 
 /// Why a master track has no mirror track.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum UnmatchReason {
   /// The mirror source returned nothing that is the same recording.
   NoCandidate,

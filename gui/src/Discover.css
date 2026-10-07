@@ -1,0 +1,249 @@
+/* Discover as lists: the picks, then the aside with the list's actions. */
+.discover {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 20px 40px 0;
+}
+
+.discover button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.discover button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.discover-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.discover h1 {
+  margin: 0;
+  font: 400 44px var(--serif);
+}
+
+.discover-head span,
+.discover .empty {
+  color: var(--secondary);
+}
+
+.discover .empty {
+  margin: 16px 0 0;
+}
+
+.discover-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 56px;
+  padding-top: 22px;
+}
+
+.discover-body > section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.discover-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.segmented {
+  display: flex;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+
+.segmented button {
+  height: 32px;
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--secondary);
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--rule);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--text);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.ranges {
+  display: flex;
+  gap: 6px;
+  font: 11px var(--mono);
+}
+
+.ranges button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--soft);
+}
+
+.ranges button[aria-pressed="true"] {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.discover-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.discover-rows:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: -1px;
+}
+
+.pick {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 70px 52px;
+  column-gap: 12px;
+  align-items: center;
+  min-height: 46px;
+  padding: 2px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pick[aria-selected="true"] {
+  background: var(--line);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.pick .n,
+.pick .time {
+  font: 11px var(--mono);
+  color: var(--quiet);
+}
+
+.pick .time {
+  font-size: 12px;
+  color: var(--secondary);
+  text-align: right;
+}
+
+.pick .what {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pick .what > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick .what b {
+  font-weight: 600;
+}
+
+.pick .what span {
+  font-size: 12px;
+  color: var(--secondary);
+}
+
+.pick.now .what b,
+.pick.now .n {
+  color: var(--amber);
+}
+
+.pick .mark {
+  font: 11px var(--mono);
+  color: var(--amber);
+}
+
+.discover aside {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.discover aside .eyebrow {
+  letter-spacing: 0.14em;
+}
+
+.discover h2 {
+  margin: 0;
+  font: 400 30px/1.05 var(--serif);
+}
+
+.discover aside p {
+  margin: 0;
+  color: var(--secondary);
+}
+
+.discover-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.discover-actions button {
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: transparent;
+}
+
+.discover-actions .primary {
+  padding: 0 16px;
+  border: none;
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.discover .keys {
+  padding: 10px 0;
+  border-top: none;
+}
+
+@media (max-width: 1100px) {
+  .discover-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 16px;
+  }
+}
+
+@media (max-width: 900px) {
+  .discover {
+    padding: 16px 16px 0;
+  }
+
+  .pick {
+    grid-template-columns: 30px minmax(0, 1fr) 52px;
+  }
+
+  .pick .mark {
+    display: none;
+  }
+}

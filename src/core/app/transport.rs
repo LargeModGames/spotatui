@@ -61,6 +61,10 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
+    if self.apple_music_owns_playback() {
+      self.toggle_apple_music();
+      return;
+    }
     // The native queue slot owns the sink: toggle its player directly (covers the
     // idle-app case where no per-source context is set).
     #[cfg(feature = "audio-decode-queue")]
@@ -155,6 +159,13 @@ impl App {
       return;
     }
 
+    // A pulled-back playback plays before Spotify confirms this device (#693).
+    #[cfg(feature = "streaming")]
+    if self.native_handed_off() && self.native_is_playing == Some(true) {
+      self.pause_native_playback();
+      return;
+    }
+
     // Use native streaming player for instant control (bypasses event channel latency)
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
@@ -218,6 +229,18 @@ impl App {
   }
 
   pub fn previous_track(&mut self) {
+    if self.apple_music_owns_playback() {
+      if self.apple_music_refuses_while_switching() {
+        return;
+      }
+      // Past the first 3s Music's own previous restarts the track, which
+      // works; earlier, step back in the list the track was started from.
+      let restart = self.apple_music_position_ms() > 3_000 && !self.apple_music_just_stepped();
+      if restart || !self.step_apple_music(false) {
+        self.dispatch(IoEvent::PreviousTrack);
+      }
+      return;
+    }
     info!("playing previous track or restarting current track");
     // A skip drops a waiting start, except one that waits for the rebuild of
     // a parked backend: the skip is refused there.
@@ -290,6 +313,15 @@ impl App {
   }
 
   pub fn force_previous_track(&mut self) {
+    if self.apple_music_owns_playback() {
+      if self.apple_music_refuses_while_switching() {
+        return;
+      }
+      if !self.step_apple_music(false) {
+        self.dispatch(IoEvent::ForcePreviousTrack);
+      }
+      return;
+    }
     info!("force skipping to previous track");
     // A skip drops a waiting start, except one that waits for the rebuild of
     // a parked backend: the skip is refused there.
@@ -340,6 +372,17 @@ impl App {
   }
 
   pub fn next_track(&mut self) {
+    if self.apple_music_owns_playback() {
+      if self.apple_music_refuses_while_switching() {
+        return;
+      }
+      // A track started by itself has no queue in Music, so its own next
+      // does nothing: start the next track of the list spotatui kept.
+      if !self.step_apple_music(true) {
+        self.dispatch(IoEvent::NextTrack);
+      }
+      return;
+    }
     info!("skipping to next track");
     // A skip drops a waiting start, except one that waits for the rebuild of
     // a parked backend: the skip is refused there, unless queued items take
@@ -424,6 +467,15 @@ impl App {
     if uris.is_empty() {
       return;
     }
+    // One Music track at a time: there is no cross-source queue for Apple Music.
+    if uris.iter().all(|uri| uri.starts_with("applemusic:")) {
+      let offset = offset.unwrap_or(0);
+      if let Some(uri) = uris.get(offset) {
+        let occurrence = uris[..offset].iter().filter(|u| *u == uri).count();
+        self.play_apple_music_track_at(uri.clone(), occurrence);
+      }
+      return;
+    }
     self.dispatch(IoEvent::StartPlayback(None, Some(uris), offset));
   }
 
@@ -450,7 +502,7 @@ impl App {
   /// Transfer Spotify playback to a Connect device, refused while another
   /// source owns the sink.
   pub(crate) fn transfer_playback_to_device(&mut self, device_id: String, persist: bool) {
-    if self.active_decoded_source() {
+    if self.apple_music_owns_playback() || self.active_decoded_source() {
       self.set_status_message("Another source owns playback", 4);
       return;
     }
@@ -538,6 +590,36 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn space_pauses_a_pulled_back_playback_before_spotify_confirms_the_device() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.mark_native_handed_off();
+    app.native_is_playing = Some(true);
+
+    app.toggle_playback();
+
+    assert_eq!(app.native_is_playing, Some(false));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn space_after_a_handoff_still_starts_when_nothing_plays_here() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.mark_native_handed_off();
+    app.native_is_playing = Some(false);
+
+    app.toggle_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+  }
 
   /// When the native queue slot owns playback, `next_track` advances the queue
   /// instead of driving the streaming player's own `next`.

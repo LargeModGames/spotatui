@@ -5,26 +5,34 @@ fn sort_playlist_track_matches(matches: &mut [(TrackInfo, usize)], sort_state: S
     return;
   }
 
-  matches.sort_by(|(track_a, position_a), (track_b, position_b)| {
-    let order = match sort_state.field {
-      SortField::Name => track_a.name.cmp(&track_b.name),
-      SortField::Duration => track_a.duration_ms.cmp(&track_b.duration_ms),
-      SortField::Artist => track_a.artists.first().cmp(&track_b.artists.first()),
-      SortField::Album => track_a.album.cmp(&track_b.album),
-      SortField::DateAdded => position_a.cmp(position_b),
-      SortField::Default => std::cmp::Ordering::Equal,
-    };
-
-    if sort_state.order == SortOrder::Descending {
-      order.reverse()
-    } else {
-      order
+  use crate::core::sort::sort_by_key_with_order;
+  match sort_state.field {
+    SortField::Name => {
+      sort_by_key_with_order(matches, sort_state.order, |(t, _)| t.name.to_lowercase())
     }
-  });
+    SortField::Artist => sort_by_key_with_order(matches, sort_state.order, |(t, _)| {
+      t.artists.first().map(|s| s.to_lowercase())
+    }),
+    SortField::Album => {
+      sort_by_key_with_order(matches, sort_state.order, |(t, _)| t.album.to_lowercase())
+    }
+    SortField::Duration => {
+      sort_by_key_with_order(matches, sort_state.order, |(t, _)| t.duration_ms)
+    }
+    SortField::DateAdded => {
+      sort_by_key_with_order(matches, sort_state.order, |(_, position)| *position)
+    }
+    SortField::Default => {}
+  }
 }
 
 impl App {
   pub fn set_playlist_tracks_to_table_continuous(&mut self) {
+    // A late page must not replace the filtered rows; clearing the filter
+    // shows the pages again.
+    if self.is_playlist_track_filter_active() {
+      return;
+    }
     let mut tracks: Vec<TrackInfo> = Vec::new();
     let mut track_ids: Vec<String> = Vec::new();
     let mut positions: Vec<usize> = Vec::new();
@@ -95,6 +103,11 @@ impl App {
   /// Open a decoded source's playlist or folder in the shared track table,
   /// routed by URI scheme. Leaves the Spotify page cache alone.
   pub(crate) fn open_source_playlist_tracks(&mut self, uri: String) {
+    if uri.starts_with("applemusic:") {
+      self.show_tracks_in_table(Vec::new(), TrackTableContext::AppleMusicPlaylist);
+      self.browse_apple_music(crate::infra::apple_music::Browse::Tracks(uri));
+      return;
+    }
     let (context, event) = if uri.starts_with("file:") {
       (
         TrackTableContext::LocalPlaylist,
@@ -120,7 +133,28 @@ impl App {
       return;
     };
     self.dispatch(event);
+    self.source_table_uri = None;
     self.show_tracks_in_table(Vec::new(), context);
+  }
+
+  /// Show the rows of the decoded-source list `uri` in the shared track table.
+  #[cfg_attr(
+    not(any(
+      feature = "local-files",
+      feature = "subsonic",
+      feature = "youtube",
+      feature = "qobuz"
+    )),
+    allow(dead_code)
+  )]
+  pub(crate) fn set_source_track_table(
+    &mut self,
+    uri: &str,
+    tracks: Vec<TrackInfo>,
+    context: TrackTableContext,
+  ) {
+    self.set_track_table(tracks, context);
+    self.source_table_uri = Some(uri.to_string());
   }
 
   /// Show a decoded source's search hits as a songs-only result set with the
@@ -132,7 +166,7 @@ impl App {
     feature = "internet-radio",
     feature = "youtube"
   ))]
-  pub(crate) fn show_source_search_tracks(&mut self, tracks: Vec<TrackInfo>) {
+  pub(crate) fn show_source_search_tracks(&mut self, query: &str, tracks: Vec<TrackInfo>) {
     let total = tracks.len() as u32;
     // No cursor clamp here, unlike set_search_results: the hidden blocks keep
     // their cursors for the next Spotify search, as before.
@@ -142,6 +176,7 @@ impl App {
         total,
         ..Default::default()
       }),
+      query: Some(query.to_string()),
       ..Default::default()
     };
     self.display_revisions.bump(DisplayDomain::Search);
@@ -194,7 +229,7 @@ impl App {
     query: String,
     mut matches: Vec<(TrackInfo, usize)>,
   ) -> bool {
-    if !self.is_playlist_track_table_active_for(playlist_id) {
+    if !self.playlist_track_search_is_current(playlist_id, &query) {
       return false;
     }
 
@@ -209,11 +244,37 @@ impl App {
 
     self.active_playlist_track_filter = Some(query);
     self.pending_playlist_track_search = None;
+    // A row parked for an unfiltered page would land when the filter clears.
+    self.forget_pending_row_selection();
     self.view.track_table_index = 0;
     self.track_table.tracks = tracks;
     self.playlist_track_positions = Some(positions);
     self.dispatch(IoEvent::CurrentUserSavedTracksContains(track_ids));
     true
+  }
+
+  /// Whether the search for `query` still owns this table: a newer submit, a
+  /// clear or another playlist supersedes it.
+  pub(crate) fn playlist_track_search_is_current(
+    &self,
+    playlist_id: &PlaylistId<'_>,
+    query: &str,
+  ) -> bool {
+    self.is_playlist_track_table_active_for(playlist_id)
+      && self.pending_playlist_track_search.as_deref() == Some(query)
+  }
+
+  /// Ends a failed search; false when a newer one owns the table.
+  pub(crate) fn fail_playlist_track_search(
+    &mut self,
+    playlist_id: &PlaylistId<'_>,
+    query: &str,
+  ) -> bool {
+    let current = self.playlist_track_search_is_current(playlist_id, query);
+    if current {
+      self.pending_playlist_track_search = None;
+    }
+    current
   }
 
   pub fn is_playlist_track_table_context(&self) -> bool {
@@ -651,9 +712,105 @@ mod tests {
       _ => panic!("unexpected event"),
     }
 
+    app.pending_playlist_track_search = Some("none".to_string());
     assert!(app.apply_playlist_track_search_results(&playlist_id, "none".to_string(), vec![]));
     assert!(app.track_table.tracks.is_empty());
     assert_eq!(app.playlist_track_positions, Some(vec![]));
+  }
+
+  #[test]
+  fn a_superseded_search_result_is_refused_and_keeps_the_newer_query() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.pending_playlist_track_search = Some("newer".to_string());
+
+    let older = vec![(track_info("0000000000000000000002", "Older"), 1)];
+    assert!(!app.apply_playlist_track_search_results(&playlist_id, "older".to_string(), older));
+    assert!(!app.fail_playlist_track_search(&playlist_id, "older"));
+
+    assert_eq!(app.pending_playlist_track_search.as_deref(), Some("newer"));
+    assert!(app.active_playlist_track_filter.is_none());
+    assert!(app.fail_playlist_track_search(&playlist_id, "newer"));
+    assert!(app.pending_playlist_track_search.is_none());
+  }
+
+  #[test]
+  fn a_late_page_does_not_replace_the_filtered_rows() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.pending_playlist_track_search = Some("match".to_string());
+    app.select_row_when_next_page_lands(1);
+    let matches = vec![(track_info("0000000000000000000002", "Match"), 7)];
+    assert!(app.apply_playlist_track_search_results(&playlist_id, "match".to_string(), matches));
+
+    let page = playlist_page(
+      0,
+      2,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    );
+    app.playlist_track_pages.upsert_page_by_offset(page);
+    app.set_playlist_tracks_to_table_continuous();
+
+    assert_eq!(app.track_table.tracks.len(), 1);
+    assert_eq!(app.playlist_track_positions, Some(vec![7]));
+    app.clear_playlist_track_filter();
+    assert_eq!(app.track_table.tracks.len(), 2);
+    assert_eq!(app.view.track_table_index, 0, "the parked row is dropped");
+  }
+
+  fn sorted_playlist_search_names(order: SortOrder) -> (Vec<String>, Option<Vec<usize>>) {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.playlist_sort = SortState {
+      field: SortField::Name,
+      order,
+    };
+    app.pending_playlist_track_search = Some("fruit".to_string());
+
+    assert!(app.apply_playlist_track_search_results(
+      &playlist_id,
+      "fruit".to_string(),
+      vec![
+        (track_info("0000000000000000000001", "Banana"), 1),
+        (track_info("0000000000000000000002", "apple"), 2),
+        (track_info("0000000000000000000003", "cherry"), 3),
+      ],
+    ));
+
+    let names = app
+      .track_table
+      .tracks
+      .iter()
+      .map(|track| track.name.clone())
+      .collect();
+    (names, app.playlist_track_positions.clone())
+  }
+
+  #[test]
+  fn playlist_search_results_sort_names_ignoring_case() {
+    let (names, positions) = sorted_playlist_search_names(SortOrder::Ascending);
+
+    assert_eq!(names, vec!["apple", "Banana", "cherry"]);
+    assert_eq!(positions, Some(vec![2, 1, 3]));
+  }
+
+  #[test]
+  fn playlist_search_results_sort_names_descending_ignoring_case() {
+    let (names, positions) = sorted_playlist_search_names(SortOrder::Descending);
+
+    assert_eq!(names, vec!["cherry", "Banana", "apple"]);
+    assert_eq!(positions, Some(vec![3, 1, 2]));
   }
 
   #[test]
@@ -745,10 +902,13 @@ mod tests {
     let mut app = App::default();
     let before = app.display_revisions().get(DisplayDomain::Search);
 
-    app.show_source_search_tracks(vec![TrackInfo::from(&full_track(
-      "0000000000000000000001",
-      "Hit",
-    ))]);
+    app.show_source_search_tracks(
+      "q",
+      vec![TrackInfo::from(&full_track(
+        "0000000000000000000001",
+        "Hit",
+      ))],
+    );
 
     assert_eq!(
       app.display_revisions().get(DisplayDomain::Search),

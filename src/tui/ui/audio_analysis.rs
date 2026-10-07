@@ -56,7 +56,11 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     .borders(Borders::ALL)
     .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
 
-  let bar_chart_title = &format!("Spectrum | {} FPS | Press q to exit", 1000 / tick_rate);
+  let bar_chart_title = &format!(
+    "Spectrum | {} FPS | Press {} to exit",
+    1000 / tick_rate,
+    app.user_config.keys.back
+  );
 
   let bar_chart_block = visualizer_block()
     .style(white)
@@ -384,5 +388,31 @@ mod tests {
         "{bars} bars drawn as {drawn} columns overflow width {inner_width}"
       );
     }
+  }
+
+  #[test]
+  fn spectrum_title_names_the_configured_back_key() {
+    use crate::tui::event::Key;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut app = App::default();
+    app.user_config.keys.back = Key::Char('x');
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|f| draw(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let content: String = (0..30)
+      .flat_map(|y| (0..120).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect();
+
+    assert!(
+      content.contains("Press x to exit"),
+      "spectrum title should name the rebound back key: {content}"
+    );
+    assert!(
+      !content.contains("Press q to exit"),
+      "spectrum title must not still show the default key: {content}"
+    );
   }
 }

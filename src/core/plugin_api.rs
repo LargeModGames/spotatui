@@ -96,6 +96,7 @@ pub struct DeviceInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct PlaylistInfo {
   pub uri: String,
   pub name: String,
@@ -130,6 +131,7 @@ pub struct ArtistRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct ArtistInfo {
   pub id: Option<String>,
   pub uri: Option<String>,
@@ -139,6 +141,7 @@ pub struct ArtistInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct AlbumInfo {
   pub id: Option<String>,
   pub uri: Option<String>,
@@ -557,7 +560,10 @@ impl PlaylistInfo {
 /// `current_playback_snapshot` and `app.current_playback_context` are absent).
 pub fn playback_state(app: &App) -> Option<PlaybackState> {
   let snapshot = current_playback_snapshot(app);
-  let context = app.current_playback_context.as_ref();
+  let context = app
+    .current_playback_context
+    .as_ref()
+    .filter(|_| !app.apple_music_owns_playback());
 
   if snapshot.is_none() && context.is_none() {
     return None;
@@ -587,7 +593,17 @@ pub fn playback_state(app: &App) -> Option<PlaybackState> {
       .repeat
       .map(PlaybackState::repeat_from)
       .unwrap_or_else(|| "off".to_string());
-    let device = context.map(|ctx| DeviceInfo::from_rspotify(&ctx.device));
+    let device = if app.apple_music_owns_playback() {
+      Some(DeviceInfo {
+        id: None,
+        name: "Music.app".into(),
+        kind: "computer".into(),
+        is_active: true,
+        volume_percent: Some(app.apple_music_volume()),
+      })
+    } else {
+      context.map(|ctx| DeviceInfo::from_rspotify(&ctx.device))
+    };
     (s.is_playing, s.shuffle, repeat_str, device)
   } else {
     // snapshot is None but context is Some — build from context only

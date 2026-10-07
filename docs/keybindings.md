@@ -20,41 +20,58 @@ one query can be walked across tabs.
 
 ## Default Keybindings
 
-| Key         | Action                    |
-| ----------- | ------------------------- |
-| `Space`     | Toggle play/pause         |
-| `n`         | Next track                |
-| `p`         | Previous track            |
-| `+` / `-`   | Volume up/down            |
-| `<` / `>`   | Seek backward/forward     |
-| `/`         | Search                    |
-| `h`/`j`/`k`/`l` | Navigate (vim-style: left/down/up/right) |
-| `Enter`     | Select / confirm          |
-| `a`         | Jump to album             |
-| `A`         | Jump to artist's albums   |
-| `o`         | Jump to context           |
-| `d`         | Switch music source       |
-| `c`         | Copy song URL             |
-| `C`         | Copy album URL            |
-| `Ctrl-r`    | Toggle repeat mode        |
-| `Ctrl-s`    | Toggle shuffle            |
-| `v`         | Audio visualization       |
-| `z`         | Add to queue              |
-| `Q`         | Show queue                |
-| `F`         | Like / save track         |
-| `B`         | Lyrics view               |
-| `T`         | Toggle miniplayer view    |
-| `R`         | Generate recap            |
-| `Ctrl-p`    | Listening party           |
-| `,`         | Open sort menu            |
-| `Alt-,`     | Open settings (`Ctrl-,` on macOS) |
-| `?`         | Show help                 |
-| `q`         | Go back / Quit            |
-| `Ctrl-j`    | Open the AI DJ (`ai-dj` builds) |
-| `Ctrl-t`    | Toggle DJ auto-queue      |
-| `Ctrl-y`    | DJ vibe shift             |
-| `Ctrl-o`    | DJ fresh tracks only      |
-| `Ctrl-g`    | Choose the DJ's AI/model  |
+Every rebindable action has one row below, with its `keybindings:` config
+key and its default from `UserConfig::new`. The five AI DJ keys live in the
+[AI DJ keys](#ai-dj-keys) table further down.
+
+| Action | Default | Config key |
+|---|---|---|
+| Go back / Quit | `q` | `back` |
+| Navigate up (vim-style) | `k` | `move_up` |
+| Navigate down (vim-style) | `j` | `move_down` |
+| Navigate left (vim-style) | `h` | `move_left` |
+| Navigate right (vim-style) | `l` | `move_right` |
+| Next page | `Ctrl-d` | `next_page` |
+| Previous page | `Ctrl-u` | `previous_page` |
+| Jump to start of list | `Ctrl-a` | `jump_to_start` |
+| Jump to end of list | `Ctrl-e` | `jump_to_end` |
+| Jump to album | `a` | `jump_to_album` |
+| Jump to artist's albums | `A` | `jump_to_artist_album` |
+| Jump to context | `o` | `jump_to_context` |
+| Switch music source / select playback device | `d` | `manage_devices` |
+| Volume down | `-` | `decrease_volume` |
+| Volume up | `+` | `increase_volume` |
+| Toggle play/pause | `Space` | `toggle_playback` |
+| Seek backward | `<` | `seek_backwards` |
+| Seek forward | `>` | `seek_forwards` |
+| Next track | `n` | `next_track` |
+| Previous track | `p` | `previous_track` |
+| Force previous track (skip position restore) | `P` | `force_previous_track` |
+| Show help | `?` | `help` |
+| Toggle shuffle | `Ctrl-s` | `shuffle` |
+| Toggle repeat mode | `Ctrl-r` | `repeat` |
+| Search | `/` | `search` |
+| Confirm (not wired yet — rebinding it has no effect today) | `Enter` | `submit` |
+| Copy song URL | `c` | `copy_song_url` |
+| Copy album URL | `C` | `copy_album_url` |
+| Audio visualization | `v` | `audio_analysis` |
+| Lyrics view (the old name `basic_view` still works) | `B` | `lyrics_view` |
+| Toggle miniplayer view | `T` | `miniplayer_view` |
+| Cover art view (cover-art builds — every released binary; a plain `cargo run` without the feature ignores it) | `G` | `cover_art_view` |
+| Add to queue | `z` | `add_item_to_queue` |
+| Show queue | `Q` | `show_queue` |
+| Remove from queue | `x` | `remove_from_queue` |
+| Open settings (`Ctrl-,` on macOS) | `Alt-,` | `open_settings` |
+| Save settings | `Alt-s` | `save_settings` |
+| Listening party | `Ctrl-p` | `listening_party` |
+| Like / save track | `F` | `like_track` |
+| Generate recap | `R` | `generate_recap` |
+
+A few keys in the help menu are fixed and have no config name: the sort menu
+(`,`), the visualizer style picker (`V`), list jumps `H` / `M` / `L`, the
+layout keys (`{` / `}`, `(` / `)`, `|`), `s` (save the selected track), and
+`w` (add a track to a playlist). They cannot be rebound from
+`config.yml`.
 
 ## Customizing Keybindings
 
@@ -70,20 +87,33 @@ keybindings:
   # ... etc
 ```
 
-The `keybindings:` section rebinds around 40 named actions in total; see
-[`examples/config.example.yml`](../examples/config.example.yml) and
-[`docs/configuration.md`](configuration.md) for the full picture of how the
-config file is structured.
+Every row in the table above is a `keybindings:` entry: the config key names
+the action and the value is its new default. Use the table as the full list of
+rebindable names — 40 actions plus the five AI DJ keys below.
 
 ### Key Format
 
-- Single keys: `"a"`, `"/"`, `" "` (space)
-- With Ctrl: `"ctrl-q"`, `"ctrl-s"`
-- With Alt: `"alt-,"`, `"alt-s"`
-- With Shift: Use capital letter `"A"`, `"C"`
-- Special keys: `"enter"`, `"esc"`, `"tab"`
+- Single keys: `"a"`, `"/"`, `" "` (or `"space"`)
+- With Ctrl: `"ctrl-q"`, `"ctrl-s"`, `"ctrl--"` (Ctrl and the `-` key)
+- With Alt: `"alt-,"`, `"alt-s"`, `"alt--"`
+- With Shift: use the capital letter, `"A"`, `"C"` (Shift is not a modifier of its own)
+- Special keys: `"enter"`, `"tab"`, `"esc"` (or `"escape"`), `"backspace"`,
+  `"del"`, `"left"` / `"right"` / `"up"` / `"down"`, `"pageup"` / `"pagedown"`,
+  `"home"` / `"end"`, `"ins"` (or `"insert"`), and `"f0"` through `"f12"`
+
+All of these names are case-insensitive, so `"ENTER"` and `"enter"` both work.
+A value that is a single character is taken as-is, so `"A"` means Shift+a.
 
 > **Note:** Three-key combinations like `ctrl-alt-q` are not supported.
+
+> **Watch out for `delete` vs `del`:** `"delete"` maps to the **Backspace** key
+> and `"del"` maps to the **Delete** key — the opposite of what most people
+> expect.
+
+If a value cannot be parsed, the binding keeps its default and a warning is
+logged at startup. A name that is not one of the config keys in the table
+above (or the AI DJ keys below) is silently ignored — unknown names produce no
+warning, so check your spelling against the table.
 
 ## AI DJ keys
 

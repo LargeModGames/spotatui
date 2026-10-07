@@ -31,12 +31,16 @@ pub enum TrackTableContext {
   SubsonicPlaylist,
   YouTubePlaylist,
   QobuzPlaylist,
+  AppleMusicPlaylist,
 }
 
 /// The five search result pages. Their cursors and focus are `App.view`'s
 /// `search_*` fields.
 #[derive(Default)]
 pub struct SearchResult {
+  /// The query these results answer; `None` for a search that did not name one.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub query: Option<String>,
   pub albums: Option<crate::core::pagination::Paged<crate::core::plugin_api::AlbumInfo>>,
   pub artists: Option<crate::core::pagination::Paged<crate::core::plugin_api::ArtistInfo>>,
   pub playlists: Option<crate::core::pagination::Paged<crate::core::plugin_api::PlaylistInfo>>,
@@ -50,6 +54,15 @@ pub struct SearchResult {
 pub struct TrackTable {
   pub tracks: Vec<TrackInfo>,
   pub context: Option<TrackTableContext>,
+}
+
+/// The track table as the TrackTable revision last counted it.
+#[derive(Default)]
+pub struct TrackTableView {
+  /// The list the rows belong to; `None` while it loads, or for a table that is not a playlist.
+  pub uri: Option<String>,
+  pub tracks: Vec<TrackInfo>,
+  pub has_more: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -85,6 +98,10 @@ impl App {
 
   /// Show `tracks` in the shared table with the cursor on the top row.
   pub(crate) fn set_track_table(&mut self, tracks: Vec<TrackInfo>, context: TrackTableContext) {
+    // Another list replaced the Music one: its later pages must not land here.
+    if context != TrackTableContext::AppleMusicPlaylist {
+      self.cancel_apple_music_browse();
+    }
     self.track_table.tracks = tracks;
     self.track_table.context = Some(context);
     self.view.track_table_index = 0;
@@ -96,6 +113,73 @@ impl App {
     if self.view.track_table_index > max_index {
       self.view.track_table_index = max_index;
     }
+  }
+
+  /// The Spotify track ids among the search results that are in Liked Songs.
+  pub(crate) fn search_liked_ids(&self) -> Vec<String> {
+    self
+      .search_results
+      .tracks
+      .iter()
+      .flat_map(|page| &page.items)
+      .filter(|track| {
+        track
+          .uri
+          .as_deref()
+          .is_some_and(|uri| uri.starts_with("spotify:track:"))
+      })
+      .filter_map(|track| track.id.clone())
+      .filter(|id| self.liked_song_ids_set.contains(id))
+      .collect()
+  }
+
+  /// Bump Search when the liked marks of its results change; they land after the results.
+  pub(super) fn note_search_liked_changes(&mut self) {
+    let liked = self.search_liked_ids();
+    if liked != self.search_liked_view {
+      self.search_liked_view = liked;
+      self.display_revisions.bump(DisplayDomain::Search);
+    }
+  }
+
+  /// The playlist the track table holds, once its rows landed.
+  fn track_table_uri(&self) -> Option<String> {
+    match self.track_table.context {
+      Some(TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch)
+        if self.pending_playlist_open.is_none() =>
+      {
+        self.playlist_track_table_id.as_ref().map(|id| id.uri())
+      }
+      Some(
+        TrackTableContext::LocalPlaylist
+        | TrackTableContext::SubsonicPlaylist
+        | TrackTableContext::YouTubePlaylist
+        | TrackTableContext::QobuzPlaylist,
+      ) => self.source_table_uri.clone(),
+      _ => None,
+    }
+  }
+
+  /// Bump TrackTable when its rows or their list change; many producers write the table.
+  pub(super) fn note_track_table_changes(&mut self) {
+    let uri = self.track_table_uri();
+    let has_more = self.track_table_has_more_rows();
+    let view = &self.track_table_view;
+    if view.uri == uri && view.has_more == has_more && view.tracks == self.track_table.tracks {
+      return;
+    }
+    self.track_table_view = TrackTableView {
+      uri,
+      tracks: self.track_table.tracks.clone(),
+      has_more,
+    };
+    self.display_revisions.bump(DisplayDomain::TrackTable);
+  }
+
+  /// The track table the TrackTable revision counted.
+  #[cfg(feature = "gui")]
+  pub(crate) fn track_table_view(&self) -> &TrackTableView {
+    &self.track_table_view
   }
 
   pub(crate) fn search_results(&self) -> &SearchResult {

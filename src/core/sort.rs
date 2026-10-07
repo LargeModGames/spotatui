@@ -282,23 +282,25 @@ impl Sorter {
       return;
     }
 
-    tracks.sort_by(|a, b| {
-      let order = match self.state.field {
-        SortField::Name => a.name.cmp(&b.name),
-        SortField::Duration => a.duration_ms.cmp(&b.duration_ms),
-        SortField::Artist => a.artists.first().cmp(&b.artists.first()),
-        SortField::Album => a.album.cmp(&b.album),
-        // DateAdded requires PlaylistItem metadata, which is not carried by
-        // the source-agnostic track snapshot. Preserve playlist order.
-        _ => std::cmp::Ordering::Equal,
-      };
+    // DateAdded requires PlaylistItem metadata, which is not carried by
+    // the source-agnostic track snapshot. Preserve playlist order.
+    if self.state.field == SortField::DateAdded {
+      return;
+    }
 
-      if self.state.order == SortOrder::Descending {
-        order.reverse()
-      } else {
-        order
+    match self.state.field {
+      SortField::Name => {
+        sort_by_key_with_order(tracks, self.state.order, |t| t.name.to_lowercase())
       }
-    });
+      SortField::Artist => sort_by_key_with_order(tracks, self.state.order, |t| {
+        t.artists.first().map(|s| s.to_lowercase())
+      }),
+      SortField::Album => {
+        sort_by_key_with_order(tracks, self.state.order, |t| t.album.to_lowercase())
+      }
+      SortField::Duration => sort_by_key_with_order(tracks, self.state.order, |t| t.duration_ms),
+      _ => {}
+    }
   }
 }
 
@@ -368,5 +370,137 @@ mod tests {
     let fields = SortContext::SavedArtists.available_fields();
     assert!(fields.contains(&SortField::Name));
     assert!(!fields.contains(&SortField::Artist));
+  }
+
+  fn track(name: &str, artist: Option<&str>, album: &str, duration_ms: u64) -> TrackInfo {
+    TrackInfo {
+      uri: None,
+      name: name.to_string(),
+      artists: artist.map(|a| vec![a.to_string()]).unwrap_or_default(),
+      album: album.to_string(),
+      duration_ms,
+      id: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 0,
+      explicit: false,
+      image_url: None,
+    }
+  }
+
+  fn sorted_names(tracks: &[TrackInfo]) -> Vec<&str> {
+    tracks.iter().map(|t| t.name.as_str()).collect()
+  }
+
+  #[test]
+  fn name_sort_ignores_letter_case() {
+    let mut tracks = vec![
+      track("beta", None, "", 0),
+      track("Alpha", None, "", 0),
+      track("gamma", None, "", 0),
+      track("Delta", None, "", 0),
+    ];
+    Sorter::new(SortState {
+      field: SortField::Name,
+      order: SortOrder::Ascending,
+    })
+    .sort_tracks(&mut tracks);
+    assert_eq!(
+      sorted_names(&tracks),
+      vec!["Alpha", "beta", "Delta", "gamma"]
+    );
+  }
+
+  #[test]
+  fn descending_name_sort_ignores_letter_case() {
+    let mut tracks = vec![
+      track("beta", None, "", 0),
+      track("Alpha", None, "", 0),
+      track("gamma", None, "", 0),
+      track("Delta", None, "", 0),
+    ];
+    Sorter::new(SortState {
+      field: SortField::Name,
+      order: SortOrder::Descending,
+    })
+    .sort_tracks(&mut tracks);
+    assert_eq!(
+      sorted_names(&tracks),
+      vec!["gamma", "Delta", "beta", "Alpha"]
+    );
+  }
+
+  #[test]
+  fn artist_sort_ignores_letter_case_and_puts_tracks_without_artists_first() {
+    let mut tracks = vec![
+      track("alt-J track", Some("alt-J"), "", 0),
+      track("Björk track", Some("Björk"), "", 0),
+      track("ABBA track", Some("ABBA"), "", 0),
+      track("no artist", None, "", 0),
+    ];
+    Sorter::new(SortState {
+      field: SortField::Artist,
+      order: SortOrder::Ascending,
+    })
+    .sort_tracks(&mut tracks);
+    assert_eq!(
+      sorted_names(&tracks),
+      vec!["no artist", "ABBA track", "alt-J track", "Björk track"]
+    );
+  }
+
+  #[test]
+  fn album_sort_ignores_letter_case() {
+    let mut tracks = vec![
+      track("t1", None, "Zebra", 0),
+      track("t2", None, "apple", 0),
+      track("t3", None, "Mango", 0),
+    ];
+    Sorter::new(SortState {
+      field: SortField::Album,
+      order: SortOrder::Ascending,
+    })
+    .sort_tracks(&mut tracks);
+    let albums: Vec<&str> = tracks.iter().map(|t| t.album.as_str()).collect();
+    assert_eq!(albums, vec!["apple", "Mango", "Zebra"]);
+  }
+
+  #[test]
+  fn duration_sort_orders_by_length() {
+    let mut tracks = vec![
+      track("long", None, "", 200_000),
+      track("short", None, "", 100_000),
+    ];
+    Sorter::new(SortState {
+      field: SortField::Duration,
+      order: SortOrder::Ascending,
+    })
+    .sort_tracks(&mut tracks);
+    assert_eq!(
+      tracks.iter().map(|t| t.duration_ms).collect::<Vec<_>>(),
+      vec![100_000, 200_000]
+    );
+  }
+
+  #[test]
+  fn date_added_and_default_sorts_keep_playlist_order() {
+    let original = vec![
+      track("b", None, "", 0),
+      track("A", None, "", 0),
+      track("c", None, "", 0),
+    ];
+    for field in [SortField::DateAdded, SortField::Default] {
+      for order in [SortOrder::Ascending, SortOrder::Descending] {
+        let mut tracks = original.clone();
+        Sorter::new(SortState { field, order }).sort_tracks(&mut tracks);
+        assert_eq!(
+          sorted_names(&tracks),
+          vec!["b", "A", "c"],
+          "{field:?} {order:?}"
+        );
+      }
+    }
   }
 }

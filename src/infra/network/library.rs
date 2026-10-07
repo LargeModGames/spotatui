@@ -1,9 +1,9 @@
 use super::mapping::{map_page, playlist_items_page};
 use super::requests::{
-  is_forbidden_error, spotify_api_request_json_for_with_refresh,
-  spotify_get_typed_compat_for_with_refresh,
+  is_forbidden_error, is_not_found_error, is_rate_limited_error,
+  spotify_api_request_json_for_with_refresh, spotify_get_typed_compat_for_with_refresh,
 };
-use super::{IoEvent, Network};
+use super::{with_rate_limit_hint, IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
@@ -53,6 +53,17 @@ const EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS: &str = concat!(
 /// playlist's item URIs, so an unbounded map would grow with every pasted URI.
 const EXTERNAL_PLAYLIST_FALLBACK_CAP: usize = 32;
 
+/// Parallel librespot metadata requests when resolving rootlist-only
+/// playlists; bounded so a large library does not burst the session.
+#[cfg(feature = "streaming")]
+const ROOTLIST_RESOLVE_CONCURRENCY: usize = 8;
+
+/// Overall time limit for resolving rootlist-only playlists. Folders and the
+/// resolved rows publish together, so a hung request must not hold the whole
+/// sidebar back. Playlists that miss it show up on the next refresh.
+#[cfg(feature = "streaming")]
+const ROOTLIST_RESOLVE_BUDGET: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlaylistAccess {
   Owned,
@@ -66,6 +77,17 @@ enum PlaylistAccess {
 /// non-403 failure keeps its real error.
 fn should_attempt_external_fallback(access: PlaylistAccess, forbidden: bool) -> bool {
   forbidden && access == PlaylistAccess::External
+}
+
+/// Owner id Spotify uses for its generated and editorial playlists.
+const SPOTIFY_OWNER_ID: &str = "spotify";
+
+/// Development Mode answers 404, not 403, for the items of a Spotify-owned
+/// playlist (Release Radar, daylist, the Mixes). Treat the 404 as hidden, not
+/// missing, only when the playlist is already known to be Spotify's, e.g. a
+/// sidebar entry resolved from the rootlist. Any other 404 stays a real error.
+fn is_hidden_spotify_owned_playlist(not_found: bool, owner_id: Option<&str>) -> bool {
+  not_found && owner_id == Some(SPOTIFY_OWNER_ID)
 }
 
 /// Next raw-page offset for a converted playlist page, driven by continuation
@@ -396,14 +418,28 @@ async fn fetch_playlist_tracks_page(
     Ok(page) => Ok(PlaylistTracksPage::Api(page)),
     Err(error) => {
       let forbidden = is_forbidden_error(&error);
+      let hidden_spotify_owned = !forbidden && {
+        let app_guard = app.lock().await;
+        is_hidden_spotify_owned_playlist(
+          is_not_found_error(&error),
+          known_playlist_info(&app_guard, playlist_id.id())
+            .and_then(|playlist| playlist.owner_id.as_deref()),
+        )
+      };
       let access = if forbidden {
         classify_playlist_after_forbidden(spotify, app, token_cache_path, playlist_id, fallbacks)
           .await
+      } else if hidden_spotify_owned {
+        log::debug!(
+          "playlist content access: id={} access=External reason=spotify-owned-404",
+          playlist_id.id()
+        );
+        PlaylistAccess::External
       } else {
         PlaylistAccess::Unknown
       };
 
-      if should_attempt_external_fallback(access, forbidden) {
+      if should_attempt_external_fallback(access, forbidden || hidden_spotify_owned) {
         #[cfg(feature = "streaming")]
         match fetch_librespot_playlist_tracks_page(app, fallbacks, playlist_id, offset, limit).await
         {
@@ -715,8 +751,7 @@ pub async fn prefetch_saved_tracks_page_task(
     let domain_page =
       crate::infra::network::mapping::map_page(&page, |st| TrackInfo::from(&st.track));
     app_guard
-      .library_mut()
-      .saved_tracks
+      .saved_tracks_mut()
       .upsert_page_by_offset(domain_page);
     app_guard.set_saved_tracks_to_table_continuous();
     let Some(candidate_next_offset) = next_offset else {
@@ -1092,6 +1127,114 @@ async fn liked_lookup_worker_task(
   }
 }
 
+/// Pages one playlist-track search reads at most: Spotify's playlist limit.
+const PLAYLIST_SEARCH_MAX_PAGES: u32 = 200;
+const PLAYLIST_SEARCH_PAGE_SIZE: u32 = 50;
+
+struct PlaylistTrackSearch {
+  spotify: AuthCodePkceSpotify,
+  app: Arc<Mutex<App>>,
+  token_cache_path: std::path::PathBuf,
+  fallbacks: ExternalPlaylistFallbackCache,
+  client_id: String,
+  playlist_id: PlaylistId<'static>,
+  query: String,
+}
+
+async fn search_playlist_tracks_task(search: PlaylistTrackSearch, terms: Vec<String>) {
+  let PlaylistTrackSearch {
+    spotify,
+    app,
+    token_cache_path,
+    fallbacks,
+    client_id,
+    playlist_id,
+    query,
+  } = search;
+  let mut offset = 0u32;
+  let mut matches: Vec<(TrackInfo, usize)> = Vec::new();
+  let mut capped = false;
+
+  for page_number in 0.. {
+    if !app
+      .lock()
+      .await
+      .playlist_track_search_is_current(&playlist_id, &query)
+    {
+      return;
+    }
+    if page_number == PLAYLIST_SEARCH_MAX_PAGES {
+      capped = true;
+      break;
+    }
+
+    let page = match fetch_playlist_tracks_page(
+      &spotify,
+      &app,
+      &token_cache_path,
+      &playlist_id,
+      offset,
+      PLAYLIST_SEARCH_PAGE_SIZE,
+      &fallbacks,
+    )
+    .await
+    {
+      Ok(page) => page.into_domain(),
+      Err(error) => {
+        let mut app = app.lock().await;
+        if !app.fail_playlist_track_search(&playlist_id, &query) {
+          return;
+        }
+        match error {
+          PlaylistPageError::UnsupportedExternal => {
+            app.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
+          }
+          // A rate limit is a wait, not a failure page: the pump shows it the
+          // same way.
+          PlaylistPageError::Request(error) if is_rate_limited_error(&error) => {
+            app.set_error_status_message(with_rate_limit_hint(error, &client_id).to_string(), 8);
+          }
+          PlaylistPageError::Request(error) => app.handle_error(error),
+        }
+        return;
+      }
+    };
+
+    // See the sort walk: only `next` stops pagination, never the compacted
+    // item count.
+    let next_offset = playlist_page_next_offset(&page, offset);
+    for (position, item) in page.items {
+      if let PlayableInfo::Track(track) = item {
+        if playlist_track_info_matches_terms(&track, &terms) {
+          matches.push((track, position as usize));
+        }
+      }
+    }
+
+    let Some(next_offset) = next_offset else {
+      break;
+    };
+    offset = next_offset;
+  }
+
+  let match_count = matches.len();
+  let mut app = app.lock().await;
+  if app.apply_playlist_track_search_results(&playlist_id, query.clone(), matches) {
+    let scope = if capped {
+      format!(
+        " in the first {} tracks",
+        PLAYLIST_SEARCH_MAX_PAGES * PLAYLIST_SEARCH_PAGE_SIZE
+      )
+    } else {
+      String::new()
+    };
+    app.set_status_message(
+      format!("{match_count} playlist tracks match \"{query}\"{scope}"),
+      3,
+    );
+  }
+}
+
 async fn fetch_all_playlist_tracks_and_sort_task(
   spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
@@ -1264,7 +1407,25 @@ async fn finish_playlists_fetch(
       let app = app.lock().await;
       app.streaming_player.clone()
     };
-    fetch_rootlist_folders(streaming_player).await
+    let nodes = fetch_rootlist_folders(streaming_player.clone()).await;
+    // Spotify-owned playlists (Release Radar, daylist, the Mixes, editorial
+    // lists) sit in the rootlist, but the Development Mode Web API leaves
+    // them out of `me/playlists`. Resolve those rootlist-only ids through the
+    // librespot session so they show up in the sidebar. Their owner is
+    // Spotify, so opening one takes the external-playlist librespot fallback.
+    if let (Some(nodes), Some(player)) = (nodes.as_ref(), streaming_player) {
+      let missing = rootlist_only_playlist_ids(nodes, &all_playlists);
+      if !missing.is_empty() {
+        let resolved = resolve_rootlist_only_playlists(&player.session(), &missing).await;
+        log::debug!(
+          "rootlist-only playlists: {} missing from the Web API, {} resolved via librespot",
+          missing.len(),
+          resolved.len()
+        );
+        all_playlists.extend(resolved);
+      }
+    }
+    nodes
   };
   #[cfg(not(feature = "streaming"))]
   let folder_nodes: Option<Vec<PlaylistFolderNode>> = None;
@@ -1530,62 +1691,18 @@ impl LibraryNetwork for Network {
       return;
     }
 
-    let limit = self.large_search_limit;
-    let mut offset = 0u32;
-    let mut matches: Vec<(TrackInfo, usize)> = Vec::new();
-
-    loop {
-      let page = match fetch_playlist_tracks_page(
-        self.spotify(),
-        &self.app,
-        &self.token_cache_path,
-        &playlist_id,
-        offset,
-        limit,
-        &self.external_playlist_fallbacks,
-      )
-      .await
-      {
-        Ok(page) => page.into_domain(),
-        Err(PlaylistPageError::UnsupportedExternal) => {
-          let mut app = self.app.lock().await;
-          app.pending_playlist_track_search = None;
-          app.set_error_status_message(EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS, 8);
-          return;
-        }
-        Err(PlaylistPageError::Request(error)) => {
-          self.handle_error(error).await;
-          return;
-        }
-      };
-
-      // See the sort walk: only `next` stops pagination, never the compacted
-      // item count.
-      let next_offset = playlist_page_next_offset(&page, offset);
-      for (position, item) in page.items {
-        if let PlayableInfo::Track(track) = item {
-          if playlist_track_info_matches_terms(&track, &terms) {
-            matches.push((track, position as usize));
-          }
-        }
-      }
-
-      let Some(next_offset) = next_offset else {
-        break;
-      };
-      offset = next_offset;
-    }
-
-    let match_count = matches.len();
-    let mut app = self.app.lock().await;
-    if app.apply_playlist_track_search_results(&playlist_id, query.clone(), matches) {
-      app.set_status_message(
-        format!("{match_count} playlist tracks match \"{query}\""),
-        3,
-      );
-    } else {
-      app.pending_playlist_track_search = None;
-    }
+    // Every page pays the pacing floor, so the walk runs detached like the sort
+    // walk; a newer query or another table supersedes it page by page.
+    let search = PlaylistTrackSearch {
+      spotify: self.spotify().clone(),
+      app: Arc::clone(&self.app),
+      token_cache_path: self.token_cache_path.clone(),
+      fallbacks: self.external_playlist_fallbacks.clone(),
+      client_id: self.client_config.client_id.clone(),
+      playlist_id,
+      query,
+    };
+    tokio::spawn(search_playlist_tracks_task(search, terms));
   }
 
   async fn get_current_user_saved_tracks(&mut self, offset: Option<u32>) {
@@ -1621,10 +1738,7 @@ impl LibraryNetwork for Network {
         populate_liked_song_ids_from_saved_tracks(app.liked_song_ids_set_mut(), &saved_tracks);
         let domain_page =
           crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
-        let saved_tracks_index = app
-          .library_mut()
-          .saved_tracks
-          .upsert_page_by_offset(domain_page);
+        let saved_tracks_index = app.saved_tracks_mut().upsert_page_by_offset(domain_page);
         app.set_saved_tracks_to_table_continuous();
         app
           .plugin_data_generations
@@ -2090,6 +2204,88 @@ mod tests {
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
 
+  async fn playlist_search_network(base_url: String, query: &str) -> (Network, Arc<Mutex<App>>) {
+    use crate::core::app::TrackTableContext;
+    use crate::infra::network::metadata::tests::spotify_with_access_token;
+    let mut app = App::default();
+    app.reset_playlist_tracks_view(search_playlist_id(), TrackTableContext::MyPlaylists);
+    app.pending_playlist_track_search = Some(query.to_string());
+    let app = Arc::new(Mutex::new(app));
+    let spotify = spotify_with_access_token("token", base_url).await;
+    let network = Network::new(
+      Some(spotify),
+      crate::core::config::ClientConfig::new(),
+      &app,
+      std::path::PathBuf::new(),
+    );
+    (network, app)
+  }
+
+  fn search_playlist_id() -> PlaylistId<'static> {
+    PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static()
+  }
+
+  #[tokio::test]
+  async fn a_playlist_search_returns_before_its_first_page_lands() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (_stream, _) = listener.accept().await.unwrap();
+      tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+    let (mut network, app) = playlist_search_network(base_url, "song").await;
+
+    tokio::time::timeout(
+      Duration::from_secs(1),
+      network.search_playlist_tracks(search_playlist_id(), "song".to_string()),
+    )
+    .await
+    .expect("the search must not hold the pump");
+
+    assert_eq!(
+      app.lock().await.pending_playlist_track_search.as_deref(),
+      Some("song")
+    );
+    server.abort();
+  }
+
+  #[tokio::test]
+  async fn a_failed_playlist_search_ends_its_pending_query_and_reports_the_error() {
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      let body = r#"{"error":{"status":500,"message":"boom"}}"#;
+      let response = format!(
+        "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    let (mut network, app) = playlist_search_network(base_url, "song").await;
+
+    network
+      .search_playlist_tracks(search_playlist_id(), "song".to_string())
+      .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+      while app.lock().await.pending_playlist_track_search.is_some() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the failed search must end");
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert_eq!(app.get_current_route().id, RouteId::Error);
+    assert!(app.active_playlist_track_filter.is_none());
+  }
+
   #[tokio::test]
   async fn a_completed_playlist_fetch_publishes_the_full_list_under_a_new_library_revision() {
     use crate::core::app::DisplayDomain;
@@ -2388,6 +2584,17 @@ mod tests {
   }
 
   #[test]
+  fn only_a_404_on_a_known_spotify_owned_playlist_counts_as_hidden() {
+    // Release Radar / daylist: the Web API hides them behind a 404.
+    assert!(is_hidden_spotify_owned_playlist(true, Some("spotify")));
+    // A 404 on anyone else's playlist, or an unknown one, is a real miss.
+    assert!(!is_hidden_spotify_owned_playlist(true, Some("someone")));
+    assert!(!is_hidden_spotify_owned_playlist(true, None));
+    // Other failures on a Spotify-owned playlist keep their real error.
+    assert!(!is_hidden_spotify_owned_playlist(false, Some("spotify")));
+  }
+
+  #[test]
   fn playlist_page_next_offset_ignores_compacted_item_count() {
     // A compacted page: zero domain items, but `next` promises more raw
     // slots. Pagination must still advance to the adjacent raw offset.
@@ -2556,6 +2763,151 @@ async fn fetch_rootlist_folders(
 
   let contents = selected.contents.as_ref()?;
   Some(parse_rootlist_items(&contents.items))
+}
+
+/// Playlist ids that appear in the librespot rootlist but not in the Web API
+/// playlist list, in rootlist order, without duplicates. Folders are walked
+/// recursively; non-playlist URIs are ignored.
+#[cfg(feature = "streaming")]
+fn rootlist_only_playlist_ids(
+  nodes: &[PlaylistFolderNode],
+  playlists: &[PlaylistInfo],
+) -> Vec<String> {
+  fn walk(
+    nodes: &[PlaylistFolderNode],
+    known: &HashSet<&str>,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+  ) {
+    for node in nodes {
+      match node.node_type {
+        PlaylistFolderNodeType::Folder => walk(&node.children, known, seen, out),
+        PlaylistFolderNodeType::Playlist => {
+          let Some(id) = node.uri.strip_prefix("spotify:playlist:") else {
+            continue;
+          };
+          if !known.contains(id) && seen.insert(id.to_string()) {
+            out.push(id.to_string());
+          }
+        }
+      }
+    }
+  }
+
+  let known: HashSet<&str> = playlists
+    .iter()
+    .filter_map(|playlist| playlist.id.as_deref())
+    .collect();
+  let mut seen = HashSet::new();
+  let mut out = Vec::new();
+  walk(nodes, &known, &mut seen, &mut out);
+  out
+}
+
+/// Sidebar entry for a playlist resolved through librespot. The owner id is
+/// the Spotify username (`spotify` for generated and editorial playlists),
+/// which is what `playlist_access_from_owner` compares against.
+#[cfg(feature = "streaming")]
+fn rootlist_playlist_info(
+  id: &str,
+  name: &str,
+  owner_username: &str,
+  track_count: u32,
+  collaborative: bool,
+) -> PlaylistInfo {
+  let owner = if owner_username == SPOTIFY_OWNER_ID {
+    "Spotify".to_string()
+  } else {
+    owner_username.to_string()
+  };
+  PlaylistInfo {
+    uri: format!("spotify:playlist:{id}"),
+    name: name.to_string(),
+    owner,
+    track_count,
+    id: Some(id.to_string()),
+    owner_id: Some(owner_username.to_string()),
+    collaborative,
+    public: None,
+    image_url: None,
+  }
+}
+
+/// Resolve rootlist-only playlist ids to sidebar entries via librespot,
+/// preserving input order. Ids that fail to resolve (deleted or region-locked
+/// playlists answer 404) are skipped, and so are ids still pending when
+/// `ROOTLIST_RESOLVE_BUDGET` runs out.
+#[cfg(feature = "streaming")]
+async fn resolve_rootlist_only_playlists(
+  session: &librespot_core::Session,
+  ids: &[String],
+) -> Vec<PlaylistInfo> {
+  use protobuf::Message;
+
+  let lookups = ids.iter().cloned().map(|id| async move {
+    let spotify_id = librespot_core::SpotifyId::from_base62(&id).ok()?;
+    let bytes = match session.spclient().get_playlist(&spotify_id).await {
+      Ok(bytes) => bytes,
+      Err(error) => {
+        log::debug!("rootlist playlist {id} unavailable via librespot: {error}");
+        return None;
+      }
+    };
+    let selected: librespot_protocol::playlist4_external::SelectedListContent =
+      Message::parse_from_bytes(&bytes).ok()?;
+    let attributes = selected.attributes.as_ref();
+    let name = attributes.map(|a| a.name()).unwrap_or_default();
+    if name.is_empty() {
+      return None;
+    }
+    Some(rootlist_playlist_info(
+      &id,
+      name,
+      selected.owner_username(),
+      selected.length().max(0) as u32,
+      attributes.is_some_and(|a| a.collaborative()),
+    ))
+  });
+
+  resolve_within_budget(
+    lookups,
+    ROOTLIST_RESOLVE_CONCURRENCY,
+    ROOTLIST_RESOLVE_BUDGET,
+  )
+  .await
+}
+
+/// Run `lookups` with at most `concurrency` in flight and keep the `Some`
+/// results, in input order. Every lookup shares one deadline `budget` from
+/// now; one still pending when it passes counts as `None`. Lookups complete
+/// out of order, so a slow one never holds a slot the others are waiting on.
+#[cfg(feature = "streaming")]
+async fn resolve_within_budget<T, F>(
+  lookups: impl IntoIterator<Item = F>,
+  concurrency: usize,
+  budget: Duration,
+) -> Vec<T>
+where
+  F: std::future::Future<Output = Option<T>>,
+{
+  use futures::stream::{self, StreamExt};
+
+  let deadline = tokio::time::Instant::now() + budget;
+  let lookups: Vec<F> = lookups.into_iter().collect();
+  let mut resolved: Vec<(usize, T)> = stream::iter(lookups.into_iter().enumerate())
+    .map(|(position, lookup)| async move {
+      let item = tokio::time::timeout_at(deadline, lookup)
+        .await
+        .ok()
+        .flatten()?;
+      Some((position, item))
+    })
+    .buffer_unordered(concurrency.max(1))
+    .filter_map(|item| async move { item })
+    .collect()
+    .await;
+  resolved.sort_unstable_by_key(|(position, _)| *position);
+  resolved.into_iter().map(|(_, item)| item).collect()
 }
 
 fn build_flat_playlist_items(playlists: &[PlaylistInfo]) -> Vec<PlaylistFolderItem> {
@@ -2810,4 +3162,154 @@ fn structurize_playlist_folders(
   }
 
   items
+}
+
+#[cfg(all(test, feature = "streaming"))]
+mod rootlist_only_tests {
+  use super::*;
+  use crate::core::test_helpers::playlist_info;
+
+  fn playlist_node(id: &str) -> PlaylistFolderNode {
+    PlaylistFolderNode {
+      name: None,
+      node_type: PlaylistFolderNodeType::Playlist,
+      uri: format!("spotify:playlist:{id}"),
+      children: Vec::new(),
+    }
+  }
+
+  fn folder_node(id: &str, children: Vec<PlaylistFolderNode>) -> PlaylistFolderNode {
+    PlaylistFolderNode {
+      name: Some(format!("folder {id}")),
+      node_type: PlaylistFolderNodeType::Folder,
+      uri: format!("spotify:folder:{id}"),
+      children,
+    }
+  }
+
+  #[test]
+  fn rootlist_ids_missing_from_the_web_api_are_returned_in_rootlist_order() {
+    let nodes = vec![
+      playlist_node("37i9dQZEVXbe5af5Lkta9S"),
+      playlist_node("00000000000000000000p1"),
+      folder_node("f1", vec![playlist_node("37i9dQZF1EP6YuccBxUcC1")]),
+    ];
+    let known = vec![playlist_info("00000000000000000000p1", "Mine", "me", false)];
+
+    assert_eq!(
+      rootlist_only_playlist_ids(&nodes, &known),
+      vec!["37i9dQZEVXbe5af5Lkta9S", "37i9dQZF1EP6YuccBxUcC1"]
+    );
+  }
+
+  #[test]
+  fn rootlist_ids_already_listed_by_the_web_api_are_not_duplicated() {
+    let nodes = vec![
+      playlist_node("00000000000000000000p1"),
+      playlist_node("00000000000000000000p2"),
+    ];
+    let known = vec![
+      playlist_info("00000000000000000000p1", "One", "me", false),
+      playlist_info("00000000000000000000p2", "Two", "friend", false),
+    ];
+
+    assert!(rootlist_only_playlist_ids(&nodes, &known).is_empty());
+  }
+
+  #[test]
+  fn a_rootlist_id_repeated_across_folders_is_resolved_once() {
+    let nodes = vec![
+      playlist_node("37i9dQZEVXbe5af5Lkta9S"),
+      folder_node("f1", vec![playlist_node("37i9dQZEVXbe5af5Lkta9S")]),
+      PlaylistFolderNode {
+        name: None,
+        node_type: PlaylistFolderNodeType::Playlist,
+        uri: "spotify:collection".to_string(),
+        children: Vec::new(),
+      },
+    ];
+
+    assert_eq!(
+      rootlist_only_playlist_ids(&nodes, &[]),
+      vec!["37i9dQZEVXbe5af5Lkta9S"]
+    );
+  }
+
+  #[test]
+  fn a_spotify_owned_rootlist_playlist_is_classified_external() {
+    let info = rootlist_playlist_info(
+      "37i9dQZEVXbe5af5Lkta9S",
+      "Release Radar",
+      "spotify",
+      29,
+      false,
+    );
+
+    assert_eq!(info.owner, "Spotify");
+    assert_eq!(info.owner_id.as_deref(), Some("spotify"));
+    assert_eq!(info.uri, "spotify:playlist:37i9dQZEVXbe5af5Lkta9S");
+    assert_eq!(info.track_count, 29);
+    assert_eq!(
+      playlist_access_from_owner(Some("me"), info.owner_id.as_deref()),
+      PlaylistAccess::External
+    );
+  }
+
+  #[tokio::test]
+  async fn lookups_past_the_budget_are_dropped_and_the_rest_keep_their_order() {
+    // 0 and 3 finish, 1 hangs past the budget, 2 fails.
+    let lookups = [(20u64, true), (10_000, true), (0, false), (0, true)]
+      .into_iter()
+      .enumerate()
+      .map(|(index, (delay, ok))| async move {
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+        ok.then_some(index)
+      });
+
+    let started = std::time::Instant::now();
+    let resolved = resolve_within_budget(lookups, 8, Duration::from_millis(200)).await;
+
+    assert_eq!(resolved, vec![0, 3]);
+    assert!(started.elapsed() < Duration::from_secs(5));
+  }
+
+  #[tokio::test]
+  async fn a_hung_lookup_does_not_stop_the_ones_queued_behind_it() {
+    // Only 2 run at a time and the first never finishes in time.
+    let lookups = (0..6).map(|index| async move {
+      let delay = if index == 0 { 10_000 } else { 10 };
+      tokio::time::sleep(Duration::from_millis(delay)).await;
+      Some(index)
+    });
+
+    let resolved = resolve_within_budget(lookups, 2, Duration::from_millis(500)).await;
+
+    assert_eq!(resolved, vec![1, 2, 3, 4, 5]);
+  }
+
+  #[test]
+  fn resolved_rootlist_playlists_take_their_rootlist_position_in_the_sidebar() {
+    let nodes = vec![
+      playlist_node("37i9dQZEVXbe5af5Lkta9S"),
+      playlist_node("00000000000000000000p1"),
+    ];
+    let mut playlists = vec![playlist_info("00000000000000000000p1", "Mine", "me", false)];
+    playlists.push(rootlist_playlist_info(
+      "37i9dQZEVXbe5af5Lkta9S",
+      "Release Radar",
+      "spotify",
+      29,
+      false,
+    ));
+
+    let items = structurize_playlist_folders(&nodes, &playlists);
+    let order: Vec<&str> = items
+      .iter()
+      .filter_map(|item| match item {
+        PlaylistFolderItem::Playlist { index, .. } => Some(playlists[*index].name.as_str()),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(order, vec!["Release Radar", "Mine"]);
+  }
 }

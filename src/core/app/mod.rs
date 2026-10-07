@@ -6,13 +6,15 @@ use crate::core::plugin_api::{
   ArtistInfo, EpisodeInfo, PlayableInfo, PlaylistInfo, SavedAlbumInfo, ShowInfo, TrackInfo,
 };
 use crate::core::requirement::{availability, Availability, Capability, Requirement};
-use crate::core::sort::{SortContext, SortField, SortOrder, SortState};
+use crate::core::sort::{SortContext, SortField, SortState};
 use crate::core::source::Source;
 use crate::core::spotify_access::{RestrictedEndpoint, SpotifyKeyTier};
 use crate::core::state::{
   PersistedRuntimeState, RadioStationAddOutcome, RadioStationConfig, RuntimeState,
 };
-use crate::core::user_config::{color_to_string, normalize_tick_rate_milliseconds, UserConfig};
+use crate::core::user_config::{
+  color_to_string, key_to_config_string, normalize_tick_rate_milliseconds, UserConfig,
+};
 use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
 use crate::infra::network::sync::{ControlMode, PartySession, PartyStatus};
 use crate::infra::network::IoEvent;
@@ -56,6 +58,8 @@ use rspotify::model::{
 use crate::infra::queue::RepeatMode;
 
 #[cfg(test)]
+use crate::core::sort::SortOrder;
+#[cfg(test)]
 use crate::core::test_helpers::{playlist_info, user_info};
 #[cfg(test)]
 use chrono::Duration as ChronoDuration;
@@ -70,6 +74,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::channel;
 
 mod album_theme;
+mod apple_music;
 mod construction;
 mod discover;
 mod display_revisions;
@@ -99,6 +104,7 @@ mod recap;
 mod route;
 mod scrollable_pages;
 mod seek;
+mod session;
 mod settings_apply;
 mod settings_schema;
 mod shuffle_repeat;
@@ -133,6 +139,7 @@ pub use queue::*;
 pub use route::*;
 pub use scrollable_pages::*;
 pub use seek::*;
+pub use session::*;
 pub use settings_schema::*;
 pub use status::*;
 pub use view::*;
@@ -295,6 +302,13 @@ pub struct App {
   /// The user's Subsonic server playlists shown by the Subsonic browser.
   /// Populated by `GetSubsonicPlaylists` dispatch.
   subsonic_playlists: Vec<PlaylistInfo>,
+  /// The Music.app remote: whether it owns playback, the handoff generation
+  /// and the last status it reported.
+  apple_music: crate::infra::apple_music::RemoteState,
+  /// Lets an Apple Music claim withdraw spotatui's own Now Playing entry, so
+  /// Music's is the only one.
+  #[cfg(all(feature = "macos-media", target_os = "macos"))]
+  macos_media_manager: Option<Arc<crate::infra::macos_media::MacMediaManager>>,
   /// The Qobuz sidebar rows (favorites, playlists, albums) shown by the Qobuz
   /// browser. Populated by `GetQobuzPlaylists` dispatch.
   qobuz_playlists: Vec<PlaylistInfo>,
@@ -380,20 +394,36 @@ pub struct App {
   /// Whether a native device activation is still in progress
   #[allow(dead_code)]
   pub native_activation_pending: bool,
+  /// Another device took playback over; the idle poll must not reclaim it (#693)
+  #[cfg(feature = "streaming")]
+  native_handed_off: bool,
+  /// A bare resume already tried to pull the handed-off playback back
+  #[cfg(feature = "streaming")]
+  native_handoff_resume_tried: bool,
   /// Top tracks from the user for Discover feature
   pub discover_top_tracks: Vec<TrackInfo>,
   /// Top Artists Mix tracks for Discover feature
   pub discover_artists_mix: Vec<TrackInfo>,
   /// Whether we're currently loading discover data
   pub discover_loading: bool,
+  /// The range `discover_top_tracks` belongs to; `None` before a landing or after a terminal clear.
+  discover_top_tracks_range: Option<DiscoverTimeRange>,
+  discover_view: DiscoverView,
+  /// The liked marks the Search revision last counted.
+  search_liked_view: Vec<String>,
+  /// The decoded-source list whose rows landed in the track table.
+  source_table_uri: Option<String>,
+  track_table_view: TrackTableView,
   /// Period shown on the Stats screen
   pub stats_period: RecapPeriod,
   /// Whether we're currently loading stats data
-  pub stats_loading: bool,
+  stats_loading: bool,
   /// Aggregated listening stats for the Stats screen
   pub stats_data: Option<StatsData>,
   /// Cached listening streak summary (Home strip + Stats screen)
   pub listening_streaks: Option<StreakSummary>,
+  /// The plays finished since this process started, oldest first.
+  session_plays: Vec<SessionPlay>,
   /// Pending monthly recap popup (path + listen count)
   recap_prompt: Option<RecapPromptState>,
   /// Current sort state per context
@@ -641,7 +671,8 @@ impl App {
   /// spinner until the service-lane task finishes — the exact UX bug
   /// `DjState::thinking` exists to avoid, and the reason the MCP executor sends
   /// straight down the channel instead of dispatching.
-  #[cfg(feature = "ai-dj")]
+  /// The Apple Music worker also uses it for the handoff it sends back to the
+  /// pump, which is not a user-visible load.
   pub fn dispatch_without_spinner(&self, action: IoEvent) {
     if let Some(io_tx) = &self.io_tx {
       if let Err(e) = io_tx.send(action) {

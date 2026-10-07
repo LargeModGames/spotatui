@@ -168,26 +168,6 @@ pub struct SettingItem {
 impl App {
   /// Load settings for the current category into settings_items
   pub fn load_settings_for_category(&mut self) {
-    // Helper to convert Key to displayable string
-    fn key_to_string(key: &Key) -> String {
-      match key {
-        Key::Char(c) => c.to_string(),
-        Key::Ctrl(c) => format!("ctrl-{}", c),
-        Key::Alt(c) => format!("alt-{}", c),
-        Key::Enter => "enter".to_string(),
-        Key::Esc => "esc".to_string(),
-        Key::Backspace => "backspace".to_string(),
-        Key::Delete => "del".to_string(),
-        Key::Left => "left".to_string(),
-        Key::Right => "right".to_string(),
-        Key::Up => "up".to_string(),
-        Key::Down => "down".to_string(),
-        Key::PageUp => "pageup".to_string(),
-        Key::PageDown => "pagedown".to_string(),
-        _ => "unknown".to_string(),
-      }
-    }
-
     self.settings_items = match self.view.settings_category {
       SettingsCategory::Behavior => vec![
         SettingItem {
@@ -530,9 +510,21 @@ impl App {
           value: SettingValue::String(self.user_config.behavior.shuffle_icon.clone()),
         },
         SettingItem {
+          id: "behavior.repeat_track_icon".to_string(),
+          name: "Repeat Track Icon".to_string(),
+          description: "Icon for repeating the current track".to_string(),
+          value: SettingValue::String(self.user_config.behavior.repeat_track_icon.clone()),
+        },
+        SettingItem {
+          id: "behavior.repeat_context_icon".to_string(),
+          name: "Repeat Context Icon".to_string(),
+          description: "Icon for repeating the playlist or album".to_string(),
+          value: SettingValue::String(self.user_config.behavior.repeat_context_icon.clone()),
+        },
+        SettingItem {
           id: "behavior.playing_icon".to_string(),
           name: "Playing Icon".to_string(),
-          description: "Icon for playing state".to_string(),
+          description: "Single-cell icon for the playing row".to_string(),
           value: SettingValue::String(self.user_config.behavior.playing_icon.clone()),
         },
         SettingItem {
@@ -589,176 +581,176 @@ impl App {
           id: "keys.back".to_string(),
           name: "Back".to_string(),
           description: "Go back / quit".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.back)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.back)),
         },
         SettingItem {
           id: "keys.move_up".to_string(),
           name: "Move Up".to_string(),
           description: "Move selection up".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_up)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.move_up)),
         },
         SettingItem {
           id: "keys.move_down".to_string(),
           name: "Move Down".to_string(),
           description: "Move selection down".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_down)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.move_down)),
         },
         SettingItem {
           id: "keys.move_left".to_string(),
           name: "Move Left".to_string(),
           description: "Move selection left".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_left)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.move_left)),
         },
         SettingItem {
           id: "keys.move_right".to_string(),
           name: "Move Right".to_string(),
           description: "Move selection right".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.move_right)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.move_right)),
         },
         SettingItem {
           id: "keys.next_page".to_string(),
           name: "Next Page".to_string(),
           description: "Navigate to next page".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.next_page)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.next_page)),
         },
         SettingItem {
           id: "keys.previous_page".to_string(),
           name: "Previous Page".to_string(),
           description: "Navigate to previous page".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.previous_page)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.previous_page)),
         },
         SettingItem {
           id: "keys.toggle_playback".to_string(),
           name: "Toggle Playback".to_string(),
           description: "Play/pause".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.toggle_playback)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.toggle_playback)),
         },
         SettingItem {
           id: "keys.seek_backwards".to_string(),
           name: "Seek Backwards".to_string(),
           description: "Seek backwards in track".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.seek_backwards)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.seek_backwards)),
         },
         SettingItem {
           id: "keys.seek_forwards".to_string(),
           name: "Seek Forwards".to_string(),
           description: "Seek forwards in track".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.seek_forwards)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.seek_forwards)),
         },
         SettingItem {
           id: "keys.next_track".to_string(),
           name: "Next Track".to_string(),
           description: "Skip to next track".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.next_track)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.next_track)),
         },
         SettingItem {
           id: "keys.previous_track".to_string(),
           name: "Previous Track".to_string(),
           description: "Go to previous track".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.previous_track)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.previous_track)),
         },
         SettingItem {
           id: "keys.force_previous_track".to_string(),
           name: "Force Previous Track".to_string(),
           description: "Always skip to the previous track (ignoring playback position)".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.force_previous_track)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.force_previous_track)),
         },
         SettingItem {
           id: "keys.shuffle".to_string(),
           name: "Shuffle".to_string(),
           description: "Toggle shuffle mode".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.shuffle)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.shuffle)),
         },
         SettingItem {
           id: "keys.repeat".to_string(),
           name: "Repeat".to_string(),
           description: "Cycle repeat mode".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.repeat)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.repeat)),
         },
         SettingItem {
           id: "keys.search".to_string(),
           name: "Search".to_string(),
           description: "Open search".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.search)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.search)),
         },
         SettingItem {
           id: "keys.help".to_string(),
           name: "Help".to_string(),
           description: "Show help menu".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.help)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.help)),
         },
         SettingItem {
           id: "keys.open_settings".to_string(),
           name: "Open Settings".to_string(),
           description: "Open settings menu".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.open_settings)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.open_settings)),
         },
         SettingItem {
           id: "keys.save_settings".to_string(),
           name: "Save Settings".to_string(),
           description: "Save settings to file".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.save_settings)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.save_settings)),
         },
         SettingItem {
           id: "keys.jump_to_album".to_string(),
           name: "Jump to Album".to_string(),
           description: "Jump to currently playing album".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.jump_to_album)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.jump_to_album)),
         },
         SettingItem {
           id: "keys.jump_to_artist_album".to_string(),
           name: "Jump to Artist".to_string(),
           description: "Jump to artist's albums".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.jump_to_artist_album)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.jump_to_artist_album)),
         },
         SettingItem {
           id: "keys.jump_to_context".to_string(),
           name: "Jump to Context".to_string(),
           description: "Jump to current playback context".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.jump_to_context)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.jump_to_context)),
         },
         SettingItem {
           id: "keys.manage_devices".to_string(),
           name: "Switch Music Source".to_string(),
           description: "Open the source and device picker".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.manage_devices)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.manage_devices)),
         },
         SettingItem {
           id: "keys.decrease_volume".to_string(),
           name: "Decrease Volume".to_string(),
           description: "Decrease playback volume".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.decrease_volume)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.decrease_volume)),
         },
         SettingItem {
           id: "keys.increase_volume".to_string(),
           name: "Increase Volume".to_string(),
           description: "Increase playback volume".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.increase_volume)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.increase_volume)),
         },
         SettingItem {
           id: "keys.add_item_to_queue".to_string(),
           name: "Add to Queue".to_string(),
           description: "Add selected item to queue".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.add_item_to_queue)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.add_item_to_queue)),
         },
         SettingItem {
           id: "keys.show_queue".to_string(),
           name: "Show Queue".to_string(),
           description: "Show playback queue".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.show_queue)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.show_queue)),
         },
         SettingItem {
           id: "keys.remove_from_queue".to_string(),
           name: "Remove from Queue".to_string(),
           description: "Remove the selected track from the queue".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.remove_from_queue)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.remove_from_queue)),
         },
         SettingItem {
           id: "keys.like_track".to_string(),
           name: "Like Track".to_string(),
           description: "Toggle saved state for the currently playing track or episode"
             .to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.like_track)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.like_track)),
         },
         SettingItem {
           id: "keys.generate_recap".to_string(),
@@ -766,44 +758,44 @@ impl App {
           description:
             "Generate and open the listening recap HTML card (uses the selected period on the Stats screen, 30 days elsewhere)"
               .to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.generate_recap)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.generate_recap)),
         },
         SettingItem {
           id: "keys.copy_song_url".to_string(),
           name: "Copy Song URL".to_string(),
           description: "Copy current song URL to clipboard".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.copy_song_url)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.copy_song_url)),
         },
         SettingItem {
           id: "keys.copy_album_url".to_string(),
           name: "Copy Album URL".to_string(),
           description: "Copy current album URL to clipboard".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.copy_album_url)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.copy_album_url)),
         },
         SettingItem {
           id: "keys.audio_analysis".to_string(),
           name: "Audio Analysis".to_string(),
           description: "Open audio analysis view".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.audio_analysis)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.audio_analysis)),
         },
         SettingItem {
           id: "keys.lyrics_view".to_string(),
           name: "Lyrics View".to_string(),
           description: "Open lyrics view".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.lyrics_view)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.lyrics_view)),
         },
         SettingItem {
           id: "keys.miniplayer_view".to_string(),
           name: "Miniplayer View".to_string(),
           description: "Toggle full-screen playbar view".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.miniplayer_view)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.miniplayer_view)),
         },
         #[cfg(feature = "cover-art")]
         SettingItem {
           id: "keys.cover_art_view".to_string(),
           name: "Cover Art View".to_string(),
           description: "Open full-screen cover art view".to_string(),
-          value: SettingValue::Key(key_to_string(&self.user_config.keys.cover_art_view)),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.cover_art_view)),
         },
       ],
       SettingsCategory::Theme => {
@@ -1004,6 +996,86 @@ impl App {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn the_icons_tab_edits_both_repeat_icons() {
+    let mut app = App::default();
+    app.view.settings_category = SettingsCategory::Icons;
+    app.load_settings_for_category();
+    for (id, value) in [
+      ("behavior.repeat_track_icon", "R1"),
+      ("behavior.repeat_context_icon", "RA"),
+    ] {
+      let item = app
+        .settings_items
+        .iter_mut()
+        .find(|item| item.id == id)
+        .unwrap_or_else(|| panic!("{id} row"));
+      item.value = SettingValue::String(value.to_string());
+    }
+
+    app.apply_settings_changes();
+
+    assert_eq!(app.user_config.behavior.repeat_track_icon, "R1");
+    assert_eq!(app.user_config.behavior.repeat_context_icon, "RA");
+  }
+
+  fn keybinding_rows_with_f5_help_and_home_search() -> App {
+    let mut app = App::default();
+    app.user_config.keys.help = Key::F5;
+    app.user_config.keys.search = Key::Home;
+    app.view.settings_category = SettingsCategory::Keybindings;
+    app.load_settings_for_category();
+    app
+  }
+
+  fn key_row(app: &App, id: &str) -> SettingValue {
+    app
+      .settings_items
+      .iter()
+      .find(|item| item.id == id)
+      .unwrap_or_else(|| panic!("{id} row"))
+      .value
+      .clone()
+  }
+
+  #[test]
+  fn keybinding_rows_spell_keys_the_way_config_yml_does() {
+    let app = keybinding_rows_with_f5_help_and_home_search();
+    assert_eq!(
+      key_row(&app, "keys.help"),
+      SettingValue::Key("f5".to_string())
+    );
+    assert_eq!(
+      key_row(&app, "keys.search"),
+      SettingValue::Key("home".to_string())
+    );
+    assert_eq!(
+      key_row(&app, "keys.toggle_playback"),
+      SettingValue::Key("space".to_string())
+    );
+  }
+
+  #[test]
+  fn every_key_row_parses_back_as_a_key() {
+    let app = keybinding_rows_with_f5_help_and_home_search();
+    let key_rows: Vec<_> = app
+      .settings_items
+      .iter()
+      .filter(|item| item.id.starts_with("keys."))
+      .collect();
+    assert!(!key_rows.is_empty());
+    for item in key_rows {
+      let SettingValue::Key(text) = &item.value else {
+        panic!("{} is not a key row", item.id);
+      };
+      assert!(
+        crate::core::user_config::parse_key_public(text.clone()).is_ok(),
+        "{} shows {text:?}, which does not parse",
+        item.id
+      );
+    }
+  }
 
   #[test]
   fn startup_screen_setting_cycle_offers_every_startup_route() {

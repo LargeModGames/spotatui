@@ -82,13 +82,11 @@ impl From<event::KeyEvent> for Key {
         ..
       } => Key::Ctrl(c),
 
-      // Terminals using the kitty keyboard protocol send Shift+letter as lowercase
-      // char with SHIFT modifier; normalise to uppercase so Key::Char('P') works.
       event::KeyEvent {
         code: event::KeyCode::Char(c),
         modifiers: event::KeyModifiers::SHIFT,
         ..
-      } if c.is_ascii_lowercase() => Key::Char(c.to_ascii_uppercase()),
+      } => Key::Char(shifted_char(c, cfg!(windows))),
 
       event::KeyEvent {
         code: event::KeyCode::Char(c),
@@ -97,5 +95,46 @@ impl From<event::KeyEvent> for Key {
 
       _ => Key::Unknown,
     }
+  }
+}
+
+/// Apply Shift casing unless the input source has already done so.
+fn shifted_char(c: char, shift_already_applied: bool) -> char {
+  if shift_already_applied || !c.is_lowercase() {
+    return c;
+  }
+
+  let mut upper = c.to_uppercase();
+  match (upper.next(), upper.next()) {
+    (Some(u), None) => u,
+    _ => c,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  #[test]
+  fn shifted_char_uppercases_lowercase_when_shift_is_not_applied() {
+    assert_eq!(shifted_char('p', false), 'P');
+    assert_eq!(shifted_char('ö', false), 'Ö');
+    assert_eq!(shifted_char('é', false), 'É');
+  }
+
+  #[test]
+  fn shifted_char_preserves_multi_char_uppercase() {
+    assert_eq!(shifted_char('ß', false), 'ß');
+  }
+
+  #[test]
+  fn shifted_char_preserves_console_resolved_casing() {
+    assert_eq!(shifted_char('a', true), 'a');
+    assert_eq!(shifted_char('ö', true), 'ö');
+    assert_eq!(shifted_char('A', true), 'A');
+  }
+
+  #[test]
+  fn shifted_char_preserves_already_uppercase_input() {
+    assert_eq!(shifted_char('Ö', false), 'Ö');
   }
 }

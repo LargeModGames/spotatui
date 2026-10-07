@@ -48,7 +48,10 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // active source instead of Spotify playlists (no write, so no "Add Playlist").
   if app.active_source == Source::Local {
     let items: Vec<String> = if app.local_playlists().is_empty() {
-      vec!["(no folders \u{2014} set music dir, then press `d`)".to_string()]
+      vec![format!(
+        "(no folders \u{2014} set music dir, then press `{}`)",
+        app.user_config.keys.manage_devices
+      )]
     } else {
       app
         .local_playlists()
@@ -68,11 +71,41 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     return;
   }
 
+  // Apple Music: "All songs" first, then the Music playlists, each opening
+  // the shared track table. Read-only, so no "Add Playlist".
+  if app.active_source == Source::AppleMusic {
+    let items: Vec<String> = if app.apple_music_playlists().is_empty() {
+      vec![format!(
+        "(press `{}`, pick Apple Music to load your library)",
+        app.user_config.keys.manage_devices
+      )]
+    } else {
+      app
+        .apple_music_playlists()
+        .iter()
+        .map(|p| format!("\u{1F3B5} {}", p.name))
+        .collect()
+    };
+    draw_selectable_list(
+      f,
+      app,
+      layout_chunk,
+      "Apple Music",
+      &items,
+      highlight_state,
+      app.view.selected_playlist_index,
+    );
+    return;
+  }
+
   // Subsonic: the sidebar Playlists panel lists the server's playlists (no
   // local-write support, so no "Add Playlist").
   if app.active_source == Source::Subsonic {
     let items: Vec<String> = if app.subsonic_playlists().is_empty() {
-      vec!["(no playlists \u{2014} configure server, then press `d`)".to_string()]
+      vec![format!(
+        "(no playlists \u{2014} configure server, then press `{}`)",
+        app.user_config.keys.manage_devices
+      )]
     } else {
       app
         .subsonic_playlists()
@@ -96,7 +129,10 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // playlists, and the favorite albums, each opening the shared track table.
   if app.active_source == Source::Qobuz {
     let items: Vec<String> = if app.qobuz_playlists().is_empty() {
-      vec!["(not logged in \u{2014} press `d`, pick Qobuz)".to_string()]
+      vec![format!(
+        "(not logged in \u{2014} press `{}`, pick Qobuz)",
+        app.user_config.keys.manage_devices
+      )]
     } else {
       app
         .qobuz_playlists()
@@ -239,6 +275,7 @@ pub fn draw_user_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
 mod tests {
   use super::*;
   use crate::core::plugin_api::PlaylistInfo;
+  use crate::tui::event::Key;
   use ratatui::{backend::TestBackend, Terminal};
 
   fn rendered(app: &App, area: Rect) -> String {
@@ -286,6 +323,23 @@ mod tests {
     assert!(
       !content.contains("Liked Songs"),
       "Spotify library entries must be hidden under Local: {content}"
+    );
+  }
+
+  #[test]
+  fn empty_local_sidebar_names_the_configured_source_key() {
+    let mut app = App::default_connected();
+    app.active_source = Source::Local;
+    app.user_config.keys.manage_devices = Key::Char('D');
+    // 60 columns: the 32-column tests above cut this hint off.
+    let content = rendered(&app, Rect::new(0, 0, 60, 40));
+    assert!(
+      content.contains("press `D`"),
+      "empty Local hint should name the rebound key: {content}"
+    );
+    assert!(
+      !content.contains("press `d`"),
+      "empty Local hint must not still show the default key: {content}"
     );
   }
 

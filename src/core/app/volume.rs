@@ -27,6 +27,11 @@ impl App {
   }
 
   pub fn flush_pending_volume(&mut self) {
+    // Music has its own coalescing state; discard any Spotify volume request.
+    if self.apple_music_owns_playback() {
+      self.cancel_volume_change();
+      return;
+    }
     if self.pending_volume.is_some() && self.playback_owner() == PlaybackOwner::None {
       self.pending_volume = None;
       return;
@@ -61,6 +66,9 @@ impl App {
   /// see the percentage jump back to the old value for a split second before
   /// correcting — especially noticeable when spamming volume up/down.
   pub fn desired_volume(&self) -> u32 {
+    if self.apple_music_owns_playback() {
+      return self.apple_music_volume().into();
+    }
     // A decoded owner's volume is the one its setters wrote; the pending value
     // and the Spotify device volume both describe the other player.
     if self.active_decoded_source() {
@@ -84,6 +92,10 @@ impl App {
   /// volume keys, so Lua actions behave identically to keypresses.
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
   pub fn set_volume_percent(&mut self, volume: u8) {
+    if self.apple_music_owns_playback() {
+      self.set_apple_music_volume(volume);
+      return;
+    }
     let next_volume = volume.min(100);
     let current_volume = self.desired_volume() as u8;
 
@@ -131,6 +143,14 @@ impl App {
   /// Bump volume up. Uses `desired_volume()` as the base so rapid presses
   /// don't accidentally calculate from a stale API value.
   pub fn increase_volume(&mut self) {
+    if self.apple_music_owns_playback() {
+      self.set_apple_music_volume(
+        self
+          .apple_music_volume()
+          .saturating_add(self.user_config.behavior.volume_increment),
+      );
+      return;
+    }
     let current_volume = self.desired_volume() as u8;
     let next_volume = min(
       current_volume + self.user_config.behavior.volume_increment,
@@ -181,6 +201,14 @@ impl App {
   /// Bump volume down. Uses `desired_volume()` as the base so rapid presses
   /// don't accidentally calculate from a stale API value.
   pub fn decrease_volume(&mut self) {
+    if self.apple_music_owns_playback() {
+      self.set_apple_music_volume(
+        self
+          .apple_music_volume()
+          .saturating_sub(self.user_config.behavior.volume_increment),
+      );
+      return;
+    }
     let current_volume = self.desired_volume() as i8;
     let next_volume = max(
       current_volume - self.user_config.behavior.volume_increment as i8,

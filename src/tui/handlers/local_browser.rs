@@ -47,11 +47,30 @@ pub fn handler(key: Key, app: &mut App) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::app::{ActiveBlock, RouteId};
   use crate::core::test_helpers::playlist_info;
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
+
+  #[test]
+  fn right_from_sidebar_refocuses_local_files_content() {
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
+
+    handler(Key::Left, &mut app);
+    super::common_key_events::handle_right_event(&mut app);
+
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::LocalBrowser
+    );
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::LocalBrowser
+    );
+  }
 
   #[test]
   fn enter_opens_the_selected_folder_by_its_source_uri() {

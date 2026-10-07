@@ -1,5 +1,6 @@
 use crate::core::action::{Action, ActionOutcome};
 use crate::core::app::{App, SettingValue, SettingsCategory};
+use crate::core::user_config::key_to_config_string;
 use crate::tui::event::Key;
 use crate::tui::handlers::common_key_events::{
   down_event, left_event, on_down_press_handler, on_up_press_handler, right_event, up_event,
@@ -263,6 +264,15 @@ fn handle_string_edit(key: Key, app: &mut App) {
           }
         }
 
+        let automatic_dither = setting.id == "theme.cover_art_dither_color"
+          && (new_value.trim().is_empty() || new_value.trim().eq_ignore_ascii_case("auto"));
+        if matches!(setting.value, SettingValue::Color(_)) && !automatic_dither {
+          if let Err(e) = crate::core::user_config::parse_theme_item(&new_value) {
+            app.handle_error(anyhow::anyhow!("Invalid color: {}", e));
+            return;
+          }
+        }
+
         let is_color_edit = matches!(setting.value, SettingValue::Color(_))
           && setting.id != "theme.cover_art_dither_color";
         match &setting.value {
@@ -382,44 +392,6 @@ fn handle_key_edit(key: Key, app: &mut App) {
       app.view.settings_edit_mode = false;
       app.view.settings_edit_buffer.clear();
     }
-  }
-}
-
-/// Convert a Key to its config file string representation
-fn key_to_config_string(key: &Key) -> String {
-  match key {
-    Key::Char(c) if *c == ' ' => "space".to_string(),
-    Key::Char(c) => c.to_string(),
-    Key::Ctrl(c) => format!("ctrl-{}", c),
-    Key::Alt(c) => format!("alt-{}", c),
-    Key::Enter => "enter".to_string(),
-    Key::Esc => "esc".to_string(),
-    Key::Backspace => "backspace".to_string(),
-    Key::Delete => "del".to_string(),
-    Key::Left => "left".to_string(),
-    Key::Right => "right".to_string(),
-    Key::Up => "up".to_string(),
-    Key::Down => "down".to_string(),
-    Key::PageUp => "pageup".to_string(),
-    Key::PageDown => "pagedown".to_string(),
-    Key::Home => "home".to_string(),
-    Key::End => "end".to_string(),
-    Key::Tab => "tab".to_string(),
-    Key::Ins => "ins".to_string(),
-    Key::F0 => "f0".to_string(),
-    Key::F1 => "f1".to_string(),
-    Key::F2 => "f2".to_string(),
-    Key::F3 => "f3".to_string(),
-    Key::F4 => "f4".to_string(),
-    Key::F5 => "f5".to_string(),
-    Key::F6 => "f6".to_string(),
-    Key::F7 => "f7".to_string(),
-    Key::F8 => "f8".to_string(),
-    Key::F9 => "f9".to_string(),
-    Key::F10 => "f10".to_string(),
-    Key::F11 => "f11".to_string(),
-    Key::F12 => "f12".to_string(),
-    Key::Unknown => "unknown".to_string(),
   }
 }
 
@@ -614,6 +586,34 @@ mod tests {
   }
 
   #[test]
+  fn capturing_a_key_already_bound_elsewhere_is_refused_after_a_reload() {
+    let mut app = App::default();
+    app.view.settings_category = SettingsCategory::Keybindings;
+    open_settings(&mut app);
+
+    app.view.settings_selected_index = setting_index(&app, "keys.help");
+    handler(Key::Enter, &mut app);
+    handler(Key::F5, &mut app);
+    app.apply_settings_changes();
+    reload_category(&mut app);
+
+    let search = setting_index(&app, "keys.search");
+    app.view.settings_selected_index = search;
+    handler(Key::Enter, &mut app);
+    handler(Key::F5, &mut app);
+
+    assert_eq!(
+      app.settings_items[search].value,
+      SettingValue::Key("/".to_string())
+    );
+    assert!(
+      app.api_error().contains("already assigned to Help"),
+      "{}",
+      app.api_error()
+    );
+  }
+
+  #[test]
   fn cycling_preset_to_terminal_turns_banner_gradient_setting_off() {
     let mut app = App::default();
     app.view.settings_category = SettingsCategory::Theme;
@@ -676,6 +676,50 @@ mod tests {
     handler(Key::Enter, &mut app);
     app.apply_settings_changes();
     assert_eq!(app.user_config.cover_art_dither_color, None);
+  }
+
+  #[test]
+  fn an_unknown_color_name_is_refused_and_keeps_the_preset() {
+    use crate::core::user_config::ThemePreset;
+
+    for invalid in ["blue", "#1e1e2e", "255, 0", "1, 2, 3, 4", ""] {
+      let mut app = App::default();
+      app.view.settings_category = SettingsCategory::Theme;
+      open_settings(&mut app);
+      let hint = setting_index(&app, "theme.hint");
+      let original = app.settings_items[hint].value.clone();
+      app.view.settings_selected_index = hint;
+      handler(Key::Enter, &mut app);
+      app.view.settings_edit_buffer = invalid.into();
+      handler(Key::Enter, &mut app);
+
+      assert_eq!(app.settings_items[hint].value, original, "{invalid:?}");
+      assert_eq!(
+        app.settings_items[setting_index(&app, "theme.preset")].value,
+        SettingValue::Preset(ThemePreset::Default.name().into())
+      );
+      assert_eq!(app.get_current_route().id, RouteId::Error);
+      assert!(app.api_error().contains("Invalid color"));
+    }
+  }
+
+  #[test]
+  fn a_valid_color_edit_switches_to_custom_and_applies_the_color() {
+    use crate::core::theme::Color;
+    use crate::core::user_config::ThemePreset;
+
+    let mut app = App::default();
+    app.view.settings_category = SettingsCategory::Theme;
+    open_settings(&mut app);
+    app.view.settings_selected_index = setting_index(&app, "theme.hint");
+    handler(Key::Enter, &mut app);
+    app.view.settings_edit_buffer = "1, 2, 3".into();
+    handler(Key::Enter, &mut app);
+    app.apply_settings_changes();
+
+    assert_eq!(app.user_config.current_preset, ThemePreset::Custom);
+    assert_eq!(app.user_config.theme.hint, Color::Rgb(1, 2, 3));
+    assert_eq!(app.get_current_route().id, RouteId::Settings);
   }
 
   #[cfg(feature = "cover-art")]

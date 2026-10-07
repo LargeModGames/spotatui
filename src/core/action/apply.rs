@@ -22,6 +22,10 @@ impl App {
 
   fn apply_action(&mut self, action: Action) -> ActionOutcome {
     match action {
+      // Music's state is its own intent, which a start still loading has
+      // before any snapshot does.
+      Action::Play if self.apple_music_owns_playback() => self.set_apple_music_playing(true),
+      Action::Pause if self.apple_music_owns_playback() => self.set_apple_music_playing(false),
       Action::Play => {
         if !effective_is_playing(self) {
           self.toggle_playback();
@@ -78,6 +82,8 @@ impl App {
       Action::MoveQueueItem { uri, from, to } => {
         self.move_queue_item(&uri, from, to);
       }
+      Action::RefreshQueue => self.dispatch_without_spinner(IoEvent::GetQueue),
+      Action::RefreshDevices => self.dispatch_without_spinner(IoEvent::GetDevicesSilent),
       Action::Search(query) => {
         let country = self.get_user_country();
         self.dispatch(IoEvent::GetSearchResults(query, country));
@@ -94,6 +100,9 @@ impl App {
         }
         crate::core::source::Source::Qobuz => {
           self.dispatch(IoEvent::GetQobuzSearchResults(query));
+        }
+        crate::core::source::Source::AppleMusic => {
+          self.browse_apple_music(crate::infra::apple_music::Browse::Search(query));
         }
         // Spotify and Local both land on the Web API search, exactly like
         // the search input's if-chain (which has no Local branch).
@@ -233,6 +242,7 @@ impl App {
         super::CopyTarget::CurrentAlbum => self.copy_album_url(),
       },
       Action::GenerateRecap => self.generate_recap(),
+      Action::GenerateStatsRecap => self.generate_stats_recap(),
       Action::CycleStatsPeriod { forward } => self.cycle_stats_period(forward),
       Action::RecommendFromTrack(track) => self.load_recommendations_for_track(track),
       Action::RecommendFromArtist { id, name } => self.load_recommendations_for_artist(id, name),

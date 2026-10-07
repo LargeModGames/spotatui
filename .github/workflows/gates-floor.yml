@@ -1,0 +1,99 @@
+name: Gates floor
+
+# Raises the two adoption floors in tools/gates.count (test_attribute_total,
+# action_refs_in_tui_handlers) to the measured values after each push to main,
+# so a PR that adds tests never edits the file. The build runs with no write
+# token in reach; the commit job mints the spotatui[bot] token only after a
+# fresh checkout. The app needs Contents write access and a bypass entry on the
+# "Protect main" ruleset.
+
+on:
+  push:
+    branches: [main]
+    # The bot commit touches only this file, so it does not start another run.
+    paths-ignore:
+      - tools/gates.count
+
+permissions:
+  contents: read
+
+# A newer push cancels the older run: the newer run measures the newest main,
+# and the older run would only be rejected as non-fast-forward at the push.
+concurrency:
+  group: gates-floor
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      sha: ${{ steps.result.outputs.sha }}
+      counts: ${{ steps.result.outputs.counts }}
+    env:
+      RUSTFLAGS: "-C linker-features=-lld"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Measure the counters and raise the floors
+        env:
+          GATES_BLESS: "1"
+        run: cargo test --locked --no-default-features --features telemetry,tui --lib gates::ratchet_counters_match_the_checked_in_baselines
+      - id: result
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "counts=$(base64 -w0 tools/gates.count)" >> "$GITHUB_OUTPUT"
+
+  commit:
+    needs: measure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.measure.outputs.sha }}
+          persist-credentials: false
+      - name: Apply the measured floors
+        id: apply
+        env:
+          COUNTS: ${{ needs.measure.outputs.counts }}
+        run: |
+          printf '%s' "$COUNTS" | base64 -d > tools/gates.count
+          if git diff --quiet; then
+            echo "The floors are current."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff
+          bash tools/check_gates_ratchet.sh HEAD
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Mint spotatui[bot] token (contents:write only)
+        if: steps.apply.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SPOTATUI_APP_ID }}
+          private-key: ${{ secrets.SPOTATUI_APP_KEY }}
+          permission-contents: write
+      - name: Commit and push
+        if: steps.apply.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SLUG: ${{ steps.app-token.outputs.app-slug }}
+          REPO: ${{ github.repository }}
+        run: |
+          bot_id=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${bot_id}+${SLUG}[bot]@users.noreply.github.com"
+          git commit -m "chore(gates): raise the adoption floors [skip ci]" -- tools/gates.count
+          # A non-fast-forward rejection means main moved during the run: the
+          # run for the newer commit raises the floors instead.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" HEAD:main

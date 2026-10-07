@@ -7,16 +7,14 @@ use crate::core::banner::BANNER;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::Network;
 use anyhow::{anyhow, Context, Result};
-use clap::{Arg, ArgMatches, Command as ClapApp};
+use clap::{builder::PossibleValue, Arg, ArgMatches, Command as ClapApp};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(super) fn boot_options(matches: &ArgMatches) -> BootOptions {
   BootOptions {
     config_path: matches.get_one::<String>("config").map(PathBuf::from),
-    tick_rate: matches
-      .get_one::<String>("tick-rate")
-      .and_then(|tick_rate| tick_rate.parse().ok()),
+    tick_rate: matches.get_one::<u64>("tick-rate").copied(),
     subcommand: matches.subcommand_name().map(str::to_owned),
     reconfigure_auth: matches.get_flag("reconfigure-auth"),
     play_file: matches.get_one::<String>("play-file").cloned(),
@@ -44,6 +42,7 @@ pub(super) fn build_clap_app() -> ClapApp {
       Arg::new("tick-rate")
         .short('t')
         .long("tick-rate")
+        .value_parser(clap::value_parser!(u64))
         .help("Set the normal UI tick rate in milliseconds.")
         .long_help(
           "Specify the normal UI tick rate in milliseconds. Lower values refresh non-animated \
@@ -72,7 +71,13 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       Arg::new("completions")
         .long("completions")
         .help("Generates completions for your preferred shell")
-        .value_parser(["bash", "zsh", "fish", "power-shell", "elvish"])
+        .value_parser([
+          PossibleValue::new("bash"),
+          PossibleValue::new("zsh"),
+          PossibleValue::new("fish"),
+          PossibleValue::new("powershell").alias("power-shell"),
+          PossibleValue::new("elvish"),
+        ])
         .value_name("SHELL"),
     )
     .arg(
@@ -360,6 +365,58 @@ mod tests {
       help.contains("country"),
       "the long help must name what trace adds to the log:\n{help}"
     );
+  }
+
+  #[test]
+  fn tick_rate_flag_rejects_invalid_values() {
+    for bad in ["fast", "250ms", "1.5", "-5"] {
+      let err = build_clap_app()
+        .try_get_matches_from(["spotatui", &format!("--tick-rate={bad}")])
+        .expect_err("invalid tick-rate must be rejected at parse time");
+      assert!(
+        err.to_string().contains("tick-rate"),
+        "error must name the flag: {err}"
+      );
+    }
+  }
+
+  #[test]
+  fn out_of_range_tick_rate_still_reaches_boot_options() {
+    // The 1..=999 range check stays in `bootstrap.rs`, shared with `config.yml`
+    // loading, so an out-of-range value must still parse here and reach boot.
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "-t", "5000"])
+      .expect("out-of-range tick-rate must parse; the range check lives in bootstrap");
+    assert_eq!(boot_options(&matches).tick_rate, Some(5000));
+  }
+
+  #[test]
+  fn completions_accepts_powershell() {
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "--completions", "powershell"])
+      .unwrap();
+    assert_eq!(
+      matches.get_one::<String>("completions").map(String::as_str),
+      Some("powershell")
+    );
+  }
+
+  #[test]
+  fn completions_still_accepts_the_old_power_shell_spelling() {
+    let matches = build_clap_app()
+      .try_get_matches_from(["spotatui", "--completions", "power-shell"])
+      .unwrap();
+    assert_eq!(
+      matches.get_one::<String>("completions").map(String::as_str),
+      Some("power-shell")
+    );
+  }
+
+  #[test]
+  fn completions_rejects_an_unknown_shell() {
+    assert!(build_clap_app()
+      .try_get_matches_from(["spotatui", "--completions", "nushell"])
+      .is_err());
   }
 
   #[test]

@@ -1,6 +1,7 @@
 # Example spotatui config.yml. Every field is optional — omit anything to keep
-# the built-in default. A typo in any of these fields logs a warning and falls
-# back to the default; it never prevents the app from starting.
+# the built-in default. Most invalid values log a warning and fall back to the
+# default. A misspelled key is usually ignored. A few out-of-range numbers
+# stop spotatui at startup — see docs/configuration.md#safe-by-default.
 # Full reference: docs/configuration.md
 
 behavior:
@@ -11,7 +12,7 @@ behavior:
   like_animation_frames: 10       # min 1; length of the heart burst when liking a track
 
   # --- Startup ---
-  # home | recently_played | podcasts | discover | artists | album_list
+  # home | recently_played | podcasts | discover | artists | album_list | stats
   startup_route: home
 
   # --- Default sorting ("<field>" or "<field>:desc") ---
@@ -46,6 +47,8 @@ behavior:
   # "narrow" or pick unambiguous glyphs.
   liked_icon: "♥"
   shuffle_icon: "🔀"
+  repeat_track_icon: "🔂"
+  repeat_context_icon: "🔁"
   playing_icon: "▶"
   paused_icon: "⏸"
   gauge_filled_icon: "⣿"
@@ -55,12 +58,6 @@ behavior:
   sort_ascending_icon: "↑"
   sort_descending_icon: "↓"
   list_highlight_icon: "▶"
-
-# The dither accent is independent of the preset. Omit or use auto to follow
-# the live playbar progress color, including adaptive-theme changes.
-# theme:
-#   cover_art_dither_color: auto
-#   cover_art_dither_color: '120, 160, 220' # exact RGB override
 
   # --- Playbar button labels (config-only) ---
   # All keys optional; omit (or set "") to keep a button's built-in label.
@@ -74,6 +71,14 @@ behavior:
   #   like: "♥+"
   #   vol_down: "vol-"
   #   vol_up: "vol+"
+
+# The dither accent is independent of the preset. Omit or use auto to follow
+# the live playbar progress color, including adaptive-theme changes.
+# cover_art_dither_color needs a cover-art build (every released binary has
+# it); in a plain `cargo run` build the key is ignored without a warning.
+# theme:
+#   cover_art_dither_color: auto
+#   # cover_art_dither_color: '120, 160, 220' # exact RGB override
 
 # --- Status line & window title templates (config-only) ---
 # {key} placeholders, {{ / }} for literal braces. Unknown keys fall back to

@@ -71,7 +71,7 @@ pub fn draw_stats(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       Style::default().fg(theme.text.into()),
     ));
   }
-  if app.stats_loading {
+  if app.stats_loading() {
     summary_spans.push(Span::styled(
       "  [Loading...]",
       Style::default().fg(theme.hint.into()),

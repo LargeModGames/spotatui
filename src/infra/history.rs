@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, App, RecapPromptState};
+use crate::core::app::{ActiveBlock, App, RecapPromptState, SessionPlay};
 use crate::infra::media_metadata::{
   current_playback_snapshot, PlaybackItemKind, PlaybackSnapshot, PlaybackSource,
 };
@@ -37,6 +37,7 @@ pub enum HistoryPlaybackSource {
   NativeContext,
   NativeRawList,
   ExternalDevice,
+  AppleMusic,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -61,6 +62,9 @@ pub struct ListenRecord {
   pub item_uri: Option<String>,
   pub context_uri: Option<String>,
   pub source: HistoryPlaybackSource,
+  /// The cover for the Session screen; never written to the listens file.
+  #[serde(skip)]
+  pub image_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +94,7 @@ struct ActiveListenSession {
   listened_ms: u64,
   last_progress_ms: u128,
   last_is_playing: bool,
+  image_url: Option<String>,
 }
 
 #[derive(Default)]
@@ -234,6 +239,18 @@ impl RecapPeriod {
       .unwrap_or(0);
     Self::ALL_PERIODS[(index + offset) % Self::ALL_PERIODS.len()]
   }
+
+  /// The inverse of [`parse_recap_period`].
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn key(self) -> &'static str {
+    match self {
+      RecapPeriod::SevenDays => "7d",
+      RecapPeriod::ThirtyDays => "30d",
+      RecapPeriod::Month => "month",
+      RecapPeriod::Year => "year",
+      RecapPeriod::All => "all",
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -252,19 +269,186 @@ pub struct StatsData {
   pub top_artists: Vec<RankedEntry>,
   pub top_albums: Vec<RankedEntry>,
   pub days: Vec<RankedEntry>,
+  /// Qualified plays in each of [`RecapPeriod::ALL_PERIODS`], whatever the selected period.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub period_plays: Vec<(RecapPeriod, usize)>,
+  /// The top five tracks of the last 7 days, whatever the selected period.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub week_tracks: Vec<RankedEntry>,
+  /// One per `top_artists` entry, in the same order.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub artist_ranks: Vec<ArtistRank>,
+  /// Empty for [`RecapPeriod::All`].
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub movements: Vec<ArtistMovement>,
+}
+
+/// An artist's rank over all time next to the selected period.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub struct ArtistRank {
+  /// 1-based, by listened time.
+  pub all_time: Option<u32>,
+  /// The artist's first qualified listen falls inside the period.
+  pub new: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub enum MovementKind {
+  Climb,
+  Fall,
+  New,
+}
+
+/// One artist whose rank in the period differs from its all-time rank.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub struct ArtistMovement {
+  pub name: String,
+  pub kind: MovementKind,
+  /// The all-time rank.
+  pub from: Option<u32>,
+  /// The rank in the period; `None` for an artist the period never played.
+  pub to: Option<u32>,
 }
 
 const STATS_LIST_LIMIT: usize = 20;
+const MOVEMENT_TOP: u32 = 10;
+const WEEK_TRACKS: usize = 5;
 
-pub fn build_stats_data(filtered: &[ListenRecord]) -> StatsData {
+/// `filtered` is the selected period's qualified listens and `listens` every recorded one.
+pub fn build_stats_data(
+  filtered: &[ListenRecord],
+  listens: &[ListenRecord],
+  period: RecapPeriod,
+) -> StatsData {
+  let now = Local::now();
+  let qualified: Vec<ListenRecord> = listens
+    .iter()
+    .filter(|record| record.qualified)
+    .cloned()
+    .collect();
+  let week: Vec<ListenRecord> = qualified
+    .iter()
+    .filter(|record| in_period(record, RecapPeriod::SevenDays, &now))
+    .cloned()
+    .collect();
+  let top_artists = aggregate_top_artists(filtered, STATS_LIST_LIMIT);
+  let all_time = aggregate_top_artists(&qualified, usize::MAX);
+  let in_period_ranks = aggregate_top_artists(filtered, usize::MAX);
   StatsData {
     total_plays: filtered.len(),
     total_time_ms: filtered.iter().map(|record| record.listened_ms).sum(),
     top_tracks: aggregate_top_tracks(filtered, STATS_LIST_LIMIT),
-    top_artists: aggregate_top_artists(filtered, STATS_LIST_LIMIT),
+    artist_ranks: artist_ranks(&top_artists, &all_time),
+    movements: if period == RecapPeriod::All {
+      Vec::new()
+    } else {
+      artist_movements(&in_period_ranks, &all_time)
+    },
+    top_artists,
     top_albums: aggregate_top_albums(filtered, STATS_LIST_LIMIT),
     days: aggregate_days(filtered),
+    period_plays: RecapPeriod::ALL_PERIODS
+      .iter()
+      .map(|&each| {
+        let plays = qualified
+          .iter()
+          .filter(|record| in_period(record, each, &now))
+          .count();
+        (each, plays)
+      })
+      .collect(),
+    week_tracks: aggregate_top_tracks(&week, WEEK_TRACKS),
   }
+}
+
+fn rank_of(ranking: &[RankedEntry], name: &str) -> Option<u32> {
+  ranking
+    .iter()
+    .position(|entry| entry.display == name)
+    .map(|index| index as u32 + 1)
+}
+
+fn artist_ranks(top: &[RankedEntry], all_time: &[RankedEntry]) -> Vec<ArtistRank> {
+  top
+    .iter()
+    .map(|entry| {
+      let lifetime = all_time.iter().find(|other| other.display == entry.display);
+      ArtistRank {
+        all_time: rank_of(all_time, &entry.display),
+        new: lifetime.is_some_and(|other| other.value == entry.value),
+      }
+    })
+    .collect()
+}
+
+/// The biggest climber into the period's top ten, the biggest faller out of the
+/// all-time top ten, and the first artist new to the period's top ten.
+fn artist_movements(period: &[RankedEntry], all_time: &[RankedEntry]) -> Vec<ArtistMovement> {
+  let top = |ranking: &[RankedEntry]| -> Vec<(String, u32)> {
+    ranking
+      .iter()
+      .take(MOVEMENT_TOP as usize)
+      .enumerate()
+      .map(|(index, entry)| (entry.display.clone(), index as u32 + 1))
+      .collect()
+  };
+  // Only the top ten are compared; ranking the whole period would cost P times A lookups.
+  let ranks = artist_ranks(&period[..period.len().min(MOVEMENT_TOP as usize)], all_time);
+  let mut movements = Vec::new();
+
+  let climber = top(period)
+    .into_iter()
+    .zip(&ranks)
+    .filter(|(_, rank)| !rank.new)
+    .filter_map(|((name, to), rank)| {
+      let from = rank.all_time?;
+      (from > to).then(|| (from - to, name, from, to))
+    })
+    // On a tie, the higher place in the period wins.
+    .max_by(|a, b| a.0.cmp(&b.0).then(b.3.cmp(&a.3)));
+  if let Some((_, name, from, to)) = climber {
+    movements.push(ArtistMovement {
+      name,
+      kind: MovementKind::Climb,
+      from: Some(from),
+      to: Some(to),
+    });
+  }
+
+  let faller = top(all_time)
+    .into_iter()
+    .filter_map(|(name, from)| {
+      let to = rank_of(period, &name);
+      let drop = to.map_or(u32::MAX, |to| to.saturating_sub(from));
+      (drop > 0).then_some((drop, name, from, to))
+    })
+    // Dropping out is the biggest fall; on a tie, the higher all-time place wins.
+    .max_by(|a, b| a.0.cmp(&b.0).then(b.2.cmp(&a.2)));
+  if let Some((_, name, from, to)) = faller {
+    movements.push(ArtistMovement {
+      name,
+      kind: MovementKind::Fall,
+      from: Some(from),
+      to,
+    });
+  }
+
+  if let Some(((name, to), _)) = top(period)
+    .into_iter()
+    .zip(&ranks)
+    .find(|(_, rank)| rank.new)
+  {
+    movements.push(ArtistMovement {
+      name,
+      kind: MovementKind::New,
+      from: None,
+      to: Some(to),
+    });
+  }
+  movements
 }
 
 pub fn compute_streaks(listens: &[ListenRecord]) -> StreakSummary {
@@ -503,6 +687,7 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
 
       match collector.observe(snapshot) {
         Ok(Some(record)) => {
+          app.lock().await.record_session_play(session_play(&record));
           if record.qualified {
             if let Some(totals) = &mut day_totals {
               let date = record.ended_at.with_timezone(&Local).date_naive();
@@ -793,6 +978,7 @@ impl ActiveListenSession {
     let artists = metadata.artists;
     let album = metadata.album;
     let duration_ms = metadata.duration_ms;
+    let image_url = metadata.image_url;
     Self {
       started_at,
       identity,
@@ -808,7 +994,22 @@ impl ActiveListenSession {
       listened_ms: 0,
       last_progress_ms: progress_ms,
       last_is_playing: is_playing,
+      image_url,
     }
+  }
+}
+
+fn session_play(record: &ListenRecord) -> SessionPlay {
+  SessionPlay {
+    started_at_ms: record.started_at.timestamp_millis().max(0) as u64,
+    ended_at_ms: record.ended_at.timestamp_millis().max(0) as u64,
+    listened_ms: record.listened_ms,
+    duration_ms: record.duration_ms,
+    title: record.title.clone(),
+    artists: record.artists.clone(),
+    album: record.album.clone(),
+    uri: record.item_uri.clone(),
+    image_url: record.image_url.clone(),
   }
 }
 
@@ -829,6 +1030,7 @@ impl ListenRecord {
       item_uri: session.item_uri,
       context_uri: session.context_uri,
       source: session.source,
+      image_url: session.image_url,
     }
   }
 }
@@ -869,6 +1071,7 @@ fn history_source_from_snapshot(snapshot: &PlaybackSnapshot) -> HistoryPlaybackS
     PlaybackSource::NativeContext => HistoryPlaybackSource::NativeContext,
     PlaybackSource::NativeRawList => HistoryPlaybackSource::NativeRawList,
     PlaybackSource::ExternalDevice => HistoryPlaybackSource::ExternalDevice,
+    PlaybackSource::AppleMusic => HistoryPlaybackSource::AppleMusic,
   }
 }
 
@@ -876,21 +1079,35 @@ pub fn filter_listens_for_period(
   listens: &[ListenRecord],
   period: RecapPeriod,
 ) -> Vec<ListenRecord> {
-  let now = Utc::now();
+  filter_listens_for_period_at(listens, period, Local::now())
+}
+
+fn filter_listens_for_period_at<Tz: TimeZone>(
+  listens: &[ListenRecord],
+  period: RecapPeriod,
+  now: DateTime<Tz>,
+) -> Vec<ListenRecord> {
   listens
     .iter()
     .filter(|record| record.qualified)
-    .filter(|record| match period {
-      RecapPeriod::SevenDays => record.ended_at >= now - Duration::days(7),
-      RecapPeriod::ThirtyDays => record.ended_at >= now - Duration::days(30),
-      RecapPeriod::Month => {
-        record.ended_at.year() == now.year() && record.ended_at.month() == now.month()
-      }
-      RecapPeriod::Year => record.ended_at.year() == now.year(),
-      RecapPeriod::All => true,
-    })
+    .filter(|record| in_period(record, period, &now))
     .cloned()
     .collect()
+}
+
+fn in_period<Tz: TimeZone>(record: &ListenRecord, period: RecapPeriod, now: &DateTime<Tz>) -> bool {
+  let tz = now.timezone();
+  let now_utc = now.with_timezone(&Utc);
+  match period {
+    RecapPeriod::SevenDays => record.ended_at >= now_utc - Duration::days(7),
+    RecapPeriod::ThirtyDays => record.ended_at >= now_utc - Duration::days(30),
+    RecapPeriod::Month => {
+      let local = record.ended_at.with_timezone(&tz);
+      local.year() == now.year() && local.month() == now.month()
+    }
+    RecapPeriod::Year => record.ended_at.with_timezone(&tz).year() == now.year(),
+    RecapPeriod::All => true,
+  }
 }
 
 /// The raw (unescaped) values the share card shows for one period.
@@ -931,14 +1148,8 @@ impl CardData {
     let (track_title, track_artist) = if top_track_raw == "No data" {
       ("No data".to_string(), "No data".to_string())
     } else {
-      (
-        top_track_raw
-          .split(" - ")
-          .next()
-          .unwrap_or(top_track_raw)
-          .to_string(),
-        top_track_raw.split(" - ").nth(1).unwrap_or("").to_string(),
-      )
+      let (title, artist) = split_track_display(top_track_raw);
+      (title.to_string(), artist.to_string())
     };
 
     Self {
@@ -1938,9 +2149,9 @@ fn render_history_recap_html(
     top_album_title = escape_html(&card.top_album),
     card_js = card.to_js_object(),
     alt_card_js = alt_card.to_js_object(),
-    top_tracks_html = render_ranked_entries(&top_tracks, "No tracks yet."),
-    top_artists_html = render_ranked_entries(&top_artists, "No artists yet."),
-    top_albums_html = render_ranked_entries(&top_albums, "No albums yet."),
+    top_tracks_html = render_ranked_entries(&top_tracks, "No tracks yet.", true),
+    top_artists_html = render_ranked_entries(&top_artists, "No artists yet.", false),
+    top_albums_html = render_ranked_entries(&top_albums, "No albums yet.", false),
     recent_html = render_recent_entries(listens),
     days_html = render_bar_entries(&listening_days),
     hours_html = render_bar_entries(&listening_hours),
@@ -1953,10 +2164,13 @@ pub struct RankedEntry {
   pub detail: String,
   pub value: u64,
   pub uri: Option<String>,
+  /// A track's title and artists apart; `None` for other entries.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub parts: Option<(String, String)>,
 }
 
 pub fn aggregate_top_tracks(listens: &[ListenRecord], limit: usize) -> Vec<RankedEntry> {
-  let mut totals: BTreeMap<String, (String, u64, u64, Option<String>)> = BTreeMap::new();
+  let mut totals: BTreeMap<String, (String, String, u64, u64, Option<String>)> = BTreeMap::new();
   for record in listens {
     let key = record
       .item_id
@@ -1965,24 +2179,26 @@ pub fn aggregate_top_tracks(listens: &[ListenRecord], limit: usize) -> Vec<Ranke
       .unwrap_or_else(|| format!("{}::{}", record.title, record.artists.join(", ")));
     let entry = totals.entry(key).or_insert_with(|| {
       (
-        format!("{} - {}", record.title, record.artists.join(", ")),
+        record.title.clone(),
+        record.artists.join(", "),
         0,
         0,
         record.item_uri.clone(),
       )
     });
-    entry.1 += record.listened_ms;
-    entry.2 += 1;
+    entry.2 += record.listened_ms;
+    entry.3 += 1;
   }
 
   sort_ranked_entries(
     totals
       .into_values()
-      .map(|(display, listened_ms, plays, uri)| RankedEntry {
-        display,
+      .map(|(title, artists, listened_ms, plays, uri)| RankedEntry {
+        display: format!("{title} - {artists}"),
         detail: format!("{} plays · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
         uri,
+        parts: Some((title, artists)),
       })
       .collect(),
     limit,
@@ -2001,8 +2217,23 @@ fn split_artists(combo: &str) -> Vec<String> {
 pub fn aggregate_top_artists(listens: &[ListenRecord], limit: usize) -> Vec<RankedEntry> {
   let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
   for record in listens {
+    // Spotify credits one artist per entry, so a name such as "Mumford & Sons"
+    // stays whole. Other sources arrive as one joined string and are split.
+    let credited_separately = record
+      .item_uri
+      .as_deref()
+      .is_some_and(|uri| uri.starts_with("spotify:"));
     for artist_combo in &record.artists {
-      let individual_artists = split_artists(artist_combo);
+      let individual_artists = if credited_separately {
+        let name = artist_combo.trim();
+        if name.is_empty() {
+          Vec::new()
+        } else {
+          vec![name.to_string()]
+        }
+      } else {
+        split_artists(artist_combo)
+      };
       for artist in individual_artists {
         let entry = totals.entry(artist).or_insert((0, 0));
         entry.0 += record.listened_ms;
@@ -2019,6 +2250,7 @@ pub fn aggregate_top_artists(listens: &[ListenRecord], limit: usize) -> Vec<Rank
         detail: format!("{} track hits · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
         uri: None,
+        parts: None,
       })
       .collect(),
     limit,
@@ -2044,6 +2276,7 @@ pub fn aggregate_top_albums(listens: &[ListenRecord], limit: usize) -> Vec<Ranke
         detail: format!("{} plays · {}", plays, format_duration(listened_ms)),
         value: listened_ms,
         uri: None,
+        parts: None,
       })
       .collect(),
     limit,
@@ -2051,9 +2284,13 @@ pub fn aggregate_top_albums(listens: &[ListenRecord], limit: usize) -> Vec<Ranke
 }
 
 pub fn aggregate_days(listens: &[ListenRecord]) -> Vec<RankedEntry> {
-  let mut totals: BTreeMap<String, u64> = BTreeMap::new();
+  aggregate_days_in(listens, &Local)
+}
+
+fn aggregate_days_in<Tz: TimeZone>(listens: &[ListenRecord], tz: &Tz) -> Vec<RankedEntry> {
+  let mut totals: BTreeMap<NaiveDate, u64> = BTreeMap::new();
   for record in listens {
-    let label = record.ended_at.format("%Y-%m-%d").to_string();
+    let label = record.ended_at.with_timezone(tz).date_naive();
     *totals.entry(label).or_default() += record.listened_ms;
   }
 
@@ -2062,10 +2299,11 @@ pub fn aggregate_days(listens: &[ListenRecord]) -> Vec<RankedEntry> {
     .rev()
     .take(10)
     .map(|(label, listened_ms)| RankedEntry {
-      display: label,
+      display: label.format("%Y-%m-%d").to_string(),
       detail: format_duration(listened_ms),
       value: listened_ms,
       uri: None,
+      parts: None,
     })
     .collect::<Vec<_>>()
     .into_iter()
@@ -2086,6 +2324,7 @@ fn aggregate_hours(listens: &[ListenRecord]) -> Vec<RankedEntry> {
       detail: format_duration(*totals.get(&hour).unwrap_or(&0)),
       value: *totals.get(&hour).unwrap_or(&0),
       uri: None,
+      parts: None,
     })
     .collect()
 }
@@ -2101,7 +2340,14 @@ fn sort_ranked_entries(mut entries: Vec<RankedEntry>, limit: usize) -> Vec<Ranke
   entries
 }
 
-fn render_ranked_entries(entries: &[RankedEntry], empty_label: &str) -> String {
+/// Split a ranked display back into its title and artist halves on the last
+/// ` - `: `aggregate_top_tracks` always appends the artists at the end, so the
+/// last separator is the one it added, and a ` - ` inside a title survives.
+fn split_track_display(display: &str) -> (&str, &str) {
+  display.rsplit_once(" - ").unwrap_or((display, ""))
+}
+
+fn render_ranked_entries(entries: &[RankedEntry], empty_label: &str, split_artist: bool) -> String {
   if entries.is_empty() {
     return format!(r#"<p class="subtle">{}</p>"#, escape_html(empty_label));
   }
@@ -2110,9 +2356,12 @@ fn render_ranked_entries(entries: &[RankedEntry], empty_label: &str) -> String {
     .iter()
     .enumerate()
     .map(|(i, entry)| {
-      let parts: Vec<&str> = entry.display.split(" - ").collect();
-      let (title, subtitle) = if parts.len() == 2 {
-        (parts[0], format!("<div class=\"entry-artist\">{}</div>", escape_html(parts[1])))
+      let (title, subtitle) = if split_artist {
+        let (title, artist) = split_track_display(&entry.display);
+        (
+          title,
+          format!("<div class=\"entry-artist\">{}</div>", escape_html(artist)),
+        )
       } else {
         (entry.display.as_str(), "".to_string())
       };
@@ -2436,7 +2685,7 @@ pub async fn sync_history_to_cloud(sync_token: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use chrono::TimeZone;
+  use chrono::{FixedOffset, TimeZone};
 
   fn record_at(day: u32, listened_ms: u64, qualified: bool) -> ListenRecord {
     let timestamp = Utc.with_ymd_and_hms(2026, 5, day, 12, 0, 0).unwrap();
@@ -2454,7 +2703,100 @@ mod tests {
       item_uri: Some(format!("spotify:track:id-{day}")),
       context_uri: None,
       source: HistoryPlaybackSource::NativeContext,
+      image_url: None,
     }
+  }
+
+  fn top_artist_names(record: ListenRecord) -> Vec<String> {
+    aggregate_top_artists(&[record], 10)
+      .into_iter()
+      .map(|entry| entry.display)
+      .collect()
+  }
+
+  #[test]
+  fn top_artists_keeps_a_spotify_band_name_with_an_ampersand_whole() {
+    let mut r = record_at(20, 100_000, true);
+    r.artists = vec!["Mumford & Sons".into()];
+    assert_eq!(top_artist_names(r), ["Mumford & Sons"]);
+  }
+
+  #[test]
+  fn top_artists_keeps_a_spotify_artist_name_with_a_comma_whole() {
+    let mut r = record_at(20, 100_000, true);
+    r.artists = vec!["Tyler, The Creator".into()];
+    assert_eq!(top_artist_names(r), ["Tyler, The Creator"]);
+  }
+
+  #[test]
+  fn top_artists_counts_each_credited_spotify_artist_separately() {
+    let mut r = record_at(20, 100_000, true);
+    r.artists = vec!["Kygo".into(), "Max McNown".into()];
+    let top = aggregate_top_artists(&[r], 10);
+    assert_eq!(
+      top
+        .iter()
+        .map(|entry| (entry.display.as_str(), entry.value))
+        .collect::<Vec<_>>(),
+      [("Kygo", 100_000), ("Max McNown", 100_000)]
+    );
+  }
+
+  #[test]
+  fn top_artists_still_splits_a_joined_local_file_artist_string() {
+    let mut r = record_at(20, 100_000, true);
+    r.artists = vec!["Alice, Bob".into()];
+    r.item_uri = Some("file:///m/a.flac".into());
+    assert_eq!(top_artist_names(r), ["Alice", "Bob"]);
+  }
+
+  #[test]
+  fn top_artists_splits_a_record_with_no_item_uri() {
+    let mut r = record_at(20, 100_000, true);
+    r.artists = vec!["Alice & Bob".into()];
+    r.item_uri = None;
+    assert_eq!(top_artist_names(r), ["Alice", "Bob"]);
+  }
+
+  #[test]
+  fn days_use_the_local_date_west_of_utc() {
+    let mut record = record_at(20, 60_000, true);
+    record.ended_at = Utc.with_ymd_and_hms(2026, 5, 20, 2, 0, 0).unwrap();
+    let days = aggregate_days_in(&[record], &FixedOffset::west_opt(5 * 3600).unwrap());
+    assert_eq!(days.len(), 1);
+    assert_eq!(days[0].display, "2026-05-19");
+  }
+
+  #[test]
+  fn days_use_the_local_date_east_of_utc() {
+    let mut record = record_at(19, 60_000, true);
+    record.ended_at = Utc.with_ymd_and_hms(2026, 5, 19, 23, 0, 0).unwrap();
+    let days = aggregate_days_in(&[record], &FixedOffset::east_opt(2 * 3600).unwrap());
+    assert_eq!(days.len(), 1);
+    assert_eq!(days[0].display, "2026-05-20");
+  }
+
+  #[test]
+  fn days_merge_plays_that_share_a_local_date() {
+    let mut first = record_at(20, 60_000, true);
+    first.ended_at = Utc.with_ymd_and_hms(2026, 5, 20, 2, 0, 0).unwrap();
+    let mut second = record_at(19, 30_000, true);
+    second.ended_at = Utc.with_ymd_and_hms(2026, 5, 19, 20, 0, 0).unwrap();
+    let records = [first, second];
+    let days = aggregate_days_in(&records, &FixedOffset::west_opt(5 * 3600).unwrap());
+    assert_eq!(days.len(), 1);
+    assert_eq!(
+      (days[0].display.as_str(), days[0].value),
+      ("2026-05-19", 90_000)
+    );
+    let utc_days = aggregate_days_in(&records, &Utc);
+    assert_eq!(
+      utc_days
+        .iter()
+        .map(|day| day.display.as_str())
+        .collect::<Vec<_>>(),
+      ["2026-05-19", "2026-05-20"]
+    );
   }
 
   #[test]
@@ -2471,6 +2813,55 @@ mod tests {
     let filtered = filter_listens_for_period(&records, RecapPeriod::All);
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].title, "Track 21");
+  }
+
+  fn titles(records: &[ListenRecord]) -> Vec<&str> {
+    records.iter().map(|record| record.title.as_str()).collect()
+  }
+
+  #[test]
+  fn month_period_uses_the_local_month_east_of_utc() {
+    let mut kept = record_at(1, 60_000, true);
+    kept.ended_at = Utc.with_ymd_and_hms(2026, 9, 30, 22, 30, 0).unwrap();
+    let mut dropped = record_at(2, 60_000, true);
+    dropped.ended_at = Utc.with_ymd_and_hms(2026, 9, 30, 21, 30, 0).unwrap();
+    let now = FixedOffset::east_opt(2 * 3600)
+      .unwrap()
+      .with_ymd_and_hms(2026, 10, 1, 1, 0, 0)
+      .unwrap();
+    let filtered = filter_listens_for_period_at(&[kept, dropped], RecapPeriod::Month, now);
+    assert_eq!(titles(&filtered), ["Track 1"]);
+  }
+
+  #[test]
+  fn month_period_uses_the_local_month_west_of_utc() {
+    let mut afternoon = record_at(1, 60_000, true);
+    afternoon.ended_at = Utc.with_ymd_and_hms(2026, 9, 30, 15, 0, 0).unwrap();
+    let mut evening = record_at(2, 60_000, true);
+    evening.ended_at = Utc.with_ymd_and_hms(2026, 10, 1, 0, 30, 0).unwrap();
+    let mut last_month = record_at(3, 60_000, true);
+    last_month.ended_at = Utc.with_ymd_and_hms(2026, 9, 1, 2, 0, 0).unwrap();
+    let now = FixedOffset::west_opt(5 * 3600)
+      .unwrap()
+      .with_ymd_and_hms(2026, 9, 30, 20, 0, 0)
+      .unwrap();
+    let filtered =
+      filter_listens_for_period_at(&[afternoon, evening, last_month], RecapPeriod::Month, now);
+    assert_eq!(titles(&filtered), ["Track 1", "Track 2"]);
+  }
+
+  #[test]
+  fn year_period_uses_the_local_year_across_new_year() {
+    let mut kept = record_at(1, 60_000, true);
+    kept.ended_at = Utc.with_ymd_and_hms(2026, 12, 31, 23, 10, 0).unwrap();
+    let mut dropped = record_at(2, 60_000, true);
+    dropped.ended_at = Utc.with_ymd_and_hms(2026, 12, 31, 22, 0, 0).unwrap();
+    let now = FixedOffset::east_opt(3600)
+      .unwrap()
+      .with_ymd_and_hms(2027, 1, 1, 0, 30, 0)
+      .unwrap();
+    let filtered = filter_listens_for_period_at(&[kept, dropped], RecapPeriod::Year, now);
+    assert_eq!(titles(&filtered), ["Track 1"]);
   }
 
   #[test]
@@ -2747,10 +3138,130 @@ mod tests {
   #[test]
   fn stats_data_totals_only_reflect_given_records() {
     let records = vec![record_at(20, 100_000, true), record_at(21, 50_000, true)];
-    let stats = build_stats_data(&records);
+    let stats = build_stats_data(&records, &records, RecapPeriod::All);
     assert_eq!(stats.total_plays, 2);
     assert_eq!(stats.total_time_ms, 150_000);
     assert_eq!(stats.top_tracks.len(), 2);
+  }
+
+  fn ranked(names: &[(&str, u64)]) -> Vec<RankedEntry> {
+    names
+      .iter()
+      .map(|(name, value)| RankedEntry {
+        display: name.to_string(),
+        detail: String::new(),
+        value: *value,
+        uri: None,
+        parts: None,
+      })
+      .collect()
+  }
+
+  fn listen_days_ago(days: i64, title: &str, qualified: bool) -> ListenRecord {
+    let mut record = record_at(1, 60_000, qualified);
+    record.ended_at = Utc::now() - Duration::days(days);
+    record.title = title.to_string();
+    record.item_id = Some(title.to_string());
+    record
+  }
+
+  #[test]
+  fn the_biggest_climber_into_the_period_top_ten_names_its_all_time_rank() {
+    let all_time = ranked(&[("A", 90), ("B", 80), ("C", 70), ("D", 60)]);
+    let period = ranked(&[("D", 30), ("A", 20), ("B", 10), ("C", 5)]);
+
+    let movements = artist_movements(&period, &all_time);
+
+    assert_eq!(
+      movements[0],
+      ArtistMovement {
+        name: "D".to_string(),
+        kind: MovementKind::Climb,
+        from: Some(4),
+        to: Some(1),
+      }
+    );
+  }
+
+  #[test]
+  fn an_all_time_artist_the_period_never_played_is_the_faller() {
+    let all_time = ranked(&[("A", 90), ("B", 80), ("C", 70)]);
+    let period = ranked(&[("A", 20), ("C", 10)]);
+
+    let fall = artist_movements(&period, &all_time)
+      .into_iter()
+      .find(|movement| movement.kind == MovementKind::Fall)
+      .unwrap();
+
+    assert_eq!(
+      (fall.name.as_str(), fall.from, fall.to),
+      ("B", Some(2), None)
+    );
+  }
+
+  #[test]
+  fn an_artist_whose_listens_all_fall_in_the_period_is_new() {
+    let all_time = ranked(&[("A", 90), ("N", 30)]);
+    let period = ranked(&[("N", 30), ("A", 10)]);
+
+    assert_eq!(
+      artist_ranks(&period, &all_time),
+      [
+        ArtistRank {
+          all_time: Some(2),
+          new: true
+        },
+        ArtistRank {
+          all_time: Some(1),
+          new: false
+        },
+      ]
+    );
+    assert!(artist_movements(&period, &all_time)
+      .iter()
+      .any(|movement| movement.kind == MovementKind::New && movement.name == "N"));
+  }
+
+  #[test]
+  fn period_plays_and_the_week_count_only_qualified_listens() {
+    let listens = vec![
+      listen_days_ago(1, "Fresh", true),
+      listen_days_ago(1, "Skipped", false),
+      listen_days_ago(20, "Older", true),
+      listen_days_ago(400, "Ancient", true),
+    ];
+    let filtered = filter_listens_for_period(&listens, RecapPeriod::All);
+
+    let stats = build_stats_data(&filtered, &listens, RecapPeriod::All);
+
+    let plays: Vec<_> = stats.period_plays.iter().map(|(_, plays)| *plays).collect();
+    assert_eq!(plays[0], 1);
+    assert_eq!(plays[1], 2);
+    assert_eq!(plays[4], 3);
+    assert_eq!(stats.week_tracks.len(), 1);
+    assert!(stats.movements.is_empty());
+  }
+
+  #[test]
+  fn the_cover_url_stays_out_of_the_listens_file() {
+    let mut record = record_at(3, 60_000, true);
+    record.image_url = Some("https://i.scdn.co/image/abc".to_string());
+
+    let line = serde_json::to_string(&record).unwrap();
+
+    assert!(!line.contains("image_url"));
+    assert_eq!(session_play(&record).image_url, record.image_url);
+  }
+
+  #[test]
+  fn top_tracks_carry_the_title_and_the_artists_apart() {
+    let tracks = aggregate_top_tracks(&[record_at(3, 60_000, true)], 5);
+
+    assert_eq!(
+      tracks[0].parts,
+      Some(("Track 3".to_string(), "Artist".to_string()))
+    );
+    assert_eq!(tracks[0].display, "Track 3 - Artist");
   }
 
   #[test]
@@ -2759,6 +3270,37 @@ mod tests {
     let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
     assert!(!html.contains("html2canvas"));
     assert!(html.contains("getContext('2d')"));
+  }
+
+  #[test]
+  fn recap_card_keeps_a_dash_in_the_top_track_title() {
+    let mut record = record_at(20, 120_000, true);
+    record.title = "Song - Remastered 2011".to_string();
+    let records = [record];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    assert!(html.contains(r#"track: "Song - Remastered 2011", artist: "Artist""#));
+    assert!(html.contains(r#"<div id="card-track-artist" class="track-artist">Artist</div>"#));
+  }
+
+  #[test]
+  fn recap_track_list_keeps_a_dash_in_the_title() {
+    let mut record = record_at(20, 120_000, true);
+    record.title = "Song - Remastered 2011".to_string();
+    let records = [record];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    assert!(html.contains(
+      r#"<span class="rank">#1</span><div class="entry-details"><strong>Song - Remastered 2011</strong><div class="entry-artist">Artist</div>"#
+    ));
+  }
+
+  #[test]
+  fn recap_album_list_keeps_a_dash_in_an_album_name() {
+    let mut record = record_at(20, 120_000, true);
+    record.album = "Live - 1985".to_string();
+    let records = [record];
+    let html = render_history_recap_html(RecapPeriod::All, &records, RecapPeriod::ThirtyDays, &[]);
+    assert!(html.contains(r#"<strong>Live - 1985</strong><div class="subtle">"#));
+    assert!(!html.contains(r#"<div class="entry-artist">1985</div>"#));
   }
 
   #[test]

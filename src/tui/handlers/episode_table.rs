@@ -54,16 +54,17 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('S') => toggle_sort_by_date(app),
     Key::Char('s') => handle_follow_event(app),
     Key::Char('D') => handle_unfollow_event(app),
-    Key::Ctrl('e') => jump_to_end(app),
-    Key::Ctrl('a') => jump_to_start(app),
+    k if k == app.user_config.keys.jump_to_end => jump_to_end(app),
+    k if k == app.user_config.keys.jump_to_start => jump_to_start(app),
     _ => {}
   }
 }
 
 fn jump_to_end(app: &mut App) {
   if let Some(episodes) = app.library().show_episodes.get_results(None) {
-    let last_idx = episodes.items.len() - 1;
-    app.view.episode_list_index = last_idx;
+    if let Some(last_idx) = episodes.items.len().checked_sub(1) {
+      app.view.episode_list_index = last_idx;
+    }
   }
 }
 
@@ -157,8 +158,15 @@ mod tests {
   }
 
   fn app_with_episodes(episodes: Vec<EpisodeInfo>) -> (App, Receiver<IoEvent>) {
+    app_with_episodes_and_config(episodes, UserConfig::new())
+  }
+
+  fn app_with_episodes_and_config(
+    episodes: Vec<EpisodeInfo>,
+    config: UserConfig,
+  ) -> (App, Receiver<IoEvent>) {
     let (tx, rx) = channel();
-    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
     let limit = episodes.len() as u32;
     app.library_mut().show_episodes.add_pages(Paged {
       items: episodes,
@@ -169,6 +177,33 @@ mod tests {
       previous: None,
     });
     (app, rx)
+  }
+
+  #[test]
+  fn rebound_jump_to_end_key_selects_the_last_episode() {
+    let mut config = UserConfig::new();
+    config.keys.jump_to_end = Key::End;
+    let (mut app, _rx) = app_with_episodes_and_config(
+      vec![
+        episode(Some("spotify:episode:one"), "One"),
+        episode(Some("spotify:episode:two"), "Two"),
+        episode(Some("spotify:episode:three"), "Three"),
+      ],
+      config,
+    );
+
+    handler(Key::End, &mut app);
+
+    assert_eq!(app.view.episode_list_index, 2);
+  }
+
+  #[test]
+  fn jump_to_end_on_an_empty_episode_page_keeps_the_first_row() {
+    let (mut app, _rx) = app_with_episodes(vec![]);
+
+    handler(Key::Ctrl('e'), &mut app);
+
+    assert_eq!(app.view.episode_list_index, 0);
   }
 
   #[test]

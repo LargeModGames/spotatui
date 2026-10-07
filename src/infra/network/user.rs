@@ -204,7 +204,7 @@ impl UserNetwork for Network {
         if !track_check.is_empty() {
           app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));
         }
-        app.discover_top_tracks = page.items.iter().map(TrackInfo::from).collect();
+        app.set_discover_top_tracks(time_range, page.items.iter().map(TrackInfo::from).collect());
         app.discover_loading = false;
       }
       Err(e) => {

@@ -28,6 +28,8 @@ export interface State {
   expired: boolean;
   channels: Channels;
   position: Position | null;
+  /** Set by the first route message, which the server sends only once boot is done. */
+  booted: boolean;
   /** The first-launch questions; the page shows them until the app has booted. */
   onboarding: OnboardingView | null;
 }
@@ -46,7 +48,7 @@ export function takeLaunchCode(
 export function showsOnboarding(state: State): boolean {
   return (
     state.onboarding !== null &&
-    (state.onboarding.pending !== null || state.channels.route === undefined)
+    (state.onboarding.pending !== null || !state.booted)
   );
 }
 
@@ -56,6 +58,7 @@ export class Connection {
     expired: false,
     channels: {},
     position: null,
+    booted: false,
     onboarding: null,
   };
   private socket: Socket | null = null;
@@ -97,6 +100,8 @@ export class Connection {
   }
 
   send(message: ClientMessage): void {
+    // A socket that is still connecting throws on send; the server hello marks it open.
+    if (!this.state.connected) return;
     this.socket?.send(JSON.stringify(message));
   }
 
@@ -113,8 +118,8 @@ export class Connection {
       case "hello":
         if (message.payload.token)
           this.storage.setItem(TOKEN_KEY, message.payload.token);
-        // Every channel follows the hello, so the store starts over.
-        return this.update({ connected: true, channels: {} });
+        // A token resumes the same process, whose revisions only rise, so the resync overwrites the store.
+        return this.update({ connected: true });
       case "onboarding":
         return this.update({ onboarding: message.payload });
       case "tick":
@@ -124,6 +129,7 @@ export class Connection {
       default:
         return this.update({
           channels: applyChannel(this.state.channels, message),
+          booted: this.state.booted || message.kind === "route",
         });
     }
   }

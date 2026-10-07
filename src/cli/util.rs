@@ -246,7 +246,13 @@ impl Format {
       }
       FormatType::ShowInfo(s) => {
         let uri = s.uri.clone().unwrap_or_default();
-        vec![Self::Show(s.name), Self::Uri(uri)]
+        // Spotify no longer sends `publisher` to Development Mode apps; an
+        // empty one must render as `None` (no %a value), not a blank artist.
+        let mut values = vec![Self::Show(s.name), Self::Uri(uri)];
+        if !s.publisher.is_empty() {
+          values.insert(1, Self::Artist(s.publisher));
+        }
+        values
       }
     }
   }
@@ -319,5 +325,106 @@ impl Format {
       Self::Flags(_) => "%f",
       Self::Playing(_) => "%s",
     }
+  }
+}
+
+/// Render a format string in a single pass.
+///
+/// On `%` followed by one of `a b t p h u d v f s r`, emits the value of the
+/// first matching placeholder (or `"None"` when no value carries it). Every
+/// other character — including a lone `%` or an unknown specifier — is copied
+/// verbatim, so playlist names like `100%hits` and defaults like `"%v% %d"`
+/// survive.
+pub fn render_format(format: &str, values: &[Format], conf: &UserConfig) -> String {
+  let mut out = String::new();
+  let mut chars = format.chars().peekable();
+  while let Some(c) = chars.next() {
+    if c == '%' && chars.peek().is_some_and(|n| "abtphudvfsr".contains(*n)) {
+      let specifier = *chars.peek().unwrap();
+      let placeholder = format!("%{}", specifier);
+      let rendered = values
+        .iter()
+        .find(|v| v.get_placeholder() == placeholder)
+        .map(|v| v.inner(conf.clone()))
+        .unwrap_or_else(|| "None".to_string());
+      out.push_str(&rendered);
+      chars.next();
+    } else {
+      out.push(c);
+    }
+  }
+  out.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::plugin_api::ShowInfo;
+
+  #[test]
+  fn a_playlist_name_containing_a_placeholder_is_printed_verbatim() {
+    let values = vec![
+      Format::Playlist("100%hits".into()),
+      Format::Uri("spotify:playlist:x".into()),
+    ];
+    assert_eq!(
+      render_format("%p (%u)", &values, &UserConfig::new()),
+      "100%hits (spotify:playlist:x)"
+    );
+  }
+
+  #[test]
+  fn a_missing_progress_placeholder_prints_none() {
+    let values = vec![Format::Track("Song".into())];
+    assert_eq!(
+      render_format("%t %r", &values, &UserConfig::new()),
+      "Song None"
+    );
+  }
+
+  #[test]
+  fn a_percent_sign_after_the_volume_is_kept() {
+    let values = vec![Format::Device("Kitchen".into()), Format::Volume(42)];
+    assert_eq!(
+      render_format("%v% %d", &values, &UserConfig::new()),
+      "42% Kitchen"
+    );
+  }
+
+  #[test]
+  fn unsupported_placeholders_print_none() {
+    let values = vec![Format::Track("T".into())];
+    assert_eq!(
+      render_format("%t - %a", &values, &UserConfig::new()),
+      "T - None"
+    );
+  }
+
+  #[test]
+  fn a_show_search_result_lists_its_publisher_as_the_artist() {
+    let values = Format::from_type(FormatType::ShowInfo(Box::new(ShowInfo {
+      name: "Pod".into(),
+      publisher: "Acme".into(),
+      uri: Some("spotify:show:1".into()),
+      ..Default::default()
+    })));
+    assert_eq!(
+      render_format("%h - %a (%u)", &values, &UserConfig::new()),
+      "Pod - Acme (spotify:show:1)"
+    );
+  }
+
+  #[test]
+  fn a_show_without_a_publisher_prints_none_for_the_artist() {
+    let values = Format::from_type(FormatType::ShowInfo(Box::new(ShowInfo {
+      name: "Pod".into(),
+      publisher: String::new(),
+      uri: Some("spotify:show:1".into()),
+      ..Default::default()
+    })));
+    assert_eq!(
+      render_format("%h - %a (%u)", &values, &UserConfig::new()),
+      "Pod - None (spotify:show:1)"
+    );
   }
 }

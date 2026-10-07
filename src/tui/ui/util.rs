@@ -143,7 +143,7 @@ pub fn truncate_text(s: &str, max_chars: usize) -> String {
 // `percentage` param needs to be between 0 and 1
 pub fn get_percentage_width(width: u16, percentage: f32) -> u16 {
   let padding = 3;
-  let width = width - padding;
+  let width = width.saturating_sub(padding);
   (f32::from(width) * percentage) as u16
 }
 
@@ -191,5 +191,35 @@ mod tests {
       get_track_progress_percentage(60 * 1000 * 2, track_length),
       100
     );
+  }
+
+  #[test]
+  fn percentage_width_is_zero_when_the_pane_is_no_wider_than_the_padding() {
+    for width in 0..=3 {
+      assert_eq!(get_percentage_width(width, 0.5), 0, "width {width}");
+    }
+  }
+
+  #[test]
+  fn percentage_width_applies_the_percentage_after_the_padding() {
+    assert_eq!(get_percentage_width(103, 0.5), 50);
+  }
+
+  #[test]
+  fn truncate_text_keeps_text_that_fits() {
+    assert_eq!(truncate_text("abc", 4), "abc");
+    assert_eq!(truncate_text("abcd", 4), "abcd");
+  }
+
+  #[test]
+  fn truncate_text_ends_long_text_with_a_single_ellipsis_char() {
+    assert_eq!(truncate_text("abcdef", 4), "abc…");
+  }
+
+  #[test]
+  fn truncate_text_counts_chars_not_bytes() {
+    let truncated = truncate_text("héllo wörld", 5);
+    assert_eq!(truncated, "héll…");
+    assert_eq!(truncated.chars().count(), 5);
   }
 }

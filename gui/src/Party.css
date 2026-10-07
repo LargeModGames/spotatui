@@ -1,0 +1,336 @@
+/* The listening party: the start forms, or the room with its queue. */
+.party {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 22px 40px 0;
+  overflow-y: auto;
+  outline: none;
+}
+
+.party button,
+.party input {
+  font: inherit;
+  color: inherit;
+}
+
+.party button {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.party button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.party .primary {
+  border: none;
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.party-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.party h1 {
+  margin: 0;
+  font: 400 44px var(--serif);
+}
+
+.party-head > span:nth-child(2) {
+  color: var(--secondary);
+}
+
+.party-head .code {
+  margin-left: auto;
+  border-color: var(--amber);
+  font: 700 14px var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--amber);
+}
+
+.party-head span.code {
+  font-weight: 400;
+  color: var(--secondary);
+}
+
+.party-head .code kbd {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.confirm {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--secondary);
+}
+
+.confirm .danger {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.notice-line {
+  margin: 16px 0 0;
+  color: var(--amber);
+}
+
+.party-start {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 48px;
+  padding-top: 28px;
+}
+
+.party-start section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.party h2 {
+  margin: 0;
+  font: 400 30px var(--serif);
+}
+
+.party-start p {
+  margin: 0;
+  color: var(--secondary);
+}
+
+.party-start form {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.party-start label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font: 10px var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--quiet);
+}
+
+.party-start input {
+  height: 34px;
+  width: 160px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--raised);
+  font: 14px var(--sans);
+  letter-spacing: 0;
+}
+
+.party-start label:first-child input {
+  width: 110px;
+  font: 700 14px var(--mono);
+  letter-spacing: 0.12em;
+}
+
+.party-room {
+  display: grid;
+  grid-template-columns: 440px minmax(0, 1fr);
+  gap: 40px;
+  padding-top: 20px;
+}
+
+.party-room section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hears {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.hears .cover.big {
+  width: 120px;
+  height: 120px;
+}
+
+.hears .song {
+  display: block;
+  font: 400 32px/1 var(--serif);
+}
+
+.hears .meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--secondary);
+}
+
+.party .hint {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--amber);
+  color: var(--secondary);
+}
+
+.listeners {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.listeners li {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.avatar-dot {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.listeners li > span:last-child {
+  font: 11px var(--mono);
+  color: var(--secondary);
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control input {
+  accent-color: var(--amber);
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.section-head h2 {
+  font-size: 26px;
+}
+
+.section-head kbd {
+  font-size: 11px;
+}
+
+.party ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.party ol:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: -1px;
+}
+
+.qrow {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 120px;
+  column-gap: 12px;
+  align-items: center;
+  height: 34px;
+  border-bottom: 1px solid var(--line);
+}
+
+.qrow.head {
+  height: auto;
+  padding-bottom: 4px;
+  border-bottom: none;
+}
+
+.qrow[aria-selected="true"] {
+  background: var(--line);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.qrow .n {
+  font: 11px var(--mono);
+  color: var(--quiet);
+}
+
+.qrow .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qrow .name b {
+  font-weight: 600;
+}
+
+.qrow .name span,
+.party .empty {
+  color: var(--secondary);
+}
+
+.qrow > span:last-child {
+  font: 11px var(--mono);
+  color: var(--secondary);
+}
+
+.qrow > .only {
+  color: var(--amber);
+}
+
+.party .empty {
+  margin: 0;
+}
+
+.party .keys {
+  margin-top: auto;
+  padding: 10px 0;
+  border-top: none;
+}
+
+@media (max-width: 1100px) {
+  .party-room,
+  .party-start {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}
+
+@media (max-width: 900px) {
+  .party {
+    padding: 16px 16px 0;
+  }
+
+  .party-head .code {
+    margin-left: 0;
+  }
+}

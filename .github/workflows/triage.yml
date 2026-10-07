@@ -54,11 +54,13 @@ jobs:
           gh issue view "$N" --repo "$REPO" --json number,title,body > issue.json
           gh issue list --repo "$REPO" --state open --limit 100 --json number,title > open-issues.json
       - name: Triage with DeepSeek
+        shell: bash
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         # tee also echoes the triage JSON into the step log for easy inspection.
         run: node .github/scripts/triage.mjs | tee triage.json
       - name: Apply label + comment as spotatui[bot]
+        shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}

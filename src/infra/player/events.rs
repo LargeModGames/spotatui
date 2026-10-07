@@ -577,6 +577,7 @@ async fn handle_player_events(
     match &event {
       PlayerEvent::Playing { .. } => {
         audibly_playing = true;
+        player.cancel_play_after_transfer();
         pending_end_of_track = None;
         last_progress_at = Instant::now();
         if !session_lost {
@@ -607,6 +608,34 @@ async fn handle_player_events(
       _ => {}
     }
 
+    // Music owns the output: a librespot that starts playing anyway (a late
+    // load, a remote Connect command) is paused before anyone hears both,
+    // and its playback-state events must not repaint Music's playbar. Session
+    // lifecycle events still reach their handlers below: a disconnect has to
+    // clean up whoever owns playback.
+    if app.lock().await.apple_music_owns_playback()
+      && matches!(
+        event,
+        PlayerEvent::Playing { .. }
+          | PlayerEvent::Paused { .. }
+          | PlayerEvent::Loading { .. }
+          | PlayerEvent::Preloading { .. }
+          | PlayerEvent::PositionChanged { .. }
+          | PlayerEvent::Seeked { .. }
+          | PlayerEvent::TrackChanged { .. }
+          | PlayerEvent::VolumeChanged { .. }
+          | PlayerEvent::EndOfTrack { .. }
+          | PlayerEvent::Stopped { .. }
+          | PlayerEvent::Unavailable { .. }
+      )
+    {
+      if matches!(event, PlayerEvent::Playing { .. }) {
+        player.pause();
+        app.lock().await.set_native_playback_intent(false);
+      }
+      continue;
+    }
+
     let notes_playback = !matches!(
       event,
       PlayerEvent::PositionChanged { .. } | PlayerEvent::Preloading { .. }
@@ -629,11 +658,7 @@ async fn handle_player_events(
         // next one not yet published), it never is. One-shot: a paused Spirc
         // emits no further Playing events, so this can't ping-pong.
         {
-          let stray_over_owner = {
-            let guard = app.lock().await;
-            !guard.native_should_drive()
-              || (!guard.queue_now_is_spotify() && guard.queue_suspended.is_some())
-          };
+          let stray_over_owner = app.lock().await.librespot_playing_is_stray();
           if stray_over_owner {
             player.pause();
             app.lock().await.set_native_playback_intent(false);
@@ -707,6 +732,10 @@ async fn handle_player_events(
         track_id,
         position_ms,
       } => {
+        if player.take_play_after_transfer() {
+          player.play();
+          continue;
+        }
         shared_is_playing.store(false, Ordering::Relaxed);
         let track_uri = track_id.to_string();
 
@@ -1121,6 +1150,9 @@ async fn handle_player_events(
             // ptr_eq guard above.)
             app.lock().await.native_backend_pending = false;
           } else {
+            if recovery == SessionDisconnectRecovery::RebuildIdle {
+              app.lock().await.mark_native_handed_off();
+            }
             let _ = recovery_tx.send(request);
           }
         }
@@ -1435,10 +1467,7 @@ async fn disconnect_streaming_player(
     // published queue slot; replaying either would steal playback back, and a
     // leftover slot would ghost-own the playbar and transport (#437).
     app_lock.pending_start_playback = None;
-    if app_lock.queue_now_is_spotify() {
-      app_lock.queue_now = None;
-      app_lock.spotify_queue_guard_reloads = 0;
-    }
+    app_lock.forget_queue_slot_after_handoff();
   }
 
   app_lock.streaming_player = None;

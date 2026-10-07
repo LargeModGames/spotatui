@@ -629,15 +629,17 @@ pub fn parse_theme_item(theme_item: &str) -> Result<Color> {
     "White" => Color::White,
     _ => {
       let colors = theme_item.split(',').collect::<Vec<&str>>();
-      if let (Some(r), Some(g), Some(b)) = (colors.first(), colors.get(1), colors.get(2)) {
+      if let [r, g, b] = colors.as_slice() {
         Color::Rgb(
           r.trim().parse::<u8>()?,
           g.trim().parse::<u8>()?,
           b.trim().parse::<u8>()?,
         )
       } else {
-        log::warn!("Unexpected color {}", theme_item);
-        Color::Black
+        anyhow::bail!(
+          "Unknown color {:?}: use a name such as LightBlue or \"r, g, b\"",
+          theme_item
+        );
       }
     }
   };
@@ -785,6 +787,29 @@ mod tests {
       parse_theme_item("23, 43, 45").unwrap(),
       Color::Rgb(23, 43, 45)
     );
+  }
+
+  #[test]
+  fn unknown_names_and_malformed_rgb_are_errors() {
+    for value in [
+      "blue",
+      "white",
+      "#1e1e2e",
+      "255, 0",
+      "1, 2, 3, 4",
+      "",
+      "300, 0, 0",
+      "1, , 3",
+    ] {
+      assert!(
+        parse_theme_item(value).is_err(),
+        "{value:?} must be rejected"
+      );
+    }
+    let error = parse_theme_item("blue").unwrap_err().to_string();
+    assert!(error.contains("blue"));
+    assert!(error.contains("LightBlue"));
+    assert!(error.contains("r, g, b"));
   }
 
   #[test]

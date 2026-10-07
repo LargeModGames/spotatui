@@ -257,6 +257,8 @@ A **bare binary name expands to a known preset**, so this is enough:
 | `claude` | `claude -p` | `claude --model haiku -p` | stdin |
 | `codex` | `codex exec -` | `codex exec --model MODEL -` | stdin |
 | `agy` (Antigravity) | `agy -p` | `agy --model gemini-3.6-flash-low -p` | argv |
+| `copilot` | `copilot --no-color -p` | `copilot --no-color --model MODEL -p` | argv |
+| `opencode` | `opencode run` | `opencode run -m openai/gpt-5.4` | argv (trailing positional) |
 | `gemini` (legacy) | `gemini -p` | `gemini -m MODEL -p` | argv |
 
 `agy` is Google's current CLI. The Gemini CLI it superseded is kept as a preset only
@@ -284,7 +286,7 @@ CLI does not know fails locally in milliseconds, before anything is sent, so a s
 suggestion costs you one error message and nothing else.
 
 Any other headless command works too, since spotatui writes the prompt and reads
-stdout and nothing is hardcoded about these four. **A multi-part command you wrote
+stdout and nothing is hardcoded about these six. **A multi-part command you wrote
 yourself is used exactly as written and never gains a model flag**, so your own argv
 keeps ownership of its own flags. The single exception is the shipped
 `["claude", "-p"]`: it is byte-identical to what the preset produces, so it still

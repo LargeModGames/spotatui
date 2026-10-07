@@ -212,7 +212,7 @@ async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
   match source.tracks(playlist_uri).await {
     Ok(tracks) => {
       let mut app = app.lock().await;
-      app.set_track_table(tracks, TrackTableContext::SubsonicPlaylist);
+      app.set_source_track_table(playlist_uri, tracks, TrackTableContext::SubsonicPlaylist);
     }
     Err(e) => set_error(app, format!("Cannot load Subsonic playlist: {e}")).await,
   }
@@ -229,7 +229,10 @@ async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str) {
     return;
   };
   match source.search(query).await {
-    Ok(results) => app.lock().await.show_source_search_tracks(results.tracks),
+    Ok(results) => app
+      .lock()
+      .await
+      .show_source_search_tracks(query, results.tracks),
     Err(e) => set_error(app, format!("Subsonic search failed: {e}")).await,
   }
 }

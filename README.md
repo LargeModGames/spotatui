@@ -69,7 +69,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 
 ## Features
 
-- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), [YouTube](#youtube), or [Qobuz](#qobuz). The free sources need no Spotify account; press `d` to switch between them at any time.
+- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), [YouTube](#youtube), [Qobuz](#qobuz), or [Apple Music](#apple-music) on macOS. The free sources need no Spotify account; press `d` to switch between them at any time.
 - **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
 - **Synced lyrics.** Line-by-line lyrics that follow playback.
 - **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
@@ -207,13 +207,15 @@ spotatui is a general music player, not just a Spotify client. Press `d` to open
 | **Internet Radio** | Play icecast/shoutcast streams with live now-playing metadata; search the [radio-browser.info](https://www.radio-browser.info) directory (30k+ stations) | Nothing |
 | **YouTube** | Search YouTube and play audio; build **local playlists** stored in a plain file | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended) |
 | **Qobuz** | Stream your Qobuz library (favorites, playlists, albums, search) at the configured quality, MP3 320 up to FLAC 24/192, through spotatui's own engine | A paid Qobuz account |
+| **Apple Music** | Browse and search your Music library and its playlists; the Music app plays them, spotatui is the remote | macOS and the Music app; your own Apple Music login |
 
 **Resuming your last session:** quit while playing from a non-Spotify source and spotatui restores that track and its position on the next launch, following the `startup_behavior` setting (`continue`, `play`, or `pause`).
 
-**Availability:** included in the Linux, macOS, and Windows release binaries. When building from source, enable them with cargo features:
+**Availability:** included in the Linux, macOS, and Windows release binaries; Apple Music is in the macOS ones only. When building from source, enable them with cargo features:
 
 ```bash
 cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz
+# macOS: add apple-music
 ```
 
 Each source has a few config keys; the essentials are below, and the full reference lives in the [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration).
@@ -257,6 +259,14 @@ behavior:
 ```
 
 Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. spotatui reads the three constants it needs from the Qobuz web player at runtime; when Qobuz changes its web player and the login stops working, set `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` from the bundle instead of waiting for a release.
+
+### Apple Music
+
+macOS only. Pick **Apple Music** in the first-run picker or the `d` menu. Unlike the other sources, the audio does not go through spotatui: the Music app plays the songs with your own Apple Music login and library, and spotatui drives it from the terminal. Music is started in the background and never brought to the front. The first time, macOS asks whether your terminal may control Music; allow it (or later under System Settings > Privacy & Security > Automation).
+
+The sidebar lists **All songs** and your playlists, including Apple Music playlists you added to your library; search looks through your library. Play/pause, next, previous, seek, volume, the media keys and the playbar follow Music. Next and previous step through the playlist or search results a song was started from, and follow Music's shuffle setting. Only one player is audible when you switch inside spotatui: starting a Music song from spotatui pauses Spotify and the other sources, and starting one of those pauses Music first. Pressing play in the Music app itself while another source is playing is not detected.
+
+Not available for Apple Music songs: the queue, the shuffle and repeat toggles (change them in Music), likes, and playlist edits. Songs Music cannot play (no longer available, or a local file that is missing) are listed, but choosing one shows a message instead of playing it, and next and previous skip them: Music would answer them with a dialog that blocks every later start. spotatui never lets Music's volume reach 0 for the same reason.
 
 ## AI DJ
 
@@ -571,6 +581,20 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Oud-Idk"><img src="https://avatars.githubusercontent.com/u/80905197?v=4?s=100" width="100px;" alt="Oud"/><br /><sub><b>Oud</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Oud-Idk" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://salty-nebula-7f4.notion.site/Yvoolab-3c6f362dc885816bae88f25d128e85cd"><img src="https://avatars.githubusercontent.com/u/202315522?v=4?s=100" width="100px;" alt="Yvoo"/><br /><sub><b>Yvoo</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=yvoolab" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/mschmicking"><img src="https://avatars.githubusercontent.com/u/17197791?v=4?s=100" width="100px;" alt="Maurice Schmicking"/><br /><sub><b>Maurice Schmicking</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=mschmicking" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/2570165831"><img src="https://avatars.githubusercontent.com/u/200382837?v=4?s=100" width="100px;" alt="2570165831"/><br /><sub><b>2570165831</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=2570165831" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/tayfuryldz"><img src="https://avatars.githubusercontent.com/u/238304586?v=4?s=100" width="100px;" alt="Tayfur Yıldız"/><br /><sub><b>Tayfur Yıldız</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=tayfuryldz" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/chiliec"><img src="https://avatars.githubusercontent.com/u/982358?v=4?s=100" width="100px;" alt="Vladimir Babin"/><br /><sub><b>Vladimir Babin</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=chiliec" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://wanjinhao1.github.io"><img src="https://avatars.githubusercontent.com/u/34562501?v=4?s=100" width="100px;" alt="Kratos"/><br /><sub><b>Kratos</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=wanjinhao1" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/niukanen1"><img src="https://avatars.githubusercontent.com/u/57656076?v=4?s=100" width="100px;" alt="niukanen1"/><br /><sub><b>niukanen1</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=niukanen1" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TrevorSatori"><img src="https://avatars.githubusercontent.com/u/80570915?v=4?s=100" width="100px;" alt="Trevor Satori"/><br /><sub><b>Trevor Satori</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=TrevorSatori" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/issues?q=author%3ATrevorSatori" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/drakeo338"><img src="https://avatars.githubusercontent.com/u/328244157?v=4?s=100" width="100px;" alt="Y.B."/><br /><sub><b>Y.B.</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=drakeo338" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/uemrey0"><img src="https://avatars.githubusercontent.com/u/64688960?v=4?s=100" width="100px;" alt="Ufuk Emre Yücetürk"/><br /><sub><b>Ufuk Emre Yücetürk</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=uemrey0" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/WaterWhisperer"><img src="https://avatars.githubusercontent.com/u/164724580?v=4?s=100" width="100px;" alt="WaterWhisperer"/><br /><sub><b>WaterWhisperer</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=WaterWhisperer" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Wassergeist"><img src="https://avatars.githubusercontent.com/u/91049818?v=4?s=100" width="100px;" alt="Marc Bauer"/><br /><sub><b>Marc Bauer</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Wassergeist" title="Code">💻</a> <a href="#financial-Wassergeist" title="Financial">💵</a></td>
     </tr>
   </tbody>
 </table>

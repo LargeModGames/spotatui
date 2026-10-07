@@ -275,13 +275,15 @@ fn parse_key(key: String) -> Result<Key> {
     return Ok(Key::Char(c));
   }
 
-  let sections: Vec<&str> = key.split('-').collect();
+  // Split on the first dash only: the key after a modifier may be '-' itself
+  // ("ctrl--"). modifier_char rejects a longer suffix ("ctrl-a-b").
+  let sections: Vec<&str> = key.splitn(2, '-').collect();
+  let is_modifier = matches!(sections[0].to_lowercase().as_str(), "ctrl" | "alt");
 
-  if sections.len() > 2 {
+  if sections.len() > 1 && !is_modifier {
     return Err(anyhow!(
-      "Shortcut can only have 2 keys, \"{}\" has {}",
-      key,
-      sections.len()
+      "Only ctrl and alt combine with another key, \"{}\" does not",
+      key
     ));
   }
 
@@ -323,6 +325,44 @@ fn parse_key(key: String) -> Result<Key> {
 /// Public version of parse_key for use in app.rs
 pub fn parse_key_public(key: String) -> Result<Key> {
   parse_key(key)
+}
+
+/// Convert a Key to its config file string representation
+pub fn key_to_config_string(key: &Key) -> String {
+  match key {
+    Key::Char(c) if *c == ' ' => "space".to_string(),
+    Key::Char(c) => c.to_string(),
+    Key::Ctrl(c) => format!("ctrl-{}", c),
+    Key::Alt(c) => format!("alt-{}", c),
+    Key::Enter => "enter".to_string(),
+    Key::Esc => "esc".to_string(),
+    Key::Backspace => "backspace".to_string(),
+    Key::Delete => "del".to_string(),
+    Key::Left => "left".to_string(),
+    Key::Right => "right".to_string(),
+    Key::Up => "up".to_string(),
+    Key::Down => "down".to_string(),
+    Key::PageUp => "pageup".to_string(),
+    Key::PageDown => "pagedown".to_string(),
+    Key::Home => "home".to_string(),
+    Key::End => "end".to_string(),
+    Key::Tab => "tab".to_string(),
+    Key::Ins => "ins".to_string(),
+    Key::F0 => "f0".to_string(),
+    Key::F1 => "f1".to_string(),
+    Key::F2 => "f2".to_string(),
+    Key::F3 => "f3".to_string(),
+    Key::F4 => "f4".to_string(),
+    Key::F5 => "f5".to_string(),
+    Key::F6 => "f6".to_string(),
+    Key::F7 => "f7".to_string(),
+    Key::F8 => "f8".to_string(),
+    Key::F9 => "f9".to_string(),
+    Key::F10 => "f10".to_string(),
+    Key::F11 => "f11".to_string(),
+    Key::F12 => "f12".to_string(),
+    Key::Unknown => "unknown".to_string(),
+  }
 }
 
 fn check_reserved_keys(key: Key) -> Result<()> {
@@ -2540,6 +2580,31 @@ mod tests {
   }
 
   #[test]
+  fn config_string_round_trips_through_parse_key() {
+    use super::{key_to_config_string, parse_key};
+    use crate::core::input::Key;
+
+    for key in [
+      Key::Char(' '),
+      Key::Char('a'),
+      Key::Ctrl('d'),
+      Key::Alt('x'),
+      Key::Tab,
+      Key::Home,
+      Key::End,
+      Key::Ins,
+      Key::F0,
+      Key::F5,
+      Key::F12,
+      Key::PageUp,
+      Key::Delete,
+      Key::Esc,
+    ] {
+      assert_eq!(parse_key(key_to_config_string(&key)).unwrap(), key);
+    }
+  }
+
+  #[test]
   fn test_parse_key() {
     use super::parse_key;
     use crate::core::input::Key;
@@ -2601,6 +2666,25 @@ mod tests {
   }
 
   #[test]
+  fn a_dash_after_a_modifier_parses_as_the_key() {
+    use super::parse_key;
+    use crate::core::input::Key;
+
+    assert_eq!(parse_key(String::from("ctrl--")).unwrap(), Key::Ctrl('-'));
+    assert_eq!(parse_key(String::from("alt--")).unwrap(), Key::Alt('-'));
+    assert_eq!(parse_key(String::from("-")).unwrap(), Key::Char('-'));
+    for bad in [
+      "ctrl-a-b", "ctrl---", "alt--a", "f1-a-b", "f1--", "f1-a", "left--",
+    ] {
+      let err = parse_key(bad.to_string()).unwrap_err();
+      assert!(
+        err.to_string().contains(bad),
+        "error for {bad:?} must name the binding: {err}"
+      );
+    }
+  }
+
+  #[test]
   fn a_malformed_keybinding_keeps_the_default_and_still_loads() {
     use super::{KeyBindingsString, UserConfig};
     use crate::core::input::Key;
@@ -2627,6 +2711,23 @@ mod tests {
     let mut config = UserConfig::new();
     let theme: UserTheme =
       serde_yaml::from_str("preset: Custom\ntext: '300, 0, 0'\nactive: '1, 2, 3'\n")
+        .expect("UserTheme must deserialize");
+
+    let result = config.load_theme(theme);
+
+    assert!(result.is_ok());
+    assert_eq!(config.theme.text, UserConfig::new().theme.text);
+    assert_eq!(config.theme.active, Color::Rgb(1, 2, 3))
+  }
+
+  #[test]
+  fn an_unknown_theme_color_name_keeps_the_default_and_still_loads() {
+    use super::{UserConfig, UserTheme};
+    use crate::core::theme::Color;
+
+    let mut config = UserConfig::new();
+    let theme: UserTheme =
+      serde_yaml::from_str("preset: Custom\ntext: purple\nactive: '1, 2, 3'\n")
         .expect("UserTheme must deserialize");
 
     let result = config.load_theme(theme);

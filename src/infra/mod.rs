@@ -1,3 +1,4 @@
+pub mod apple_music;
 pub mod audio;
 #[cfg(feature = "discord-rpc")]
 pub mod discord_rpc;

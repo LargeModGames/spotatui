@@ -49,6 +49,27 @@ const UNAUTHORIZED_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 /// value can neither park the app for a day nor overflow the deadline.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
 
+/// Total time the sends and retries of one Spotify call may take: one full
+/// attempt plus a backoff. A token refresh is never cut short, so it comes on
+/// top.
+const SPOTIFY_REQUEST_DEADLINE: Duration = Duration::from_secs(40);
+
+/// The time left before `deadline` after `elapsed` and a planned `wait`, or
+/// `None` when the wait does not fit.
+fn time_left(elapsed: Duration, wait: Duration, deadline: Duration) -> Option<Duration> {
+  deadline
+    .checked_sub(elapsed)?
+    .checked_sub(wait)
+    .filter(|left| !left.is_zero())
+}
+
+fn deadline_error(deadline: Duration) -> anyhow::Error {
+  anyhow!(
+    "Spotify API request failed: timed out after {}s",
+    deadline.as_secs()
+  )
+}
+
 /// Longest response body echoed into the diagnostics log.
 const MAX_LOGGED_BODY_CHARS: usize = 512;
 
@@ -467,6 +488,7 @@ pub async fn spotify_api_request_json_for_with_refresh(
       path,
       query,
       body,
+      deadline: SPOTIFY_REQUEST_DEADLINE,
     },
     |force| async move {
       match auth::refresh_token_and_cache(spotify, token_cache_path, force).await {
@@ -498,6 +520,7 @@ struct SpotifyApiRequest<'a> {
   path: &'a str,
   query: &'a [(&'a str, String)],
   body: Option<Value>,
+  deadline: Duration,
 }
 
 async fn spotify_api_request_json_for_base_with_refresh<F, Fut>(
@@ -516,9 +539,12 @@ where
     path,
     query,
     body,
+    deadline,
   } = request;
 
   refresh_token(false).await?;
+  // Starts after the refresh: a cancelled refresh can lose a rotated token.
+  let started_at = Instant::now();
 
   let mut url = reqwest::Url::parse(base_url)?.join(path)?;
   if !query.is_empty() {
@@ -586,13 +612,27 @@ where
       request = request.header(CONTENT_LENGTH, "0").body(Vec::new());
     }
 
+    let Some(left) = time_left(started_at.elapsed(), Duration::ZERO, deadline) else {
+      warn!("{endpoint} gave up at the {}s deadline", deadline.as_secs());
+      return Err(deadline_error(deadline));
+    };
     let attempt_started_at = Instant::now();
-    let response = match request.send().await {
+    let sent = match tokio::time::timeout(left, request.send()).await {
+      Ok(sent) => sent,
+      Err(_) => {
+        warn!("{endpoint} gave up at the {}s deadline", deadline.as_secs());
+        return Err(deadline_error(deadline));
+      }
+    };
+    let response = match sent {
       Ok(response) => response,
       Err(e) => {
-        if attempt + 1 < max_attempts && (e.is_connect() || e.is_timeout() || e.is_request()) {
-          let backoff_secs = 1 + u64::from(attempt);
-          tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        let backoff = Duration::from_secs(1 + u64::from(attempt));
+        if attempt + 1 < max_attempts
+          && (e.is_connect() || e.is_timeout() || e.is_request())
+          && time_left(started_at.elapsed(), backoff, deadline).is_some()
+        {
+          tokio::time::sleep(backoff).await;
           attempt += 1;
           continue;
         }
@@ -626,7 +666,10 @@ where
         request_success_line(&endpoint, status, elapsed.as_millis(), body.as_ref())
       );
       let should_parse_json = response_is_json(&response);
-      let response_body = response.text().await?;
+      let left = time_left(started_at.elapsed(), Duration::ZERO, deadline).unwrap_or_default();
+      let response_body = tokio::time::timeout(left, response.text())
+        .await
+        .map_err(|_| deadline_error(deadline))??;
       // Response bodies are the largest PII surface in the whole log and are
       // rarely what a successful call is diagnosed by, so they stay at trace.
       trace!("{}", response_trace_line(&endpoint, status, &response_body));
@@ -647,7 +690,15 @@ where
       .unwrap_or(1);
     // `text()` consumes the response, so everything the branches below need
     // (status, retry-after, body) is captured here, once.
-    let response_body = response.text().await.unwrap_or_default();
+    let left = time_left(started_at.elapsed(), Duration::ZERO, deadline).unwrap_or_default();
+    // A body that stalls past the deadline ends the call: a 401 would
+    // otherwise start a forced refresh after it.
+    let response_body = match tokio::time::timeout(left, response.text()).await {
+      Ok(body) => body.unwrap_or_default(),
+      Err(_) => return Err(deadline_error(deadline)),
+    };
+    let retry_fits =
+      || time_left(started_at.elapsed(), UNAUTHORIZED_RETRY_BACKOFF, deadline).is_some();
 
     // Diagnostics for every non-2xx: which endpoint (path *and* query), which
     // status, what was asked for, what Spotify actually said, and how old the
@@ -680,6 +731,9 @@ where
       if forced_refresh_gate.try_begin().await {
         match refresh_token(true).await {
           Ok(Some(_)) => {
+            if !retry_fits() {
+              return Err(deadline_error(deadline));
+            }
             tokio::time::sleep(UNAUTHORIZED_RETRY_BACKOFF).await;
             continue;
           }
@@ -712,6 +766,9 @@ where
       // is freshly minted and this 401 is coming from Spotify's side. Retry with
       // it after a backoff instead of rotating the token family yet again.
       warn!("401 within the forced-refresh cooldown; retrying with the current token");
+      if !retry_fits() {
+        return Err(deadline_error(deadline));
+      }
       tokio::time::sleep(UNAUTHORIZED_RETRY_BACKOFF).await;
       continue;
     }
@@ -1021,6 +1078,7 @@ pub async fn spotify_get_typed_before_app<T: DeserializeOwned>(
       path,
       query: &[],
       body: None,
+      deadline: SPOTIFY_REQUEST_DEADLINE,
     },
     |force| async move {
       auth::refresh_token_and_cache(spotify, token_cache_path, force)
@@ -1525,6 +1583,7 @@ mod tests {
         path: "me",
         query: &[],
         body: None,
+        deadline: SPOTIFY_REQUEST_DEADLINE,
       },
       move |force| {
         let spotify = spotify_for_closure.clone();
@@ -1618,6 +1677,7 @@ mod tests {
           path: "me/player",
           query: &[],
           body: None,
+          deadline: SPOTIFY_REQUEST_DEADLINE,
         },
         move |force| {
           let spotify = spotify_for_closure.clone();
@@ -1697,6 +1757,7 @@ mod tests {
           path: "me/player",
           query: &[],
           body: None,
+          deadline: SPOTIFY_REQUEST_DEADLINE,
         },
         move |force| {
           let forced_refresh_calls = Arc::clone(&forced_refresh_calls);
@@ -1751,6 +1812,7 @@ mod tests {
         path: "me/player",
         query: &[],
         body: None,
+        deadline: SPOTIFY_REQUEST_DEADLINE,
       },
       |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
       &ForcedRefreshGate::default(),
@@ -1798,6 +1860,7 @@ mod tests {
         path: "me/player/shuffle",
         query: &[("state", "true".to_string())],
         body: None,
+        deadline: SPOTIFY_REQUEST_DEADLINE,
       },
       |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
       &ForcedRefreshGate::default(),
@@ -1842,6 +1905,7 @@ mod tests {
         path: "me/player/play",
         query: &[],
         body: None,
+        deadline: SPOTIFY_REQUEST_DEADLINE,
       },
       |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
       &ForcedRefreshGate::default(),
@@ -1881,6 +1945,7 @@ mod tests {
         path: "me/player/play",
         query: &[("device_id", "device-1".to_string())],
         body: Some(json!({ "uris": ["spotify:track:1"] })),
+        deadline: SPOTIFY_REQUEST_DEADLINE,
       },
       |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
       &ForcedRefreshGate::default(),
@@ -1923,6 +1988,7 @@ mod tests {
       path: "me/player",
       query: &[],
       body: None,
+      deadline: SPOTIFY_REQUEST_DEADLINE,
     };
     let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
 
@@ -1943,6 +2009,100 @@ mod tests {
     assert!(is_rate_limited_error(&first));
     assert!(is_rate_limited_error(&second));
     assert!(second.to_string().contains("retry in"), "{second}");
+  }
+
+  #[tokio::test]
+  async fn a_stalled_response_gives_up_at_the_deadline_as_a_transient_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+
+    let spotify = spotify_with_access_token("access").await;
+    let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
+    let started_at = Instant::now();
+    let error = spotify_api_request_json_for_base_with_refresh(
+      &spotify,
+      SpotifyApiRequest {
+        base_url: &base_url,
+        method: Method::GET,
+        path: "me/player",
+        query: &[],
+        body: None,
+        deadline: Duration::from_millis(300),
+      },
+      refresh,
+      &ForcedRefreshGate::default(),
+    )
+    .await
+    .unwrap_err();
+    server.abort();
+
+    assert!(started_at.elapsed() < Duration::from_secs(3));
+    assert!(is_transient_network_error(&error), "{error}");
+  }
+
+  #[tokio::test]
+  async fn a_stalled_401_body_gives_up_at_the_deadline_without_a_forced_refresh() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      let head = "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n";
+      stream.write_all(head.as_bytes()).await.unwrap();
+      tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+
+    let spotify = spotify_with_access_token("access").await;
+    let forced_refreshes = Arc::new(AtomicUsize::new(0));
+    let forced = Arc::clone(&forced_refreshes);
+    let error = spotify_api_request_json_for_base_with_refresh(
+      &spotify,
+      SpotifyApiRequest {
+        base_url: &base_url,
+        method: Method::GET,
+        path: "me/player",
+        query: &[],
+        body: None,
+        deadline: Duration::from_millis(300),
+      },
+      move |force| {
+        let forced = Arc::clone(&forced);
+        async move {
+          if force {
+            forced.fetch_add(1, Ordering::SeqCst);
+          }
+          Ok(Some(SystemTime::now() + Duration::from_secs(3600)))
+        }
+      },
+      &ForcedRefreshGate::default(),
+    )
+    .await
+    .unwrap_err();
+    server.abort();
+
+    assert!(is_transient_network_error(&error), "{error}");
+    assert_eq!(forced_refreshes.load(Ordering::SeqCst), 0);
+  }
+
+  #[test]
+  fn a_wait_fits_only_inside_the_deadline() {
+    let deadline = Duration::from_secs(40);
+    let second = Duration::from_secs(1);
+
+    assert_eq!(
+      time_left(Duration::from_secs(30), second, deadline),
+      Some(Duration::from_secs(9))
+    );
+    assert_eq!(time_left(Duration::from_secs(39), second, deadline), None);
+    assert_eq!(
+      time_left(Duration::from_secs(41), Duration::ZERO, deadline),
+      None
+    );
   }
 
   #[tokio::test]
@@ -1980,6 +2140,7 @@ mod tests {
         path: "me/player",
         query: &[],
         body: None,
+        deadline: SPOTIFY_REQUEST_DEADLINE,
       },
       refresh,
       &gate,

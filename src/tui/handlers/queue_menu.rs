@@ -14,6 +14,14 @@ pub fn handler(key: Key, app: &mut App) {
     // rebindable). J moves it down, K moves it up.
     Key::Char('J') => reorder(1, app),
     Key::Char('K') => reorder(-1, app),
+    // Row 0 is the now-playing header, so the rows run 0..row_count.
+    k if common_key_events::high_event(k) => app.view.queue_selected_index = 0,
+    k if common_key_events::middle_event(k) => {
+      app.view.queue_selected_index = (row_count(app) - 1) / 2;
+    }
+    k if common_key_events::low_event(k) => {
+      app.view.queue_selected_index = row_count(app) - 1;
+    }
     k if k == app.user_config.keys.remove_from_queue => remove_selected(app),
     Key::Enter => play_selected(app),
     _ => {}
@@ -136,6 +144,24 @@ mod tests {
       app.add_track_to_native_queue(track("spotify:track:x", name));
     }
     app
+  }
+
+  #[test]
+  fn l_selects_the_last_queue_row() {
+    let mut app = app_with_queue(&["A", "B", "C"]);
+    handler(Key::Char('L'), &mut app);
+    assert_eq!(app.view.queue_selected_index, 3);
+  }
+
+  #[test]
+  fn h_selects_the_now_playing_row_and_m_the_middle_row() {
+    let mut app = app_with_queue(&["A", "B", "C"]);
+    app.view.queue_selected_index = 3;
+    handler(Key::Char('H'), &mut app);
+    assert_eq!(app.view.queue_selected_index, 0);
+    // Rows: [now playing, A, B, C] => middle index 1.
+    handler(Key::Char('M'), &mut app);
+    assert_eq!(app.view.queue_selected_index, 1);
   }
 
   #[test]

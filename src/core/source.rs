@@ -50,18 +50,41 @@ pub enum Source {
   Radio,
   YouTube,
   Qobuz,
+  /// macOS only: a remote for the Music app (feature `apple-music`).
+  AppleMusic,
 }
 
 impl Source {
-  /// Every selectable source, in display order. Add new sources here.
-  pub const ALL: [Source; 6] = [
+  /// Every source, in display order. Add new sources here.
+  pub const ALL: [Source; 7] = [
     Source::Spotify,
     Source::Local,
     Source::Subsonic,
     Source::Radio,
     Source::YouTube,
     Source::Qobuz,
+    Source::AppleMusic,
   ];
+
+  /// The sources the `d` picker offers. Apple Music is listed only in a macOS
+  /// build with the `apple-music` feature: elsewhere nothing can reach Music.
+  pub fn picker_sources() -> &'static [Source] {
+    // Spelled out rather than sliced off `ALL`, so a source added after
+    // Apple Music is not the one that disappears.
+    const WITHOUT_APPLE_MUSIC: [Source; 6] = [
+      Source::Spotify,
+      Source::Local,
+      Source::Subsonic,
+      Source::Radio,
+      Source::YouTube,
+      Source::Qobuz,
+    ];
+    if cfg!(all(feature = "apple-music", target_os = "macos")) {
+      &Self::ALL
+    } else {
+      &WITHOUT_APPLE_MUSIC
+    }
+  }
 
   /// Human-readable label shown in the source picker.
   pub fn label(&self) -> &'static str {
@@ -72,6 +95,7 @@ impl Source {
       Source::Radio => "Internet Radio",
       Source::YouTube => "YouTube",
       Source::Qobuz => "Qobuz",
+      Source::AppleMusic => "Apple Music",
     }
   }
 
@@ -84,6 +108,7 @@ impl Source {
       Source::Radio => "free",
       Source::Local => "free",
       Source::Qobuz => "paid subscription, logs in through the browser",
+      Source::AppleMusic => "macOS Music app, needs Automation permission",
     }
   }
 
@@ -98,6 +123,7 @@ impl Source {
       Source::Radio => "Radio",
       Source::YouTube => "YouTube",
       Source::Qobuz => "Qobuz",
+      Source::AppleMusic => "AppleMusic",
     }
   }
 
@@ -111,6 +137,7 @@ impl Source {
       "Radio" => Source::Radio,
       "YouTube" => Source::YouTube,
       "Qobuz" => Source::Qobuz,
+      "AppleMusic" => Source::AppleMusic,
       _ => Source::Spotify,
     }
   }
@@ -119,7 +146,12 @@ impl Source {
   pub fn supports_search(&self) -> bool {
     matches!(
       self,
-      Source::Spotify | Source::Subsonic | Source::Radio | Source::YouTube | Source::Qobuz
+      Source::Spotify
+        | Source::Subsonic
+        | Source::Radio
+        | Source::YouTube
+        | Source::Qobuz
+        | Source::AppleMusic
     )
   }
 
@@ -162,6 +194,23 @@ mod tests {
       assert_eq!(wire, format!("\"{}\"", source.to_config_str()));
       assert_eq!(serde_json::from_str::<Source>(&wire).unwrap(), source);
     }
+  }
+
+  #[test]
+  fn apple_music_is_offered_only_where_it_builds_and_only_searches() {
+    let apple_music = cfg!(all(feature = "apple-music", target_os = "macos"));
+    // The picker is every source, in order, minus Apple Music where it
+    // cannot work: never a source dropped by position.
+    let expected: Vec<Source> = Source::ALL
+      .into_iter()
+      .filter(|s| apple_music || *s != Source::AppleMusic)
+      .collect();
+    assert_eq!(Source::picker_sources(), expected.as_slice());
+    assert!(Source::AppleMusic.supports_search());
+    assert!(!Source::AppleMusic.supports_library());
+    assert!(!Source::AppleMusic.supports_playlist_write());
+    assert!(!Source::AppleMusic.supports_like());
+    assert!(!Source::AppleMusic.supports_playlist_sync());
   }
 
   #[test]
