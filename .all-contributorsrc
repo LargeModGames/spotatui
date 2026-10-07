@@ -480,6 +480,16 @@
       "contributions": [
         "doc"
       ]
+    },
+    {
+      "login": "Wassergeist",
+      "name": "Marc Bauer",
+      "avatar_url": "https://avatars.githubusercontent.com/u/91049818?v=4",
+      "profile": "https://github.com/Wassergeist",
+      "contributions": [
+        "code",
+        "financial"
+      ]
     }
   ],
   "contributorsPerLine": 7,
