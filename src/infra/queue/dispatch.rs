@@ -1306,7 +1306,6 @@ mod tests {
   use std::time::SystemTime;
 
   #[cfg(any(
-    feature = "queue-download",
     feature = "streaming",
     not(all(feature = "qobuz", feature = "subsonic"))
   ))]

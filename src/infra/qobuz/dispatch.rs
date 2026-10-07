@@ -414,6 +414,7 @@ pub(crate) async fn download_for_queue(
   let tmp = NamedTempFile::new().context("creating temp file for Qobuz stream")?;
   let (init, stream) = source.begin_stream(track_id, quality).await?;
   let mut reader = progressive::open(stream, &tmp).await?;
+  let _cancel_on_abort = reader.cancellation_token().drop_guard();
   tokio::task::spawn_blocking(move || std::io::copy(&mut reader, &mut std::io::sink()))
     .await
     .context("download task")?
