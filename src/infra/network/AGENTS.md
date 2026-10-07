@@ -22,9 +22,10 @@ worth knowing before adding an event:
 - **Spotify lane**: `Network::runs_on_spotify_lane` lists slow Spotify work (the
   DJ crawl, the DJ tool calls) that runs in order on one worker beside the pump,
   with a `Network` from `spotify_lane_network` (the pump's client, limits,
-  fallback cache and rate gate, taken per event). The pump holds a lane event
-  back in a rate-limit window before the hand-off, so one flusher keeps the
-  order. Never a transport event, never one that writes `Network` state the pump
+  fallback cache and rate gate, taken per event). In a rate-limit window the
+  pump holds a gated lane event (`DjIndexLibrary`) back before the hand-off, so
+  one flusher keeps the order; `DjToolCall` bypasses the gate and fails at once
+  with the wait, inside its caller's 45 s timeout. Never a transport event, never one that writes `Network` state the pump
   reads (the login, the search limits). A detached task (the playlist sort and
   search walks) is the other way off the pump; it needs a staleness check of its
   own before it writes `App`.

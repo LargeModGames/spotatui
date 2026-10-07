@@ -691,11 +691,12 @@ where
     // `text()` consumes the response, so everything the branches below need
     // (status, retry-after, body) is captured here, once.
     let left = time_left(started_at.elapsed(), Duration::ZERO, deadline).unwrap_or_default();
-    let response_body = tokio::time::timeout(left, response.text())
-      .await
-      .ok()
-      .and_then(Result::ok)
-      .unwrap_or_default();
+    // A body that stalls past the deadline ends the call: a 401 would
+    // otherwise start a forced refresh after it.
+    let response_body = match tokio::time::timeout(left, response.text()).await {
+      Ok(body) => body.unwrap_or_default(),
+      Err(_) => return Err(deadline_error(deadline)),
+    };
     let retry_fits =
       || time_left(started_at.elapsed(), UNAUTHORIZED_RETRY_BACKOFF, deadline).is_some();
 
@@ -2042,6 +2043,50 @@ mod tests {
 
     assert!(started_at.elapsed() < Duration::from_secs(3));
     assert!(is_transient_network_error(&error), "{error}");
+  }
+
+  #[tokio::test]
+  async fn a_stalled_401_body_gives_up_at_the_deadline_without_a_forced_refresh() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      let head = "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n";
+      stream.write_all(head.as_bytes()).await.unwrap();
+      tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+
+    let spotify = spotify_with_access_token("access").await;
+    let forced_refreshes = Arc::new(AtomicUsize::new(0));
+    let forced = Arc::clone(&forced_refreshes);
+    let error = spotify_api_request_json_for_base_with_refresh(
+      &spotify,
+      SpotifyApiRequest {
+        base_url: &base_url,
+        method: Method::GET,
+        path: "me/player",
+        query: &[],
+        body: None,
+        deadline: Duration::from_millis(300),
+      },
+      move |force| {
+        let forced = Arc::clone(&forced);
+        async move {
+          if force {
+            forced.fetch_add(1, Ordering::SeqCst);
+          }
+          Ok(Some(SystemTime::now() + Duration::from_secs(3600)))
+        }
+      },
+      &ForcedRefreshGate::default(),
+    )
+    .await
+    .unwrap_err();
+    server.abort();
+
+    assert!(is_transient_network_error(&error), "{error}");
+    assert_eq!(forced_refreshes.load(Ordering::SeqCst), 0);
   }
 
   #[test]
