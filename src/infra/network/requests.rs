@@ -177,14 +177,15 @@ fn request_body_for_log(body: Option<&Value>) -> String {
   })
 }
 
-/// The line a 429 leaves behind: raw `Retry-After` (before the cap) and `reason`.
+/// The line a 429 leaves behind: raw `Retry-After` (before the cap) and `reason`,
+/// escaped and truncated so it stays one log line.
 fn rate_limit_line(endpoint: &str, retry_after: Option<&str>, response_body: &str) -> String {
   let reason = serde_json::from_str::<Value>(response_body)
     .ok()
     .and_then(|v| {
       v.pointer("/error/reason")
         .and_then(Value::as_str)
-        .map(str::to_owned)
+        .map(|reason| truncate_for_log(&reason.escape_debug().to_string()))
     });
   format!(
     "Spotify API {endpoint} rate limited: Retry-After {}, reason {}",
@@ -2047,6 +2048,24 @@ mod tests {
     let line = rate_limit_line("/v1/me/player", None, "");
     assert!(line.contains("Retry-After missing"), "{line}");
     assert!(line.contains("reason none"), "{line}");
+  }
+
+  #[test]
+  fn a_429_reason_stays_on_one_line_and_is_truncated() {
+    let line = rate_limit_line(
+      "/v1/me/player",
+      Some("30"),
+      r#"{"error":{"status":429,"reason":"QUOTA_EXCEEDED\nforged line"}}"#,
+    );
+    assert!(!line.contains('\n'), "{line}");
+    assert!(line.contains(r"QUOTA_EXCEEDED\nforged line"), "{line}");
+
+    let long = format!(
+      r#"{{"error":{{"status":429,"reason":"{}"}}}}"#,
+      "x".repeat(2_000)
+    );
+    let line = rate_limit_line("/v1/me/player", Some("30"), &long);
+    assert!(line.contains("(truncated)"), "{line}");
   }
 
   #[tokio::test]

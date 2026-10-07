@@ -70,9 +70,11 @@ impl App {
     let soon = Instant::now()
       .checked_sub(wait)
       .unwrap_or_else(Instant::now);
-    // Only ever earlier, and it stands in for the track-end poll.
-    self.instant_since_last_current_playback_poll =
-      self.instant_since_last_current_playback_poll.min(soon);
+    // A due poll stays; a pending one waits for the latest command. Either way
+    // it stands in for the track-end poll.
+    if self.instant_since_last_current_playback_poll.elapsed() < interval {
+      self.instant_since_last_current_playback_poll = soon;
+    }
     self.spend_track_end_poll();
   }
 
@@ -476,6 +478,25 @@ mod tests {
     let (mut app, _rx) = app_playing_elsewhere(60_000, Duration::from_secs(10));
     app.poll_playback_soon();
     assert!(app.instant_since_last_current_playback_poll.elapsed() >= Duration::from_secs(10));
+  }
+
+  #[test]
+  fn a_second_command_moves_the_poll_to_a_second_after_it() {
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::from_secs(1));
+    app.poll_playback_soon();
+    app.instant_since_last_current_playback_poll -= Duration::from_millis(500);
+    app.poll_playback_soon();
+
+    app.instant_since_last_current_playback_poll -= Duration::from_millis(600);
+    app.poll_current_playback();
+    assert!(
+      rx.try_recv().is_err(),
+      "1.1 s after the first, 0.6 s after the second"
+    );
+
+    app.instant_since_last_current_playback_poll -= Duration::from_millis(500);
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
   }
 
   #[test]
