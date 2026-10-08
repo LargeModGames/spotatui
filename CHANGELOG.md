@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- **Synced lyrics no longer stick on a header tag**: an LRC header such as `[ar:Queen]`, `[ti:Song]` or `[offset:+500]` used to become a blank lyric line. `[offset:+500]` landed at 8:20, so the highlight stayed on that blank line for most of the song, and a body that was only tags never fell back to the plain lyrics. Those tags are now dropped. A one-digit fraction such as `[00:12.5]` is read as 12.5 seconds, and a longer fraction keeps its first three digits as milliseconds ([#673](https://github.com/LargeModGames/spotatui/issues/673)).
+
 - **An unknown `--device` name stops the command**: `spotatui playback --device` and `spotatui play --device` used to ignore a name that matched no Connect device and continue on the saved device. They now stop with `no device with name '…'` and a non-zero exit, the same message `--transfer` already printed. Two devices with the same name use the first one ([#669](https://github.com/LargeModGames/spotatui/issues/669)).
 
 - **Playback on another device is polled at the configured interval**: while a phone or another Connect device played, spotatui asked Spotify for the playback state every second, about 3,600 requests an hour, which can use up a Development Mode app's API quota. It now uses `playback_poll_seconds` there too, with one extra poll just after the current track should end and one a second after a command sent through the Web API (play, pause, skip, seek, volume, transfer), so the next track and your own changes still show up right away. A `429` also logs the raw `Retry-After` and Spotify's `reason` (`QUOTA_EXCEEDED` for a used-up quota).
