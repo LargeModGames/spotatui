@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
@@ -413,13 +413,24 @@ pub(crate) async fn download_for_queue(
   let track_id = track_id_from_uri(uri)?;
   let tmp = NamedTempFile::new().context("creating temp file for Qobuz stream")?;
   let (init, stream) = source.begin_stream(track_id, quality).await?;
+  let failure = stream.failure();
   let mut reader = progressive::open(stream, &tmp).await?;
   let _cancel_on_abort = reader.cancellation_token().drop_guard();
   tokio::task::spawn_blocking(move || std::io::copy(&mut reader, &mut std::io::sink()))
     .await
     .context("download task")?
-    .context("downloading the Qobuz stream")?;
+    .context("downloading the Qobuz stream")
+    .map_err(|e| stream_cause(&failure, e))?;
   Ok((tmp, init.quality().label()))
+}
+
+/// The segment error behind a failed read, when there is one: the reader and
+/// the decoder only see a stream that ended early.
+fn stream_cause(failure: &progressive::Failure, err: anyhow::Error) -> anyhow::Error {
+  match failure.get() {
+    Some(cause) => anyhow!("{cause}"),
+    None => err,
+  }
 }
 
 /// Open the track's stream into a fresh tempfile and build its decoder, whose
@@ -433,6 +444,7 @@ async fn prepare_track(
   let (init, stream) = source.begin_stream(track_id, quality).await?;
   let delivered = init.quality();
   let total = init.total_bytes();
+  let failure = stream.failure();
   let reader = progressive::open(stream, &tmp).await?;
   let mime = if delivered.flac {
     "audio/flac"
@@ -443,7 +455,8 @@ async fn prepare_track(
     LocalPlayer::prepare_stream(reader, Some(mime), Some(total))
   })
   .await
-  .context("decoder task")??;
+  .context("decoder task")?
+  .map_err(|e| stream_cause(&failure, e))?;
   Ok((tmp, delivered, prepared))
 }
 
@@ -793,6 +806,22 @@ async fn teardown_qobuz(app: &Arc<Mutex<App>>) {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_segment_failure_replaces_the_decoder_error() {
+    let failure = progressive::Failure::default();
+    let decoder = || anyhow!("decoding audio stream: format not recognized");
+    assert!(stream_cause(&failure, decoder())
+      .to_string()
+      .starts_with("decoding"));
+    failure
+      .set("segment 1 returned HTTP 403 Forbidden".to_string())
+      .unwrap();
+    assert_eq!(
+      stream_cause(&failure, decoder()).to_string(),
+      "segment 1 returned HTTP 403 Forbidden"
+    );
+  }
 
   #[test]
   fn qobuz_uris_are_recognised_by_scheme() {

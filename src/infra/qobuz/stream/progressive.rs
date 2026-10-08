@@ -13,6 +13,7 @@ use std::fs::File;
 use std::future::Future;
 use std::io::{self, BufReader};
 use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -41,6 +42,10 @@ const STALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The reader the decoder pulls from; dropping it cancels the download.
 pub type TrackReader = StreamDownload<TempfileStorage>;
+
+/// The error of a segment that ran out of attempts. The reader only reports a
+/// failed download, so the caller reads the cause here.
+pub type Failure = Arc<OnceLock<String>>;
 
 /// Start the download into `file` and return the decoder's reader.
 pub async fn open(stream: SegmentStream, file: &NamedTempFile) -> Result<TrackReader> {
@@ -98,7 +103,7 @@ pub struct SegmentStream {
   end: usize,
   in_flight: Option<JoinHandle<Result<Bytes>>>,
   attempts: u32,
-  failure: Option<String>,
+  failure: Failure,
 }
 
 impl SegmentStream {
@@ -129,8 +134,12 @@ impl SegmentStream {
       end: chunks,
       in_flight: None,
       attempts: 0,
-      failure: None,
+      failure: Failure::default(),
     }
+  }
+
+  pub fn failure(&self) -> Failure {
+    Arc::clone(&self.failure)
   }
 
   fn chunk_count(&self) -> usize {
@@ -165,7 +174,7 @@ impl SegmentStream {
 
   /// Continue from byte `start`, yielding chunks below `end_chunk` only.
   fn restart(&mut self, start: u64, end_chunk: usize) -> io::Result<()> {
-    if let Some(message) = &self.failure {
+    if let Some(message) = self.failure.get() {
       return Err(io::Error::other(message.clone()));
     }
     self.abort_in_flight();
@@ -202,7 +211,7 @@ impl Stream for SegmentStream {
 
   fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
     let this = &mut *self;
-    if this.failure.is_some() || this.next >= this.end {
+    if this.failure.get().is_some() || this.next >= this.end {
       return Poll::Ready(None);
     }
     let chunk = if this.next == 0 {
@@ -223,11 +232,16 @@ impl Stream for SegmentStream {
       match outcome {
         Ok(bytes) => bytes,
         Err(e) => {
-          // `stream-download` logs the error and polls again; the failure
-          // flag ends the stream after the last attempt.
+          // `stream-download` polls again; the failure flag ends the stream
+          // after the last attempt. Its own error log goes to `tracing`, which
+          // the app log does not record.
           this.attempts += 1;
+          log::warn!(
+            "[qobuz] segment {index} attempt {}/{MAX_ATTEMPTS}: {e:#}",
+            this.attempts
+          );
           if this.attempts >= MAX_ATTEMPTS {
-            this.failure = Some(format!("{e:#}"));
+            let _ = this.failure.set(format!("{e:#}"));
           }
           return Poll::Ready(Some(Err(e)));
         }
@@ -425,5 +439,49 @@ mod tests {
     .await
     .unwrap();
     assert!(result.is_err());
+  }
+
+  #[tokio::test]
+  async fn a_stalled_segment_is_retried_after_the_read_timeout() {
+    let (segments, expected) = fixture_track();
+    let template = serve_with(segments, Some(1)).await;
+    let http = crate::infra::qobuz::qobuz_client(Duration::from_millis(300));
+    let init = fetch_init(&http, &template).await.unwrap();
+    let stream = SegmentStream::new(http, template, KEY, &init);
+    let tmp = NamedTempFile::new().unwrap();
+    let started = std::time::Instant::now();
+    let mut reader = open(stream, &tmp).await.unwrap();
+    let bytes = tokio::task::spawn_blocking(move || {
+      let mut out = Vec::new();
+      reader.read_to_end(&mut out).map(|_| out)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(bytes, expected);
+    assert!(
+      started.elapsed() < Duration::from_secs(5),
+      "took {:?}",
+      started.elapsed()
+    );
+  }
+
+  #[tokio::test]
+  async fn a_failed_reader_keeps_the_segment_error_for_the_caller() {
+    let (mut segments, _) = fixture_track();
+    segments.pop();
+    let stream = fixture_stream(segments).await;
+    let failure = stream.failure();
+    let tmp = NamedTempFile::new().unwrap();
+    let mut reader = open(stream, &tmp).await.unwrap();
+    let result = tokio::task::spawn_blocking(move || {
+      let mut out = Vec::new();
+      reader.read_to_end(&mut out)
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err());
+    let cause = failure.get().expect("the failure is recorded");
+    assert!(cause.contains("segment 2 returned HTTP 404"), "got {cause}");
   }
 }
