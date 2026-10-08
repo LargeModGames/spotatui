@@ -614,6 +614,28 @@ mod tests {
   }
 
   #[test]
+  fn binding_a_reserved_key_reports_it_by_its_config_name() {
+    let mut app = App::default();
+    app.view.settings_category = SettingsCategory::Keybindings;
+    open_settings(&mut app);
+
+    let help = setting_index(&app, "keys.help");
+    app.view.settings_selected_index = help;
+    handler(Key::Enter, &mut app);
+    handler(Key::Char('H'), &mut app);
+
+    assert!(
+      app.api_error().contains("The key H is reserved"),
+      "{}",
+      app.api_error()
+    );
+    assert_eq!(
+      app.settings_items[help].value,
+      SettingValue::Key("?".to_string())
+    );
+  }
+
+  #[test]
   fn cycling_preset_to_terminal_turns_banner_gradient_setting_off() {
     let mut app = App::default();
     app.view.settings_category = SettingsCategory::Theme;

@@ -110,6 +110,13 @@ A value that is a single character is taken as-is, so `"A"` means Shift+a.
 > and `"del"` maps to the **Delete** key — the opposite of what most people
 > expect.
 
+Some keys are reserved and cannot be remapped through Settings: `H`, `M` and
+`L` (jump to the top, middle and bottom of a list), `up`, `down`, `left`,
+`right`, `backspace` and `enter`. The Settings screen refuses them with an
+error, and a `plugin_commands` binding on one of them is skipped with a log
+warning. Because `"delete"` counts as Backspace (see the note above), a plugin
+command bound to `delete` is skipped too, and the log calls it `backspace`.
+
 If a value cannot be parsed, the binding keeps its default and a warning is
 logged at startup. A name that is not one of the config keys in the table
 above (or the AI DJ keys below) is silently ignored — unknown names produce no

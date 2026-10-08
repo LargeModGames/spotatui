@@ -379,10 +379,9 @@ fn check_reserved_keys(key: Key) -> Result<()> {
   ];
   for item in reserved.iter() {
     if key == *item {
-      // TODO: Add pretty print for key
       return Err(anyhow!(
-        "The key {:?} is reserved and cannot be remapped",
-        key
+        "The key {} is reserved and cannot be remapped",
+        key_to_config_string(&key)
       ));
     }
   }
@@ -2941,6 +2940,21 @@ mod tests {
     assert!(
       check_reserved_keys(Key::Enter).is_err(),
       "Enter key should be reserved"
+    );
+  }
+
+  #[test]
+  fn a_reserved_key_error_names_the_key_as_config_yml_spells_it() {
+    use super::check_reserved_keys;
+    use crate::core::input::Key;
+
+    assert_eq!(
+      check_reserved_keys(Key::Char('H')).unwrap_err().to_string(),
+      "The key H is reserved and cannot be remapped"
+    );
+    assert_eq!(
+      check_reserved_keys(Key::Left).unwrap_err().to_string(),
+      "The key left is reserved and cannot be remapped"
     );
   }
 
