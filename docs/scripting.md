@@ -450,12 +450,11 @@ plugin_commands:
 ```
 
 Each entry maps a command name to a key string. The key string uses the same format as the
-built-in keybindings (e.g. `ctrl-l`, `alt-x`, `f1`, `space`). Entries are silently skipped when
+built-in keybindings (e.g. `ctrl-l`, `alt-x`, `f1`, `space`). Entries are skipped when
 the key string is invalid, the key is one of the reserved navigation keys (`H`, `M`, `L` for the
-top/middle/bottom list jumps, and `up`, `down`, `left`, `right`, `backspace`, `enter`; a
-`delete` binding counts as `backspace`), or the key already has a named action bound to it. The
-remaining entries are loaded normally, and each skipped entry logs a warning naming the key the
-same way `config.yml` spells it.
+top/middle/bottom list jumps, and `up`, `down`, `left`, `right`, `backspace`, `enter`), or the
+key already has a named action bound to it. The remaining entries are loaded normally, and each
+skipped entry logs a warning naming the key the same way `config.yml` spells it.
 
 Which keys are already taken depends on the build: an `ai-dj` build claims `ctrl-j`, `ctrl-t`,
 `ctrl-y`, `ctrl-o` and `ctrl-g` for the DJ, so a plugin binding on one of those is dropped on
