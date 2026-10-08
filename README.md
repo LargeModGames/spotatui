@@ -455,20 +455,21 @@ You may be asked to re-authenticate with Spotify the first time.
 1. [Install OpenSSL](https://docs.rs/openssl/0.10.25/openssl/#automatic)
 1. [Install Rust](https://www.rust-lang.org/tools/install)
 1. [Install `xorg-dev`](https://github.com/aweinstock314/rust-clipboard#prerequisites) (required for clipboard support)
-1. **Linux only:** Install PipeWire development libraries (required for audio visualization)
+1. **Linux only (glibc):** Install ALSA + pkg-config for the default build (`librespot` alsa-backend and cpal). Musl builds use rodio instead, so they don't need libasound for librespot. Package list matches [docs/installation.md#prerequisites](docs/installation.md#prerequisites).
    ```bash
    # Debian/Ubuntu
-   sudo apt-get install libpipewire-0.3-dev libspa-0.2-dev
+   sudo apt-get install libasound2-dev pkg-config
 
    # Arch Linux
-   sudo pacman -S pipewire
+   sudo pacman -S alsa-lib pkg-config
 
    # Fedora
-   sudo dnf install pipewire-devel
+   sudo dnf install alsa-lib-devel pkg-config
 
    # NixOS
    nix develop github:LargeModGames/spotatui
    ```
+   Optional: `--features audio-viz` (and the Linux release / `all-sources` CI leg) need PipeWire dev packages — `libpipewire-0.3-dev libspa-0.2-dev` (Debian/Ubuntu), `pipewire` (Arch), `pipewire-devel` (Fedora). The slim `--no-default-features --features telemetry,tui` build needs neither ALSA nor PipeWire.
 1. Clone or fork this repo and `cd` to it
 1. And then `cargo run`
 
