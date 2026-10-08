@@ -64,18 +64,15 @@ impl App {
   }
 
   /// Poll [`REMOTE_SETTLE`] from now, after a Web API command.
+  /// Its own deadline, so the regular and the track-end poll keep their timing.
   pub(crate) fn poll_playback_soon(&mut self) {
-    let interval = Duration::from_secs(self.user_config.behavior.playback_poll_seconds);
-    let wait = interval.saturating_sub(REMOTE_SETTLE);
-    let soon = Instant::now()
-      .checked_sub(wait)
-      .unwrap_or_else(Instant::now);
-    // A due poll stays; a pending one waits for the latest command. Either way
-    // it stands in for the track-end poll.
-    if self.instant_since_last_current_playback_poll.elapsed() < interval {
-      self.instant_since_last_current_playback_poll = soon;
-    }
-    self.spend_track_end_poll();
+    self.command_poll_at = Some(Instant::now() + REMOTE_SETTLE);
+  }
+
+  /// When the poll after a Web API command is due, for tests outside `core::app`.
+  #[cfg(test)]
+  pub(crate) fn command_poll_at(&self) -> Option<Instant> {
+    self.command_poll_at
   }
 
   fn poll_current_playback(&mut self) {
@@ -101,9 +98,14 @@ impl App {
       .elapsed()
       .as_millis();
 
-    if !self.is_fetching_current_playback && elapsed >= poll_interval_ms {
+    let command_due = self.command_poll_at.is_some_and(|at| Instant::now() >= at);
+
+    if !self.is_fetching_current_playback && (elapsed >= poll_interval_ms || command_due) {
       self.is_fetching_current_playback = true;
-      if poll_interval_ms < interval_ms {
+      if command_due {
+        self.command_poll_at = None;
+      }
+      if poll_interval_ms < interval_ms && elapsed >= poll_interval_ms {
         self.spend_track_end_poll();
       }
       // Trigger the seek if the user has set a new position
@@ -465,36 +467,37 @@ mod tests {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
   }
 
-  #[test]
-  fn a_command_near_the_track_end_still_waits_a_second() {
-    let (mut app, rx) = app_playing_elsewhere(179_000, Duration::ZERO);
-    app.poll_playback_soon();
-    app.poll_current_playback();
-    assert!(rx.try_recv().is_err());
+  /// Let `by` pass for both poll deadlines.
+  fn let_time_pass(app: &mut App, by: Duration) {
+    app.instant_since_last_current_playback_poll -= by;
+    if let Some(at) = app.command_poll_at.as_mut() {
+      *at -= by;
+    }
   }
 
   #[test]
   fn a_command_never_delays_a_poll_that_is_already_due() {
-    let (mut app, _rx) = app_playing_elsewhere(60_000, Duration::from_secs(10));
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::from_secs(10));
     app.poll_playback_soon();
-    assert!(app.instant_since_last_current_playback_poll.elapsed() >= Duration::from_secs(10));
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
   }
 
   #[test]
   fn a_second_command_moves_the_poll_to_a_second_after_it() {
-    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::from_secs(1));
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::ZERO);
     app.poll_playback_soon();
-    app.instant_since_last_current_playback_poll -= Duration::from_millis(500);
+    let_time_pass(&mut app, Duration::from_millis(500));
     app.poll_playback_soon();
 
-    app.instant_since_last_current_playback_poll -= Duration::from_millis(600);
+    let_time_pass(&mut app, Duration::from_millis(600));
     app.poll_current_playback();
     assert!(
       rx.try_recv().is_err(),
       "1.1 s after the first, 0.6 s after the second"
     );
 
-    app.instant_since_last_current_playback_poll -= Duration::from_millis(500);
+    let_time_pass(&mut app, Duration::from_millis(500));
     app.poll_current_playback();
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
   }
@@ -509,7 +512,89 @@ mod tests {
       "Spotify needs a moment to report it"
     );
 
-    app.instant_since_last_current_playback_poll -= Duration::from_millis(1_100);
+    let_time_pass(&mut app, Duration::from_millis(1_100));
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+  }
+
+  #[test]
+  fn a_command_during_a_poll_in_flight_still_polls_after_it() {
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::ZERO);
+    app.is_fetching_current_playback = true;
+    app.poll_playback_soon();
+
+    // The poll in flight answers with the state from before the command.
+    app.is_fetching_current_playback = false;
+    let_time_pass(&mut app, Duration::from_millis(1_100));
+    app.instant_since_last_current_playback_poll = Instant::now();
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+  }
+
+  #[test]
+  fn a_podcast_episode_on_another_device_gets_its_track_end_poll() {
+    let (mut app, rx) = app_playing_elsewhere(0, Duration::from_millis(2_500));
+    let mut episode = elsewhere_context(2_398_000);
+    episode.item = Some(PlayableItem::Episode(
+      crate::infra::media_metadata::tests::episode(),
+    ));
+    app.current_playback_context = Some(episode);
+    app.poll_current_playback();
+    assert!(rx.try_recv().is_err(), "the episode has not ended yet");
+
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(3_100);
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+  }
+
+  #[test]
+  fn an_item_without_a_duration_gets_the_regular_interval() {
+    let (mut app, rx) = app_playing_elsewhere(0, Duration::from_millis(3_100));
+    let mut unknown = elsewhere_context(0);
+    unknown.item = Some(PlayableItem::Unknown(serde_json::json!({})));
+    app.current_playback_context = Some(unknown);
+    app.poll_current_playback();
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_command_poll_before_the_track_end_poll_keeps_it() {
+    let (mut app, rx) = app_playing_elsewhere(177_000, Duration::ZERO);
+    let state = elsewhere_context(177_000);
+    app.current_playback_context = Some(state.clone());
+    app.poll_playback_soon();
+    let_time_pass(&mut app, Duration::from_millis(1_100));
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+
+    // Same timestamp, 2 s left: the track-end poll is still owed.
+    app.is_fetching_current_playback = false;
+    let mut near_end = state;
+    near_end.progress = Some(chrono::TimeDelta::milliseconds(178_000));
+    app.current_playback_context = Some(near_end);
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(3_100);
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+  }
+
+  #[test]
+  fn a_command_early_in_the_track_keeps_its_end_poll() {
+    // Volume, shuffle and repeat leave Spotify's timestamp alone: the follow-up
+    // poll brings back the same state, so the timestamp must stay fixed here.
+    let (mut app, rx) = app_playing_elsewhere(120_000, Duration::ZERO);
+    let state = elsewhere_context(120_000);
+    app.current_playback_context = Some(state.clone());
+    app.poll_playback_soon();
+    let_time_pass(&mut app, Duration::from_millis(1_100));
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+
+    // The follow-up poll answered: same timestamp, 2 s left.
+    app.is_fetching_current_playback = false;
+    let mut near_end = state;
+    near_end.progress = Some(chrono::TimeDelta::milliseconds(178_000));
+    app.current_playback_context = Some(near_end);
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(3_100);
     app.poll_current_playback();
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
   }

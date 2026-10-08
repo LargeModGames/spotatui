@@ -3114,24 +3114,23 @@ mod tests {
         &app,
         std::path::PathBuf::new(),
       );
-      let set_at = Instant::now();
-      app.lock().await.instant_since_last_current_playback_poll = set_at;
       let failed =
         player_command_with_saved_device_retry(&network, Method::POST, "me/player/next", &[], None)
           .await;
       assert!(failed.is_err());
-      assert_eq!(
-        app.lock().await.instant_since_last_current_playback_poll,
-        set_at
-      );
+      assert!(app.lock().await.command_poll_at().is_none());
 
+      let sent_at = Instant::now();
       player_command_with_saved_device_retry(&network, Method::POST, "me/player/next", &[], None)
         .await
         .unwrap();
       server.await.unwrap();
-      // Default 5 s interval: moved back by 4 s, so the poll is due a second on.
-      let polled_ago = app.lock().await.instant_since_last_current_playback_poll.elapsed();
-      assert!(polled_ago >= std::time::Duration::from_secs(4), "{polled_ago:?}");
+      // About a second after the command went through.
+      assert!(app
+        .lock()
+        .await
+        .command_poll_at()
+        .is_some_and(|at| at >= sent_at + std::time::Duration::from_secs(1)));
     })
     .await
     .unwrap();
