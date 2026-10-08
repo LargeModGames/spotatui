@@ -595,6 +595,7 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/WaterWhisperer"><img src="https://avatars.githubusercontent.com/u/164724580?v=4?s=100" width="100px;" alt="WaterWhisperer"/><br /><sub><b>WaterWhisperer</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=WaterWhisperer" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Wassergeist"><img src="https://avatars.githubusercontent.com/u/91049818?v=4?s=100" width="100px;" alt="Marc Bauer"/><br /><sub><b>Marc Bauer</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Wassergeist" title="Code">💻</a> <a href="#financial-Wassergeist" title="Financial">💵</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/RohithPariki"><img src="https://avatars.githubusercontent.com/u/159949499?v=4?s=100" width="100px;" alt="RohithPariki"/><br /><sub><b>RohithPariki</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=RohithPariki" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
