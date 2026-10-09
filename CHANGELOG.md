@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- **Esc on the Unsaved Settings prompt keeps the edit**: the prompt's hint says `Esc: Cancel`, but Esc closed Settings and dropped the staged change, doing what N does. Esc now hides the prompt and returns to the Settings list with the edit intact, and the Controls line names the configured back key (`Esc/x: Exit` after `back: x`) instead of a hard-coded q ([#664](https://github.com/LargeModGames/spotatui/issues/664)).
+
 - **The reserved-key error names the key the way `config.yml` spells it**: trying to bind a reserved key in Settings said `The key Char('H') is reserved and cannot be remapped` (Rust's debug name) instead of `The key H is reserved...`, and the same text was logged when a `plugin_commands` entry was skipped. The message now uses the config spelling (`H`, `left`, `enter`, ...), and `docs/keybindings.md` and `docs/scripting.md` list the reserved keys ([#665](https://github.com/LargeModGames/spotatui/issues/665)).
 
 - **Synced lyrics no longer stick on a header tag**: an LRC header such as `[ar:Queen]`, `[ti:Song]` or `[offset:+500]` used to become a blank lyric line. `[offset:+500]` landed at 8:20, so the state message said the lyrics were synced while the highlight stayed on that blank line for most of the song, and a body that was only tags never fell back to the plain lyrics. Those tags are now dropped. A one-digit fraction such as `[00:12.5]` is read as 12.5 seconds, and a longer fraction keeps its first three digits as milliseconds ([#673](https://github.com/LargeModGames/spotatui/issues/673)).

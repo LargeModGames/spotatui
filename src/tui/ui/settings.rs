@@ -337,9 +337,10 @@ fn draw_settings_help(f: &mut Frame<'_>, app: &App, area: Rect) {
     &format!(
       // Kept inside ~93 columns: the row is not wrapped, so anything past the
       // block's inner width is simply cut off.
-      "↑/↓: Select | ←/→: Tab | Enter: Edit | Mouse: Click | {}: Filter | {}: Save | Esc/q: Exit",
+      "↑/↓: Select | ←/→: Tab | Enter: Edit | Mouse: Click | {}: Filter | {}: Save | Esc/{}: Exit",
       app.user_config.keys.search,
-      app.effective_save_settings_key()
+      app.effective_save_settings_key(),
+      app.user_config.keys.back
     )
   };
   // The filter query takes the second row while it exists, like the Help
@@ -437,6 +438,7 @@ fn draw_unsaved_changes_prompt(f: &mut Frame<'_>, app: &App) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::tui::event::Key;
   use ratatui::{backend::TestBackend, Terminal};
 
   const WIDTH: u16 = 100;
@@ -490,6 +492,25 @@ mod tests {
       "{rendered}"
     );
     assert!(!rendered.contains("Back: [q]  ("), "{rendered}");
+  }
+
+  #[test]
+  fn the_controls_line_names_the_configured_back_key() {
+    let app = filtered_app("", false);
+    let default_rendered = rendered(&app);
+    assert!(
+      default_rendered.contains("Esc/q: Exit"),
+      "{default_rendered}"
+    );
+
+    let mut rebound = filtered_app("", false);
+    rebound.user_config.keys.back = Key::Char('x');
+    let rebound_rendered = rendered(&rebound);
+    assert!(
+      rebound_rendered.contains("Esc/x: Exit"),
+      "{rebound_rendered}"
+    );
+    assert!(!rebound_rendered.contains("Esc/q"), "{rebound_rendered}");
   }
 
   fn rendered(app: &App) -> String {

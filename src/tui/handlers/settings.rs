@@ -90,7 +90,13 @@ pub(super) fn reload_category(app: &mut App) {
 fn handle_unsaved_changes_prompt(key: Key, app: &mut App) {
   match key {
     Key::Char('y') | Key::Char('Y') => save_and_close(app),
-    Key::Char('n') | Key::Char('N') | Key::Esc => close_settings(app),
+    Key::Char('n') | Key::Char('N') => close_settings(app),
+    // The prompt's own Esc only hides it: the staged edit survives, like the
+    // hint line promises. N stays the discard key.
+    Key::Esc => {
+      app.view.settings_unsaved_prompt_visible = false;
+      app.view.settings_unsaved_prompt_save_selected = true;
+    }
     Key::Enter => {
       if app.view.settings_unsaved_prompt_save_selected {
         save_and_close(app);
@@ -794,6 +800,23 @@ mod tests {
 
     assert!(app.view.settings_unsaved_prompt_visible);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Settings);
+  }
+
+  #[test]
+  fn esc_on_the_unsaved_prompt_returns_to_settings_with_the_edit_kept() {
+    let mut app = App::default();
+    open_settings(&mut app);
+
+    app.view.settings_selected_index = first_bool_setting_index(&app);
+    handler(Key::Enter, &mut app);
+    handler(Key::Esc, &mut app);
+    assert!(app.view.settings_unsaved_prompt_visible);
+
+    handler(Key::Esc, &mut app);
+
+    assert!(!app.view.settings_unsaved_prompt_visible);
+    assert_eq!(app.get_current_route().id, RouteId::Settings);
+    assert!(app.has_unsaved_settings_changes());
   }
 
   #[test]
