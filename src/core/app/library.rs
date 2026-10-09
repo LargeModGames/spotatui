@@ -308,6 +308,11 @@ impl App {
         SortField::DateAdded => {
           sort_by_key_with_order(&mut page.items, sort_state.order, |a| a.added_at.clone())
         }
+        // Spotify dates are `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, so the strings
+        // order chronologically; an album without one sorts first.
+        SortField::ReleaseDate => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
+          a.album.release_date.clone()
+        }),
         _ => {}
       }
     }
@@ -972,6 +977,29 @@ mod tests {
       next: has_next.then(|| "https://example.com/me/albums?next".to_string()),
       previous: None,
     }
+  }
+
+  #[test]
+  fn release_date_sort_puts_the_newest_saved_album_first_when_descending() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut page = saved_album_page(0, &["mid", "undated", "new", "old"], false);
+    let dates = [Some("2019-06"), None, Some("2024-05-17"), Some("1999")];
+    for (item, date) in page.items.iter_mut().zip(dates) {
+      item.album.release_date = date.map(str::to_string);
+    }
+    app.library.saved_albums.upsert_page_by_offset(page);
+
+    // The first press sorts ascending, the second flips to descending.
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::ReleaseDate);
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::ReleaseDate);
+
+    let ids: Vec<&str> = app.library.saved_albums.pages[0]
+      .items
+      .iter()
+      .filter_map(|a| a.album.id.as_deref())
+      .collect();
+    assert_eq!(ids, ["new", "mid", "old", "undated"]);
   }
 
   #[test]

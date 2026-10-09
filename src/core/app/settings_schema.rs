@@ -122,6 +122,8 @@ const SAVED_ALBUM_SORT_SETTING_OPTIONS: &[&str] = &[
   "date_added:desc",
   "artist",
   "artist:desc",
+  "release_date",
+  "release_date:desc",
 ];
 
 const SAVED_ARTIST_SORT_SETTING_OPTIONS: &[&str] = &["default", "name", "name:desc"];
@@ -996,6 +998,37 @@ impl App {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn every_sort_field_a_context_offers_is_selectable_in_settings() {
+    use crate::core::sort::{SortContext, SortField};
+    for (context, options) in [
+      (
+        SortContext::PlaylistTracks,
+        PLAYLIST_TRACK_SORT_SETTING_OPTIONS,
+      ),
+      (SortContext::SavedAlbums, SAVED_ALBUM_SORT_SETTING_OPTIONS),
+      (SortContext::SavedArtists, SAVED_ARTIST_SORT_SETTING_OPTIONS),
+      (
+        SortContext::RecentlyPlayed,
+        RECENTLY_PLAYED_SORT_SETTING_OPTIONS,
+      ),
+    ] {
+      let expected: Vec<String> = context
+        .available_fields()
+        .iter()
+        .flat_map(|field| {
+          let token = field.to_config_str();
+          if *field == SortField::Default {
+            vec![token.to_string()]
+          } else {
+            vec![token.to_string(), format!("{token}:desc")]
+          }
+        })
+        .collect();
+      assert_eq!(expected, options, "{context:?}");
+    }
+  }
 
   #[test]
   fn the_icons_tab_edits_both_repeat_icons() {

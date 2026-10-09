@@ -1,5 +1,6 @@
 use super::util::{draw_selectable_list, get_artist_highlight_state, get_color, join_artist_names};
 use crate::core::app::{App, ArtistBlock};
+use crate::core::plugin_api::AlbumInfo;
 use crate::core::spotify_access::RestrictedEndpoint;
 use crate::tui::theme::ThemeExt;
 use ratatui::layout::Alignment;
@@ -100,12 +101,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             album_artist.push_str(&app.user_config.padded_liked_icon());
           }
         }
-        album_artist.push_str(&format!(
-          "{} - {} ({})",
-          item.name.to_owned(),
-          join_artist_names(&item.artists),
-          item.album_type.as_deref().unwrap_or("unknown")
-        ));
+        album_artist.push_str(&album_row_text(item));
         album_artist
       })
       .collect::<Vec<String>>();
@@ -149,12 +145,34 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   };
 }
 
+/// One row of the artist page's album list: `Name - Artists (type, year)`,
+/// or `(type)` when the album has no usable release date.
+fn album_row_text(album: &AlbumInfo) -> String {
+  let album_type = album.album_type.as_deref().unwrap_or("unknown");
+  let detail = match release_year(album.release_date.as_deref()) {
+    Some(year) => format!("{album_type}, {year}"),
+    None => album_type.to_string(),
+  };
+  format!(
+    "{} - {} ({detail})",
+    album.name,
+    join_artist_names(&album.artists)
+  )
+}
+
+/// The year of a Spotify release date (`YYYY`, `YYYY-MM` or `YYYY-MM-DD`).
+/// Spotify reports an unknown date as `0000`, which counts as none.
+fn release_year(date: Option<&str>) -> Option<&str> {
+  let year = date?.get(..4)?;
+  (year.bytes().all(|b| b.is_ascii_digit()) && year != "0000").then_some(year)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::Artist;
   use crate::core::pagination::Paged;
-  use crate::core::plugin_api::{AlbumInfo, ArtistInfo, TrackInfo};
+  use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ArtistRef, TrackInfo};
   use ratatui::{backend::TestBackend, Terminal};
 
   fn top_track(name: &str) -> TrackInfo {
@@ -196,6 +214,42 @@ mod tests {
       selected_top_track_index: 0,
       artist_selected_block: ArtistBlock::TopTracks,
       artist_hovered_block: ArtistBlock::TopTracks,
+    }
+  }
+
+  fn single(release_date: Option<&str>) -> AlbumInfo {
+    AlbumInfo {
+      name: "Album".to_string(),
+      artists: vec![ArtistRef {
+        id: None,
+        name: "First".to_string(),
+      }],
+      album_type: Some("single".to_string()),
+      release_date: release_date.map(str::to_string),
+      ..Default::default()
+    }
+  }
+
+  #[test]
+  fn album_rows_show_the_release_year_after_the_type() {
+    assert_eq!(
+      album_row_text(&single(Some("2024-05-17"))),
+      "Album - First (single, 2024)"
+    );
+    assert_eq!(
+      album_row_text(&single(Some("1999"))),
+      "Album - First (single, 1999)"
+    );
+  }
+
+  #[test]
+  fn album_rows_without_a_usable_release_date_show_the_type_only() {
+    for date in [None, Some(""), Some("19"), Some("0000")] {
+      assert_eq!(
+        album_row_text(&single(date)),
+        "Album - First (single)",
+        "{date:?}"
+      );
     }
   }
 

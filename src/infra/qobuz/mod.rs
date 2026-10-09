@@ -102,6 +102,9 @@ const FAVORITES_URI: &str = "qobuz:favorites:tracks";
 /// Per-request caps; they bound each segment GET, never a whole track.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Time without a byte from the server: a stalled segment fails here, long
+/// before `REQUEST_TIMEOUT`, so its retries start sooner.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 const PAGE_LIMIT: u32 = 500;
 const MAX_ITEMS: usize = 10_000;
@@ -157,15 +160,16 @@ fn unix_now() -> u64 {
 /// Process-wide HTTP client with per-request timeouts (see Subsonic's twin).
 pub fn shared_qobuz_client() -> Client {
   static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
-  CLIENT
-    .get_or_init(|| {
-      Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .unwrap_or_default()
-    })
-    .clone()
+  CLIENT.get_or_init(|| qobuz_client(READ_TIMEOUT)).clone()
+}
+
+fn qobuz_client(read_timeout: Duration) -> Client {
+  Client::builder()
+    .connect_timeout(CONNECT_TIMEOUT)
+    .timeout(REQUEST_TIMEOUT)
+    .read_timeout(read_timeout)
+    .build()
+    .unwrap_or_default()
 }
 
 /// The one stream session per process; sources are rebuilt per event.

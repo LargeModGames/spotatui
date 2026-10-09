@@ -498,7 +498,7 @@ pub fn select_media_metadata(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
   use crate::core::app::{NativePlaybackOrigin, NativeTrackInfo, NativeTrackKind};
   use chrono::{Duration, Utc};
@@ -582,7 +582,7 @@ mod tests {
   }
 
   #[allow(deprecated)]
-  fn episode() -> FullEpisode {
+  pub(crate) fn episode() -> FullEpisode {
     FullEpisode {
       audio_preview_url: None,
       description: "Description".to_string(),

@@ -17,7 +17,7 @@ behavior:
 
   # --- Default sorting ("<field>" or "<field>:desc") ---
   # playlist_tracks: default | name | date_added | artist | album | duration
-  # saved_albums:    default | name | date_added | artist
+  # saved_albums:    default | name | date_added | artist | release_date
   # saved_artists:   default | name
   # recently_played: default | name | artist | album
   default_sort_playlist_tracks: default

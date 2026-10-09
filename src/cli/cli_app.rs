@@ -6,7 +6,7 @@ use super::util::{Flag, Format, FormatType, JumpDirection, Type};
 
 use anyhow::{anyhow, Result};
 use reqwest::Method;
-use rspotify::model::{context::CurrentPlaybackContext, idtypes::Id, PlayableItem};
+use rspotify::model::{context::CurrentPlaybackContext, idtypes::Id, Device, PlayableItem};
 
 pub struct CliApp {
   pub net: Network,
@@ -113,25 +113,19 @@ impl CliApp {
 
   // spotatui ... -d ... (specify device to control)
   pub async fn set_device(&mut self, name: String) -> Result<()> {
-    // Change the device if specified by user
-    let app = self.net.app.lock().await;
-    if let Some(dp) = app.devices() {
-      for d in &dp.devices {
-        if d.name == name {
-          // Save the id of the device
-          if let Some(id) = d.id.clone() {
-            self
-              .net
-              .client_config
-              .set_device_id(id)
-              .map_err(|_e| anyhow!("failed to use device with name '{}'", d.name))?;
-          }
-        }
-      }
-    } else {
-      // Error out if no device is available
-      return Err(anyhow!("no device available"));
-    }
+    let id = {
+      let app = self.net.app.lock().await;
+      let devices = app
+        .devices()
+        .ok_or_else(|| anyhow!("no device available"))?;
+      device_id_by_name(&devices.devices, &name)?
+    };
+
+    self
+      .net
+      .client_config
+      .set_device_id(id)
+      .map_err(|_e| anyhow!("failed to use device with name '{name}'"))?;
     Ok(())
   }
 
@@ -246,29 +240,19 @@ impl CliApp {
 
   // spotatui playback --transfer DEVICE
   pub async fn transfer_playback(&mut self, device: &str) -> Result<()> {
-    // Get the device id by name
-    let mut id = String::new();
-    if let Some(devices) = self.net.app.lock().await.devices() {
-      for d in &devices.devices {
-        if d.name == device {
-          if let Some(device_id) = &d.id {
-            id.push_str(device_id);
-            break;
-          }
-          break;
-        }
-      }
+    let id = {
+      let app = self.net.app.lock().await;
+      let Some(devices) = app.devices() else {
+        return Err(anyhow!("no device with name '{device}'"));
+      };
+      device_id_by_name(&devices.devices, device)?
     };
 
-    if id.is_empty() {
-      Err(anyhow!("no device with name '{}'", device))
-    } else {
-      self
-        .net
-        .handle_network_event(IoEvent::TransferPlaybackToDevice(id.to_string(), true))
-        .await;
-      Ok(())
-    }
+    self
+      .net
+      .handle_network_event(IoEvent::TransferPlaybackToDevice(id, true))
+      .await;
+    Ok(())
   }
 
   pub async fn seek(&mut self, seconds_str: String) -> Result<()> {
@@ -798,6 +782,14 @@ fn random_offset(total: u32) -> Option<usize> {
   (total > 0).then(|| rand::random_range(0..total) as usize)
 }
 
+fn device_id_by_name(devices: &[Device], name: &str) -> Result<String> {
+  devices
+    .iter()
+    .find(|device| device.name == name)
+    .and_then(|device| device.id.clone())
+    .ok_or_else(|| anyhow!("no device with name '{name}'"))
+}
+
 fn parse_query_limit(max: &str, ceiling: u32) -> Result<u32> {
   match max.parse::<u32>() {
     Ok(num) if (1..=ceiling).contains(&num) => Ok(num),
@@ -808,11 +800,13 @@ fn parse_query_limit(max: &str, ceiling: u32) -> Result<u32> {
 #[cfg(test)]
 mod tests {
   use super::{
-    first_result_uri, parse_query_limit, playlist_items_total, random_offset, SearchResult, Type,
+    device_id_by_name, first_result_uri, parse_query_limit, playlist_items_total, random_offset,
+    SearchResult, Type,
   };
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ShowInfo, TrackInfo};
   use crate::core::test_helpers::{full_track, playlist_info};
+  use rspotify::model::{Device, DeviceType};
 
   fn search_results_with_hits() -> SearchResult {
     SearchResult {
@@ -1073,5 +1067,56 @@ mod tests {
     assert!(parse_query_limit("11", 10).is_err());
     assert!(parse_query_limit("0", 10).is_err());
     assert!(parse_query_limit("ten", 10).is_err());
+  }
+
+  fn device(id: Option<&str>, name: &str) -> Device {
+    Device {
+      id: id.map(str::to_string),
+      is_active: false,
+      is_private_session: false,
+      is_restricted: false,
+      name: name.to_string(),
+      _type: DeviceType::Computer,
+      volume_percent: Some(50),
+    }
+  }
+
+  #[test]
+  fn a_device_name_resolves_to_its_id() {
+    let devices = [
+      device(Some("dev1"), "Laptop"),
+      device(Some("dev2"), "Kitchen"),
+    ];
+    assert_eq!(device_id_by_name(&devices, "Kitchen").unwrap(), "dev2");
+  }
+
+  #[test]
+  fn an_unknown_device_name_is_an_error() {
+    let devices = [device(Some("dev1"), "Laptop")];
+    assert_eq!(
+      device_id_by_name(&devices, "Kitchn")
+        .unwrap_err()
+        .to_string(),
+      "no device with name 'Kitchn'"
+    );
+  }
+
+  #[test]
+  fn a_device_name_with_no_id_is_an_error() {
+    let devices = [device(None, "Kitchn")];
+    assert_eq!(
+      device_id_by_name(&devices, "Kitchn")
+        .unwrap_err()
+        .to_string(),
+      "no device with name 'Kitchn'"
+    );
+  }
+
+  #[test]
+  fn a_device_name_with_no_devices_is_an_error() {
+    assert_eq!(
+      device_id_by_name(&[], "Kitchn").unwrap_err().to_string(),
+      "no device with name 'Kitchn'"
+    );
   }
 }

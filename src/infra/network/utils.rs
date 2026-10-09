@@ -466,17 +466,24 @@ fn parse_synced_lyrics(text: &str) -> Vec<(u128, String)> {
       if parts.len() != 2 {
         return None;
       }
-      let mins = parts[0].parse::<u64>().unwrap_or(0);
+      let mins = parts[0].trim().parse::<u64>().ok()?;
       let secs_parts: Vec<&str> = parts[1].split('.').collect();
-      let secs = secs_parts[0].parse::<u64>().unwrap_or(0);
+      let secs = secs_parts[0].trim().parse::<u64>().ok()?;
       let ms = if secs_parts.len() > 1 {
-        // Handle 2- or 3-digit fractional seconds.
-        let ms_str = secs_parts[1];
-        let ms_val = ms_str.parse::<u64>().unwrap_or(0);
-        if ms_str.len() == 2 {
-          ms_val * 10
+        let ms_str = secs_parts[1].trim();
+        if ms_str.is_empty() || !ms_str.bytes().all(|b| b.is_ascii_digit()) {
+          return None;
+        }
+        let digits = if ms_str.len() > 3 {
+          &ms_str[..3]
         } else {
-          ms_val
+          ms_str
+        };
+        let ms_val = digits.parse::<u64>().ok()?;
+        match digits.len() {
+          1 => ms_val * 100,
+          2 => ms_val * 10,
+          _ => ms_val,
         }
       } else {
         0
@@ -666,5 +673,60 @@ mod tests {
     assert_eq!(app.lyrics_status(), LyricsStatus::Found);
     assert_eq!(app.lyrics(), Some(&[(1_000u128, "hi".to_string())][..]));
     assert!(app.lyrics_synced());
+  }
+
+  #[test]
+  fn lrc_metadata_tags_are_not_lyric_lines() {
+    let text = "[ar:Queen]\n[ti:Song]\n[by:someone]\n[00:01.00] Hi";
+    assert_eq!(
+      parse_synced_lyrics(text),
+      vec![(1_000u128, "Hi".to_string())]
+    );
+  }
+
+  #[test]
+  fn an_lrc_offset_tag_is_not_a_line_at_eight_minutes() {
+    let text = "[ar:Queen]\n[offset:+500]\n[00:01.00] Hi";
+    assert_eq!(
+      parse_synced_lyrics(text),
+      vec![(1_000u128, "Hi".to_string())]
+    );
+  }
+
+  #[test]
+  fn a_one_digit_lrc_fraction_is_tenths_of_a_second() {
+    assert_eq!(
+      parse_synced_lyrics("[00:12.5] x"),
+      vec![(12_500u128, "x".to_string())]
+    );
+  }
+
+  #[test]
+  fn an_lrc_fraction_past_three_digits_keeps_the_milliseconds() {
+    assert_eq!(
+      parse_synced_lyrics("[00:01.1234] x"),
+      vec![(1_123u128, "x".to_string())]
+    );
+  }
+
+  #[test]
+  fn synced_lyrics_of_only_lrc_tags_fall_back_to_plain_lyrics() {
+    let mut app = App::default();
+    apply_lyrics_response(
+      &mut app,
+      Some(search_result(
+        Some("[ar:X]\n[ti:Y]"),
+        Some("plain words"),
+        Some(180.0),
+      )),
+      180.0,
+    );
+
+    assert_eq!(app.lyrics_status(), LyricsStatus::Found);
+    assert!(!app.lyrics_synced());
+    assert_eq!(
+      app.lyrics(),
+      Some(&[(0u128, "plain words".to_string())][..])
+    );
   }
 }

@@ -794,10 +794,9 @@ where
     }
 
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-      warn!(
-        "{}",
-        rate_limit_line(&endpoint, retry_after.as_deref(), &response_body)
-      );
+      // Built outside the macro, so the 429 tests run it.
+      let line = rate_limit_line(&endpoint, retry_after.as_deref(), &response_body);
+      warn!("{line}");
       let window = retry_after_secs.max(1).min(MAX_RETRY_AFTER.as_secs());
       forced_refresh_gate
         .rate_limit_for(Duration::from_secs(window))

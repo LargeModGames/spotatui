@@ -6,4 +6,4 @@
  * The serde derives on this enum, `SortOrder` and `SortContext` are the
  * action-vocabulary wire shape: `Action::Sort` carries them directly.
  */
-export type SortField = "Default" | "Name" | "DateAdded" | "Artist" | "Duration" | "Album";
+export type SortField = "Default" | "Name" | "DateAdded" | "Artist" | "Duration" | "Album" | "ReleaseDate";

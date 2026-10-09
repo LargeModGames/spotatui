@@ -25,6 +25,8 @@ pub enum SortField {
   Duration,
   /// By album name (for tracks)
   Album,
+  /// By release date (for albums)
+  ReleaseDate,
 }
 
 impl SortField {
@@ -37,6 +39,7 @@ impl SortField {
       SortField::Artist => "Artist",
       SortField::Duration => "Duration",
       SortField::Album => "Album",
+      SortField::ReleaseDate => "Release Date",
     }
   }
 
@@ -49,6 +52,7 @@ impl SortField {
       SortField::Artist => Some('r'),
       SortField::Duration => Some('t'),
       SortField::Album => Some('l'),
+      SortField::ReleaseDate => Some('y'),
     }
   }
 
@@ -61,6 +65,7 @@ impl SortField {
       SortField::Artist => "artist",
       SortField::Duration => "duration",
       SortField::Album => "album",
+      SortField::ReleaseDate => "release_date",
     }
   }
 
@@ -74,6 +79,7 @@ impl SortField {
       "artist" => Some(SortField::Artist),
       "duration" => Some(SortField::Duration),
       "album" => Some(SortField::Album),
+      "release_date" => Some(SortField::ReleaseDate),
       _ => None,
     }
   }
@@ -164,6 +170,7 @@ impl SortContext {
         SortField::Name,
         SortField::DateAdded,
         SortField::Artist,
+        SortField::ReleaseDate,
       ],
       SortContext::SavedArtists => &[SortField::Default, SortField::Name],
       SortContext::RecentlyPlayed => &[
@@ -359,6 +366,14 @@ mod tests {
       SortState::parse("artist", SortContext::SavedArtists).unwrap_err(),
       "sort field 'artist' is not available in this context (valid: default, name)"
     );
+  }
+
+  #[test]
+  fn release_date_sort_is_offered_for_saved_albums_only() {
+    let parsed = SortState::parse("release_date:desc", SortContext::SavedAlbums).unwrap();
+    assert_eq!(parsed.field, SortField::ReleaseDate);
+    assert_eq!(parsed.to_config_str(), "release_date:desc");
+    assert!(SortState::parse("release_date", SortContext::PlaylistTracks).is_err());
   }
 
   #[test]

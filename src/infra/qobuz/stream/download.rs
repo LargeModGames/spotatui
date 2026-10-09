@@ -68,6 +68,11 @@ pub(super) mod test_support {
 
   /// Serve `segments[i]` at `/seg/i`; returns the URL template.
   pub async fn serve(segments: Vec<Vec<u8>>) -> String {
+    serve_with(segments, None).await
+  }
+
+  /// Like [`serve`], but the first request for segment `stall` gets no answer.
+  pub async fn serve_with(segments: Vec<Vec<u8>>, mut stall: Option<usize>) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -84,6 +89,14 @@ pub(super) mod test_support {
           .next()
           .and_then(|s| s.parse().ok())
           .unwrap_or(usize::MAX);
+        if stall == Some(index) {
+          stall = None;
+          tokio::spawn(async move {
+            let _open = stream;
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+          });
+          continue;
+        }
         let (status, body) = match segments.get(index) {
           Some(b) => ("200 OK", b.clone()),
           None => ("404 Not Found", Vec::new()),

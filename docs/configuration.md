@@ -99,7 +99,7 @@ Valid fields per screen:
 | Setting | Valid fields |
 |---|---|
 | `default_sort_playlist_tracks` | `default`, `name`, `date_added`, `artist`, `album`, `duration` |
-| `default_sort_saved_albums` | `default`, `name`, `date_added`, `artist` |
+| `default_sort_saved_albums` | `default`, `name`, `date_added`, `artist`, `release_date` |
 | `default_sort_saved_artists` | `default`, `name` |
 | `default_sort_recently_played` | `default`, `name`, `artist`, `album` |
 

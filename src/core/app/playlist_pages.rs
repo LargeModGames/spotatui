@@ -22,7 +22,8 @@ fn sort_playlist_track_matches(matches: &mut [(TrackInfo, usize)], sort_state: S
     SortField::DateAdded => {
       sort_by_key_with_order(matches, sort_state.order, |(_, position)| *position)
     }
-    SortField::Default => {}
+    // Not offered for playlist tracks: a track carries no release date.
+    SortField::Default | SortField::ReleaseDate => {}
   }
 }
 

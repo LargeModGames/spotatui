@@ -35,7 +35,7 @@ use crate::core::plugin_api::TrackInfo;
 use crate::core::source::{Searcher, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{advance_index, replay_file, snapshot_tracks};
+use crate::infra::queue::{advance_index, is_placeholder, replay_file, snapshot_tracks};
 
 /// Skip direction within the YouTube queue.
 #[derive(Clone, Copy)]
@@ -480,8 +480,10 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
   let index = start_idx.min(tracks.len() - 1);
 
   // A livestream (duration 0 in the search row) never finishes downloading —
-  // the tempfile fetch would just spin until the timeout. Refuse up front.
-  if tracks[index].duration_ms == 0 {
+  // the tempfile fetch would just spin until the timeout. Refuse up front. A
+  // placeholder for an off-screen URI also reads 0, but only because its
+  // duration is unknown: that one downloads (#716).
+  if tracks[index].duration_ms == 0 && !is_placeholder(&tracks[index]) {
     set_error(
       app,
       "Live streams aren't supported on the YouTube source yet".to_string(),
@@ -641,7 +643,7 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
       None => return, // session torn down between dispatch and here
       Some(s) => match s.tracks.get(target) {
         None => Plan::OutOfRange,
-        Some(track) if track.duration_ms == 0 => Plan::Live,
+        Some(track) if track.duration_ms == 0 && !is_placeholder(track) => Plan::Live,
         Some(track) => match track.uri.as_deref().map(video_id_from_uri) {
           Some(Ok(id)) => Plan::Play(
             Arc::clone(&s.player),
@@ -817,11 +819,16 @@ mod tests {
     );
   }
 
-  /// A youtube: start with no matching browse row must be consumed (it is
-  /// ours) but publish nothing — and must not panic.
+  /// A youtube: start with no matching browse row (an MCP or AI DJ
+  /// `play_now`) is ours and goes on to the download instead of being refused
+  /// as a livestream (#716). yt-dlp points at a path that does not exist, so
+  /// the start fails right after: at the download, or earlier at the audio
+  /// output where there is none.
   #[tokio::test]
-  async fn youtube_start_with_no_rows_is_consumed_without_session() {
-    let app = Arc::new(Mutex::new(test_app()));
+  async fn an_off_screen_youtube_start_is_not_refused_as_a_livestream() {
+    let mut app = test_app();
+    app.user_config.behavior.ytdlp_path = Some("/nonexistent/spotatui-test/yt-dlp".to_string());
+    let app = Arc::new(Mutex::new(app));
     assert!(
       route_youtube_event(
         &app,
@@ -829,7 +836,17 @@ mod tests {
       )
       .await
     );
-    assert!(app.lock().await.youtube_playback.is_none());
+    let guard = app.lock().await;
+    assert!(guard.youtube_playback.is_none());
+    let message = guard.status_message().unwrap_or_default().to_lowercase();
+    assert!(
+      !message.contains("live streams"),
+      "an off-screen URI must not be refused as live, got {message:?}"
+    );
+    assert!(
+      message.contains("yt-dlp") || message.contains("audio output"),
+      "the start should reach the player and the download, got {message:?}"
+    );
   }
 
   /// Livestream rows (duration 0) are refused up front with a clear message —

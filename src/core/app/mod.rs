@@ -155,6 +155,8 @@ pub struct App {
   pub instant_since_last_current_playback_poll: Instant,
   /// `timestamp` of the playback state the track-end poll already ran for.
   track_end_polled_for: Option<chrono::DateTime<chrono::Utc>>,
+  /// When the poll after a Web API command is due.
+  command_poll_at: Option<Instant>,
   navigation_stack: Vec<Route>,
   pub spectrum_data: Option<crate::infra::audio::SpectrumData>,
   pub audio_capture_active: bool,

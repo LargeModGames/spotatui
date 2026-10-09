@@ -101,6 +101,7 @@ impl Default for App {
       user: None,
       instant_since_last_current_playback_poll: Instant::now(),
       track_end_polled_for: None,
+      command_poll_at: None,
       clipboard: Clipboard::new().ok(),
       is_loading: false,
       io_tx: None,

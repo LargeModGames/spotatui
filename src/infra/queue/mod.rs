@@ -23,8 +23,10 @@ pub mod dispatch;
 use crate::core::plugin_api::TrackInfo;
 
 /// Snapshot the `TrackInfo`s for `uris` in order from the track table, then
-/// the search results (a play can come from either view). Unknown URIs are
-/// dropped.
+/// the search results (a play can come from either view). A URI in neither,
+/// which is what an MCP or AI DJ start usually sends (#716), gets a
+/// placeholder named after the URI, like the native queue's opaque items, so
+/// it still plays and `start_idx` still lines up with `uris`.
 #[cfg(feature = "queue-download")]
 pub fn snapshot_tracks(
   table: &[TrackInfo],
@@ -33,15 +35,43 @@ pub fn snapshot_tracks(
 ) -> Vec<TrackInfo> {
   uris
     .iter()
-    .filter_map(|uri| {
+    .map(|uri| {
       let matches = |t: &&TrackInfo| t.uri.as_deref() == Some(uri.as_str());
       table
         .iter()
         .find(matches)
         .or_else(|| search.and_then(|s| s.iter().find(matches)))
         .cloned()
+        .unwrap_or_else(|| placeholder_track(uri))
     })
     .collect()
+}
+
+/// Whether `track` is a row [`snapshot_tracks`] made up for an off-screen URI.
+/// Its `duration_ms` is 0 because the duration is unknown, not because the
+/// track is a livestream.
+#[cfg(feature = "queue-download")]
+pub fn is_placeholder(track: &TrackInfo) -> bool {
+  track.artists.is_empty() && track.uri.as_deref() == Some(track.name.as_str())
+}
+
+#[cfg(feature = "queue-download")]
+fn placeholder_track(uri: &str) -> TrackInfo {
+  TrackInfo {
+    uri: Some(uri.to_string()),
+    name: uri.to_string(),
+    artists: Vec::new(),
+    album: String::new(),
+    duration_ms: 0,
+    id: None,
+    album_id: None,
+    artist_refs: Vec::new(),
+    is_playable: true,
+    is_local: false,
+    track_number: 0,
+    explicit: false,
+    image_url: None,
+  }
 }
 
 /// Why a queue episode ended: a drained queue resumes the suspended context,
@@ -564,10 +594,30 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_drops_unknown_uris() {
+    fn snapshot_keeps_an_off_screen_uri_as_a_placeholder_named_after_it() {
       let table = vec![track("qobuz:track:a", "A")];
-      let snap = snapshot_tracks(&table, None, &["qobuz:track:missing".to_string()]);
-      assert!(snap.is_empty());
+      let snap = snapshot_tracks(&table, None, &["qobuz:track:51628161".to_string()]);
+      assert_eq!(snap.len(), 1);
+      assert_eq!(snap[0].uri.as_deref(), Some("qobuz:track:51628161"));
+      assert_eq!(snap[0].name, "qobuz:track:51628161");
+    }
+
+    #[test]
+    fn a_placeholder_is_told_apart_from_a_known_row_with_no_duration() {
+      let snap = snapshot_tracks(&[], None, &["youtube:off12345".to_string()]);
+      assert!(is_placeholder(&snap[0]));
+      let mut live = track("youtube:live12345", "24/7 Lofi Radio");
+      live.duration_ms = 0;
+      assert!(!is_placeholder(&live));
+    }
+
+    #[test]
+    fn snapshot_keeps_positions_aligned_when_one_uri_is_off_screen() {
+      let table = vec![track("qobuz:track:a", "A"), track("qobuz:track:c", "C")];
+      let uris = ["qobuz:track:a", "qobuz:track:b", "qobuz:track:c"].map(str::to_string);
+      let snap = snapshot_tracks(&table, None, &uris);
+      let names: Vec<&str> = snap.iter().map(|t| t.name.as_str()).collect();
+      assert_eq!(names, ["A", "qobuz:track:b", "C"]);
     }
   }
 
