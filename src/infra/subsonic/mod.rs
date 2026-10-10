@@ -356,6 +356,22 @@ impl SubsonicSource {
     Ok(detail.entry)
   }
 
+  /// `getSong.view`: one song's metadata, for a track that was started from a
+  /// bare URI (#716).
+  pub(crate) async fn song_info(&self, track_id: &str) -> Result<TrackInfo> {
+    let url = Self::append_param(
+      &self.endpoint_url("getSong.view"),
+      "id",
+      &url_encode(track_id),
+    );
+    let song = self
+      .fetch(&url)
+      .await?
+      .song
+      .ok_or_else(|| anyhow!("No song in getSong response"))?;
+    Ok(self.song_to_track_info(&song))
+  }
+
   /// Every track of a playlist as sync candidates, with the ISRC `tracks` drops.
   pub(crate) async fn sync_playlist_tracks(&self, playlist_uri: &str) -> Result<Vec<SyncTrack>> {
     let id = playlist_id_from_uri(playlist_uri)?;
@@ -1311,5 +1327,47 @@ mod tests {
     assert_eq!(found[0].title, "Yesterday");
     assert_eq!(found[0].artist, "The Beatles");
     assert_eq!(found[0].duration_ms, Some(125_000));
+  }
+
+  const GET_SONG: &str = r#"{"subsonic-response": {"status": "ok", "version": "1.16.1",
+    "song": {"id": "a1/b 2", "title": "Weightless", "artist": "Marconi Union",
+             "artistId": "ar9", "album": "Weightless", "albumId": "al3",
+             "duration": 469, "track": 1, "coverArt": "al3"}}}"#;
+
+  #[tokio::test]
+  async fn song_info_looks_one_song_up_with_get_song() {
+    let (base, server) = serve(vec![("200 OK", GET_SONG)]).await;
+    let source = SubsonicSource::new(base, "u", String::new());
+    let track = source.song_info("a1/b 2").await.unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("/rest/getSong.view?"), "{}", seen[0]);
+    assert!(seen[0].contains("u=u&t="));
+    assert!(seen[0].contains("&id=a1%2Fb+2"));
+    assert_eq!(track.uri.as_deref(), Some("subsonic:track:a1/b 2"));
+    assert_eq!(track.name, "Weightless");
+    assert_eq!(track.artists, ["Marconi Union"]);
+    assert_eq!(track.album, "Weightless");
+    assert_eq!(track.duration_ms, 469_000);
+    assert_eq!(track.album_id.as_deref(), Some("al3"));
+    assert!(track
+      .image_url
+      .is_some_and(|url| url.contains("/rest/getCoverArt.view?") && url.ends_with("&id=al3")));
+  }
+
+  #[tokio::test]
+  async fn a_song_the_server_does_not_have_is_an_error() {
+    let (base, server) = serve(vec![(
+      "200 OK",
+      r#"{"subsonic-response": {"status": "failed", "version": "1.16.1",
+        "error": {"code": 70, "message": "Song not found"}}}"#,
+    )])
+    .await;
+    let err = SubsonicSource::new(base, "u", String::new())
+      .song_info("missing")
+      .await
+      .unwrap_err();
+    server.await.unwrap();
+    assert!(err.to_string().contains("Song not found"), "{err:#}");
   }
 }

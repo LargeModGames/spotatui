@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- **A Qobuz, Subsonic or YouTube track started by URI shows its title**: when the AI DJ or an MCP client's `play_now` started a track that was not in the track table or the search results, the playbar, the window title and the OS media controls showed its URI (`qobuz:track:51628161`) for the whole track, with no artist and no duration. spotatui now looks the track up once it starts: Qobuz in its catalogue, Subsonic with the server's `getSong`, and YouTube from the video page yt-dlp already reads for the download, so YouTube costs no extra request. The URI stays on screen until the answer arrives, and a lookup that fails leaves it there without stopping playback ([#716](https://github.com/LargeModGames/spotatui/issues/716)).
+
 - **Esc on the Unsaved Settings prompt keeps the edit**: the prompt's hint says `Esc: Cancel`, but Esc closed Settings and dropped the staged change, doing what N does. Esc now hides the prompt and returns to the Settings list with the edit intact, and the Controls line names the configured back key (`Esc/x: Exit` after `back: x`) instead of a hard-coded q ([#664](https://github.com/LargeModGames/spotatui/issues/664)).
 
 - **The reserved-key error names the key the way `config.yml` spells it**: trying to bind a reserved key in Settings said `The key Char('H') is reserved and cannot be remapped` (Rust's debug name) instead of `The key H is reserved...`, and the same text was logged when a `plugin_commands` entry was skipped. The message now uses the config spelling (`H`, `left`, `enter`, ...), and `docs/keybindings.md` and `docs/scripting.md` list the reserved keys ([#665](https://github.com/LargeModGames/spotatui/issues/665)).

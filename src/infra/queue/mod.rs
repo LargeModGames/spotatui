@@ -55,6 +55,41 @@ pub fn is_placeholder(track: &TrackInfo) -> bool {
   track.artists.is_empty() && track.uri.as_deref() == Some(track.name.as_str())
 }
 
+/// The URI of `tracks[index]` when that row is a placeholder, so the source
+/// knows to look its metadata up. YouTube needs no lookup: its download
+/// prints the metadata.
+#[cfg(feature = "queue-download")]
+#[cfg_attr(not(any(feature = "qobuz", feature = "subsonic")), allow(dead_code))]
+pub fn placeholder_uri(tracks: &[TrackInfo], index: usize) -> Option<String> {
+  tracks
+    .get(index)
+    .filter(|t| is_placeholder(t))
+    .and_then(|t| t.uri.clone())
+}
+
+/// Put the metadata a source resolved for `uri` in place of its placeholder,
+/// only while that placeholder is still the current row (`tracks[index]`). A
+/// lookup that lands after a skip, a new queue, or a row that already has
+/// real metadata changes nothing. The row keeps `uri`, so routing never moves.
+/// Returns whether the row changed.
+#[cfg(feature = "queue-download")]
+pub fn apply_resolved(
+  tracks: &mut [TrackInfo],
+  index: usize,
+  uri: &str,
+  mut resolved: TrackInfo,
+) -> bool {
+  let Some(row) = tracks.get_mut(index) else {
+    return false;
+  };
+  if !is_placeholder(row) || row.uri.as_deref() != Some(uri) {
+    return false;
+  }
+  resolved.uri = Some(uri.to_string());
+  *row = resolved;
+  true
+}
+
 #[cfg(feature = "queue-download")]
 fn placeholder_track(uri: &str) -> TrackInfo {
   TrackInfo {
@@ -618,6 +653,49 @@ mod tests {
       let snap = snapshot_tracks(&table, None, &uris);
       let names: Vec<&str> = snap.iter().map(|t| t.name.as_str()).collect();
       assert_eq!(names, ["A", "qobuz:track:b", "C"]);
+    }
+
+    #[test]
+    fn a_resolved_title_replaces_the_placeholder_while_it_is_current() {
+      let uri = "qobuz:track:51628161";
+      let mut tracks = snapshot_tracks(&[], None, &[uri.to_string()]);
+      assert_eq!(placeholder_uri(&tracks, 0).as_deref(), Some(uri));
+      // The source maps its own URI; the row keeps the one it was started with.
+      let resolved = track("qobuz:track:other-id", "Around the World");
+      assert!(apply_resolved(&mut tracks, 0, uri, resolved));
+      assert_eq!(tracks[0].name, "Around the World");
+      assert_eq!(tracks[0].artists, ["Artist"]);
+      assert_eq!(tracks[0].uri.as_deref(), Some(uri));
+      assert!(!is_placeholder(&tracks[0]));
+      assert_eq!(placeholder_uri(&tracks, 0), None);
+    }
+
+    #[test]
+    fn a_late_resolution_leaves_a_newer_current_track_alone() {
+      let uris = ["youtube:aaaaaaaaaaa", "youtube:bbbbbbbbbbb"].map(str::to_string);
+      let mut tracks = snapshot_tracks(&[], None, &uris);
+      // The lookup was for the first row, but the queue has moved on to the
+      // second: neither row changes.
+      let late = track("youtube:aaaaaaaaaaa", "First");
+      assert!(!apply_resolved(&mut tracks, 1, "youtube:aaaaaaaaaaa", late));
+      assert!(tracks.iter().all(is_placeholder));
+      // Out of range (the session was replaced by a shorter one).
+      let late = track("youtube:aaaaaaaaaaa", "First");
+      assert!(!apply_resolved(&mut tracks, 5, "youtube:aaaaaaaaaaa", late));
+    }
+
+    #[test]
+    fn a_resolution_never_overwrites_a_row_with_real_metadata() {
+      let mut tracks = vec![track("subsonic:track:a", "From the playlist")];
+      assert_eq!(placeholder_uri(&tracks, 0), None);
+      let resolved = track("subsonic:track:a", "From getSong");
+      assert!(!apply_resolved(
+        &mut tracks,
+        0,
+        "subsonic:track:a",
+        resolved
+      ));
+      assert_eq!(tracks[0].name, "From the playlist");
     }
   }
 

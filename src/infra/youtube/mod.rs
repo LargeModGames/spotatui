@@ -66,6 +66,13 @@ const FORMAT_SELECTOR: &str = "140/bestaudio[ext=m4a]/bestaudio";
 /// stays undownloadable without a real PO-token provider.
 const EMBEDDED_PLAYER_CLIENTS: &str = "youtube:player_client=web_embedded,tv_embedded";
 
+/// What the download prints on stdout once yt-dlp has the video's page: the
+/// fields [`YtVideo`] reads, as one JSON object. The download already resolves
+/// the page, so a video started from a bare URI (#716) gets its title,
+/// channel and duration with no second request. `--print` alone would skip
+/// the download (it implies `--simulate`), hence `--no-simulate` next to it.
+const METADATA_TEMPLATE: &str = "%(.{id,title,channel,uploader,duration,view_count,thumbnail})j";
+
 /// Cap on a search invocation. yt-dlp searches normally return in a few
 /// seconds; a hung process must not wedge the IoEvent pump forever.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(45);
@@ -218,13 +225,16 @@ impl YouTubeSource {
     )
   }
 
-  /// Download a video's audio (itag 140 AAC/M4A preferred) to `dest`.
+  /// Download a video's audio (itag 140 AAC/M4A preferred) to `dest`, and
+  /// return the video's metadata when yt-dlp printed it (see
+  /// [`METADATA_TEMPLATE`]); a download whose metadata cannot be read still
+  /// succeeds, with `None`.
   ///
   /// When `ffmpeg` is on `$PATH`, yt-dlp remuxes the DASH fragments into a
   /// plain MP4 container ("FixupM4a"); without it the file stays fragmented,
   /// which the bundled decoder may reject — the dispatch surfaces an
   /// install-ffmpeg hint on decode failure for that case.
-  pub async fn download_audio(&self, video_id: &str, dest: &Path) -> Result<()> {
+  pub async fn download_audio(&self, video_id: &str, dest: &Path) -> Result<Option<TrackInfo>> {
     // Belt-and-braces: the dispatch already validated the id, but this method
     // is also callable directly (tests, future callers).
     if !video_id
@@ -238,11 +248,12 @@ impl YouTubeSource {
       .ok_or_else(|| anyhow!("Non-UTF-8 tempfile path"))?;
     let url = format!("https://www.youtube.com/watch?v={video_id}");
 
-    run_with_embedded_fallback(|embedded| {
+    let stdout = run_with_embedded_fallback(|embedded| {
       let args = download_args(dest, &url, embedded);
-      async move { self.run(&args, DOWNLOAD_TIMEOUT).await.map(|_| ()) }
+      async move { self.run(&args, DOWNLOAD_TIMEOUT).await }
     })
-    .await
+    .await?;
+    Ok(track_from_download_output(&stdout, video_id))
   }
 
   /// Run `yt-dlp` with `args`, returning stdout. Fails with the tail of
@@ -316,15 +327,15 @@ impl YouTubeSource {
 /// a double failure the *primary* error surfaces: it names the canonical
 /// problem (403, missing binary, dead network), where the fallback's usually
 /// degenerates to a less useful "format not available".
-async fn run_with_embedded_fallback<F, Fut>(mut attempt: F) -> Result<()>
+async fn run_with_embedded_fallback<T, F, Fut>(mut attempt: F) -> Result<T>
 where
   F: FnMut(bool) -> Fut,
-  Fut: std::future::Future<Output = Result<()>>,
+  Fut: std::future::Future<Output = Result<T>>,
 {
   match attempt(false).await {
-    Ok(()) => Ok(()),
+    Ok(out) => Ok(out),
     Err(primary) => match attempt(true).await {
-      Ok(()) => Ok(()),
+      Ok(out) => Ok(out),
       Err(fallback) => {
         log::info!("youtube: embedded-client download fallback also failed: {fallback:#}");
         Err(primary)
@@ -341,6 +352,9 @@ fn download_args<'a>(dest: &'a str, url: &'a str, embedded_fallback: bool) -> Ve
     args.extend_from_slice(&["--extractor-args", EMBEDDED_PLAYER_CLIENTS]);
   }
   args.extend_from_slice(&[
+    "--no-simulate",
+    "--print",
+    METADATA_TEMPLATE,
     "-f",
     FORMAT_SELECTOR,
     "--no-playlist",
@@ -415,6 +429,19 @@ fn video_to_track_info(v: &YtVideo) -> TrackInfo {
       .clone()
       .or_else(|| Some(thumbnail_url_for_video_id(&v.id))),
   }
+}
+
+/// The metadata a download printed for `video_id` (see [`METADATA_TEMPLATE`]),
+/// mapped like a search row. The last line that parses for this video wins;
+/// anything else on stdout (a notice, an older yt-dlp printing nothing) gives
+/// `None`, never an error.
+fn track_from_download_output(stdout: &str, video_id: &str) -> Option<TrackInfo> {
+  stdout
+    .lines()
+    .rev()
+    .filter_map(|line| serde_json::from_str::<YtVideo>(line.trim()).ok())
+    .find(|v| v.id == video_id && !v.title.trim().is_empty())
+    .map(|v| video_to_track_info(&v))
 }
 
 /// Map a search row onto the sync currency; an absent duration stays absent.
@@ -554,6 +581,50 @@ mod tests {
     assert_eq!(retry[2..], first_try[..], "everything else stays identical");
   }
 
+  #[test]
+  fn every_download_attempt_prints_the_metadata_and_still_downloads() {
+    let url = "https://www.youtube.com/watch?v=5NV6Rdv1a3I";
+    for embedded in [false, true] {
+      let args = download_args("dest.m4a", url, embedded);
+      let print = args.iter().position(|a| *a == "--print").unwrap();
+      assert_eq!(args[print + 1], METADATA_TEMPLATE);
+      // Without it `--print` turns the download into a dry run.
+      assert!(args.contains(&"--no-simulate"));
+      assert_eq!(args[args.len() - 3..], ["-o", "dest.m4a", url]);
+    }
+  }
+
+  /// What yt-dlp 2026.03.17 printed for `METADATA_TEMPLATE` on a local info
+  /// JSON (`--load-info-json`), with a notice line around it.
+  const DOWNLOAD_STDOUT: &str = concat!(
+    "[info] a notice\n",
+    r#"{"id": "5NV6Rdv1a3I", "title": "Daft Punk - Get Lucky (Official Audio)", "channel": "Daft Punk", "uploader": "Daft Punk", "duration": 249.0, "view_count": 863781229, "thumbnail": "https://i.ytimg.com/vi/5NV6Rdv1a3I/maxresdefault.jpg"}"#,
+    "\n",
+  );
+
+  #[test]
+  fn a_download_reports_the_title_channel_and_duration_it_printed() {
+    let track = track_from_download_output(DOWNLOAD_STDOUT, "5NV6Rdv1a3I").unwrap();
+    assert_eq!(track.uri.as_deref(), Some("youtube:5NV6Rdv1a3I"));
+    assert_eq!(track.name, "Daft Punk - Get Lucky (Official Audio)");
+    assert_eq!(track.artists, ["Daft Punk"]);
+    assert_eq!(track.duration_ms, 249_000);
+    assert_eq!(
+      track.image_url.as_deref(),
+      Some("https://i.ytimg.com/vi/5NV6Rdv1a3I/maxresdefault.jpg")
+    );
+  }
+
+  #[test]
+  fn a_download_with_no_usable_metadata_reports_none() {
+    assert!(track_from_download_output("", "5NV6Rdv1a3I").is_none());
+    assert!(track_from_download_output("not json\n", "5NV6Rdv1a3I").is_none());
+    // Another video's line is not this video's title.
+    assert!(track_from_download_output(DOWNLOAD_STDOUT, "dQw4w9WgXcQ").is_none());
+    // A line with no title would only replace the URI with an empty name.
+    assert!(track_from_download_output(r#"{"id": "5NV6Rdv1a3I"}"#, "5NV6Rdv1a3I").is_none());
+  }
+
   #[tokio::test]
   async fn download_fallback_never_runs_after_a_primary_success() {
     let mut attempts = Vec::new();
@@ -586,7 +657,7 @@ mod tests {
 
   #[tokio::test]
   async fn double_download_failure_surfaces_the_primary_error() {
-    let err = run_with_embedded_fallback(|embedded| async move {
+    let err = run_with_embedded_fallback::<(), _, _>(|embedded| async move {
       Err(anyhow!(if embedded {
         "format not available"
       } else {

@@ -49,6 +49,8 @@ pub struct SubsonicResponse {
   pub playlist: Option<PlaylistDetail>,
   #[serde(rename = "searchResult3")]
   pub search_result3: Option<SearchResult3>,
+  /// `getSong` → `song`.
+  pub song: Option<SubsonicSong>,
 }
 
 #[derive(Debug, Deserialize)]

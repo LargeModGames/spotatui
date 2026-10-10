@@ -39,7 +39,9 @@ use crate::core::app::{App, TrackTableContext};
 use crate::core::source::{MediaSource, Searcher, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{advance_index, replay_file, snapshot_tracks};
+use crate::infra::queue::{
+  advance_index, apply_resolved, placeholder_uri, replay_file, snapshot_tracks,
+};
 
 /// Environment variable that overrides the configured Subsonic password. Prefer
 /// it over the plaintext config field so the secret is never written to disk.
@@ -382,6 +384,7 @@ async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx:
       if guard.decoded_shuffle {
         state.set_shuffle(true);
       }
+      spawn_resolve(app, &state);
       guard.subsonic_playback = Some(state);
       guard.set_status_message(format!("\u{266a} {display}"), 4);
     }
@@ -543,6 +546,7 @@ async fn commit_index(app: &Arc<Mutex<App>>, target: usize, tmp: NamedTempFile) 
     s.index = target;
     s.advancing = false;
     s.tempfile = tmp;
+    spawn_resolve(app, s);
     s.tracks.get(target).map(|t| t.name.clone())
   } else {
     None
@@ -550,6 +554,43 @@ async fn commit_index(app: &Arc<Mutex<App>>, target: usize, tmp: NamedTempFile) 
   if let Some(display) = display {
     guard.set_status_message(format!("\u{266a} {display}"), 4);
   }
+}
+
+/// Look the current song up with `getSong` when it is a placeholder (a URI
+/// started from outside the track table, as an MCP or AI DJ `play_now` sends,
+/// #716), so the playbar and the OS media controls show its title instead of
+/// the URI. Called once the song is current, and runs on its own task so the
+/// pump never waits for it. The answer lands only while that row is still the
+/// current one; a failed lookup keeps the placeholder and never stops playback.
+fn spawn_resolve(app: &Arc<Mutex<App>>, session: &SubsonicPlaybackState) {
+  let Some(uri) = placeholder_uri(&session.tracks, session.index) else {
+    return;
+  };
+  let Ok(track_id) = track_id_from_uri(&uri).map(str::to_string) else {
+    return;
+  };
+  let app = Arc::clone(app);
+  let source = Arc::clone(&session.source);
+  tokio::spawn(async move {
+    let track = match source.song_info(&track_id).await {
+      Ok(track) => track,
+      Err(e) => {
+        log::info!("subsonic: no getSong metadata for {uri}: {e:#}");
+        return;
+      }
+    };
+    let mut guard = app.lock().await;
+    // A new session (another server, or a fresh start) builds a new source:
+    // the same URI there is a different track, so drop this result.
+    if let Some(s) = guard
+      .subsonic_playback
+      .as_mut()
+      .filter(|s| Arc::ptr_eq(&s.source, &source))
+    {
+      let index = s.index;
+      apply_resolved(&mut s.tracks, index, &uri, track);
+    }
+  });
 }
 
 /// End the subsonic session, releasing the output device and cleaning up the

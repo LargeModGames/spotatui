@@ -507,6 +507,15 @@ impl QobuzSource {
     }
   }
 
+  /// `GET track/get`: one catalogue track, with its album, for a track that
+  /// was started from a bare URI (#716).
+  pub(crate) async fn track_info(&self, track_id: &str) -> Result<TrackInfo> {
+    let track: types::Track = self
+      .get("track/get", &[("track_id", track_id.to_string())])
+      .await?;
+    Ok(track_to_track_info(&track, None))
+  }
+
   async fn listing_tracks(&self, listing: &Listing) -> Result<Vec<TrackInfo>> {
     paginate(|offset| async move {
       let (page, album) = self.listing_page(listing, offset).await?;
@@ -1270,6 +1279,51 @@ mod tests {
     assert_eq!(found[0].key, "5001");
     assert_eq!(found[0].isrc.as_deref(), Some("GBAAA0000001"));
     assert_eq!(found[0].duration_ms, Some(429_000));
+  }
+
+  /// `track/get` returns the track object itself, with its album nested.
+  const TRACK_GET: &str = r#"{
+    "id": 51628161, "title": "Around the World", "version": "Radio Edit",
+    "duration": 429, "track_number": 7,
+    "performer": { "id": 36819, "name": "Daft Punk" },
+    "album": { "id": "0060254730301", "title": "Homework",
+               "artist": { "id": 36819, "name": "Daft Punk" },
+               "image": { "large": "https://img/large.jpg" } },
+    "streamable": true, "parental_warning": false
+  }"#;
+
+  #[tokio::test]
+  async fn track_info_looks_one_track_up_in_the_catalogue() {
+    let (base, server) = serve(vec![("200 OK", TRACK_GET)]).await;
+    let track = QobuzSource::with_base(base)
+      .track_info("51628161")
+      .await
+      .unwrap();
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].0.starts_with("GET /track/get?"), "{}", seen[0].0);
+    assert!(seen[0].0.contains("track_id=51628161"));
+    assert_eq!(track.uri.as_deref(), Some("qobuz:track:51628161"));
+    assert_eq!(track.name, "Around the World (Radio Edit)");
+    assert_eq!(track.artists, ["Daft Punk"]);
+    assert_eq!(track.album, "Homework");
+    assert_eq!(track.duration_ms, 429_000);
+    assert_eq!(track.image_url.as_deref(), Some("https://img/large.jpg"));
+  }
+
+  #[tokio::test]
+  async fn a_failed_track_lookup_is_an_error_not_a_blank_track() {
+    let (base, server) = serve(vec![(
+      "404 Not Found",
+      r#"{"status":"error","code":404,"message":"No result matching given argument"}"#,
+    )])
+    .await;
+    let err = QobuzSource::with_base(base)
+      .track_info("0")
+      .await
+      .unwrap_err();
+    server.await.unwrap();
+    assert!(err.to_string().contains("track/get"), "{err:#}");
   }
 
   #[test]
