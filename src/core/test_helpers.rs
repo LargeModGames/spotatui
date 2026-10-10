@@ -31,6 +31,7 @@ pub fn queued_track(uri: &str, name: &str) -> TrackInfo {
     track_number: 1,
     explicit: false,
     image_url: None,
+    release_date: None,
   }
 }
 

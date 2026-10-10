@@ -1070,6 +1070,7 @@ mod dj_actions {
       track_number: 0,
       explicit: false,
       image_url: None,
+      release_date: None,
     }
   }
 
@@ -3449,6 +3450,7 @@ fn queued(uri: &str, name: &str) -> TrackInfo {
     track_number: 0,
     explicit: false,
     image_url: None,
+    release_date: None,
   }
 }
 

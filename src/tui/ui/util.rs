@@ -147,6 +147,13 @@ pub fn get_percentage_width(width: u16, percentage: f32) -> u16 {
   (f32::from(width) * percentage) as u16
 }
 
+/// The year of a release date (`YYYY`, `YYYY-MM` or `YYYY-MM-DD`).
+/// Spotify reports an unknown date as `0000`, which counts as none.
+pub fn release_year(date: Option<&str>) -> Option<&str> {
+  let year = date?.get(..4)?;
+  (year.bytes().all(|b| b.is_ascii_digit()) && year != "0000").then_some(year)
+}
+
 // Ensure track progress percentage is between 0 and 100 inclusive
 pub fn get_track_progress_percentage(song_progress_ms: u128, track_duration: Duration) -> u16 {
   let min_perc = 0_f64;
@@ -175,6 +182,20 @@ mod tests {
     ];
     assert_eq!(join_artist_names(&artists), "Daft Punk, Pharrell");
     assert_eq!(join_artist_names(&[]), "");
+  }
+
+  #[test]
+  fn release_year_reads_the_first_four_digits_of_any_date_precision() {
+    for date in ["2024", "2024-05", "2024-05-17"] {
+      assert_eq!(release_year(Some(date)), Some("2024"), "{date}");
+    }
+  }
+
+  #[test]
+  fn release_year_is_none_for_a_missing_short_or_zero_date() {
+    for date in [None, Some(""), Some("19"), Some("0000"), Some("abcd-01-01")] {
+      assert_eq!(release_year(date), None, "{date:?}");
+    }
   }
 
   #[test]

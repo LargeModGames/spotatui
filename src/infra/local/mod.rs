@@ -392,6 +392,7 @@ fn track_info_from_path(path: &Path) -> TrackInfo {
         // Cover art for local files is read from the file's embedded picture on
         // demand (see `extract_embedded_cover`), not carried as a URL here.
         image_url: None,
+        release_date: None,
       };
     }
   };
@@ -402,14 +403,19 @@ fn track_info_from_path(path: &Path) -> TrackInfo {
   // Prefer the primary tag; fall back to any tag.
   let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
-  let (name, artist_name, album, track_number) = if let Some(t) = tag {
+  let (name, artist_name, album, track_number, release_date) = if let Some(t) = tag {
     let name = t.title().map(|s| s.to_string()).unwrap_or(fallback_name);
     let artist = t.artist().map(|s| s.to_string()).unwrap_or_default();
     let album = t.album().map(|s| s.to_string()).unwrap_or_default();
     let track_number = t.track().unwrap_or(0);
-    (name, artist, album, track_number)
+    // The recording date or year tag; only the year is kept.
+    let release_date = t
+      .date()
+      .filter(|date| date.year > 0)
+      .map(|date| format!("{:04}", date.year));
+    (name, artist, album, track_number, release_date)
   } else {
-    (fallback_name, String::new(), String::new(), 0)
+    (fallback_name, String::new(), String::new(), 0, None)
   };
 
   // Split the combined artist string on common separators to produce a list.
@@ -441,6 +447,7 @@ fn track_info_from_path(path: &Path) -> TrackInfo {
     track_number,
     explicit: false,
     image_url: None,
+    release_date,
   }
 }
 

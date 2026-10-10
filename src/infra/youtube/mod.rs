@@ -414,6 +414,7 @@ fn video_to_track_info(v: &YtVideo) -> TrackInfo {
       .thumbnail
       .clone()
       .or_else(|| Some(thumbnail_url_for_video_id(&v.id))),
+    release_date: None,
   }
 }
 

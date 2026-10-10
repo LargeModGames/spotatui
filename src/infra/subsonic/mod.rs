@@ -488,6 +488,7 @@ impl SubsonicSource {
       track_number: s.track_number.unwrap_or(0),
       explicit: false,
       image_url: s.cover_art.as_deref().map(|id| self.cover_art_url(id)),
+      release_date: s.year.filter(|year| *year > 0).map(|year| year.to_string()),
     }
   }
 }
@@ -1082,6 +1083,25 @@ mod tests {
     let song: types::SubsonicSong = serde_json::from_str(r#"{"id":"1","title":"T"}"#).unwrap();
     let track = src.song_to_track_info(&song);
     assert_eq!(track.track_number, 0);
+  }
+
+  #[test]
+  fn subsonic_song_year_fills_the_track_release_date() {
+    let src = SubsonicSource::new("http://localhost", "user", "sesame");
+    let song: types::SubsonicSong =
+      serde_json::from_str(r#"{"id":"1","title":"T","year":1965}"#).unwrap();
+    assert_eq!(
+      src.song_to_track_info(&song).release_date.as_deref(),
+      Some("1965")
+    );
+
+    for json in [
+      r#"{"id":"1","title":"T"}"#,
+      r#"{"id":"1","title":"T","year":0}"#,
+    ] {
+      let song: types::SubsonicSong = serde_json::from_str(json).unwrap();
+      assert_eq!(src.song_to_track_info(&song).release_date, None, "{json}");
+    }
   }
 
   #[test]

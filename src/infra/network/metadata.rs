@@ -336,7 +336,15 @@ impl MetadataNetwork for Network {
             previous: None,
             total,
           };
-          let tracks_domain = map_page(&tracks, |t| crate::core::plugin_api::TrackInfo::from(t));
+          let mut tracks_domain =
+            map_page(&tracks, |t| crate::core::plugin_api::TrackInfo::from(t));
+          // The album-tracks endpoint omits each track's album, so the
+          // release-year column reads the date of the album opened here.
+          for track in &mut tracks_domain.items {
+            if track.release_date.is_none() {
+              track.release_date = album_info.release_date.clone();
+            }
+          }
           let mut app = self.app.lock().await;
           if !track_check.is_empty() {
             app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));

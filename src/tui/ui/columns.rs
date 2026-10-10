@@ -115,22 +115,24 @@ fn column_defs(table: TableColumnSet) -> &'static [ColumnDef] {
   }
 }
 
-const SONG_COLUMNS: [ColumnDef; 6] = [
+const SONG_COLUMNS: [ColumnDef; 7] = [
   liked_column(),
   index_column(),
   title_column(WidthSpec::Percent(0.3), "Title"),
   artist_column(WidthSpec::Percent(0.3)),
   album_column(WidthSpec::Percent(0.3)),
   length_column(WidthSpec::Percent(0.1), "Length"),
+  year_column(),
 ];
 
-const ALBUM_TRACK_COLUMNS: [ColumnDef; 6] = [
+const ALBUM_TRACK_COLUMNS: [ColumnDef; 7] = [
   liked_column(),
   index_column(),
   title_column(WidthSpec::PercentMinus(2.0 / 5.0, 5), "Title"),
   artist_column(WidthSpec::Percent(2.0 / 5.0)),
   album_column(WidthSpec::Percent(0.3)),
   length_column(WidthSpec::Percent(1.0 / 5.0), "Length"),
+  year_column(),
 ];
 
 const ALBUM_COLUMNS: [ColumnDef; 4] = [
@@ -177,13 +179,14 @@ const EPISODE_COLUMNS: [ColumnDef; 4] = [
   },
 ];
 
-const RECENTLY_PLAYED_COLUMNS: [ColumnDef; 6] = [
+const RECENTLY_PLAYED_COLUMNS: [ColumnDef; 7] = [
   liked_column(),
   index_column(),
   title_column(WidthSpec::PercentMinus(2.0 / 5.0, 2), "Title"),
   artist_column(WidthSpec::Percent(2.0 / 5.0)),
   album_column(WidthSpec::Percent(0.3)),
   length_column(WidthSpec::Percent(1.0 / 5.0), "Length"),
+  year_column(),
 ];
 
 const fn liked_column() -> ColumnDef {
@@ -231,6 +234,16 @@ const fn album_column(width: WidthSpec) -> ColumnDef {
   }
 }
 
+/// The album's release year: opt-in through `tables`, in no default list.
+const fn year_column() -> ColumnDef {
+  ColumnDef {
+    id: "year",
+    header: "Year",
+    width: WidthSpec::Fixed(4),
+    column_id: ColumnId::None,
+  }
+}
+
 const fn length_column(width: WidthSpec, header: &'static str) -> ColumnDef {
   ColumnDef {
     id: "length",
@@ -251,6 +264,37 @@ mod tests {
       columns.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
       ["liked", "title", "artist", "album", "length"]
     );
+  }
+
+  #[test]
+  fn the_year_column_is_in_no_default_column_list() {
+    for table in [
+      TableColumnSet::Songs,
+      TableColumnSet::AlbumTracks,
+      TableColumnSet::RecentlyPlayed,
+    ] {
+      let columns = resolve_columns(table, 100, &[]);
+      assert!(columns.iter().all(|c| c.id != "year"));
+    }
+  }
+
+  #[test]
+  fn song_tables_accept_a_configured_year_column() {
+    let year = ColumnSpec {
+      id: "year".to_string(),
+      ..Default::default()
+    };
+    for (table, name) in [
+      (TableColumnSet::Songs, "songs"),
+      (TableColumnSet::AlbumTracks, "album_tracks"),
+      (TableColumnSet::RecentlyPlayed, "recently_played"),
+    ] {
+      assert!(crate::core::user_config::valid_column_ids(name).contains(&"year"));
+      let columns = resolve_columns(table, 100, std::slice::from_ref(&year));
+      assert_eq!(columns.len(), 1, "{name}");
+      assert_eq!(columns[0].header, "Year");
+      assert_eq!(columns[0].width, 4);
+    }
   }
 
   #[test]

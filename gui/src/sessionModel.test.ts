@@ -43,6 +43,7 @@ const queued = (seconds: number): TrackInfo => ({
   track_number: 0,
   explicit: false,
   image_url: null,
+  release_date: null,
 });
 
 describe("sessionModel", () => {

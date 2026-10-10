@@ -378,6 +378,7 @@ mod tests {
       track_number: 0,
       explicit: false,
       image_url: None,
+      release_date: None,
     }
   }
 

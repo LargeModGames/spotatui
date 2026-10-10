@@ -98,6 +98,7 @@ impl From<&FullTrack> for TrackInfo {
       explicit: t.explicit,
       // Spotify cover art is resolved separately from album images, not here.
       image_url: None,
+      release_date: t.album.release_date.clone(),
     }
   }
 }
@@ -127,6 +128,9 @@ impl From<&SimplifiedTrack> for TrackInfo {
       explicit: t.explicit,
       // Spotify cover art is resolved separately from album images, not here.
       image_url: None,
+      // An album's own tracklist omits the album; `From<&FullAlbum>` and the
+      // album-tracks fetch backfill it from the parent album.
+      release_date: t.album.as_ref().and_then(|al| al.release_date.clone()),
     }
   }
 }
@@ -153,7 +157,7 @@ impl From<&FullAlbum> for AlbumInfo {
   fn from(a: &FullAlbum) -> Self {
     let album_id = a.id.id().to_string();
     // Child tracks come back as SimplifiedTrack without their parent album set;
-    // backfill the album name/id from this full album so each row is renderable.
+    // backfill the album name/id/release date from this full album so each row is renderable.
     let tracks = a
       .tracks
       .items
@@ -165,6 +169,9 @@ impl From<&FullAlbum> for AlbumInfo {
         }
         if info.album_id.is_none() {
           info.album_id = Some(album_id.clone());
+        }
+        if info.release_date.is_none() {
+          info.release_date = Some(a.release_date.clone());
         }
         info
       })
@@ -421,6 +428,61 @@ mod tests {
   }
 
   #[test]
+  fn full_track_carries_its_album_release_date() {
+    let mut ft = full_track("4uLU6hMCjMI75M1A2tKUQC", "A");
+    ft.album.release_date = Some("1987-07-27".to_string());
+    assert_eq!(
+      TrackInfo::from(&ft).release_date.as_deref(),
+      Some("1987-07-27")
+    );
+
+    ft.album.release_date = None;
+    assert_eq!(TrackInfo::from(&ft).release_date, None);
+  }
+
+  #[test]
+  fn full_album_tracks_take_the_album_release_date() {
+    // The album endpoint's tracklist omits each track's album.
+    let album: FullAlbum = serde_json::from_value(serde_json::json!({
+      "artists": [],
+      "album_type": "album",
+      "copyrights": [],
+      "external_ids": {},
+      "external_urls": {},
+      "genres": [],
+      "href": "",
+      "id": "4aawyAB9vmqN3uQ7FjRGTy",
+      "images": [],
+      "name": "Whenever You Need Somebody",
+      "release_date": "1987-11-16",
+      "release_date_precision": "day",
+      "tracks": {
+        "href": "",
+        "items": [{
+          "artists": [],
+          "disc_number": 1,
+          "duration_ms": 213_000,
+          "explicit": false,
+          "external_urls": {},
+          "id": "4uLU6hMCjMI75M1A2tKUQC",
+          "is_local": false,
+          "name": "Never Gonna Give You Up",
+          "track_number": 1
+        }],
+        "limit": 50,
+        "next": null,
+        "offset": 0,
+        "previous": null,
+        "total": 1
+      }
+    }))
+    .unwrap();
+
+    let info = AlbumInfo::from(&album);
+    assert_eq!(info.tracks[0].release_date.as_deref(), Some("1987-11-16"));
+  }
+
+  #[test]
   fn simplified_artist_maps_id_and_uri() {
     let artist = artist_with_id("2WX2uTcsvV5OnS0inACecP", "Survive Said The Prophet");
     let info = ArtistInfo::from(&artist);
@@ -504,6 +566,20 @@ mod tests {
     for key in ["uri", "name", "artists", "album", "duration_ms"] {
       assert!(obj.contains_key(key), "missing contract key `{key}`");
     }
+  }
+
+  #[test]
+  fn track_info_without_a_release_date_key_still_deserializes() {
+    // Plugin data and `last_session.yml` written before the field existed.
+    let info: TrackInfo = serde_json::from_value(serde_json::json!({
+      "uri": null,
+      "name": "A",
+      "artists": [],
+      "album": "",
+      "duration_ms": 0
+    }))
+    .unwrap();
+    assert_eq!(info.release_date, None);
   }
 
   #[test]

@@ -70,6 +70,13 @@ pub struct TrackInfo {
   /// snapshot, preserving the api_version = 4 plugin contract.
   #[serde(default)]
   pub image_url: Option<String>,
+  /// Release date of the track's album as the source reports it: `YYYY`,
+  /// `YYYY-MM` or `YYYY-MM-DD` (Spotify), or only the year (Subsonic, local
+  /// file tags). Spotify reports an unknown date as `0000`. `None` when the
+  /// source has no date. Additive: only adds a key to the serialized
+  /// snapshot, preserving the api_version = 4 plugin contract.
+  #[serde(default)]
+  pub release_date: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -586,6 +593,7 @@ pub fn playback_state(app: &App) -> Option<PlaybackState> {
     track_number: 0,
     explicit: false,
     image_url: None,
+    release_date: None,
   });
 
   let (is_playing, shuffle, repeat, device) = if let Some(s) = &snapshot {

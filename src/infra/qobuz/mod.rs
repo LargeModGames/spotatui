@@ -740,6 +740,7 @@ fn track_to_track_info(t: &types::Track, parent: Option<&types::Album>) -> Track
     track_number: t.track_number,
     explicit: t.parental_warning,
     image_url: album.and_then(|a| a.image.large.clone()),
+    release_date: None,
   }
 }
 

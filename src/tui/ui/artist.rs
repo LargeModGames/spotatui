@@ -1,4 +1,6 @@
-use super::util::{draw_selectable_list, get_artist_highlight_state, get_color, join_artist_names};
+use super::util::{
+  draw_selectable_list, get_artist_highlight_state, get_color, join_artist_names, release_year,
+};
 use crate::core::app::{App, ArtistBlock};
 use crate::core::plugin_api::AlbumInfo;
 use crate::core::spotify_access::RestrictedEndpoint;
@@ -160,13 +162,6 @@ fn album_row_text(album: &AlbumInfo) -> String {
   )
 }
 
-/// The year of a Spotify release date (`YYYY`, `YYYY-MM` or `YYYY-MM-DD`).
-/// Spotify reports an unknown date as `0000`, which counts as none.
-fn release_year(date: Option<&str>) -> Option<&str> {
-  let year = date?.get(..4)?;
-  (year.bytes().all(|b| b.is_ascii_digit()) && year != "0000").then_some(year)
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -190,6 +185,7 @@ mod tests {
       track_number: 1,
       explicit: false,
       image_url: None,
+      release_date: None,
     }
   }
 

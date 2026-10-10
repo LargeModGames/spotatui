@@ -290,6 +290,7 @@ fn station_to_track_info(s: &RbStation) -> TrackInfo {
     track_number: 0,
     explicit: false,
     image_url: None,
+    release_date: None,
   }
 }
 
@@ -309,6 +310,7 @@ pub fn config_station_to_track_info(name: &str, url: &str) -> TrackInfo {
     track_number: 0,
     explicit: false,
     image_url: None,
+    release_date: None,
   }
 }
 

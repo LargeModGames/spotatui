@@ -271,6 +271,7 @@ pub fn stored_to_track_info(t: &StoredTrack) -> TrackInfo {
     // StoredTrack persists no thumbnail (on-disk format stays stable); the
     // video id alone yields a deterministic thumbnail URL.
     image_url: Some(super::thumbnail_url_for_video_id(&t.video_id)),
+    release_date: None,
   }
 }
 

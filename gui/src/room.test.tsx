@@ -20,6 +20,7 @@ const track = (name: string, index: number): TrackInfo => ({
   track_number: index + 1,
   explicit: false,
   image_url: null,
+  release_date: null,
 });
 
 const album: AlbumInfo = {

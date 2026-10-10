@@ -913,6 +913,7 @@ mod tests {
       track_number: 0,
       explicit: false,
       image_url: None,
+      release_date: None,
     };
 
     let messages = apply_from_page(&mut app, &action_frame(Action::QueueTrack(track)));
@@ -1010,6 +1011,7 @@ mod tests {
           track_number: 0,
           explicit: false,
           image_url: None,
+          release_date: None,
         })
         .collect(),
       offset,

@@ -26,6 +26,7 @@ const track = (name: string, seconds = 200, album = "21"): TrackInfo => ({
   track_number: 0,
   explicit: false,
   image_url: null,
+  release_date: null,
 });
 
 const tracks = ["One", "Two", "Three"].map((name) => track(name));
