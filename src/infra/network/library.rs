@@ -604,6 +604,10 @@ fn librespot_track_info(track: &LibrespotTrack) -> Option<TrackInfo> {
       name: artist.name.clone(),
     })
     .collect::<Vec<_>>();
+  // librespot reads an absent date as year 0; keep only the year, since a
+  // missing month or day reads as January or the 1st.
+  let year = track.album.date.year();
+  let release_date = (year > 0).then(|| format!("{year:04}"));
 
   Some(TrackInfo {
     uri,
@@ -622,6 +626,7 @@ fn librespot_track_info(track: &LibrespotTrack) -> Option<TrackInfo> {
     track_number: track.number.max(0) as u32,
     explicit: track.is_explicit,
     image_url: None,
+    release_date,
   })
 }
 

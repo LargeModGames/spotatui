@@ -98,7 +98,8 @@ format:
 # Reorder, remove, rename (header:) and resize (width_percent: or width:, not
 # both, no zeros, percents may not sum past 100). Omit a table for defaults.
 # Valid ids:
-#   songs / album_tracks / recently_played: liked, index, title, artist, album, length
+#   songs / album_tracks / recently_played: liked, index, title, artist, album, length,
+#     year (the album's release year; in no default list)
 #   albums:   title, artist, date, liked
 #   podcasts: title, publisher
 #   episodes: played, date, title, duration

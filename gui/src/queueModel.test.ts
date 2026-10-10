@@ -16,6 +16,7 @@ const track = (uri: string | null): TrackInfo => ({
   track_number: 0,
   explicit: false,
   image_url: null,
+  release_date: null,
 });
 
 const native = [track("a"), track("b"), track("c")];

@@ -46,6 +46,7 @@ pub(super) fn queue_track(uri: Option<&str>, name: &str) -> TrackInfo {
     track_number: 0,
     explicit: false,
     image_url: None,
+    release_date: None,
   }
 }
 

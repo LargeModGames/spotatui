@@ -2476,9 +2476,9 @@ impl UserConfig {
 /// registry; the round-trip test guards the two staying in sync.
 pub fn valid_column_ids(table: &str) -> &'static [&'static str] {
   match table {
-    "songs" | "album_tracks" | "recently_played" => {
-      &["liked", "index", "title", "artist", "album", "length"]
-    }
+    "songs" | "album_tracks" | "recently_played" => &[
+      "liked", "index", "title", "artist", "album", "length", "year",
+    ],
     "albums" => &["title", "artist", "date", "liked"],
     "podcasts" => &["title", "publisher"],
     "episodes" => &["played", "date", "title", "duration"],

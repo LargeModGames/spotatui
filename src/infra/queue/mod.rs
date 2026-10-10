@@ -71,6 +71,7 @@ fn placeholder_track(uri: &str) -> TrackInfo {
     track_number: 0,
     explicit: false,
     image_url: None,
+    release_date: None,
   }
 }
 
@@ -560,6 +561,7 @@ mod tests {
         track_number: 0,
         explicit: false,
         image_url: None,
+        release_date: None,
       }
     }
 

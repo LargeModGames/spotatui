@@ -31,4 +31,12 @@ artist_refs: Array<ArtistRef>, is_playable: boolean, is_local: boolean, track_nu
  * sources without per-track art. Additive: only adds a key to the serialized
  * snapshot, preserving the api_version = 4 plugin contract.
  */
-image_url: string | null, };
+image_url: string | null, 
+/**
+ * Release date of the track's album as the source reports it: `YYYY`,
+ * `YYYY-MM` or `YYYY-MM-DD` (Spotify), or only the year (Subsonic, local
+ * file tags). Spotify reports an unknown date as `0000`. `None` when the
+ * source has no date. Additive: only adds a key to the serialized
+ * snapshot, preserving the api_version = 4 plugin contract.
+ */
+release_date: string | null, };

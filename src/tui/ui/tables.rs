@@ -13,7 +13,9 @@ use rspotify::model::PlayableItem;
 use rspotify::prelude::Id;
 
 use super::columns::{resolve_columns, ResolvedColumn, TableColumnSet};
-use super::util::{get_color, get_percentage_width, join_artist_names, millis_to_minutes};
+use super::util::{
+  get_color, get_percentage_width, join_artist_names, millis_to_minutes, release_year,
+};
 use crate::tui::theme::{EmphasisExt, ThemeExt};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -178,6 +180,9 @@ fn track_table_item(track: &TrackInfo, columns: &[ResolvedColumn]) -> TableItem 
         "artist" => track.artists.join(", "),
         "album" => track.album.clone(),
         "length" => millis_to_minutes(track.duration_ms as u128),
+        "year" => release_year(track.release_date.as_deref())
+          .unwrap_or_default()
+          .to_string(),
         _ => String::new(),
       })
       .collect(),
@@ -892,7 +897,61 @@ mod tests {
       track_number: i + 1,
       explicit: false,
       image_url: None,
+      release_date: None,
     }
+  }
+
+  fn column(id: &str) -> crate::core::user_config::ColumnSpec {
+    crate::core::user_config::ColumnSpec {
+      id: id.to_string(),
+      ..Default::default()
+    }
+  }
+
+  fn dated(release_date: Option<&str>) -> TrackInfo {
+    TrackInfo {
+      release_date: release_date.map(str::to_string),
+      ..track(1)
+    }
+  }
+
+  #[test]
+  fn the_year_column_renders_the_album_release_year() {
+    let columns = resolve_columns(
+      TableColumnSet::Songs,
+      80,
+      &[column("title"), column("year")],
+    );
+    for date in ["1997", "1997-01", "1997-01-20"] {
+      assert_eq!(
+        track_table_item(&dated(Some(date)), &columns).format,
+        ["Track 1", "1997"],
+        "{date}"
+      );
+    }
+  }
+
+  #[test]
+  fn the_year_column_is_empty_for_an_unknown_release_date() {
+    let columns = resolve_columns(TableColumnSet::Songs, 80, &[column("year")]);
+    for date in [None, Some(""), Some("0000")] {
+      assert_eq!(
+        track_table_item(&dated(date), &columns).format,
+        [""],
+        "{date:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn a_configured_year_column_shows_in_the_song_table() {
+    let mut app = App::default();
+    app.user_config.tables.songs = vec![column("title"), column("year")];
+    app.track_table.tracks = vec![dated(Some("1997-01-20"))];
+
+    let content = rendered_with(&app, Rect::new(0, 0, 60, 6), draw_song_table);
+    assert!(content.contains("Year"), "header: {content}");
+    assert!(content.contains("1997"), "row: {content}");
   }
 
   #[test]

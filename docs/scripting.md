@@ -160,7 +160,7 @@ The playback table has these fields:
     id, album_id,
     artist_refs = { { id, name }, ... },
     is_playable, is_local, track_number, explicit,
-    image_url,
+    image_url, release_date,
   } or nil,
   is_playing = bool,
   progress_ms = number,
@@ -180,7 +180,11 @@ tracks); `album_id` is the album's base62 id, when known; `artist_refs` is an ar
 and empty when only the combined `artists` display list is available (e.g. native-playback
 snapshots); `is_playable` and `is_local` default to `true`/`false`; `track_number` defaults to
 `0` and `explicit` to `false` when unknown; `image_url` is a directly-fetchable cover-art URL
-when the source provides one (e.g. Subsonic, YouTube, Qobuz), otherwise `nil`.
+when the source provides one (e.g. Subsonic, YouTube, Qobuz), otherwise `nil`; `release_date` is
+the release date of the track's album as the source reports it (`"1997"`, `"1997-01"` or
+`"1997-01-20"`; Spotify sends `"0000"` for an unknown date), or `nil` when the source has none.
+It is filled in track lists such as search results and saved tracks; the track in the playback
+table itself always has `release_date = nil`, because the now-playing snapshot carries no date.
 
 The cached reads for playlists, queue and search results refresh when the underlying data
 changes; they are cheap to call but can be empty until the app has actually fetched that data.

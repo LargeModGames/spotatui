@@ -267,12 +267,14 @@ Valid ids and default order per table:
 
 | Table | Screen | Default columns | All valid ids |
 |---|---|---|---|
-| `songs` | playlists, liked songs, search results | `liked, title, artist, album, length` | + `index` |
-| `album_tracks` | an album's track list | `liked, index, title, artist, length` | + `album` |
-| `recently_played` | Recently Played | `liked, title, artist, length` | + `index`, `album` |
+| `songs` | playlists, liked songs, search results | `liked, title, artist, album, length` | + `index`, `year` |
+| `album_tracks` | an album's track list | `liked, index, title, artist, length` | + `album`, `year` |
+| `recently_played` | Recently Played | `liked, title, artist, length` | + `index`, `album`, `year` |
 | `albums` | Saved Albums | `title, artist, date` | + `liked` |
 | `podcasts` | Podcasts | `title, publisher` | — |
 | `episodes` | a podcast's episodes | `played, date, title, duration` | — |
+
+`year` is the release year of the track's album, 4 cells wide. No table shows it by default; add `- { id: year }` to a table to see it. Spotify and Subsonic tracks carry the year, and local files do when their tags have a date or year; Qobuz, YouTube, Internet Radio and Apple Music tracks leave the cell empty, as does a track whose date Spotify does not know.
 
 The ▶ now-playing marker attaches to the `title` column, or to the first column if you remove `title`. Sort keyboard shortcuts are unaffected by column layout.
 
