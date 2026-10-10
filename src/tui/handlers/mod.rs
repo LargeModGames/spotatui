@@ -155,6 +155,13 @@ pub fn handle_app(key: Key, app: &mut App) {
     return;
   }
 
+  // The sort menu is a popup whose shortcut letters ('n', 'd', 'a', ...)
+  // collide with global bindings, so it needs the keys before they are claimed.
+  if app.get_current_route().active_block == ActiveBlock::SortMenu {
+    handle_block_events(key, app);
+    return;
+  }
+
   // Friends has a few local keys that conflict with globals, plus inline input modes
   // that need first chance to consume typed characters.
   if should_route_friends_before_globals(key, app) {
@@ -675,10 +682,25 @@ fn handle_escape(app: &mut App) {
   }
 }
 
+/// Test fixture: a track table for an open playlist with its sort menu open.
+/// Shared by the issue #660 routing tests below.
+#[cfg(test)]
+fn app_with_open_playlist_sort_menu() -> App {
+  use crate::core::app::TrackTableContext;
+  use crate::core::sort::SortContext;
+
+  let mut app = App::default();
+  app.set_track_table(Vec::new(), TrackTableContext::MyPlaylists);
+  app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+  sort_menu::open_sort_menu(&mut app, SortContext::PlaylistTracks);
+  app
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::TrackTableContext;
+  use crate::core::sort::{SortContext, SortField, SortOrder};
   use crate::core::test_helpers::full_track;
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
@@ -695,6 +717,55 @@ mod tests {
     sync::mpsc::{channel, TryRecvError},
     time::SystemTime,
   };
+
+  // --- Sort menu shortcut routing (issue #660) ---
+
+  #[test]
+  fn sort_menu_shortcut_letters_reach_the_menu_instead_of_global_bindings() {
+    // 'n' is next_track, 'd' is manage_devices and 'a' is jump_to_album
+    // globally; inside the open sort menu each must sort instead.
+    for (key, field) in [
+      (Key::Char('n'), SortField::Name),
+      (Key::Char('d'), SortField::Default),
+      (Key::Char('a'), SortField::DateAdded),
+    ] {
+      let mut app = app_with_open_playlist_sort_menu();
+
+      handle_app(key, &mut app);
+
+      assert_eq!(app.sort_state(SortContext::PlaylistTracks).field, field);
+      assert!(!app.view.sort_menu_visible);
+    }
+  }
+
+  #[test]
+  fn uppercase_sort_menu_shortcuts_reach_the_menu_too() {
+    // 'R' is generate_recap globally, and the sort shortcut 'r' sorts by
+    // artist: the uppercase letter must reach the menu, not the binding.
+    let mut app = app_with_open_playlist_sort_menu();
+
+    handle_app(Key::Char('R'), &mut app);
+
+    let sort = app.sort_state(SortContext::PlaylistTracks);
+    assert_eq!(sort.field, SortField::Artist);
+    assert_eq!(sort.order, SortOrder::Descending);
+    assert!(!app.view.sort_menu_visible);
+  }
+
+  #[test]
+  fn sort_menu_letters_without_a_shortcut_keep_the_menu_open() {
+    // 'x' is not a sort shortcut; the menu must stay open and not trigger
+    // any global binding either.
+    let mut app = app_with_open_playlist_sort_menu();
+
+    handle_app(Key::Char('x'), &mut app);
+
+    assert!(app.view.sort_menu_visible);
+    assert_eq!(
+      app.sort_state(SortContext::PlaylistTracks).field,
+      SortField::Default
+    );
+  }
 
   fn friends_app() -> App {
     let mut app = App::default();
