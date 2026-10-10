@@ -740,14 +740,14 @@ mod tests {
 
   #[test]
   fn uppercase_sort_menu_shortcuts_reach_the_menu_too() {
-    // 'N' is the uppercase Name shortcut (sort descending), and it must not
-    // fall through to a global binding that happens to share the letter.
+    // 'R' is generate_recap globally, and the sort shortcut 'r' sorts by
+    // artist: the uppercase letter must reach the menu, not the binding.
     let mut app = app_with_open_playlist_sort_menu();
 
-    handle_app(Key::Char('N'), &mut app);
+    handle_app(Key::Char('R'), &mut app);
 
     let sort = app.sort_state(SortContext::PlaylistTracks);
-    assert_eq!(sort.field, SortField::Name);
+    assert_eq!(sort.field, SortField::Artist);
     assert_eq!(sort.order, SortOrder::Descending);
     assert!(!app.view.sort_menu_visible);
   }
