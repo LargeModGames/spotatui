@@ -9,8 +9,8 @@ use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::right_event(k, &app.user_config.keys) => {
-      common_key_events::handle_right_event(app)
+    k if common_key_events::toward_content_event(k, &app.user_config) => {
+      common_key_events::focus_content(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => select_next(app),
     k if common_key_events::up_event(k, &app.user_config.keys) => select_previous(app),

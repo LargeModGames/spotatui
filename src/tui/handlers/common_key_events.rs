@@ -1,5 +1,5 @@
 use crate::core::app::{ActiveBlock, App, RouteId};
-use crate::core::user_config::KeyBindings;
+use crate::core::user_config::{KeyBindings, UserConfig};
 use crate::tui::event::Key;
 
 pub fn down_event(key: Key, keys: &KeyBindings) -> bool {
@@ -125,20 +125,31 @@ pub fn content_active_block_for_route(route_id: &RouteId) -> Option<ActiveBlock>
   }
 }
 
-pub fn handle_right_event(app: &mut App) {
-  match app.get_current_route().hovered_block {
-    ActiveBlock::MyPlaylists | ActiveBlock::Library => {
-      if let Some(active_block) = content_active_block_for_route(&app.get_current_route().id) {
-        app.set_current_route_state(Some(active_block), Some(active_block));
-      }
-    }
-    _ => {}
-  };
+pub fn sidebar_on_right(config: &UserConfig) -> bool {
+  config.behavior.sidebar_position == "right"
 }
 
-pub fn handle_left_event(app: &mut App) {
-  // TODO: This should send you back to either library or playlist based on last selection
+pub fn toward_sidebar_event(key: Key, config: &UserConfig) -> bool {
+  let keys = &config.keys;
+  if sidebar_on_right(config) { right_event(key, keys) } else { left_event(key, keys) }
+}
+
+pub fn toward_content_event(key: Key, config: &UserConfig) -> bool {
+  let keys = &config.keys;
+  if sidebar_on_right(config) { left_event(key, keys) } else { right_event(key, keys) }
+}
+
+pub fn focus_sidebar(app: &mut App) {
   app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+}
+
+pub fn focus_content(app: &mut App) {
+  let hovered = app.get_current_route().hovered_block;
+  if matches!(hovered, ActiveBlock::Library | ActiveBlock::MyPlaylists) {
+    if let Some(block) = content_active_block_for_route(&app.get_current_route().id) {
+      app.set_current_route_state(Some(block), Some(block));
+    }
+  }
 }
 
 #[cfg(test)]
@@ -231,13 +242,13 @@ mod tests {
     let mut app = App::default();
     // Spotify (default): left arrow focuses the Library list.
     app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
-    handle_left_event(&mut app);
+    focus_sidebar(&mut app);
     assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
 
     // Local: the Library list keeps its free rows, so it stays the top block.
     app.active_source = Source::Local;
     app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
-    handle_left_event(&mut app);
+    focus_sidebar(&mut app);
     assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
   }
 }

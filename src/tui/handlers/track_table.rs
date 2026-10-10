@@ -8,8 +8,8 @@ pub fn handler(key: Key, app: &mut App) {
   // A row parked by an earlier key follows only that key; the paging arms below re-park.
   app.forget_pending_row_selection();
   match key {
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
-      common_key_events::handle_left_event(app)
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
+      common_key_events::focus_sidebar(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       let current_index = app.view.track_table_index;

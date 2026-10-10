@@ -46,7 +46,7 @@ pub fn handler(key: Key, app: &mut App) {
         _ => {}
       }
     }
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
       match app.get_current_route().hovered_block {
         ActiveBlock::ArtistBlock
         | ActiveBlock::AlbumList
@@ -66,8 +66,8 @@ pub fn handler(key: Key, app: &mut App) {
         _ => {}
       }
     }
-    k if common_key_events::right_event(k, &app.user_config.keys) => {
-      common_key_events::handle_right_event(app)
+    k if common_key_events::toward_content_event(k, &app.user_config) => {
+      common_key_events::focus_content(app)
     }
     Key::Char('w') if app.get_current_route().hovered_block == ActiveBlock::PlayBar => {
       super::playbar::handler(key, app);

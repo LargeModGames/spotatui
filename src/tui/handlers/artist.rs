@@ -297,12 +297,16 @@ pub fn handler(key: Key, app: &mut App) {
       k if common_key_events::left_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
         match artist.artist_hovered_block {
-          ArtistBlock::TopTracks => common_key_events::handle_left_event(app),
+          ArtistBlock::TopTracks => {
+            if !common_key_events::sidebar_on_right(&app.user_config) {
+              common_key_events::focus_sidebar(app)
+            }
+          }
           ArtistBlock::Albums => {
             if artist.top_tracks_visible() {
               artist.artist_hovered_block = ArtistBlock::TopTracks;
-            } else {
-              common_key_events::handle_left_event(app);
+            } else if !common_key_events::sidebar_on_right(&app.user_config) {
+              common_key_events::focus_sidebar(app);
             }
           }
           ArtistBlock::RelatedArtists => {
