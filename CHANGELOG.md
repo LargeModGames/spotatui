@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- **Sort menu shortcut letters sort again**: the sort menu lists a letter next to each field, but with the default keys `n` skipped to the next track, `d` opened the device picker and `a` jumped to the playing album instead of sorting, and the menu stayed open. The same happened to `A`, `T` and `R` in uppercase. The global keybinding match ran before the menu could see the key; the menu now gets every key while it is open, like the Party popup and the Create Playlist form, so each listed letter sorts and the menu closes ([#660](https://github.com/LargeModGames/spotatui/issues/660)).
+
 - **Esc on the Unsaved Settings prompt keeps the edit**: the prompt's hint says `Esc: Cancel`, but Esc closed Settings and dropped the staged change, doing what N does. Esc now hides the prompt and returns to the Settings list with the edit intact, and the Controls line names the configured back key (`Esc/x: Exit` after `back: x`) instead of a hard-coded q ([#664](https://github.com/LargeModGames/spotatui/issues/664)).
 
 - **The reserved-key error names the key the way `config.yml` spells it**: trying to bind a reserved key in Settings said `The key Char('H') is reserved and cannot be remapped` (Rust's debug name) instead of `The key H is reserved...`, and the same text was logged when a `plugin_commands` entry was skipped. The message now uses the config spelling (`H`, `left`, `enter`, ...), and `docs/keybindings.md` and `docs/scripting.md` list the reserved keys ([#665](https://github.com/LargeModGames/spotatui/issues/665)).
