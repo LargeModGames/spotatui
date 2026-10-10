@@ -445,7 +445,17 @@ fn response_is_json(response: &reqwest::Response) -> bool {
     })
 }
 
+#[cfg(test)]
+thread_local! {
+  /// Set by a timing test, so its request does not queue behind every other HTTP test.
+  static SKIP_PACING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub async fn pace_spotify_api_call() {
+  #[cfg(test)]
+  if SKIP_PACING.with(|skip| skip.get()) {
+    return;
+  }
   // Reserve a start slot under the lock, then sleep OUTSIDE it. The previous
   // implementation held the lock across the sleep, which serialized every
   // "concurrent" tokio::join! call site into 250ms-apart starts (adding ~1s of
@@ -2015,6 +2025,7 @@ mod tests {
     };
     let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
 
+    SKIP_PACING.with(|skip| skip.set(true));
     let started_at = Instant::now();
     let first = spotify_api_request_json_for_base_with_refresh(&spotify, request(), refresh, &gate)
       .await
@@ -2079,6 +2090,7 @@ mod tests {
 
     let spotify = spotify_with_access_token("access").await;
     let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
+    SKIP_PACING.with(|skip| skip.set(true));
     let started_at = Instant::now();
     let error = spotify_api_request_json_for_base_with_refresh(
       &spotify,
@@ -2116,6 +2128,7 @@ mod tests {
     let spotify = spotify_with_access_token("access").await;
     let forced_refreshes = Arc::new(AtomicUsize::new(0));
     let forced = Arc::clone(&forced_refreshes);
+    SKIP_PACING.with(|skip| skip.set(true));
     let error = spotify_api_request_json_for_base_with_refresh(
       &spotify,
       SpotifyApiRequest {

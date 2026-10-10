@@ -22,6 +22,36 @@ Example: spotatui pb -s -f 'playing on %d at %v%'",
     )
 }
 
+/// Refuses a URI `play --uri` cannot start, so it fails before boot.
+fn parse_spotify_uri(uri: &str) -> Result<String, String> {
+  const OTHER_SOURCES: [&str; 6] = [
+    "file",
+    "subsonic",
+    "youtube",
+    "qobuz",
+    "radio",
+    "applemusic",
+  ];
+  const PLAYABLE: [&str; 5] = [
+    "spotify:track:",
+    "spotify:album:",
+    "spotify:artist:",
+    "spotify:playlist:",
+    "spotify:show:",
+  ];
+  if PLAYABLE.iter().any(|kind| uri.starts_with(kind)) {
+    return Ok(uri.to_string());
+  }
+  let expected = "expected a spotify:track:, spotify:album:, spotify:artist:, \
+spotify:playlist: or spotify:show: URI";
+  match uri.split_once(':') {
+    Some((scheme, _)) if OTHER_SOURCES.contains(&scheme) => Err(format!(
+      "{scheme}: URIs play only in the running spotatui; {expected}"
+    )),
+    _ => Err(expected.to_string()),
+  }
+}
+
 pub fn playback_subcommand() -> Command {
   Command::new("playback")
     .version(env!("CARGO_PKG_VERSION"))
@@ -184,7 +214,8 @@ pub fn play_subcommand() -> Command {
     .author(env!("CARGO_PKG_AUTHORS"))
     .about("Plays a URI or another Spotify item by name")
     .long_about(
-      "If you specify a URI, the type can be inferred. If you want to play something by \
+      "If you specify a Spotify URI, the type can be inferred. URIs of other sources \
+play only in the running spotatui. If you want to play something by \
 name, you have to specify the type: `--track`, `--album`, `--artist`, `--playlist` \
 or `--show`. The first item which was found will be played without confirmation. \
 To add a track to the queue, use `--queue`. To play a random song from a playlist, \
@@ -199,7 +230,8 @@ The same function as found in `playback` will be called.",
         .short('u')
         .long("uri")
         .value_name("URI")
-        .help("Plays the URI"),
+        .value_parser(parse_spotify_uri)
+        .help("Plays a Spotify track, album, artist, playlist or show URI"),
     )
     .arg(
       Arg::new("name")
@@ -398,4 +430,51 @@ specify it.",
         .required(true)
         .multiple(false),
     )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn play_uri_accepts_the_spotify_kinds_it_can_start() {
+    for uri in [
+      "spotify:track:1",
+      "spotify:album:1",
+      "spotify:artist:1",
+      "spotify:playlist:1",
+      "spotify:show:1",
+    ] {
+      let matches = play_subcommand()
+        .try_get_matches_from(["play", "--uri", uri])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("uri").unwrap(), uri);
+    }
+  }
+
+  #[test]
+  fn play_uri_refuses_another_source_and_names_its_scheme() {
+    let error = play_subcommand()
+      .try_get_matches_from(["play", "--uri", "qobuz:track:123"])
+      .unwrap_err();
+    assert!(
+      error
+        .to_string()
+        .contains("qobuz: URIs play only in the running spotatui"),
+      "{error}"
+    );
+  }
+
+  #[test]
+  fn play_uri_refuses_a_spotify_kind_it_cannot_start() {
+    for uri in [
+      "spotify:episode:1",
+      "Spotify:track:1",
+      "https://open.spotify.com/track/1",
+      "not-a-uri",
+    ] {
+      let error = parse_spotify_uri(uri).unwrap_err();
+      assert!(error.starts_with("expected a spotify:track:"), "{error}");
+    }
+  }
 }

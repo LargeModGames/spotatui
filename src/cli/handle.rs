@@ -9,6 +9,46 @@ use super::{
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 
+/// The Spotify state a subcommand reads before it acts.
+#[derive(Debug, PartialEq, Eq)]
+struct ProbePlan {
+  devices: bool,
+  playback: bool,
+}
+
+/// `seek` and the status line fetch their own playback, so they skip that probe.
+fn probe_plan(cmd: &str, matches: &ArgMatches) -> ProbePlan {
+  match cmd {
+    "playback" => ProbePlan {
+      devices: true,
+      playback: [
+        "toggle",
+        "like",
+        "dislike",
+        "shuffle",
+        "repeat",
+        "share-track",
+        "share-album",
+      ]
+      .into_iter()
+      .any(|flag| matches.get_flag(flag)),
+    },
+    // The start seeds its shuffle state from the current playback.
+    "play" => ProbePlan {
+      devices: true,
+      playback: true,
+    },
+    "list" => ProbePlan {
+      devices: matches.get_flag("devices"),
+      playback: false,
+    },
+    _ => ProbePlan {
+      devices: false,
+      playback: false,
+    },
+  }
+}
+
 // Handle the different subcommands
 pub async fn handle_matches(
   matches: &ArgMatches,
@@ -18,11 +58,16 @@ pub async fn handle_matches(
 ) -> Result<String> {
   let mut cli = CliApp::new(net, config);
 
-  cli.net.handle_network_event(IoEvent::GetDevices).await;
-  cli
-    .net
-    .handle_network_event(IoEvent::GetCurrentPlayback)
-    .await;
+  let plan = probe_plan(&cmd, matches);
+  if plan.devices {
+    cli.net.handle_network_event(IoEvent::GetDevices).await;
+  }
+  if plan.playback {
+    cli
+      .net
+      .handle_network_event(IoEvent::GetCurrentPlayback)
+      .await;
+  }
 
   let devices_list = match cli.net.app.lock().await.devices() {
     Some(p) => p
@@ -153,5 +198,233 @@ pub async fn handle_matches(
     output
   } else {
     Err(anyhow!("{}", api_error))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::app::App;
+  use crate::core::config::ClientConfig;
+  use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+  use std::sync::Arc;
+  use tokio::io::AsyncWriteExt;
+  use tokio::sync::Mutex;
+
+  const NOTHING: ProbePlan = ProbePlan {
+    devices: false,
+    playback: false,
+  };
+
+  fn plan(cmd: &str, args: &[&str]) -> ProbePlan {
+    let command = match cmd {
+      "playback" => crate::cli::playback_subcommand(),
+      "play" => crate::cli::play_subcommand(),
+      "list" => crate::cli::list_subcommand(),
+      _ => crate::cli::search_subcommand(),
+    };
+    let matches = command
+      .try_get_matches_from(std::iter::once(cmd).chain(args.iter().copied()))
+      .unwrap();
+    probe_plan(cmd, &matches)
+  }
+
+  #[test]
+  fn search_and_the_library_lists_probe_nothing() {
+    assert_eq!(plan("search", &["queen", "--tracks"]), NOTHING);
+    assert_eq!(plan("list", &["--playlists"]), NOTHING);
+    assert_eq!(plan("list", &["--liked"]), NOTHING);
+  }
+
+  #[test]
+  fn the_device_list_probes_only_the_devices() {
+    assert_eq!(
+      plan("list", &["--devices"]),
+      ProbePlan {
+        devices: true,
+        playback: false,
+      }
+    );
+  }
+
+  #[test]
+  fn play_probes_the_devices_and_the_playback() {
+    assert_eq!(
+      plan("play", &["--uri", "spotify:track:1"]),
+      ProbePlan {
+        devices: true,
+        playback: true,
+      }
+    );
+  }
+
+  #[test]
+  fn playback_reads_the_playback_first_only_for_flags_that_act_on_it() {
+    for flag in [
+      "--toggle",
+      "--like",
+      "--dislike",
+      "--shuffle",
+      "--repeat",
+      "--share-track",
+      "--share-album",
+    ] {
+      assert!(plan("playback", &[flag]).playback, "{flag}");
+    }
+    for args in [
+      &["--next"][..],
+      &["--previous"],
+      &["--volume", "40"],
+      &["--seek", "+10"],
+      &["--status"],
+    ] {
+      assert_eq!(
+        plan("playback", args),
+        ProbePlan {
+          devices: true,
+          playback: false,
+        },
+        "{args:?}"
+      );
+    }
+  }
+
+  /// A Spotify API that answers every request with an empty `204` and keeps each request line.
+  async fn recording_network() -> (
+    Network,
+    Arc<std::sync::Mutex<Vec<String>>>,
+    tokio::task::JoinHandle<()>,
+    tempfile::TempDir,
+  ) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let server = tokio::spawn(async move {
+      loop {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        let line = request.lines().next().unwrap_or_default().to_string();
+        log.lock().unwrap().push(line);
+        stream
+          .write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n")
+          .await
+          .unwrap();
+      }
+    });
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+    let state_dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(state_dir.path().join("state.yml"));
+    let app = Arc::new(Mutex::new(app));
+    let spotify = spotify_with_access_token("test_token", base_url).await;
+    let net = Network::new(
+      Some(spotify),
+      ClientConfig::new(),
+      &app,
+      std::path::PathBuf::new(),
+    );
+    (net, seen, server, state_dir)
+  }
+
+  #[tokio::test]
+  async fn a_search_sends_no_device_or_playback_request() {
+    // Generous: every HTTP test shares the API pacing limiter.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let (net, seen, server, _state_dir) = recording_network().await;
+      let matches = crate::cli::search_subcommand()
+        .try_get_matches_from(["search", "queen", "--tracks"])
+        .unwrap();
+
+      let _ = handle_matches(&matches, "search".to_string(), net, UserConfig::new()).await;
+      server.abort();
+
+      let seen = seen.lock().unwrap();
+      assert!(
+        seen.iter().any(|line| line.contains("/v1/search")),
+        "{seen:?}"
+      );
+      assert!(
+        !seen.iter().any(|line| line.contains("/v1/me/player")),
+        "{seen:?}"
+      );
+    })
+    .await
+    .expect("search test timed out");
+  }
+
+  fn is_playback_fetch(line: &str) -> bool {
+    line.starts_with("GET /v1/me/player?") || line.starts_with("GET /v1/me/player ")
+  }
+
+  async fn requests_of(cmd: &str, args: &[&str]) -> Vec<String> {
+    let (net, seen, server, _state_dir) = recording_network().await;
+    let command = match cmd {
+      "playback" => crate::cli::playback_subcommand(),
+      _ => crate::cli::list_subcommand(),
+    };
+    let matches = command
+      .try_get_matches_from(std::iter::once(cmd).chain(args.iter().copied()))
+      .unwrap();
+    let _ = handle_matches(&matches, cmd.to_string(), net, UserConfig::new()).await;
+    server.abort();
+    let seen = seen.lock().unwrap().clone();
+    seen
+  }
+
+  #[tokio::test]
+  async fn the_device_list_fetches_the_devices_and_not_the_playback() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let seen = requests_of("list", &["--devices"]).await;
+      assert!(
+        seen
+          .iter()
+          .any(|line| line.contains("/v1/me/player/devices")),
+        "{seen:?}"
+      );
+      assert!(!seen.iter().any(|line| is_playback_fetch(line)), "{seen:?}");
+    })
+    .await
+    .expect("device list test timed out");
+  }
+
+  #[tokio::test]
+  async fn only_a_flag_that_reads_the_playback_fetches_it_before_acting() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let toggle = requests_of("playback", &["--toggle"]).await;
+      let fetches = toggle.iter().filter(|line| is_playback_fetch(line)).count();
+      assert_eq!(fetches, 2, "the probe and the status line: {toggle:?}");
+
+      let next = requests_of("playback", &["--next"]).await;
+      let fetches = next.iter().filter(|line| is_playback_fetch(line)).count();
+      assert_eq!(fetches, 1, "the status line only: {next:?}");
+    })
+    .await
+    .expect("playback probe test timed out");
+  }
+
+  #[tokio::test]
+  async fn the_status_line_does_not_fetch_the_liked_songs() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let (net, seen, server, _state_dir) = recording_network().await;
+      let mut cli = CliApp::new(net, UserConfig::new());
+
+      let status = cli.get_status("%t".to_string()).await;
+      server.abort();
+
+      assert!(status.is_err(), "nothing plays, so there is no status line");
+      let seen = seen.lock().unwrap();
+      assert!(
+        seen.iter().any(|line| line.contains("/v1/me/player")),
+        "{seen:?}"
+      );
+      assert!(
+        !seen.iter().any(|line| line.contains("/v1/me/tracks")),
+        "{seen:?}"
+      );
+    })
+    .await
+    .expect("status test timed out");
   }
 }

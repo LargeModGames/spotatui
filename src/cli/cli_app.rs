@@ -377,10 +377,6 @@ impl CliApp {
       .net
       .handle_network_event(IoEvent::GetCurrentPlayback)
       .await;
-    self
-      .net
-      .handle_network_event(IoEvent::GetCurrentSavedTracks(None))
-      .await;
 
     let context = self
       .net
