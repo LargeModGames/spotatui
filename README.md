@@ -4,7 +4,7 @@
 </h1>
 <p align="center">
   A terminal music player written in Rust, powered by <a href="https://github.com/ratatui-org/ratatui">Ratatui</a><br>
-  Native Spotify streaming, synced lyrics, a real-time audio visualizer, local file,<br> Subsonic/Navidrome, Internet Radio, YouTube, and Qobuz sources. Spotify is optional.
+  Native Spotify streaming, synced lyrics, a real-time audio visualizer, local file,<br> Subsonic/Navidrome, Internet Radio, YouTube, and Qobuz sources, plus Apple Music on macOS. Spotify is optional.
 </p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
@@ -34,6 +34,7 @@
   - [Internet Radio](#internet-radio)
   - [YouTube](#youtube)
   - [Qobuz](#qobuz)
+  - [Apple Music](#apple-music)
 - [AI DJ](#ai-dj)
 - [Native Streaming](#native-streaming)
 - [Configuration](#configuration)
@@ -65,7 +66,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 | Key differences | spotify-tui | spotatui |
 |---|---|---|
 | Spotify backend | external Connect device (spotifyd, official client, ...) | built-in native client |
-| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio, Qobuz |
+| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio, Qobuz, Apple Music (macOS) |
 
 ## Features
 
@@ -82,7 +83,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 
 ## Installation
 
-> **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, Local Files, and Qobuz all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
+> **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, Local Files, Qobuz, and Apple Music (macOS) all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
 
 ```bash
 # One-line installer — macOS, Linux, WSL. Grabs the prebuilt binary for your
@@ -154,7 +155,7 @@ The flake provides `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. nixpkg
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
-> **Which build has which sources?** The prebuilt Linux, macOS, and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz. A plain `cargo install --locked spotatui` does not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz`.
+> **Which build has which sources?** The prebuilt Linux, macOS, and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz, and the macOS ones also Apple Music. A plain `cargo install --locked spotatui` does not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz` (on macOS, add `apple-music`).
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
@@ -171,6 +172,7 @@ Welcome to spotatui! Choose your music source:
   4) Internet Radio (free)
   5) Local Files    (free)
   6) Qobuz          (paid subscription, logs in through the browser)
+  7) Apple Music    (macOS Music app, needs Automation permission)
 ```
 
 Pick a **free source** to skip Spotify entirely, or pick **Spotify** to run the auth wizard (you'll create a Spotify Developer app — see the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation#connecting-to-spotify)). Only sources compiled into your build are listed.
@@ -365,7 +367,7 @@ spotatui is extremely lightweight compared to the official Electron client.
 
 ## Playback Requirements
 
-The non-Spotify sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz) play through spotatui's own audio engine and need no extra setup.
+The non-Spotify sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz) play through spotatui's own audio engine and need no extra setup. Apple Music (macOS) plays through the Music app instead; see [Apple Music](#apple-music).
 
 Spotify is different: it uses the [Web API](https://developer.spotify.com/documentation/web-api/), which doesn't stream audio itself. To play Spotify tracks you need **one** of:
 
