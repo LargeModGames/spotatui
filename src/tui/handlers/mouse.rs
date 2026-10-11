@@ -358,7 +358,9 @@ fn selected_setting_expects_key_capture(app: &App) -> bool {
 
 fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
   // Rows are drawn from the filtered view, so a click resolves to a position in
-  // it before it means anything as an index into `settings_items`.
+  // it before it means anything as an index into `settings_items`. The last
+  // frame scrolled to keep the selection from before this click on screen, so
+  // the scroll offset comes from that selection's position in the same view.
   let visible = filtered_setting_indices(app);
   let Some(clicked_row) = settings_item_index_from_click(list_area, mouse_row, visible.len())
   else {
@@ -1680,6 +1682,65 @@ mod tests {
     assert_eq!(app.view.settings_filter, "sort");
     assert_eq!(app.view.settings_selected_index, visible[1]);
     assert_ne!(visible[1], 1);
+  }
+
+  #[test]
+  fn clicking_the_top_row_of_a_scrolled_settings_list_selects_the_row_that_was_drawn() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 100,
+      height: 20,
+    };
+    open_settings(&mut app);
+    let visible = filtered_setting_indices(&app);
+    let areas = settings_layout_areas(&app).expect("settings layout areas");
+    let inner_height = (areas.list.height - 2) as usize;
+    assert!(
+      visible.len() > inner_height,
+      "the list must overflow its box to scroll"
+    );
+
+    // The last row is selected, so the drawn list is scrolled to the bottom.
+    app.view.settings_selected_index = *visible.last().unwrap();
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        areas.list.x + 2,
+        areas.list.y + 1,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(
+      app.view.settings_selected_index,
+      visible[visible.len() - inner_height]
+    );
+    assert!(!app.view.settings_edit_mode);
+  }
+
+  #[test]
+  fn clicking_a_settings_row_before_the_list_scrolls_selects_the_row_under_the_pointer() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 100,
+      height: 20,
+    };
+    open_settings(&mut app);
+    let visible = filtered_setting_indices(&app);
+    assert!(visible.len() > 2, "expected several Behavior rows");
+    app.view.settings_selected_index = visible[0];
+
+    let areas = settings_layout_areas(&app).expect("settings layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        areas.list.x + 2,
+        areas.list.y + 3,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(app.view.settings_selected_index, visible[2]);
   }
 
   #[test]
