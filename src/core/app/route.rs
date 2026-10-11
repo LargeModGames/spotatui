@@ -312,6 +312,13 @@ impl App {
     self.dispatch(event);
   }
 
+  /// Starts the in-app Spotify login when there is no Spotify session.
+  pub(crate) fn begin_spotify_login_if_needed(&mut self) {
+    if !self.spotify_connected {
+      self.dispatch(IoEvent::BeginSpotifyLogin);
+    }
+  }
+
   // The navigation_stack actually only controls the large block to the right of `library` and
   // `playlists`
   pub fn push_navigation_stack(&mut self, next_route_id: RouteId, next_active_block: ActiveBlock) {

@@ -261,6 +261,19 @@ impl App {
     self.state_save_due = Some(Instant::now() + Duration::from_millis(STATE_SAVE_DEBOUNCE_MS));
   }
 
+  /// The Spotify Connect device playback goes to by default.
+  pub fn saved_spotify_device_id(&self) -> Option<String> {
+    self.runtime_state.spotify_device_id.clone()
+  }
+
+  pub fn remember_spotify_device(&mut self, device_id: &str) {
+    let patch = PersistedRuntimeState::spotify_device_id(device_id);
+    if let Some(device_id) = patch.spotify_device_id.clone() {
+      self.runtime_state.spotify_device_id = Some(device_id);
+      self.schedule_state_save(patch);
+    }
+  }
+
   pub fn save_runtime_state(&self, patch: &PersistedRuntimeState) -> anyhow::Result<()> {
     if patch.is_empty() {
       return Ok(());

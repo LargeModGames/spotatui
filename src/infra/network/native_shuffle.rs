@@ -17,7 +17,7 @@
 //! (non-`streaming`) CI build still compiles and runs their tests.
 
 #[cfg(feature = "streaming")]
-use super::requests::spotify_get_typed_compat_for_with_refresh;
+use super::requests::spotify_get_typed_for;
 #[cfg(feature = "streaming")]
 use super::Network;
 #[cfg(feature = "streaming")]
@@ -41,9 +41,8 @@ use rspotify::model::{
   PlayableItem,
 };
 #[cfg(feature = "streaming")]
-use rspotify::{prelude::*, AuthCodePkceSpotify};
+use rspotify::prelude::*;
 #[cfg(feature = "streaming")]
-use std::path::Path;
 #[cfg(feature = "streaming")]
 use std::sync::Arc;
 #[cfg(feature = "streaming")]
@@ -700,9 +699,7 @@ impl Network {
   /// by then; the generation stamp discards results for a replaced session.
   #[cfg(feature = "streaming")]
   fn spawn_full_context_fetch(&self, kind: FullFetch, generation: u64) {
-    let spotify = self.spotify().clone();
     let app = Arc::clone(&self.app);
-    let token_cache_path = self.token_cache_path.clone();
     tokio::spawn(async move {
       // A failed fetch strands a lazily-seeded session on its single seed
       // track (nothing to advance into), so retry transient API failures
@@ -711,12 +708,8 @@ impl Network {
       let mut attempt = 0u32;
       let result = loop {
         let result = match &kind {
-          FullFetch::Playlist(id) => {
-            fetch_playlist_uris(&spotify, &token_cache_path, &app, generation, id).await
-          }
-          FullFetch::SavedTracks => {
-            fetch_saved_track_uris(&spotify, &token_cache_path, &app, generation).await
-          }
+          FullFetch::Playlist(id) => fetch_playlist_uris(&app, generation, id).await,
+          FullFetch::SavedTracks => fetch_saved_track_uris(&app, generation).await,
         };
         attempt += 1;
         match result {
@@ -739,8 +732,6 @@ impl Network {
 /// abandoned walk (its session was cleared or replaced) returns an empty list.
 #[cfg(feature = "streaming")]
 async fn paginate_uris<Item>(
-  spotify: &AuthCodePkceSpotify,
-  token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
   generation: u64,
   path: &str,
@@ -762,12 +753,9 @@ where
     if !still_wanted {
       return Ok((Vec::new(), false));
     }
-    let page = spotify_get_typed_compat_for_with_refresh::<Page<Item>>(
-      spotify,
+    let page = spotify_get_typed_for::<Page<Item>>(
       path,
       &[("limit", limit.to_string()), ("offset", offset.to_string())],
-      token_cache_path,
-      app,
     )
     .await?;
     let has_next = page.next.is_some();
@@ -794,24 +782,17 @@ where
 /// unplayable items are skipped.
 #[cfg(feature = "streaming")]
 async fn fetch_playlist_uris(
-  spotify: &AuthCodePkceSpotify,
-  token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
   generation: u64,
   playlist_id: &PlaylistId<'static>,
 ) -> anyhow::Result<(Vec<String>, bool)> {
   let path = format!("playlists/{}/items", playlist_id.id());
-  paginate_uris(
-    spotify,
-    token_cache_path,
-    app,
-    generation,
-    &path,
-    |item: &PlaylistItem| match item.item.as_ref() {
+  paginate_uris(app, generation, &path, |item: &PlaylistItem| {
+    match item.item.as_ref() {
       Some(PlayableItem::Track(track)) => track.id.as_ref().map(|id| id.uri()),
       _ => None,
-    },
-  )
+    }
+  })
   .await
 }
 
@@ -819,19 +800,12 @@ async fn fetch_playlist_uris(
 /// capped at [`MAX_NATIVE_SHUFFLE_TRACKS`]. Returns `(uris, truncated)`.
 #[cfg(feature = "streaming")]
 async fn fetch_saved_track_uris(
-  spotify: &AuthCodePkceSpotify,
-  token_cache_path: &Path,
   app: &Arc<Mutex<App>>,
   generation: u64,
 ) -> anyhow::Result<(Vec<String>, bool)> {
-  paginate_uris(
-    spotify,
-    token_cache_path,
-    app,
-    generation,
-    "me/tracks",
-    |item: &SavedTrack| item.track.id.as_ref().map(|id| id.uri()),
-  )
+  paginate_uris(app, generation, "me/tracks", |item: &SavedTrack| {
+    item.track.id.as_ref().map(|id| id.uri())
+  })
   .await
 }
 
@@ -1144,12 +1118,7 @@ mod tests {
     });
     app.claim_decoded_sink(crate::core::source::Source::Qobuz);
     let app = Arc::new(Mutex::new(app));
-    let network = Network::new(
-      None,
-      crate::core::config::ClientConfig::new(),
-      &app,
-      std::path::PathBuf::new(),
-    );
+    let network = Network::new(None, &app);
     (app, network)
   }
 

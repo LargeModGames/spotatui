@@ -1,8 +1,8 @@
 //! The first-launch interaction surface.
 //!
 //! Core and infra never talk to the console: every interactive first-run flow
-//! (the source picker, Spotify client setup, OAuth URL display, the manual
-//! redirect paste, source credential prompts) goes through this trait so the
+//! (the source picker, the Spotify pairing code, source credential prompts)
+//! goes through this trait so the
 //! frontend decides how to present it. The terminal frontend's
 //! `ConsoleOnboarding` (`tui/onboarding.rs`) reproduces the historical stdout
 //! byte for byte; a windowed frontend can implement the same surface with

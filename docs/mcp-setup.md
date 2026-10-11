@@ -179,7 +179,7 @@ PowerShell.
 ### Step 6 — Confirm the tools are visible
 
 Reload or restart your client so it picks up the new server, then list your tools.
-You should see eight, all prefixed with the server name (`mcp__spotatui__…` in
+You should see eighteen, all prefixed with the server name (`mcp__spotatui__…` in
 Claude Code, or `mcp__plugin_spotatui_spotatui__…` if you installed the plugin —
 a plugin's tools carry its name too):
 

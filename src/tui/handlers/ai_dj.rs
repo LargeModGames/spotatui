@@ -1003,7 +1003,7 @@ mod tests {
     let dir = tempfile::tempdir().expect("a writable scratch directory");
     let (mut app, _rx) = dj_app();
     app.user_config.path_to_config = Some(UserConfigPaths {
-      // A missing parent rather than a read-only directory: `write_private_file`
+      // A missing parent rather than a read-only directory: `write_private_file_atomic`
       // fails at `open` on every platform and for every user, including the root
       // account CI containers usually run as, which ignores mode bits.
       config_file_path: dir.path().join("no-such-directory").join("config.yml"),

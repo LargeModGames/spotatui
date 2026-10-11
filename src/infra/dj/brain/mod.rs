@@ -17,9 +17,9 @@
 //! the queue, or simply ask a question and stop. A step with nothing to call is
 //! how a plain conversational reply happens.
 //!
-//! The tools are [`super::tools::TOOLS`] verbatim — the same table the MCP server
-//! publishes — so a tool added there is one the in-TUI DJ can use with no change
-//! here.
+//! The tools are [`super::tools::dj_tools`]: the table the MCP server publishes,
+//! without the MCP-only library and device tools, so a DJ tool added there is
+//! one the in-TUI DJ can use with no change here.
 //!
 //! **All three backends speak the same JSON step protocol** rather than each
 //! adopting its provider's native tool-calling. `agent_cli` is a one-shot
@@ -32,7 +32,7 @@ pub mod anthropic;
 pub mod openai_compat;
 
 use super::brief::TasteBrief;
-use super::tools::TOOLS;
+use super::tools::dj_tools;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::sync::OnceLock;
@@ -151,8 +151,8 @@ impl DjBrain {
 
 /// The system prompt every backend uses.
 ///
-/// The tool list is rendered from [`TOOLS`], so the DJ inherits whatever the MCP
-/// server publishes.
+/// The tool list is rendered from [`dj_tools`], so the DJ inherits every DJ
+/// tool the MCP server publishes.
 pub fn system_prompt() -> String {
   format!(
     "You are the DJ for a terminal music player, talking to the listener in a chat \
@@ -189,8 +189,7 @@ fn step_shape_hint() -> String {
 
 /// The tool table as prompt text: name, what it does, and its argument schema.
 fn tool_catalogue() -> String {
-  TOOLS
-    .iter()
+  dj_tools()
     .map(|tool| {
       format!(
         "- {}: {}\n  arguments: {}",
@@ -225,7 +224,7 @@ pub fn step_schema() -> Value {
         "items": {
           "type": "object",
           "properties": {
-            "name": {"type": "string", "enum": TOOLS.iter().map(|tool| tool.name).collect::<Vec<_>>()},
+            "name": {"type": "string", "enum": dj_tools().map(|tool| tool.name).collect::<Vec<_>>()},
             "arguments": {"type": "object"}
           },
           "required": ["name", "arguments"],
@@ -575,18 +574,27 @@ mod tests {
   }
 
   #[test]
-  fn the_prompt_offers_every_tool_the_mcp_server_publishes() {
-    // Iterated rather than listed, so a tool added to the table fails this until
-    // the in-TUI DJ can see it too. That inheritance is the point of the design.
+  fn the_prompt_offers_every_dj_tool_and_no_mcp_only_one() {
+    // Iterated rather than listed, so a DJ tool added to the table fails this
+    // until the in-TUI DJ can see it too. That inheritance is the point of the design.
     let prompt = system_prompt();
-    for tool in TOOLS {
-      assert!(prompt.contains(tool.name), "{} is not offered", tool.name);
+    for tool in super::super::tools::TOOLS {
+      assert_eq!(
+        prompt.contains(&format!("- {}:", tool.name)),
+        tool.dj,
+        "{} offered wrongly",
+        tool.name
+      );
     }
     let names = step_schema()["properties"]["tool_calls"]["items"]["properties"]["name"]["enum"]
       .as_array()
       .unwrap()
       .clone();
-    assert_eq!(names.len(), TOOLS.len(), "the schema must offer them too");
+    assert_eq!(
+      names.len(),
+      dj_tools().count(),
+      "the schema must offer them too"
+    );
   }
 
   #[test]

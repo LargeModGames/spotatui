@@ -2,6 +2,10 @@
 //!
 //! Handles authentication, session management, and audio playback with Spotify Connect.
 
+use crate::infra::spotify::credentials::{
+  clear_cached_streaming_credentials, get_default_cache_path, streaming_proxy_from_env,
+  SPOTIFY_PLAYER_CLIENT_ID,
+};
 use anyhow::{anyhow, Context, Result};
 use librespot_connect::{ConnectConfig, LoadRequest, SavedPlaybackState, Spirc};
 use librespot_core::{
@@ -13,7 +17,6 @@ use librespot_core::{
   spclient::TransferRequest,
   SpotifyUri,
 };
-use librespot_oauth::OAuthClientBuilder;
 use librespot_playback::{
   audio_backend,
   config::{AudioFormat, PlayerConfig},
@@ -538,162 +541,6 @@ impl audio_backend::Sink for RecoveringSink {
   }
 }
 
-/// OAuth scopes required for streaming (based on spotify-player)
-const STREAMING_SCOPES: [&str; 6] = [
-  "streaming",
-  "user-read-playback-state",
-  "user-modify-playback-state",
-  "user-read-currently-playing",
-  "user-library-read",
-  "user-read-private",
-];
-
-/// spotify-player's client_id - known to work with librespot
-/// Using this because librespot requires a client_id with specific permissions
-/// that regular Spotify developer apps may not have.
-const SPOTIFY_PLAYER_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
-
-/// spotify-player's redirect_uri - must match what's registered with their client_id
-const SPOTIFY_PLAYER_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
-
-/// Wait until `address` looks bindable, so the streaming consent is not opened
-/// while the Web API callback server still holds the port.
-///
-/// Advisory only, and deliberately so. librespot binds the port itself, so the
-/// most this can do is probe and release; between that release and librespot's
-/// own bind the port is unowned, which no amount of retrying can close. Returns
-/// whether the port came free rather than `Result`, because the caller must not
-/// treat "still busy" as fatal: librespot's bind is the authority and reports a
-/// far better error than this probe can.
-fn wait_for_oauth_callback_port(address: &str, max_wait: Duration, retry_delay: Duration) -> bool {
-  let deadline = Instant::now() + max_wait;
-  loop {
-    match std::net::TcpListener::bind(address) {
-      Ok(listener) => {
-        drop(listener);
-        return true;
-      }
-      Err(_) if Instant::now() < deadline => {
-        std::thread::sleep(retry_delay.min(deadline.saturating_duration_since(Instant::now())));
-      }
-      Err(_) => return false,
-    }
-  }
-}
-
-fn request_streaming_oauth_credentials() -> Result<Credentials> {
-  // The Web API and streaming OAuth clients both use port 8989. On a fresh
-  // profile their callback servers run back-to-back, so wait for the first
-  // listener to be fully released before librespot opens the second consent.
-  // Advisory: if it is still busy we go ahead anyway and let librespot's own
-  // bind produce the real error, rather than refusing to try at all.
-  if !wait_for_oauth_callback_port(
-    "127.0.0.1:8989",
-    Duration::from_secs(5),
-    Duration::from_millis(50),
-  ) {
-    warn!("OAuth callback port 127.0.0.1:8989 still busy; attempting the streaming login anyway");
-  }
-
-  let client_builder = OAuthClientBuilder::new(
-    SPOTIFY_PLAYER_CLIENT_ID,
-    SPOTIFY_PLAYER_REDIRECT_URI,
-    STREAMING_SCOPES.to_vec(),
-  )
-  .open_in_browser();
-
-  let oauth_client = client_builder
-    .build()
-    .map_err(|e| anyhow!("Failed to build OAuth client: {:?}", e))?;
-
-  let token = oauth_client
-    .get_access_token()
-    .map_err(|e| anyhow!("OAuth authentication failed: {:?}", e))?;
-
-  Ok(Credentials::with_access_token(token.access_token))
-}
-
-/// Populate the reusable credential cache before the TUI enters raw mode.
-/// Deferred player initialization and recovery can then remain cache-only.
-pub fn ensure_streaming_credentials_cached(
-  onboarding: &dyn crate::core::onboarding::Onboarding,
-) -> Result<()> {
-  let cache_path = get_default_cache_path();
-  if let Some(path) = cache_path.as_ref() {
-    crate::core::paths::ensure_private_dir(path)?;
-  }
-  let cache = Cache::new(cache_path, None, None, None)?;
-  if cache.credentials().is_none() {
-    onboarding.info("Streaming authentication required - opening browser...");
-    let credentials = request_streaming_oauth_credentials()?;
-    cache.save_credentials(&credentials);
-  }
-  Ok(())
-}
-
-pub fn streaming_credentials_are_cached() -> Result<bool> {
-  let cache_path = get_default_cache_path();
-  if let Some(path) = cache_path.as_ref() {
-    crate::core::paths::ensure_private_dir(path)?;
-  }
-  Ok(
-    Cache::new(cache_path, None, None, None)?
-      .credentials()
-      .is_some(),
-  )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StreamingAuthMode {
-  /// Default startup mode: use cache first, then fall back to browser OAuth.
-  InteractiveIfNeeded,
-  /// Recovery mode: only use cached credentials; never open a browser.
-  CacheOnly,
-}
-
-fn resolve_streaming_credentials(
-  cache: &Cache,
-  auth_mode: StreamingAuthMode,
-) -> Result<(Credentials, bool)> {
-  if let Some(cached_creds) = cache.credentials() {
-    info!("Using cached streaming credentials");
-    return Ok((cached_creds, true));
-  }
-
-  match auth_mode {
-    StreamingAuthMode::InteractiveIfNeeded => Ok((request_streaming_oauth_credentials()?, false)),
-    StreamingAuthMode::CacheOnly => Err(anyhow!(
-      "No cached streaming credentials found (cache-only recovery mode)"
-    )),
-  }
-}
-
-fn clear_cached_streaming_credentials(cache_path: &Option<PathBuf>) {
-  let Some(credentials_path) = cache_path
-    .as_ref()
-    .map(|path| path.join("credentials.json"))
-  else {
-    return;
-  };
-
-  match std::fs::remove_file(&credentials_path) {
-    Ok(()) => {
-      info!(
-        "Cleared cached streaming credentials at {}",
-        credentials_path.display()
-      );
-    }
-    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-    Err(e) => {
-      warn!(
-        "Failed to clear cached streaming credentials at {}: {}",
-        credentials_path.display(),
-        e
-      );
-    }
-  }
-}
-
 /// Configuration for the streaming player
 #[derive(Clone, Debug)]
 pub struct StreamingConfig {
@@ -761,35 +608,8 @@ impl StreamingPlayer {
     self.with_connection(|connection| connection.session.clone())
   }
 
-  /// Create a new streaming player using librespot-oauth for authentication
-  ///
-  /// This will check for cached credentials first, and if not found,
-  /// will open a browser for OAuth authentication.
-  ///
-  /// # Arguments
-  /// * `client_id` - Spotify application client ID
-  /// * `redirect_uri` - OAuth redirect URI (must match Spotify app settings)
-  /// * `config` - Streaming configuration options
-  pub async fn new(_client_id: &str, _redirect_uri: &str, config: StreamingConfig) -> Result<Self> {
-    Self::new_with_auth_mode(config, StreamingAuthMode::InteractiveIfNeeded).await
-  }
-
-  /// Create a new streaming player using ONLY cached credentials.
-  ///
-  /// This path is intended for runtime recovery flows where opening a browser
-  /// would be disruptive.
-  pub async fn new_cache_only(
-    _client_id: &str,
-    _redirect_uri: &str,
-    config: StreamingConfig,
-  ) -> Result<Self> {
-    Self::new_with_auth_mode(config, StreamingAuthMode::CacheOnly).await
-  }
-
-  async fn new_with_auth_mode(
-    config: StreamingConfig,
-    auth_mode: StreamingAuthMode,
-  ) -> Result<Self> {
+  /// A streaming player from the cached Spotify login; never opens a browser.
+  pub async fn new_cache_only(config: StreamingConfig) -> Result<Self> {
     // Set up cache paths
     let cache_path = config.cache_path.clone().or_else(get_default_cache_path);
     let audio_cache_path = if config.audio_cache {
@@ -808,9 +628,9 @@ impl StreamingPlayer {
 
     let cache = Cache::new(cache_path.clone(), None, audio_cache_path, None)?;
 
-    // Try to get credentials from cache first, then optionally fall back to OAuth.
-    let (mut credentials, mut used_cached_credentials) =
-      resolve_streaming_credentials(&cache, auth_mode)?;
+    let credentials = cache
+      .credentials()
+      .ok_or_else(|| anyhow!("No cached Spotify login; log in to Spotify first"))?;
 
     // Create session configuration using spotify-player's client_id
     let mut session_config = SessionConfig {
@@ -900,70 +720,46 @@ impl StreamingPlayer {
       is_group: false,
       disable_volume: false,
       volume_steps: 64,
+      emit_set_queue_events: false,
     };
 
     info!("Initializing Spirc with device_id={}", session.device_id());
 
     let init_timeout = spirc_init_timeout();
 
-    let mut retried_with_fresh_credentials = false;
-
     // Create Spirc (Spotify Connect controller)
-    let (spirc, spirc_task) = loop {
-      let spirc_new = Spirc::new(
-        connect_config.clone(),
-        session.clone(),
-        credentials.clone(),
-        player.clone(),
-        mixer.clone(),
-      );
-
-      match timeout(init_timeout, spirc_new).await {
-        Ok(Ok(result)) => break result,
-        Ok(Err(e))
-          if matches!(auth_mode, StreamingAuthMode::InteractiveIfNeeded)
-            && should_retry_with_fresh_credentials(
-              true,
-              used_cached_credentials,
-              retried_with_fresh_credentials,
-            ) =>
-        {
-          warn!(
-            "Cached streaming credentials failed ({:?}); retrying with a fresh OAuth login",
-            e
-          );
+    let spirc_new = Spirc::new(
+      connect_config.clone(),
+      session.clone(),
+      credentials.clone(),
+      player.clone(),
+      mixer.clone(),
+    );
+    let (spirc, spirc_task) = match timeout(init_timeout, spirc_new).await {
+      Ok(Ok(result)) => result,
+      Ok(Err(e)) => {
+        // Only discard cached credentials when Spotify actually rejected them.
+        // A transient failure (network down, service unavailable) must NOT wipe
+        // valid credentials and force a browser re-auth next launch — same
+        // reasoning as the timeout arm below.
+        if matches!(
+          e.kind,
+          ErrorKind::Unauthenticated | ErrorKind::PermissionDenied
+        ) {
           clear_cached_streaming_credentials(&cache_path);
-          credentials = request_streaming_oauth_credentials()?;
-          used_cached_credentials = false;
-          retried_with_fresh_credentials = true;
         }
-        Ok(Err(e)) => {
-          // Only discard cached credentials when Spotify actually rejected them.
-          // A transient failure (network down, service unavailable) must NOT wipe
-          // valid credentials and force a browser re-auth next launch — same
-          // reasoning as the timeout arm below.
-          if matches!(auth_mode, StreamingAuthMode::CacheOnly)
-            && used_cached_credentials
-            && matches!(
-              e.kind,
-              ErrorKind::Unauthenticated | ErrorKind::PermissionDenied
-            )
-          {
-            clear_cached_streaming_credentials(&cache_path);
-          }
-          warn!("Spirc creation error: {:?}", e);
-          return Err(anyhow!("Failed to create Spirc: {:?}", e));
-        }
-        Err(_) => {
-          // Timeout means the network was slow, not that credentials are bad.
-          // Do NOT clear credentials, they may be valid for the next startup.
-          // Streaming is skipped for this session; main.rs falls back to Web API.
-          return Err(anyhow!(
-            "Spirc initialization timed out after {}s. Streaming skipped for this session. \
+        warn!("Spirc creation error: {:?}", e);
+        return Err(anyhow!("Failed to create Spirc: {:?}", e));
+      }
+      Err(_) => {
+        // Timeout means the network was slow, not that credentials are bad.
+        // Do NOT clear credentials, they may be valid for the next startup.
+        // Streaming is skipped for this session; main.rs falls back to Web API.
+        return Err(anyhow!(
+          "Spirc initialization timed out after {}s. Streaming skipped for this session. \
              Set SPOTATUI_STREAMING_INIT_TIMEOUT_SECS to adjust.",
-            init_timeout.as_secs()
-          ));
-        }
+          init_timeout.as_secs()
+        ));
       }
     };
 
@@ -1367,140 +1163,6 @@ pub fn player_build_timeout() -> Duration {
   spirc_init_timeout().saturating_add(Duration::from_secs(15))
 }
 
-/// Returns true when a Spirc init failure should be retried with fresh OAuth
-/// credentials instead of cached ones.
-fn should_retry_with_fresh_credentials(
-  auth_error: bool,
-  used_cached: bool,
-  already_retried: bool,
-) -> bool {
-  auth_error && used_cached && !already_retried
-}
-
-/// Drops any `user:password@` from a proxy URL before it is logged or handed
-/// on. Two reasons, and the second is why this strips rather than masks:
-///
-/// - The log file is the app's own diagnostic artifact and gets pasted into bug
-///   reports; a proxy password has no business in it. librespot logs the URL it
-///   is given at `info` (`socket.rs`), so masking only our own message would
-///   still leak it one layer down.
-/// - librespot's `proxy_connect` sends a bare `CONNECT` with no
-///   `Proxy-Authorization` header, so embedded credentials are never used for
-///   authentication anyway. Carrying them further buys nothing and only widens
-///   the exposure.
-fn redact_proxy_url(url: &url::Url) -> url::Url {
-  let mut redacted = url.clone();
-  if redacted.set_username("").is_err() || redacted.set_password(None).is_err() {
-    // Only fails for cannot-be-a-base URLs, which the scheme check rejects.
-    return redacted;
-  }
-  redacted
-}
-
-/// A raw candidate is echoed in warnings only after the same treatment. It may
-/// have failed to parse, so this works textually: everything between the scheme
-/// separator and the last `@` of the authority is replaced.
-fn redact_raw_proxy(raw: &str) -> String {
-  let (scheme, rest) = match raw.split_once("://") {
-    Some((scheme, rest)) => (scheme, rest),
-    None => ("", raw),
-  };
-  let authority_end = rest.find('/').unwrap_or(rest.len());
-  let Some(at) = rest[..authority_end].rfind('@') else {
-    return raw.to_string();
-  };
-  let separator = if scheme.is_empty() { "" } else { "://" };
-  format!("{scheme}{separator}<redacted>@{}", &rest[at + 1..])
-}
-
-/// Only `http` is accepted. librespot tunnels through the proxy with a plain
-/// `CONNECT` and never wraps that conversation in TLS, so an `https://` proxy
-/// URL cannot mean what it says: without an explicit port the `url` crate
-/// resolves it to 443, and librespot then speaks plaintext HTTP at a port that
-/// expects a TLS client hello. `https_proxy` conventionally names *which*
-/// proxy tunnels HTTPS traffic, not that the proxy itself is reached over TLS,
-/// so its value is an `http://` URL - accepting `https` here would only
-/// convert a config typo into a silent handshake timeout.
-fn proxy_scheme_is_supported(scheme: &str) -> bool {
-  scheme == "http"
-}
-
-/// The HTTP proxy librespot should tunnel its access-point connection through,
-/// picked from the first non-empty candidate.
-///
-/// librespot opens a raw TCP socket to the access point, so unlike every
-/// reqwest-based call in the app it does not pick up `https_proxy` by itself.
-/// On a network that only allows outbound traffic through a corporate proxy
-/// that leaves the Spotify session hanging until the init timeout, the Connect
-/// device never registers, and every Web API playback call answers
-/// `NO_ACTIVE_DEVICE` - with nothing in the log naming the cause.
-///
-/// A malformed or unsupported value is reported and ignored rather than
-/// failing startup, because a direct connection may still work.
-fn proxy_url_from_candidates<'a>(
-  candidates: impl IntoIterator<Item = Option<&'a str>>,
-) -> Option<url::Url> {
-  let raw = candidates
-    .into_iter()
-    .flatten()
-    .map(str::trim)
-    .find(|value| !value.is_empty())?;
-  match url::Url::parse(raw) {
-    Ok(url) if proxy_scheme_is_supported(url.scheme()) => {
-      if !url.username().is_empty() || url.password().is_some() {
-        // Reported rather than rejected: the credentials are useless either
-        // way, but a proxy that authenticates by source address - the common
-        // corporate setup - still works once they are stripped. Rejecting the
-        // whole URL would break those installs for no gain.
-        warn!(
-          "proxy credentials are ignored: librespot sends no Proxy-Authorization header. \
-           A proxy that requires authentication will answer 407 and native streaming \
-           will not start."
-        );
-      }
-      Some(redact_proxy_url(&url))
-    }
-    Ok(url) if url.scheme() == "https" => {
-      warn!(
-        "ignoring proxy '{}': librespot tunnels with a plaintext CONNECT and cannot reach a \
-         proxy over TLS. If the proxy speaks plain HTTP, write it as 'http://...'.",
-        redact_raw_proxy(raw)
-      );
-      None
-    }
-    Ok(url) => {
-      warn!(
-        "ignoring proxy '{}': librespot only supports http proxies, not '{}'",
-        redact_raw_proxy(raw),
-        url.scheme()
-      );
-      None
-    }
-    Err(e) => {
-      warn!(
-        "ignoring unparseable proxy '{}': {e}",
-        redact_raw_proxy(raw)
-      );
-      None
-    }
-  }
-}
-
-/// `SPOTATUI_STREAMING_PROXY` is checked first so the streaming session can be
-/// pointed at a different proxy than the rest of the app; the remaining
-/// candidates follow the usual lowercase-before-uppercase convention.
-fn streaming_proxy_from_env() -> Option<url::Url> {
-  let vars = [
-    "SPOTATUI_STREAMING_PROXY",
-    "https_proxy",
-    "HTTPS_PROXY",
-    "http_proxy",
-    "HTTP_PROXY",
-  ]
-  .map(|name| std::env::var(name).ok());
-  proxy_url_from_candidates(vars.iter().map(Option::as_deref))
-}
-
 /// Stable Connect device id, persisted in the streaming cache dir so every
 /// launch and every in-app recovery registers as the same device (#297).
 fn get_or_create_device_id(cache_path: Option<&Path>) -> Result<Option<String>> {
@@ -1555,10 +1217,11 @@ fn new_device_id_string() -> String {
 #[cfg(test)]
 mod tests {
   use super::{
-    get_or_create_device_id, migrate_legacy_streaming_cache_if_unclaimed, new_device_id_string,
-    proxy_url_from_candidates, redact_raw_proxy, should_retry_with_fresh_credentials,
-    wait_for_oauth_callback_port, PlayAfterTransfer, RecoveringSink, StreamingConnectionState,
-    PLAY_AFTER_TRANSFER_WINDOW,
+    get_or_create_device_id, new_device_id_string, PlayAfterTransfer, RecoveringSink,
+    StreamingConnectionState, PLAY_AFTER_TRANSFER_WINDOW,
+  };
+  use crate::infra::spotify::credentials::{
+    migrate_legacy_streaming_cache_if_unclaimed, proxy_url_from_candidates, redact_raw_proxy,
   };
   use librespot_playback::{audio_backend, convert::Converter, decoder::AudioPacket};
   use std::sync::Arc;
@@ -1630,48 +1293,6 @@ mod tests {
   }
 
   #[test]
-  fn oauth_callback_port_waits_for_previous_listener_to_release() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-    let release = std::thread::spawn(move || {
-      std::thread::sleep(Duration::from_millis(100));
-      drop(listener);
-    });
-
-    assert!(
-      wait_for_oauth_callback_port(&address, Duration::from_secs(1), Duration::from_millis(10)),
-      "callback port should become available after the first listener exits"
-    );
-    release.join().unwrap();
-
-    std::net::TcpListener::bind(address).expect("callback port should remain available");
-  }
-
-  /// A port that never frees is reported, not fatal: the caller logs and lets
-  /// librespot's own bind produce the authoritative error.
-  #[test]
-  fn oauth_callback_port_reports_a_port_that_stays_busy() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-
-    assert!(
-      !wait_for_oauth_callback_port(
-        &address,
-        Duration::from_millis(50),
-        Duration::from_millis(10)
-      ),
-      "a port held for the whole wait should report as unavailable"
-    );
-
-    drop(listener);
-  }
-
-  #[test]
-  fn auth_failure_with_cached_creds_triggers_retry() {
-    assert!(should_retry_with_fresh_credentials(true, true, false));
-  }
-
-  #[test]
   fn streaming_proxy_prefers_the_first_non_empty_candidate() {
     let proxy = proxy_url_from_candidates([None, Some("  "), Some("http://proxy.example:3128")])
       .expect("a well-formed http proxy should be accepted");
@@ -1739,31 +1360,6 @@ mod tests {
       redact_raw_proxy("http://proxy.example:3128/a@b"),
       "http://proxy.example:3128/a@b"
     );
-  }
-
-  #[test]
-  fn timeout_with_cached_creds_does_not_trigger_retry() {
-    assert!(!should_retry_with_fresh_credentials(false, true, false));
-  }
-
-  #[test]
-  fn auth_failure_with_fresh_creds_does_not_trigger_retry() {
-    assert!(!should_retry_with_fresh_credentials(true, false, false));
-  }
-
-  #[test]
-  fn timeout_with_fresh_creds_does_not_trigger_retry() {
-    assert!(!should_retry_with_fresh_credentials(false, false, false));
-  }
-
-  #[test]
-  fn auth_failure_already_retried_does_not_trigger_second_retry() {
-    assert!(!should_retry_with_fresh_credentials(true, true, true));
-  }
-
-  #[test]
-  fn success_never_triggers_retry() {
-    assert!(!should_retry_with_fresh_credentials(false, true, false));
   }
 
   #[test]
@@ -1893,29 +1489,4 @@ mod tests {
     pending.cancel();
     assert!(!pending.take(armed_at));
   }
-}
-
-/// Helper to get the default cache path for streaming
-pub fn get_default_cache_path() -> Option<PathBuf> {
-  let cache_path = crate::core::paths::app_cache_dir()?.join("streaming_cache");
-  if let Some(config_dir) = crate::core::paths::app_config_dir() {
-    if let Err(error) = migrate_legacy_streaming_cache_if_unclaimed(&config_dir, &cache_path) {
-      log::warn!(
-        "failed to migrate legacy streaming cache from {} to {}: {error}",
-        config_dir.join("streaming_cache").display(),
-        cache_path.display()
-      );
-    }
-  }
-  Some(cache_path)
-}
-
-fn migrate_legacy_streaming_cache_if_unclaimed(
-  app_config_dir: &Path,
-  cache_path: &Path,
-) -> Result<bool> {
-  crate::core::migrations::migrate_legacy_path_if_unclaimed(
-    &app_config_dir.join("streaming_cache"),
-    cache_path,
-  )
 }

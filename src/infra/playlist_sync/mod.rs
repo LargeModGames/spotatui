@@ -8,14 +8,13 @@ mod spotify;
 #[cfg(feature = "youtube")]
 mod youtube;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use rspotify::AuthCodePkceSpotify;
 use tokio::sync::Mutex;
 
 use crate::core::app::App;
+use crate::core::auth::SpotifyLogin;
 use crate::core::playlist_sync::{Endpoint, SyncReport, SyncTrack};
 use crate::core::source::Source;
 use crate::infra::network::IoEvent;
@@ -26,23 +25,14 @@ const CANDIDATE_LIMIT: u32 = 10;
 
 /// Everything a run needs from boot in order to open clients.
 pub struct SyncContext {
-  spotify: Option<AuthCodePkceSpotify>,
-  token_cache_path: PathBuf,
+  spotify: Option<SpotifyLogin>,
   app: Arc<Mutex<App>>,
 }
 
 impl SyncContext {
   /// The boot pieces a run opens its clients from.
-  pub fn new(
-    spotify: Option<AuthCodePkceSpotify>,
-    token_cache_path: PathBuf,
-    app: Arc<Mutex<App>>,
-  ) -> Self {
-    SyncContext {
-      spotify,
-      token_cache_path,
-      app,
-    }
+  pub fn new(spotify: Option<SpotifyLogin>, app: Arc<Mutex<App>>) -> Self {
+    SyncContext { spotify, app }
   }
 
   /// The `App` handle the run writes its status messages through.
@@ -289,14 +279,7 @@ pub(crate) async fn for_source(endpoint: &Endpoint, ctx: &SyncContext) -> Result
   match endpoint.source {
     Source::Spotify => ctx
       .spotify
-      .clone()
-      .map(|spotify| {
-        SourceClient::Spotify(Box::new(spotify::SpotifyClient::new(
-          spotify,
-          ctx.token_cache_path.clone(),
-          Arc::clone(&ctx.app),
-        )))
-      })
+      .map(|_| SourceClient::Spotify(Box::new(spotify::SpotifyClient)))
       .ok_or_else(|| anyhow!("Spotify is not connected")),
     #[cfg(feature = "qobuz")]
     Source::Qobuz => Ok(SourceClient::Qobuz(
@@ -379,13 +362,8 @@ pub async fn run_guarded(
 }
 
 /// Start a run on a detached task, for the `IoEvent` handler.
-pub fn spawn_run(
-  spotify: Option<AuthCodePkceSpotify>,
-  token_cache_path: PathBuf,
-  app: Arc<Mutex<App>>,
-  retry_unmatched: bool,
-) {
-  let ctx = SyncContext::new(spotify, token_cache_path, app);
+pub fn spawn_run(spotify: Option<SpotifyLogin>, app: Arc<Mutex<App>>, retry_unmatched: bool) {
+  let ctx = SyncContext::new(spotify, app);
   tokio::spawn(run_guarded(ctx, None, false, retry_unmatched));
 }
 
@@ -439,13 +417,12 @@ pub async fn link_guarded(ctx: SyncContext, master: Endpoint, mirror: Source) {
 
 /// Start [`link_guarded`] on a detached task, for the `IoEvent` handler.
 pub fn spawn_link(
-  spotify: Option<AuthCodePkceSpotify>,
-  token_cache_path: PathBuf,
+  spotify: Option<SpotifyLogin>,
   app: Arc<Mutex<App>>,
   master: Endpoint,
   mirror: Source,
 ) {
-  let ctx = SyncContext::new(spotify, token_cache_path, app);
+  let ctx = SyncContext::new(spotify, app);
   tokio::spawn(link_guarded(ctx, master, mirror));
 }
 

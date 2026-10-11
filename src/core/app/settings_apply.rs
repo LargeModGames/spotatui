@@ -228,6 +228,30 @@ impl App {
             self.user_config.behavior.enable_media_keys = *v;
           }
         }
+        "behavior.enable_streaming" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.enable_streaming = *v;
+          }
+        }
+        "behavior.streaming_device_name" => {
+          if let SettingValue::String(v) = &setting.value {
+            let name = v.trim();
+            if !name.is_empty() {
+              self.user_config.behavior.streaming_device_name = name.to_string();
+            }
+          }
+        }
+        "behavior.streaming_bitrate" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.streaming_bitrate =
+              crate::core::user_config::streaming_bitrate_or_default(v.parse().unwrap_or(0));
+          }
+        }
+        "behavior.streaming_audio_cache" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.streaming_audio_cache = *v;
+          }
+        }
         "behavior.enable_announcements" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_announcements = *v;

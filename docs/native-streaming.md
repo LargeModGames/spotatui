@@ -4,13 +4,9 @@ spotatui includes **native Spotify Connect** support, allowing it to play audio 
 
 ## Setup
 
-The native streaming feature uses a separate authentication flow. On first run:
-
-1. Your browser will open to Spotify's authorization page
-2. **Important:** The redirect URI will be `http://127.0.0.1:8989/login` - this is different from the main app's callback URL
-3. After authorizing, "spotatui" will appear in your Spotify Connect device list
-4. Credentials are cached so you only need to do this once
-
+Native streaming uses the Spotify login, so there is no separate setup. After
+you log in (see [Connecting to Spotify](installation.md#connecting-to-spotify)),
+"spotatui" appears in your Spotify Connect device list.
 ## How It Works
 
 - When streaming is enabled, "spotatui" registers as a Spotify Connect device
@@ -20,19 +16,19 @@ The native streaming feature uses a separate authentication flow. On first run:
 ## Audio Quality
 
 Native streaming uses 320 kbps by default. To select a different quality, set
-`streaming_bitrate` in `client.yml` and restart spotatui:
+`streaming_bitrate` under `behavior` in `config.yml`, or change it in
+Settings, and restart spotatui:
 
 ```yaml
-streaming_bitrate: 320 # 96, 160, or 320 kbps
+behavior:
+  streaming_bitrate: 320 # 96, 160, or 320 kbps
 ```
 
-`client.yml` is in the spotatui app config directory (for example,
-`$XDG_CONFIG_HOME/spotatui/client.yml` when `XDG_CONFIG_HOME` is set to an
-absolute path, or `~/.config/spotatui/client.yml` when it is unset or not
-absolute). This setting controls the librespot native player directly; the
-Spotify app may still describe a Connect device's quality as "Automatic".
-
-Native-streaming credentials and audio cache are stored in the app cache
+The same section holds `enable_streaming`, `streaming_device_name` (the name
+in the Connect device list) and `streaming_audio_cache`. This setting controls
+the librespot native player directly; the Spotify app may still describe a
+Connect device's quality as "Automatic".
+The Spotify login and the audio cache are stored in the app cache
 directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
 `XDG_CACHE_HOME` is set to an absolute path, or
 `~/.cache/spotatui/streaming_cache` when it is unset or not absolute.
@@ -40,8 +36,7 @@ directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
 ## Notes
 
 - Native streaming is **enabled by default** when built with the `streaming` feature
-- Premium account is required for playback
-- The streaming authentication uses a different client than the main app's API controls
+- Premium account is required
 
 ---
 

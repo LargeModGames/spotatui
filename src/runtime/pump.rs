@@ -128,12 +128,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
     // run concurrently on a detached task instead of queueing behind
     // rate-limited Spotify calls on this serial pump (and vice versa).
     if Network::runs_on_service_lane(&io_event) {
-      let mut service_network = Network::new(
-        None,
-        network.client_config.clone(),
-        &network.app,
-        network.token_cache_path.clone(),
-      );
+      let mut service_network = Network::new(None, &network.app);
       tokio::spawn(async move {
         service_network.handle_network_event(io_event).await;
       });
@@ -352,7 +347,6 @@ mod tests {
   #[tokio::test]
   async fn a_spotify_start_without_a_session_pushes_the_status_channel() {
     use crate::core::app::{App, SPOTIFY_NOT_CONNECTED_STATUS};
-    use crate::core::config::ClientConfig;
     use crate::core::user_config::UserConfig;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -362,12 +356,7 @@ mod tests {
     let before = app.display_revisions();
     let app = Arc::new(Mutex::new(app));
     let dir = tempfile::tempdir().unwrap();
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      dir.path().join("token.json"),
-    );
+    let mut network = Network::new(None, &app);
     let (pump_tx, pump_rx) = std::sync::mpsc::channel();
     pump_tx
       .send(IoEvent::StartPlayback(
@@ -390,9 +379,8 @@ mod tests {
   #[tokio::test]
   async fn a_routed_event_runs_while_the_dj_crawl_is_in_flight() {
     use crate::core::app::{App, DisplayDomain};
-    use crate::core::config::ClientConfig;
     use crate::core::user_config::UserConfig;
-    use crate::infra::network::metadata::tests::spotify_with_access_token;
+    use crate::infra::network::metadata::tests::fake_spotify_login;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
@@ -418,13 +406,8 @@ mod tests {
     app.note_display_changes();
     let seen = app.display_revisions().get(DisplayDomain::Playback);
     let app = Arc::new(Mutex::new(app));
-    let dir = tempfile::tempdir().unwrap();
-    let mut network = Network::new(
-      Some(spotify_with_access_token("token", base_url).await),
-      ClientConfig::new(),
-      &app,
-      dir.path().join("token.json"),
-    );
+    let (spotify, _fake) = fake_spotify_login(base_url);
+    let mut network = Network::new(Some(spotify), &app);
     let (pump_tx, pump_rx) = std::sync::mpsc::channel();
     pump_tx.send(IoEvent::DjIndexLibrary).unwrap();
     pump_tx.send(IoEvent::FinishNativeQueue).unwrap();
@@ -455,7 +438,6 @@ mod tests {
   #[tokio::test]
   async fn a_routed_event_that_returns_the_sink_moves_the_playback_revision() {
     use crate::core::app::{App, DisplayDomain, NativeTrackInfo};
-    use crate::core::config::ClientConfig;
     use crate::core::user_config::UserConfig;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -477,13 +459,7 @@ mod tests {
     #[cfg(feature = "gui")]
     let before = app.display_revisions();
     let app = Arc::new(Mutex::new(app));
-    let dir = tempfile::tempdir().unwrap();
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      dir.path().join("token.json"),
-    );
+    let mut network = Network::new(None, &app);
     let (pump_tx, pump_rx) = std::sync::mpsc::channel();
     pump_tx.send(IoEvent::FinishNativeQueue).unwrap();
     drop(pump_tx);

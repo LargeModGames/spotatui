@@ -103,7 +103,7 @@ impl App {
     self.focus_dj_screen();
     // Asked once, on the first visit, and only here because `open` is the single
     // funnel every entry point goes through. Not in `first_run.rs`: that runs before
-    // the TUI, gated on the absence of client.yml, and would interrogate every user
+    // the TUI, only on the first run, and would interrogate every user
     // about coding agents even if they never open the DJ.
     //
     // An already-open picker is rebuilt rather than resumed. That state means the user

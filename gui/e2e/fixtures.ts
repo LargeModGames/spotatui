@@ -628,7 +628,6 @@ export const discover: ServerMessage[] = [
         is_local: false,
       })),
       artists_mix: [],
-      artists_mix_available: true,
       liked_ids: ["d0", "d3"],
     },
   },

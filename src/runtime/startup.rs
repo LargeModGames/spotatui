@@ -5,9 +5,7 @@
 use super::bootstrap::Boot;
 use super::pump::start_tokio;
 #[cfg(feature = "streaming")]
-use super::streaming::launch::{
-  cache_streaming_credentials, deferred_streaming_startup, DeferredStreamingContext,
-};
+use super::streaming::launch::{deferred_streaming_startup, DeferredStreamingContext};
 use crate::core::app::App;
 use crate::core::driver::{Driver, MprisHandle};
 use crate::core::user_config::{StartupBehavior, UserConfig};
@@ -209,43 +207,22 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   let app = boot.app;
   let sync_io_rx = boot.sync_io_rx;
   let user_config = boot.user_config;
-  let client_config = boot.client_config;
   let spotify = boot.spotify;
-  let final_token_cache_path = boot.token_cache_path;
   let restore_playback = boot.restore_playback;
   let restore_queue = boot.restore_queue;
   let initial_shuffle_enabled = boot.initial_shuffle_enabled;
   let initial_startup_behavior = boot.initial_startup_behavior;
-  let client_id_notice_message = boot.client_id_notice_message;
+  let startup_notice = boot.startup_notice;
   #[cfg(feature = "streaming")]
   let runtime_state = boot.runtime_state;
-  #[cfg(feature = "streaming")]
-  let onboarding = boot.onboarding;
-  #[cfg(feature = "streaming")]
-  let cached_me = boot.cached_me;
-  #[cfg(feature = "streaming")]
-  let selected_redirect_uri = boot.selected_redirect_uri;
 
-  #[cfg(feature = "streaming")]
-  cache_streaming_credentials(
-    &client_config,
-    spotify.as_ref(),
-    cached_me.as_ref(),
-    &final_token_cache_path,
-    &onboarding,
-    &app,
-  )
-  .await;
-  // Shown here rather than at authentication time: the streaming credential
-  // flow above can block on a browser round trip, which would burn the
-  // message's TTL before the first frame ever renders. Never displaces a
-  // message something else just set (they are more urgent than this notice).
-  // A Spotify browse scope with no session comes second: say so once, before
-  // the first key press reaches the auth gate.
+  // Never displaces a message something else just set (they are more urgent
+  // than this notice). A Spotify browse scope with no session comes second:
+  // say so once, before the first key press reaches the auth gate.
   {
     let mut app_mut = app.lock().await;
     if app_mut.status_message().is_none() {
-      if let Some(message) = client_id_notice_message {
+      if let Some(message) = startup_notice {
         app_mut.set_status_message(message, 15);
       } else if spotify.is_none() && app_mut.active_source == crate::core::source::Source::Spotify {
         app_mut.set_status_message(crate::core::app::SPOTIFY_NOT_CONNECTED_STATUS, 8);
@@ -295,7 +272,7 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   // UI is up (see `deferred_streaming_startup`) instead of gating the first
   // frame for seconds (worst case tens of seconds).
   #[cfg(feature = "streaming")]
-  let streaming_attempted = client_config.enable_streaming && spotify.is_some();
+  let streaming_attempted = user_config.behavior.enable_streaming && spotify.is_some();
 
   // Create shared atomic for real-time position updates from native player
   // This avoids lock contention - the player event handler can update position
@@ -546,16 +523,16 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     // parks itself for replay instead of erroring (the task clears this and
     // replays whatever parked when it finishes, whatever the outcome).
     app.lock().await.native_backend_pending = true;
+    let behavior = &user_config.behavior;
     deferred_streaming_startup(DeferredStreamingContext {
       app: Arc::clone(&app),
-      spotify: spotify
-        .clone()
-        .expect("streaming_attempted implies a Spotify session"),
-      cached_me,
-      token_cache_path: final_token_cache_path.clone(),
-      client_config: client_config.clone(),
-      redirect_uri: selected_redirect_uri,
-      volume_percent: runtime_state.volume_percent,
+      streaming_config: player::StreamingConfig {
+        device_name: behavior.streaming_device_name.clone(),
+        bitrate: crate::core::user_config::streaming_bitrate_or_default(behavior.streaming_bitrate),
+        audio_cache: behavior.streaming_audio_cache,
+        cache_path: crate::infra::spotify::credentials::get_default_cache_path(),
+        initial_volume: runtime_state.volume_percent,
+      },
       device_startup_behavior,
       // A restored non-Spotify session owns the startup play/pause decision;
       // otherwise the deferred task fires it once the device is selected.
@@ -581,7 +558,7 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   let cloned_app = Arc::clone(&app);
   info!("spawning spotify network event handler");
   tokio::spawn(async move {
-    let mut network = Network::new(spotify, client_config, &app, final_token_cache_path);
+    let mut network = Network::new(spotify, &app);
 
     // The saved-device startup decision moved into
     // `deferred_streaming_startup` (it needs the native player's device

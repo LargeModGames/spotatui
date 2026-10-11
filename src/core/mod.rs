@@ -16,7 +16,6 @@ pub mod app;
 pub mod art;
 pub mod auth;
 pub mod banner;
-pub mod config;
 #[cfg(feature = "art-decode")]
 pub mod cover_theme;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -42,7 +41,6 @@ pub mod requirement;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod sort;
 pub mod source;
-pub mod spotify_access;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod state;
 #[cfg(test)]

@@ -11,7 +11,7 @@ All fields are optional; omitted values use the built-in defaults. A complete, c
 
 Simple values (numbers, toggles, icons, positions) can also be changed live in the in-app **Settings** screen (see the hint in the top-right of the UI). Press the search key (`/` by default) there to fuzzy-filter the rows by name or by their key in this file, so you can reach a setting without scrolling for it. Structured config — `format:` templates, `tables:` columns, and `playbar_control_labels` — is file-only. Edit the file while the app is closed: saving from the Settings screen rewrites the `behavior`, `theme`, and `keybindings` sections, but your `format:`, `tables:`, and `plugin_commands:` sections survive in-app saves untouched.
 
-Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/state.yml` when `XDG_STATE_HOME` is set to an absolute path, or `${HOME}/.local/state/spotatui/state.yml` when it is unset or not absolute. This includes volume, shuffle, active source, seen announcements, resized pane dimensions, and saved radio stations. The Spotify OAuth token cache and local listening history also live under the app state directory. Native streaming credentials and audio cache live under `$XDG_CACHE_HOME/spotatui/streaming_cache` when `XDG_CACHE_HOME` is set to an absolute path, or `${HOME}/.cache/spotatui/streaming_cache` when it is unset or not absolute. `sync_token` remains user config and is stored in `config.yml`.
+Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/state.yml` when `XDG_STATE_HOME` is set to an absolute path, or `${HOME}/.local/state/spotatui/state.yml` when it is unset or not absolute. This includes volume, shuffle, active source, the saved Spotify device, seen announcements, resized pane dimensions, and saved radio stations. The local listening history also lives under the app state directory. The Spotify login and the native-streaming audio cache live under `$XDG_CACHE_HOME/spotatui/streaming_cache` when `XDG_CACHE_HOME` is set to an absolute path, or `${HOME}/.cache/spotatui/streaming_cache` when it is unset or not absolute. `sync_token` remains user config and is stored in `config.yml`.
 
 ## Safe by default
 
@@ -47,6 +47,17 @@ behavior:
                                    #   height so huge values cannot break scrolling
 ```
 
+## Native streaming
+
+Builds with the `streaming` feature play Spotify themselves as a Connect device. These fields also appear in Settings; a change takes effect after a restart.
+
+```yaml
+behavior:
+  enable_streaming: true           # register spotatui as a Spotify Connect device
+  streaming_device_name: spotatui  # the name in the Connect device list
+  streaming_bitrate: 320           # 96, 160, or 320 kbps
+  streaming_audio_cache: false     # keep played audio in the streaming cache
+```
 ## Cover art dithering
 
 Build with `--features cover-art` to show the cover-art settings. Dithering is off by default and does not turn on cover art where terminal support has disabled it; `draw_cover_art_forced` still controls the basic-terminal fallback.

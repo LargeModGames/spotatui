@@ -19,10 +19,54 @@ use crate::infra::dj::{library, DjLibrary, DjLine, DjSuggestion};
 use crate::infra::network::IoEvent;
 use rspotify::model::track::FullTrack;
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use tokio::sync::oneshot;
+
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+fn artist_names(artists: &[rspotify::model::SimplifiedArtist]) -> String {
+  artists
+    .iter()
+    .map(|artist| artist.name.as_str())
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+/// `1. title [uri]` lines for tool text.
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+fn numbered(items: &[serde_json::Value]) -> String {
+  items
+    .iter()
+    .enumerate()
+    .map(|(index, item)| {
+      format!(
+        "{}. {} [{}]",
+        index + 1,
+        item["title"].as_str().unwrap_or_default(),
+        item["uri"].as_str().unwrap_or("no uri")
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+/// The device a transfer goes to: an exact id, else a name in any case.
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+fn pick_device(
+  devices: &[rspotify::model::device::Device],
+  wanted: &str,
+) -> Option<(String, String)> {
+  let found = devices
+    .iter()
+    .find(|device| device.id.as_deref() == Some(wanted))
+    .or_else(|| {
+      devices
+        .iter()
+        .find(|device| device.name.eq_ignore_ascii_case(wanted))
+    })?;
+  Some((found.id.clone()?, found.name.clone()))
+}
 
 /// The tool handlers behind `DjToolCall`, shared by both front doors.
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
@@ -33,12 +77,7 @@ impl Network {
     app: &std::sync::Arc<tokio::sync::Mutex<crate::core::app::App>>,
     call: DjToolCall,
   ) -> ToolOutcome {
-    let mut network = Network::new(
-      None,
-      crate::core::config::ClientConfig::new(),
-      app,
-      std::path::PathBuf::new(),
-    );
+    let mut network = Network::new(None, app);
     network.dj_tool_outcome(call).await
   }
 
@@ -82,6 +121,11 @@ impl Network {
         extra_skip_keys,
       } => self.dj_queue(items, exclude_owned, extra_skip_keys).await,
       DjToolCall::PlayNow { uri } => self.dj_play_now(uri).await,
+      DjToolCall::GetAlbum { album } => self.dj_album(&album).await,
+      DjToolCall::GetArtist { artist } => self.dj_artist(&artist).await,
+      DjToolCall::ListDevices => self.dj_devices().await,
+      DjToolCall::TransferPlayback { device } => self.dj_transfer(&device).await,
+      DjToolCall::LikeTracks { uris, liked } => self.dj_like(uris, liked).await,
       // Everything else is answered without the network, before the event is
       // ever dispatched (`tools::execute_app_only`).
       other => ToolOutcome::error(format!(
@@ -89,6 +133,189 @@ impl Network {
         other.tool_name()
       )),
     }
+  }
+
+  async fn dj_album(&self, id: &str) -> ToolOutcome {
+    let album = match self
+      .spotify_get_typed::<rspotify::model::album::FullAlbum>(&format!("albums/{id}"), &[])
+      .await
+    {
+      Ok(album) => album,
+      Err(e) => return ToolOutcome::error(format!("Could not read the album: {e}")),
+    };
+    let artists = artist_names(&album.artists);
+    let year = album.release_date.get(..4).unwrap_or_default();
+    let tracks: Vec<Value> = album
+      .tracks
+      .items
+      .iter()
+      .map(|track| {
+        json!({
+          "title": track.name,
+          "uri": track.id.as_ref().map(rspotify::prelude::Id::uri),
+          "duration_ms": track.duration.num_milliseconds(),
+        })
+      })
+      .collect();
+    let text = format!(
+      "{} by {artists} ({year}), {} tracks:\n{}",
+      album.name,
+      tracks.len(),
+      numbered(&tracks)
+    );
+    ToolOutcome::with_data(
+      text,
+      json!({ "name": album.name, "artists": artists, "year": year, "tracks": tracks }),
+    )
+  }
+
+  async fn dj_artist(&self, id: &str) -> ToolOutcome {
+    use rspotify::model::{artist::FullArtist, page::Page, SimplifiedAlbum};
+    #[derive(serde::Deserialize)]
+    struct TopTracks {
+      tracks: Vec<FullTrack>,
+    }
+    let artist = match self
+      .spotify_get_typed::<FullArtist>(&format!("artists/{id}"), &[])
+      .await
+    {
+      Ok(artist) => artist,
+      Err(e) => return ToolOutcome::error(format!("Could not read the artist: {e}")),
+    };
+    let top = self
+      .spotify_get_typed::<TopTracks>(&format!("artists/{id}/top-tracks"), &[])
+      .await
+      .map(|top| top.tracks)
+      .unwrap_or_default();
+    let albums = self
+      .spotify_get_typed::<Page<SimplifiedAlbum>>(
+        &format!("artists/{id}/albums"),
+        &[("limit", "20".to_string())],
+      )
+      .await
+      .map(|page| page.items)
+      .unwrap_or_default();
+    let top: Vec<Value> = top
+      .iter()
+      .map(|track| json!({ "title": track.name, "uri": track.id.as_ref().map(rspotify::prelude::Id::uri) }))
+      .collect();
+    let albums: Vec<Value> = albums
+      .iter()
+      .map(|album| {
+        json!({
+          "title": album.name,
+          "uri": album.id.as_ref().map(rspotify::prelude::Id::uri),
+          "year": album.release_date.as_deref().and_then(|date| date.get(..4)),
+        })
+      })
+      .collect();
+    let text = format!(
+      "{}\nTop tracks:\n{}\nAlbums:\n{}",
+      artist.name,
+      numbered(&top),
+      numbered(&albums)
+    );
+    ToolOutcome::with_data(
+      text,
+      json!({ "name": artist.name, "top_tracks": top, "albums": albums }),
+    )
+  }
+
+  async fn dj_devices(&self) -> ToolOutcome {
+    match self
+      .spotify_get_typed::<rspotify::model::device::DevicePayload>("me/player/devices", &[])
+      .await
+    {
+      Ok(payload) => {
+        let devices: Vec<Value> = payload
+          .devices
+          .iter()
+          .map(|device| {
+            json!({
+              "id": device.id,
+              "name": device.name,
+              "type": format!("{:?}", device._type),
+              "active": device.is_active,
+              "volume_percent": device.volume_percent,
+            })
+          })
+          .collect();
+        let text = if devices.is_empty() {
+          "No Spotify Connect devices are online".to_string()
+        } else {
+          payload
+            .devices
+            .iter()
+            .map(|device| {
+              format!(
+                "{} [{}]{}",
+                device.name,
+                device.id.as_deref().unwrap_or("no id"),
+                if device.is_active { " (active)" } else { "" }
+              )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+        ToolOutcome::with_data(text, json!({ "devices": devices }))
+      }
+      Err(e) => ToolOutcome::error(format!("Could not list the devices: {e}")),
+    }
+  }
+
+  async fn dj_transfer(&self, device: &str) -> ToolOutcome {
+    let devices = match self
+      .spotify_get_typed::<rspotify::model::device::DevicePayload>("me/player/devices", &[])
+      .await
+    {
+      Ok(payload) => payload.devices,
+      Err(e) => return ToolOutcome::error(format!("Could not list the devices: {e}")),
+    };
+    let Some((id, name)) = pick_device(&devices, device) else {
+      let names: Vec<&str> = devices.iter().map(|device| device.name.as_str()).collect();
+      return ToolOutcome::error(format!(
+        "No device matches \"{device}\". Online: {}",
+        if names.is_empty() {
+          "none".to_string()
+        } else {
+          names.join(", ")
+        }
+      ));
+    };
+    self.app.lock().await.apply(Action::TransferPlayback {
+      device_id: id,
+      persist: false,
+    });
+    ToolOutcome::ok(format!("Moving playback to {name}"))
+  }
+
+  /// Toggles only the tracks whose liked state differs, after reading it.
+  async fn dj_like(&self, uris: Vec<String>, liked: bool) -> ToolOutcome {
+    let states = match self.library_contains_uris(&uris).await {
+      Ok(states) => states,
+      Err(e) => return ToolOutcome::error(format!("Could not read Liked Songs: {e}")),
+    };
+    let mut app = self.app.lock().await;
+    let mut changed = 0;
+    for (uri, is_liked) in uris.iter().zip(states) {
+      let id = uri.trim_start_matches("spotify:track:").to_string();
+      // The toggle reads this set, so it must match Spotify before the toggle.
+      if is_liked {
+        app.liked_song_ids_set_mut().insert(id);
+      } else {
+        app.liked_song_ids_set_mut().remove(&id);
+      }
+      if is_liked != liked {
+        app.apply(Action::ToggleSaveTrack(uri.clone()));
+        changed += 1;
+      }
+    }
+    let unchanged = uris.len() - changed;
+    ToolOutcome::ok(format!(
+      "{} {changed} track(s); {unchanged} already {}",
+      if liked { "Liking" } else { "Unliking" },
+      if liked { "liked" } else { "not liked" }
+    ))
   }
 
   async fn dj_search(&self, query: &str, limit: usize) -> ToolOutcome {
@@ -735,17 +962,50 @@ impl Network {
 mod tests {
   use super::*;
   use crate::core::app::App;
-  use crate::core::config::ClientConfig;
   use std::sync::Arc;
   use tokio::sync::Mutex;
 
-  fn temp_token_cache_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("spotatui-dj-test-token-cache.json")
+  #[test]
+  fn a_transfer_picks_a_device_by_id_then_by_name() {
+    let devices: Vec<rspotify::model::device::Device> = serde_json::from_value(json!([
+      {"id": "d1", "name": "Kitchen", "type": "Speaker", "is_active": false,
+       "is_private_session": false, "is_restricted": false, "volume_percent": 50},
+      {"id": "kitchen", "name": "Phone", "type": "Smartphone", "is_active": true,
+       "is_private_session": false, "is_restricted": false, "volume_percent": 50},
+    ]))
+    .unwrap();
+    assert_eq!(
+      pick_device(&devices, "kitchen"),
+      Some(("kitchen".to_string(), "Phone".to_string())),
+      "an exact id wins over a name"
+    );
+    assert_eq!(
+      pick_device(&devices, "KITCHEN "),
+      None,
+      "the name match is exact apart from case"
+    );
+    assert_eq!(
+      pick_device(&devices, "Kitchen"),
+      Some(("d1".to_string(), "Kitchen".to_string()))
+    );
+    assert_eq!(pick_device(&devices, "Car"), None);
+  }
+
+  #[test]
+  fn tool_lines_are_numbered_with_their_uri() {
+    let items = vec![
+      json!({"title": "One", "uri": "spotify:track:1"}),
+      json!({"title": "Two", "uri": null}),
+    ];
+    assert_eq!(
+      numbered(&items),
+      "1. One [spotify:track:1]\n2. Two [no uri]"
+    );
   }
 
   async fn unauthenticated_network() -> Network {
     let app = Arc::new(Mutex::new(App::default()));
-    Network::new(None, ClientConfig::new(), &app, temp_token_cache_path())
+    Network::new(None, &app)
   }
 
   #[tokio::test]
@@ -1186,12 +1446,7 @@ mod in_tui {
         crate::core::user_config::UserConfig::new(),
         Some(std::time::SystemTime::now()),
       )));
-      let network = Network::new(
-        None,
-        crate::core::config::ClientConfig::new(),
-        &app,
-        std::env::temp_dir().join("spotatui-dj-turn-test-cache.json"),
-      );
+      let network = Network::new(None, &app);
       (network, app)
     }
 

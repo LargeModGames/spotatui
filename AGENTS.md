@@ -97,11 +97,11 @@ off-by-default `gui` feature, which also owns the crate-root
 | Unit | Role |
 |------|------|
 | `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), the shared action vocabulary (`action/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
-| `infra/` | Spotify Web API (`network/`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
+| `infra/` | Spotify: Web API shapes (`network/`) answered from Spotify's internal API (`spotify/`, feature `spotify-session`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
 | `gui/` | Browser frontend (feature `gui`): the loopback page server with its Host/Origin/launch-code checks (`server.rs`), the JSON push protocol over the display revisions (`protocol.rs`), the socket bridge to the tick loop (`bridge.rs`), and the first-launch questions over the socket (`onboarding.rs`, a blocking `Onboarding` that waits for the page); `build.rs` embeds `gui/dist` |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
-| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` and `run_gui` its callers, plus the boot auth rule `spotify_auth_mode`: interactive only right after the client wizard or `--reconfigure-auth`, a subcommand needs a cached token, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui` or `gui`), `gui.rs::run_gui` (the browser frontend: the loopback server first, boot with the first-launch questions answered in the page, then a tick loop with no terminal), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
+| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` and `run_gui` its callers, plus the boot login rule `spotify_auth_mode`: the device login only when the first-run picker chose Spotify or on `--reconfigure-auth`, a subcommand needs a cached login with a live session, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui` or `gui`), `gui.rs::run_gui` (the browser frontend: the loopback server first, boot with the first-launch questions answered in the page, then a tick loop with no terminal), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
 
 ### Data flow
 
@@ -117,7 +117,7 @@ crossterm thread (tui/event/) → runner.rs loop (draws the frame, then reads on
 
 `tui/event/` is only the crossterm→`Key` plumbing; the event loop itself is
 `tui/runner.rs::start_ui`. Everything on a timer lives in `core/driver/`
-(`Driver::tick`): the playback tick + debounced flushes, OAuth refresh,
+(`Driver::tick`): the playback tick + debounced flushes,
 Discord/MPRIS presence sync, the window title, lyrics + cover-art scheduling,
 native-queue and decoded-source auto-advance, and `last_session.yml`
 persistence. The runner draws frames, reads events, and calls `driver.tick`
@@ -196,9 +196,10 @@ session) lives in `src/core/app/native_{backend,recovery,shuffle}.rs`.
 
 - It rides our **maintained librespot fork**, published on crates.io as
   `spotatui-librespot-*` and consumed through `package =` renames, so imports
-  stay `librespot_*`. The fork carries upstream backports *and* a fork-only
-  `SessionDisconnectReason` API the app depends on - it cannot be swapped for
-  upstream 0.8. All seven crates are `=`-pinned in lockstep; bump them together
+  stay `librespot_*`. The fork carries upstream backports *and* fork-only
+  APIs the app depends on (`SessionDisconnectReason`, and the `SpClient`
+  calls `infra/spotify/` makes: collection, playlist changes, player
+  commands, Pathfinder) - it cannot be swapped for upstream 0.8. All seven crates are `=`-pinned in lockstep; bump them together
   when the fork publishes a new version.
 - Verify native playback changes with the full `cargo run` build, not only the
   slim telemetry build.
@@ -216,12 +217,16 @@ See `.claude/skills/add-tui-screen/SKILL.md` for the six-place checklist.
 Call `app.dispatch(IoEvent::…)` from a handler - never call async Spotify code
 directly from handlers or UI code. Draw functions take `&App` and must not mutate.
 
-Inside the network layer, never call rspotify client methods for Spotify data:
-use `self.spotify_api_request_json(...)` / `self.spotify_get_typed::<T>(...)`
-from `src/infra/network/requests.rs` (pacing, 401 cooldown, payload
-normalization). rspotify supplies OAuth/PKCE, id types, and models only. Spotify
-401s are deliberately tolerated (consecutive-failure threshold, forced-refresh
-cooldown) - don't "fix" that by escalating on first failure.
+Inside the network layer, call Spotify only through
+`self.spotify_api_request_json(...)` / `self.spotify_get_typed::<T>(...)` from
+`src/infra/network/requests.rs` (the rate-limit window, the deadline, payload
+normalization). The funnel takes Web API paths, and `infra/spotify/router.rs`
+answers each one from Spotify's internal API over the librespot session; a
+path it has no `Route` arm for is a 501, so a new Spotify call starts there.
+rspotify supplies id types and models only. There is no client id and no
+token: the login is librespot's, cached in the streaming cache, and the
+session refuses an account that is not Premium. Never send the internal
+login's token to `api.spotify.com`.
 
 ### The shared Action vocabulary
 
@@ -327,7 +332,7 @@ never config:
 | File | Owner | Contents |
 |------|-------|----------|
 | `config.yml` (config dir) | `core/user_config.rs` | hand-editable settings, keys, theme |
-| `client.yml` (config dir) | `core/config.rs` | Spotify app credentials |
+| `client.yml` (config dir) | `core/migrations.rs` (read only) | written by older releases; boot copies its streaming settings and saved device into `config.yml` and `state.yml` |
 | `state.yml` (state dir) | `core/state.rs` | machine-written runtime values |
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
 | `playlist_sync.yml` (state dir) | `core/playlist_sync/store.rs` | playlist links + match cache |
@@ -353,6 +358,9 @@ never config:
   windows-media, mpris, discord-rpc, self-update, scripting`. Notably **not**
   in default: `cover-art` (so a plain `cargo run` has no album art, though
   every shipped binary enables it), the five sources, and the DJ features.
+- `spotify-session` gates the Spotify login and the internal-API client
+  (`infra/spotify/`); `streaming` pulls it in. A build without it has no
+  Spotify at all: the slim, headless, mcp-only and ai-dj-only legs.
 - `tui` gates `mod tui` and owns the terminal-only crates (ratatui, crossterm,
   tui-bar-graph, colorgrad - the last also pulled by `art-decode` for the
   adaptive-theme HSV math). `gui` gates `mod gui` (the browser frontend's

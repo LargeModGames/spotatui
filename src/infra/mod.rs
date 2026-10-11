@@ -29,9 +29,12 @@ pub mod qobuz;
 pub mod queue;
 #[cfg(feature = "internet-radio")]
 pub mod radio;
+#[cfg(feature = "qobuz")]
 pub mod redirect_uri;
 #[cfg(feature = "scripting")]
 pub mod scripting;
+#[cfg(feature = "spotify-session")]
+pub mod spotify;
 #[cfg(feature = "subsonic")]
 pub mod subsonic;
 #[cfg(feature = "youtube")]

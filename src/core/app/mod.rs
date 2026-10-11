@@ -8,7 +8,6 @@ use crate::core::plugin_api::{
 use crate::core::requirement::{availability, Availability, Capability, Requirement};
 use crate::core::sort::{SortContext, SortField, SortState};
 use crate::core::source::Source;
-use crate::core::spotify_access::{RestrictedEndpoint, SpotifyKeyTier};
 use crate::core::state::{
   PersistedRuntimeState, RadioStationAddOutcome, RadioStationConfig, RuntimeState,
 };
@@ -39,8 +38,11 @@ use std::sync::Arc;
 use std::{
   cmp::{max, min},
   collections::HashSet,
-  time::{Duration, Instant, SystemTime},
+  time::{Duration, Instant},
 };
+// The test modules under `core/app/` take `SystemTime` through `use super::*`.
+#[cfg(test)]
+use std::time::SystemTime;
 use unicode_width::UnicodeWidthStr;
 
 use arboard::Clipboard;
@@ -114,7 +116,6 @@ mod transport;
 mod view;
 mod volume;
 
-mod spotify_session;
 #[cfg(test)]
 mod test_support;
 
@@ -336,18 +337,10 @@ pub struct App {
   pub is_loading: bool,
   io_tx: Option<Sender<IoEvent>>,
   pub is_fetching_current_playback: bool,
-  /// Expiry of the current Spotify access token, or `None` when there is no
-  /// Spotify session (launched against a free source). The token-refresh poll
-  /// in the driver skips refreshing while this is `None`.
-  pub spotify_token_expiry: Option<SystemTime>,
-  /// Whether a Spotify session is available (token loaded at startup or added
-  /// via in-TUI login). Gates the Spotify-only startup dispatches so a
+  /// Whether a Spotify login is available (cached at startup or added by the
+  /// in-app login). Gates the Spotify-only startup dispatches so a
   /// free-source launch doesn't spam "connect Spotify" messages.
   pub spotify_connected: bool,
-  pub auth_refresh_in_progress: bool,
-  /// Earliest instant the timed token refresh may run again after a failure,
-  /// so a failing refresh backs off instead of re-arming on every tick.
-  spotify_refresh_retry_at: Option<Instant>,
   pending_keybinding_persist: Option<PendingKeybindingPersist>,
   pub keybinding_runtime: KeybindingRuntimeState,
 
@@ -642,9 +635,6 @@ pub struct App {
   /// Where this run's log file is being written, resolved once here so draw
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,
-  /// The Spotify API tier learned for this client ID; `Full` until an endpoint
-  /// refuses it. Private: read through [`App::spotify_endpoint_blocked`].
-  spotify_key_tier: SpotifyKeyTier,
 }
 
 impl App {

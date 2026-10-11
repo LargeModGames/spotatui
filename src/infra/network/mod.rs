@@ -10,30 +10,25 @@ pub mod playback;
 pub mod recommend;
 pub mod requests;
 pub mod search;
-pub mod spotify_source;
 pub mod sync;
 pub mod user;
 pub mod utils;
 
 use crate::core::app::{App, PlaybackOwner, SPOTIFY_NOT_CONNECTED_STATUS};
-use crate::core::auth;
-use crate::core::config::{ClientConfig, NCSPOT_CLIENT_ID};
+use crate::core::auth::SpotifyLogin;
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use crate::core::source::Source;
-use crate::core::spotify_access::RestrictedEndpoint;
-use crate::infra::redirect_uri::{bind_callback_listener, serve_spotify_callback};
 use anyhow::anyhow;
 use rspotify::model::{
   album::SimplifiedAlbum,
   enums::{Country, RepeatState},
 };
 use rspotify::prelude::Id;
-// `parse_response_code` / `request_token` for the in-TUI login live on this trait.
-use rspotify::clients::OAuthClient;
-use rspotify::AuthCodePkceSpotify;
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+
+/// How long the in-app login waits for the approval in the browser.
+#[cfg(feature = "spotify-session")]
+const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 use tokio::sync::Mutex;
 // Re-export traits
 use self::library::LibraryNetwork;
@@ -55,7 +50,6 @@ pub enum IoEvent {
   /// The payload is the previous track identifier (either base62 id or a `spotify:track:` URI).
   #[allow(dead_code)]
   EnsurePlaybackContinues(String),
-  RefreshAuthentication,
   GetPlaylists,
   GetDevices,
   /// Refresh the device list without opening the device picker (plugin data reads).
@@ -336,16 +330,16 @@ pub enum IoEvent {
   LinkPlaylist(crate::core::playlist_sync::Endpoint, Source),
   /// Forget one playlist-sync link by id; the mirror playlists stay.
   RemovePlaylistSyncLink(String),
-  /// Start an in-TUI Spotify OAuth login: open the browser and spawn the callback
-  /// server. Dispatched from the `d` source picker when Spotify is unconfigured.
-  /// Runs without a Spotify session (bypasses the auth gate).
+  /// Start an in-app Spotify login: show the pairing code, open the browser and
+  /// wait for the approval off the pump. Runs without a Spotify session
+  /// (bypasses the auth gate).
   BeginSpotifyLogin,
-  /// Complete an in-TUI Spotify login with the OAuth callback URL received by the
-  /// spawned server. Bypasses the auth gate (there is no session yet).
-  CompleteSpotifyLogin(String),
-  /// Abandon an in-flight in-TUI Spotify login (callback server timed out or
-  /// failed), clearing the pending state so the user can retry.
-  CancelSpotifyLogin,
+  /// The in-app login finished and the session is live. Bypasses the auth gate.
+  #[cfg_attr(not(feature = "spotify-session"), allow(dead_code))]
+  CompleteSpotifyLogin,
+  /// The in-app login failed or timed out, with the reason to show.
+  #[cfg_attr(not(feature = "spotify-session"), allow(dead_code))]
+  CancelSpotifyLogin(String),
   /// Fetch and decode the current track's cover art (album-art URL, source
   /// thumbnail, or a local file's embedded picture). Dispatched by the shared
   /// track-change detector; handled off the `App` lock so the render loop never
@@ -403,52 +397,36 @@ pub enum IoEvent {
   DjIndexLibrary,
 }
 
-/// An in-flight in-TUI Spotify login. Holds the exact PKCE client that generated
-/// the authorize URL: PKCE stores the `code_verifier` inside the instance, so the
-/// token exchange in `complete_spotify_login` MUST run on this same client.
-struct PendingLogin {
-  spotify: AuthCodePkceSpotify,
-  token_cache_path: PathBuf,
-}
-
 pub struct Network {
-  /// The authenticated Spotify client, or `None` when spotatui was launched
-  /// against a free source (YouTube/Subsonic/Radio/Local) without a Spotify
-  /// session. Spotify-bound `IoEvent`s early-return at the auth gate in
-  /// `handle_network_event` when this is `None`; the `spotify()` accessor is
-  /// only reached from handlers that run behind that gate. In-TUI login
-  /// (`CompleteSpotifyLogin`) fills this in live.
-  pub spotify: Option<AuthCodePkceSpotify>,
+  /// The cached Spotify login, or `None` when spotatui runs without one (a
+  /// free source, or a build without Spotify). Spotify-bound `IoEvent`s stop
+  /// at the auth gate in `handle_network_event` when this is `None`. The
+  /// in-app login (`CompleteSpotifyLogin`) fills it in live.
+  pub spotify: Option<SpotifyLogin>,
   pub large_search_limit: u32,
   pub small_search_limit: u32,
-  pub client_config: ClientConfig,
   pub app: Arc<Mutex<App>>,
   #[cfg(feature = "streaming")]
   native_idle_recovery: playback::NativeIdleRecoveryState,
   pub party_connection: Option<sync::PartyConnection>,
   pub party_incoming_rx: Option<tokio::sync::mpsc::UnboundedReceiver<sync::SyncMessage>>,
-  pub token_cache_path: PathBuf,
-  /// In-flight in-TUI Spotify login, if any (see `begin_spotify_login`).
-  pending_login: Option<PendingLogin>,
-  /// How many playback polls in a row came back 401. Spotify's player service
-  /// intermittently rejects a valid token (issue #395) and the poll runs once a
-  /// second against an external device, so a lone 401 is noise; only a sustained
-  /// run means the session is actually broken and deserves the error route.
+  /// An in-app login waits for the approval in the browser.
+  login_in_flight: bool,
+  /// How many playback polls in a row came back 401. A lone 401 is noise; only
+  /// a sustained run means the session is broken and deserves the error route.
   /// Reset by every poll the API answers.
   consecutive_playback_auth_failures: u8,
-  /// TTL caches so re-visiting the same artist/album skips the round trip +
-  /// pacing tax (see `metadata::MetadataTtlCache`).
+  /// TTL caches so re-visiting the same artist/album skips the round trip
+  /// (see `metadata::MetadataTtlCache`).
   artist_cache: metadata::MetadataTtlCache<metadata::CachedArtistData>,
   album_cache: metadata::MetadataTtlCache<rspotify::model::album::FullAlbum>,
   album_tracks_cache: metadata::MetadataTtlCache<Vec<rspotify::model::track::SimplifiedTrack>>,
-  /// The `Retry-After` window every Spotify call checks: the shared gate in
+  /// The rate-limit window every Spotify call checks: the shared gate in
   /// production, a private one in tests.
-  rate_gate: requests::ForcedRefreshGate,
-  /// Session-scoped reuse for the external-playlist fallback path (Development
-  /// Mode 403s): confirmed-external classifications and resolved librespot
-  /// playlist contents, shared by foreground fetch, background prefetch,
-  /// sort, and search so each playlist pays classification plus one proto
-  /// download instead of one per page.
+  rate_gate: requests::RateLimitGate,
+  /// Session-scoped reuse for the external-playlist fallback path: confirmed
+  /// external classifications and resolved playlist contents, shared by
+  /// foreground fetch, background prefetch, sort, and search.
   pub(crate) external_playlist_fallbacks: library::ExternalPlaylistFallbackCache,
   /// Spotify-bound events held back while that window is open. The pump and the
   /// Spotify lane set `defers_rate_limited` (the lane hands what it holds back
@@ -456,7 +434,6 @@ pub struct Network {
   deferred: Vec<Deferred>,
   pub(crate) defers_rate_limited: bool,
 }
-
 /// A held-back event and the playback owner it was addressed to.
 struct Deferred {
   event: IoEvent,
@@ -475,90 +452,32 @@ fn owner_still_owns(queued: PlaybackOwner, now: PlaybackOwner) -> bool {
     )
 }
 
-/// The shared client id's window is shared by every user; only an app of the
-/// user's own gets out of it.
-fn with_rate_limit_hint(e: anyhow::Error, client_id: &str) -> anyhow::Error {
-  if requests::is_rate_limited_error(&e) && client_id == NCSPOT_CLIENT_ID {
-    anyhow!("{e}. Shared client ID: run spotatui --reconfigure-auth to use your own app")
-  } else {
-    e
-  }
-}
-
 impl Network {
-  #[cfg(feature = "streaming")]
-  pub fn new(
-    spotify: Option<AuthCodePkceSpotify>,
-    client_config: ClientConfig,
-    app: &Arc<Mutex<App>>,
-    token_cache_path: PathBuf,
-  ) -> Self {
+  pub fn new(spotify: Option<SpotifyLogin>, app: &Arc<Mutex<App>>) -> Self {
     Network {
       spotify,
       large_search_limit: 50,
       small_search_limit: search::SPOTIFY_SEARCH_LIMIT,
-      client_config,
       app: Arc::clone(app),
+      #[cfg(feature = "streaming")]
       native_idle_recovery: playback::NativeIdleRecoveryState::default(),
       party_connection: None,
       party_incoming_rx: None,
-      token_cache_path,
-      pending_login: None,
+      login_in_flight: false,
       consecutive_playback_auth_failures: 0,
       artist_cache: Default::default(),
       album_cache: Default::default(),
       album_tracks_cache: Default::default(),
-      rate_gate: requests::shared_forced_refresh_gate().clone(),
+      rate_gate: requests::shared_rate_gate().clone(),
       external_playlist_fallbacks: library::external_playlist_fallback_cache(),
       deferred: Vec::new(),
       defers_rate_limited: false,
     }
   }
 
-  #[cfg(not(feature = "streaming"))]
-  pub fn new(
-    spotify: Option<AuthCodePkceSpotify>,
-    client_config: ClientConfig,
-    app: &Arc<Mutex<App>>,
-    token_cache_path: PathBuf,
-  ) -> Self {
-    Network {
-      spotify,
-      large_search_limit: 50,
-      small_search_limit: search::SPOTIFY_SEARCH_LIMIT,
-      client_config,
-      app: Arc::clone(app),
-      party_connection: None,
-      party_incoming_rx: None,
-      token_cache_path,
-      pending_login: None,
-      consecutive_playback_auth_failures: 0,
-      artist_cache: Default::default(),
-      album_cache: Default::default(),
-      album_tracks_cache: Default::default(),
-      rate_gate: requests::shared_forced_refresh_gate().clone(),
-      external_playlist_fallbacks: library::external_playlist_fallback_cache(),
-      deferred: Vec::new(),
-      defers_rate_limited: false,
-    }
-  }
-
-  /// Borrow the authenticated Spotify client. Only call this from handlers that
-  /// run behind the auth gate in `handle_network_event`: that gate early-returns
-  /// for every Spotify-bound event when `self.spotify` is `None`, so a handler
-  /// reached past it is guaranteed a live client. The `expect` documents (and
-  /// enforces at runtime) that invariant; it is unreachable in normal operation.
-  fn spotify(&self) -> &AuthCodePkceSpotify {
-    self
-      .spotify
-      .as_ref()
-      .expect("Spotify client present: the auth gate rejects Spotify events when it is None")
-  }
-
-  /// True for `IoEvent`s whose handlers never call [`Network::spotify`], so they
-  /// run even without a Spotify session (free-source launch). Keep this in sync
-  /// with the handlers: an event listed here MUST NOT reach the `spotify()`
-  /// accessor. Covered here: auth refresh (a no-op when there is no client),
+  /// True for `IoEvent`s whose handlers need no Spotify login, so they run
+  /// even without one (free-source launch). Keep this in sync with the
+  /// handlers: an event listed here must not call Spotify. Covered here: the login,
   /// source-agnostic services (telemetry, announcements, LRCLIB lyrics, cover
   /// art), the spotatui.com friends/party features (their own HTTP/relay
   /// clients), pure-state updates, and the per-source browse events that the
@@ -592,10 +511,9 @@ impl Network {
     }
     matches!(
       io_event,
-      IoEvent::RefreshAuthentication
-        | IoEvent::BeginSpotifyLogin
-        | IoEvent::CompleteSpotifyLogin(_)
-        | IoEvent::CancelSpotifyLogin
+      IoEvent::BeginSpotifyLogin
+        | IoEvent::CompleteSpotifyLogin
+        | IoEvent::CancelSpotifyLogin(_)
         | IoEvent::FetchGlobalSongCount
         | IoEvent::IncrementGlobalSongCount
         | IoEvent::FetchAnnouncements
@@ -728,8 +646,8 @@ impl Network {
     // Events whose handlers never touch the Spotify client run regardless of
     // whether a Spotify session exists (see `event_bypasses_spotify_auth`).
     // Everything else is Spotify-bound: when launched against a free source with
-    // no Spotify session, point the user at the in-TUI login path instead of
-    // failing loudly; otherwise ensure the token is fresh before proceeding.
+    // no Spotify login, point the user at the in-app login instead of failing
+    // loudly.
     let bypass_auth = Self::event_bypasses_spotify_auth(&io_event);
     let on_spotify_lane = Self::runs_on_spotify_lane(&io_event);
     // Only the `GetCurrentPlayback` handler releases the tick's poll latch, so
@@ -759,24 +677,9 @@ impl Network {
         Some(io_event) => io_event,
         None => return,
       };
-      if !self.ensure_authentication_fresh(false).await {
-        let mut app = self.app.lock().await;
-        if is_playback_poll {
-          app.is_fetching_current_playback = false;
-        }
-        if let Some(id) = pending_playlist_id.as_deref() {
-          if app.pending_playlist_open.as_deref() == Some(id) {
-            app.pending_playlist_open = None;
-          }
-        }
-        return;
-      }
     }
 
     match io_event {
-      IoEvent::RefreshAuthentication => {
-        self.refresh_authentication().await;
-      }
       IoEvent::EnsurePlaybackContinues(previous_track_id) => {
         self.ensure_playback_continues(previous_track_id).await;
       }
@@ -1144,11 +1047,11 @@ impl Network {
       IoEvent::BeginSpotifyLogin => {
         self.begin_spotify_login().await;
       }
-      IoEvent::CompleteSpotifyLogin(callback_url) => {
-        self.complete_spotify_login(callback_url).await;
+      IoEvent::CompleteSpotifyLogin => {
+        self.complete_spotify_login().await;
       }
-      IoEvent::CancelSpotifyLogin => {
-        self.cancel_spotify_login().await;
+      IoEvent::CancelSpotifyLogin(reason) => {
+        self.cancel_spotify_login(reason).await;
       }
       // Local-files browse events are handled by infra::local::dispatch before
       // reaching the network; they only arrive here when the feature is off.
@@ -1191,16 +1094,14 @@ impl Network {
       | IoEvent::RemoveTrackFromYouTubePlaylist(..) => {}
       IoEvent::RunPlaylistSync { retry_unmatched } => {
         crate::infra::playlist_sync::spawn_run(
-          self.spotify.clone(),
-          self.token_cache_path.clone(),
+          self.spotify,
           Arc::clone(&self.app),
           retry_unmatched,
         );
       }
       IoEvent::LinkPlaylist(master, mirror) => {
         crate::infra::playlist_sync::spawn_link(
-          self.spotify.clone(),
-          self.token_cache_path.clone(),
+          self.spotify,
           Arc::clone(&self.app),
           master,
           mirror,
@@ -1224,7 +1125,6 @@ impl Network {
 
   async fn handle_error(&mut self, e: anyhow::Error) {
     let rate_limited = requests::is_rate_limited_error(&e);
-    let e = with_rate_limit_hint(e, &self.client_config.client_id);
     let mut app = self.app.lock().await;
     // The first hit of a window under the pump: every later event is held
     // back, so a status message is enough. The CLI keeps its exit signal.
@@ -1264,16 +1164,11 @@ impl Network {
     None
   }
 
-  /// A `Network` for the Spotify lane: the pump's client (its token is shared),
-  /// limits, fallback cache and rate gate, taken per event so a login reaches it.
-  /// It defers like the pump; the lane hands what it defers back to the pump.
+  /// A `Network` for the Spotify lane: the pump's login, limits, fallback cache
+  /// and rate gate, taken per event so a login reaches it. It defers like the
+  /// pump; the lane hands what it defers back to the pump.
   pub(crate) fn spotify_lane_network(&self) -> Network {
-    let mut lane = Network::new(
-      self.spotify.clone(),
-      self.client_config.clone(),
-      &self.app,
-      self.token_cache_path.clone(),
-    );
+    let mut lane = Network::new(self.spotify, &self.app);
     lane.large_search_limit = self.large_search_limit;
     lane.small_search_limit = self.small_search_limit;
     lane.external_playlist_fallbacks = self.external_playlist_fallbacks.clone();
@@ -1383,233 +1278,87 @@ impl Network {
     }
   }
 
-  /// Record that `endpoint` refused the key in use, and persist the new tier.
-  /// The caller passes the endpoint that refused, so a refusal outside the
-  /// restricted table never reaches this.
-  async fn raise_spotify_key_tier(&self, endpoint: RestrictedEndpoint) {
-    let client_id = self
-      .spotify
-      .as_ref()
-      .map(|spotify| spotify.creds.id.clone());
-    self
-      .app
-      .lock()
-      .await
-      .raise_spotify_key_tier(endpoint, client_id.as_deref());
-  }
-
-  /// [`Self::raise_spotify_key_tier`] plus the status line saying why the
-  /// feature is not there. One entry point for both halves of a refusal.
-  async fn raise_and_remind_unavailable(&self, feature_name: &str, endpoint: RestrictedEndpoint) {
-    self.raise_spotify_key_tier(endpoint).await;
-    self
-      .show_status_message(
-        format!("{feature_name}: {}", endpoint.unavailable_note()),
-        5,
-      )
-      .await;
-  }
-
-  /// [`Self::raise_and_remind_unavailable`] as a pre-check: `true` when the
-  /// funnel would refuse `endpoint`, so the caller returns instead of starting
-  /// the work. Same state and message as a refusal caught after the fact.
-  async fn endpoint_is_out_of_reach(
-    &self,
-    feature_name: &str,
-    endpoint: RestrictedEndpoint,
-  ) -> bool {
-    // A `let`, not an `if` condition: the guard must be dropped before
-    // `raise_and_remind_unavailable` takes the same lock.
-    let blocked = self.app.lock().await.spotify_endpoint_blocked(endpoint);
-    if blocked {
-      self
-        .raise_and_remind_unavailable(feature_name, endpoint)
-        .await;
-    }
-    blocked
-  }
-
   async fn show_status_message(&self, message: String, ttl_secs: u64) {
     self.app.lock().await.set_status_message(message, ttl_secs);
   }
 
-  /// The timed refresh. It fires inside the refresh margin, so `force` is not
-  /// needed; a stale timer event after another path refreshed is a no-op
-  /// instead of a second rotation.
-  async fn refresh_authentication(&mut self) {
-    self.ensure_authentication_fresh(false).await;
-  }
-
-  async fn ensure_authentication_fresh(&mut self, force: bool) -> bool {
-    // No Spotify session (free-source launch): there is no token to refresh.
-    // Spotify-bound events never reach here in that state because the auth gate
-    // in `handle_network_event` rejects them first; the only caller that can hit
-    // this branch is `RefreshAuthentication`, for which a no-op is correct.
-    let Some(spotify) = self.spotify.as_ref() else {
-      let mut app = self.app.lock().await;
-      app.auth_refresh_in_progress = false;
-      return false;
-    };
-    match auth::refresh_token_and_cache(spotify, &self.token_cache_path, force).await {
-      Ok(expiry) => {
-        let mut app = self.app.lock().await;
-        app.spotify_token_expiry = Some(expiry);
-        app.auth_refresh_in_progress = false;
-        app.note_spotify_refresh_succeeded();
-        true
-      }
-      Err(e) => {
-        {
-          let mut app = self.app.lock().await;
-          app.auth_refresh_in_progress = false;
-          app.is_loading = false;
-          app.note_spotify_refresh_failed();
-        }
-        self.handle_error(anyhow!(e)).await;
-        false
-      }
-    }
-  }
-
-  /// Start an in-TUI Spotify OAuth login: build the PKCE client, open the browser,
-  /// and spawn a callback server that reports back via `CompleteSpotifyLogin`
-  /// (or `CancelSpotifyLogin` on timeout/failure). Non-blocking: the UI keeps
-  /// rendering while the browser round-trips.
+  /// Starts the in-app login: the pairing code goes in the status line, the
+  /// browser opens, and a task waits for the approval off the pump.
   async fn begin_spotify_login(&mut self) {
     if self.spotify.is_some() {
-      // Already connected — nothing to log into.
       return;
     }
-    if self.pending_login.is_some() {
+    if self.login_in_flight {
       self
         .show_status_message("Spotify login already in progress...".to_string(), 4)
         .await;
       return;
     }
-
-    let config_paths = match self.client_config.get_or_build_paths() {
-      Ok(paths) => paths,
-      Err(e) => {
-        self
-          .show_status_message(format!("Spotify login setup failed: {e}"), 8)
-          .await;
-        return;
-      }
-    };
-
-    let (spotify, authorize_url, port, token_cache_path) =
-      match auth::prepare_interactive_login(&self.client_config, &config_paths) {
-        Ok(prepared) => prepared,
+    #[cfg(feature = "spotify-session")]
+    {
+      use crate::infra::spotify::{credentials, session};
+      let pending = match credentials::begin_login().await {
+        Ok(pending) => pending,
         Err(e) => {
           self
-            .show_status_message(format!("Spotify login setup failed: {e}"), 8)
+            .show_status_message(format!("Spotify login failed: {e}"), 8)
             .await;
           return;
         }
       };
-
-    // Bound before the browser opens, see `bind_callback_listener`.
-    let Ok(listener) = bind_callback_listener(port).await else {
+      let Some(io_tx) = self.app.lock().await.io_tx_clone() else {
+        return;
+      };
+      log::info!("[login] pairing URL: {}", pending.url());
+      if let Err(e) = open::that_detached(pending.url()) {
+        log::warn!("[login] failed to open browser automatically: {e}");
+      }
       self
         .show_status_message(
           format!(
-            "Spotify login failed: could not listen on 127.0.0.1:{port} for the browser callback"
+            "Log in to Spotify: open {} and confirm the code {}",
+            pending.url(),
+            pending.code()
           ),
-          8,
+          LOGIN_TIMEOUT.as_secs(),
         )
         .await;
-      return;
-    };
-
-    log::info!("[login] authorize URL: {authorize_url}");
-    if let Err(e) = open::that_detached(&authorize_url) {
-      log::warn!("[login] failed to open browser automatically: {e}");
-      self
-        .show_status_message(
-          format!("Open this URL in your browser to log in to Spotify: {authorize_url}"),
-          30,
-        )
-        .await;
-    } else {
-      self
-        .show_status_message("Opening browser to log in to Spotify...".to_string(), 12)
-        .await;
+      self.login_in_flight = true;
+      tokio::spawn(async move {
+        let finished = async {
+          let credentials = pending.finish().await?;
+          session::log_in(credentials)
+            .await
+            .map_err(|reason| anyhow::anyhow!(reason.message()))
+        };
+        let event = match tokio::time::timeout(LOGIN_TIMEOUT, finished).await {
+          Ok(Ok(())) => IoEvent::CompleteSpotifyLogin,
+          Ok(Err(e)) => IoEvent::CancelSpotifyLogin(format!("Spotify login failed: {e}")),
+          Err(_) => IoEvent::CancelSpotifyLogin(
+            "Spotify login timed out. Press `d` and pick Spotify to try again.".to_string(),
+          ),
+        };
+        let _ = io_tx.send(event);
+      });
     }
-
-    // Keep the PKCE client on `self`: PKCE stores the code_verifier inside it and
-    // the token exchange in `complete_spotify_login` must reuse this instance.
-    self.pending_login = Some(PendingLogin {
-      spotify,
-      token_cache_path,
-    });
-
-    // Drive the callback server off a spawned task so the pump/UI stay responsive.
-    // The task carries only the sender + listener, never the client.
-    let io_tx = self.app.lock().await.io_tx_clone();
-    let Some(io_tx) = io_tx else {
-      return;
-    };
-    tokio::spawn(async move {
-      let overall_timeout = Duration::from_secs(180);
-      match tokio::time::timeout(overall_timeout, serve_spotify_callback(listener)).await {
-        Ok(Ok(url)) => {
-          let _ = io_tx.send(IoEvent::CompleteSpotifyLogin(url));
-        }
-        Ok(Err(())) => {
-          log::warn!("[login] callback server failed");
-          let _ = io_tx.send(IoEvent::CancelSpotifyLogin);
-        }
-        Err(_) => {
-          log::warn!(
-            "[login] login timed out after {}s",
-            overall_timeout.as_secs()
-          );
-          let _ = io_tx.send(IoEvent::CancelSpotifyLogin);
-        }
-      }
-    });
+    #[cfg(not(feature = "spotify-session"))]
+    self
+      .show_status_message(
+        "This build of spotatui has no Spotify support".to_string(),
+        6,
+      )
+      .await;
   }
 
-  /// Finish an in-TUI Spotify login from the OAuth callback URL. The token
-  /// exchange runs on the SAME PKCE client that produced the authorize URL.
-  /// Native streaming still requires a restart (its init happens pre-TUI).
-  async fn complete_spotify_login(&mut self, callback_url: String) {
-    let Some(pending) = self.pending_login.take() else {
-      return;
-    };
-    let PendingLogin {
-      spotify,
-      token_cache_path,
-    } = pending;
-
-    let Some(code) = spotify.parse_response_code(&callback_url) else {
-      self
-        .show_status_message("Spotify login failed: invalid callback URL.".to_string(), 8)
-        .await;
-      return;
-    };
-
-    if let Err(e) = spotify.request_token(&code).await {
-      self
-        .show_status_message(format!("Spotify login failed: {e}"), 8)
-        .await;
-      return;
+  /// Finishes the in-app login: the session is live, so Spotify data loads now.
+  async fn complete_spotify_login(&mut self) {
+    self.login_in_flight = false;
+    #[cfg(any(test, feature = "spotify-session"))]
+    {
+      self.spotify = Some(SpotifyLogin::new());
     }
-
-    if let Err(e) = auth::save_token_to_file(&spotify, &token_cache_path).await {
-      log::warn!("[login] failed to cache token after login: {e}");
-    }
-    let expiry = auth::token_expiry(&spotify).await.ok();
-
-    // A brand-new token family is in play, so the previous session's
-    // forced-refresh cooldown carries no information about it.
-    requests::reset_forced_refresh_cooldown().await;
-
-    self.spotify = Some(spotify);
-    self.token_cache_path = token_cache_path;
     {
       let mut app = self.app.lock().await;
-      app.spotify_token_expiry = expiry;
       app.spotify_connected = true;
       // `LikedSongs.available` reads the flag; a page must learn it can fetch now.
       app.bump_display(crate::core::app::DisplayDomain::LikedSongs);
@@ -1617,7 +1366,6 @@ impl Network {
       if app.active_source == crate::core::source::Source::Spotify {
         app.persist_active_source();
       }
-      // Load Spotify data now that a session exists.
       app.dispatch(IoEvent::GetUser);
       app.dispatch(IoEvent::GetPlaylists);
       app.dispatch(IoEvent::GetCurrentPlayback);
@@ -1630,19 +1378,12 @@ impl Network {
       .await;
   }
 
-  /// Clear an abandoned in-TUI login (callback timed out or failed) so the user
-  /// can retry.
-  async fn cancel_spotify_login(&mut self) {
-    if self.pending_login.take().is_some() {
-      self
-        .show_status_message(
-          "Spotify login timed out. Press `d` and pick Spotify to try again.".to_string(),
-          6,
-        )
-        .await;
+  /// Clears a failed in-app login so the user can try again.
+  async fn cancel_spotify_login(&mut self, reason: String) {
+    if std::mem::take(&mut self.login_in_flight) {
+      self.show_status_message(reason, 8).await;
     }
   }
-
   async fn start_party(&mut self, control_mode: sync::ControlMode) {
     // The event bypasses the auth gate, so the handler carries the requirement
     // itself: the relay drives Spotify playback, and opening the socket first
@@ -2050,36 +1791,8 @@ fn party_yields_to_local_playback(app: &App) -> bool {
 mod tests {
   use super::*;
   use crate::core::app::App;
-  use crate::core::config::ClientConfig;
   use crate::core::user_config::UserConfig;
-  use chrono::{TimeDelta, Utc};
-  use rspotify::{Config, Credentials, OAuth, Token};
-  use std::time::SystemTime;
-
-  async fn spotify_with_token(token: Token) -> AuthCodePkceSpotify {
-    let spotify = AuthCodePkceSpotify::with_config(
-      Credentials::new_pkce("test_client_id"),
-      OAuth {
-        redirect_uri: "http://localhost:8888/callback".to_string(),
-        ..Default::default()
-      },
-      Config::default(),
-    );
-
-    let mut token_lock = spotify.token.lock().await.expect("Failed to lock token");
-    *token_lock = Some(token);
-    drop(token_lock);
-
-    spotify
-  }
-
-  fn temp_token_cache_path() -> PathBuf {
-    std::env::temp_dir().join(format!(
-      "spotatui_network_test_token_{}.json",
-      rand::random::<u32>()
-    ))
-  }
-
+  use std::time::{Duration, SystemTime};
   #[test]
   fn every_service_lane_event_bypasses_spotify_auth() {
     use crate::infra::history::RecapPeriod;
@@ -2171,8 +1884,7 @@ mod tests {
     for event in [
       IoEvent::NextTrack,
       IoEvent::Seek(0),
-      IoEvent::RefreshAuthentication,
-      IoEvent::CompleteSpotifyLogin(String::new()),
+      IoEvent::CompleteSpotifyLogin,
       IoEvent::UpdateSearchLimits(1, 1),
     ] {
       assert!(!Network::runs_on_spotify_lane(&event));
@@ -2228,61 +1940,13 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn pre_event_auth_failure_clears_loading_state() {
-    let expired_token_without_refresh = Token {
-      access_token: "expired_access_token".to_string(),
-      refresh_token: None,
-      expires_in: TimeDelta::seconds(3600),
-      expires_at: Some(Utc::now() - TimeDelta::seconds(60)),
-      scopes: Default::default(),
-    };
-    let spotify = spotify_with_token(expired_token_without_refresh).await;
-    let token_cache_path = temp_token_cache_path();
-    let (io_tx, _io_rx) = std::sync::mpsc::channel();
-    let app = Arc::new(Mutex::new(App::new(
-      io_tx,
-      UserConfig::new(),
-      Some(SystemTime::now() - Duration::from_secs(60)),
-    )));
-
-    {
-      let mut app = app.lock().await;
-      app.is_loading = true;
-      app.auth_refresh_in_progress = true;
-    }
-
-    let mut network = Network::new(
-      Some(spotify),
-      ClientConfig::new(),
-      &app,
-      token_cache_path.clone(),
-    );
-    network.handle_network_event(IoEvent::GetUser).await;
-
-    let app = app.lock().await;
-    assert!(!app.is_loading);
-    assert!(!app.auth_refresh_in_progress);
-
-    let _ = std::fs::remove_file(token_cache_path);
-  }
-
-  #[tokio::test]
-  async fn a_playback_poll_dropped_by_a_failed_refresh_lets_the_tick_poll_again() {
+  async fn a_playback_poll_dropped_at_the_auth_gate_lets_the_tick_poll_again() {
     use std::time::Instant;
-    let expired_token_without_refresh = Token {
-      access_token: "expired_access_token".to_string(),
-      refresh_token: None,
-      expires_in: TimeDelta::seconds(3600),
-      expires_at: Some(Utc::now() - TimeDelta::seconds(60)),
-      scopes: Default::default(),
-    };
-    let spotify = spotify_with_token(expired_token_without_refresh).await;
-    let token_cache_path = temp_token_cache_path();
     let (io_tx, io_rx) = std::sync::mpsc::channel();
     let app = Arc::new(Mutex::new(App::new(
       io_tx,
       UserConfig::new(),
-      Some(SystemTime::now() - Duration::from_secs(60)),
+      Some(SystemTime::now()),
     )));
     let tick_polls = |app: &mut App| {
       app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(10);
@@ -2295,12 +1959,7 @@ mod tests {
     assert!(tick_polls(&mut *app.lock().await));
     assert!(app.lock().await.is_fetching_current_playback);
 
-    let mut network = Network::new(
-      Some(spotify),
-      ClientConfig::new(),
-      &app,
-      token_cache_path.clone(),
-    );
+    let mut network = Network::new(None, &app);
     network
       .handle_network_event(IoEvent::GetCurrentPlayback)
       .await;
@@ -2308,10 +1967,69 @@ mod tests {
     let mut app = app.lock().await;
     assert!(!app.is_fetching_current_playback);
     assert!(tick_polls(&mut app), "the tick polls again after the drop");
-
-    let _ = std::fs::remove_file(token_cache_path);
   }
 
+  #[tokio::test]
+  async fn a_finished_login_connects_and_loads_spotify() {
+    let (app, io_rx) = app_with_a_session_and_channel();
+    app.lock().await.spotify_connected = false;
+    let mut network = Network::new(None, &app);
+    network.login_in_flight = true;
+
+    network
+      .handle_network_event(IoEvent::CompleteSpotifyLogin)
+      .await;
+
+    assert!(network.spotify.is_some());
+    assert!(!network.login_in_flight);
+    assert!(app.lock().await.spotify_connected);
+    let loaded: Vec<IoEvent> = io_rx.try_iter().collect();
+    assert!(loaded.iter().any(|event| matches!(event, IoEvent::GetUser)));
+    assert!(loaded
+      .iter()
+      .any(|event| matches!(event, IoEvent::GetPlaylists)));
+  }
+
+  #[tokio::test]
+  async fn a_failed_login_shows_its_reason_once() {
+    let app = app_without_a_session();
+    let mut network = Network::new(None, &app);
+    network.login_in_flight = true;
+
+    network
+      .handle_network_event(IoEvent::CancelSpotifyLogin(
+        "Spotify login timed out".to_string(),
+      ))
+      .await;
+    assert!(!network.login_in_flight);
+    assert_eq!(
+      app.lock().await.status_message(),
+      Some("Spotify login timed out")
+    );
+
+    app.lock().await.set_status_message("other", 5);
+    network
+      .handle_network_event(IoEvent::CancelSpotifyLogin("late".to_string()))
+      .await;
+    assert_eq!(app.lock().await.status_message(), Some("other"));
+    assert!(network.spotify.is_none());
+  }
+
+  #[tokio::test]
+  async fn a_second_login_while_one_waits_is_refused() {
+    let app = app_without_a_session();
+    let mut network = Network::new(None, &app);
+    network.login_in_flight = true;
+
+    network
+      .handle_network_event(IoEvent::BeginSpotifyLogin)
+      .await;
+
+    assert_eq!(
+      app.lock().await.status_message(),
+      Some("Spotify login already in progress...")
+    );
+  }
   #[tokio::test]
   async fn auth_gate_clears_pending_playlist_open() {
     let (io_tx, _io_rx) = std::sync::mpsc::channel();
@@ -2321,7 +2039,7 @@ mod tests {
       Some(SystemTime::now()),
     )));
     app.lock().await.pending_playlist_open = Some("playlist-id".to_string());
-    let mut network = Network::new(None, ClientConfig::new(), &app, temp_token_cache_path());
+    let mut network = Network::new(None, &app);
 
     network
       .handle_network_event(IoEvent::GetPlaylistItems("playlist-id".to_string(), 0))
@@ -2331,18 +2049,15 @@ mod tests {
   }
 
   fn session_free_network(app: &Arc<Mutex<App>>) -> Network {
-    Network::new(None, ClientConfig::new(), app, temp_token_cache_path())
+    Network::new(None, app)
   }
 
   /// A pump-mode network with a session and a private, open rate-limit window.
   async fn rate_limited_pump_network(app: &Arc<Mutex<App>>) -> Network {
     let mut network = session_free_network(app);
-    network.spotify = Some(AuthCodePkceSpotify::new(
-      Credentials::default(),
-      OAuth::default(),
-    ));
+    network.spotify = Some(SpotifyLogin::new());
     network.defers_rate_limited = true;
-    network.rate_gate = requests::ForcedRefreshGate::default();
+    network.rate_gate = requests::RateLimitGate::default();
     network
       .rate_gate
       .rate_limit_for(Duration::from_secs(30))
@@ -2458,24 +2173,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_rate_limit_on_the_shared_client_id_names_the_way_out() {
-    let app = app_without_a_session();
-    let mut network = rate_limited_pump_network(&app).await;
-    network.client_config.client_id = NCSPOT_CLIENT_ID.to_string();
-
-    network
-      .handle_error(anyhow!(
-        "Spotify API 429 Too Many Requests failed: retry in 17s"
-      ))
-      .await;
-
-    let app = app.lock().await;
-    assert!(app
-      .status_message()
-      .is_some_and(|m| m.contains("retry in 17s") && m.contains("--reconfigure-auth")));
-  }
-
-  #[tokio::test]
   async fn a_rate_limit_error_without_the_pump_keeps_the_cli_exit_signal() {
     let app = app_without_a_session();
     let mut network = session_free_network(&app);
@@ -2563,10 +2260,7 @@ mod tests {
   /// A party member whose Spotify client is never called: the relay dispatches.
   async fn party_network(app: &Arc<Mutex<App>>, role: sync::PartyRole) -> Network {
     let mut network = session_free_network(app);
-    network.spotify = Some(AuthCodePkceSpotify::new(
-      Credentials::default(),
-      OAuth::default(),
-    ));
+    network.spotify = Some(SpotifyLogin::new());
     app
       .lock()
       .await

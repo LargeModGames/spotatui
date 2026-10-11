@@ -113,19 +113,14 @@ impl CliApp {
 
   // spotatui ... -d ... (specify device to control)
   pub async fn set_device(&mut self, name: String) -> Result<()> {
+    let mut app = self.net.app.lock().await;
     let id = {
-      let app = self.net.app.lock().await;
       let devices = app
         .devices()
         .ok_or_else(|| anyhow!("no device available"))?;
       device_id_by_name(&devices.devices, &name)?
     };
-
-    self
-      .net
-      .client_config
-      .set_device_id(id)
-      .map_err(|_e| anyhow!("failed to use device with name '{name}'"))?;
+    app.remember_spotify_device(&id);
     Ok(())
   }
 

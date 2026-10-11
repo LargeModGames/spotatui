@@ -226,6 +226,9 @@ impl App {
       Action::SelectSource(source) => {
         self.set_active_source(source);
         self.load_source_sidebar(source);
+        if source == crate::core::source::Source::Spotify {
+          self.begin_spotify_login_if_needed();
+        }
       }
       Action::OpenAddTrackDialog => self.begin_add_track_to_playlist_flow_from_selection(),
       Action::OpenAddTrackDialogFor {

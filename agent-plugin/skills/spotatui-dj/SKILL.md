@@ -47,7 +47,8 @@ full-screen terminal app and needs a real terminal. Ask the user to start it.
 | `set_dj_vibe` | Record a standing direction for the built-in auto-queue DJ |
 
 That is the whole surface. Do not promise the user control beyond it; in
-particular there is no tool to toggle continuous auto-queue.
+particular there is no tool to toggle continuous auto-queue. Change the user's
+library or playlists only when they asked for it.
 
 ## Start with their taste
 

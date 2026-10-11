@@ -545,10 +545,9 @@ jobs:
 
             def caveats
               <<~EOS
-                To use spotatui, you need a Spotify Premium account and must set up
-                Spotify API credentials. Run `spotatui` for first-time setup instructions.
+                Spotify in spotatui needs a Spotify Premium account. Run `spotatui`,
+                pick Spotify, and confirm the code it shows on Spotify's pairing page.
 
-                For native streaming support, ensure you have a Spotify Premium subscription.
                 Note: Native streaming on macOS requires 'portaudio' (installed as a dependency).
 
                 More info: https://github.com/LargeModGames/spotatui

@@ -3,8 +3,7 @@
 //! playback correctly by calling [`Driver::tick`] at its tick rate.
 //!
 //! One tick advances playback state (`App::update_on_tick` plus the debounced
-//! seek/volume/state flushes), refreshes the OAuth token, syncs OS presence
-//! (Discord, MPRIS, window title), detects track changes (lyrics + cover
+//! seek/volume/state flushes), syncs OS presence (Discord, MPRIS, window title), detects track changes (lyrics + cover
 //! art), counts plays for the global song counter, auto-advances the native
 //! queue and the decoded sources, persists the non-Spotify session, and feeds
 //! the audio visualizer.
@@ -37,7 +36,7 @@ use crate::infra::scripting::ScriptEngine;
 #[cfg(feature = "scripting")]
 use log::info;
 use std::sync::{atomic::AtomicU64, Arc};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "discord-rpc")]
 pub type DiscordRpcHandle = Option<discord_rpc::DiscordRpcManager>;
@@ -262,22 +261,6 @@ impl Driver {
         }
       }
       self.prev_is_streaming_active = current_is_streaming_active;
-    }
-
-    // Only refresh when a Spotify session exists; a free-source launch has no
-    // token expiry and must not schedule refreshes. This lives on the tick so
-    // every frontend gets it: one that skipped it would work for exactly one
-    // token lifetime and then 401 forever.
-    if plan::oauth_refresh_due(
-      app.spotify_token_expiry,
-      SystemTime::now(),
-      app.auth_refresh_in_progress,
-      app.active_decoded_source() || app.apple_music_owns_playback(),
-      app.spotify_refresh_retry_at(),
-      env.now,
-    ) {
-      app.auth_refresh_in_progress = true;
-      app.dispatch(IoEvent::RefreshAuthentication);
     }
 
     app.update_on_tick(elapsed);

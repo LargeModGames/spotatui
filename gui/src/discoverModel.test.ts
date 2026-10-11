@@ -8,7 +8,6 @@ const discover = (patch: Partial<DiscoverPayload> = {}): DiscoverPayload => ({
   top_tracks_range: "Medium",
   top_tracks: [],
   artists_mix: [],
-  artists_mix_available: true,
   liked_ids: [],
   ...patch,
 });
@@ -28,19 +27,11 @@ describe("discoverModel", () => {
     ).toBeNull();
   });
 
-  it("fetches the mix once when the key allows it", () => {
+  it("fetches the mix once", () => {
     expect(fetchFor(discover(), "mix", "Medium", null)).toEqual({
       OpenDiscover: "ArtistsMix",
     });
     expect(fetchFor(discover(), "mix", "Medium", "mix")).toBeNull();
-    expect(
-      fetchFor(
-        discover({ artists_mix_available: false }),
-        "mix",
-        "Medium",
-        null,
-      ),
-    ).toBeNull();
   });
 
   it("shows top tracks only under the range they belong to", () => {

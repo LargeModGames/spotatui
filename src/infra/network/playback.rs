@@ -2,10 +2,7 @@ use super::requests::is_transient_network_error;
 use super::{IoEvent, Network};
 use crate::core::app::PlaybackOwner;
 #[cfg(feature = "streaming")]
-use crate::core::{
-  app::{App, NativePlaybackOrigin, NativePlaybackRecoverySnapshot},
-  config::ClientConfig,
-};
+use crate::core::app::{App, NativePlaybackOrigin, NativePlaybackRecoverySnapshot};
 #[cfg(feature = "streaming")]
 use crate::infra::player::{select_native, PlaybackBackend};
 use anyhow::anyhow;
@@ -347,7 +344,6 @@ fn saved_device_matches_native_player(
 
 #[cfg(feature = "streaming")]
 fn persist_native_device_id_if_needed(
-  client_config: &mut ClientConfig,
   app: &mut App,
   native_device_id: &str,
   update: NativeDevicePreferenceUpdate,
@@ -356,13 +352,11 @@ fn persist_native_device_id_if_needed(
     return;
   }
 
-  if client_config.device_id.as_deref() == Some(native_device_id) {
+  if app.saved_spotify_device_id().as_deref() == Some(native_device_id) {
     return;
   }
 
-  if let Err(e) = client_config.set_device_id(native_device_id.to_string()) {
-    app.handle_error(anyhow!(e));
-  }
+  app.remember_spotify_device(native_device_id);
 }
 
 #[cfg(feature = "streaming")]
@@ -397,7 +391,6 @@ fn handoff_resume_may_pull_back(cached_device_id: Option<&str>, native_device_id
 
 #[cfg(feature = "streaming")]
 fn reconcile_native_idle_device_if_preferred(
-  client_config: &mut ClientConfig,
   app: &mut App,
   player: &crate::infra::player::StreamingPlayer,
   recovery: &mut NativeIdleRecoveryState,
@@ -407,16 +400,16 @@ fn reconcile_native_idle_device_if_preferred(
   }
 
   let native_device_id = player.device_id();
+  let saved_device_id = app.saved_spotify_device_id();
   let saved_device_matches_native = saved_device_matches_native_player(
-    client_config.device_id.as_deref(),
+    saved_device_id.as_deref(),
     Some(&native_device_id),
     app.devices(),
     player.device_name(),
   );
-  let Some(native_preference_update) = native_idle_device_preference_update(
-    client_config.device_id.as_deref(),
-    saved_device_matches_native,
-  ) else {
+  let Some(native_preference_update) =
+    native_idle_device_preference_update(saved_device_id.as_deref(), saved_device_matches_native)
+  else {
     return;
   };
 
@@ -440,12 +433,7 @@ fn reconcile_native_idle_device_if_preferred(
     player.device_name().to_string(),
     player.get_volume(),
   );
-  persist_native_device_id_if_needed(
-    client_config,
-    app,
-    &native_device_id,
-    native_preference_update,
-  );
+  persist_native_device_id_if_needed(app, &native_device_id, native_preference_update);
 }
 
 #[cfg(feature = "streaming")]
@@ -511,7 +499,7 @@ fn saved_device_retry(
 }
 
 /// Run a player command against the Web API, retrying once on the saved
-/// device (`client_config.device_id`) when Spotify rejects the bare command
+/// device (`App::saved_spotify_device_id`) when Spotify rejects the bare command
 /// with `NO_ACTIVE_DEVICE`. A failed retry surfaces the *original* error so
 /// downstream classification (native fallback, transient suppression) is
 /// unchanged.
@@ -530,9 +518,10 @@ async fn player_command_with_saved_device_retry(
     return result;
   };
 
+  let saved_device_id = network.app.lock().await.saved_spotify_device_id();
   let Some(device_id) = saved_device_retry(
     is_no_active_device_error(&e),
-    network.client_config.device_id.as_deref(),
+    saved_device_id.as_deref(),
     native_can_claim_player_command(network).await,
   ) else {
     return Err(e);
@@ -801,8 +790,9 @@ async fn transfer_playback_backend(network: &Network, device_id: &str) -> Playba
 
 #[cfg(feature = "streaming")]
 async fn should_activate_native_streaming_for_playback(network: &Network) -> bool {
-  let saved_device_id = network.client_config.device_id.as_deref();
   let app = network.app.lock().await;
+  let saved_device_id = app.saved_spotify_device_id();
+  let saved_device_id = saved_device_id.as_deref();
   let Some(player) = app.streaming_player.as_ref() else {
     return false;
   };
@@ -1308,7 +1298,6 @@ impl PlaybackNetwork for Network {
         #[cfg(feature = "streaming")]
         if let Some(player) = streaming_player.as_ref() {
           reconcile_native_idle_device_if_preferred(
-            &mut self.client_config,
             &mut app,
             player,
             &mut self.native_idle_recovery,
@@ -1404,7 +1393,6 @@ impl PlaybackNetwork for Network {
           #[cfg(feature = "streaming")]
           if let Some(player) = streaming_player.as_ref() {
             reconcile_native_idle_device_if_preferred(
-              &mut self.client_config,
               &mut app,
               player,
               &mut self.native_idle_recovery,
@@ -1593,7 +1581,7 @@ impl PlaybackNetwork for Network {
       let (should_transfer, native_preference_update) = {
         let app = self.app.lock().await;
         let saved_device_matches_native = saved_device_matches_native_player(
-          self.client_config.device_id.as_deref(),
+          app.saved_spotify_device_id().as_deref(),
           Some(&native_device_id),
           app.devices(),
           player.device_name(),
@@ -1611,7 +1599,7 @@ impl PlaybackNetwork for Network {
         (
           should_transfer,
           native_device_preference_update(
-            self.client_config.device_id.as_deref(),
+            app.saved_spotify_device_id().as_deref(),
             false,
             saved_device_matches_native,
           ),
@@ -1639,12 +1627,7 @@ impl PlaybackNetwork for Network {
         app.native_activation_pending = false;
         app.native_playback_origin = Some(requested_origin);
         app.native_device_id = Some(native_device_id.clone());
-        persist_native_device_id_if_needed(
-          &mut self.client_config,
-          &mut app,
-          &native_device_id,
-          native_preference_update,
-        );
+        persist_native_device_id_if_needed(&mut app, &native_device_id, native_preference_update);
         if context_id.is_none() && uris.is_none() {
           app.set_native_playback_intent(true);
         } else {
@@ -1881,13 +1864,13 @@ impl PlaybackNetwork for Network {
               {
                 let mut app = self.app.lock().await;
                 let saved_device_matches_native = saved_device_matches_native_player(
-                  self.client_config.device_id.as_deref(),
+                  app.saved_spotify_device_id().as_deref(),
                   Some(&native_device_id),
                   app.devices(),
                   player.device_name(),
                 );
                 let native_preference_update = native_device_preference_update(
-                  self.client_config.device_id.as_deref(),
+                  app.saved_spotify_device_id().as_deref(),
                   false,
                   saved_device_matches_native,
                 );
@@ -1899,7 +1882,6 @@ impl PlaybackNetwork for Network {
                 app.instant_since_last_current_playback_poll =
                   activation_time - Duration::from_secs(6);
                 persist_native_device_id_if_needed(
-                  &mut self.client_config,
                   &mut app,
                   &native_device_id,
                   native_preference_update,
@@ -2485,7 +2467,6 @@ impl PlaybackNetwork for Network {
       {
         if persist_device_id {
           persist_native_device_id_if_needed(
-            &mut self.client_config,
             &mut app,
             &device_id,
             NativeDevicePreferenceUpdate::Persist,
@@ -2511,13 +2492,13 @@ impl PlaybackNetwork for Network {
         .settle_current_episode(activation_time);
       let mut app = self.app.lock().await;
       let saved_device_matches_native = saved_device_matches_native_player(
-        self.client_config.device_id.as_deref(),
+        app.saved_spotify_device_id().as_deref(),
         Some(&native_device_id),
         app.devices(),
         player.device_name(),
       );
       let native_preference_update = native_device_preference_update(
-        self.client_config.device_id.as_deref(),
+        app.saved_spotify_device_id().as_deref(),
         persist_device_id,
         saved_device_matches_native,
       );
@@ -2533,12 +2514,7 @@ impl PlaybackNetwork for Network {
       app.current_playback_context = None;
       app.last_device_activation = Some(activation_time);
       app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
-      persist_native_device_id_if_needed(
-        &mut self.client_config,
-        &mut app,
-        &native_device_id,
-        native_preference_update,
-      );
+      persist_native_device_id_if_needed(&mut app, &native_device_id, native_preference_update);
       return;
     }
 
@@ -2559,10 +2535,7 @@ impl PlaybackNetwork for Network {
     } else {
       let mut app = self.app.lock().await;
       if persist_device_id {
-        // Update via client_config helper to save to file
-        if let Err(e) = self.client_config.set_device_id(device_id) {
-          app.handle_error(anyhow!(e));
-        }
+        app.remember_spotify_device(&device_id);
       }
       app.current_playback_context = None;
       app.poll_playback_soon();
@@ -2590,7 +2563,7 @@ impl PlaybackNetwork for Network {
       let (should_transfer, external_playback_active, native_preference_update) = {
         let app = self.app.lock().await;
         let saved_device_matches_native = saved_device_matches_native_player(
-          self.client_config.device_id.as_deref(),
+          app.saved_spotify_device_id().as_deref(),
           Some(&native_device_id),
           app.devices(),
           player.device_name(),
@@ -2616,7 +2589,7 @@ impl PlaybackNetwork for Network {
             && !external_playback_active,
           external_playback_active,
           native_device_preference_update(
-            self.client_config.device_id.as_deref(),
+            app.saved_spotify_device_id().as_deref(),
             persist_device_id,
             saved_device_matches_native,
           ),
@@ -2657,12 +2630,7 @@ impl PlaybackNetwork for Network {
           app.last_device_activation = Some(activation_time);
           app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
         }
-        persist_native_device_id_if_needed(
-          &mut self.client_config,
-          &mut app,
-          &native_device_id,
-          native_preference_update,
-        );
+        persist_native_device_id_if_needed(&mut app, &native_device_id, native_preference_update);
       }
 
       for _ in 0..2 {
@@ -3030,7 +2998,7 @@ mod tests {
   #[tokio::test]
   async fn pause_with_no_active_device_is_not_an_error() {
     use crate::core::app::{App, RouteId};
-    use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+    use crate::infra::network::metadata::tests::{fake_spotify_login, read_http_request};
     use tokio::io::AsyncWriteExt;
     use tokio::sync::Mutex;
 
@@ -3055,13 +3023,8 @@ mod tests {
         crate::core::user_config::UserConfig::new(),
         Some(std::time::SystemTime::now()),
       )));
-      let spotify = spotify_with_access_token("test_token", base_url).await;
-      let mut network = Network::new(
-        Some(spotify),
-        crate::core::config::ClientConfig::new(),
-        &app,
-        std::path::PathBuf::new(),
-      );
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
 
       network.pause_playback().await;
       server.await.unwrap();
@@ -3077,7 +3040,7 @@ mod tests {
   #[tokio::test]
   async fn only_a_successful_command_polls_sooner() {
     use crate::core::app::App;
-    use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+    use crate::infra::network::metadata::tests::{fake_spotify_login, read_http_request};
     use tokio::io::AsyncWriteExt;
     use tokio::sync::Mutex;
 
@@ -3107,13 +3070,8 @@ mod tests {
         crate::core::user_config::UserConfig::new(),
         Some(std::time::SystemTime::now()),
       )));
-      let spotify = spotify_with_access_token("test_token", base_url).await;
-      let network = Network::new(
-        Some(spotify),
-        crate::core::config::ClientConfig::new(),
-        &app,
-        std::path::PathBuf::new(),
-      );
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let network = Network::new(Some(spotify), &app);
       let failed =
         player_command_with_saved_device_retry(&network, Method::POST, "me/player/next", &[], None)
           .await;
@@ -3140,7 +3098,7 @@ mod tests {
   #[tokio::test]
   async fn an_empty_poll_after_a_handoff_forgets_the_phone_so_space_can_pull_back() {
     use crate::core::app::App;
-    use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+    use crate::infra::network::metadata::tests::{fake_spotify_login, read_http_request};
     use tokio::io::AsyncWriteExt;
     use tokio::sync::Mutex;
 
@@ -3171,13 +3129,8 @@ mod tests {
         Some(std::time::SystemTime::now()),
       )));
       app.lock().await.mark_native_handed_off();
-      let spotify = spotify_with_access_token("test_token", base_url).await;
-      let mut network = Network::new(
-        Some(spotify),
-        crate::core::config::ClientConfig::new(),
-        &app,
-        std::path::PathBuf::new(),
-      );
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
 
       // The paused phone still holds the playback: Space must leave it there.
       network.get_current_playback().await;
@@ -3963,7 +3916,6 @@ mod tests {
   #[tokio::test]
   async fn resume_spotify_context_with_nothing_known_finishes_the_queue() {
     use crate::core::app::App;
-    use crate::core::config::ClientConfig;
     use crate::core::user_config::UserConfig;
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
@@ -3975,12 +3927,7 @@ mod tests {
       Some(SystemTime::now()),
     )));
     // No Spotify client is needed: the both-None arm never reaches `spotify()`.
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      std::env::temp_dir().join("spotatui_resume_context_test.json"),
-    );
+    let mut network = Network::new(None, &app);
 
     network.resume_spotify_context(None, None).await;
 
@@ -3992,7 +3939,6 @@ mod tests {
   #[tokio::test]
   async fn a_spotify_queue_slot_blocks_a_cached_context_restore() {
     use crate::core::app::App;
-    use crate::core::config::ClientConfig;
     use crate::core::user_config::UserConfig;
     use crate::infra::queue::QueueNowPlaying;
     use std::sync::mpsc::channel;
@@ -4012,12 +3958,7 @@ mod tests {
       rspotify::model::enums::RepeatState::Off,
     );
     let app = std::sync::Arc::new(tokio::sync::Mutex::new(app_state));
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      std::env::temp_dir().join("spotatui_restore_slot_test.json"),
-    );
+    let mut network = Network::new(None, &app);
 
     network.restore_native_playback(generation).await;
 
@@ -4028,7 +3969,6 @@ mod tests {
   #[tokio::test]
   async fn a_decoded_owner_refuses_the_end_of_track_continuation() {
     use crate::core::app::App;
-    use crate::core::config::ClientConfig;
     use crate::core::source::Source;
     use crate::core::user_config::UserConfig;
     use std::sync::mpsc::channel;
@@ -4039,12 +3979,7 @@ mod tests {
     seeded.claim_decoded_sink(Source::YouTube);
     let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
     // No Spotify client: reaching the `me/player` GET panics in `spotify()`.
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      std::env::temp_dir().join("spotatui_continuation_refusal_test.json"),
-    );
+    let mut network = Network::new(None, &app);
 
     network
       .ensure_playback_continues("0000000000000000000001".to_string())
@@ -4057,7 +3992,6 @@ mod tests {
   #[tokio::test]
   async fn an_explicit_start_waits_for_a_parked_backend_instead_of_the_web_api() {
     use crate::core::app::App;
-    use crate::core::config::ClientConfig;
     use crate::core::user_config::UserConfig;
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
@@ -4070,12 +4004,7 @@ mod tests {
     seeded.seed_native_parked();
     let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
     // No Spotify client: reaching the Connect arm's `me/player` PUT panics in `spotify()`.
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      std::env::temp_dir().join("spotatui_parked_start_test.json"),
-    );
+    let mut network = Network::new(None, &app);
 
     network
       .start_playback(
@@ -4103,7 +4032,6 @@ mod tests {
   #[tokio::test]
   async fn a_transfer_to_the_parked_native_device_requests_the_rebuild() {
     use crate::core::app::App;
-    use crate::core::config::ClientConfig;
     use crate::core::user_config::UserConfig;
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
@@ -4116,12 +4044,7 @@ mod tests {
     seeded.native_device_id = Some("native-device".to_string());
     let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
     // No Spotify client: reaching the `me/player` PUT panics in `spotify()`.
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      std::env::temp_dir().join("spotatui_parked_transfer_test.json"),
-    );
+    let mut network = Network::new(None, &app);
 
     network
       .transfert_playback_to_device("native-device".to_string(), false)
@@ -4137,7 +4060,6 @@ mod tests {
   #[tokio::test]
   async fn transfer_to_an_external_device_is_refused_while_a_decoded_source_owns_playback() {
     use crate::core::app::App;
-    use crate::core::config::ClientConfig;
     use crate::core::source::Source;
     use crate::core::user_config::UserConfig;
     use std::sync::mpsc::channel;
@@ -4148,12 +4070,7 @@ mod tests {
     seeded.claim_decoded_sink(Source::YouTube);
     let app = std::sync::Arc::new(tokio::sync::Mutex::new(seeded));
     // No Spotify client: reaching the `me/player` PUT panics in `spotify()`.
-    let mut network = Network::new(
-      None,
-      ClientConfig::new(),
-      &app,
-      std::env::temp_dir().join("spotatui_transfer_refusal_test.json"),
-    );
+    let mut network = Network::new(None, &app);
 
     network
       .transfert_playback_to_device("external-device".to_string(), true)
@@ -4163,6 +4080,6 @@ mod tests {
       app.lock().await.status_message(),
       Some("Another source owns playback")
     );
-    assert!(network.client_config.device_id.is_none());
+    assert!(app.lock().await.saved_spotify_device_id().is_none());
   }
 }

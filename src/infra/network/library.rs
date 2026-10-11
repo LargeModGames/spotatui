@@ -1,9 +1,9 @@
 use super::mapping::{map_page, playlist_items_page};
 use super::requests::{
-  is_forbidden_error, is_not_found_error, is_rate_limited_error,
-  spotify_api_request_json_for_with_refresh, spotify_get_typed_compat_for_with_refresh,
+  is_forbidden_error, is_not_found_error, is_rate_limited_error, spotify_api_request_json_for,
+  spotify_get_typed_for,
 };
-use super::{with_rate_limit_hint, IoEvent, Network};
+use super::{IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, App, PlaylistFolder, PlaylistFolderItem, PlaylistFolderNode, PlaylistFolderNodeType,
   RouteId,
@@ -15,17 +15,16 @@ use crate::core::source::Source;
 use anyhow::anyhow;
 use reqwest::Method;
 use rspotify::model::{
-  idtypes::{AlbumId, LibraryId, PlaylistId, ShowId, TrackId, UserId},
+  idtypes::{AlbumId, PlaylistId, ShowId, TrackId, UserId},
   page::Page,
   playlist::{PlaylistItem, SimplifiedPlaylist},
   track::SavedTrack,
 };
-use rspotify::{prelude::*, AuthCodePkceSpotify};
+use rspotify::prelude::*;
 use serde_json::json;
 #[cfg(feature = "streaming")]
 use std::collections::HashMap;
 use std::collections::{HashSet, VecDeque};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -306,9 +305,7 @@ fn log_playlist_access(app: &App, playlist_id: &str, access: PlaylistAccess) {
 }
 
 async fn classify_playlist_after_forbidden(
-  spotify: &AuthCodePkceSpotify,
   app: &Arc<Mutex<App>>,
-  token_cache_path: &Path,
   playlist_id: &PlaylistId<'_>,
   fallbacks: &ExternalPlaylistFallbackCache,
 ) -> PlaylistAccess {
@@ -336,12 +333,9 @@ async fn classify_playlist_after_forbidden(
   // library. The metadata endpoint remains useful for relationship checks even
   // when the items endpoint is restricted, and the minimal shape avoids asking
   // rspotify to deserialize a response with no item page.
-  let metadata = match spotify_get_typed_compat_for_with_refresh::<PlaylistAccessMetadata>(
-    spotify,
+  let metadata = match spotify_get_typed_for::<PlaylistAccessMetadata>(
     &format!("playlists/{}", playlist_id.id()),
     &[],
-    token_cache_path,
-    app,
   )
   .await
   {
@@ -378,9 +372,7 @@ async fn classify_playlist_after_forbidden(
 /// special only when the playlist metadata proves another user owns it;
 /// all other errors remain real errors.
 async fn fetch_playlist_tracks_page(
-  spotify: &AuthCodePkceSpotify,
   app: &Arc<Mutex<App>>,
-  token_cache_path: &Path,
   playlist_id: &PlaylistId<'_>,
   offset: u32,
   limit: u32,
@@ -406,15 +398,7 @@ async fn fetch_playlist_tracks_page(
 
   let path = format!("playlists/{}/items", playlist_id.id());
   let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-  match spotify_get_typed_compat_for_with_refresh::<Page<PlaylistItem>>(
-    spotify,
-    &path,
-    &query,
-    token_cache_path,
-    app,
-  )
-  .await
-  {
+  match spotify_get_typed_for::<Page<PlaylistItem>>(&path, &query).await {
     Ok(page) => Ok(PlaylistTracksPage::Api(page)),
     Err(error) => {
       let forbidden = is_forbidden_error(&error);
@@ -427,8 +411,7 @@ async fn fetch_playlist_tracks_page(
         )
       };
       let access = if forbidden {
-        classify_playlist_after_forbidden(spotify, app, token_cache_path, playlist_id, fallbacks)
-          .await
+        classify_playlist_after_forbidden(app, playlist_id, fallbacks).await
       } else if hidden_spotify_owned {
         log::debug!(
           "playlist content access: id={} access=External reason=spotify-owned-404",
@@ -593,14 +576,14 @@ fn external_fallback_track_is_playable() -> bool {
 
 #[cfg(feature = "streaming")]
 fn librespot_track_info(track: &LibrespotTrack) -> Option<TrackInfo> {
-  let id = track.id.to_id().ok()?;
-  let uri = track.id.to_uri().ok();
-  let album_id = track.album.id.to_id().ok();
+  let id = track.id.to_id();
+  let uri = Some(track.id.to_uri());
+  let album_id = Some(track.album.id.to_id());
   let artist_refs = track
     .artists
     .iter()
     .map(|artist| crate::core::plugin_api::ArtistRef {
-      id: artist.id.to_id().ok(),
+      id: Some(artist.id.to_id()),
       name: artist.name.clone(),
     })
     .collect::<Vec<_>>();
@@ -635,8 +618,8 @@ fn librespot_episode_info(
   episode: &LibrespotEpisode,
 ) -> Option<crate::core::plugin_api::EpisodeInfo> {
   Some(crate::core::plugin_api::EpisodeInfo {
-    id: episode.id.to_id().ok(),
-    uri: episode.id.to_uri().ok(),
+    id: Some(episode.id.to_id()),
+    uri: Some(episode.id.to_uri()),
     name: episode.name.clone(),
     duration_ms: episode.duration.max(0) as u64,
     show_name: episode.show_name.clone(),
@@ -701,9 +684,7 @@ fn domain_track_page(
 }
 
 pub async fn prefetch_saved_tracks_page_task(
-  spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
-  token_cache_path: std::path::PathBuf,
   limit: u32,
   mut offset: u32,
   generation: u64,
@@ -725,14 +706,8 @@ pub async fn prefetch_saved_tracks_page_task(
     }
 
     let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    let Ok(page) = spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::SavedTrack>>(
-      &spotify,
-      "me/tracks",
-      &query,
-      &token_cache_path,
-      &app,
-    )
-    .await
+    let Ok(page) =
+      spotify_get_typed_for::<Page<rspotify::model::SavedTrack>>("me/tracks", &query).await
     else {
       let mut app_guard = app.lock().await;
       app_guard.saved_tracks_prefetch_in_flight.remove(&offset);
@@ -784,9 +759,7 @@ pub async fn prefetch_saved_tracks_page_task(
 // offsets, generation, shared fallback cache); cf. `finish_playlists_fetch`.
 #[allow(clippy::too_many_arguments)]
 pub async fn prefetch_playlist_tracks_page_task(
-  spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
-  token_cache_path: std::path::PathBuf,
   limit: u32,
   playlist_id: PlaylistId<'static>,
   mut offset: u32,
@@ -809,16 +782,7 @@ pub async fn prefetch_playlist_tracks_page_task(
       return;
     }
 
-    let page = match fetch_playlist_tracks_page(
-      &spotify,
-      &app,
-      &token_cache_path,
-      &playlist_id,
-      offset,
-      limit,
-      &fallbacks,
-    )
-    .await
+    let page = match fetch_playlist_tracks_page(&app, &playlist_id, offset, limit, &fallbacks).await
     {
       Ok(page) => page.into_domain(),
       Err(PlaylistPageError::UnsupportedExternal) => {
@@ -922,14 +886,9 @@ impl Network {
 
     let mut all_results = Vec::with_capacity(uris.len());
     for batch in uri_batches(uris) {
-      let batch_results = spotify_get_typed_compat_for_with_refresh::<Vec<bool>>(
-        self.spotify(),
-        "me/library/contains",
-        &[("uris", batch.join(","))],
-        &self.token_cache_path,
-        &self.app,
-      )
-      .await?;
+      let batch_results =
+        spotify_get_typed_for::<Vec<bool>>("me/library/contains", &[("uris", batch.join(","))])
+          .await?;
       all_results.extend(batch_results);
     }
 
@@ -962,14 +921,24 @@ impl Network {
   pub(super) async fn library_save_uris(&self, uris: &[String]) -> anyhow::Result<()> {
     for batch in uri_batches(uris) {
       let query = vec![("uris", batch.join(","))];
-      spotify_api_request_json_for_with_refresh(
-        self.spotify(),
+      spotify_api_request_json_for(
         Method::PUT,
         "me/library",
         &query,
         Some(json!({ "uris": batch })),
-        &self.token_cache_path,
-        &self.app,
+      )
+      .await?;
+    }
+    Ok(())
+  }
+
+  async fn playlist_add_uris(&self, playlist_id: &str, uris: &[String]) -> anyhow::Result<()> {
+    for batch in uris.chunks(100) {
+      spotify_api_request_json_for(
+        Method::POST,
+        &format!("playlists/{playlist_id}/items"),
+        &[],
+        Some(json!({ "uris": batch })),
       )
       .await?;
     }
@@ -979,14 +948,11 @@ impl Network {
   pub(super) async fn library_remove_uris(&self, uris: &[String]) -> anyhow::Result<()> {
     for batch in uri_batches(uris) {
       let query = vec![("uris", batch.join(","))];
-      spotify_api_request_json_for_with_refresh(
-        self.spotify(),
+      spotify_api_request_json_for(
         Method::DELETE,
         "me/library",
         &query,
         Some(json!({ "uris": batch })),
-        &self.token_cache_path,
-        &self.app,
       )
       .await?;
     }
@@ -994,20 +960,10 @@ impl Network {
   }
 
   pub fn spawn_saved_tracks_prefetch(&self, offset: u32, generation: u64) {
-    let spotify = self.spotify().clone();
     let app = self.app.clone();
-    let token_cache_path = self.token_cache_path.clone();
     let large_search_limit = self.large_search_limit;
     tokio::spawn(async move {
-      prefetch_saved_tracks_page_task(
-        spotify,
-        app,
-        token_cache_path,
-        large_search_limit,
-        offset,
-        generation,
-      )
-      .await;
+      prefetch_saved_tracks_page_task(app, large_search_limit, offset, generation).await;
     });
   }
 
@@ -1017,16 +973,12 @@ impl Network {
     offset: u32,
     generation: u64,
   ) {
-    let spotify = self.spotify().clone();
     let app = self.app.clone();
-    let token_cache_path = self.token_cache_path.clone();
     let large_search_limit = self.large_search_limit;
     let fallbacks = self.external_playlist_fallbacks.clone();
     tokio::spawn(async move {
       prefetch_playlist_tracks_page_task(
-        spotify,
         app,
-        token_cache_path,
         large_search_limit,
         playlist_id,
         offset,
@@ -1048,11 +1000,7 @@ impl Network {
 /// skip-to-queued-track waited ~20s behind it, #386). One worker at a time
 /// (`liked_lookup_worker_running`), so rapid navigation coalesces into the
 /// deduped pending set instead of parallel request floods.
-async fn liked_lookup_worker_task(
-  spotify: AuthCodePkceSpotify,
-  app: Arc<Mutex<App>>,
-  token_cache_path: std::path::PathBuf,
-) {
+async fn liked_lookup_worker_task(app: Arc<Mutex<App>>) {
   const BATCH: usize = 40;
   const MAX_CONSECUTIVE_FAILURES: u32 = 3;
   let mut consecutive_failures = 0u32;
@@ -1078,14 +1026,8 @@ async fn liked_lookup_worker_task(
       .iter()
       .map(|id| format!("spotify:track:{id}"))
       .collect();
-    let result = spotify_get_typed_compat_for_with_refresh::<Vec<bool>>(
-      &spotify,
-      "me/library/contains",
-      &[("uris", uris.join(","))],
-      &token_cache_path,
-      &app,
-    )
-    .await;
+    let result =
+      spotify_get_typed_for::<Vec<bool>>("me/library/contains", &[("uris", uris.join(","))]).await;
     let mut guard = app.lock().await;
     match result {
       Ok(is_saved_vec) => {
@@ -1137,22 +1079,16 @@ const PLAYLIST_SEARCH_MAX_PAGES: u32 = 200;
 const PLAYLIST_SEARCH_PAGE_SIZE: u32 = 50;
 
 struct PlaylistTrackSearch {
-  spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
-  token_cache_path: std::path::PathBuf,
   fallbacks: ExternalPlaylistFallbackCache,
-  client_id: String,
   playlist_id: PlaylistId<'static>,
   query: String,
 }
 
 async fn search_playlist_tracks_task(search: PlaylistTrackSearch, terms: Vec<String>) {
   let PlaylistTrackSearch {
-    spotify,
     app,
-    token_cache_path,
     fallbacks,
-    client_id,
     playlist_id,
     query,
   } = search;
@@ -1174,9 +1110,7 @@ async fn search_playlist_tracks_task(search: PlaylistTrackSearch, terms: Vec<Str
     }
 
     let page = match fetch_playlist_tracks_page(
-      &spotify,
       &app,
-      &token_cache_path,
       &playlist_id,
       offset,
       PLAYLIST_SEARCH_PAGE_SIZE,
@@ -1197,7 +1131,7 @@ async fn search_playlist_tracks_task(search: PlaylistTrackSearch, terms: Vec<Str
           // A rate limit is a wait, not a failure page: the pump shows it the
           // same way.
           PlaylistPageError::Request(error) if is_rate_limited_error(&error) => {
-            app.set_error_status_message(with_rate_limit_hint(error, &client_id).to_string(), 8);
+            app.set_error_status_message(error.to_string(), 8);
           }
           PlaylistPageError::Request(error) => app.handle_error(error),
         }
@@ -1241,9 +1175,7 @@ async fn search_playlist_tracks_task(search: PlaylistTrackSearch, terms: Vec<Str
 }
 
 async fn fetch_all_playlist_tracks_and_sort_task(
-  spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
-  token_cache_path: std::path::PathBuf,
   playlist_id: PlaylistId<'static>,
   fallbacks: ExternalPlaylistFallbackCache,
 ) {
@@ -1263,16 +1195,7 @@ async fn fetch_all_playlist_tracks_and_sort_task(
       }
     }
 
-    let page = match fetch_playlist_tracks_page(
-      &spotify,
-      &app,
-      &token_cache_path,
-      &playlist_id,
-      offset,
-      limit,
-      &fallbacks,
-    )
-    .await
+    let page = match fetch_playlist_tracks_page(&app, &playlist_id, offset, limit, &fallbacks).await
     {
       Ok(page) => page.into_domain(),
       Err(PlaylistPageError::UnsupportedExternal) => {
@@ -1324,9 +1247,7 @@ async fn fetch_all_playlist_tracks_and_sort_task(
 /// already-published pages instead of error-routing the UI.
 #[allow(clippy::too_many_arguments)]
 async fn finish_playlists_fetch(
-  spotify: AuthCodePkceSpotify,
   app: Arc<Mutex<App>>,
-  token_cache_path: std::path::PathBuf,
   mut all_playlists: Vec<PlaylistInfo>,
   has_more: bool,
   limit: u32,
@@ -1351,12 +1272,9 @@ async fn finish_playlists_fetch(
       }
       let mut attempts = 0u8;
       let page = loop {
-        match spotify_get_typed_compat_for_with_refresh::<Page<SimplifiedPlaylist>>(
-          &spotify,
+        match spotify_get_typed_for::<Page<SimplifiedPlaylist>>(
           "me/playlists",
           &[("limit", limit.to_string()), ("offset", offset.to_string())],
-          &token_cache_path,
-          &app,
         )
         .await
         {
@@ -1511,12 +1429,9 @@ impl LibraryNetwork for Network {
     // Always use the compat path: parses raw JSON to serde_json::Value first,
     // which silently deduplicates keys (last-wins). This handles the known Spotify
     // API bug where "items" appears twice in the same JSON object.
-    let first_page = match spotify_get_typed_compat_for_with_refresh::<Page<SimplifiedPlaylist>>(
-      self.spotify(),
+    let first_page = match spotify_get_typed_for::<Page<SimplifiedPlaylist>>(
       "me/playlists",
       &[("limit", limit.to_string()), ("offset", "0".to_string())],
-      &self.token_cache_path,
-      &self.app,
     )
     .await
     {
@@ -1587,14 +1502,10 @@ impl LibraryNetwork for Network {
       )
     };
 
-    let spotify = self.spotify().clone();
     let app = Arc::clone(&self.app);
-    let token_cache_path = self.token_cache_path.clone();
     tokio::spawn(async move {
       finish_playlists_fetch(
-        spotify,
         app,
-        token_cache_path,
         first_items,
         has_more,
         limit,
@@ -1625,9 +1536,7 @@ impl LibraryNetwork for Network {
     };
 
     match fetch_playlist_tracks_page(
-      self.spotify(),
       &self.app,
-      &self.token_cache_path,
       &playlist_id,
       playlist_offset,
       self.large_search_limit,
@@ -1696,14 +1605,11 @@ impl LibraryNetwork for Network {
       return;
     }
 
-    // Every page pays the pacing floor, so the walk runs detached like the sort
+    // The walk runs detached like the sort
     // walk; a newer query or another table supersedes it page by page.
     let search = PlaylistTrackSearch {
-      spotify: self.spotify().clone(),
       app: Arc::clone(&self.app),
-      token_cache_path: self.token_cache_path.clone(),
       fallbacks: self.external_playlist_fallbacks.clone(),
-      client_id: self.client_config.client_id.clone(),
       playlist_id,
       query,
     };
@@ -1722,15 +1628,7 @@ impl LibraryNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::SavedTrack>>(
-      self.spotify(),
-      "me/tracks",
-      &query,
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await
-    {
+    match spotify_get_typed_for::<Page<rspotify::model::SavedTrack>>("me/tracks", &query).await {
       Ok(saved_tracks) => {
         let mut app = self.app.lock().await;
         app
@@ -1774,15 +1672,7 @@ impl LibraryNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::SavedAlbum>>(
-      self.spotify(),
-      "me/albums",
-      &query,
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await
-    {
+    match spotify_get_typed_for::<Page<rspotify::model::SavedAlbum>>("me/albums", &query).await {
       Ok(saved_albums) => {
         let mut app = self.app.lock().await;
         if !saved_albums.items.is_empty() {
@@ -1910,15 +1800,7 @@ impl LibraryNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_compat_for_with_refresh::<Page<rspotify::model::show::Show>>(
-      self.spotify(),
-      "me/shows",
-      &query,
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await
-    {
+    match spotify_get_typed_for::<Page<rspotify::model::show::Show>>("me/shows", &query).await {
       Ok(saved_shows) => {
         let mut app = self.app.lock().await;
         if !saved_shows.items.is_empty() {
@@ -1943,11 +1825,7 @@ impl LibraryNetwork for Network {
     playlist_id: PlaylistId<'static>,
     _is_public: Option<bool>,
   ) {
-    match self
-      .spotify()
-      .library_add([LibraryId::Playlist(playlist_id)])
-      .await
-    {
+    match self.library_save_uris(&[playlist_id.uri()]).await {
       Ok(_) => {
         // Optimistic update handled in handler or next refresh
       }
@@ -1960,11 +1838,7 @@ impl LibraryNetwork for Network {
     _user_id: UserId<'static>,
     playlist_id: PlaylistId<'static>,
   ) {
-    match self
-      .spotify()
-      .library_remove([LibraryId::Playlist(playlist_id)])
-      .await
-    {
+    match self.library_remove_uris(&[playlist_id.uri()]).await {
       Ok(_) => {
         // Handled
       }
@@ -1978,8 +1852,7 @@ impl LibraryNetwork for Network {
     track_id: TrackId<'static>,
   ) {
     match self
-      .spotify()
-      .playlist_add_items(playlist_id.clone(), vec![PlayableId::Track(track_id)], None)
+      .playlist_add_uris(playlist_id.id(), &[track_id.uri()])
       .await
     {
       Ok(_) => {
@@ -2022,14 +1895,11 @@ impl LibraryNetwork for Network {
         }]
     });
 
-    match spotify_api_request_json_for_with_refresh(
-      self.spotify(),
+    match spotify_api_request_json_for(
       Method::DELETE,
       &format!("playlists/{}/items", playlist_id.id()),
       &[],
       Some(body),
-      &self.token_cache_path,
-      &self.app,
     )
     .await
     {
@@ -2093,11 +1963,9 @@ impl LibraryNetwork for Network {
     if !spawn {
       return;
     }
-    let spotify = self.spotify().clone();
     let app = Arc::clone(&self.app);
-    let token_cache_path = self.token_cache_path.clone();
     tokio::spawn(async move {
-      liked_lookup_worker_task(spotify, app, token_cache_path).await;
+      liked_lookup_worker_task(app).await;
     });
   }
 
@@ -2115,19 +1983,10 @@ impl LibraryNetwork for Network {
         return;
       }
     }
-    let spotify = self.spotify().clone();
     let app = Arc::clone(&self.app);
-    let token_cache_path = self.token_cache_path.clone();
     let fallbacks = self.external_playlist_fallbacks.clone();
     tokio::spawn(async move {
-      fetch_all_playlist_tracks_and_sort_task(
-        spotify,
-        app,
-        token_cache_path,
-        playlist_id,
-        fallbacks,
-      )
-      .await;
+      fetch_all_playlist_tracks_and_sort_task(app, playlist_id, fallbacks).await;
     });
   }
 
@@ -2140,14 +1999,11 @@ impl LibraryNetwork for Network {
       "collaborative": false,
       "description": "Created with spotatui"
     });
-    let playlist_value = match spotify_api_request_json_for_with_refresh(
-      self.spotify(),
+    let playlist_value = match spotify_api_request_json_for(
       Method::POST,
       "me/playlists",
       &[],
       Some(create_body),
-      &self.token_cache_path,
-      &self.app,
     )
     .await
     {
@@ -2177,16 +2033,9 @@ impl LibraryNetwork for Network {
     };
 
     if !track_ids.is_empty() {
-      let items: Vec<rspotify::model::idtypes::PlayableId> = track_ids
-        .iter()
-        .map(|id| rspotify::model::idtypes::PlayableId::Track(id.clone()))
-        .collect();
-      if let Err(e) = self
-        .spotify()
-        .playlist_add_items(playlist_id, items, None)
-        .await
-      {
-        self.handle_error(anyhow!(e)).await;
+      let uris: Vec<String> = track_ids.iter().map(|id| id.uri()).collect();
+      if let Err(e) = self.playlist_add_uris(playlist_id.id(), &uris).await {
+        self.handle_error(e).await;
         return;
       }
     }
@@ -2209,21 +2058,23 @@ mod tests {
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
 
-  async fn playlist_search_network(base_url: String, query: &str) -> (Network, Arc<Mutex<App>>) {
+  async fn playlist_search_network(
+    base_url: String,
+    query: &str,
+  ) -> (
+    Network,
+    Arc<Mutex<App>>,
+    crate::infra::network::requests::fake::FakeSpotify,
+  ) {
     use crate::core::app::TrackTableContext;
-    use crate::infra::network::metadata::tests::spotify_with_access_token;
+    use crate::infra::network::metadata::tests::fake_spotify_login;
     let mut app = App::default();
     app.reset_playlist_tracks_view(search_playlist_id(), TrackTableContext::MyPlaylists);
     app.pending_playlist_track_search = Some(query.to_string());
     let app = Arc::new(Mutex::new(app));
-    let spotify = spotify_with_access_token("token", base_url).await;
-    let network = Network::new(
-      Some(spotify),
-      crate::core::config::ClientConfig::new(),
-      &app,
-      std::path::PathBuf::new(),
-    );
-    (network, app)
+    let (spotify, _fake) = fake_spotify_login(base_url);
+    let network = Network::new(Some(spotify), &app);
+    (network, app, _fake)
   }
 
   fn search_playlist_id() -> PlaylistId<'static> {
@@ -2240,7 +2091,7 @@ mod tests {
       let (_stream, _) = listener.accept().await.unwrap();
       tokio::time::sleep(Duration::from_secs(10)).await;
     });
-    let (mut network, app) = playlist_search_network(base_url, "song").await;
+    let (mut network, app, _fake) = playlist_search_network(base_url, "song").await;
 
     tokio::time::timeout(
       Duration::from_secs(1),
@@ -2272,7 +2123,7 @@ mod tests {
       );
       stream.write_all(response.as_bytes()).await.unwrap();
     });
-    let (mut network, app) = playlist_search_network(base_url, "song").await;
+    let (mut network, app, _fake) = playlist_search_network(base_url, "song").await;
 
     network
       .search_playlist_tracks(search_playlist_id(), "song".to_string())
@@ -2302,9 +2153,7 @@ mod tests {
     let app = Arc::new(Mutex::new(app));
 
     finish_playlists_fetch(
-      AuthCodePkceSpotify::new(rspotify::Credentials::default(), rspotify::OAuth::default()),
       Arc::clone(&app),
-      std::path::PathBuf::new(),
       vec![playlist_info("00000000000000000000p1", "P1", "me", false)],
       false,
       50,
@@ -2448,17 +2297,11 @@ mod tests {
 
   /// Run one `GetCurrentSavedTracks(None)` against an API that answers with the first saved-tracks page.
   async fn land_first_saved_tracks_page(app: App) -> Arc<Mutex<App>> {
-    use crate::infra::network::metadata::tests::spotify_with_access_token;
-    crate::infra::network::requests::SKIP_PACING.with(|skip| skip.set(true));
+    use crate::infra::network::metadata::tests::fake_spotify_login;
     let (base_url, server) = serve_saved_tracks_page(saved_tracks_page(0, 20, false)).await;
     let app = Arc::new(Mutex::new(app));
-    let spotify = spotify_with_access_token("token", base_url).await;
-    let mut network = Network::new(
-      Some(spotify),
-      crate::core::config::ClientConfig::new(),
-      &app,
-      std::path::PathBuf::new(),
-    );
+    let (spotify, _fake) = fake_spotify_login(base_url);
+    let mut network = Network::new(Some(spotify), &app);
     network
       .handle_network_event(IoEvent::GetCurrentSavedTracks(None))
       .await;
@@ -2491,8 +2334,7 @@ mod tests {
   #[tokio::test]
   async fn a_prefetched_liked_songs_page_keeps_an_open_playlist_and_moves_the_index() {
     use crate::core::app::TrackTableContext;
-    use crate::infra::network::metadata::tests::spotify_with_access_token;
-    crate::infra::network::requests::SKIP_PACING.with(|skip| skip.set(true));
+    use crate::infra::network::metadata::tests::fake_spotify_login;
     let mut app = App::default();
     app.reset_saved_tracks_view();
     let first = crate::infra::network::mapping::map_page(&saved_tracks_page(0, 20, true), |st| {
@@ -2503,17 +2345,9 @@ mod tests {
     let generation = app.saved_tracks_prefetch_generation;
     let app = Arc::new(Mutex::new(app));
     let (base_url, server) = serve_saved_tracks_page(saved_tracks_page(20, 20, false)).await;
-    let spotify = spotify_with_access_token("token", base_url).await;
+    let (_spotify, _fake) = fake_spotify_login(base_url);
 
-    prefetch_saved_tracks_page_task(
-      spotify,
-      Arc::clone(&app),
-      std::path::PathBuf::new(),
-      20,
-      20,
-      generation,
-    )
-    .await;
+    prefetch_saved_tracks_page_task(Arc::clone(&app), 20, 20, generation).await;
     server.await.unwrap();
 
     let app = app.lock().await;

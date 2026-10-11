@@ -274,8 +274,6 @@ pub(crate) struct DiscoverPayload {
   top_tracks_range: Option<DiscoverTimeRange>,
   top_tracks: Vec<TrackInfo>,
   artists_mix: Vec<TrackInfo>,
-  /// False once this app key lost the artist top-tracks endpoint.
-  artists_mix_available: bool,
   /// The ids among both lists that are in Liked Songs.
   liked_ids: Vec<String>,
 }
@@ -542,7 +540,6 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
           top_tracks_range: view.range,
           top_tracks: view.top_tracks.clone(),
           artists_mix: view.artists_mix.clone(),
-          artists_mix_available: view.mix_available,
           liked_ids: view.liked_ids.clone(),
         }),
       }

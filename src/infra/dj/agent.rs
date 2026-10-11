@@ -152,7 +152,7 @@ impl<E: ToolExecutor> Turn<'_, E> {
 
   /// Parse, apply the in-TUI policy, execute, and report one call.
   async fn run_call(&mut self, call: &ToolInvocation) -> CallResult {
-    let parsed = match tools::parse_call(&call.name, &call.arguments) {
+    let parsed = match tools::parse_dj_call(&call.name, &call.arguments) {
       Ok(parsed) => self.apply_policy(parsed),
       // Handed back to the model rather than aborting: a malformed call is
       // something it can correct on the next step, which is the entire benefit of

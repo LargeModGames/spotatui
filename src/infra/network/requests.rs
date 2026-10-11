@@ -1,67 +1,28 @@
 use super::Network;
-use crate::core::{app::App, auth, spotify_access::restricted_endpoint};
 use anyhow::anyhow;
 use log::{debug, trace, warn};
-use reqwest::header::CONTENT_LENGTH;
 use reqwest::{Method, StatusCode};
-use rspotify::AuthCodePkceSpotify;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
-  future::Future,
-  path::Path,
   sync::Arc,
   sync::OnceLock,
   time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
 
-// Leaky-bucket pacing state: the theoretical arrival time (GCRA "TAT") of the
-// next request. Sustained throughput is one request per SPOTIFY_API_MIN_INTERVAL,
-// with up to SPOTIFY_API_BURST requests allowed to start at once so the
-// concurrent fan-outs (search joins five queries, the artist page two) aren't
-// artificially staggered.
-static SPOTIFY_API_PACING: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
-const SPOTIFY_API_MIN_INTERVAL: Duration = Duration::from_millis(250);
-const SPOTIFY_API_BURST: u32 = 5;
-const SPOTIFY_API_BASE_URL: &str = "https://api.spotify.com/v1/";
-
 static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-/// How long one forced token refresh suppresses the next one.
-///
-/// A 401 forces a full `POST /api/token`, which under PKCE also *rotates the
-/// refresh token*. Spotify's player service intermittently answers a perfectly
-/// valid token with 401 (issue #395), and the playback poll runs every few
-/// seconds, so force-refreshing on every 401 mints a whole new token family
-/// every few polls — pure churn, and a lost rotated refresh
-/// token logs the user out. Inside the cooldown the request is retried with the
-/// token already in hand instead.
-const FORCED_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
-
-/// Delay before the single post-401 retry. Without it the retry lands inside
-/// the same ~1s server-side window that produced the 401 (a track transition,
-/// or a freshly minted token that has not propagated yet) and fails
-/// identically, turning a recoverable blip into a surfaced error.
-const UNAUTHORIZED_RETRY_BACKOFF: Duration = Duration::from_secs(1);
-
-/// Longest `Retry-After` honored: a bound on the window, so a bogus header
-/// value can neither park the app for a day nor overflow the deadline.
+/// Longest rate-limit window honored, so a bad value cannot park the app.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
 
-/// Total time the sends and retries of one Spotify call may take: one full
-/// attempt plus a backoff. A token refresh is never cut short, so it comes on
-/// top.
-const SPOTIFY_REQUEST_DEADLINE: Duration = Duration::from_secs(40);
+/// How long a 429 from the internal API holds every call back: librespot does
+/// not pass Spotify's `Retry-After` on.
+const ROUTED_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(10);
 
-/// The time left before `deadline` after `elapsed` and a planned `wait`, or
-/// `None` when the wait does not fit.
-fn time_left(elapsed: Duration, wait: Duration, deadline: Duration) -> Option<Duration> {
-  deadline
-    .checked_sub(elapsed)?
-    .checked_sub(wait)
-    .filter(|left| !left.is_zero())
-}
+/// Total time one Spotify call may take. Above the session connect timeout,
+/// so the first call of a run can still connect.
+const SPOTIFY_REQUEST_DEADLINE: Duration = Duration::from_secs(40);
 
 fn deadline_error(deadline: Duration) -> anyhow::Error {
   anyhow!(
@@ -69,7 +30,6 @@ fn deadline_error(deadline: Duration) -> anyhow::Error {
     deadline.as_secs()
   )
 }
-
 /// Longest response body echoed into the diagnostics log.
 const MAX_LOGGED_BODY_CHARS: usize = 512;
 
@@ -147,26 +107,23 @@ fn redact_json(value: &Value) -> Value {
 
 /// The endpoint as it may appear in a log line or an error message: the path
 /// plus the query, with denylisted parameter values replaced.
-fn redacted_target(url: &reqwest::Url) -> String {
-  let path = url.path().to_string();
-  let mut pairs = url.query_pairs().peekable();
-  if pairs.peek().is_none() {
+fn redacted_target(path: &str, query: &[(&str, String)]) -> String {
+  let path = format!("/v1/{}", path.trim_start_matches('/'));
+  if query.is_empty() {
     return path;
   }
-  // Re-encoded rather than concatenated: `query_pairs` hands back decoded
-  // values, so a `&` or a newline inside one would split the logged endpoint
-  // into something that reads like two parameters or two log lines.
-  let mut query = url::form_urlencoded::Serializer::new(String::new());
-  for (key, value) in pairs {
-    if is_redacted_query_key(&key) {
-      query.append_pair(&key, REDACTED_PLACEHOLDER);
+  // Encoded rather than concatenated: a `&` or a newline inside a value would
+  // otherwise split the logged endpoint into two parameters or two log lines.
+  let mut encoded = url::form_urlencoded::Serializer::new(String::new());
+  for (key, value) in query {
+    if is_redacted_query_key(key) {
+      encoded.append_pair(key, REDACTED_PLACEHOLDER);
     } else {
-      query.append_pair(&key, &value);
+      encoded.append_pair(key, value);
     }
   }
-  format!("{path}?{}", query.finish())
+  format!("{path}?{}", encoded.finish())
 }
-
 /// Redacted, truncated request body for a log line; empty when there is none.
 fn request_body_for_log(body: Option<&Value>) -> String {
   body.map_or_else(String::new, |payload| {
@@ -175,23 +132,6 @@ fn request_body_for_log(body: Option<&Value>) -> String {
       truncate_for_log(&redact_json(payload).to_string())
     )
   })
-}
-
-/// The line a 429 leaves behind: raw `Retry-After` (before the cap) and `reason`,
-/// escaped and truncated so it stays one log line.
-fn rate_limit_line(endpoint: &str, retry_after: Option<&str>, response_body: &str) -> String {
-  let reason = serde_json::from_str::<Value>(response_body)
-    .ok()
-    .and_then(|v| {
-      v.pointer("/error/reason")
-        .and_then(Value::as_str)
-        .map(|reason| truncate_for_log(&reason.escape_debug().to_string()))
-    });
-  format!(
-    "Spotify API {endpoint} rate limited: Retry-After {}, reason {}",
-    retry_after.unwrap_or("missing"),
-    reason.as_deref().unwrap_or("none")
-  )
 }
 
 /// Redacted, truncated response body. JSON is redacted key-wise; anything else
@@ -228,9 +168,8 @@ fn response_trace_line(endpoint: &str, status: reqwest::StatusCode, response_bod
   )
 }
 
-/// Everything the `warn!` line for a non-2xx response needs. Grouped into a
-/// struct because the line carries eight values and the point of extracting it
-/// is testability, not a shorter signature.
+/// Everything the `warn!` line for a failed request needs, grouped so a test
+/// can check what the line carries.
 struct FailureLine<'a> {
   /// Whether the request body may go in. The body carries user-entered text
   /// (a playlist name, a search term), and this line is logged at `warn`,
@@ -238,31 +177,19 @@ struct FailureLine<'a> {
   /// else the debug mode adds.
   include_body: bool,
   endpoint: &'a str,
-  status: reqwest::StatusCode,
   elapsed_ms: u128,
-  attempt: u8,
-  max_attempts: u8,
-  token_age: Option<std::time::Duration>,
   body: Option<&'a Value>,
-  response_body: &'a str,
+  error: &'a str,
 }
 
 impl FailureLine<'_> {
   fn render(&self) -> String {
-    let token_age = self.token_age.map_or_else(
-      || "unknown".to_string(),
-      |age| format!("{}s", age.as_secs()),
-    );
     format!(
-      "Spotify API {} -> {} in {}ms (attempt {}/{}, token age {}){}: {}",
+      "Spotify API {} failed in {}ms{}: {}",
       self.endpoint,
-      self.status,
       self.elapsed_ms,
-      self.attempt,
-      self.max_attempts,
-      token_age,
       self.body_for_log(),
-      response_body_for_log(self.response_body)
+      truncate_for_log(self.error)
     )
   }
 
@@ -275,68 +202,28 @@ impl FailureLine<'_> {
   }
 }
 
-/// Cooldown state for forced token refreshes triggered by a 401 response.
-///
-/// Deliberately long-lived and shared: every request is a fresh call into
-/// [`spotify_api_request_json_for_base_with_refresh`], so per-call state would
-/// reset on each poll and never suppress anything.
-#[derive(Clone)]
-pub struct ForcedRefreshGate {
-  last_forced_refresh: Arc<Mutex<Option<Instant>>>,
-  cooldown: Duration,
-  /// End of the last `Retry-After` window: no request goes out before it.
+/// The rate-limit window every Spotify call shares: while it is open, calls
+/// fail at once instead of adding load.
+#[derive(Clone, Default)]
+pub struct RateLimitGate {
   rate_limited_until: Arc<Mutex<Option<Instant>>>,
 }
 
-impl ForcedRefreshGate {
-  pub fn new(cooldown: Duration) -> Self {
-    Self {
-      last_forced_refresh: Arc::new(Mutex::new(None)),
-      cooldown,
-      rate_limited_until: Arc::new(Mutex::new(None)),
-    }
-  }
-
-  /// Time left in the `Retry-After` window, if one is open.
+impl RateLimitGate {
+  /// Time left in the window, if one is open.
   pub(crate) async fn rate_limit_remaining(&self) -> Option<Duration> {
     let until = (*self.rate_limited_until.lock().await)?;
     until.checked_duration_since(Instant::now())
   }
 
-  /// Open (or extend) the window: a shorter `Retry-After` that lands during a
-  /// longer one must not cut the longer one short.
+  /// Open (or extend) the window: a shorter one that lands during a longer
+  /// one must not cut the longer one short.
   pub(crate) async fn rate_limit_for(&self, window: Duration) {
     let until = Instant::now() + window.min(MAX_RETRY_AFTER);
     let mut slot = self.rate_limited_until.lock().await;
     *slot = Some(slot.map_or(until, |current| current.max(until)));
   }
-
-  /// Claims the right to force a refresh now. Returns `false` when one already
-  /// happened within the cooldown, meaning the caller should retry with the
-  /// token it already holds rather than rotating the token family again.
-  async fn try_begin(&self) -> bool {
-    let mut last_forced_refresh = self.last_forced_refresh.lock().await;
-    let now = Instant::now();
-    match *last_forced_refresh {
-      Some(previous) if now.duration_since(previous) < self.cooldown => false,
-      _ => {
-        *last_forced_refresh = Some(now);
-        true
-      }
-    }
-  }
-
-  async fn reset(&self) {
-    *self.last_forced_refresh.lock().await = None;
-  }
 }
-
-impl Default for ForcedRefreshGate {
-  fn default() -> Self {
-    Self::new(FORCED_REFRESH_COOLDOWN)
-  }
-}
-
 /// A non-2xx answer from Spotify, with the status kept so a caller can tell a
 /// rejected token from a request that merely failed. `Display` is the plain
 /// text every other caller already matches on.
@@ -378,28 +265,11 @@ impl std::fmt::Display for SpotifyApiError {
 
 impl std::error::Error for SpotifyApiError {}
 
-/// The process-wide gate used by every real Spotify request (one Spotify
-/// session per process). Tests drive the base helper with their own instance.
-pub(crate) fn shared_forced_refresh_gate() -> &'static ForcedRefreshGate {
-  static GATE: OnceLock<ForcedRefreshGate> = OnceLock::new();
-  GATE.get_or_init(ForcedRefreshGate::default)
+/// The process-wide gate every Spotify request goes through.
+pub(crate) fn shared_rate_gate() -> &'static RateLimitGate {
+  static GATE: OnceLock<RateLimitGate> = OnceLock::new();
+  GATE.get_or_init(RateLimitGate::default)
 }
-
-/// Forget the last forced refresh, so the next 401 may force one immediately.
-/// Called when a brand-new token family enters play (in-TUI login), where the
-/// previous session's cooldown carries no information.
-pub async fn reset_forced_refresh_cooldown() {
-  shared_forced_refresh_gate().reset().await;
-}
-
-/// Age of the access token now attached to a request, derived from
-/// `expires_at - expires_in`. Diagnostics only: a 401 on a token minted seconds
-/// ago points at propagation lag or a server-side reject, not at expiry.
-fn token_age(token: &rspotify::Token) -> Option<Duration> {
-  let issued_at = token.expires_at? - token.expires_in;
-  (chrono::Utc::now() - issued_at).to_std().ok()
-}
-
 fn truncate_for_log(body: &str) -> String {
   let trimmed = body.trim();
   if trimmed.chars().count() <= MAX_LOGGED_BODY_CHARS {
@@ -434,404 +304,194 @@ pub fn shared_http_client() -> &'static reqwest::Client {
   })
 }
 
-fn response_is_json(response: &reqwest::Response) -> bool {
-  response
-    .headers()
-    .get(reqwest::header::CONTENT_TYPE)
-    .and_then(|value| value.to_str().ok())
-    .is_some_and(|value| {
-      let value = value.to_ascii_lowercase();
-      value.contains("/json") || value.contains("+json")
-    })
-}
-
-#[cfg(test)]
-thread_local! {
-  /// Set by a test that does not measure the pacing, so its requests do not queue behind every other HTTP test.
-  pub(crate) static SKIP_PACING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-pub async fn pace_spotify_api_call() {
-  #[cfg(test)]
-  if SKIP_PACING.with(|skip| skip.get()) {
-    return;
-  }
-  // Reserve a start slot under the lock, then sleep OUTSIDE it. The previous
-  // implementation held the lock across the sleep, which serialized every
-  // "concurrent" tokio::join! call site into 250ms-apart starts (adding ~1s of
-  // pure pacing to every search).
-  let burst_allowance = SPOTIFY_API_MIN_INTERVAL * (SPOTIFY_API_BURST - 1);
-  let start_at = {
-    let pacing_lock = SPOTIFY_API_PACING.get_or_init(|| Mutex::new(None));
-    let mut theoretical_arrival = pacing_lock.lock().await;
-    let now = Instant::now();
-    // Clamp to `now` so idle time never banks more than one burst of credit.
-    let tat = theoretical_arrival.map_or(now, |t| t.max(now));
-    *theoretical_arrival = Some(tat + SPOTIFY_API_MIN_INTERVAL);
-    // A call may start up to `burst_allowance` ahead of its theoretical slot.
-    tat.checked_sub(burst_allowance).map_or(now, |t| t.max(now))
-  };
-
-  let now = Instant::now();
-  if start_at > now {
-    tokio::time::sleep(start_at - now).await;
-  }
-}
-
-pub async fn spotify_api_request_json_for_with_refresh(
-  spotify: &AuthCodePkceSpotify,
+/// The one Spotify call every handler makes: a Web API path answered from the
+/// internal API. A 429 opens the shared rate-limit window.
+pub async fn spotify_api_request_json_for(
   method: Method,
   path: &str,
   query: &[(&str, String)],
   body: Option<Value>,
-  token_cache_path: &Path,
-  app: &Arc<Mutex<App>>,
 ) -> anyhow::Result<Value> {
-  // Key-tier gate: every caller funnels through here, so a surface that forgot
-  // to pre-check still cannot spend a refused request. Answered before the
-  // token, pacing and socket, so callers see the same 403 as Spotify's own.
-  if let Some(endpoint) = restricted_endpoint(method.as_str(), path, query) {
-    let blocked = app.lock().await.spotify_endpoint_blocked(endpoint);
-    if blocked {
+  request_with(
+    shared_rate_gate(),
+    SPOTIFY_REQUEST_DEADLINE,
+    method,
+    path,
+    query,
+    body,
+  )
+  .await
+}
+
+async fn request_with(
+  gate: &RateLimitGate,
+  deadline: Duration,
+  method: Method,
+  path: &str,
+  query: &[(&str, String)],
+  body: Option<Value>,
+) -> anyhow::Result<Value> {
+  let endpoint = format!("{method} {}", redacted_target(path, query));
+  // Inside the window every call fails here at once: a sleep would park the
+  // serial pump and every event behind it.
+  if let Some(left) = gate.rate_limit_remaining().await {
+    debug!(
+      "Spotify API {endpoint} not sent: rate limited for another {}s",
+      left.as_secs().max(1)
+    );
+    return Err(rate_limited_error(left, endpoint));
+  }
+
+  let started_at = Instant::now();
+  let answered = tokio::time::timeout(
+    deadline,
+    Box::pin(answer(&method, path, query, body.as_ref())),
+  )
+  .await
+  .unwrap_or_else(|_| Err(deadline_error(deadline)));
+  let elapsed_ms = started_at.elapsed().as_millis();
+
+  match answered {
+    Ok(value) => {
+      debug!(
+        "{}",
+        request_success_line(&endpoint, StatusCode::OK, elapsed_ms, body.as_ref())
+      );
+      if log::log_enabled!(log::Level::Trace) {
+        trace!(
+          "{}",
+          response_trace_line(&endpoint, StatusCode::OK, &value.to_string())
+        );
+      }
+      Ok(value)
+    }
+    Err(error) => {
+      let error = match error.downcast::<SpotifyApiError>() {
+        Ok(api_error) if api_error.status == StatusCode::TOO_MANY_REQUESTS => {
+          gate.rate_limit_for(ROUTED_RATE_LIMIT_WINDOW).await;
+          rate_limited_error(ROUTED_RATE_LIMIT_WINDOW, endpoint.clone())
+        }
+        Ok(mut api_error) => {
+          api_error.endpoint = Some(endpoint.clone());
+          api_error.into()
+        }
+        Err(other) => other,
+      };
+      warn!(
+        "{}",
+        FailureLine {
+          include_body: log::log_enabled!(log::Level::Debug),
+          endpoint: &endpoint,
+          elapsed_ms,
+          body: body.as_ref(),
+          error: &error.to_string(),
+        }
+        .render()
+      );
+      Err(error)
+    }
+  }
+}
+
+fn rate_limited_error(left: Duration, endpoint: String) -> anyhow::Error {
+  SpotifyApiError {
+    status: StatusCode::TOO_MANY_REQUESTS,
+    body: format!(
+      "rate limited by Spotify, retry in {}s",
+      left.as_secs().max(1)
+    ),
+    detail: None,
+    endpoint: Some(endpoint),
+  }
+  .into()
+}
+
+async fn answer(
+  method: &Method,
+  path: &str,
+  query: &[(&str, String)],
+  body: Option<&Value>,
+) -> anyhow::Result<Value> {
+  #[cfg(test)]
+  if let Some(base_url) = fake::base_url() {
+    return fake::request(&base_url, method, path, query, body).await;
+  }
+  #[cfg(feature = "spotify-session")]
+  return crate::infra::spotify::route(method, path, query, body).await;
+  #[cfg(not(feature = "spotify-session"))]
+  {
+    let _ = (method, path, query, body);
+    Err(anyhow!("This build of spotatui has no Spotify support"))
+  }
+}
+
+/// A local HTTP server in place of Spotify, for handler tests.
+#[cfg(test)]
+pub(crate) mod fake {
+  use super::*;
+  use std::cell::RefCell;
+
+  thread_local! {
+    static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+  }
+
+  /// Sends this thread's Spotify calls to `base_url` until the guard drops.
+  pub(crate) fn use_fake_spotify(base_url: impl Into<String>) -> FakeSpotify {
+    BASE_URL.with(|url| *url.borrow_mut() = Some(base_url.into()));
+    FakeSpotify
+  }
+
+  pub(crate) struct FakeSpotify;
+
+  impl Drop for FakeSpotify {
+    fn drop(&mut self) {
+      BASE_URL.with(|url| *url.borrow_mut() = None);
+    }
+  }
+
+  pub(super) fn base_url() -> Option<String> {
+    BASE_URL.with(|url| url.borrow().clone())
+  }
+
+  pub(super) async fn request(
+    base_url: &str,
+    method: &Method,
+    path: &str,
+    query: &[(&str, String)],
+    body: Option<&Value>,
+  ) -> anyhow::Result<Value> {
+    let mut url = reqwest::Url::parse(base_url)?.join(path.trim_start_matches('/'))?;
+    if !query.is_empty() {
+      let mut pairs = url.query_pairs_mut();
+      for (key, value) in query {
+        pairs.append_pair(key, value);
+      }
+    }
+    let mut request = shared_http_client().request(method.clone(), url);
+    if let Some(body) = body {
+      request = request.json(body);
+    }
+    let response = request
+      .send()
+      .await
+      .map_err(|e| anyhow!("Spotify API request failed: {e}"))?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
       return Err(
         SpotifyApiError {
-          status: StatusCode::FORBIDDEN,
-          body: "Forbidden".to_string(),
-          detail: Some(endpoint.unavailable_note().to_string()),
+          status,
+          body: text,
+          detail: None,
           endpoint: None,
         }
         .into(),
       );
     }
-  }
-
-  let base_url = &spotify.config.api_base_url;
-
-  spotify_api_request_json_for_base_with_refresh(
-    spotify,
-    SpotifyApiRequest {
-      base_url,
-      method,
-      path,
-      query,
-      body,
-      deadline: SPOTIFY_REQUEST_DEADLINE,
-    },
-    |force| async move {
-      match auth::refresh_token_and_cache(spotify, token_cache_path, force).await {
-        Ok(expiry) => {
-          let mut app = app.lock().await;
-          app.spotify_token_expiry = Some(expiry);
-          app.auth_refresh_in_progress = false;
-          Ok(Some(expiry))
-        }
-        Err(e) => {
-          let mut app = app.lock().await;
-          app.auth_refresh_in_progress = false;
-          app.is_loading = false;
-          Err(e)
-        }
-      }
-    },
-    shared_forced_refresh_gate(),
-  )
-  .await
-}
-
-/// One Spotify Web API call: everything about *what* to send, kept together so
-/// the shared helper's signature stays readable next to its refresh closure and
-/// retry policy.
-struct SpotifyApiRequest<'a> {
-  base_url: &'a str,
-  method: Method,
-  path: &'a str,
-  query: &'a [(&'a str, String)],
-  body: Option<Value>,
-  deadline: Duration,
-}
-
-async fn spotify_api_request_json_for_base_with_refresh<F, Fut>(
-  spotify: &AuthCodePkceSpotify,
-  request: SpotifyApiRequest<'_>,
-  mut refresh_token: F,
-  forced_refresh_gate: &ForcedRefreshGate,
-) -> anyhow::Result<Value>
-where
-  F: FnMut(bool) -> Fut,
-  Fut: Future<Output = anyhow::Result<Option<std::time::SystemTime>>>,
-{
-  let SpotifyApiRequest {
-    base_url,
-    method,
-    path,
-    query,
-    body,
-    deadline,
-  } = request;
-
-  refresh_token(false).await?;
-  // Starts after the refresh: a cancelled refresh can lose a rotated token.
-  let started_at = Instant::now();
-
-  let mut url = reqwest::Url::parse(base_url)?.join(path)?;
-  if !query.is_empty() {
-    let mut qp = url.query_pairs_mut();
-    for (k, v) in query {
-      qp.append_pair(k, v);
-    }
-  }
-
-  // One redacted `METHOD /path?query` for every log line and error below.
-  let endpoint = format!("{} {}", method, redacted_target(&url));
-
-  // Inside a `Retry-After` window every call fails here, at once and with no
-  // request: a sleep would park the serial pump and every event behind it.
-  if let Some(left) = forced_refresh_gate.rate_limit_remaining().await {
-    // Worth one line: without it the debug log just goes quiet for the length
-    // of the window, with no request to explain the gap.
-    debug!(
-      "Spotify API {endpoint} not sent: rate limited for another {}s",
-      left.as_secs().max(1)
-    );
-    return Err(
-      SpotifyApiError {
-        status: reqwest::StatusCode::TOO_MANY_REQUESTS,
-        body: format!(
-          "rate limited by Spotify, retry in {}s",
-          left.as_secs().max(1)
-        ),
-        detail: None,
-        endpoint: Some(endpoint.clone()),
-      }
-      .into(),
-    );
-  }
-
-  let client = shared_http_client();
-  let mut attempt: u8 = 0;
-  let max_attempts: u8 = 4;
-  let mut attempted_unauthorized_recovery = false;
-
-  loop {
-    let (access_token, access_token_age) = {
-      let token_lock = spotify.token.lock().await.expect("Failed to lock token");
-      let token = token_lock
-        .as_ref()
-        .ok_or_else(|| anyhow!("No access token available"))?;
-      (token.access_token.clone(), token_age(token))
-    };
-
-    pace_spotify_api_call().await;
-
-    let mut request = client
-      .request(method.clone(), url.clone())
-      .header("Authorization", format!("Bearer {}", access_token))
-      .header("Content-Type", "application/json");
-
-    if let Some(payload) = body.clone() {
-      request = request.json(&payload);
-    } else if matches!(
-      method,
-      Method::POST | Method::PUT | Method::DELETE | Method::PATCH
-    ) {
-      // Some Spotify mutation endpoints reject bodyless requests unless the
-      // transport explicitly declares an empty body with Content-Length: 0.
-      request = request.header(CONTENT_LENGTH, "0").body(Vec::new());
-    }
-
-    let Some(left) = time_left(started_at.elapsed(), Duration::ZERO, deadline) else {
-      warn!("{endpoint} gave up at the {}s deadline", deadline.as_secs());
-      return Err(deadline_error(deadline));
-    };
-    let attempt_started_at = Instant::now();
-    let sent = match tokio::time::timeout(left, request.send()).await {
-      Ok(sent) => sent,
-      Err(_) => {
-        warn!("{endpoint} gave up at the {}s deadline", deadline.as_secs());
-        return Err(deadline_error(deadline));
-      }
-    };
-    let response = match sent {
-      Ok(response) => response,
-      Err(e) => {
-        let backoff = Duration::from_secs(1 + u64::from(attempt));
-        if attempt + 1 < max_attempts
-          && (e.is_connect() || e.is_timeout() || e.is_request())
-          && time_left(started_at.elapsed(), backoff, deadline).is_some()
-        {
-          tokio::time::sleep(backoff).await;
-          attempt += 1;
-          continue;
-        }
-        // Which call broke goes in the log, not in the message: reqwest's
-        // `Display` carries the full request URL, and the query string holds
-        // the search box, while this message is surfaced on the error screen
-        // and recorded by `App::handle_error` at `info` — both without
-        // `--debug`. `without_url` drops it; `is_transient_network_error`
-        // matches what is left.
-        let e = e.without_url();
-        warn!(
-          "{} transport failure after {:?} on attempt {}/{}: {}",
-          endpoint,
-          attempt_started_at.elapsed(),
-          attempt + 1,
-          max_attempts,
-          e
-        );
-        return Err(anyhow!("Spotify API request failed: {}", e));
-      }
-    };
-    let elapsed = attempt_started_at.elapsed();
-    let status = response.status();
-    if status.is_success() {
-      // The one line every successful call leaves behind (issue #566): what ran
-      // before the failure that is being reported. `log!` only formats its
-      // arguments once the level is enabled, so the redaction below costs
-      // nothing with debug off.
-      debug!(
-        "{}",
-        request_success_line(&endpoint, status, elapsed.as_millis(), body.as_ref())
-      );
-      let should_parse_json = response_is_json(&response);
-      let left = time_left(started_at.elapsed(), Duration::ZERO, deadline).unwrap_or_default();
-      let response_body = tokio::time::timeout(left, response.text())
-        .await
-        .map_err(|_| deadline_error(deadline))??;
-      // Response bodies are the largest PII surface in the whole log and are
-      // rarely what a successful call is diagnosed by, so they stay at trace.
-      trace!("{}", response_trace_line(&endpoint, status, &response_body));
-      if response_body.trim().is_empty() {
-        return Ok(Value::Null);
-      }
-      if should_parse_json {
-        return Ok(serde_json::from_str(&response_body)?);
-      }
+    if text.trim().is_empty() {
       return Ok(Value::Null);
     }
-
-    let retry_after = response
-      .headers()
-      .get("retry-after")
-      .and_then(|h| h.to_str().ok())
-      .map(str::to_owned);
-    let retry_after_secs = retry_after
-      .as_deref()
-      .and_then(|v| v.parse::<u64>().ok())
-      .unwrap_or(1);
-    // `text()` consumes the response, so everything the branches below need
-    // (status, retry-after, body) is captured here, once.
-    let left = time_left(started_at.elapsed(), Duration::ZERO, deadline).unwrap_or_default();
-    // A body that stalls past the deadline ends the call: a 401 would
-    // otherwise start a forced refresh after it.
-    let response_body = match tokio::time::timeout(left, response.text()).await {
-      Ok(body) => body.unwrap_or_default(),
-      Err(_) => return Err(deadline_error(deadline)),
-    };
-    let retry_fits =
-      || time_left(started_at.elapsed(), UNAUTHORIZED_RETRY_BACKOFF, deadline).is_some();
-
-    // Diagnostics for every non-2xx: which endpoint (path *and* query), which
-    // status, what was asked for, what Spotify actually said, and how old the
-    // token we attached was. Failure is the case that gets reported, so it
-    // carries the full picture at any level; the token *value* is never logged.
-    // This is what separates "the token really expired" from "Spotify rejected
-    // a valid token" in a user-supplied log (issue #395).
-    // Built outside the macro on purpose: a struct of references costs nothing
-    // on a path that just did HTTP, and it puts these lines on the executed
-    // path of the failure tests below. `render()` stays inside, so the
-    // redaction still only runs when the level is enabled.
-    let failure = FailureLine {
-      include_body: log::max_level() >= log::LevelFilter::Debug,
-      endpoint: &endpoint,
-      status,
-      elapsed_ms: elapsed.as_millis(),
-      attempt: attempt + 1,
-      max_attempts,
-      token_age: access_token_age,
-      body: body.as_ref(),
-      response_body: &response_body,
-    };
-    warn!("{}", failure.render());
-
-    if status == reqwest::StatusCode::UNAUTHORIZED && !attempted_unauthorized_recovery {
-      // One-shot: whichever recovery path runs below, a second 401 falls through
-      // to the error return instead of looping.
-      attempted_unauthorized_recovery = true;
-
-      if forced_refresh_gate.try_begin().await {
-        match refresh_token(true).await {
-          Ok(Some(_)) => {
-            if !retry_fits() {
-              return Err(deadline_error(deadline));
-            }
-            tokio::time::sleep(UNAUTHORIZED_RETRY_BACKOFF).await;
-            continue;
-          }
-          Ok(None) => {
-            return Err(
-              SpotifyApiError {
-                status,
-                body: response_body,
-                detail: Some("token refresh unavailable for this request".to_string()),
-                endpoint: Some(endpoint),
-              }
-              .into(),
-            );
-          }
-          Err(refresh_err) => {
-            return Err(
-              SpotifyApiError {
-                status,
-                body: response_body,
-                detail: Some(format!("token refresh failed: {refresh_err}")),
-                endpoint: Some(endpoint),
-              }
-              .into(),
-            );
-          }
-        }
-      }
-
-      // A forced refresh already ran within the cooldown, so the token in hand
-      // is freshly minted and this 401 is coming from Spotify's side. Retry with
-      // it after a backoff instead of rotating the token family yet again.
-      warn!("401 within the forced-refresh cooldown; retrying with the current token");
-      if !retry_fits() {
-        return Err(deadline_error(deadline));
-      }
-      tokio::time::sleep(UNAUTHORIZED_RETRY_BACKOFF).await;
-      continue;
-    }
-
-    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-      // Built outside the macro, so the 429 tests run it.
-      let line = rate_limit_line(&endpoint, retry_after.as_deref(), &response_body);
-      warn!("{line}");
-      let window = retry_after_secs.max(1).min(MAX_RETRY_AFTER.as_secs());
-      forced_refresh_gate
-        .rate_limit_for(Duration::from_secs(window))
-        .await;
-      // The raw body went to the log above; the user sees the wait instead.
-      return Err(
-        SpotifyApiError {
-          status,
-          body: format!("rate limited by Spotify, retry in {window}s"),
-          detail: None,
-          endpoint: Some(endpoint),
-        }
-        .into(),
-      );
-    }
-
-    return Err(
-      SpotifyApiError {
-        status,
-        body: response_body,
-        detail: None,
-        endpoint: Some(endpoint),
-      }
-      .into(),
-    );
+    Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
   }
 }
 
@@ -843,16 +503,7 @@ impl Network {
     query: &[(&str, String)],
     body: Option<Value>,
   ) -> anyhow::Result<Value> {
-    spotify_api_request_json_for_with_refresh(
-      self.spotify(),
-      method,
-      path,
-      query,
-      body,
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await
+    spotify_api_request_json_for(method, path, query, body).await
   }
 
   pub async fn spotify_get_typed<T: DeserializeOwned>(
@@ -860,14 +511,9 @@ impl Network {
     path: &str,
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
-    let mut value = self
-      .spotify_api_request_json(Method::GET, path, query, None)
-      .await?;
-    normalize_spotify_payload(&mut value);
-    Ok(serde_json::from_value(value)?)
+    spotify_get_typed_for(path, query).await
   }
 }
-
 pub fn normalize_spotify_payload(value: &mut Value) {
   match value {
     Value::Object(map) => {
@@ -1069,64 +715,15 @@ pub fn is_not_found_error(e: &anyhow::Error) -> bool {
     .is_some_and(|se| se.status == reqwest::StatusCode::NOT_FOUND)
 }
 
-/// Whether an error is Spotify refusing the endpoint because of the key's tier.
-pub fn is_restricted_client_id_error(e: &anyhow::Error) -> bool {
-  is_forbidden_error(e) || is_not_found_error(e)
-}
-
-pub async fn spotify_get_typed_compat_for_with_refresh<T: DeserializeOwned>(
-  spotify: &AuthCodePkceSpotify,
+/// A typed `GET` through [`spotify_api_request_json_for`].
+pub async fn spotify_get_typed_for<T: DeserializeOwned>(
   path: &str,
   query: &[(&str, String)],
-  token_cache_path: &Path,
-  app: &Arc<Mutex<App>>,
 ) -> anyhow::Result<T> {
-  let mut value = spotify_api_request_json_for_with_refresh(
-    spotify,
-    Method::GET,
-    path,
-    query,
-    None,
-    token_cache_path,
-    app,
-  )
-  .await?;
+  let mut value = spotify_api_request_json_for(Method::GET, path, query, None).await?;
   normalize_spotify_payload(&mut value);
   Ok(serde_json::from_value(value)?)
 }
-
-/// The boot-time token check: the same pacing, `Retry-After` retries, and 401
-/// recovery as every other call, for the one request made before an `App`
-/// exists to report refresh state to.
-pub async fn spotify_get_typed_before_app<T: DeserializeOwned>(
-  spotify: &AuthCodePkceSpotify,
-  path: &str,
-  token_cache_path: &Path,
-) -> anyhow::Result<T> {
-  let mut value = spotify_api_request_json_for_base_with_refresh(
-    spotify,
-    SpotifyApiRequest {
-      base_url: SPOTIFY_API_BASE_URL,
-      method: Method::GET,
-      path,
-      query: &[],
-      body: None,
-      deadline: SPOTIFY_REQUEST_DEADLINE,
-    },
-    |force| async move {
-      auth::refresh_token_and_cache(spotify, token_cache_path, force)
-        .await
-        .map(Some)
-    },
-    // Its own gate: nothing else uses this client yet, and a fallback
-    // candidate must not inherit the previous candidate's 401 cooldown.
-    &ForcedRefreshGate::default(),
-  )
-  .await?;
-  normalize_spotify_payload(&mut value);
-  Ok(serde_json::from_value(value)?)
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1166,32 +763,29 @@ mod tests {
     assert!(line.contains("Bearer"), "{line}");
   }
 
-  fn failure_line(body: Option<&Value>, response_body: &str) -> String {
+  fn failure_line(include_body: bool, body: Option<&Value>, error: &str) -> String {
     FailureLine {
-      include_body: true,
+      include_body,
       endpoint: "PUT /v1/me/player/play",
-      status: reqwest::StatusCode::FORBIDDEN,
       elapsed_ms: 13,
-      attempt: 2,
-      max_attempts: 3,
-      token_age: Some(std::time::Duration::from_secs(90)),
       body,
-      response_body,
+      error,
     }
     .render()
   }
 
   #[test]
-  fn failure_line_redacts_both_bodies() {
+  fn failure_line_redacts_the_request_body() {
     let body = serde_json::json!({ "refresh_token": "AQsecret", "position_ms": 0 });
     let line = failure_line(
+      true,
       Some(&body),
-      r#"{"error":{"status":403},"password":"hunter2"}"#,
+      "Spotify API 403 Forbidden failed: Restricted",
     );
     assert!(!line.contains("AQsecret"), "{line}");
-    assert!(!line.contains("hunter2"), "{line}");
     assert!(line.contains("position_ms"), "{line}");
     assert!(line.contains("403"), "{line}");
+    assert!(line.contains("13ms"), "{line}");
   }
 
   /// The `warn!` line is written without `--debug`, so a playlist name or a
@@ -1199,81 +793,21 @@ mod tests {
   #[test]
   fn failure_line_omits_the_request_body_unless_debug_is_on() {
     let body = serde_json::json!({ "name": "My Private Playlist" });
-    let line = FailureLine {
-      include_body: false,
-      endpoint: "POST /v1/users/me/playlists",
-      status: reqwest::StatusCode::FORBIDDEN,
-      elapsed_ms: 5,
-      attempt: 1,
-      max_attempts: 1,
-      token_age: None,
-      body: Some(&body),
-      response_body: "",
-    }
-    .render();
+    let line = failure_line(false, Some(&body), "failed");
     assert!(!line.contains("My Private Playlist"), "{line}");
     assert!(line.contains("--debug"), "{line}");
   }
 
   #[test]
-  fn failure_line_reports_attempt_and_token_age() {
-    let line = failure_line(None, "");
-    assert!(line.contains("attempt 2/3"), "{line}");
-    assert!(line.contains("token age 90s"), "{line}");
+  fn failure_line_bounds_a_long_error() {
+    let line = failure_line(false, None, &"x".repeat(5_000));
+    assert!(line.contains("(truncated)"), "{line}");
   }
 
-  #[test]
-  fn failure_line_says_unknown_when_the_token_age_is_unavailable() {
-    let line = FailureLine {
-      include_body: true,
-      endpoint: "GET /v1/me",
-      status: reqwest::StatusCode::UNAUTHORIZED,
-      elapsed_ms: 1,
-      attempt: 1,
-      max_attempts: 1,
-      token_age: None,
-      body: None,
-      response_body: "",
-    }
-    .render();
-    assert!(line.contains("token age unknown"), "{line}");
-  }
-  use chrono::{TimeDelta, Utc};
-  use rspotify::{Config, Credentials, OAuth, Token};
-  use std::{
-    sync::{
-      atomic::{AtomicUsize, Ordering},
-      Arc,
-    },
-    time::SystemTime,
-  };
   use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
   };
-
-  async fn spotify_with_access_token(access_token: &str) -> AuthCodePkceSpotify {
-    let spotify = AuthCodePkceSpotify::with_config(
-      Credentials::new_pkce("test_client_id"),
-      OAuth {
-        redirect_uri: "http://localhost:8888/callback".to_string(),
-        ..Default::default()
-      },
-      Config::default(),
-    );
-
-    let mut token_lock = spotify.token.lock().await.expect("Failed to lock token");
-    *token_lock = Some(Token {
-      access_token: access_token.to_string(),
-      refresh_token: Some("refresh_token".to_string()),
-      expires_in: TimeDelta::seconds(3600),
-      expires_at: Some(Utc::now() + TimeDelta::seconds(3600)),
-      scopes: Default::default(),
-    });
-    drop(token_lock);
-
-    spotify
-  }
 
   async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
     let mut buf = vec![0; 4096];
@@ -1281,6 +815,25 @@ mod tests {
     String::from_utf8_lossy(&buf[..n]).to_string()
   }
 
+  /// One answer from a local server; the request it got comes back on join.
+  async fn serve_once(
+    status: &'static str,
+    body: &'static str,
+  ) -> (String, tokio::task::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let request = read_http_request(&mut stream).await;
+      let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      stream.write_all(response.as_bytes()).await.unwrap();
+      request
+    });
+    (base_url, server)
+  }
   #[test]
   fn redactor_replaces_a_nested_access_token_without_walking_into_it() {
     let payload = json!({
@@ -1399,32 +952,35 @@ mod tests {
 
   #[test]
   fn redacted_target_keeps_the_query_and_blanks_denylisted_parameters() {
-    let url = reqwest::Url::parse("https://api.spotify.com/v1/search?q=abba&type=track").unwrap();
-    assert_eq!(redacted_target(&url), "/v1/search?q=***&type=track");
+    let query = [("q", "abba".to_string()), ("type", "track".to_string())];
+    assert_eq!(
+      redacted_target("search", &query),
+      "/v1/search?q=***&type=track"
+    );
 
-    let url =
-      reqwest::Url::parse("https://accounts.spotify.com/api/token?code=xyz&grant_type=pkce")
-        .unwrap();
-    assert_eq!(redacted_target(&url), "/api/token?code=***&grant_type=pkce");
+    let query = [
+      ("code", "xyz".to_string()),
+      ("grant_type", "pkce".to_string()),
+    ];
+    assert_eq!(
+      redacted_target("token", &query),
+      "/v1/token?code=***&grant_type=pkce"
+    );
   }
 
-  /// A decoded separator or newline put back verbatim would read as an extra
-  /// parameter, or as an extra log line.
+  /// A separator or newline put in verbatim would read as an extra parameter,
+  /// or as an extra log line.
   #[test]
-  fn redacted_target_re_encodes_separators_and_newlines() {
-    let url =
-      reqwest::Url::parse("https://api.spotify.com/v1/search?market=a%26b%0Afake=1").unwrap();
-    let target = redacted_target(&url);
+  fn redacted_target_encodes_separators_and_newlines() {
+    let target = redacted_target("search", &[("market", "a&b\nfake=1".to_string())]);
     assert!(!target.contains('\n'), "{target}");
     assert_eq!(target, "/v1/search?market=a%26b%0Afake%3D1");
   }
 
   #[test]
   fn redacted_target_is_only_the_path_when_there_is_no_query() {
-    let url = reqwest::Url::parse("https://api.spotify.com/v1/me/player").unwrap();
-    assert_eq!(redacted_target(&url), "/v1/me/player");
+    assert_eq!(redacted_target("me/player", &[]), "/v1/me/player");
   }
-
   #[test]
   fn a_logged_request_body_is_redacted_and_bounded() {
     assert_eq!(request_body_for_log(None), "");
@@ -1548,445 +1104,33 @@ mod tests {
     assert!(!is_not_found_error(&rate_limited));
   }
 
-  #[test]
-  fn restricted_key_classification_accepts_both_refusal_statuses() {
-    for status in [
-      reqwest::StatusCode::FORBIDDEN,
-      reqwest::StatusCode::NOT_FOUND,
-    ] {
-      let error = anyhow::Error::new(SpotifyApiError {
-        status,
-        body: "Forbidden".to_string(),
-        detail: None,
-        endpoint: None,
-      });
-      assert!(is_restricted_client_id_error(&error));
-    }
-
-    assert!(!is_restricted_client_id_error(&anyhow::anyhow!(
-      "transport failure"
-    )));
-  }
-
-  #[tokio::test]
-  async fn retries_once_with_refreshed_token_after_401() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let seen_authorization = Arc::new(Mutex::new(Vec::<String>::new()));
-    let seen_authorization_for_server = Arc::clone(&seen_authorization);
-
-    let server = tokio::spawn(async move {
-      for status in ["401 Unauthorized", "200 OK"] {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let request = read_http_request(&mut stream).await;
-        if let Some(header) = request
-          .lines()
-          .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
-        {
-          seen_authorization_for_server
-            .lock()
-            .await
-            .push(header.to_ascii_lowercase());
-        }
-
-        let body = if status.starts_with("200") {
-          r#"{"ok":true}"#
-        } else {
-          r#"{"error":"expired"}"#
-        };
-        let response = format!(
-          "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-          body.len()
-        );
-        stream.write_all(response.as_bytes()).await.unwrap();
-      }
-    });
-
-    let spotify = spotify_with_access_token("old_access").await;
-    let refresh_calls = Arc::new(AtomicUsize::new(0));
-    let refresh_calls_for_closure = Arc::clone(&refresh_calls);
-    let spotify_for_closure = spotify.clone();
-
-    let started_at = Instant::now();
-    let result = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::GET,
-        path: "me",
-        query: &[],
-        body: None,
-        deadline: SPOTIFY_REQUEST_DEADLINE,
-      },
-      move |force| {
-        let spotify = spotify_for_closure.clone();
-        let refresh_calls = Arc::clone(&refresh_calls_for_closure);
-        async move {
-          refresh_calls.fetch_add(1, Ordering::SeqCst);
-          if force {
-            let mut token_lock = spotify.token.lock().await.expect("Failed to lock token");
-            let token = token_lock.as_mut().unwrap();
-            token.access_token = "new_access".to_string();
-          }
-          Ok(Some(SystemTime::now() + Duration::from_secs(3600)))
-        }
-      },
-      &ForcedRefreshGate::default(),
-    )
-    .await
-    .unwrap();
-    let elapsed = started_at.elapsed();
-
-    server.await.unwrap();
-
-    assert_eq!(result, json!({ "ok": true }));
-    assert_eq!(refresh_calls.load(Ordering::SeqCst), 2);
-    assert_eq!(
-      *seen_authorization.lock().await,
-      vec![
-        "authorization: bearer old_access".to_string(),
-        "authorization: bearer new_access".to_string()
-      ]
-    );
-    // The retry must not land inside the window that produced the 401.
-    assert!(
-      elapsed >= UNAUTHORIZED_RETRY_BACKOFF,
-      "post-refresh retry was not backed off (took {elapsed:?})"
-    );
-  }
-
-  /// Issue #395: the playback poll runs every few seconds, and Spotify's player
-  /// service can answer a valid token with 401. Only the first 401 in a cooldown
-  /// window may force a (refresh-token-rotating) `POST /api/token`; the next one
-  /// retries with the token already in hand.
-  #[tokio::test]
-  async fn second_unauthorized_within_cooldown_retries_without_forcing_refresh() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let seen_authorization = Arc::new(Mutex::new(Vec::<String>::new()));
-    let seen_authorization_for_server = Arc::clone(&seen_authorization);
-
-    let server = tokio::spawn(async move {
-      // Two calls, each answered 401 then 200 — the pattern a track transition
-      // produces across consecutive polls.
-      for status in ["401 Unauthorized", "200 OK", "401 Unauthorized", "200 OK"] {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let request = read_http_request(&mut stream).await;
-        if let Some(header) = request
-          .lines()
-          .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
-        {
-          seen_authorization_for_server
-            .lock()
-            .await
-            .push(header.to_ascii_lowercase());
-        }
-
-        let body = if status.starts_with("200") {
-          r#"{"ok":true}"#
-        } else {
-          r#"{ "error" : { "status" : 401, "message" : "Access token missing" }}"#
-        };
-        let response = format!(
-          "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-          body.len()
-        );
-        stream.write_all(response.as_bytes()).await.unwrap();
-      }
-    });
-
-    let spotify = spotify_with_access_token("old_access").await;
-    let forced_refresh_calls = Arc::new(AtomicUsize::new(0));
-    let gate = ForcedRefreshGate::default();
-
-    for _ in 0..2 {
-      let forced_refresh_calls = Arc::clone(&forced_refresh_calls);
-      let spotify_for_closure = spotify.clone();
-      let result = spotify_api_request_json_for_base_with_refresh(
-        &spotify,
-        SpotifyApiRequest {
-          base_url: &base_url,
-          method: Method::GET,
-          path: "me/player",
-          query: &[],
-          body: None,
-          deadline: SPOTIFY_REQUEST_DEADLINE,
-        },
-        move |force| {
-          let spotify = spotify_for_closure.clone();
-          let forced_refresh_calls = Arc::clone(&forced_refresh_calls);
-          async move {
-            if force {
-              forced_refresh_calls.fetch_add(1, Ordering::SeqCst);
-              let mut token_lock = spotify.token.lock().await.expect("Failed to lock token");
-              let token = token_lock.as_mut().unwrap();
-              token.access_token = "new_access".to_string();
-            }
-            Ok(Some(SystemTime::now() + Duration::from_secs(3600)))
-          }
-        },
-        &gate,
-      )
-      .await
-      .unwrap();
-
-      assert_eq!(result, json!({ "ok": true }));
-    }
-
-    server.await.unwrap();
-
-    assert_eq!(
-      forced_refresh_calls.load(Ordering::SeqCst),
-      1,
-      "the second 401 must not mint another token family"
-    );
-    assert_eq!(
-      *seen_authorization.lock().await,
-      vec![
-        "authorization: bearer old_access".to_string(),
-        "authorization: bearer new_access".to_string(),
-        "authorization: bearer new_access".to_string(),
-        "authorization: bearer new_access".to_string(),
-      ]
-    );
-  }
-
-  /// An expired cooldown must let the next 401 force a refresh again, so a token
-  /// that really did go bad still recovers.
-  #[tokio::test]
-  async fn unauthorized_forces_refresh_again_once_cooldown_expires() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-
-    let server = tokio::spawn(async move {
-      for status in ["401 Unauthorized", "200 OK", "401 Unauthorized", "200 OK"] {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let _request = read_http_request(&mut stream).await;
-        let body = if status.starts_with("200") {
-          r#"{"ok":true}"#
-        } else {
-          r#"{"error":"expired"}"#
-        };
-        let response = format!(
-          "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-          body.len()
-        );
-        stream.write_all(response.as_bytes()).await.unwrap();
-      }
-    });
-
-    let spotify = spotify_with_access_token("access_token").await;
-    let forced_refresh_calls = Arc::new(AtomicUsize::new(0));
-    // A zero cooldown is the "cooldown has elapsed" case.
-    let gate = ForcedRefreshGate::new(Duration::ZERO);
-
-    for _ in 0..2 {
-      let forced_refresh_calls = Arc::clone(&forced_refresh_calls);
-      spotify_api_request_json_for_base_with_refresh(
-        &spotify,
-        SpotifyApiRequest {
-          base_url: &base_url,
-          method: Method::GET,
-          path: "me/player",
-          query: &[],
-          body: None,
-          deadline: SPOTIFY_REQUEST_DEADLINE,
-        },
-        move |force| {
-          let forced_refresh_calls = Arc::clone(&forced_refresh_calls);
-          async move {
-            if force {
-              forced_refresh_calls.fetch_add(1, Ordering::SeqCst);
-            }
-            Ok(Some(SystemTime::now() + Duration::from_secs(3600)))
-          }
-        },
-        &gate,
-      )
-      .await
-      .unwrap();
-    }
-
-    server.await.unwrap();
-
-    assert_eq!(forced_refresh_calls.load(Ordering::SeqCst), 2);
-  }
-
-  /// A second 401 inside the same call must surface the error instead of
-  /// looping: the recovery is one-shot regardless of which path it took.
-  #[tokio::test]
-  async fn repeated_unauthorized_in_one_call_gives_up_after_one_recovery() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let request_count = Arc::new(AtomicUsize::new(0));
-    let request_count_for_server = Arc::clone(&request_count);
-
-    let server = tokio::spawn(async move {
-      for _ in 0..2 {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let _request = read_http_request(&mut stream).await;
-        request_count_for_server.fetch_add(1, Ordering::SeqCst);
-        let body = r#"{ "error" : { "status" : 401, "message" : "Access token missing" }}"#;
-        let response = format!(
-          "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-          body.len()
-        );
-        stream.write_all(response.as_bytes()).await.unwrap();
-      }
-    });
-
-    let spotify = spotify_with_access_token("access_token").await;
-
-    let error = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::GET,
-        path: "me/player",
-        query: &[],
-        body: None,
-        deadline: SPOTIFY_REQUEST_DEADLINE,
-      },
-      |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
-      &ForcedRefreshGate::default(),
-    )
-    .await
-    .unwrap_err();
-
-    server.await.unwrap();
-
-    assert_eq!(request_count.load(Ordering::SeqCst), 2);
-    // playback.rs classifies by substring, so the status must stay in the text.
-    assert!(
-      error.to_string().contains("401"),
-      "unexpected error text: {error}"
-    );
-  }
-
-  #[tokio::test]
-  async fn sends_content_length_zero_for_empty_mutation_requests() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let seen_request = Arc::new(Mutex::new(String::new()));
-    let seen_request_for_server = Arc::clone(&seen_request);
-
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let request = read_http_request(&mut stream).await;
-      *seen_request_for_server.lock().await = request;
-
-      let body = r#"{"ok":true}"#;
-      let response = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-      );
-      stream.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    let spotify = spotify_with_access_token("access_token").await;
-
-    let result = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::PUT,
-        path: "me/player/shuffle",
-        query: &[("state", "true".to_string())],
-        body: None,
-        deadline: SPOTIFY_REQUEST_DEADLINE,
-      },
-      |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
-      &ForcedRefreshGate::default(),
-    )
-    .await
-    .unwrap();
-
-    server.await.unwrap();
-
-    let request = seen_request.lock().await.clone();
-    assert_eq!(result, json!({ "ok": true }));
-    assert!(request.starts_with("PUT /v1/me/player/shuffle?state=true HTTP/1.1\r\n"));
-    assert!(request
-      .to_ascii_lowercase()
-      .contains("content-length: 0\r\n"));
-  }
-
-  #[tokio::test]
-  async fn ignores_non_json_success_body_for_mutation_requests() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let _request = read_http_request(&mut stream).await;
-
-      let body = "OK";
-      let response = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-      );
-      stream.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    let spotify = spotify_with_access_token("access_token").await;
-
-    let result = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::PUT,
-        path: "me/player/play",
-        query: &[],
-        body: None,
-        deadline: SPOTIFY_REQUEST_DEADLINE,
-      },
-      |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
-      &ForcedRefreshGate::default(),
-    )
-    .await
-    .unwrap();
-
-    server.await.unwrap();
-
-    assert_eq!(result, Value::Null);
-  }
-
   /// Issue #566: `Spotify API 403 Forbidden failed: …` never said which call
   /// broke. The failing call's method, path *and* query now travel with it.
   #[tokio::test]
   async fn a_failed_request_names_the_endpoint_it_used() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let (base_url, server) = serve_once(
+      "403 Forbidden",
+      r#"{"error":{"status":403,"message":"Player command failed"}}"#,
+    )
+    .await;
+    let _fake = fake::use_fake_spotify(base_url);
 
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let _ = read_http_request(&mut stream).await;
-      let body = r#"{"error":{"status":403,"message":"Player command failed"}}"#;
-      let response = format!(
-        "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-      );
-      stream.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    let spotify = spotify_with_access_token("access").await;
-    let error = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::PUT,
-        path: "me/player/play",
-        query: &[("device_id", "device-1".to_string())],
-        body: Some(json!({ "uris": ["spotify:track:1"] })),
-        deadline: SPOTIFY_REQUEST_DEADLINE,
-      },
-      |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) },
-      &ForcedRefreshGate::default(),
+    let error = request_with(
+      &RateLimitGate::default(),
+      SPOTIFY_REQUEST_DEADLINE,
+      Method::PUT,
+      "me/player/play",
+      &[("device_id", "device-1".to_string())],
+      Some(serde_json::json!({ "uris": ["spotify:track:1"] })),
     )
     .await
     .unwrap_err();
-    server.await.unwrap();
+    let request = server.await.unwrap();
 
+    assert!(
+      request.starts_with("PUT /v1/me/player/play?device_id=device-1"),
+      "{request}"
+    );
     assert!(
       error
         .to_string()
@@ -1996,45 +1140,29 @@ mod tests {
     assert!(is_forbidden_error(&error));
   }
 
-  /// A 429 opens a `Retry-After` window on the gate: the call fails at once
-  /// (no sleep on the pump) and the next call fails without a request.
+  /// A 429 opens the window: the call fails at once and the next one fails
+  /// without a request.
   #[tokio::test]
   async fn a_429_fails_at_once_and_blocks_the_next_call_locally() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let _ = read_http_request(&mut stream).await;
-      let body = r#"{"error":{"status":429}}"#;
-      let response = format!(
-        "HTTP/1.1 429 Too Many Requests\r\nretry-after: 30\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-      );
-      stream.write_all(response.as_bytes()).await.unwrap();
-    });
-
-    let spotify = spotify_with_access_token("access").await;
-    let gate = ForcedRefreshGate::default();
-    let request = || SpotifyApiRequest {
-      base_url: &base_url,
-      method: Method::GET,
-      path: "me/player",
-      query: &[],
-      body: None,
-      deadline: SPOTIFY_REQUEST_DEADLINE,
+    let (base_url, server) =
+      serve_once("429 Too Many Requests", r#"{"error":{"status":429}}"#).await;
+    let _fake = fake::use_fake_spotify(base_url);
+    let gate = RateLimitGate::default();
+    let call = || {
+      request_with(
+        &gate,
+        SPOTIFY_REQUEST_DEADLINE,
+        Method::GET,
+        "me/player",
+        &[],
+        None,
+      )
     };
-    let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
 
-    SKIP_PACING.with(|skip| skip.set(true));
     let started_at = Instant::now();
-    let first = spotify_api_request_json_for_base_with_refresh(&spotify, request(), refresh, &gate)
-      .await
-      .unwrap_err();
+    let first = call().await.unwrap_err();
     server.await.unwrap();
-    let second =
-      spotify_api_request_json_for_base_with_refresh(&spotify, request(), refresh, &gate)
-        .await
-        .unwrap_err();
+    let second = call().await.unwrap_err();
 
     assert!(
       started_at.elapsed() < Duration::from_secs(5),
@@ -2043,39 +1171,8 @@ mod tests {
     assert!(is_rate_limited_error(&first));
     assert!(is_rate_limited_error(&second));
     assert!(second.to_string().contains("retry in"), "{second}");
-  }
-
-  #[test]
-  fn a_429_logs_the_raw_retry_after_and_reason() {
-    let line = rate_limit_line(
-      "/v1/me/player",
-      Some("15242"),
-      r#"{"error":{"status":429,"message":"Too many requests","reason":"QUOTA_EXCEEDED"}}"#,
-    );
-    assert!(line.contains("Retry-After 15242"), "{line}");
-    assert!(line.contains("reason QUOTA_EXCEEDED"), "{line}");
-
-    let line = rate_limit_line("/v1/me/player", None, "");
-    assert!(line.contains("Retry-After missing"), "{line}");
-    assert!(line.contains("reason none"), "{line}");
-  }
-
-  #[test]
-  fn a_429_reason_stays_on_one_line_and_is_truncated() {
-    let line = rate_limit_line(
-      "/v1/me/player",
-      Some("30"),
-      r#"{"error":{"status":429,"reason":"QUOTA_EXCEEDED\nforged line"}}"#,
-    );
-    assert!(!line.contains('\n'), "{line}");
-    assert!(line.contains(r"QUOTA_EXCEEDED\nforged line"), "{line}");
-
-    let long = format!(
-      r#"{{"error":{{"status":429,"reason":"{}"}}}}"#,
-      "x".repeat(2_000)
-    );
-    let line = rate_limit_line("/v1/me/player", Some("30"), &long);
-    assert!(line.contains("(truncated)"), "{line}");
+    let left = gate.rate_limit_remaining().await.unwrap();
+    assert!(left <= ROUTED_RATE_LIMIT_WINDOW, "{left:?}");
   }
 
   #[tokio::test]
@@ -2087,23 +1184,16 @@ mod tests {
       let _ = read_http_request(&mut stream).await;
       tokio::time::sleep(Duration::from_secs(10)).await;
     });
+    let _fake = fake::use_fake_spotify(base_url);
 
-    let spotify = spotify_with_access_token("access").await;
-    let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
-    SKIP_PACING.with(|skip| skip.set(true));
     let started_at = Instant::now();
-    let error = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::GET,
-        path: "me/player",
-        query: &[],
-        body: None,
-        deadline: Duration::from_millis(300),
-      },
-      refresh,
-      &ForcedRefreshGate::default(),
+    let error = request_with(
+      &RateLimitGate::default(),
+      Duration::from_millis(300),
+      Method::GET,
+      "me/player",
+      &[],
+      None,
     )
     .await
     .unwrap_err();
@@ -2114,69 +1204,47 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_stalled_401_body_gives_up_at_the_deadline_without_a_forced_refresh() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let _ = read_http_request(&mut stream).await;
-      let head = "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n";
-      stream.write_all(head.as_bytes()).await.unwrap();
-      tokio::time::sleep(Duration::from_secs(10)).await;
-    });
+  async fn an_empty_success_body_reads_as_null() {
+    let (base_url, server) = serve_once("200 OK", "").await;
+    let _fake = fake::use_fake_spotify(base_url);
 
-    let spotify = spotify_with_access_token("access").await;
-    let forced_refreshes = Arc::new(AtomicUsize::new(0));
-    let forced = Arc::clone(&forced_refreshes);
-    SKIP_PACING.with(|skip| skip.set(true));
-    let error = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::GET,
-        path: "me/player",
-        query: &[],
-        body: None,
-        deadline: Duration::from_millis(300),
-      },
-      move |force| {
-        let forced = Arc::clone(&forced);
-        async move {
-          if force {
-            forced.fetch_add(1, Ordering::SeqCst);
-          }
-          Ok(Some(SystemTime::now() + Duration::from_secs(3600)))
-        }
-      },
-      &ForcedRefreshGate::default(),
+    let value = request_with(
+      &RateLimitGate::default(),
+      SPOTIFY_REQUEST_DEADLINE,
+      Method::PUT,
+      "me/player/pause",
+      &[],
+      None,
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+
+    assert_eq!(value, Value::Null);
+  }
+
+  #[cfg(feature = "spotify-session")]
+  #[tokio::test]
+  async fn without_a_login_a_call_is_unauthorized() {
+    let error = request_with(
+      &RateLimitGate::default(),
+      SPOTIFY_REQUEST_DEADLINE,
+      Method::GET,
+      "me",
+      &[],
+      None,
     )
     .await
     .unwrap_err();
-    server.abort();
-
-    assert!(is_transient_network_error(&error), "{error}");
-    assert_eq!(forced_refreshes.load(Ordering::SeqCst), 0);
-  }
-
-  #[test]
-  fn a_wait_fits_only_inside_the_deadline() {
-    let deadline = Duration::from_secs(40);
-    let second = Duration::from_secs(1);
-
     assert_eq!(
-      time_left(Duration::from_secs(30), second, deadline),
-      Some(Duration::from_secs(9))
-    );
-    assert_eq!(time_left(Duration::from_secs(39), second, deadline), None);
-    assert_eq!(
-      time_left(Duration::from_secs(41), Duration::ZERO, deadline),
-      None
+      error.downcast_ref::<SpotifyApiError>().map(|e| e.status),
+      Some(StatusCode::UNAUTHORIZED)
     );
   }
 
   #[tokio::test]
   async fn a_shorter_window_never_cuts_a_longer_one_short() {
-    let gate = ForcedRefreshGate::default();
+    let gate = RateLimitGate::default();
     gate.rate_limit_for(Duration::from_secs(30)).await;
     gate.rate_limit_for(Duration::from_secs(1)).await;
 
@@ -2185,40 +1253,10 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn an_extreme_retry_after_is_bounded_and_does_not_panic() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let _ = read_http_request(&mut stream).await;
-      let response = format!(
-        "HTTP/1.1 429 Too Many Requests\r\nretry-after: {}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-        u64::MAX
-      );
-      stream.write_all(response.as_bytes()).await.unwrap();
-    });
+  async fn an_extreme_window_is_bounded() {
+    let gate = RateLimitGate::default();
+    gate.rate_limit_for(Duration::MAX).await;
 
-    let spotify = spotify_with_access_token("access").await;
-    let gate = ForcedRefreshGate::default();
-    let refresh = |_force| async move { Ok(Some(SystemTime::now() + Duration::from_secs(3600))) };
-    let error = spotify_api_request_json_for_base_with_refresh(
-      &spotify,
-      SpotifyApiRequest {
-        base_url: &base_url,
-        method: Method::GET,
-        path: "me/player",
-        query: &[],
-        body: None,
-        deadline: SPOTIFY_REQUEST_DEADLINE,
-      },
-      refresh,
-      &gate,
-    )
-    .await
-    .unwrap_err();
-    server.await.unwrap();
-
-    assert!(is_rate_limited_error(&error));
     let left = gate.rate_limit_remaining().await.unwrap();
     assert!(left <= MAX_RETRY_AFTER, "{left:?}");
   }

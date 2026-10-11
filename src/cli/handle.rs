@@ -79,7 +79,7 @@ pub async fn handle_matches(
   };
 
   // If the device_id is not specified, select the first available device
-  let device_id = cli.net.client_config.device_id.clone();
+  let device_id = cli.net.app.lock().await.saved_spotify_device_id();
   let needs_device = match &device_id {
     Some(id) => !devices_list.contains(id),
     None => true,
@@ -87,7 +87,7 @@ pub async fn handle_matches(
   if needs_device {
     // Select the first device available
     if let Some(d) = devices_list.first() {
-      cli.net.client_config.set_device_id(d.clone())?;
+      cli.net.app.lock().await.remember_spotify_device(d);
     }
   }
 
@@ -205,8 +205,7 @@ pub async fn handle_matches(
 mod tests {
   use super::*;
   use crate::core::app::App;
-  use crate::core::config::ClientConfig;
-  use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+  use crate::infra::network::metadata::tests::{fake_spotify_login, read_http_request};
   use std::sync::Arc;
   use tokio::io::AsyncWriteExt;
   use tokio::sync::Mutex;
@@ -295,6 +294,7 @@ mod tests {
     Arc<std::sync::Mutex<Vec<String>>>,
     tokio::task::JoinHandle<()>,
     tempfile::TempDir,
+    crate::infra::network::requests::fake::FakeSpotify,
   ) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
@@ -318,21 +318,16 @@ mod tests {
     let state_dir = tempfile::tempdir().unwrap();
     app.state_path = Some(state_dir.path().join("state.yml"));
     let app = Arc::new(Mutex::new(app));
-    let spotify = spotify_with_access_token("test_token", base_url).await;
-    let net = Network::new(
-      Some(spotify),
-      ClientConfig::new(),
-      &app,
-      std::path::PathBuf::new(),
-    );
-    (net, seen, server, state_dir)
+    let (spotify, _fake) = fake_spotify_login(base_url);
+    let net = Network::new(Some(spotify), &app);
+    (net, seen, server, state_dir, _fake)
   }
 
   #[tokio::test]
   async fn a_search_sends_no_device_or_playback_request() {
     // Generous: every HTTP test shares the API pacing limiter.
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
-      let (net, seen, server, _state_dir) = recording_network().await;
+      let (net, seen, server, _state_dir, _fake) = recording_network().await;
       let matches = crate::cli::search_subcommand()
         .try_get_matches_from(["search", "queen", "--tracks"])
         .unwrap();
@@ -359,7 +354,7 @@ mod tests {
   }
 
   async fn requests_of(cmd: &str, args: &[&str]) -> Vec<String> {
-    let (net, seen, server, _state_dir) = recording_network().await;
+    let (net, seen, server, _state_dir, _fake) = recording_network().await;
     let command = match cmd {
       "playback" => crate::cli::playback_subcommand(),
       _ => crate::cli::list_subcommand(),
@@ -407,7 +402,7 @@ mod tests {
   #[tokio::test]
   async fn the_status_line_does_not_fetch_the_liked_songs() {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
-      let (net, seen, server, _state_dir) = recording_network().await;
+      let (net, seen, server, _state_dir, _fake) = recording_network().await;
       let mut cli = CliApp::new(net, UserConfig::new());
 
       let status = cli.get_status("%t".to_string()).await;

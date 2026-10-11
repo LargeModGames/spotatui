@@ -23,10 +23,7 @@ export function fetchFor(
 ): Action | null {
   if (!discover.available || discover.loading) return null;
   if (list === "mix") {
-    const wanted =
-      discover.artists_mix_available &&
-      discover.artists_mix.length === 0 &&
-      requested !== "mix";
+    const wanted = discover.artists_mix.length === 0 && requested !== "mix";
     return wanted ? { OpenDiscover: "ArtistsMix" } : null;
   }
   const wanted = discover.top_tracks_range !== range && requested !== range;

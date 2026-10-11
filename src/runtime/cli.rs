@@ -126,14 +126,7 @@ pub(super) async fn run_subcommand(boot: Boot, cmd: &str, matches: &ArgMatches) 
   let app = boot.app;
   // Held (unread) for the length of the command; see the field doc on `Boot`.
   let _sync_io_rx = boot.sync_io_rx;
-  // Both `Network::new` variants share one signature, so the same call
-  // compiles with or without `streaming`. CLI mode never uses streaming.
-  let network = Network::new(
-    boot.spotify,
-    boot.client_config,
-    &app,
-    boot.token_cache_path,
-  );
+  let network = Network::new(boot.spotify, &app);
   let cli_result = cli::handle_matches(matches, cmd.to_string(), network, boot.user_config).await;
   app.lock().await.flush_state_save(true);
   println!("{}", cli_result?);
@@ -146,11 +139,7 @@ async fn run_sync(boot: Boot, matches: &ArgMatches) -> Result<()> {
   // Held (unread) for the length of the command; see the field doc on `Boot`.
   let _sync_io_rx = boot.sync_io_rx;
   let args = cli::sync_args(matches);
-  let ctx = crate::infra::playlist_sync::SyncContext::new(
-    boot.spotify,
-    boot.token_cache_path,
-    Arc::clone(&app),
-  );
+  let ctx = crate::infra::playlist_sync::SyncContext::new(boot.spotify, Arc::clone(&app));
   let run = crate::infra::playlist_sync::run_guarded(ctx, args.link, args.dry_run, true);
   let report = tokio::spawn(run)
     .await
@@ -212,13 +201,12 @@ pub(super) async fn handle_self_update_command(_matches: &ArgMatches) -> Result<
 
 /// Run the auto-update check, returning the new version when one was installed.
 ///
-/// Deliberately does NOT restart here. This runs concurrently with
-/// authentication, and restarting mid-authentication deadlocks startup: the
-/// re-exec blocks this task in `Command::status()`, which stops the joined
-/// authentication future from being polled while it still owns the OAuth
-/// callback port, so the child cannot bind that port and the parent never
-/// releases it. See `restart_after_update`, which the caller invokes once
-/// authentication has finished.
+/// Deliberately does NOT restart here. This runs concurrently with the
+/// Spotify login, and restarting mid-login stalls startup: the re-exec blocks
+/// this task in `Command::status()`, which stops the joined login from being
+/// polled while it still owns the terminal and waits for the approval. See
+/// `restart_after_update`, which the caller invokes once the login has
+/// finished.
 #[cfg(feature = "self-update")]
 pub(super) async fn run_auto_update(skip: bool, user_config: &UserConfig) -> Option<String> {
   if skip
@@ -275,9 +263,9 @@ pub(super) async fn run_auto_update(_skip: bool, _user_config: &UserConfig) -> O
 ///
 /// Must be called only once startup is no longer holding resources the child
 /// will need. The child repeats startup from scratch, so anything this process
-/// still owns (the OAuth callback port on 8989, stdin, the terminal) it would
-/// contend with. Authentication persists its token before returning, so the
-/// child reuses it rather than opening a second browser login. The
+/// still owns (stdin, the terminal) it would contend with. A finished login is
+/// cached before it returns, so the child reuses it rather than asking for a
+/// second login. The
 /// single-instance lock is released just before the re-exec, since the child
 /// takes it again while this process waits.
 pub(super) fn restart_after_update(

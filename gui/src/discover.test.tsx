@@ -27,7 +27,6 @@ const payload: DiscoverPayload = {
   top_tracks_range: "Medium",
   top_tracks: [track("Firestone", "1"), track("Stay", "2")],
   artists_mix: [],
-  artists_mix_available: true,
   liked_ids: ["1"],
 };
 

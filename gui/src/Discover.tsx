@@ -87,14 +87,8 @@ export const Discover = memo(function Discover({
 
   const liked = new Set(discover?.liked_ids ?? []);
   const available = discover?.available ?? false;
-  const blocked = list === "mix" && discover?.artists_mix_available === false;
-  const notice = blocked
-    ? "The top artists mix is not available with this Spotify app key."
-    : rows.length === 0
-      ? loading
-        ? "Loading…"
-        : "Nothing here yet."
-      : null;
+  const notice =
+    rows.length === 0 ? (loading ? "Loading…" : "Nothing here yet.") : null;
   const heading =
     list === "mix"
       ? "Top artists mix"
@@ -168,35 +162,34 @@ export const Discover = memo(function Discover({
               data-focus
               onKeyDown={onKeyDown}
             >
-              {!blocked &&
-                rows.map((track, index) => {
-                  const now = playingUri !== null && track.uri === playingUri;
-                  return (
-                    <div
-                      key={`${index}-${track.uri ?? track.name}`}
-                      id={`discover-${index}`}
-                      role="option"
-                      aria-selected={index === cursor}
-                      className={now ? "pick now" : "pick"}
-                      onClick={() => setWant(index)}
-                      onDoubleClick={() => play(index)}
-                    >
-                      <span className="n">{now ? "▶" : index + 1}</span>
-                      <span className="what">
-                        <b>{track.name}</b>
-                        <span>
-                          {[track.artists.join(", "), track.album]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
+              {rows.map((track, index) => {
+                const now = playingUri !== null && track.uri === playingUri;
+                return (
+                  <div
+                    key={`${index}-${track.uri ?? track.name}`}
+                    id={`discover-${index}`}
+                    role="option"
+                    aria-selected={index === cursor}
+                    className={now ? "pick now" : "pick"}
+                    onClick={() => setWant(index)}
+                    onDoubleClick={() => play(index)}
+                  >
+                    <span className="n">{now ? "▶" : index + 1}</span>
+                    <span className="what">
+                      <b>{track.name}</b>
+                      <span>
+                        {[track.artists.join(", "), track.album]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </span>
-                      <span className="mark">
-                        {track.id && liked.has(track.id) ? "♥ liked" : ""}
-                      </span>
-                      <span className="time">{clock(track.duration_ms)}</span>
-                    </div>
-                  );
-                })}
+                    </span>
+                    <span className="mark">
+                      {track.id && liked.has(track.id) ? "♥ liked" : ""}
+                    </span>
+                    <span className="time">{clock(track.duration_ms)}</span>
+                  </div>
+                );
+              })}
             </div>
           </section>
           <aside aria-label="This list">

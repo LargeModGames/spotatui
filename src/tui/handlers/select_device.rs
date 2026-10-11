@@ -2,7 +2,6 @@ use super::common_key_events;
 use crate::core::action::Action;
 use crate::core::app::{App, SourceFocus};
 use crate::core::source::Source;
-use crate::infra::network::IoEvent;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -99,7 +98,11 @@ pub fn handler(key: Key, app: &mut App) {
 fn select_source(app: &mut App) {
   let source = Source::picker_sources()[app.view.source_list_index];
   // Picking Apple Music again reloads it: Music's library can change under us.
-  if app.active_source != source || source == Source::AppleMusic {
+  // Picking Spotify again without a session retries the login.
+  if app.active_source != source
+    || source == Source::AppleMusic
+    || (source == Source::Spotify && !app.spotify_connected)
+  {
     app.apply(Action::SelectSource(source));
     // Reset the sidebar playlist cursor to the top of the new source's list.
     app.view.selected_playlist_index = Some(0);
@@ -108,16 +111,6 @@ fn select_source(app: &mut App) {
     }
   }
 
-  // Adding Spotify from a free-source session: start the in-TUI OAuth login
-  // (browser + async callback). This sits OUTSIDE the `active_source != source`
-  // guard so re-selecting Spotify after a cancelled/timed-out login retries
-  // instead of no-oping (a failed attempt leaves active_source == Spotify but
-  // spotify_connected == false). The `pending_login`/`spotify.is_some()` guards in
-  // the handler make a redundant dispatch a safe no-op. Connected users just
-  // switch back to their already-loaded Spotify data.
-  if source == Source::Spotify && !app.spotify_connected {
-    app.dispatch(IoEvent::BeginSpotifyLogin);
-  }
   app.set_status_message(format!("Source: {}", source.label()), 4);
   app.pop_navigation_stack();
 }

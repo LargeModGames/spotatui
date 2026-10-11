@@ -157,16 +157,8 @@ To skip the check for one run, use `spotatui --no-update` (or `-U`) or set `SPOT
 
 ## Connecting to Spotify
 
-spotatui talks to Spotify's Web API through a Spotify app. The first run asks which app to use:
+spotatui talks to Spotify the way the official app does. It needs no Spotify developer app and no client ID, and Spotify in spotatui needs a **Premium** account.
 
-1. **The shared ncspot client ID.** No dashboard needed. Spotify counts every ncspot and spotatui user against this one app, so it is often rate limited: playlists load slowly or not at all, and the status bar says so.
-2. **Your own Spotify app** (recommended). Spotify gives each app a rate limit of its own.
+To log in, pick Spotify on the first run, or press `d` and pick Spotify later. spotatui shows a short code and opens Spotify's pairing page in your browser. Confirm the code there; the login is cached, so this happens once. Run `spotatui --reconfigure-auth` to forget the login and log in again, for example with another account.
 
-To use your own app:
-
-1. Go to the [Spotify Dashboard](https://developer.spotify.com/dashboard/applications) and click **Create app**.
-2. Add `http://127.0.0.1:8888/callback` to the Redirect URIs. The wizard asks for the port; 8888 is the default.
-3. Copy the `Client ID`. No client secret is needed.
-4. Run `spotatui --reconfigure-auth`, choose option 2, and paste the id. The browser opens once to sign in.
-
-The wizard keeps the shared id as `fallback_client_id` in `client.yml`, for a login that fails on your own app. A `client.yml` from an older version, with the shared id as `client_id` and your app as `fallback_client_id`, is read the other way round: your app leads. Your app still has no login of its own, so the first launch after the upgrade runs on the shared id and the status bar says so; run `spotatui --reconfigure-auth` once, choose 2, and paste the id. Native streaming signs in on its own and needs no dashboard entry.
+A `client.yml` from an older version stays on disk and is no longer used for the login. spotatui copies its native-streaming settings and saved device into `config.yml` and `state.yml` once.

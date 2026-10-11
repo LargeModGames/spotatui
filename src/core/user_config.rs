@@ -93,6 +93,18 @@ pub fn qobuz_quality_from_label(label: &str) -> u8 {
 }
 
 /// A configured Qobuz quality, or the default for an unknown id.
+/// The native streaming bitrates librespot offers, in kbps.
+pub const STREAMING_BITRATES: &[&str] = &["96", "160", "320"];
+const STREAMING_BITRATE_DEFAULT: u16 = 320;
+
+pub fn streaming_bitrate_or_default(bitrate: u16) -> u16 {
+  if STREAMING_BITRATES.contains(&bitrate.to_string().as_str()) {
+    bitrate
+  } else {
+    STREAMING_BITRATE_DEFAULT
+  }
+}
+
 fn qobuz_quality_or_default(quality: u8) -> u8 {
   if QOBUZ_QUALITY_IDS.contains(&quality) {
     quality
@@ -590,6 +602,10 @@ pub struct BehaviorConfigString {
   pub dj_configured: Option<bool>,
   pub keepawake_enabled: Option<bool>,
   pub enable_media_keys: Option<bool>,
+  pub enable_streaming: Option<bool>,
+  pub streaming_device_name: Option<String>,
+  pub streaming_bitrate: Option<u16>,
+  pub streaming_audio_cache: Option<bool>,
   pub sync_token: Option<String>,
   pub local_music_path: Option<String>,
   pub subsonic_url: Option<String>,
@@ -768,6 +784,14 @@ pub struct BehaviorConfig {
   /// play/pause/skip buttons, media keys, MPRIS/SMTC/Now Playing, playerctl).
   /// It still publishes track metadata to the OS; it just stops reacting.
   pub enable_media_keys: bool,
+  /// Register spotatui as a Spotify Connect device and play through librespot.
+  pub enable_streaming: bool,
+  /// The Connect device name other Spotify apps show.
+  pub streaming_device_name: String,
+  /// Native streaming bitrate in kbps: 96, 160 or 320.
+  pub streaming_bitrate: u16,
+  /// Keep played audio in the cache directory.
+  pub streaming_audio_cache: bool,
   pub sync_token: Option<String>,
   /// Filesystem path to the local music library root (browsed by the Local
   /// Files screen). Defaults to the OS music directory; `None` if unavailable.
@@ -1176,6 +1200,10 @@ impl UserConfig {
         dj_configured: None,
         keepawake_enabled: true,
         enable_media_keys: true,
+        enable_streaming: cfg!(feature = "streaming"),
+        streaming_device_name: "spotatui".to_string(),
+        streaming_bitrate: STREAMING_BITRATE_DEFAULT,
+        streaming_audio_cache: false,
         sync_token: None,
         local_music_path: dirs::audio_dir().map(|p| p.to_string_lossy().to_string()),
         subsonic_url: None,
@@ -1732,6 +1760,21 @@ impl UserConfig {
     if let Some(enable_media_keys) = behavior_config.enable_media_keys {
       self.behavior.enable_media_keys = enable_media_keys;
     }
+    if let Some(enable_streaming) = behavior_config.enable_streaming {
+      self.behavior.enable_streaming = enable_streaming;
+    }
+    if let Some(name) = behavior_config.streaming_device_name {
+      let name = name.trim();
+      if !name.is_empty() {
+        self.behavior.streaming_device_name = name.to_string();
+      }
+    }
+    if let Some(bitrate) = behavior_config.streaming_bitrate {
+      self.behavior.streaming_bitrate = streaming_bitrate_or_default(bitrate);
+    }
+    if let Some(audio_cache) = behavior_config.streaming_audio_cache {
+      self.behavior.streaming_audio_cache = audio_cache;
+    }
     if let Some(local_music_path) = behavior_config.local_music_path {
       let trimmed = local_music_path.trim();
       self.behavior.local_music_path = if trimmed.is_empty() {
@@ -2257,6 +2300,10 @@ impl UserConfig {
       dj_configured: self.behavior.dj_configured,
       keepawake_enabled: Some(self.behavior.keepawake_enabled),
       enable_media_keys: Some(self.behavior.enable_media_keys),
+      enable_streaming: Some(self.behavior.enable_streaming),
+      streaming_device_name: Some(self.behavior.streaming_device_name.clone()),
+      streaming_bitrate: Some(self.behavior.streaming_bitrate),
+      streaming_audio_cache: Some(self.behavior.streaming_audio_cache),
       // --- Phase 2/3/6 new fields (persist whatever the user set) ---
       gauge_filled_icon: Some(self.behavior.gauge_filled_icon.clone()),
       gauge_unfilled_icon: Some(self.behavior.gauge_unfilled_icon.clone()),

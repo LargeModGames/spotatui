@@ -30,8 +30,8 @@ use std::io;
 use std::sync::Arc;
 
 /// Console implementation of the first-launch surface for builds without the
-/// terminal frontend. CLI subcommands can still reach the Spotify auth wizard
-/// (`ClientConfig::load_config`), whose prompts are plain stdin/stdout;
+/// terminal frontend. CLI subcommands can still reach the Spotify login
+/// (`--reconfigure-auth`), whose lines are plain stdout;
 /// mirrors `ConsoleOnboarding` minus the interactive source picker, which is
 /// unreachable here (the picker only runs on a UI launch, and headless builds
 /// bail out before boot in that case).

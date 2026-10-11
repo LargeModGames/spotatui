@@ -6,10 +6,10 @@ use std::{
 
 const APP_DIR: &str = "spotatui";
 const FALLBACK_CONFIG_DIR: [&str; 1] = [".config"];
-#[cfg(any(feature = "streaming", test))]
+#[cfg(any(feature = "spotify-session", test))]
 const FALLBACK_CACHE_DIR: [&str; 1] = [".cache"];
 const FALLBACK_STATE_DIR: [&str; 2] = [".local", "state"];
-#[cfg(feature = "streaming")]
+#[cfg(feature = "spotify-session")]
 const XDG_CACHE_HOME_ENV: &str = "XDG_CACHE_HOME";
 const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 const XDG_STATE_HOME_ENV: &str = "XDG_STATE_HOME";
@@ -30,7 +30,7 @@ pub(crate) fn app_config_dir() -> Option<PathBuf> {
 ///
 /// Uses `$XDG_CACHE_HOME/spotatui` when XDG_CACHE_HOME is set to an absolute
 /// path, otherwise falls back to `$HOME/.cache/spotatui`.
-#[cfg(feature = "streaming")]
+#[cfg(feature = "spotify-session")]
 pub(crate) fn app_cache_dir() -> Option<PathBuf> {
   app_dir_from(
     std::env::var_os(XDG_CACHE_HOME_ENV),
@@ -49,6 +49,11 @@ pub(crate) fn app_state_dir() -> Option<PathBuf> {
     dirs::home_dir(),
     &FALLBACK_STATE_DIR,
   )
+}
+
+/// The Spotify app settings file older releases wrote; read once by the migration.
+pub(crate) fn legacy_client_config_path() -> Option<PathBuf> {
+  app_config_dir().map(|dir| dir.join("client.yml"))
 }
 
 /// The Qobuz credentials file: `<config dir>/qobuz_credentials.yml`.

@@ -1,27 +1,23 @@
 //! First-run source picker.
 //!
-//! Historically spotatui forced a Spotify OAuth login before the TUI could open.
-//! Now that YouTube, Subsonic/Navidrome, Internet Radio, and Local Files are all
-//! free, first launch instead asks which source to set up. Picking Spotify falls
-//! through to the existing auth wizard; picking a free source seeds a default
-//! `client.yml` (so Spotify can still be added later via in-TUI login), records
-//! the choice as the active source, and collects any source-specific config.
+//! First launch asks which sources to set up. Picking Spotify makes boot log
+//! in right after the picker; picking only free sources starts the app with
+//! the first one, and Spotify can still be added later with the in-app login.
 //!
 //! Only sources whose Cargo feature is compiled in are offered. A build with just
-//! Spotify (the slim build) shows no picker and keeps the original
-//! behavior.
+//! Spotify (the slim build) shows no picker and logs in to Spotify.
 //!
 //! This module is the selection *logic*; all presentation goes through the
 //! [`Onboarding`] trait (the terminal picker itself lives in `tui/first_run.rs`).
 
-use crate::core::config::ClientConfig;
 use crate::core::onboarding::Onboarding;
 use crate::core::source::Source;
-use crate::core::state::RuntimeState;
+use crate::core::state::{PersistedRuntimeState, RuntimeState};
 use crate::core::user_config::UserConfig;
 #[cfg(feature = "subsonic")]
 use anyhow::anyhow;
 use anyhow::Result;
+use std::path::Path;
 
 fn config_file_path_display(user_config: &UserConfig) -> String {
   user_config
@@ -47,42 +43,35 @@ fn save_config_or_warn(user_config: &UserConfig, onboarding: &dyn Onboarding) ->
   }
 }
 
-/// Run the interactive first-run source picker. A no-op after the first launch
-/// (detected by the presence of `client.yml`) and when only Spotify is compiled
-/// in. Must be called before [`ClientConfig::load_config`], which would otherwise
-/// trigger the Spotify-only auth wizard on a fresh install.
+/// A first run has neither a `state.yml` nor the `client.yml` older releases wrote.
+pub(crate) fn is_first_run(state_path: &Path, legacy_client_path: Option<&Path>) -> bool {
+  !state_path.exists() && !legacy_client_path.is_some_and(Path::exists)
+}
+
+/// Run the interactive first-run source picker; the caller checks
+/// [`is_first_run`] first. `true` when the user picked Spotify, so boot logs
+/// in now.
 pub async fn run_first_run_picker(
   user_config: &mut UserConfig,
   runtime_state: &mut RuntimeState,
-  client_config: &mut ClientConfig,
+  state_path: Option<&Path>,
   onboarding: &dyn Onboarding,
-) -> Result<()> {
-  // First run is detected by the absence of the Spotify client config file.
-  let paths = client_config.get_or_build_paths()?;
-  if paths.config_file_path.exists() {
-    return Ok(());
-  }
-
+) -> Result<bool> {
   let options = compiled_in_sources();
-
-  // Only Spotify available (the slim build): keep today's behavior and let
-  // `load_config` run the wizard.
-  if options.len() == 1 {
-    return Ok(());
-  }
-
-  let selections = match onboarding.pick_sources(&options)? {
-    Some(selected) => selected,
-    // Cancelled (esc / ctrl-c) or nothing checked: fall through to the Spotify
-    // wizard, matching the historical default.
-    None => return Ok(()),
+  let selections = if options.len() == 1 {
+    options
+  } else {
+    // Cancelled (esc / ctrl-c) or nothing checked: Spotify, the historical default.
+    onboarding
+      .pick_sources(&options)?
+      .unwrap_or_else(|| vec![Source::Spotify])
   };
 
   apply_selections(
     selections,
     user_config,
     runtime_state,
-    client_config,
+    state_path,
     onboarding,
   )
   .await
@@ -94,33 +83,23 @@ async fn apply_selections(
   selections: Vec<Source>,
   user_config: &mut UserConfig,
   runtime_state: &mut RuntimeState,
-  client_config: &mut ClientConfig,
+  state_path: Option<&Path>,
   onboarding: &dyn Onboarding,
-) -> Result<()> {
-  // Spotify only: keep today's behavior and let `load_config` run the wizard.
-  if selections == [Source::Spotify] {
-    return Ok(());
-  }
-
+) -> Result<bool> {
   let spotify_selected = selections.contains(&Source::Spotify);
   let active = selections[0];
 
-  // If Spotify wasn't chosen, seed a default `client.yml` (no OAuth) so a later
-  // in-TUI Spotify login has a client id to work with. If Spotify *was* chosen we
-  // leave `client.yml` absent so `load_config` runs the OAuth wizard below.
-  if !spotify_selected {
-    client_config.init_default_spotify_config()?;
-  }
   runtime_state.active_source = active;
   // The global song counter opt-in is asked before this picker runs, so the
   // user's choice already sits on `user_config`; save_config persists it here.
-  // The active source is runtime state, so save it separately.
+  // The active source is runtime state, and its file marks the first run done.
   save_config_or_warn(user_config, onboarding);
-  let state_path = crate::core::state::default_state_path()?;
-  crate::core::state::save(
-    &state_path,
-    &crate::core::state::PersistedRuntimeState::active_source(runtime_state.active_source),
-  )?;
+  if let Some(state_path) = state_path {
+    crate::core::state::save(
+      state_path,
+      &PersistedRuntimeState::active_source(runtime_state.active_source),
+    )?;
+  }
 
   // Collect credentials / check prerequisites for each chosen free source.
   for source in &selections {
@@ -130,9 +109,10 @@ async fn apply_selections(
   }
 
   if spotify_selected {
-    // Fall through: `load_config` runs the existing Spotify auth wizard.
-    onboarding.info("\nSetting up your other sources, then we'll log in to Spotify...\n");
-    return Ok(());
+    if selections.len() > 1 {
+      onboarding.info("\nSetting up your other sources, then we'll log in to Spotify...\n");
+    }
+    return Ok(true);
   }
 
   onboarding.info(&format!(
@@ -140,9 +120,8 @@ async fn apply_selections(
     active.label()
   ));
 
-  Ok(())
+  Ok(false)
 }
-
 /// The sources whose Cargo feature is compiled into this build, in display order.
 /// Spotify is always present.
 pub(crate) fn compiled_in_sources() -> Vec<Source> {
@@ -393,6 +372,78 @@ mod tests {
       *onboarding.masked_prompts.lock().unwrap(),
       vec!["  Password: ".to_string()]
     );
+  }
+
+  #[test]
+  fn only_a_launch_with_neither_file_is_a_first_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.yml");
+    let client = dir.path().join("client.yml");
+
+    assert!(is_first_run(&state, Some(&client)));
+    assert!(is_first_run(&state, None));
+    std::fs::write(&client, "client_id: x\n").unwrap();
+    assert!(!is_first_run(&state, Some(&client)));
+    std::fs::write(&state, "active_source: Spotify\n").unwrap();
+    assert!(!is_first_run(&state, None));
+  }
+
+  /// A user config that saves into `dir`, never into the real config directory.
+  fn user_config_in(dir: &Path) -> UserConfig {
+    let mut user_config = UserConfig::new();
+    user_config
+      .path_to_config
+      .replace(crate::core::user_config::UserConfigPaths {
+        config_file_path: dir.join("config.yml"),
+      });
+    user_config
+  }
+
+  #[tokio::test]
+  async fn picking_spotify_asks_boot_to_log_in_and_ends_the_first_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_path = dir.path().join("state.yml");
+    let mut user_config = user_config_in(dir.path());
+    let mut runtime_state = RuntimeState::default();
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    let log_in = apply_selections(
+      vec![Source::Spotify],
+      &mut user_config,
+      &mut runtime_state,
+      Some(&state_path),
+      &onboarding,
+    )
+    .await
+    .unwrap();
+
+    assert!(log_in);
+    assert_eq!(runtime_state.active_source, Source::Spotify);
+    assert!(!is_first_run(&state_path, None));
+  }
+
+  #[cfg(feature = "internet-radio")]
+  #[tokio::test]
+  async fn picking_only_a_free_source_starts_without_a_spotify_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_path = dir.path().join("state.yml");
+    let mut user_config = user_config_in(dir.path());
+    let mut runtime_state = RuntimeState::default();
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    let log_in = apply_selections(
+      vec![Source::Radio],
+      &mut user_config,
+      &mut runtime_state,
+      Some(&state_path),
+      &onboarding,
+    )
+    .await
+    .unwrap();
+
+    assert!(!log_in);
+    assert_eq!(runtime_state.active_source, Source::Radio);
+    assert!(state_path.exists());
   }
 
   #[test]

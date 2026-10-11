@@ -14,6 +14,7 @@
 use super::{brief, DjSuggestion, MAX_BATCH};
 use crate::core::action::Action;
 use crate::core::app::App;
+use crate::infra::network::ids;
 use crate::infra::network::search::SPOTIFY_SEARCH_LIMIT;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -33,7 +34,27 @@ pub struct ToolSpec {
   /// Spotify lane) rather than just the `App` lock. A call with no Spotify
   /// item never does: see `DjToolCall::needs_network`.
   pub needs_network: bool,
+  /// Offered to the in-app DJ too. The library, playlist and device tools are
+  /// MCP-only: an agent there acts for a user who asked it to.
+  #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
+  pub dj: bool,
+  /// Removes something the user keeps; MCP clients confirm it with the user.
+  #[cfg_attr(not(feature = "mcp-server"), allow(dead_code))]
+  pub destructive: bool,
   pub schema: fn() -> Value,
+}
+
+/// Most URIs one library or playlist write takes, so a call stays a few requests.
+pub const WRITE_BATCH: usize = 20;
+
+fn uris_schema(description: &str) -> Value {
+  json!({
+    "type": "array",
+    "minItems": 1,
+    "maxItems": WRITE_BATCH,
+    "items": {"type": "string"},
+    "description": description,
+  })
 }
 
 /// Every tool, in a fixed order.
@@ -44,6 +65,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "Summarise what the user has been listening to: top artists, top tracks, top albums, and recent plays. Call this first when choosing music for them. Returns aggregate names only — no identifiers or timestamps.",
     read_only: true,
     needs_network: false,
+    dj: true,
+    destructive: false,
     schema: || {
       json!({
         "type": "object",
@@ -64,6 +87,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "The currently playing or paused track, whether playback is active, and how many tracks are waiting in the queue.",
     read_only: true,
     needs_network: false,
+    dj: true,
+    destructive: false,
     schema: || json!({"type": "object", "additionalProperties": false}),
   },
   ToolSpec {
@@ -72,6 +97,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "The tracks currently queued up, in play order.",
     read_only: true,
     needs_network: false,
+    dj: true,
+    destructive: false,
     schema: || json!({"type": "object", "additionalProperties": false}),
   },
   ToolSpec {
@@ -80,6 +107,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "Search the catalogue for tracks and return their playable URIs. Use this to check that something exists before queueing it by name. Each result is marked `owned` when the user already has it (Liked Songs, or a playlist they own or collaborate on) — prefer results marked new when they asked for something they have not heard.",
     read_only: true,
     needs_network: true,
+    dj: true,
+    destructive: false,
     schema: || {
       json!({
         "type": "object",
@@ -98,6 +127,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "Add tracks to the play queue. Give either a `uri` from search_tracks, or a `title` plus `artist` to be looked up. Tracks that cannot be found are skipped and reported back, so check the result rather than assuming everything was queued.",
     read_only: false,
     needs_network: true,
+    dj: true,
+    destructive: false,
     schema: || {
       json!({
         "type": "object",
@@ -133,6 +164,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "Start playing a track immediately, interrupting whatever is playing. Use queue_tracks instead unless the user asked for something right now. The track has to exist: give a URI from search_tracks rather than one you assembled yourself.",
     read_only: false,
     needs_network: true,
+    dj: true,
+    destructive: false,
     schema: || {
       json!({
         "type": "object",
@@ -148,6 +181,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "Skip to the next track.",
     read_only: false,
     needs_network: false,
+    dj: true,
+    destructive: false,
     schema: || json!({"type": "object", "additionalProperties": false}),
   },
   ToolSpec {
@@ -156,6 +191,8 @@ pub const TOOLS: &[ToolSpec] = &[
     description: "Set the standing direction the built-in auto-queue DJ follows when it refills the queue on its own, e.g. 'mellow instrumental for focusing'. Pass null to clear it. This does not start playback or queue anything. The built-in DJ is optional and may be switched off or not built in at all, so read the result: it says whether anything will act on the vibe. Either way it is stored and returned by get_listening_history, so you can honour it yourself when you queue.",
     read_only: false,
     needs_network: false,
+    dj: true,
+    destructive: false,
     schema: || {
       json!({
         "type": "object",
@@ -164,7 +201,194 @@ pub const TOOLS: &[ToolSpec] = &[
       })
     },
   },
+  ToolSpec {
+    name: "list_playlists",
+    title: "List playlists",
+    description: "The user's Spotify playlists in sidebar order, with their URIs, track counts and whether the user owns them. Use a URI from here with add_to_playlist or remove_from_playlist; only a playlist the user owns or collaborates on can be edited.",
+    read_only: true,
+    needs_network: false,
+    dj: false,
+    destructive: false,
+    schema: || json!({"type": "object", "additionalProperties": false}),
+  },
+  ToolSpec {
+    name: "get_album",
+    title: "Get album",
+    description: "An album's artists, release year and track list, with a URI for each track.",
+    read_only: true,
+    needs_network: true,
+    dj: false,
+    destructive: false,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {"album": {"type": "string", "description": "A spotify:album: URI or album id."}},
+        "required": ["album"],
+        "additionalProperties": false
+      })
+    },
+  },
+  ToolSpec {
+    name: "get_artist",
+    title: "Get artist",
+    description: "An artist's top tracks and albums, each with a URI.",
+    read_only: true,
+    needs_network: true,
+    dj: false,
+    destructive: false,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {"artist": {"type": "string", "description": "A spotify:artist: URI or artist id."}},
+        "required": ["artist"],
+        "additionalProperties": false
+      })
+    },
+  },
+  ToolSpec {
+    name: "list_devices",
+    title: "List devices",
+    description: "The Spotify Connect devices of the user's account, which one is active, and their volume.",
+    read_only: true,
+    needs_network: true,
+    dj: false,
+    destructive: false,
+    schema: || json!({"type": "object", "additionalProperties": false}),
+  },
+  ToolSpec {
+    name: "transfer_playback",
+    title: "Transfer playback",
+    description: "Move Spotify playback to another Connect device, by the id or the name list_devices gives.",
+    read_only: false,
+    needs_network: true,
+    dj: false,
+    destructive: false,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {"device": {"type": "string", "description": "A device id or name from list_devices."}},
+        "required": ["device"],
+        "additionalProperties": false
+      })
+    },
+  },
+  ToolSpec {
+    name: "create_playlist",
+    title: "Create playlist",
+    description: "Create a Spotify playlist, optionally with tracks. It appears in list_playlists once Spotify has made it.",
+    read_only: false,
+    needs_network: false,
+    dj: false,
+    destructive: false,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "uris": uris_schema("Track URIs from search_tracks to start the playlist with.")
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      })
+    },
+  },
+  ToolSpec {
+    name: "add_to_playlist",
+    title: "Add to playlist",
+    description: "Add tracks to the end of a playlist the user owns or collaborates on.",
+    read_only: false,
+    needs_network: false,
+    dj: false,
+    destructive: false,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {
+          "playlist": {"type": "string", "description": "A playlist URI from list_playlists."},
+          "uris": uris_schema("Track URIs from search_tracks, in order.")
+        },
+        "required": ["playlist", "uris"],
+        "additionalProperties": false
+      })
+    },
+  },
+  ToolSpec {
+    name: "remove_from_playlist",
+    title: "Remove from playlist",
+    description: "Remove one track from a playlist the user owns. Give the track's URI and its 0-based position in the playlist; nothing is removed when the track at that position is a different one.",
+    read_only: false,
+    needs_network: false,
+    dj: false,
+    destructive: true,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {
+          "playlist": {"type": "string", "description": "A playlist URI from list_playlists."},
+          "uri": {"type": "string", "description": "The URI of the track to remove."},
+          "position": {"type": "integer", "minimum": 0, "description": "The track's 0-based position."}
+        },
+        "required": ["playlist", "uri", "position"],
+        "additionalProperties": false
+      })
+    },
+  },
+  ToolSpec {
+    name: "like_tracks",
+    title: "Like tracks",
+    description: "Add tracks to the user's Liked Songs, or remove them with liked set to false. Tracks already in that state are left alone.",
+    read_only: false,
+    needs_network: true,
+    dj: false,
+    destructive: false,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {
+          "uris": uris_schema("Track URIs from search_tracks."),
+          "liked": {"type": "boolean", "description": "False removes them from Liked Songs. Defaults to true."}
+        },
+        "required": ["uris"],
+        "additionalProperties": false
+      })
+    },
+  },
+  ToolSpec {
+    name: "follow_artist",
+    title: "Follow artist",
+    description: "Follow an artist, or unfollow them with follow set to false.",
+    read_only: false,
+    needs_network: false,
+    dj: false,
+    destructive: false,
+    schema: || {
+      json!({
+        "type": "object",
+        "properties": {
+          "artist": {"type": "string", "description": "A spotify:artist: URI or artist id."},
+          "follow": {"type": "boolean", "description": "False unfollows. Defaults to true."}
+        },
+        "required": ["artist"],
+        "additionalProperties": false
+      })
+    },
+  },
 ];
+
+/// The tools the in-app DJ may call.
+#[cfg(any(test, feature = "ai-dj"))]
+pub fn dj_tools() -> impl Iterator<Item = &'static ToolSpec> {
+  TOOLS.iter().filter(|tool| tool.dj)
+}
+
+/// [`parse_call`] for the in-app DJ: an MCP-only tool is unknown to it.
+#[cfg(any(test, feature = "ai-dj"))]
+pub fn parse_dj_call(name: &str, args: &Value) -> Result<DjToolCall, ToolCallError> {
+  if !spec(name).is_some_and(|tool| tool.dj) {
+    return Err(ToolCallError::UnknownTool(name.to_string()));
+  }
+  parse_call(name, args)
+}
 
 pub fn spec(name: &str) -> Option<&'static ToolSpec> {
   TOOLS.iter().find(|tool| tool.name == name)
@@ -207,6 +431,42 @@ pub enum DjToolCall {
   SkipTrack,
   SetDjVibe {
     vibe: Option<String>,
+  },
+  ListPlaylists,
+  /// A bare album id.
+  GetAlbum {
+    album: String,
+  },
+  /// A bare artist id.
+  GetArtist {
+    artist: String,
+  },
+  ListDevices,
+  TransferPlayback {
+    device: String,
+  },
+  CreatePlaylist {
+    name: String,
+    uris: Vec<String>,
+  },
+  /// `playlist` is a `spotify:playlist:` URI, `uris` are `spotify:track:` URIs.
+  AddToPlaylist {
+    playlist: String,
+    uris: Vec<String>,
+  },
+  RemoveFromPlaylist {
+    playlist: String,
+    uri: String,
+    position: usize,
+  },
+  LikeTracks {
+    uris: Vec<String>,
+    liked: bool,
+  },
+  /// A bare artist id.
+  FollowArtist {
+    artist: String,
+    follow: bool,
   },
 }
 
@@ -423,7 +683,118 @@ pub fn parse_call(name: &str, args: &Value) -> Result<DjToolCall, ToolCallError>
       };
       Ok(DjToolCall::SetDjVibe { vibe })
     }
+    "list_playlists" => Ok(DjToolCall::ListPlaylists),
+    "list_devices" => Ok(DjToolCall::ListDevices),
+    "get_album" => Ok(DjToolCall::GetAlbum {
+      album: spotify_id(get("album"), "album", ids::album_id)?,
+    }),
+    "get_artist" => Ok(DjToolCall::GetArtist {
+      artist: spotify_id(get("artist"), "artist", ids::artist_id)?,
+    }),
+    "follow_artist" => Ok(DjToolCall::FollowArtist {
+      artist: spotify_id(get("artist"), "artist", ids::artist_id)?,
+      follow: flag(get("follow"), "follow")?,
+    }),
+    "transfer_playback" => {
+      let device = get("device")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|device| !device.is_empty())
+        .ok_or_else(|| invalid("device is required and must be a non-empty string"))?;
+      Ok(DjToolCall::TransferPlayback {
+        device: device.to_string(),
+      })
+    }
+    "create_playlist" => {
+      let name = get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| invalid("name is required and must be a non-empty string"))?;
+      let uris = match get("uris") {
+        None | Some(Value::Null) => Vec::new(),
+        uris => track_uris(uris)?,
+      };
+      Ok(DjToolCall::CreatePlaylist {
+        name: name.to_string(),
+        uris,
+      })
+    }
+    "add_to_playlist" => Ok(DjToolCall::AddToPlaylist {
+      playlist: playlist_uri(get("playlist"))?,
+      uris: track_uris(get("uris"))?,
+    }),
+    "remove_from_playlist" => {
+      let uri = track_uris(Some(&json!([get("uri").cloned().unwrap_or(Value::Null)])))
+        .map_err(|_| invalid("uri must be a spotify:track: URI or track id"))?
+        .remove(0);
+      let position = get("position")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid("position is required and must be a non-negative integer"))?;
+      Ok(DjToolCall::RemoveFromPlaylist {
+        playlist: playlist_uri(get("playlist"))?,
+        uri,
+        position: position as usize,
+      })
+    }
+    "like_tracks" => Ok(DjToolCall::LikeTracks {
+      uris: track_uris(get("uris"))?,
+      liked: flag(get("liked"), "liked")?,
+    }),
     other => Err(ToolCallError::UnknownTool(other.to_string())),
+  }
+}
+
+/// A Spotify id from a URI or a bare id of `kind`.
+fn spotify_id<T: rspotify::prelude::Id>(
+  value: Option<&Value>,
+  kind: &str,
+  parse: fn(&str) -> Option<T>,
+) -> Result<String, ToolCallError> {
+  value
+    .and_then(Value::as_str)
+    .and_then(|value| parse(value.trim()))
+    .map(|id| id.id().to_string())
+    .ok_or_else(|| {
+      ToolCallError::InvalidArguments(format!("{kind} must be a spotify:{kind}: URI or {kind} id"))
+    })
+}
+
+fn playlist_uri(value: Option<&Value>) -> Result<String, ToolCallError> {
+  spotify_id(value, "playlist", ids::playlist_id).map(|id| format!("spotify:playlist:{id}"))
+}
+
+/// 1 to [`WRITE_BATCH`] track URIs or ids, as `spotify:track:` URIs.
+fn track_uris(value: Option<&Value>) -> Result<Vec<String>, ToolCallError> {
+  let invalid = |detail: String| ToolCallError::InvalidArguments(detail);
+  let entries = value
+    .and_then(Value::as_array)
+    .ok_or_else(|| invalid("uris is required and must be an array".to_string()))?;
+  if entries.is_empty() || entries.len() > WRITE_BATCH {
+    return Err(invalid(format!(
+      "uris must hold between 1 and {WRITE_BATCH} entries"
+    )));
+  }
+  entries
+    .iter()
+    .map(|entry| {
+      entry
+        .as_str()
+        .and_then(|uri| ids::track_id(uri.trim()))
+        .map(|id| format!("spotify:track:{}", rspotify::prelude::Id::id(&id)))
+        .ok_or_else(|| invalid(format!("{entry} is not a spotify:track: URI or track id")))
+    })
+    .collect()
+}
+
+/// An optional boolean that defaults to true.
+fn flag(value: Option<&Value>, name: &str) -> Result<bool, ToolCallError> {
+  match value {
+    None | Some(Value::Null) => Ok(true),
+    Some(Value::Bool(value)) => Ok(*value),
+    Some(_) => Err(ToolCallError::InvalidArguments(format!(
+      "{name} must be a boolean"
+    ))),
   }
 }
 
@@ -436,11 +807,21 @@ impl DjToolCall {
       Self::SearchTracks { .. } => true,
       Self::QueueTracks { items, .. } => queue_needs_spotify(items),
       Self::PlayNow { uri } => uri.starts_with("spotify:track:"),
+      Self::GetAlbum { .. }
+      | Self::GetArtist { .. }
+      | Self::ListDevices
+      | Self::TransferPlayback { .. }
+      | Self::LikeTracks { .. } => true,
       Self::GetListeningHistory { .. }
       | Self::GetNowPlaying
       | Self::GetQueue
       | Self::SkipTrack
-      | Self::SetDjVibe { .. } => false,
+      | Self::SetDjVibe { .. }
+      | Self::ListPlaylists
+      | Self::CreatePlaylist { .. }
+      | Self::AddToPlaylist { .. }
+      | Self::RemoveFromPlaylist { .. }
+      | Self::FollowArtist { .. } => false,
     }
   }
 
@@ -454,6 +835,16 @@ impl DjToolCall {
       Self::PlayNow { .. } => "play_now",
       Self::SkipTrack => "skip_track",
       Self::SetDjVibe { .. } => "set_dj_vibe",
+      Self::ListPlaylists => "list_playlists",
+      Self::GetAlbum { .. } => "get_album",
+      Self::GetArtist { .. } => "get_artist",
+      Self::ListDevices => "list_devices",
+      Self::TransferPlayback { .. } => "transfer_playback",
+      Self::CreatePlaylist { .. } => "create_playlist",
+      Self::AddToPlaylist { .. } => "add_to_playlist",
+      Self::RemoveFromPlaylist { .. } => "remove_from_playlist",
+      Self::LikeTracks { .. } => "like_tracks",
+      Self::FollowArtist { .. } => "follow_artist",
     }
   }
 }
@@ -496,14 +887,144 @@ pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Optio
         None => "DJ vibe cleared".to_string(),
       }))
     }
+    DjToolCall::ListPlaylists => Some(playlists_outcome(app).await),
+    DjToolCall::CreatePlaylist { name, uris } => Some(
+      spotify_write(app, Action::CreatePlaylist {
+        name: name.clone(),
+        track_uris: uris.clone(),
+      })
+      .await
+      .unwrap_or_else(|| {
+        ToolOutcome::ok(format!(
+          "Creating the playlist \"{name}\" with {} track(s). It is in list_playlists once Spotify has made it.",
+          uris.len()
+        ))
+      }),
+    ),
+    DjToolCall::AddToPlaylist { playlist, uris } => {
+      let mut app = app.lock().await;
+      if !app.spotify_connected {
+        return Some(not_connected());
+      }
+      for uri in uris {
+        app.apply(Action::AddTrackToPlaylist {
+          playlist: playlist.clone(),
+          track: uri.clone(),
+        });
+      }
+      Some(ToolOutcome::ok(format!(
+        "Adding {} track(s) to {playlist}",
+        uris.len()
+      )))
+    }
+    DjToolCall::RemoveFromPlaylist {
+      playlist,
+      uri,
+      position,
+    } => Some(
+      spotify_write(app, Action::RemoveTrackFromPlaylist {
+        playlist: playlist.clone(),
+        track: uri.clone(),
+        position: *position,
+      })
+      .await
+      .unwrap_or_else(|| {
+        ToolOutcome::ok(format!(
+          "Removing {uri} at position {position} from {playlist}, if that is the track there"
+        ))
+      }),
+    ),
+    DjToolCall::FollowArtist { artist, follow } => {
+      let action = if *follow {
+        Action::FollowArtist(artist.clone())
+      } else {
+        Action::UnfollowArtist(artist.clone())
+      };
+      Some(
+        spotify_write(app, action)
+          .await
+          .unwrap_or_else(|| {
+            ToolOutcome::ok(if *follow {
+              format!("Following spotify:artist:{artist}")
+            } else {
+              format!("Unfollowing spotify:artist:{artist}")
+            })
+          }),
+      )
+    }
     // These run the network handlers: with the Spotify client on the Spotify
     // lane, or with none when the call has no Spotify item. `play_now` confirms
     // a Spotify track exists before interrupting what is playing: dispatching
     // blind used to report success for a URI that stopped playback instead.
     DjToolCall::SearchTracks { .. }
     | DjToolCall::QueueTracks { .. }
-    | DjToolCall::PlayNow { .. } => None,
+    | DjToolCall::PlayNow { .. }
+    | DjToolCall::GetAlbum { .. }
+    | DjToolCall::GetArtist { .. }
+    | DjToolCall::ListDevices
+    | DjToolCall::TransferPlayback { .. }
+    | DjToolCall::LikeTracks { .. } => None,
   }
+}
+
+fn not_connected() -> ToolOutcome {
+  ToolOutcome::error(
+    "spotatui has no Spotify session. Log in from the spotatui UI, then try again.",
+  )
+}
+
+/// Applies a Spotify write through the pump; `Some` error without a session.
+async fn spotify_write(app: &Arc<Mutex<App>>, action: Action) -> Option<ToolOutcome> {
+  let mut app = app.lock().await;
+  if !app.spotify_connected {
+    return Some(not_connected());
+  }
+  app.apply(action);
+  None
+}
+
+async fn playlists_outcome(app: &Arc<Mutex<App>>) -> ToolOutcome {
+  let app = app.lock().await;
+  let user_id = app.user().as_ref().map(|user| user.id.clone());
+  let playlists: Vec<Value> = app
+    .all_playlists()
+    .iter()
+    .filter(|playlist| playlist.uri.starts_with("spotify:playlist:"))
+    .map(|playlist| {
+      let owned = playlist.owner_id.is_some() && playlist.owner_id == user_id;
+      json!({
+        "name": playlist.name,
+        "uri": playlist.uri,
+        "tracks": playlist.track_count,
+        "owned": owned,
+        "collaborative": playlist.collaborative,
+      })
+    })
+    .collect();
+  if playlists.is_empty() {
+    return ToolOutcome::with_data(
+      "No Spotify playlists are loaded",
+      json!({ "playlists": [] }),
+    );
+  }
+  let text = playlists
+    .iter()
+    .map(|playlist| {
+      format!(
+        "{} [{}] {} tracks{}",
+        playlist["name"].as_str().unwrap_or_default(),
+        playlist["uri"].as_str().unwrap_or_default(),
+        playlist["tracks"],
+        if playlist["owned"] == true {
+          ", owned"
+        } else {
+          ""
+        }
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
+  ToolOutcome::with_data(text, json!({ "playlists": playlists }))
 }
 
 /// What, if anything, will actually act on a vibe that was just set.
@@ -689,7 +1210,7 @@ mod tests {
     assert_eq!(names.len(), unique.len(), "duplicate tool name");
     // Order is part of the contract: MCP clients cache tools/list.
     assert_eq!(names[0], "get_listening_history");
-    assert_eq!(names.last(), Some(&"set_dj_vibe"));
+    assert_eq!(names.last(), Some(&"follow_artist"));
   }
 
   #[test]
@@ -1040,6 +1561,13 @@ mod tests {
         "search_tracks" => json!({"query": "x"}),
         "queue_tracks" => json!({"tracks": [{"uri": "spotify:track:x"}]}),
         "play_now" => json!({"uri": "spotify:track:x"}),
+        "get_album" => json!({"album": ALBUM}),
+        "get_artist" | "follow_artist" => json!({"artist": ARTIST}),
+        "transfer_playback" => json!({"device": "Kitchen"}),
+        "create_playlist" => json!({"name": "Road Trip"}),
+        "add_to_playlist" => json!({"playlist": PLAYLIST, "uris": [TRACK]}),
+        "remove_from_playlist" => json!({"playlist": PLAYLIST, "uri": TRACK, "position": 0}),
+        "like_tracks" => json!({"uris": [TRACK]}),
         _ => json!({}),
       };
       let call = parse_call(tool.name, &args).unwrap();
@@ -1051,5 +1579,202 @@ mod tests {
       );
       assert_eq!(call.tool_name(), tool.name);
     }
+  }
+
+  const TRACK: &str = "4uLU6hMCjMI75M1A2tKUQC";
+  const ALBUM: &str = "6dVIqQ8qmQ5GBnJ9shOYGE";
+  const ARTIST: &str = "4tZwfgrHOc3mvqYlEYSvVi";
+  const PLAYLIST: &str = "37i9dQZF1DXcBWIGoYBM5M";
+
+  #[test]
+  fn the_library_and_device_tools_are_hidden_from_the_dj() {
+    let offered: Vec<&str> = dj_tools().map(|tool| tool.name).collect();
+    assert_eq!(offered.len(), 8);
+    assert!(!offered.contains(&"like_tracks"));
+    assert_eq!(
+      parse_dj_call("like_tracks", &json!({"uris": [TRACK]})),
+      Err(ToolCallError::UnknownTool("like_tracks".to_string()))
+    );
+    assert_eq!(
+      parse_dj_call("skip_track", &json!({})),
+      Ok(DjToolCall::SkipTrack)
+    );
+  }
+
+  #[test]
+  fn only_a_playlist_removal_is_destructive() {
+    let destructive: Vec<&str> = TOOLS
+      .iter()
+      .filter(|tool| tool.destructive)
+      .map(|tool| tool.name)
+      .collect();
+    assert_eq!(destructive, vec!["remove_from_playlist"]);
+    assert!(TOOLS
+      .iter()
+      .filter(|tool| tool.destructive)
+      .all(|tool| !tool.read_only));
+  }
+
+  #[test]
+  fn playlist_writes_take_ids_or_uris_and_send_uris() {
+    let call = parse_call(
+      "add_to_playlist",
+      &json!({"playlist": PLAYLIST, "uris": [TRACK, format!("spotify:track:{TRACK}")]}),
+    )
+    .unwrap();
+    let track_uri = format!("spotify:track:{TRACK}");
+    assert_eq!(
+      call,
+      DjToolCall::AddToPlaylist {
+        playlist: format!("spotify:playlist:{PLAYLIST}"),
+        uris: vec![track_uri.clone(), track_uri],
+      }
+    );
+  }
+
+  #[test]
+  fn a_write_takes_one_to_a_batch_of_track_uris() {
+    let too_many: Vec<&str> = vec![TRACK; WRITE_BATCH + 1];
+    assert!(parse_call("like_tracks", &json!({"uris": too_many})).is_err());
+    assert!(parse_call("like_tracks", &json!({"uris": []})).is_err());
+    assert!(parse_call(
+      "like_tracks",
+      &json!({"uris": [format!("spotify:album:{ALBUM}")]})
+    )
+    .is_err());
+    assert!(parse_call("like_tracks", &json!({"uris": vec![TRACK; WRITE_BATCH]})).is_ok());
+  }
+
+  #[test]
+  fn a_removal_needs_the_track_and_its_position() {
+    let base = json!({"playlist": PLAYLIST, "uri": TRACK});
+    assert!(parse_call("remove_from_playlist", &base).is_err());
+    let mut negative = base.clone();
+    negative["position"] = json!(-1);
+    assert!(parse_call("remove_from_playlist", &negative).is_err());
+    let mut wrong = base.clone();
+    wrong["position"] = json!(3);
+    wrong["uri"] = json!(format!("spotify:episode:{TRACK}"));
+    assert!(parse_call("remove_from_playlist", &wrong).is_err());
+    let mut good = base;
+    good["position"] = json!(3);
+    assert!(matches!(
+      parse_call("remove_from_playlist", &good),
+      Ok(DjToolCall::RemoveFromPlaylist { position: 3, .. })
+    ));
+  }
+
+  #[test]
+  fn like_and_follow_default_to_on() {
+    assert_eq!(
+      parse_call("like_tracks", &json!({"uris": [TRACK]})).unwrap(),
+      DjToolCall::LikeTracks {
+        uris: vec![format!("spotify:track:{TRACK}")],
+        liked: true
+      }
+    );
+    assert_eq!(
+      parse_call(
+        "follow_artist",
+        &json!({"artist": format!("spotify:artist:{ARTIST}"), "follow": false})
+      )
+      .unwrap(),
+      DjToolCall::FollowArtist {
+        artist: ARTIST.to_string(),
+        follow: false
+      }
+    );
+    assert!(parse_call("follow_artist", &json!({"artist": ARTIST, "follow": "no"})).is_err());
+  }
+
+  #[test]
+  fn a_lookup_needs_an_id_of_its_own_kind() {
+    assert_eq!(
+      parse_call(
+        "get_album",
+        &json!({"album": format!("spotify:album:{ALBUM}")})
+      )
+      .unwrap(),
+      DjToolCall::GetAlbum {
+        album: ALBUM.to_string()
+      }
+    );
+    assert!(parse_call(
+      "get_album",
+      &json!({"album": format!("spotify:artist:{ARTIST}")})
+    )
+    .is_err());
+    assert!(parse_call("transfer_playback", &json!({"device": "  "})).is_err());
+    assert!(parse_call("create_playlist", &json!({"name": ""})).is_err());
+  }
+
+  fn app_with_channel(
+    connected: bool,
+  ) -> (
+    Arc<Mutex<App>>,
+    std::sync::mpsc::Receiver<crate::infra::network::IoEvent>,
+  ) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app = App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      connected.then(std::time::SystemTime::now),
+    );
+    (Arc::new(Mutex::new(app)), rx)
+  }
+
+  #[tokio::test]
+  async fn a_write_without_a_spotify_session_is_refused() {
+    let (app, rx) = app_with_channel(false);
+    let call = parse_call("create_playlist", &json!({"name": "Road Trip"})).unwrap();
+    let outcome = execute_app_only(&app, &call).await.unwrap();
+    assert!(outcome.is_error);
+    assert!(rx.try_recv().is_err(), "nothing reaches the pump");
+  }
+
+  #[tokio::test]
+  async fn adding_to_a_playlist_sends_one_add_per_track() {
+    use crate::infra::network::IoEvent;
+    let (app, rx) = app_with_channel(true);
+    let call = parse_call(
+      "add_to_playlist",
+      &json!({"playlist": PLAYLIST, "uris": [TRACK, TRACK]}),
+    )
+    .unwrap();
+    let outcome = execute_app_only(&app, &call).await.unwrap();
+    assert!(!outcome.is_error);
+    for _ in 0..2 {
+      assert!(matches!(rx.try_recv(), Ok(IoEvent::AddTrackToPlaylist(..))));
+    }
+  }
+
+  #[tokio::test]
+  async fn unfollowing_sends_the_unfollow() {
+    use crate::infra::network::IoEvent;
+    let (app, rx) = app_with_channel(true);
+    let call = parse_call("follow_artist", &json!({"artist": ARTIST, "follow": false})).unwrap();
+    execute_app_only(&app, &call).await.unwrap();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::UserUnfollowArtists(_))));
+  }
+
+  #[tokio::test]
+  async fn the_playlist_list_marks_what_the_user_owns() {
+    use crate::core::test_helpers::{playlist_info, user_info};
+    let (app, _rx) = app_with_channel(true);
+    {
+      let mut app = app.lock().await;
+      *app.user_mut() = Some(user_info("me"));
+      app.all_playlists_mut().extend([
+        playlist_info("00000000000000000000p1", "Mine", "me", false),
+        playlist_info("00000000000000000000p2", "Theirs", "other", false),
+      ]);
+    }
+    let outcome = execute_app_only(&app, &DjToolCall::ListPlaylists)
+      .await
+      .unwrap();
+    let playlists = outcome.structured.unwrap()["playlists"].clone();
+    assert_eq!(playlists[0]["owned"], true);
+    assert_eq!(playlists[1]["owned"], false);
+    assert!(outcome.text.contains("Mine"));
   }
 }

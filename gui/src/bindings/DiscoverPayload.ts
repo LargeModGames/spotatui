@@ -16,10 +16,6 @@ loading: boolean,
  */
 top_tracks_range: DiscoverTimeRange | null, top_tracks: Array<TrackInfo>, artists_mix: Array<TrackInfo>, 
 /**
- * False once this app key lost the artist top-tracks endpoint.
- */
-artists_mix_available: boolean, 
-/**
  * The ids among both lists that are in Liked Songs.
  */
 liked_ids: Array<string>, };

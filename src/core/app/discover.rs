@@ -46,7 +46,6 @@ pub struct DiscoverView {
   pub range: Option<DiscoverTimeRange>,
   pub loading: bool,
   pub available: bool,
-  pub mix_available: bool,
   pub top_tracks: Vec<TrackInfo>,
   pub artists_mix: Vec<TrackInfo>,
   /// The ids among both lists that are in Liked Songs.
@@ -154,13 +153,10 @@ impl App {
       .filter_map(|track| track.id.clone())
       .filter(|id| self.liked_song_ids_set.contains(id))
       .collect();
-    let mix_available = !self
-      .spotify_endpoint_blocked(crate::core::spotify_access::RestrictedEndpoint::ArtistTopTracks);
     let view = &self.discover_view;
     if view.range == self.discover_top_tracks_range
       && view.loading == self.discover_loading
       && view.available == self.spotify_connected
-      && view.mix_available == mix_available
       && view.liked_ids == liked_ids
       && view.top_tracks == self.discover_top_tracks
       && view.artists_mix == self.discover_artists_mix
@@ -171,7 +167,6 @@ impl App {
       range: self.discover_top_tracks_range,
       loading: self.discover_loading,
       available: self.spotify_connected,
-      mix_available,
       top_tracks: self.discover_top_tracks.clone(),
       artists_mix: self.discover_artists_mix.clone(),
       liked_ids,

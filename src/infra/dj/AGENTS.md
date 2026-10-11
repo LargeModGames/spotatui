@@ -1,7 +1,13 @@
 ### The DJ: lanes, guards, and the avoid-library filter
 
-The tool surface is defined once - `src/infra/dj/tools.rs::TOOLS` (8 tools). MCP
-publishes it verbatim; the in-TUI brain renders the same table into its prompt.
+The tool surface is defined once - `src/infra/dj/tools.rs::TOOLS` (18 tools). MCP
+publishes it verbatim; the in-TUI brain renders only the rows with `dj: true`
+(`dj_tools`, `parse_dj_call`): the library, playlist and device tools are
+MCP-only, because an agent there acts on the user's request. Their writes go
+through `app.apply(Action::…)`, so the pump and the auth gate handle them; a
+write without a session answers an error instead of a silent no-op. Batches
+are capped at `WRITE_BATCH`, and `remove_from_playlist` is the one
+`destructive` tool (MCP `destructiveHint`, so the client confirms it).
 
 - **Lanes**: `AskDj` / `DjTopUp` run on the service lane (a brain call can take
   minutes; they touch only `App` and use `dispatch_without_spinner` - plain

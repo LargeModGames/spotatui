@@ -1,16 +1,11 @@
 use super::{PlaylistRead, SyncClient};
-use crate::core::app::App;
 use crate::core::playlist_sync::{normalize_isrc, pick_candidate, SyncTrack};
-use crate::infra::network::requests::spotify_api_request_json_for_with_refresh;
+use crate::infra::network::requests::spotify_api_request_json_for;
 use crate::infra::network::search::SPOTIFY_SEARCH_LIMIT;
 use anyhow::{anyhow, Result};
 use reqwest::Method;
-use rspotify::AuthCodePkceSpotify;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// Everything the matcher needs from one playlist item and nothing else, asked
 /// for under both spellings so either side of Spotify's `track` rename parses.
@@ -22,26 +17,10 @@ const WRITE_CHUNK: usize = 100;
 /// Hard cap on one playlist read.
 const MAX_ITEMS: usize = 10_000;
 
-/// Spotify playlist reads, searches and writes through the shared paced helper.
-pub(crate) struct SpotifyClient {
-  spotify: AuthCodePkceSpotify,
-  token_cache_path: PathBuf,
-  app: Arc<Mutex<App>>,
-}
+/// Spotify playlist reads, searches and writes through the shared request helper.
+pub(crate) struct SpotifyClient;
 
 impl SpotifyClient {
-  pub(crate) fn new(
-    spotify: AuthCodePkceSpotify,
-    token_cache_path: PathBuf,
-    app: Arc<Mutex<App>>,
-  ) -> Self {
-    SpotifyClient {
-      spotify,
-      token_cache_path,
-      app,
-    }
-  }
-
   /// One `search` call as candidates, capped by the endpoint's own ceiling.
   async fn search(&self, q: &str, limit: u32) -> Result<Vec<SyncTrack>> {
     let params = [
@@ -50,16 +29,7 @@ impl SpotifyClient {
       ("limit", limit.min(SPOTIFY_SEARCH_LIMIT).to_string()),
       ("market", "from_token".to_string()),
     ];
-    let value = spotify_api_request_json_for_with_refresh(
-      &self.spotify,
-      Method::GET,
-      "search",
-      &params,
-      None,
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await?;
+    let value = spotify_api_request_json_for(Method::GET, "search", &params, None).await?;
     Ok(search_candidates(value))
   }
 
@@ -77,16 +47,7 @@ impl SpotifyClient {
 
 impl SyncClient for SpotifyClient {
   async fn find_playlist(&self, name: &str) -> Result<Option<String>> {
-    let me = spotify_api_request_json_for_with_refresh(
-      &self.spotify,
-      Method::GET,
-      "me",
-      &[],
-      None,
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await?;
+    let me = spotify_api_request_json_for(Method::GET, "me", &[], None).await?;
     let me = me
       .get("id")
       .and_then(Value::as_str)
@@ -99,16 +60,7 @@ impl SyncClient for SpotifyClient {
         ("limit", PAGE_LIMIT.to_string()),
         ("offset", offset.to_string()),
       ];
-      let value = spotify_api_request_json_for_with_refresh(
-        &self.spotify,
-        Method::GET,
-        "me/playlists",
-        &params,
-        None,
-        &self.token_cache_path,
-        &self.app,
-      )
-      .await?;
+      let value = spotify_api_request_json_for(Method::GET, "me/playlists", &params, None).await?;
       let (hit, count, has_next) = owned_playlist_on_page(&value, name, &me);
       if hit.is_some() {
         return Ok(hit);
@@ -121,16 +73,9 @@ impl SyncClient for SpotifyClient {
   }
 
   async fn create_playlist(&self, name: &str) -> Result<String> {
-    let value = spotify_api_request_json_for_with_refresh(
-      &self.spotify,
-      Method::POST,
-      "me/playlists",
-      &[],
-      Some(create_body(name)),
-      &self.token_cache_path,
-      &self.app,
-    )
-    .await?;
+    let value =
+      spotify_api_request_json_for(Method::POST, "me/playlists", &[], Some(create_body(name)))
+        .await?;
     created_playlist_uri(value)
   }
 
@@ -145,16 +90,7 @@ impl SyncClient for SpotifyClient {
         ("offset", offset.to_string()),
       ];
       log::info!("playlist sync: reading Spotify playlist page at offset {offset}");
-      let value = spotify_api_request_json_for_with_refresh(
-        &self.spotify,
-        Method::GET,
-        &path,
-        &params,
-        None,
-        &self.token_cache_path,
-        &self.app,
-      )
-      .await?;
+      let value = spotify_api_request_json_for(Method::GET, &path, &params, None).await?;
       let page = read_items_page(value);
       if page.unrecognized > 0 {
         return Err(anyhow!(
@@ -183,16 +119,7 @@ impl SyncClient for SpotifyClient {
   async fn add(&self, playlist_uri: &str, tracks: &[SyncTrack]) -> Result<()> {
     let path = format!("playlists/{}/items", playlist_id_of(playlist_uri));
     for chunk in tracks.chunks(WRITE_CHUNK) {
-      spotify_api_request_json_for_with_refresh(
-        &self.spotify,
-        Method::POST,
-        &path,
-        &[],
-        Some(add_body(chunk)),
-        &self.token_cache_path,
-        &self.app,
-      )
-      .await?;
+      spotify_api_request_json_for(Method::POST, &path, &[], Some(add_body(chunk))).await?;
     }
     Ok(())
   }
@@ -200,16 +127,7 @@ impl SyncClient for SpotifyClient {
   async fn remove(&self, playlist_uri: &str, keys: &[String]) -> Result<()> {
     let path = format!("playlists/{}/items", playlist_id_of(playlist_uri));
     for chunk in keys.chunks(WRITE_CHUNK) {
-      spotify_api_request_json_for_with_refresh(
-        &self.spotify,
-        Method::DELETE,
-        &path,
-        &[],
-        Some(remove_body(chunk)),
-        &self.token_cache_path,
-        &self.app,
-      )
-      .await?;
+      spotify_api_request_json_for(Method::DELETE, &path, &[], Some(remove_body(chunk))).await?;
     }
     Ok(())
   }

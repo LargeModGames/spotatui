@@ -44,7 +44,7 @@
 - [Plugins](#plugins)
 - [Performance](#performance)
 - [Playback Requirements](#playback-requirements)
-  - [Deprecated Spotify API Features](#deprecated-spotify-api-features)
+  - [Audio Visualizer](#audio-visualizer)
 - [Using with spotifyd](#using-with-spotifyd)
 - [Migrating from spotify-tui](#migrating-from-spotify-tui)
 - [Song History](#song-history)
@@ -175,8 +175,7 @@ Welcome to spotatui! Choose your music source:
   7) Apple Music    (macOS Music app, needs Automation permission)
 ```
 
-Pick a **free source** to skip Spotify entirely, or pick **Spotify** to run the auth wizard (you'll create a Spotify Developer app — see the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation#connecting-to-spotify)). Only sources compiled into your build are listed.
-
+Pick a **free source** to skip Spotify entirely, or pick **Spotify** to log in: spotatui shows a code and opens Spotify's pairing page in your browser, where you confirm the code. No developer app or client ID is necessary. Spotify needs a **Premium** account. Only sources compiled into your build are listed.
 Once you're in:
 
 - Press `?` for the in-app help menu of all key events.
@@ -196,8 +195,7 @@ spotatui history recap --period 30d --output ./recap.html # Generate a shareable
 
 ### Adding Spotify later
 
-Started with a free source and want Spotify too? Press `d`, select **Spotify**, and spotatui opens your browser to log in without restarting — enabling browsing, playlists, and controlling external devices right away. **Native (librespot) streaming still requires a restart**, since it initializes at startup.
-
+Started with a free source and want Spotify too? Press `d`, select **Spotify**, and spotatui shows a pairing code in the status line and opens your browser to log in without a restart. Browsing, playlists, and the control of other devices work at once. **Native (librespot) streaming still requires a restart**, because it starts with the app.
 ## Music Sources
 
 spotatui is a general music player, not just a Spotify client. Press `d` to open the **Source & Device** picker; the sidebar and search re-scope to the active source. Playback for these sources runs through spotatui's own audio engine, so volume control and the visualizer work exactly as they do for Spotify — and none of them need Spotify Premium.
@@ -369,36 +367,27 @@ spotatui is extremely lightweight compared to the official Electron client.
 
 The non-Spotify sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz) play through spotatui's own audio engine and need no extra setup. Apple Music (macOS) plays through the Music app instead; see [Apple Music](#apple-music).
 
-Spotify is different: it uses the [Web API](https://developer.spotify.com/documentation/web-api/), which doesn't stream audio itself. To play Spotify tracks you need **one** of:
+Spotify is different: spotatui talks to Spotify the way the official app does, and that connection does not play audio itself. To play Spotify tracks you need **one** of:
 
-1. **Native Streaming** — spotatui plays audio directly using its built-in streaming. See [Native Streaming](#native-streaming). *(Recommended.)*
-2. **Official Spotify Client** — have the official app open on your computer.
-3. **[spotifyd](https://github.com/Spotifyd/spotifyd)** — a lightweight background alternative.
+1. **Native Streaming**: spotatui plays audio directly using its built-in streaming. See [Native Streaming](#native-streaming). *(Recommended.)*
+2. **Official Spotify Client**: have the official app open on your computer.
+3. **[spotifyd](https://github.com/Spotifyd/spotifyd)**: a lightweight background alternative.
 
-Playing Spotify tracks requires a **Premium** account. With a free Spotify account spotatui can authenticate and browse your library/search results, but playback actions (play/pause/seek/transfer) will not work in either native streaming or Web API playback control mode.
+Spotify in spotatui requires a **Premium** account: the login refuses a free account. spotatui needs no Spotify developer app and no client ID. Older releases asked for one; spotatui leaves their `client.yml` on disk and copies its streaming settings and saved device into `config.yml` and `state.yml`.
 
-Spotify rate limits are per app. The shared ncspot client ID from the quick setup is shared by every ncspot and spotatui user and is often rate limited; your own Spotify app gets a limit of its own. Run `spotatui --reconfigure-auth` and choose option 2, see [Connecting to Spotify](docs/installation.md#connecting-to-spotify).
+### Audio Visualizer
 
-### Deprecated Spotify API Features
+The **audio visualizer** (press `v`) uses **local real-time FFT analysis** of your system audio:
 
-As of November 2024, Spotify removed access to certain API endpoints for new applications. The following features **only work if your Spotify Developer application was created before November 27, 2024**:
+| Platform    | Status               | Notes                                    |
+| ----------- | -------------------- | ---------------------------------------- |
+| **Windows** | Works out of the box | Uses WASAPI loopback                     |
+| **Linux**   | Works out of the box | Uses PipeWire/PulseAudio monitor devices |
+| **macOS**   | Requires setup       | Needs a virtual audio device (see below) |
 
-- **Related Artists** — the "Related Artists" section on an artist page.
-- **Recommendations** — seed-based recommendations. The **AI DJ** does not depend on this endpoint: it has a model do the recommending and only uses Spotify to look the tracks up, so it works regardless of when your app was created.
-- **Audio Analysis** — spotatui no longer depends on it. The **audio visualizer** (press `v`) now uses **local real-time FFT analysis** of your system audio, so it works regardless of your app's creation date:
-
-  | Platform    | Status               | Notes                                    |
-  | ----------- | -------------------- | ---------------------------------------- |
-  | **Windows** | Works out of the box | Uses WASAPI loopback                     |
-  | **Linux**   | Works out of the box | Uses PipeWire/PulseAudio monitor devices |
-  | **macOS**   | Requires setup       | Needs a virtual audio device (see below) |
-
-  > **macOS:** macOS doesn't natively expose system audio loopback. Install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid), route system audio through it, and set it as your default input device.
-  >
-  > **Note:** The visualizer is **system-wide** — it captures all audio on your system, so it also reacts to YouTube videos, games, and any other source.
-
-For more information, see [Spotify's announcement about API changes](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api).
-
+> **macOS:** macOS doesn't natively expose system audio loopback. Install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid), route system audio through it, and set it as your default input device.
+>
+> **Note:** The visualizer is **system-wide**: it captures all audio on your system, so it also reacts to YouTube videos, games, and any other source.
 ## Using with [spotifyd](https://github.com/Spotifyd/spotifyd)
 
 > **Note:** If you're using native streaming, you don't need spotifyd!

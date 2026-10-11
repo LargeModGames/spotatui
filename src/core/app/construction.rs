@@ -106,10 +106,7 @@ impl Default for App {
       is_loading: false,
       io_tx: None,
       is_fetching_current_playback: false,
-      spotify_token_expiry: None,
       spotify_connected: false,
-      auth_refresh_in_progress: false,
-      spotify_refresh_retry_at: None,
       pending_keybinding_persist: None,
       keybinding_runtime: KeybindingRuntimeState::default(),
 
@@ -241,7 +238,6 @@ impl Default for App {
       plugin_playbar_segments: std::collections::BTreeMap::new(),
       plugin_popup: None,
       log_path: crate::core::paths::app_log_path().display().to_string(),
-      spotify_key_tier: SpotifyKeyTier::default(),
     }
   }
 }
@@ -284,19 +280,20 @@ impl App {
     self.native_parked = true;
   }
 
+  /// `spotify_session` is `Some` when the test has a Spotify login; the time
+  /// itself is not read.
   #[cfg(test)]
   pub fn new(
     io_tx: Sender<IoEvent>,
     user_config: UserConfig,
-    spotify_token_expiry: Option<SystemTime>,
+    spotify_session: Option<SystemTime>,
   ) -> App {
     Self::new_with_state(
       io_tx,
       user_config,
       RuntimeState::default(),
       None,
-      spotify_token_expiry,
-      SpotifyKeyTier::default(),
+      spotify_session.is_some(),
     )
   }
 
@@ -305,8 +302,7 @@ impl App {
     user_config: UserConfig,
     mut runtime_state: RuntimeState,
     state_path: Option<PathBuf>,
-    spotify_token_expiry: Option<SystemTime>,
-    spotify_key_tier: SpotifyKeyTier,
+    spotify_connected: bool,
   ) -> App {
     // A saved Apple Music scope can outlive the build that offered it. Restore
     // only a source the current picker can select, keeping both mirrors in sync.
@@ -368,17 +364,13 @@ impl App {
       user_config,
       runtime_state,
       state_path,
-      // A token expiry means a Spotify session loaded at startup; a free-source
-      // launch with no cached token passes `None`. In-TUI login flips both fields.
-      spotify_connected: spotify_token_expiry.is_some(),
-      spotify_token_expiry,
+      spotify_connected,
       active_source,
       navigation_stack: vec![startup_route],
       playlist_sort,
       album_sort,
       artist_sort,
       recently_played_sort,
-      spotify_key_tier,
       #[cfg(feature = "ai-dj")]
       dj: crate::infra::dj::DjState {
         avoid_library: dj_avoid_library,
@@ -403,8 +395,7 @@ mod tests {
         ..RuntimeState::default()
       },
       None,
-      None,
-      SpotifyKeyTier::default(),
+      false,
     )
   }
 

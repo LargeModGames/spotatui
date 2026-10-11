@@ -24,40 +24,13 @@ fn extract_callback_url(request: &str, accept: fn(&str) -> bool) -> Option<Strin
   Some(format!("http://{}{}", host, path))
 }
 
-/// The Spotify callback carries an OAuth `code=` query parameter.
-fn spotify_callback(path: &str) -> bool {
-  path.contains("code=")
-}
-
-/// Bind the OAuth callback listener. Callers bind *before* opening the browser:
-/// a launcher can wait for the browser to exit (xdg-open with no Firefox
-/// running does), and a redirect that arrives before the bind is refused.
-pub async fn bind_callback_listener(port: u16) -> Result<tokio::net::TcpListener, ()> {
-  tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
-    .await
-    .map_err(|e| log::warn!("[login] failed to bind callback server on port {port}: {e}"))
-}
-
-/// The Spotify callback server, used by both the pre-TUI startup login and the
-/// in-TUI login flow: it never blocks the caller's thread (the old blocking
-/// variant parked a tokio worker in a std accept() loop with no timeout and
-/// could hang the startup login entirely, #364). Returns the callback URL, or
-/// `Err(())` on accept failure. Callers that need an overall timeout (e.g. the
-/// in-TUI flow) apply it via `tokio::time::timeout` so an abandoned login
-/// doesn't leak the listener.
-pub async fn serve_spotify_callback(listener: tokio::net::TcpListener) -> Result<String, ()> {
-  run_accept_loop(listener, spotify_callback).await
-}
-
 /// The callback server on a pre-bound listener, for callbacks `accept` approves.
-#[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
 pub async fn redirect_uri_web_server_on(
   listener: tokio::net::TcpListener,
   accept: fn(&str) -> bool,
 ) -> Result<String, ()> {
   run_accept_loop(listener, accept).await
 }
-
 /// Accept-loop extracted so tests can inject a pre-bound listener (port 0) and
 /// avoid races caused by hard-coding a port that might already be in use.
 async fn run_accept_loop(
@@ -119,6 +92,10 @@ async fn write_async_response(
 mod tests {
   use super::*;
 
+  /// An OAuth callback carries a `code=` query parameter.
+  fn spotify_callback(path: &str) -> bool {
+    path.contains("code=")
+  }
   #[test]
   fn valid_callback_returns_url_with_code() {
     let request = "GET /login?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:8989\r\n\r\n";
@@ -236,12 +213,5 @@ mod tests {
 
     let url = result.expect("server should return Ok(url)");
     assert!(url.contains("code=realcode456"), "unexpected url: {url}");
-  }
-
-  #[tokio::test]
-  async fn a_busy_port_reports_a_failed_bind() {
-    let holder = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = holder.local_addr().unwrap().port();
-    assert!(bind_callback_listener(port).await.is_err());
   }
 }

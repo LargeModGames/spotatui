@@ -298,9 +298,9 @@ fn tool_descriptors() -> Vec<Value> {
         "annotations": {
           "title": tool.title,
           "readOnlyHint": tool.read_only,
-          // Nothing here destroys data; the worst case is a queue the user has
-          // to clear. Skipping and playing are not idempotent, though.
-          "destructiveHint": false,
+          // Only a removal from a playlist destroys something the user keeps;
+          // skipping and playing are not idempotent, though.
+          "destructiveHint": tool.destructive,
           "idempotentHint": tool.read_only,
           "openWorldHint": true,
         },

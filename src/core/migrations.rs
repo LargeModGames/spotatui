@@ -315,6 +315,118 @@ pub(crate) fn apply_legacy_config_runtime_state_migration(
   Ok(patch)
 }
 
+/// Seed `config.yml` and `state.yml` from the `client.yml` older releases
+/// wrote: the native-streaming settings and the saved Connect device. A key
+/// the config or state already has wins, a value equal to the default is not
+/// written, and `client.yml` stays on disk so a downgrade still finds it.
+pub(crate) fn apply_legacy_client_config_migration(
+  client_path: &Path,
+  config_path: &Path,
+  behavior: &mut BehaviorConfig,
+  runtime_state: &mut RuntimeState,
+  persisted_state: &PersistedRuntimeState,
+) -> Result<PersistedRuntimeState> {
+  let mut patch = PersistedRuntimeState::default();
+  let Some(client) = read_config_value(client_path)? else {
+    return Ok(patch);
+  };
+  let Some(client) = client.as_mapping() else {
+    return Ok(patch);
+  };
+
+  if persisted_state.spotify_device_id.is_none() {
+    if let Some(device_id) = client
+      .get(yaml_key("device_id"))
+      .and_then(Value::as_str)
+      .map(str::trim)
+      .filter(|id| !id.is_empty())
+    {
+      runtime_state.spotify_device_id = Some(device_id.to_string());
+      patch.spotify_device_id = Some(device_id.to_string());
+    }
+  }
+
+  let config = read_config_value(config_path)?;
+  let configured = |key: &str| {
+    config
+      .as_ref()
+      .and_then(behavior_mapping)
+      .is_some_and(|behavior| behavior.contains_key(yaml_key(key)))
+  };
+  let mut copied = Mapping::new();
+  let mut copy = |key: &str, value: Value| {
+    copied.insert(yaml_key(key), value);
+  };
+  if !configured("enable_streaming") {
+    if let Some(enabled) = client
+      .get(yaml_key("enable_streaming"))
+      .and_then(Value::as_bool)
+    {
+      if enabled != behavior.enable_streaming {
+        behavior.enable_streaming = enabled;
+        copy("enable_streaming", Value::Bool(enabled));
+      }
+    }
+  }
+  if !configured("streaming_device_name") {
+    if let Some(name) = client
+      .get(yaml_key("streaming_device_name"))
+      .and_then(Value::as_str)
+      .map(str::trim)
+      .filter(|name| !name.is_empty() && *name != behavior.streaming_device_name)
+    {
+      behavior.streaming_device_name = name.to_string();
+      copy("streaming_device_name", Value::String(name.to_string()));
+    }
+  }
+  if !configured("streaming_bitrate") {
+    if let Some(bitrate) = client
+      .get(yaml_key("streaming_bitrate"))
+      .and_then(Value::as_u64)
+      .and_then(|bitrate| u16::try_from(bitrate).ok())
+      .map(crate::core::user_config::streaming_bitrate_or_default)
+      .filter(|bitrate| *bitrate != behavior.streaming_bitrate)
+    {
+      behavior.streaming_bitrate = bitrate;
+      copy("streaming_bitrate", Value::Number(bitrate.into()));
+    }
+  }
+  if !configured("streaming_audio_cache") {
+    if let Some(cache) = client
+      .get(yaml_key("streaming_audio_cache"))
+      .and_then(Value::as_bool)
+      .filter(|cache| *cache != behavior.streaming_audio_cache)
+    {
+      behavior.streaming_audio_cache = cache;
+      copy("streaming_audio_cache", Value::Bool(cache));
+    }
+  }
+
+  if !copied.is_empty() {
+    write_behavior_keys(config_path, config, copied)?;
+  }
+  Ok(patch)
+}
+
+/// Adds keys under `behavior:` and leaves the rest of the file as it was.
+fn write_behavior_keys(path: &Path, config: Option<Value>, keys: Mapping) -> Result<()> {
+  let mut config = config.unwrap_or_else(|| Value::Mapping(Mapping::new()));
+  let map = config
+    .as_mapping_mut()
+    .ok_or_else(|| anyhow!("{} is not a YAML mapping", path.display()))?;
+  let behavior = map
+    .entry(yaml_key("behavior"))
+    .or_insert_with(|| Value::Mapping(Mapping::new()))
+    .as_mapping_mut()
+    .ok_or_else(|| anyhow!("`behavior` in {} is not a YAML mapping", path.display()))?;
+  behavior.extend(keys);
+  if let Some(dir) = path.parent() {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+  }
+  crate::core::auth::write_private_file_atomic(path, serde_yaml::to_string(&config)?.as_bytes())
+    .with_context(|| format!("writing {}", path.display()))
+}
+
 fn path_exists(path: &Path) -> Result<bool> {
   match fs::symlink_metadata(path) {
     Ok(_) => Ok(true),
@@ -667,5 +779,153 @@ behavior:
     assert_eq!(runtime.seen_announcement_ids, vec!["existing"]);
     assert_eq!(runtime.dismissed_announcements, vec!["existing-dismissed"]);
     assert_eq!(patch, PersistedRuntimeState::default());
+  }
+
+  fn client_migration(
+    client_yml: &str,
+    config_yml: Option<&str>,
+    persisted: &PersistedRuntimeState,
+  ) -> (
+    tempfile::TempDir,
+    Result<PersistedRuntimeState>,
+    BehaviorConfig,
+    RuntimeState,
+  ) {
+    let dir = tempfile::tempdir().unwrap();
+    let client = dir.path().join("client.yml");
+    std::fs::write(&client, client_yml).unwrap();
+    let config = dir.path().join("config.yml");
+    if let Some(config_yml) = config_yml {
+      std::fs::write(&config, config_yml).unwrap();
+    }
+    let mut behavior = crate::core::user_config::UserConfig::new().behavior;
+    let mut runtime = RuntimeState::default();
+    let result = apply_legacy_client_config_migration(
+      &client,
+      &config,
+      &mut behavior,
+      &mut runtime,
+      persisted,
+    );
+    (dir, result, behavior, runtime)
+  }
+
+  #[test]
+  fn changed_streaming_settings_move_from_client_yml_to_the_config() {
+    let default_streaming = cfg!(feature = "streaming");
+    let (dir, result, behavior, _) = client_migration(
+      &format!(
+        "client_id: abc\nstreaming_device_name: Desk\nstreaming_bitrate: 160\nenable_streaming: {default_streaming}\n"
+      ),
+      Some("theme:\n  active: \"#ffffff\"\n"),
+      &PersistedRuntimeState::default(),
+    );
+    result.unwrap();
+    assert_eq!(behavior.streaming_device_name, "Desk");
+    assert_eq!(behavior.streaming_bitrate, 160);
+
+    let written = std::fs::read_to_string(dir.path().join("config.yml")).unwrap();
+    let config: Value = serde_yaml::from_str(&written).unwrap();
+    let behavior = behavior_mapping(&config).unwrap();
+    assert_eq!(
+      behavior.get(yaml_key("streaming_device_name")),
+      Some(&yaml_key("Desk"))
+    );
+    assert_eq!(
+      behavior.get(yaml_key("streaming_bitrate")),
+      Some(&Value::from(160))
+    );
+    assert!(
+      !behavior.contains_key(yaml_key("enable_streaming")),
+      "a default value is not written"
+    );
+    assert!(written.contains("theme"), "the rest of the config stays");
+  }
+
+  #[test]
+  fn a_setting_the_config_already_has_wins() {
+    let (dir, result, behavior, _) = client_migration(
+      "streaming_device_name: Old\n",
+      Some("behavior:\n  streaming_device_name: New\n"),
+      &PersistedRuntimeState::default(),
+    );
+    result.unwrap();
+    assert_eq!(
+      behavior.streaming_device_name, "spotatui",
+      "the config load sets New later"
+    );
+    let written = std::fs::read_to_string(dir.path().join("config.yml")).unwrap();
+    assert!(written.contains("New") && !written.contains("Old"));
+  }
+
+  #[test]
+  fn default_streaming_settings_write_no_config() {
+    let (dir, result, _, _) = client_migration(
+      "client_id: abc\nport: 8888\nstreaming_device_name: spotatui\nstreaming_bitrate: 320\nstreaming_audio_cache: false\n",
+      None,
+      &PersistedRuntimeState::default(),
+    );
+    result.unwrap();
+    assert!(!dir.path().join("config.yml").exists());
+  }
+
+  #[test]
+  fn an_unknown_bitrate_is_not_migrated() {
+    let (_dir, result, behavior, _) = client_migration(
+      "streaming_bitrate: 999\n",
+      None,
+      &PersistedRuntimeState::default(),
+    );
+    result.unwrap();
+    assert_eq!(behavior.streaming_bitrate, 320);
+  }
+
+  #[test]
+  fn the_saved_device_moves_to_the_state() {
+    let (_dir, result, _, runtime) = client_migration(
+      "device_id: \" phone-1 \"\n",
+      None,
+      &PersistedRuntimeState::default(),
+    );
+    assert_eq!(
+      result.unwrap().spotify_device_id.as_deref(),
+      Some("phone-1")
+    );
+    assert_eq!(runtime.spotify_device_id.as_deref(), Some("phone-1"));
+  }
+
+  #[test]
+  fn a_device_the_state_already_has_wins() {
+    let persisted = PersistedRuntimeState::spotify_device_id("current");
+    let (_dir, result, _, runtime) = client_migration("device_id: old\n", None, &persisted);
+    assert!(result.unwrap().is_empty());
+    assert_eq!(runtime.spotify_device_id, None);
+  }
+
+  #[test]
+  fn no_client_yml_is_no_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut behavior = crate::core::user_config::UserConfig::new().behavior;
+    let mut runtime = RuntimeState::default();
+    let patch = apply_legacy_client_config_migration(
+      &dir.path().join("client.yml"),
+      &dir.path().join("config.yml"),
+      &mut behavior,
+      &mut runtime,
+      &PersistedRuntimeState::default(),
+    )
+    .unwrap();
+    assert!(patch.is_empty());
+    assert!(!dir.path().join("config.yml").exists());
+  }
+
+  #[test]
+  fn a_garbled_client_yml_is_an_error() {
+    let (_dir, result, _, _) = client_migration(
+      "device_id: [unclosed\n",
+      None,
+      &PersistedRuntimeState::default(),
+    );
+    assert!(result.is_err());
   }
 }

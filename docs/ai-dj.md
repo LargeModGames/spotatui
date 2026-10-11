@@ -50,8 +50,7 @@ queue immediately.
 > **Why the DJ is home-grown rather than Spotify's.** Spotify's own AI DJ cannot be
 > driven through the public API (issue #196), and Spotify
 > [restricted `/recommendations`](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api)
-> to apps that already held extended quota on 2024-11-27. spotatui users register
-> their own client ID, so that endpoint returns 403 for them. The model is the
+> to apps that already held extended quota on 2024-11-27. The model is the
 > recommender here; Spotify and YouTube are only catalogue and player.
 
 ---

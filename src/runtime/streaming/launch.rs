@@ -1,169 +1,28 @@
-//! The credential gate and the deferred librespot bring-up.
+//! The deferred librespot bring-up.
 
 use super::{startup_device_decision, StartupDeviceEvent};
 use crate::core::app::App;
-use crate::core::config::ClientConfig;
-use crate::core::onboarding::Onboarding;
 use crate::core::user_config::StartupBehavior;
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
 use crate::infra::macos_media;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::infra::mpris;
-use crate::infra::network::requests::{self, spotify_get_typed_compat_for_with_refresh};
+use crate::infra::network::requests::spotify_get_typed_for;
 use crate::infra::network::IoEvent;
 use crate::infra::player;
+use crate::infra::spotify::session::{self, Unavailable};
 use log::{info, warn};
-use rspotify::{model::user::PrivateUser, AuthCodePkceSpotify};
-use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, Arc};
-use std::time::Duration;
 use tokio::sync::Mutex;
 
-fn subscription_level_label(level: rspotify::model::SubscriptionLevel) -> &'static str {
-  match level {
-    rspotify::model::SubscriptionLevel::Premium => "premium",
-    rspotify::model::SubscriptionLevel::Free => "free",
+/// The status line for a session that cannot carry native streaming, if any.
+fn native_streaming_refusal(reason: Unavailable) -> Option<&'static str> {
+  match reason {
+    Unavailable::NoLogin => None,
+    Unavailable::NotPremium => Some("Spotify Premium is required for playback"),
+    Unavailable::Offline => Some("Could not connect to Spotify: native streaming disabled"),
   }
 }
-
-/// The wait before the next plan check after a rate limit; `None` after the
-/// last attempt, or for a window too long to hold startup for.
-fn plan_check_retry_delay(attempt: u32, window: Option<Duration>) -> Option<Duration> {
-  const ATTEMPTS: u32 = 3;
-  const MAX_WAIT: Duration = Duration::from_secs(60);
-  let delay = window
-    .unwrap_or_default()
-    .saturating_add(Duration::from_secs(1));
-  (attempt < ATTEMPTS && delay <= MAX_WAIT).then_some(delay)
-}
-
-/// Can run with the UI already up, so outcomes are reported through `info!` and
-/// the returned status message only, never `println!`, which would corrupt the
-/// TUI. Reuses the `/me` captured during token validation when available
-/// instead of paying a second round trip. With `wait_out_rate_limit`, a 429
-/// waits for the window and asks again instead of disabling streaming.
-async fn account_supports_native_streaming(
-  spotify: &AuthCodePkceSpotify,
-  cached_me: Option<PrivateUser>,
-  token_cache_path: &Path,
-  app: &Arc<Mutex<App>>,
-  wait_out_rate_limit: bool,
-) -> (bool, Option<&'static str>) {
-  let mut attempt = 0;
-  let user_result = match cached_me {
-    Some(user) => Ok(user),
-    None => loop {
-      let result = spotify_get_typed_compat_for_with_refresh::<PrivateUser>(
-        spotify,
-        "me",
-        &[],
-        token_cache_path,
-        app,
-      )
-      .await;
-      match result {
-        Err(e) if wait_out_rate_limit && requests::is_rate_limited_error(&e) => {
-          attempt += 1;
-          let window = requests::shared_forced_refresh_gate()
-            .rate_limit_remaining()
-            .await;
-          let Some(delay) = plan_check_retry_delay(attempt, window) else {
-            break Err(e);
-          };
-          info!(
-            "spotify plan check rate limited; asking again in {}s",
-            delay.as_secs()
-          );
-          tokio::time::sleep(delay).await;
-        }
-        result => break result,
-      }
-    },
-  };
-  match user_result {
-    #[allow(deprecated)]
-    Ok(user) => match user.product {
-      Some(rspotify::model::SubscriptionLevel::Premium) => (true, None),
-      Some(level) => {
-        let plan = subscription_level_label(level);
-        info!(
-          "spotify {} account detected: playback is unavailable (native streaming and Web API playback controls require premium)",
-          plan
-        );
-        (
-          false,
-          Some("Spotify Free account: playback controls unavailable (Premium required)"),
-        )
-      }
-      None => {
-        info!("spotify account level unknown: native streaming disabled to avoid librespot exit");
-        (
-          false,
-          Some("Could not verify Spotify plan: native streaming disabled"),
-        )
-      }
-    },
-    Err(e) => {
-      info!(
-        "spotify account level check failed ({}); native streaming disabled to avoid librespot exit",
-        e
-      );
-      (
-        false,
-        Some("Could not verify Spotify plan: native streaming disabled"),
-      )
-    }
-  }
-}
-
-/// Runs before the frontend starts: the OAuth flow blocks on a browser round trip.
-#[cfg_attr(not(feature = "tui"), allow(dead_code))]
-pub(crate) async fn cache_streaming_credentials(
-  client_config: &ClientConfig,
-  spotify: Option<&AuthCodePkceSpotify>,
-  cached_me: Option<&PrivateUser>,
-  token_cache_path: &Path,
-  onboarding: &Arc<dyn Onboarding>,
-  app: &Arc<Mutex<App>>,
-) {
-  if !client_config.enable_streaming || player::streaming_credentials_are_cached().unwrap_or(false)
-  {
-    return;
-  }
-  let Some(spotify) = spotify else {
-    return;
-  };
-  let (supported, status_message) =
-    account_supports_native_streaming(spotify, cached_me.cloned(), token_cache_path, app, false)
-      .await;
-  if let Some(message) = status_message {
-    app.lock().await.set_status_message(message, 12);
-  }
-  if !supported {
-    return;
-  }
-  // The OAuth flow spins up a blocking local callback server and waits on
-  // the browser; keep it off the async reactor so it never ties up a
-  // worker thread while the user completes sign-in.
-  let onboarding_for_streaming = onboarding.clone();
-  let cached = tokio::task::spawn_blocking(move || {
-    player::ensure_streaming_credentials_cached(onboarding_for_streaming.as_ref())
-  })
-  .await
-  .unwrap_or_else(|e| Err(anyhow::anyhow!("credential caching task panicked: {e}")));
-  if let Err(error) = cached {
-    warn!("native streaming authentication unavailable: {error}");
-    // Name the actual failure. The generic message left issue #414's
-    // reporter with a browser "unable to connect" page, a login that
-    // repeated every launch, and nothing on screen or in reach that
-    // said which half of startup had failed or why.
-    app.lock().await.set_status_message(
-      format!("Native streaming authentication failed ({error}); using Spotify Connect."),
-      10,
-    );
-  }
-}
-
 impl StartupDeviceEvent {
   fn into_io_event(self) -> IoEvent {
     match self {
@@ -186,12 +45,7 @@ impl StartupDeviceEvent {
 /// UI is already up.
 pub(crate) struct DeferredStreamingContext {
   pub(crate) app: Arc<Mutex<App>>,
-  pub(crate) spotify: AuthCodePkceSpotify,
-  pub(crate) cached_me: Option<PrivateUser>,
-  pub(crate) token_cache_path: PathBuf,
-  pub(crate) client_config: ClientConfig,
-  pub(crate) redirect_uri: String,
-  pub(crate) volume_percent: u8,
+  pub(crate) streaming_config: player::StreamingConfig,
   pub(crate) device_startup_behavior: StartupBehavior,
   /// Spotify startup Play/Pause, run after the device decision so it lands on
   /// the selected device instead of 404ing with NO_ACTIVE_DEVICE while init is
@@ -243,8 +97,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
     shared_is_playing: Arc::clone(&ctx.shared_is_playing),
     recovery_rx: ctx.recovery_rx,
     recovery_tx: ctx.recovery_tx.clone(),
-    client_config: ctx.client_config.clone(),
-    redirect_uri: ctx.redirect_uri.clone(),
+    streaming_config: ctx.streaming_config.clone(),
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     mpris_manager: ctx.mpris_manager.clone(),
     #[cfg(all(feature = "macos-media", target_os = "macos"))]
@@ -253,41 +106,26 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
     windows_media_manager: ctx.windows_media_manager.clone(),
   });
 
-  let (supported, status_message) = account_supports_native_streaming(
-    &ctx.spotify,
-    ctx.cached_me,
-    &ctx.token_cache_path,
-    &ctx.app,
-    true,
-  )
-  .await;
-  if let Some(message) = status_message {
-    ctx.app.lock().await.set_status_message(message, 12);
-  }
-  if !supported {
+  // The session refuses a non-Premium account, so it answers the plan check.
+  if let Err(reason) = session::current().await {
+    info!("native streaming not started: {}", reason.message());
+    if let Some(message) = native_streaming_refusal(reason) {
+      ctx.app.lock().await.set_status_message(message, 12);
+    }
     return;
   }
 
   info!("initializing native streaming player");
-  let streaming_config = player::StreamingConfig {
-    device_name: ctx.client_config.streaming_device_name.clone(),
-    bitrate: ctx.client_config.streaming_bitrate,
-    audio_cache: ctx.client_config.streaming_audio_cache,
-    cache_path: player::get_default_cache_path(),
-    initial_volume: ctx.volume_percent,
-  };
-  let client_id = ctx.client_config.client_id.clone();
-  let redirect_uri = ctx.redirect_uri;
+  let streaming_config = ctx.streaming_config;
 
   // Internal Spirc timeout defaults to 30s (configurable via
   // SPOTATUI_STREAMING_INIT_TIMEOUT_SECS). The outer timeout here is a safety net
-  // that catches hangs *outside* Spirc init (e.g. OAuth callback never arriving,
-  // blocking I/O in credential retrieval). Set it above the internal timeout.
+  // that catches hangs *outside* Spirc init (e.g. blocking I/O in credential
+  // retrieval). Set it above the internal timeout.
   let outer_timeout = player::player_build_timeout();
 
-  let init_task = tokio::spawn(async move {
-    player::StreamingPlayer::new_cache_only(&client_id, &redirect_uri, streaming_config).await
-  });
+  let init_task =
+    tokio::spawn(async move { player::StreamingPlayer::new_cache_only(streaming_config).await });
   let abort_handle = init_task.abort_handle();
 
   let streaming_player = match tokio::time::timeout(outer_timeout, init_task).await {
@@ -365,17 +203,10 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   // streaming). This used to run inline in the network task before the pump
   // started; the decision's outcome now dispatches through the pump.
   let device_name = streaming_player.device_name().to_string();
-  let saved_device_id = ctx.client_config.device_id.clone();
+  let saved_device_id = ctx.app.lock().await.saved_spotify_device_id();
   let mut devices_snapshot = None;
   if let Ok(devices) =
-    spotify_get_typed_compat_for_with_refresh::<rspotify::model::device::DevicePayload>(
-      &ctx.spotify,
-      "me/player/devices",
-      &[],
-      &ctx.token_cache_path,
-      &ctx.app,
-    )
-    .await
+    spotify_get_typed_for::<rspotify::model::device::DevicePayload>("me/player/devices", &[]).await
   {
     let devices_vec = devices.devices;
     let mut app_mut = ctx.app.lock().await;
@@ -403,30 +234,13 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
 
 #[cfg(test)]
 mod tests {
-  use super::plan_check_retry_delay;
-  use std::time::Duration;
+  use super::*;
 
   #[test]
-  fn plan_check_waits_out_the_window_plus_a_second() {
-    assert_eq!(
-      plan_check_retry_delay(1, Some(Duration::from_secs(17))),
-      Some(Duration::from_secs(18))
-    );
-    assert_eq!(
-      plan_check_retry_delay(2, None),
-      Some(Duration::from_secs(1))
-    );
-  }
-
-  #[test]
-  fn plan_check_gives_up_on_a_long_window_or_after_three_attempts() {
-    assert_eq!(
-      plan_check_retry_delay(1, Some(Duration::from_secs(600))),
-      None
-    );
-    assert_eq!(
-      plan_check_retry_delay(3, Some(Duration::from_secs(5))),
-      None
-    );
+  fn only_a_missing_login_starts_without_a_status_line() {
+    assert_eq!(native_streaming_refusal(Unavailable::NoLogin), None);
+    assert!(native_streaming_refusal(Unavailable::NotPremium)
+      .is_some_and(|message| message.contains("Premium")));
+    assert!(native_streaming_refusal(Unavailable::Offline).is_some());
   }
 }

@@ -4,11 +4,11 @@
 //! `run_gui()` call it.
 
 use crate::core::app::App;
-use crate::core::auth;
-use crate::core::config::ClientConfig;
+use crate::core::auth::{self, SpotifyLogin};
 use crate::core::limits::MAX_PLAYBAR_ROWS;
 use crate::core::migrations::{
-  apply_legacy_config_radio_station_migration, apply_legacy_config_runtime_state_migration,
+  apply_legacy_client_config_migration, apply_legacy_config_radio_station_migration,
+  apply_legacy_config_runtime_state_migration,
 };
 use crate::core::onboarding::{Onboarding, OnboardingAnswer, OnboardingPrompt};
 use crate::core::state::{PersistedRuntimeState, RuntimeState};
@@ -16,12 +16,9 @@ use crate::core::user_config::{
   validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
 };
 use crate::infra::network::IoEvent;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use backtrace::Backtrace;
 use log::info;
-#[cfg(feature = "streaming")]
-use rspotify::model::user::PrivateUser;
-use rspotify::AuthCodePkceSpotify;
 use std::{
   fs,
   io::Write,
@@ -191,55 +188,13 @@ pub(super) fn install_panic_hook() {
   }));
 }
 
-/// Abbreviate a Spotify client ID for user-facing messages: enough to tell two
-/// apart, short enough to fit a status line. The 8-char prefix is also what
-/// names the token cache file, so it is recognisable.
-fn short_client_id(client_id: &str) -> String {
-  let head: String = client_id.chars().take(8).collect();
-  if client_id.chars().count() > 8 {
-    format!("{head}…")
-  } else {
-    head
-  }
-}
-
-fn name_client_id(client_id: &str) -> String {
-  if client_id == crate::core::config::NCSPOT_CLIENT_ID {
-    "the shared ncspot client ID".to_string()
-  } else {
-    format!("your own app ({})", short_client_id(client_id))
-  }
-}
-
-/// Phrase an [`auth::ClientIdNotice`] for the user. It is informational:
-/// nothing is broken, and it must not read as if the user misconfigured
-/// something.
-fn describe_client_id_notice(notice: auth::ClientIdNotice) -> String {
-  match notice {
-    auth::ClientIdNotice::FellBack {
-      from_client_id,
-      to_client_id,
-    } if to_client_id == crate::core::config::NCSPOT_CLIENT_ID => format!(
-      "No usable Spotify session for {}; signed in with the shared ncspot client ID, whose Spotify rate limit every user shares. Run `spotatui --reconfigure-auth` and choose 2 to sign in with your own app.",
-      name_client_id(&from_client_id)
-    ),
-    auth::ClientIdNotice::FellBack {
-      from_client_id,
-      to_client_id,
-    } => format!(
-      "No usable Spotify session for {}; signed in with {} instead.",
-      name_client_id(&from_client_id),
-      name_client_id(&to_client_id)
-    ),
-  }
-}
-
 /// Prompt once for the anonymous global song counter opt-in and persist the
 /// choice into `config.yml`. Asked before the first-run source picker so the
 /// answer applies to whichever source(s) the user sets up. Non-interactive runs
 /// default to opt-out so telemetry is never enabled for a user we couldn't ask.
 fn prompt_global_song_count_opt_in(
   user_config: &mut UserConfig,
+  first_run: bool,
   onboarding: &dyn Onboarding,
 ) -> Result<()> {
   let config_paths = match &user_config.path_to_config {
@@ -250,22 +205,16 @@ fn prompt_global_song_count_opt_in(
     }
   };
 
-  // A genuine first run has no `client.yml` yet — the source picker keys off the
-  // same signal, so asking here keeps the two in step even when a stale config
-  // (e.g. one silently opted out by an older build) already carries the setting.
-  // Outside a first run, only ask when the config predates the setting.
-  let client_yml_exists = config_paths
-    .config_file_path
-    .parent()
-    .map(|dir| dir.join("client.yml").exists())
-    .unwrap_or(false);
-
+  // The source picker keys off the same first-run signal, so asking here keeps
+  // the two in step even when a stale config (e.g. one silently opted out by an
+  // older build) already carries the setting. Outside a first run, only ask
+  // when the config predates the setting.
   let config_has_answer = config_paths.config_file_path.exists() && {
     let config_string = fs::read_to_string(&config_paths.config_file_path)?;
     !config_string.trim().is_empty() && config_string.contains("enable_global_song_count")
   };
 
-  if !should_prompt_global_song_count(client_yml_exists, config_has_answer) {
+  if !should_prompt_global_song_count(first_run, config_has_answer) {
     return Ok(());
   }
 
@@ -308,31 +257,31 @@ fn prompt_global_song_count_opt_in(
 }
 
 /// A genuine first run has no answer yet; a stale config predating the setting
-/// is asked again even when `client.yml` exists.
-fn should_prompt_global_song_count(client_yml_exists: bool, config_has_answer: bool) -> bool {
-  !client_yml_exists || !config_has_answer
+/// is asked again on a later launch.
+fn should_prompt_global_song_count(first_run: bool, config_has_answer: bool) -> bool {
+  first_run || !config_has_answer
 }
 
 /// How boot obtains a Spotify session.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SpotifyAuthMode {
-  /// Open the browser when no usable token is cached.
+  /// Log in through Spotify's pairing page now.
   Interactive,
-  /// A cached token or a failed boot with a clear message.
+  /// A cached login with a live session, or a failed boot with a clear message.
   CachedOrFail,
-  /// A cached token or no session; the frontend offers the login.
+  /// A cached login or no session; the frontend offers the login.
   CachedOrNone,
 }
 
-/// Interactive only right after the client wizard (fresh install,
-/// `--reconfigure-auth`, or the auth-setup migration): the user just asked for
-/// Spotify. Most subcommands need a session; `sync` and a UI launch do not.
+/// Interactive only when the user just asked for Spotify (`--reconfigure-auth`,
+/// or Spotify picked on the first run). Most subcommands need a session; `sync`
+/// and a UI launch do not.
 fn spotify_auth_mode(
   subcommand: Option<&str>,
   reconfigure_auth: bool,
-  wizard_ran: bool,
+  picked_spotify: bool,
 ) -> SpotifyAuthMode {
-  if reconfigure_auth || wizard_ran {
+  if reconfigure_auth || picked_spotify {
     SpotifyAuthMode::Interactive
   } else {
     match subcommand {
@@ -342,64 +291,12 @@ fn spotify_auth_mode(
   }
 }
 
-/// Whether this launch forgets the key tier a `403`/`404` saved: whenever the
-/// auth wizard ran, the one gesture that means "ask Spotify again".
-fn forgets_saved_spotify_key_tier(reconfigure_auth: bool, wizard_ran: bool) -> bool {
-  reconfigure_auth || wizard_ran
-}
-
-const TIER_RESET_NOTICE: &str =
-  "Cleared the saved Spotify API restrictions; your app is asked again from scratch.\n";
-
-/// Forget the key tier a refusal saved: the map `App` is built from, and the
-/// saved entry that would bring it back next launch. A still-refused endpoint
-/// is simply learned again.
-fn clear_saved_spotify_key_tier(
-  runtime_state: &mut RuntimeState,
-  state_path: Option<&Path>,
-  onboarding: &dyn Onboarding,
-) {
-  if runtime_state.client_key_tiers.is_empty() {
-    return;
-  }
-  runtime_state.client_key_tiers.clear();
-  onboarding.info(TIER_RESET_NOTICE);
-
-  match state_path {
-    Some(path) => {
-      if let Err(e) = crate::core::state::save_clearing_client_key_tiers(path) {
-        log::warn!("[state] failed to clear the saved Spotify key tier: {e:#}");
-      }
-    }
-    None => log::warn!("[state] no runtime state path; the cleared Spotify key tier was not saved"),
-  }
-}
-
 fn global_song_counter_prompt() -> OnboardingPrompt {
   OnboardingPrompt::Confirm {
     title: "Global Song Counter".to_string(),
     body: "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds".to_string(),
     question: "\nWould you like to participate? (Y/n): ".to_string(),
   }
-}
-
-fn auth_setup_migration_prompt() -> OnboardingPrompt {
-  OnboardingPrompt::Confirm {
-    title: "Authentication Setup Update".to_string(),
-    body: "\nConfiguration handling has changed and your authentication setup may need an update."
-      .to_string(),
-    question: "Would you like to run the new auth setup wizard now? (Y/n): ".to_string(),
-  }
-}
-
-/// Ask about the auth-setup migration. Deliberately NOT gated on
-/// interactivity: piped or closed stdin reads as empty input, which answers
-/// yes and runs the wizard, exactly as before this went through `Onboarding`.
-fn ask_auth_setup_migration(onboarding: &dyn Onboarding) -> Result<bool> {
-  Ok(matches!(
-    onboarding.ask(&auth_setup_migration_prompt())?,
-    OnboardingAnswer::Yes
-  ))
 }
 
 /// Merge `enable` into the `behavior` section of `config.yml`, creating the file
@@ -485,9 +382,7 @@ pub(super) struct Boot {
   #[cfg_attr(not(feature = "tui"), allow(dead_code))]
   pub(super) sync_io_rx: std::sync::mpsc::Receiver<IoEvent>,
   pub(super) user_config: UserConfig,
-  pub(super) client_config: ClientConfig,
-  pub(super) spotify: Option<AuthCodePkceSpotify>,
-  pub(super) token_cache_path: PathBuf,
+  pub(super) spotify: Option<SpotifyLogin>,
   /// Read after boot only by the frontend launch's streaming startup.
   #[cfg_attr(not(all(feature = "tui", feature = "streaming")), allow(dead_code))]
   pub(super) runtime_state: RuntimeState,
@@ -499,19 +394,10 @@ pub(super) struct Boot {
   pub(super) initial_shuffle_enabled: bool,
   #[cfg_attr(not(feature = "tui"), allow(dead_code))]
   pub(super) initial_startup_behavior: StartupBehavior,
+  /// A status line for the first frame, such as a failed boot login.
   #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-  pub(super) client_id_notice_message: Option<String>,
-  /// Read after boot only by the frontend launch's streaming startup.
-  #[cfg_attr(not(all(feature = "tui", feature = "streaming")), allow(dead_code))]
-  pub(super) onboarding: Arc<dyn Onboarding>,
-  #[cfg(feature = "streaming")]
-  #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-  pub(super) cached_me: Option<PrivateUser>,
-  #[cfg(feature = "streaming")]
-  #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-  pub(super) selected_redirect_uri: String,
+  pub(super) startup_notice: Option<String>,
 }
-
 /// The launch inputs `boot` reads, built from the command line by `cli::boot_options`.
 pub(super) struct BootOptions {
   pub(super) config_path: Option<PathBuf>,
@@ -544,9 +430,12 @@ pub(super) async fn boot(
   let mut state_path = None;
   let mut should_save_initial_state = false;
   let mut can_save_initial_state = false;
+  let mut first_run = false;
+  let legacy_client_path = crate::core::paths::legacy_client_config_path();
   match crate::core::state::default_state_path() {
     Ok(path) => {
       let state_file_exists = path.exists();
+      first_run = crate::core::first_run::is_first_run(&path, legacy_client_path.as_deref());
       match crate::core::state::load(&path) {
         Ok(state) => {
           persisted_state = state;
@@ -591,12 +480,35 @@ pub(super) async fn boot(
     },
     None => PersistedRuntimeState::default(),
   };
+  let legacy_client_fields = match (
+    legacy_client_path.as_deref(),
+    user_config
+      .path_to_config
+      .as_ref()
+      .map(|paths| paths.config_file_path.clone()),
+  ) {
+    (Some(client_path), Some(config_path)) => match apply_legacy_client_config_migration(
+      client_path,
+      &config_path,
+      &mut user_config.behavior,
+      &mut runtime_state,
+      &persisted_state,
+    ) {
+      Ok(fields) => fields,
+      Err(e) => {
+        log::warn!("[state] failed to read the legacy client.yml: {e}");
+        PersistedRuntimeState::default()
+      }
+    },
+    _ => PersistedRuntimeState::default(),
+  };
   let state = if should_save_initial_state {
     runtime_state.to_persisted()
   } else {
     let mut state = default_fields;
     state.merge_patch(&legacy_radio_fields);
     state.merge_patch(&legacy_runtime_fields);
+    state.merge_patch(&legacy_client_fields);
     state
   };
   if can_save_initial_state && !state.is_empty() {
@@ -647,148 +559,54 @@ pub(super) async fn boot(
   // Global song counter opt-in (interactive TUI only). Asked before the source
   // picker so the choice applies no matter which source(s) the user sets up.
   if options.subcommand.is_none() {
-    prompt_global_song_count_opt_in(&mut user_config, onboarding.as_ref())?;
+    prompt_global_song_count_opt_in(&mut user_config, first_run, onboarding.as_ref())?;
   }
 
-  let mut client_config = ClientConfig::new();
-  // First-run source picker (interactive TUI only): lets the user pick a free
-  // source and skip Spotify entirely. Must run before `load_config`, which would
-  // otherwise launch the Spotify-only auth wizard on a fresh install. Skipped for
-  // CLI subcommands (Spotify-only) and when `--reconfigure-auth` is requested.
-  if options.subcommand.is_none() && !options.reconfigure_auth {
-    crate::core::first_run::run_first_run_picker(
+  // First-run source picker (interactive UI launch only): picking Spotify logs
+  // in below; picking only free sources starts without Spotify.
+  let mut picked_spotify = false;
+  if first_run && options.subcommand.is_none() && !options.reconfigure_auth {
+    picked_spotify = crate::core::first_run::run_first_run_picker(
       &mut user_config,
       &mut runtime_state,
-      &mut client_config,
+      state_path.as_deref(),
       onboarding.as_ref(),
     )
     .await?;
   }
-  let mut wizard_ran = client_config.load_config(onboarding.as_ref())?;
-  info!("client authentication config loaded");
 
   let reconfigure_auth = options.reconfigure_auth;
-
   if reconfigure_auth {
-    onboarding.info("\nReconfiguring client authentication...");
-    client_config.reconfigure_auth(onboarding.as_ref())?;
-    onboarding.info("Client authentication setup updated.\n");
-  } else if options.subcommand.is_none() && client_config.needs_auth_setup_migration() {
-    if ask_auth_setup_migration(onboarding.as_ref())? {
-      client_config.reconfigure_auth(onboarding.as_ref())?;
-      wizard_ran = true;
-      onboarding.info("Client authentication setup updated.\n");
-    } else {
-      client_config.mark_auth_setup_migrated()?;
-      onboarding.info("Skipped. You can run this anytime with `spotatui --reconfigure-auth`.\n");
-    }
+    onboarding.info("\nForgetting the saved Spotify login...");
+    auth::forget_spotify_login().await;
   }
+  // A build without Spotify support has nothing to log in to.
+  let picked_spotify = picked_spotify && cfg!(feature = "spotify-session");
+  let auth_mode = spotify_auth_mode(
+    options.subcommand.as_deref(),
+    reconfigure_auth,
+    picked_spotify,
+  );
 
-  let config_paths = client_config.get_or_build_paths()?;
-
-  // Before `App` reads the tier below: the wizard running is the one moment a
-  // saved refusal is worth forgetting.
-  if forgets_saved_spotify_key_tier(reconfigure_auth, wizard_ran) {
-    clear_saved_spotify_key_tier(
-      &mut runtime_state,
-      state_path.as_deref(),
-      onboarding.as_ref(),
-    );
-  }
-
-  let auth_mode = spotify_auth_mode(options.subcommand.as_deref(), reconfigure_auth, wizard_ran);
-
-  // The GitHub update check runs concurrently with authentication: both are
-  // network round trips and neither depends on the other, so the check no
-  // longer adds its own latency to startup. (An update that actually installs
-  // still restarts the process, exactly as before.)
-  let (authenticated, installed_update) = tokio::join!(
-    async {
-      match auth_mode {
-        SpotifyAuthMode::Interactive => {
-          auth::authenticate_with_fallback(&mut client_config, &config_paths, onboarding.as_ref())
-            .await
-            .map(Some)
-        }
-        SpotifyAuthMode::CachedOrFail => {
-          auth::authenticate_cached(&mut client_config, &config_paths, onboarding.as_ref())
-            .await
-            .map(Some)
-            .context(
-              "Spotify is not connected. Start `spotatui`, press `d` and pick Spotify to log in.",
-            )
-        }
-        SpotifyAuthMode::CachedOrNone => Ok(
-          auth::try_load_spotify_silently(&mut client_config, &config_paths, onboarding.as_ref())
-            .await,
-        ),
-      }
-    },
+  // The GitHub update check runs concurrently with the login: both are network
+  // round trips and neither depends on the other. (An update that actually
+  // installs still restarts the process, exactly as before.)
+  let (logged_in, installed_update) = tokio::join!(
+    spotify_login(auth_mode, options.subcommand.is_none(), onboarding.as_ref()),
     super::cli::run_auto_update(
       options.subcommand.is_some() || options.no_update,
       &user_config
     )
   );
 
-  // Only now that authentication has released the OAuth callback port and the
-  // terminal. Runs before the `?` below so a broken auth state is still allowed
-  // to restart into the newer build, which may be what fixes it.
+  // Runs before the `?` below so a broken login is still allowed to restart
+  // into the newer build, which may be what fixes it.
   super::cli::restart_after_update(installed_update, instance_lock)?;
 
-  let authenticated: Option<auth::AuthenticatedClient> = authenticated?;
-
-  // Which Spotify app the session actually authenticated as, when the user would
-  // likely assume otherwise. Logged now (so it is in every log file) and shown as
-  // a status message once the UI is about to come up (issue #395).
-  let client_id_notice_message = authenticated
-    .as_ref()
-    .and_then(|a| a.client_id_notice.clone())
-    .map(describe_client_id_notice);
-  if let Some(message) = client_id_notice_message.as_deref() {
-    log::warn!("{}", message);
+  let (spotify, startup_notice) = logged_in?;
+  if let Some(message) = startup_notice.as_deref() {
+    log::warn!("{message}");
   }
-
-  // Redirect URI for native streaming: from the authenticated client when a
-  // Spotify session exists, else the configured default (streaming stays off
-  // without Spotify anyway, see the `spotify.is_some()` gate below).
-  #[cfg(feature = "streaming")]
-  let selected_redirect_uri = authenticated
-    .as_ref()
-    .map(|a| a.redirect_uri.clone())
-    .unwrap_or_else(|| client_config.get_redirect_uri());
-
-  let final_token_cache_path = authenticated
-    .as_ref()
-    .map(|a| a.token_cache_path.clone())
-    .unwrap_or_else(|| {
-      auth::token_cache_path_for_client(&config_paths.token_cache_path, &client_config.client_id)
-    });
-
-  // The /me captured while validating the cached token; the streaming account
-  // probe reuses it instead of a second round trip.
-  #[cfg(feature = "streaming")]
-  let cached_me = authenticated.as_ref().and_then(|a| a.me.clone());
-
-  // Persist whatever token is now in memory and verify it. All later Spotify
-  // requests go through spotatui's refresh-and-cache path so the on-disk token
-  // stays current. With no Spotify session both stay `None`.
-  let (spotify, token_expiry) = match authenticated.map(|a| a.spotify) {
-    Some(spotify) => {
-      if let Err(e) = auth::save_token_to_file(&spotify, &final_token_cache_path).await {
-        log::warn!("Failed to cache token on startup: {}", e);
-      }
-      let token_expiry = auth::token_expiry(&spotify).await?;
-      (Some(spotify), Some(token_expiry))
-    }
-    None => (None, None),
-  };
-
-  let current_client_id = spotify
-    .as_ref()
-    .map(|client| client.creds.id.as_str())
-    .unwrap_or(client_config.client_id.as_str());
-  let spotify_key_tier = runtime_state.spotify_key_tier_for(current_client_id);
-
   let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
   info!("app state initialized");
 
@@ -798,8 +616,7 @@ pub(super) async fn boot(
     user_config.clone(),
     runtime_state.clone(),
     state_path.clone(),
-    token_expiry,
-    spotify_key_tier,
+    spotify.is_some(),
   )));
 
   // `--play-file <PATH>`: queue a local file to start once the UI is up. The
@@ -825,35 +642,69 @@ pub(super) async fn boot(
     app,
     sync_io_rx,
     user_config,
-    client_config,
     spotify,
-    token_cache_path: final_token_cache_path,
     runtime_state,
     restore_playback,
     restore_queue,
     initial_shuffle_enabled,
     initial_startup_behavior,
-    client_id_notice_message,
-    onboarding,
-    #[cfg(feature = "streaming")]
-    cached_me,
-    #[cfg(feature = "streaming")]
-    selected_redirect_uri,
+    startup_notice,
   })
+}
+
+/// The Spotify login `mode` asks for, plus a status line for the first frame.
+/// A failed login on a UI launch is that line; the app starts without Spotify.
+async fn spotify_login(
+  mode: SpotifyAuthMode,
+  ui_launch: bool,
+  onboarding: &dyn Onboarding,
+) -> Result<(Option<SpotifyLogin>, Option<String>)> {
+  match mode {
+    SpotifyAuthMode::Interactive => match auth::log_in_to_spotify(onboarding).await {
+      Ok(login) => Ok((Some(login), None)),
+      Err(e) if ui_launch => Ok((
+        None,
+        Some(format!(
+          "Spotify login failed: {e}. Press `d` and pick Spotify to try again."
+        )),
+      )),
+      Err(e) => Err(e.context("Spotify login failed")),
+    },
+    SpotifyAuthMode::CachedOrFail => live_spotify_session()
+      .await
+      .map(|login| (Some(login), None)),
+    SpotifyAuthMode::CachedOrNone => Ok((SpotifyLogin::cached(), None)),
+  }
+}
+
+/// A subcommand needs Spotify now: the cached login must connect.
+async fn live_spotify_session() -> Result<SpotifyLogin> {
+  #[cfg(feature = "spotify-session")]
+  {
+    use crate::infra::spotify::session::{self, Unavailable};
+    match session::current().await {
+      Ok(_) => Ok(SpotifyLogin::new()),
+      Err(Unavailable::NoLogin) => Err(anyhow::anyhow!(
+        "Spotify is not connected. Start `spotatui`, press `d` and pick Spotify to log in."
+      )),
+      Err(reason) => Err(anyhow::anyhow!(reason.message())),
+    }
+  }
+  #[cfg(not(feature = "spotify-session"))]
+  Err(anyhow::anyhow!(
+    "This build of spotatui has no Spotify support"
+  ))
 }
 
 #[cfg(test)]
 mod tests {
   use super::{
-    apply_configured_runtime_defaults, ask_auth_setup_migration, auth_setup_migration_prompt,
-    clear_saved_spotify_key_tier, describe_client_id_notice, forgets_saved_spotify_key_tier,
-    global_song_counter_prompt, persist_global_song_count, prompt_global_song_count_opt_in,
-    should_prompt_global_song_count, spotify_auth_mode, SpotifyAuthMode, TIER_RESET_NOTICE,
+    apply_configured_runtime_defaults, global_song_counter_prompt, persist_global_song_count,
+    prompt_global_song_count_opt_in, should_prompt_global_song_count, spotify_auth_mode,
+    spotify_login, SpotifyAuthMode,
   };
-  use crate::core::auth;
   use crate::core::limits::MAX_PLAYBAR_ROWS;
   use crate::core::onboarding::OnboardingPrompt;
-  use crate::core::spotify_access::SpotifyKeyTier;
   use crate::core::state::{PersistedRuntimeState, RuntimeState};
   use crate::core::test_helpers::ScriptedOnboarding;
   use crate::core::user_config::UserConfig;
@@ -924,14 +775,14 @@ mod tests {
 
   #[test]
   fn global_song_counter_prompt_predicate_matches_first_run_and_stale_configs() {
-    // Genuine first run: no client.yml, nothing answered.
-    assert!(should_prompt_global_song_count(false, false));
-    // Stale config predating the setting.
+    // Genuine first run, nothing answered.
     assert!(should_prompt_global_song_count(true, false));
-    // No client.yml yet, even with an answer present.
-    assert!(should_prompt_global_song_count(false, true));
+    // Stale config predating the setting.
+    assert!(should_prompt_global_song_count(false, false));
+    // A first run, even with an answer present.
+    assert!(should_prompt_global_song_count(true, true));
     // Asked and answered already.
-    assert!(!should_prompt_global_song_count(true, true));
+    assert!(!should_prompt_global_song_count(false, true));
   }
 
   #[test]
@@ -947,21 +798,6 @@ mod tests {
       "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds"
     );
     assert_eq!(question, "\nWould you like to participate? (Y/n): ");
-
-    let OnboardingPrompt::Confirm {
-      title,
-      body,
-      question,
-    } = auth_setup_migration_prompt();
-    assert_eq!(title, "Authentication Setup Update");
-    assert_eq!(
-      body,
-      "\nConfiguration handling has changed and your authentication setup may need an update."
-    );
-    assert_eq!(
-      question,
-      "Would you like to run the new auth setup wizard now? (Y/n): "
-    );
   }
 
   #[test]
@@ -976,7 +812,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::with_answers(&["y"]);
 
-    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
 
     assert!(user_config.behavior.enable_global_song_count);
     let persisted = std::fs::read_to_string(&config_path).unwrap();
@@ -995,7 +831,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::with_answers(&["nope"]);
 
-    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
 
     assert!(!user_config.behavior.enable_global_song_count);
     let persisted = std::fs::read_to_string(&config_path).unwrap();
@@ -1010,7 +846,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::non_interactive(&[]);
 
-    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
 
     // Never enable anonymous telemetry for a user we couldn't prompt.
     assert!(!user_config.behavior.enable_global_song_count);
@@ -1029,7 +865,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::with_answers(&["y"]);
 
-    prompt_global_song_count_opt_in(&mut user_config, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
 
     assert!(user_config.behavior.enable_global_song_count);
     assert!(!config_path.exists());
@@ -1052,122 +888,48 @@ mod tests {
   }
 
   #[test]
-  fn auth_setup_migration_ask_runs_the_wizard_on_an_empty_answer() {
-    let onboarding = ScriptedOnboarding::with_answers(&[""]);
-
-    assert!(ask_auth_setup_migration(&onboarding).unwrap());
-    assert!(onboarding.saw("Authentication Setup Update"));
-    assert!(onboarding.saw("Would you like to run the new auth setup wizard now? (Y/n): "));
-  }
-
-  #[test]
-  fn auth_setup_migration_ask_skips_the_wizard_on_a_decline() {
-    let onboarding = ScriptedOnboarding::with_answers(&["n"]);
-
-    assert!(!ask_auth_setup_migration(&onboarding).unwrap());
-    assert!(onboarding.saw("Would you like to run the new auth setup wizard now? (Y/n): "));
-  }
-
-  #[test]
-  fn a_fallback_to_the_shared_id_names_the_way_out() {
-    let own = "0123456789abcdef0123456789abcdef";
-    let shared = crate::core::config::NCSPOT_CLIENT_ID;
-    let to_shared = describe_client_id_notice(auth::ClientIdNotice::FellBack {
-      from_client_id: own.to_string(),
-      to_client_id: shared.to_string(),
-    });
-    assert!(to_shared.starts_with("No usable Spotify session for your own app (01234567…)"));
-    assert!(to_shared.contains("--reconfigure-auth"));
-
-    let to_own = describe_client_id_notice(auth::ClientIdNotice::FellBack {
-      from_client_id: shared.to_string(),
-      to_client_id: own.to_string(),
-    });
-    assert!(to_own.starts_with("No usable Spotify session for the shared ncspot client ID"));
-    assert!(!to_own.contains("--reconfigure-auth"));
-  }
-
-  #[test]
-  fn the_boot_auth_mode_follows_the_wizard_and_the_subcommand() {
+  fn the_boot_auth_mode_follows_the_picker_and_the_subcommand() {
     let cases = [
       (None, true, false, SpotifyAuthMode::Interactive),
       (Some("play"), true, false, SpotifyAuthMode::Interactive),
       (None, false, true, SpotifyAuthMode::Interactive),
-      (Some("play"), false, true, SpotifyAuthMode::Interactive),
       (Some("play"), false, false, SpotifyAuthMode::CachedOrFail),
       (Some("sync"), false, false, SpotifyAuthMode::CachedOrNone),
       (None, false, false, SpotifyAuthMode::CachedOrNone),
     ];
 
-    for (subcommand, reconfigure_auth, wizard_ran, expected) in cases {
+    for (subcommand, reconfigure_auth, picked_spotify, expected) in cases {
       assert_eq!(
-        spotify_auth_mode(subcommand, reconfigure_auth, wizard_ran),
+        spotify_auth_mode(subcommand, reconfigure_auth, picked_spotify),
         expected,
-        "subcommand={subcommand:?} reconfigure_auth={reconfigure_auth} wizard_ran={wizard_ran}"
+        "subcommand={subcommand:?} reconfigure_auth={reconfigure_auth} picked_spotify={picked_spotify}"
       );
     }
   }
 
-  #[test]
-  fn a_re_auth_is_the_only_thing_that_forgets_a_saved_key_tier() {
-    assert!(forgets_saved_spotify_key_tier(true, false));
-    assert!(forgets_saved_spotify_key_tier(false, true));
-    assert!(forgets_saved_spotify_key_tier(true, true));
-
-    // A plain launch, a subcommand, a declined migration.
-    assert!(!forgets_saved_spotify_key_tier(false, false));
-  }
-
-  #[test]
-  fn re_authentication_forgets_a_tier_saved_from_an_earlier_refusal() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.yml");
-    let client_id = "0123456789abcdef0123456789abcdef";
-    crate::core::state::save(
-      &path,
-      &PersistedRuntimeState {
-        client_key_tiers: Some(std::collections::BTreeMap::from([(
-          client_id.to_string(),
-          SpotifyKeyTier::Restricted2026,
-        )])),
-        ..PersistedRuntimeState::default()
-      },
-    )
-    .unwrap();
-    let mut runtime = RuntimeState::default();
-    runtime.apply_persisted(&crate::core::state::load(&path).unwrap());
-    assert_eq!(
-      runtime.spotify_key_tier_for(client_id),
-      SpotifyKeyTier::Restricted2026
-    );
+  /// A subcommand without a session must fail with a way out; the unit-test
+  /// session never connects.
+  #[tokio::test]
+  async fn a_subcommand_without_a_session_fails_with_the_way_to_log_in() {
     let onboarding = ScriptedOnboarding::with_answers(&[]);
-
-    clear_saved_spotify_key_tier(&mut runtime, Some(&path), &onboarding);
-
-    assert_eq!(
-      runtime.spotify_key_tier_for(client_id),
-      SpotifyKeyTier::Full
-    );
-    assert_eq!(
-      crate::core::state::load(&path).unwrap().client_key_tiers,
-      None
-    );
-    assert!(onboarding.saw(TIER_RESET_NOTICE));
-  }
-
-  #[test]
-  fn re_authentication_says_nothing_when_no_tier_was_saved() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.yml");
-    let mut runtime = RuntimeState::default();
-    let onboarding = ScriptedOnboarding::with_answers(&[]);
-
-    clear_saved_spotify_key_tier(&mut runtime, Some(&path), &onboarding);
-
+    let error = spotify_login(SpotifyAuthMode::CachedOrFail, false, &onboarding)
+      .await
+      .unwrap_err()
+      .to_string();
     assert!(
-      !path.exists(),
-      "a launch with no saved tier must not write a state file"
+      error.contains("log in") || error.contains("no Spotify support"),
+      "{error}"
     );
-    assert!(!onboarding.saw(TIER_RESET_NOTICE));
+  }
+
+  #[cfg(not(feature = "spotify-session"))]
+  #[tokio::test]
+  async fn a_failed_login_on_a_ui_launch_starts_without_spotify() {
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+    let (login, notice) = spotify_login(SpotifyAuthMode::Interactive, true, &onboarding)
+      .await
+      .unwrap();
+    assert!(login.is_none());
+    assert!(notice.is_some_and(|line| line.contains("Press `d`")));
   }
 }

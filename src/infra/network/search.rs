@@ -223,9 +223,8 @@ impl SearchNetwork for Network {
 mod tests {
   use super::*;
   use crate::core::app::App;
-  use crate::core::config::ClientConfig;
   use crate::core::user_config::UserConfig;
-  use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+  use crate::infra::network::metadata::tests::{fake_spotify_login, read_http_request};
   use std::sync::Arc;
   use tokio::io::AsyncWriteExt;
   use tokio::sync::Mutex;
@@ -238,7 +237,6 @@ mod tests {
 
   #[tokio::test]
   async fn a_frontend_that_sets_no_limits_searches_at_the_spotify_ceiling() {
-    crate::infra::network::requests::SKIP_PACING.with(|skip| skip.set(true));
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
       let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
       let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
@@ -261,13 +259,8 @@ mod tests {
       let state_dir = tempfile::tempdir().unwrap();
       app.state_path = Some(state_dir.path().join("state.yml"));
       let app = Arc::new(Mutex::new(app));
-      let spotify = spotify_with_access_token("test_token", base_url).await;
-      let mut network = Network::new(
-        Some(spotify),
-        ClientConfig::new(),
-        &app,
-        std::path::PathBuf::new(),
-      );
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
 
       network.get_search_results("queen".to_string(), None).await;
       server.abort();

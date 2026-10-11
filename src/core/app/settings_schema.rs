@@ -85,6 +85,10 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
     | "behavior.pin_community_playlist"
     | "behavior.liked_icon"
     | "behavior.episode_played_icon"
+    | "behavior.enable_streaming"
+    | "behavior.streaming_device_name"
+    | "behavior.streaming_bitrate"
+    | "behavior.streaming_audio_cache"
     | "keys.jump_to_album"
     | "keys.jump_to_artist_album"
     | "keys.jump_to_context"
@@ -294,6 +298,38 @@ impl App {
             "Let OS media keys, headphone buttons, and remote controls (playerctl, Now Playing) control playback"
               .to_string(),
           value: SettingValue::Bool(self.user_config.behavior.enable_media_keys),
+        },
+        #[cfg(feature = "streaming")]
+        SettingItem {
+          id: "behavior.enable_streaming".to_string(),
+          name: "Native Streaming".to_string(),
+          description: "Play Spotify in spotatui as a Connect device (applies on restart)".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.enable_streaming),
+        },
+        #[cfg(feature = "streaming")]
+        SettingItem {
+          id: "behavior.streaming_device_name".to_string(),
+          name: "Streaming Device Name".to_string(),
+          description: "The Connect device name other Spotify apps show (applies on restart)"
+            .to_string(),
+          value: SettingValue::String(self.user_config.behavior.streaming_device_name.clone()),
+        },
+        #[cfg(feature = "streaming")]
+        SettingItem {
+          id: "behavior.streaming_bitrate".to_string(),
+          name: "Streaming Bitrate".to_string(),
+          description: "Native streaming quality in kbps (applies on restart)".to_string(),
+          value: SettingValue::Cycle(
+            self.user_config.behavior.streaming_bitrate.to_string(),
+            crate::core::user_config::STREAMING_BITRATES,
+          ),
+        },
+        #[cfg(feature = "streaming")]
+        SettingItem {
+          id: "behavior.streaming_audio_cache".to_string(),
+          name: "Streaming Audio Cache".to_string(),
+          description: "Keep played audio in the cache directory (applies on restart)".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.streaming_audio_cache),
         },
         SettingItem {
           id: "behavior.startup_behavior".to_string(),

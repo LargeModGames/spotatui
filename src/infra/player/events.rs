@@ -1,13 +1,12 @@
 use crate::core::app::{self, App, NativeTrackKind};
-use crate::core::config::ClientConfig;
 #[cfg(all(feature = "macos-media", target_os = "macos"))]
 use crate::infra::macos_media;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::infra::mpris;
 use crate::infra::network::IoEvent;
 use crate::infra::player::{
-  get_default_cache_path, player_build_timeout, PlayerEvent, SessionDisconnectReason,
-  StreamingConfig, StreamingConnectionState, StreamingPlayer,
+  player_build_timeout, PlayerEvent, SessionDisconnectReason, StreamingConfig,
+  StreamingConnectionState, StreamingPlayer,
 };
 use log::{info, warn};
 use std::sync::{
@@ -86,8 +85,8 @@ pub struct StreamingRecoveryContext {
   pub shared_is_playing: Arc<AtomicBool>,
   pub recovery_rx: tokio::sync::mpsc::UnboundedReceiver<StreamingRecoveryRequest>,
   pub recovery_tx: tokio::sync::mpsc::UnboundedSender<StreamingRecoveryRequest>,
-  pub client_config: ClientConfig,
-  pub redirect_uri: String,
+  /// The player settings; the volume is read again at each rebuild.
+  pub streaming_config: StreamingConfig,
   #[cfg(all(feature = "mpris", target_os = "linux"))]
   pub mpris_manager: Option<Arc<mpris::MprisManager>>,
   #[cfg(all(feature = "macos-media", target_os = "macos"))]
@@ -194,20 +193,14 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
     };
 
     let streaming_config = StreamingConfig {
-      device_name: ctx.client_config.streaming_device_name.clone(),
-      bitrate: ctx.client_config.streaming_bitrate,
-      audio_cache: ctx.client_config.streaming_audio_cache,
-      cache_path: get_default_cache_path(),
       initial_volume,
+      ..ctx.streaming_config.clone()
     };
 
     info!("attempting native streaming recovery");
 
-    let client_id = ctx.client_config.client_id.clone();
-    let redirect_uri = ctx.redirect_uri.clone();
-    let build = tokio::spawn(async move {
-      StreamingPlayer::new_cache_only(&client_id, &redirect_uri, streaming_config).await
-    });
+    let build =
+      tokio::spawn(async move { StreamingPlayer::new_cache_only(streaming_config).await });
     let abort_handle = build.abort_handle();
     let build_timeout = player_build_timeout();
     let built = match tokio::time::timeout(build_timeout, build).await {
@@ -285,7 +278,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         if app.native_should_drive() && recovery_needs_native_selection(&request, replay_queue_slot)
         {
           app.dispatch(IoEvent::AutoSelectStreamingDevice(
-            ctx.client_config.streaming_device_name.clone(),
+            ctx.streaming_config.device_name.clone(),
             false,
             true,
           ));
