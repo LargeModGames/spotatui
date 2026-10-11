@@ -708,6 +708,114 @@ mod tests {
       Some("37i9dQZF1DXcBWIGoYBM5M")
     );
   }
+
+  #[test]
+  fn playlist_track_matcher_matches_case_insensitively_across_fields() {
+    let track = TrackInfo {
+      name: "Never Gonna Give You Up".into(),
+      artists: vec!["Rick Astley".into()],
+      album: "Whenever You Need Somebody".into(),
+      duration_ms: 213_000,
+      id: Some("rick123".into()),
+      uri: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 1,
+      explicit: false,
+      image_url: None,
+      release_date: None,
+    };
+
+    // Match on track title
+    let terms = vec!["never".to_string(), "gonna".to_string()];
+    assert!(playlist_track_info_matches_terms(&track, &terms));
+
+    // Match across artist and album
+    let terms = vec!["astley".to_string(), "whenever".to_string()];
+    assert!(playlist_track_info_matches_terms(&track, &terms));
+
+    // Miss on nonexistent term
+    let terms = vec!["astley".to_string(), "metallica".to_string()];
+    assert!(!playlist_track_info_matches_terms(&track, &terms));
+  }
+
+  #[test]
+  fn try_search_and_sort_return_false_when_pages_are_incomplete() {
+    let mut app = App::default();
+    let playlist_id = PlaylistId::from_id("wifwifwifwifwfwif").unwrap();
+
+    // App is neither active for this playlist nor has pages
+    assert!(!app.try_search_playlist_tracks_from_cached_pages(&playlist_id, "rickroll"));
+    assert!(!app.try_sort_playlist_tracks_from_cached_pages(&playlist_id));
+  }
+
+  #[test]
+  fn try_search_and_sort_succeed_when_pages_are_complete() {
+    let mut app = App::default();
+    let playlist_id = PlaylistId::from_id("OwO").unwrap();
+
+    // Set the context and the active playlist id
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone().into_static());
+
+    // Insert a complete page with 2 tracks (terminal page: next is None)
+    let track1 = TrackInfo {
+      name: "Never Gonna Give You Up".into(),
+      artists: vec!["Rick Astley".into()],
+      album: "Whenever You Need Somebody".into(),
+      duration_ms: 213_000,
+      id: Some("1".into()),
+      uri: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 1,
+      explicit: false,
+      image_url: None,
+      release_date: None,
+    };
+
+    let track2 = TrackInfo {
+      name: "Together Forever".into(),
+      artists: vec!["Rick Astley".into()],
+      album: "Whenever You Need Somebody".into(),
+      duration_ms: 200_000,
+      id: Some("2".into()),
+      uri: None,
+      album_id: None,
+      artist_refs: vec![],
+      is_playable: true,
+      is_local: false,
+      track_number: 2,
+      explicit: false,
+      image_url: None,
+      release_date: None,
+    };
+
+    app.playlist_track_pages.upsert_page_by_offset(Paged {
+      items: vec![
+        (0, PlayableInfo::Track(track1)),
+        (1, PlayableInfo::Track(track2)),
+      ],
+      offset: 0,
+      limit: 50,
+      total: 2,
+      next: None,
+      previous: None,
+    });
+
+    // Test happy-path in-memory search
+    assert!(app.try_search_playlist_tracks_from_cached_pages(&playlist_id, "Together"));
+    assert_eq!(app.active_playlist_track_filter.as_deref(), Some("Together"));
+    assert_eq!(app.track_table.tracks.len(), 1);
+
+    // Test happy-path in-memory sort
+    assert!(app.try_sort_playlist_tracks_from_cached_pages(&playlist_id));
+    assert_eq!(app.track_table.tracks.len(), 2);
+  }
 }
 
 pub fn playlist_track_info_matches_terms(track: &TrackInfo, terms: &[String]) -> bool {
