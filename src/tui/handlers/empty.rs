@@ -81,6 +81,7 @@ mod tests {
   use super::*;
   use crate::core::app::RouteId;
   use crate::core::source::Source;
+  use crate::core::test_helpers::app_with_sidebar;
 
   #[test]
   fn up_and_left_reach_the_library_under_a_free_source() {
@@ -239,5 +240,15 @@ mod tests {
     handler(Key::Char('w'), &mut app);
 
     assert_eq!(app.status_message(), Some("No track currently playing"));
+  }
+
+  #[test]
+  fn with_the_sidebar_on_the_right_an_unfocused_screen_moves_right_to_the_sidebar() {
+    let mut app = app_with_sidebar("right");
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::TrackTable));
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
   }
 }

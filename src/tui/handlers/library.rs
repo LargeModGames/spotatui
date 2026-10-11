@@ -78,7 +78,8 @@ fn open_local_source(app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::action::LibraryTarget;
-  use crate::core::app::RouteId;
+  use crate::core::app::{ActiveBlock, RouteId};
+  use crate::core::test_helpers::app_with_sidebar;
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
@@ -169,5 +170,22 @@ mod tests {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetLocalPlaylists)));
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(app.view.local_playlists_index, 0);
+  }
+
+  // This also applies to playlist block
+  #[test]
+  fn with_the_sidebar_on_the_right_the_left_key_enters_the_content() {
+    let mut app = app_with_sidebar("right");
+    app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+    app.set_current_route_state(Some(ActiveBlock::Library), Some(ActiveBlock::Library));
+
+    handler(Key::Right, &mut app);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Library);
+
+    handler(Key::Left, &mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::AlbumTracks
+    );
   }
 }

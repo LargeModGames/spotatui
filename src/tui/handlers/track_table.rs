@@ -403,11 +403,11 @@ fn saved_tracks_playback_request(app: &App) -> Option<(Vec<String>, usize)> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::PendingTrackSelection;
+  use crate::core::app::{ActiveBlock, PendingTrackSelection};
   use crate::core::geometry::Viewport;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{PlayableInfo, TrackInfo};
-  use crate::core::test_helpers::full_track;
+  use crate::core::test_helpers::{app_with_sidebar, full_track};
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use chrono::Utc;
@@ -1078,5 +1078,23 @@ mod tests {
       IoEvent::StartPlayback(_, _, _) => "StartPlayback",
       _ => "other",
     }
+  }
+
+  // This applies to any content window
+  #[test]
+  fn with_the_sidebar_on_the_right_the_right_key_leaves_the_track_table() {
+    let mut app = app_with_sidebar("right");
+    app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+
+    handler(Key::Left, &mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::TrackTable
+    );
+
+    handler(Key::Right, &mut app);
+    let current_route = app.get_current_route();
+    assert_eq!(current_route.active_block, ActiveBlock::Empty);
+    assert_eq!(current_route.hovered_block, ActiveBlock::Library);
   }
 }

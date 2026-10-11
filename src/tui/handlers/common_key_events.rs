@@ -131,12 +131,20 @@ pub fn sidebar_on_right(config: &UserConfig) -> bool {
 
 pub fn toward_sidebar_event(key: Key, config: &UserConfig) -> bool {
   let keys = &config.keys;
-  if sidebar_on_right(config) { right_event(key, keys) } else { left_event(key, keys) }
+  if sidebar_on_right(config) {
+    right_event(key, keys)
+  } else {
+    left_event(key, keys)
+  }
 }
 
 pub fn toward_content_event(key: Key, config: &UserConfig) -> bool {
   let keys = &config.keys;
-  if sidebar_on_right(config) { left_event(key, keys) } else { right_event(key, keys) }
+  if sidebar_on_right(config) {
+    left_event(key, keys)
+  } else {
+    right_event(key, keys)
+  }
 }
 
 pub fn focus_sidebar(app: &mut App) {
@@ -157,7 +165,7 @@ pub fn focus_content(app: &mut App) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::source::Source;
+  use crate::core::{app::SidebarBlock, source::Source};
 
   #[test]
   fn the_playlist_sync_route_focuses_its_block_from_the_sidebar() {
@@ -252,5 +260,53 @@ mod tests {
     app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
     focus_sidebar(&mut app);
     assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+  }
+
+  #[test]
+  fn the_sidebar_key_is_left_unless_the_sidebar_is_on_the_right() {
+    for (position, sidebar_key, content_key) in [
+      ("left", Key::Left, Key::Right),
+      ("hidden", Key::Left, Key::Right),
+      ("right", Key::Right, Key::Left),
+    ] {
+      let mut config = UserConfig::new();
+      config.behavior.sidebar_position = position.to_string();
+
+      assert!(toward_sidebar_event(sidebar_key, &config));
+      assert!(!toward_sidebar_event(content_key, &config));
+      assert!(toward_content_event(content_key, &config));
+      assert!(!toward_content_event(sidebar_key, &config));
+    }
+  }
+
+  #[test]
+  fn returning_to_the_sidebar_goes_to_the_panel_it_left() {
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
+
+    focus_content(&mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::TrackTable
+    );
+
+    focus_sidebar(&mut app);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
+  #[test]
+  fn a_content_screen_does_not_overwrite_the_remembered_sidebar_panel() {
+    let mut app = App::default();
+    app.view.last_sidebar_block = ActiveBlock::MyPlaylists.into();
+    app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+
+    focus_content(&mut app);
+
+    assert_eq!(app.view.last_sidebar_block, SidebarBlock::Playlists);
   }
 }
