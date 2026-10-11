@@ -80,7 +80,8 @@ fn track_change_handler_queues_notify() {
   }
 }
 
-#[test]fn empty_playback_fields_reach_lua_as_nil() {
+#[test]
+fn empty_playback_fields_reach_lua_as_nil() {
   let mut engine = ScriptEngine::new().unwrap();
   *engine.shared.playback.borrow_mut() = Some(playback(Some(track("uri:1", "Song A")), true, 0));
   engine
