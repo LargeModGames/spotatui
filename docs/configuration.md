@@ -129,7 +129,7 @@ behavior:
   subsonic_password: "secret"
 ```
 
-`subsonic_password` is stored in plaintext in `config.yml`; the first-run Subsonic setup also writes it there. Prefer the `SPOTATUI_SUBSONIC_PASSWORD` environment variable when the password should not be written to disk. When set, the environment variable overrides `subsonic_password` as spotatui connects.
+`subsonic_password` is stored in plaintext in `config.yml`; the first-run Subsonic setup also writes it there. Prefer the `SPOTATUI_SUBSONIC_PASSWORD` environment variable when the password should not be written to disk. For normal configured-source connections, the environment variable overrides `subsonic_password`. During first-run setup, spotatui tests the password entered during setup.
 
 The `subsonic` cargo feature is required. It is included in the release binaries.
 
