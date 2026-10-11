@@ -517,6 +517,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "TheCodedKid",
+      "name": "Samuel",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15819181?v=4",
+      "profile": "http://web.samtalks.us",
+      "contributions": [
+        "doc"
+      ]
     }
   ],
   "contributorsPerLine": 7,
