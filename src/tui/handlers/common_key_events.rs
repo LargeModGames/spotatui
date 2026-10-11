@@ -155,10 +155,16 @@ pub fn focus_sidebar(app: &mut App) {
 pub fn focus_content(app: &mut App) {
   let hovered = app.get_current_route().hovered_block;
   if matches!(hovered, ActiveBlock::Library | ActiveBlock::MyPlaylists) {
-    app.view.last_sidebar_block = hovered.into(); // the cache update
+    remember_sidebar_block(app, hovered);
     if let Some(block) = content_active_block_for_route(&app.get_current_route().id) {
       app.set_current_route_state(Some(block), Some(block));
     }
+  }
+}
+
+pub fn remember_sidebar_block(app: &mut App, block: ActiveBlock) {
+  if matches!(block, ActiveBlock::Library | ActiveBlock::MyPlaylists) {
+    app.view.last_sidebar_block = block.into();
   }
 }
 

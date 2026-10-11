@@ -317,7 +317,13 @@ pub fn handler(key: Key, app: &mut App) {
       }
       k if common_key_events::right_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
-        handle_down_press_on_hovered_block(app);
+        if artist.artist_hovered_block == ArtistBlock::TopTracks
+          && common_key_events::sidebar_on_right(&app.user_config)
+        {
+          common_key_events::focus_sidebar(app);
+        } else {
+          handle_down_press_on_hovered_block(app);
+        }
       }
       k if common_key_events::high_event(k)
         && artist.artist_selected_block != ArtistBlock::Empty =>
@@ -414,6 +420,7 @@ mod tests {
   use crate::core::app::ActiveBlock;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{ArtistInfo, TrackInfo};
+  use crate::core::test_helpers::app_with_sidebar;
 
   fn track(id: &str, name: &str) -> TrackInfo {
     TrackInfo {
@@ -572,6 +579,29 @@ mod tests {
     handler(Key::Left, &mut app);
 
     assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+  }
+
+  #[test]
+  fn right_press_from_top_tracks_focuses_the_right_sidebar() {
+    let mut app = app_hovering_with(app_with_sidebar("right"), artist_page(vec![]));
+    app.view.last_sidebar_block = ActiveBlock::MyPlaylists.into();
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
+  #[test]
+  fn right_press_from_top_tracks_keeps_artist_navigation_with_left_sidebar() {
+    let mut app = app_hovering(artist_page(vec![]));
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
   }
 
   #[test]

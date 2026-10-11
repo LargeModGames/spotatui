@@ -151,7 +151,10 @@ pub fn handler(key: Key, app: &mut App) {
         app.view.selected_playlist_index = Some(count - 1);
       }
     }
-    Key::Enter => activate_selected(app),
+    Key::Enter => {
+      common_key_events::remember_sidebar_block(app, ActiveBlock::MyPlaylists);
+      activate_selected(app);
+    }
     Key::Char('D') if app.active_source == Source::Radio => {
       remove_radio_station(app);
     }
@@ -329,6 +332,8 @@ mod tests {
     app.view.selected_playlist_index = Some(1);
 
     handler(Key::Enter, &mut app);
+
+    assert_eq!(app.view.last_sidebar_block, ActiveBlock::MyPlaylists.into());
 
     match rx.recv().unwrap() {
       IoEvent::GetPlaylistItems(id, 0) => assert_eq!(id, "37i9dQZF1DXcBWIGoYBM5M"),

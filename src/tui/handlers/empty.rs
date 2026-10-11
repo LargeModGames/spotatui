@@ -61,7 +61,7 @@ pub fn handler(key: Key, app: &mut App) {
         | ActiveBlock::Stats
         | ActiveBlock::PlaylistSync
         | ActiveBlock::LocalBrowser => {
-          app.set_current_route_state(None, Some(ActiveBlock::Library));
+          app.set_current_route_state(None, Some(app.view.last_sidebar_block.into()));
         }
         _ => {}
       }
@@ -172,6 +172,21 @@ mod tests {
 
       assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
     }
+  }
+
+  #[test]
+  fn an_unfocused_content_screen_returns_to_the_remembered_playlist_panel() {
+    let mut app = App::default();
+    app.view.last_sidebar_block = ActiveBlock::MyPlaylists.into();
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::TrackTable));
+
+    handler(Key::Left, &mut app);
+
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::MyPlaylists
+    );
   }
 
   #[test]
