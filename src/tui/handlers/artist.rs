@@ -296,33 +296,60 @@ pub fn handler(key: Key, app: &mut App) {
       }
       k if common_key_events::left_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
+        let sidebar_right = common_key_events::sidebar_on_right(&app.user_config);
         match artist.artist_hovered_block {
           ArtistBlock::TopTracks => {
-            if !common_key_events::sidebar_on_right(&app.user_config) {
-              common_key_events::focus_sidebar(app)
+            if sidebar_right {
+              // far edge: wrap to the last visible column
+              artist.artist_hovered_block = if artist.related_artists_visible() {
+                ArtistBlock::RelatedArtists
+              } else {
+                ArtistBlock::Albums
+              };
+            } else {
+              common_key_events::focus_sidebar(app);
             }
           }
           ArtistBlock::Albums => {
             if artist.top_tracks_visible() {
               artist.artist_hovered_block = ArtistBlock::TopTracks;
-            } else if !common_key_events::sidebar_on_right(&app.user_config) {
+            } else if sidebar_right {
+              // far edge with no Top Tracks: wrap to Related Artists if it is shown
+              if artist.related_artists_visible() {
+                artist.artist_hovered_block = ArtistBlock::RelatedArtists;
+              }
+            } else {
               common_key_events::focus_sidebar(app);
             }
           }
-          ArtistBlock::RelatedArtists => {
-            artist.artist_hovered_block = ArtistBlock::Albums;
-          }
+          ArtistBlock::RelatedArtists => artist.artist_hovered_block = ArtistBlock::Albums,
           ArtistBlock::Empty => {}
         }
       }
       k if common_key_events::right_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
-        if artist.artist_hovered_block == ArtistBlock::TopTracks
-          && common_key_events::sidebar_on_right(&app.user_config)
-        {
-          common_key_events::focus_sidebar(app);
-        } else {
-          handle_down_press_on_hovered_block(app);
+        let sidebar_right = common_key_events::sidebar_on_right(&app.user_config);
+        match artist.artist_hovered_block {
+          ArtistBlock::TopTracks => artist.artist_hovered_block = ArtistBlock::Albums,
+          ArtistBlock::Albums => {
+            if artist.related_artists_visible() {
+              artist.artist_hovered_block = ArtistBlock::RelatedArtists;
+            } else if sidebar_right {
+              common_key_events::focus_sidebar(app);
+            } else if artist.top_tracks_visible() {
+              artist.artist_hovered_block = ArtistBlock::TopTracks;
+            }
+          }
+          ArtistBlock::RelatedArtists => {
+            if sidebar_right {
+              common_key_events::focus_sidebar(app);
+            } else if artist.top_tracks_visible() {
+              artist.artist_hovered_block = ArtistBlock::TopTracks;
+            } else {
+              artist.artist_hovered_block = ArtistBlock::Albums;
+            }
+          }
+          ArtistBlock::Empty => {}
         }
       }
       k if common_key_events::high_event(k)
