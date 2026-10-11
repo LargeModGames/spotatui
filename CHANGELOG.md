@@ -48,6 +48,8 @@
 
 ### Fixed
 
+- **Search and sort in a playlist see your own edits**: search and sort read the playlist pages that opening it had already loaded, and those pages were not refreshed after you removed or added a track in spotatui, so a removed track came back and an added one was missing on a playlist longer than one page. An add or a remove now marks the loaded pages out of date, so the next search or sort fetches the playlist from Spotify again ([#750](https://github.com/LargeModGames/spotatui/issues/750)).
+
 - **Dragging on the playbar progress bar scrubs**: pressing the left mouse button on the progress bar and dragging only seeked on the first click, because the terminal input thread dropped every mouse drag before it reached the playbar. Drags with the left mouse button now get through, so the position follows the pointer as you drag ([#659](https://github.com/LargeModGames/spotatui/issues/659)).
 
 - **A playlist opened while Liked Songs loads keeps its songs**: opening Liked Songs downloads all of its pages in the background. If you opened a playlist, an album or a list from another source before that download finished, the next page that arrived put Liked Songs back in the song table. A Lua plugin that asked for your saved tracks did the same. The download now fills only the Liked Songs cache while another list is open.

@@ -1866,6 +1866,12 @@ impl LibraryNetwork for Network {
 
           if app.is_current_route_playlist_track_table_for(&playlist_id) {
             let playlist_offset = app.playlist_offset;
+            // The added track lands at the end of the playlist, past every
+            // page the opened playlist already cached, so those pages are
+            // stale. `is_complete` reads false here, making the next search or
+            // sort walk Spotify again. The page refetch below refreshes the
+            // page the user is looking at without making the rest current.
+            app.mark_playlist_track_pages_stale(&playlist_id);
             app.dispatch(IoEvent::GetPlaylistItems(
               playlist_id.id().to_string(),
               playlist_offset,
@@ -1904,6 +1910,13 @@ impl LibraryNetwork for Network {
     .await
     {
       Ok(_) => {
+        {
+          let mut app = self.app.lock().await;
+          // A remove never refetches: the cached pages now show a track that
+          // is no longer there. Mark them stale so the next search or sort
+          // walks Spotify again instead of bringing the removed track back.
+          app.mark_playlist_track_pages_stale(&playlist_id);
+        }
         self
           .show_status_message("Removed from playlist".to_string(), 3)
           .await;

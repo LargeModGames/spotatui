@@ -4,6 +4,11 @@ use super::*;
 pub struct ScrollableResultPages<T> {
   pub index: usize,
   pub pages: Vec<T>,
+  /// Set when the cached pages were mutated underneath the reader (e.g. a
+  /// track was added to or removed from an open playlist). `is_complete`
+  /// honours it, so a search or sort walks Spotify again instead of reading
+  /// pages that no longer match what is on the server. Cleared by `clear()`.
+  pub stale: bool,
 }
 
 impl<T> ScrollableResultPages<T> {
@@ -11,6 +16,7 @@ impl<T> ScrollableResultPages<T> {
     ScrollableResultPages {
       index: 0,
       pages: vec![],
+      stale: false,
     }
   }
 
@@ -22,9 +28,15 @@ impl<T> ScrollableResultPages<T> {
     self.pages.get_mut(at_index.unwrap_or(self.index))
   }
 
+  /// Mark the cached pages as stale (see the `stale` field).
+  pub fn mark_stale(&mut self) {
+    self.stale = true;
+  }
+
   pub fn clear(&mut self) {
     self.index = 0;
     self.pages.clear();
+    self.stale = false;
   }
 
   /// Append a page and jump the visible index to it.
@@ -86,7 +98,7 @@ impl<T> ScrollableResultPages<Paged<T>> {
   /// Returns `true` if all pages from offset 0 to the end of the collection
   /// are cached contiguously with no missing gaps.
   pub fn is_complete(&self) -> bool {
-    if self.pages.is_empty() {
+    if self.stale || self.pages.is_empty() {
       return false;
     }
 
@@ -327,5 +339,37 @@ mod tests {
       previous: None,
     });
     assert!(!cache.is_complete());
+  }
+
+  #[test]
+  fn is_complete_returns_false_after_mark_stale() {
+    // A complete, contiguous two-page cache: is_complete() is true.
+    let mut cache: ScrollableResultPages<Paged<u32>> = ScrollableResultPages::new();
+    cache.upsert_page_by_offset(Paged {
+      items: vec![1, 2],
+      offset: 0,
+      limit: 2,
+      total: 4,
+      next: Some("next_url".into()),
+      previous: None,
+    });
+    cache.upsert_page_by_offset(Paged {
+      items: vec![3, 4],
+      offset: 2,
+      limit: 2,
+      total: 4,
+      next: None,
+      previous: None,
+    });
+    assert!(cache.is_complete());
+
+    // Marking the pages stale makes the cache read incomplete, so the cached
+    // search/sort short-circuit is skipped and Spotify is walked again.
+    cache.mark_stale();
+    assert!(!cache.is_complete());
+
+    // `clear()` drops the mark along with the pages when the view resets.
+    cache.clear();
+    assert!(!cache.stale);
   }
 }

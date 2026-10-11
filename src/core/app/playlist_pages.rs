@@ -207,6 +207,18 @@ impl App {
     self.playlist_track_positions = None;
   }
 
+  /// Mark the open playlist's cached pages as stale after a mutation (an add
+  /// or a remove). `is_complete` then reads false, so the next search or sort
+  /// walks Spotify again instead of reading pages that no longer match the
+  /// server. No-op when `playlist_id` is not the active playlist track table;
+  /// `reset_playlist_tracks_view` clears the mark via `clear()` when a
+  /// playlist opens.
+  pub fn mark_playlist_track_pages_stale(&mut self, playlist_id: &PlaylistId<'_>) {
+    if self.is_current_route_playlist_track_table_for(playlist_id) {
+      self.playlist_track_pages.mark_stale();
+    }
+  }
+
   pub fn is_playlist_track_filter_active(&self) -> bool {
     self.active_playlist_track_filter.is_some()
   }
