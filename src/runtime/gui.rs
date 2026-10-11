@@ -4,7 +4,7 @@
 use super::bootstrap::{self, BootOptions};
 use super::instance;
 use super::startup::{prepare_frontend, shutdown_frontend, FrontendHandles};
-use crate::core::app::App;
+use crate::core::app::{App, PlaybackOwner};
 use crate::core::driver::{Driver, TickEnv};
 use crate::core::onboarding::Onboarding;
 use crate::gui::bridge::{self, Publisher};
@@ -135,8 +135,8 @@ async fn serve_until_quit(
         last_tick = now;
         publisher.publish(&app);
         publisher.tick(&app, now);
-        if publisher.abandoned(now) {
-          log::info!("no page connected for a minute; quitting");
+        if publisher.abandoned(now, plays_here(&app)) {
+          log::info!("no page connected and nothing played here for a minute; quitting");
           break;
         }
       }
@@ -154,4 +154,16 @@ async fn serve_until_quit(
       () = &mut ctrl_c => break,
     }
   }
+}
+
+/// Whether this process makes the sound, so closing the last tab must not stop it.
+fn plays_here(app: &App) -> bool {
+  matches!(
+    app.playback_owner(),
+    PlaybackOwner::Queue | PlaybackOwner::Decoded | PlaybackOwner::NativeSpotify
+  ) && app
+    .playback_view()
+    .0
+    .as_ref()
+    .is_some_and(|snapshot| snapshot.is_playing)
 }

@@ -32,5 +32,11 @@ export function App({ connection }: { connection: Connection }) {
       />
     );
 
-  return <Shell state={state} send={send} />;
+  return (
+    <Shell
+      state={state}
+      send={send}
+      onQuit={() => connection.send({ type: "quit" })}
+    />
+  );
 }

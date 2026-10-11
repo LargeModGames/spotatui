@@ -15,6 +15,7 @@ const palette = (compiled: ("Spotify" | "YouTube")[]) =>
       }}
       send={() => {}}
       onSearch={() => {}}
+      onQuit={() => {}}
       onClose={() => {}}
     />,
   );
@@ -24,6 +25,9 @@ describe("CommandMode", () => {
     const html = palette(["Spotify"]);
     expect(html).toContain("search john powell");
     expect(html).toContain("<b>party</b> <span>listening party</span>");
+    expect(html).toContain(
+      "<b>quit</b> <span>stop spotatui and its music</span>",
+    );
     expect(html).not.toContain("<b>source</b>");
     expect(palette(["Spotify", "YouTube"])).toContain("<b>source</b>");
   });

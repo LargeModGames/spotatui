@@ -18,10 +18,10 @@ const song: NowPlaying = {
   context_uri: null,
 };
 
-const player = (item: NowPlaying | null) =>
+const player = (item: NowPlaying | null, liked = false) =>
   renderToStaticMarkup(
     <PlayerBar
-      playback={{ item, volume: 72, device: "This PC", liked: false }}
+      playback={{ item, volume: 72, device: "This PC", liked }}
       position={{ ms: 100_000, at: 0 }}
       connected
       send={() => {}}
@@ -51,6 +51,15 @@ describe("PlayerBar", () => {
     const html = player({ ...song, shuffle: true, repeat: "track" });
     expect(html).toContain('aria-label="Shuffle" aria-pressed="true"');
     expect(html).toContain('aria-label="Repeat one" aria-pressed="true"');
+  });
+
+  it("offers the heart for a Spotify song only, pressed when it is liked", () => {
+    const spotify = { ...song, uri: "spotify:track:4uLU6hMCjMI75M1A2tKUQC" };
+    expect(player(song)).not.toContain('aria-label="Like"');
+    expect(player(spotify)).toContain('aria-label="Like" aria-pressed="false"');
+    expect(player(spotify, true)).toContain(
+      'aria-label="Like" aria-pressed="true"',
+    );
   });
 
   it("counts the time of a stream up and shows it as live", () => {

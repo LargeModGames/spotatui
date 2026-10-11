@@ -12,6 +12,8 @@
 
 ### Changed
 
+- **`spotatui search` shows up to 10 results of each type**: without `--limit` it showed 4. It now asks for 10, the most Spotify returns to a Development Mode app. `--limit` still picks a smaller number.
+
 - **Spotify steps aside while another source plays**: when Local Files, Subsonic, Internet Radio, YouTube or Qobuz takes over from Spotify playing on spotatui, spotatui now shuts its Spotify player down instead of only pausing it, so the spotatui device leaves the device list of your other Spotify apps until you play Spotify in spotatui again. That start rebuilds the player in about a second ("Reconnecting native streaming…") and then plays, and a Spotify track queued behind another source plays the same way. When the other source ends, Space or a media key resumes the Spotify track you left; previous, seek, volume, shuffle, repeat and next with nothing queued answer "Press play to resume Spotify" until then, and the device picker still lists spotatui (Enter on it reconnects). A track from another source queued in the middle of a Spotify playlist still only pauses Spotify, so the playlist continues without a reconnect, and when Spotify plays on another device nothing changes. Quitting now also shuts the spotatui device down, so your other Spotify apps show it as inactive.
 
 - **One spotatui window at a time**: starting `spotatui` while another spotatui window runs now stops at once with "spotatui is already running (pid N)" instead of starting a second player beside the first. This includes `--reconfigure-auth` and `--play-file`: quit the running window first. CLI subcommands such as `spotatui playback` and `spotatui sync` still run beside it. Building from source now needs Rust 1.90 or newer.
@@ -20,6 +22,7 @@
 
 ### Fixed
 
+- **A playlist opened while Liked Songs loads keeps its songs**: opening Liked Songs downloads all of its pages in the background. If you opened a playlist, an album or a list from another source before that download finished, the next page that arrived put Liked Songs back in the song table. A Lua plugin that asked for your saved tracks did the same. The download now fills only the Liked Songs cache while another list is open.
 - **Empty Lua plugin fields are `nil`**: missing values in playback, track, device and other snapshots now match the documented `nil` behavior, so guards such as `if track.release_date then` correctly skip absent values. JSON decoding and plugin storage keep their existing null sentinel ([#736](https://github.com/LargeModGames/spotatui/issues/736)).
 - **Clicking a row in a scrolled Settings list selects that row**: once the Behavior or Keybindings list had scrolled, a click counted rows from the top of the box without the scroll offset, so it selected a row scrolled out of view and the list jumped back to the top; a second click then edited that row. The click now adds the offset the list was drawn with, the way the other lists already do ([#661](https://github.com/LargeModGames/spotatui/issues/661)).
 

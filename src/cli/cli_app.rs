@@ -216,8 +216,8 @@ impl CliApp {
           .app
           .lock()
           .await
-          .track_table
-          .tracks
+          .saved_tracks_prefix()
+          .0
           .iter()
           .map(|t| {
             self.format_output(

@@ -496,7 +496,7 @@ impl Network {
     Network {
       spotify,
       large_search_limit: 50,
-      small_search_limit: 4,
+      small_search_limit: search::SPOTIFY_SEARCH_LIMIT,
       client_config,
       app: Arc::clone(app),
       native_idle_recovery: playback::NativeIdleRecoveryState::default(),
@@ -525,7 +525,7 @@ impl Network {
     Network {
       spotify,
       large_search_limit: 50,
-      small_search_limit: 4,
+      small_search_limit: search::SPOTIFY_SEARCH_LIMIT,
       client_config,
       app: Arc::clone(app),
       party_connection: None,

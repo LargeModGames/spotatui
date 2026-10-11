@@ -6,7 +6,8 @@ import type { TrackInfo } from "./bindings/TrackInfo";
 import { playRequest } from "./libraryModel";
 import { year } from "./searchModel";
 
-export type Verb = "search" | "play" | "queue" | "source" | "device" | "party";
+export type Verb =
+  "search" | "play" | "queue" | "source" | "device" | "party" | "quit";
 export type Kind = "song" | "album" | "artist";
 
 export const COMMANDS: Record<Verb, { usage: string; what: string }> = {
@@ -22,6 +23,7 @@ export const COMMANDS: Record<Verb, { usage: string; what: string }> = {
     usage: "party start | join <code> <name> | leave",
     what: "listening party",
   },
+  quit: { usage: "quit", what: "stop spotatui and its music" },
 };
 
 const VERBS = Object.keys(COMMANDS) as Verb[];
@@ -33,12 +35,13 @@ export interface Parsed {
   arg: string;
 }
 
-/** A leading colon is dropped; an unknown first word makes the whole input a search. */
+/** A leading colon is dropped; an unknown first word, or quit with more words, makes the whole input a search. */
 export function parse(input: string): Parsed {
   const text = input.replace(/^:/, "").trimStart();
   const [first = "", ...rest] = text.split(/\s+/);
   const verb = VERBS.find((name) => name === first.toLowerCase()) ?? null;
-  if (!verb) return { verb: null, kind: null, arg: text.trim() };
+  if (!verb || (verb === "quit" && rest.join("") !== ""))
+    return { verb: null, kind: null, arg: text.trim() };
   const kindWord = rest[0]?.toLowerCase();
   const kind =
     verb === "play" ? (KINDS.find((name) => name === kindWord) ?? null) : null;

@@ -28,6 +28,7 @@ export function PlayerBar({
   const volume = playback?.volume ?? 0;
   const source = sourceOf(item?.uri ?? null);
   const repeat = item?.repeat ?? "off";
+  const liked = playback?.liked ?? false;
   return (
     <footer className="playerbar">
       <div className="track">
@@ -46,6 +47,22 @@ export function PlayerBar({
             </span>
           )}
         </div>
+        {source === "Spotify" && (
+          <button
+            className="like"
+            aria-label="Like"
+            aria-pressed={liked}
+            disabled={!connected}
+            onClick={() => send("ToggleSaveCurrentItem")}
+          >
+            <Icon>
+              <path
+                d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"
+                fill={liked ? "currentColor" : "none"}
+              />
+            </Icon>
+          </button>
+        )}
         {source && <SourceBadge source={source} />}
       </div>
       <div className="transport">

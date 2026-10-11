@@ -421,6 +421,15 @@ impl App {
     self.track_table.context = Some(TrackTableContext::SavedTracks);
   }
 
+  /// Refresh the table from the Liked Songs cache only while the table still shows Liked Songs.
+  pub(crate) fn refresh_saved_tracks_table(&mut self) {
+    if self.track_table.context == Some(TrackTableContext::SavedTracks) {
+      self.set_saved_tracks_to_table_continuous();
+    } else {
+      self.library.saved_tracks.index = self.saved_tracks_prefix().1;
+    }
+  }
+
   pub fn reset_saved_tracks_view(&mut self) {
     self.saved_tracks_prefetch_generation = self.saved_tracks_prefetch_generation.wrapping_add(1);
     self.saved_tracks_prefetch_in_flight.clear();
