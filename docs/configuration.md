@@ -105,6 +105,47 @@ Valid fields per screen:
 
 `default` keeps the order the API returns (playlist order, date saved, play order). A field that is not valid for that screen falls back to `default` with a warning.
 
+## Local Files
+
+The `local-files` feature scans one music folder and turns each directory that directly contains audio files into a playlist. Playlist names are paths relative to the configured root; loose audio files in the root appear in `(root)`. Scanning goes up to eight directory levels deep, skips entries whose names start with `.`, and recognizes MP3, FLAC, OGG, M4A, AAC, and WAV files.
+
+```yaml
+behavior:
+  local_music_path: "/home/you/Music"
+```
+
+When this key is omitted, spotatui uses the OS music directory. Setting it to an empty string disables that default and reports `No local music folder configured`. Paths are used exactly as written: `~` is not expanded, so use an absolute path (for example, `C:\\Users\\you\\Music` on Windows).
+
+The `local-files` cargo feature is required. It is included in the release binaries.
+
+## Subsonic
+
+The `subsonic` feature works with Navidrome and other Subsonic-compatible servers. Include `http://` or `https://` in the full server URL:
+
+```yaml
+behavior:
+  subsonic_url: "https://music.example.com"
+  subsonic_username: "you"
+  subsonic_password: "secret"
+```
+
+`subsonic_password` is stored in plaintext in `config.yml`; the first-run Subsonic setup also writes it there. Prefer the `SPOTATUI_SUBSONIC_PASSWORD` environment variable when the password should not be written to disk. When set, the environment variable overrides `subsonic_password` as spotatui connects.
+
+The `subsonic` cargo feature is required. It is included in the release binaries.
+
+## YouTube
+
+The `youtube` feature runs `yt-dlp` for playback. By default it invokes the bare command `yt-dlp`, found through `PATH`. Set `ytdlp_path` when the binary must be invoked by another name or path:
+
+```yaml
+behavior:
+  ytdlp_path: "/opt/yt-dlp/yt-dlp"
+```
+
+Local YouTube playlists are stored in `youtube_playlists.yml` in the app config directory. Set `SPOTATUI_YOUTUBE_PLAYLISTS_PATH` to replace that location; its value must be the full path to the `.yml` file, not a directory.
+
+The `youtube` cargo feature is required. It is included in the release binaries.
+
 ## Internet Radio
 
 Preconfigured stations can be declared in `config.yml`:
