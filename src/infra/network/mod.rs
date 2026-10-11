@@ -2285,7 +2285,7 @@ mod tests {
       Some(SystemTime::now() - Duration::from_secs(60)),
     )));
     let tick_polls = |app: &mut App| {
-      app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(10);
+      app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(30);
       app.update_on_tick(Duration::from_millis(250));
       io_rx
         .try_iter()

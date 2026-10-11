@@ -1896,8 +1896,7 @@ impl PlaybackNetwork for Network {
                 app.native_playback_origin = Some(requested_origin);
                 app.native_device_id = Some(native_device_id.clone());
                 app.last_device_activation = Some(activation_time);
-                app.instant_since_last_current_playback_poll =
-                  activation_time - Duration::from_secs(6);
+                app.poll_playback_soon();
                 persist_native_device_id_if_needed(
                   &mut self.client_config,
                   &mut app,
@@ -2532,7 +2531,7 @@ impl PlaybackNetwork for Network {
       // play can leak to the official Spotify client / 404 (#282).
       app.current_playback_context = None;
       app.last_device_activation = Some(activation_time);
-      app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
+      app.poll_playback_soon();
       persist_native_device_id_if_needed(
         &mut self.client_config,
         &mut app,
@@ -2632,7 +2631,7 @@ impl PlaybackNetwork for Network {
           app.is_streaming_active = true;
           app.native_activation_pending = true;
           app.last_device_activation = Some(activation_time);
-          app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
+          app.poll_playback_soon();
         }
       }
 
@@ -2655,7 +2654,7 @@ impl PlaybackNetwork for Network {
           app.last_device_activation = None;
         } else {
           app.last_device_activation = Some(activation_time);
-          app.instant_since_last_current_playback_poll = activation_time - Duration::from_secs(6);
+          app.poll_playback_soon();
         }
         persist_native_device_id_if_needed(
           &mut self.client_config,

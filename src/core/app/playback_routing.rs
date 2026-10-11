@@ -237,6 +237,11 @@ impl App {
     u128::try_from(duration_ms.saturating_sub(progress_ms)).ok()
   }
 
+  /// Whether the playback poll can slow down: native events report playback, or nothing plays.
+  pub(crate) fn playback_poll_can_wait(&self) -> bool {
+    self.is_streaming_active || !matches!(&self.current_playback_context, Some(c) if c.is_playing)
+  }
+
   /// Mark the track-end poll as spent for the cached playback state.
   pub(crate) fn spend_track_end_poll(&mut self) {
     self.track_end_polled_for = self.current_playback_context.as_ref().map(|c| c.timestamp);

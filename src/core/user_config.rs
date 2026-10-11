@@ -1195,7 +1195,7 @@ impl UserConfig {
         playbar_control_labels: HashMap::new(),
         // --- Phase 3: behavior constants / startup / sort ---
         status_message_ttl_percent: 100,
-        playback_poll_seconds: 5,
+        playback_poll_seconds: 10,
         table_scroll_padding: 5,
         like_animation_frames: 10,
         startup_route: "home".to_string(),

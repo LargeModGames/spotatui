@@ -31,8 +31,9 @@ behavior:
   animation_tick_rate_milliseconds: 16
                                    # animation-only cadence, e.g. the like-heart burst
                                    #   (1..=999, fatal if outside)
-  playback_poll_seconds: 5         # how often playback state is polled (min 1, fatal if 0;
-                                   #   near track end the app polls faster regardless)
+  playback_poll_seconds: 10        # how often playback state is polled (min 1, fatal if 0;
+                                   #   near track end the app polls faster regardless;
+                                   #   at least 30 while paused, idle or streaming natively)
   status_message_ttl_percent: 100  # scales how long status messages stay visible
                                    #   (10..=1000; 200 = twice as long)
   like_animation_frames: 10        # length of the heart burst when liking a track (min 1, fatal if 0)

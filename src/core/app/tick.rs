@@ -18,6 +18,9 @@ const _: () = assert!(
 /// How long Spotify takes to report a change made on another device.
 const REMOTE_SETTLE: Duration = Duration::from_secs(1);
 
+/// Poll interval while native events report playback or nothing plays.
+const QUIET_POLL: Duration = Duration::from_secs(30);
+
 /// Next poll: the interval, or just after the track ends if that is sooner.
 fn playback_poll_after_ms(interval_ms: u128, ms_left_on_other_device: Option<u128>) -> u128 {
   ms_left_on_other_device
@@ -85,8 +88,16 @@ impl App {
       return;
     }
 
+    let mut interval = Duration::from_secs(self.user_config.behavior.playback_poll_seconds);
+    if self.playback_poll_can_wait()
+      && self
+        .last_device_activation
+        .is_none_or(|at| at.elapsed() >= QUIET_POLL)
+    {
+      interval = interval.max(QUIET_POLL);
+    }
+    let interval_ms = interval.as_millis();
     // Another device sends no track-change events: poll once more at its track end.
-    let interval_ms = self.user_config.behavior.playback_poll_seconds as u128 * 1000;
     let poll_interval_ms = if self.is_streaming_active {
       interval_ms
     } else {
@@ -402,12 +413,16 @@ mod tests {
 
     app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(5_100);
     app.poll_current_playback();
+    assert!(rx.try_recv().is_err(), "the default is 10 s");
+
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(10_100);
+    app.poll_current_playback();
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
   }
 
   #[test]
   fn another_device_is_polled_once_more_at_its_track_end() {
-    // 2 s left: the extra poll comes 1 s after the end, before the 5 s one.
+    // 2 s left: the extra poll comes 1 s after the end, before the 10 s one.
     let (mut app, rx) = app_playing_elsewhere(178_000, Duration::from_millis(2_500));
     app.poll_current_playback();
     assert!(rx.try_recv().is_err(), "the track has not ended yet");
@@ -436,6 +451,47 @@ mod tests {
     let mut paused = elsewhere_context(179_000);
     paused.is_playing = false;
     app.current_playback_context = Some(paused);
+    app.poll_current_playback();
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_paused_device_is_polled_every_30_seconds() {
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::from_millis(10_100));
+    let mut paused = elsewhere_context(60_000);
+    paused.is_playing = false;
+    app.current_playback_context = Some(paused);
+    app.poll_current_playback();
+    assert!(rx.try_recv().is_err());
+
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(30_100);
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+  }
+
+  #[test]
+  fn native_streaming_is_polled_every_30_seconds() {
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::from_millis(10_100));
+    app.is_streaming_active = true;
+    app.poll_current_playback();
+    assert!(rx.try_recv().is_err());
+
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(30_100);
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+  }
+
+  #[test]
+  fn a_device_activation_keeps_the_configured_interval_for_30_seconds() {
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::from_millis(10_100));
+    app.is_streaming_active = true;
+    app.last_device_activation = Some(Instant::now());
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+
+    app.is_fetching_current_playback = false;
+    app.last_device_activation = Some(Instant::now() - Duration::from_secs(31));
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_millis(10_100);
     app.poll_current_playback();
     assert!(rx.try_recv().is_err());
   }
@@ -532,6 +588,18 @@ mod tests {
   }
 
   #[test]
+  fn a_command_on_a_paused_device_polls_a_second_later() {
+    let (mut app, rx) = app_playing_elsewhere(60_000, Duration::ZERO);
+    let mut paused = elsewhere_context(60_000);
+    paused.is_playing = false;
+    app.current_playback_context = Some(paused);
+    app.poll_playback_soon();
+    let_time_pass(&mut app, Duration::from_millis(1_100));
+    app.poll_current_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetCurrentPlayback)));
+  }
+
+  #[test]
   fn a_podcast_episode_on_another_device_gets_its_track_end_poll() {
     let (mut app, rx) = app_playing_elsewhere(0, Duration::from_millis(2_500));
     let mut episode = elsewhere_context(2_398_000);
@@ -606,7 +674,7 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), None);
     assert!(!app.spotify_connected);
     // Force the poll interval to have elapsed so only the connection gate matters.
-    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(10);
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(30);
 
     app.poll_current_playback();
 
@@ -702,7 +770,7 @@ mod tests {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert!(app.spotify_connected);
-    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(10);
+    app.instant_since_last_current_playback_poll = Instant::now() - Duration::from_secs(30);
 
     app.poll_current_playback();
 

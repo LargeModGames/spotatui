@@ -7,7 +7,7 @@
 behavior:
   # --- Timing / behavior constants ---
   status_message_ttl_percent: 100 # 10..=1000; 200 = status messages last twice as long
-  playback_poll_seconds: 5        # min 1; playback-state poll interval
+  playback_poll_seconds: 10       # min 1; playback-state poll interval
   table_scroll_padding: 5         # rows kept visible below the selection while scrolling
   like_animation_frames: 10       # min 1; length of the heart burst when liking a track
 
