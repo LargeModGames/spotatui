@@ -251,6 +251,10 @@ impl App {
     match context {
       SortContext::PlaylistTracks => {
         if let Some(playlist_id) = self.current_playlist_track_table_id() {
+          if self.try_sort_playlist_tracks_from_cached_pages(&playlist_id) {
+            return;
+          }
+
           self.dispatch(IoEvent::FetchAllPlaylistTracksAndSort(
             playlist_id.id().to_string(),
           ));
@@ -419,6 +423,15 @@ impl App {
     self.library.saved_tracks.index = active_index;
     self.replace_track_table_tracks(tracks);
     self.track_table.context = Some(TrackTableContext::SavedTracks);
+  }
+
+  /// Refresh the table from the Liked Songs cache only while the table still shows Liked Songs.
+  pub(crate) fn refresh_saved_tracks_table(&mut self) {
+    if self.track_table.context == Some(TrackTableContext::SavedTracks) {
+      self.set_saved_tracks_to_table_continuous();
+    } else {
+      self.library.saved_tracks.index = self.saved_tracks_prefix().1;
+    }
   }
 
   pub fn reset_saved_tracks_view(&mut self) {

@@ -70,6 +70,16 @@ describe("parse", () => {
       kind: null,
       arg: "someone like",
     });
+    expect(parse(":quit")).toEqual({ verb: "quit", kind: null, arg: "" });
+    expect(parse("quit ")).toEqual({ verb: "quit", kind: null, arg: "" });
+  });
+
+  it("searches a title that starts with quit instead of quitting", () => {
+    expect(parse("quit playing games")).toEqual({
+      verb: null,
+      kind: null,
+      arg: "quit playing games",
+    });
   });
 
   it("treats an unknown first word as a search over the whole input", () => {

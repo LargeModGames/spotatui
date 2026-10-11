@@ -147,13 +147,17 @@ fn process_playlist_track_search(app: &mut App, input: String) {
   }
 
   if let Some(playlist_id) = app.current_playlist_track_table_id() {
+    if app.try_search_playlist_tracks_from_cached_pages(&playlist_id, &query) {
+      return;
+    }
+
+    // Otherwise, dispatch background task
     app.apply(Action::SearchPlaylistTracks {
       playlist_id: playlist_id.id().to_string(),
       query,
     });
   }
 }
-
 fn spotify_resource_id(base: &str, uri: &str, sep: &str, resource_type: &str) -> (String, bool) {
   let uri_prefix = format!("{}{}{}", base, resource_type, sep);
   let id_string_with_query_params = uri.trim_start_matches(&uri_prefix);

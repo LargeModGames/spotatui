@@ -758,7 +758,7 @@ pub async fn prefetch_saved_tracks_page_task(
     app_guard
       .saved_tracks_mut()
       .upsert_page_by_offset(domain_page);
-    app_guard.set_saved_tracks_to_table_continuous();
+    app_guard.refresh_saved_tracks_table();
     let Some(candidate_next_offset) = next_offset else {
       return;
     };
@@ -1744,7 +1744,7 @@ impl LibraryNetwork for Network {
         let domain_page =
           crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
         let saved_tracks_index = app.saved_tracks_mut().upsert_page_by_offset(domain_page);
-        app.set_saved_tracks_to_table_continuous();
+        app.refresh_saved_tracks_table();
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::SavedTracks);
@@ -2423,6 +2423,107 @@ mod tests {
       previous: None,
       total: 60,
     }
+  }
+
+  /// An API that answers one request with `page`, and its base URL.
+  async fn serve_saved_tracks_page(
+    page: Page<SavedTrack>,
+  ) -> (String, tokio::task::JoinHandle<()>) {
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+    let body = serde_json::to_string(&page).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_http_request(&mut stream).await;
+      let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    (base_url, server)
+  }
+
+  /// Run one `GetCurrentSavedTracks(None)` against an API that answers with the first saved-tracks page.
+  async fn land_first_saved_tracks_page(app: App) -> Arc<Mutex<App>> {
+    use crate::infra::network::metadata::tests::spotify_with_access_token;
+    crate::infra::network::requests::SKIP_PACING.with(|skip| skip.set(true));
+    let (base_url, server) = serve_saved_tracks_page(saved_tracks_page(0, 20, false)).await;
+    let app = Arc::new(Mutex::new(app));
+    let spotify = spotify_with_access_token("token", base_url).await;
+    let mut network = Network::new(
+      Some(spotify),
+      crate::core::config::ClientConfig::new(),
+      &app,
+      std::path::PathBuf::new(),
+    );
+    network
+      .handle_network_event(IoEvent::GetCurrentSavedTracks(None))
+      .await;
+    server.await.unwrap();
+    app
+  }
+
+  #[tokio::test]
+  async fn a_liked_songs_page_fills_the_table_only_while_it_shows_liked_songs() {
+    use crate::core::app::TrackTableContext;
+    let mut app = App::default();
+    app.reset_saved_tracks_view();
+    let app = land_first_saved_tracks_page(app).await;
+    assert_eq!(app.lock().await.track_table.tracks.len(), 2);
+
+    // A playlist opened before the page landed keeps the table; the cache still fills.
+    let mut app = App::default();
+    app.reset_saved_tracks_view();
+    app.reset_playlist_tracks_view(search_playlist_id(), TrackTableContext::MyPlaylists);
+    let app = land_first_saved_tracks_page(app).await;
+    let app = app.lock().await;
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::MyPlaylists)
+    );
+    assert!(app.track_table.tracks.is_empty());
+    assert_eq!(app.saved_tracks_prefix().0.len(), 2);
+  }
+
+  #[tokio::test]
+  async fn a_prefetched_liked_songs_page_keeps_an_open_playlist_and_moves_the_index() {
+    use crate::core::app::TrackTableContext;
+    use crate::infra::network::metadata::tests::spotify_with_access_token;
+    crate::infra::network::requests::SKIP_PACING.with(|skip| skip.set(true));
+    let mut app = App::default();
+    app.reset_saved_tracks_view();
+    let first = crate::infra::network::mapping::map_page(&saved_tracks_page(0, 20, true), |st| {
+      TrackInfo::from(&st.track)
+    });
+    app.saved_tracks_mut().upsert_page_by_offset(first);
+    app.reset_playlist_tracks_view(search_playlist_id(), TrackTableContext::MyPlaylists);
+    let generation = app.saved_tracks_prefetch_generation;
+    let app = Arc::new(Mutex::new(app));
+    let (base_url, server) = serve_saved_tracks_page(saved_tracks_page(20, 20, false)).await;
+    let spotify = spotify_with_access_token("token", base_url).await;
+
+    prefetch_saved_tracks_page_task(
+      spotify,
+      Arc::clone(&app),
+      std::path::PathBuf::new(),
+      20,
+      20,
+      generation,
+    )
+    .await;
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::MyPlaylists)
+    );
+    assert!(app.track_table.tracks.is_empty());
+    assert_eq!(app.saved_tracks_prefix().0.len(), 4);
+    assert_eq!(app.library().saved_tracks.index, 1);
   }
 
   #[test]

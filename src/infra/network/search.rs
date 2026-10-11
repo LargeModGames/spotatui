@@ -222,10 +222,68 @@ impl SearchNetwork for Network {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::app::App;
+  use crate::core::config::ClientConfig;
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::metadata::tests::{read_http_request, spotify_with_access_token};
+  use std::sync::Arc;
+  use tokio::io::AsyncWriteExt;
+  use tokio::sync::Mutex;
 
   #[test]
   fn a_tall_terminal_search_limit_is_capped_at_the_spotify_ceiling() {
     assert_eq!(search_limit(50), "10");
     assert_eq!(search_limit(4), "4");
+  }
+
+  #[tokio::test]
+  async fn a_frontend_that_sets_no_limits_searches_at_the_spotify_ceiling() {
+    crate::infra::network::requests::SKIP_PACING.with(|skip| skip.set(true));
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+      let log = seen.clone();
+      let server = tokio::spawn(async move {
+        loop {
+          let (mut stream, _) = listener.accept().await.unwrap();
+          let request = read_http_request(&mut stream).await;
+          let line = request.lines().next().unwrap_or_default().to_string();
+          log.lock().unwrap().push(line);
+          stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        }
+      });
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+      let state_dir = tempfile::tempdir().unwrap();
+      app.state_path = Some(state_dir.path().join("state.yml"));
+      let app = Arc::new(Mutex::new(app));
+      let spotify = spotify_with_access_token("test_token", base_url).await;
+      let mut network = Network::new(
+        Some(spotify),
+        ClientConfig::new(),
+        &app,
+        std::path::PathBuf::new(),
+      );
+
+      network.get_search_results("queen".to_string(), None).await;
+      server.abort();
+
+      let seen = seen.lock().unwrap();
+      let searches: Vec<_> = seen
+        .iter()
+        .filter(|line| line.contains("/v1/search"))
+        .collect();
+      assert_eq!(searches.len(), 5, "{seen:?}");
+      assert!(
+        searches.iter().all(|line| line.contains("limit=10")),
+        "{seen:?}"
+      );
+    })
+    .await
+    .expect("search limit test timed out");
   }
 }

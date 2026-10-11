@@ -37,6 +37,7 @@ export function CommandMode({
   storage,
   send,
   onSearch,
+  onQuit,
   onClose,
 }: {
   search: SearchPayload | null;
@@ -46,6 +47,7 @@ export function CommandMode({
   storage: Pick<Storage, "getItem" | "setItem">;
   send: (action: Action) => void;
   onSearch: (query: string) => void;
+  onQuit: () => void;
   onClose: () => void;
 }) {
   const [input, setInput] = useState("");
@@ -103,6 +105,11 @@ export function CommandMode({
 
   const run = (playNow: boolean) => {
     if (link) return finish(link);
+    // Kept out of the history, so a recalled entry never stops spotatui.
+    if (parsed.verb === "quit") {
+      onQuit();
+      return onClose();
+    }
     if (parsed.verb === null || parsed.verb === "search") {
       if (!parsed.arg) return;
       // The Search screen runs it, so its own waiting state and cursor follow.

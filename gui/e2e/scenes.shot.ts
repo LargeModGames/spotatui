@@ -56,6 +56,26 @@ test("playing at 800 px on a long device name", async ({ page }) => {
   await shot(page, "playing-narrow");
 });
 
+test("a liked Spotify song at 800 px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, [
+    ...playing.map((message) =>
+      message.kind === "playback" && message.payload.item
+        ? {
+            ...message,
+            payload: {
+              ...message.payload,
+              item: { ...message.payload.item, uri: "spotify:track:21" },
+            },
+          }
+        : message,
+    ),
+    ...library,
+  ]);
+  await page.getByText("Wake Me Up").waitFor();
+  await shot(page, "playing-spotify-narrow");
+});
+
 test("idle", async ({ page }) => {
   await openWith(page, idle);
   await page.getByText("Nothing is queued").waitFor();

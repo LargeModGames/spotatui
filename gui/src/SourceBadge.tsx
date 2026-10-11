@@ -10,7 +10,7 @@ export function SourceBadge({ source }: { source: Source }) {
   return (
     <span className="badge">
       <Swatch source={source} />
-      {source.toUpperCase()}
+      <span className="name">{source.toUpperCase()}</span>
     </span>
   );
 }

@@ -255,6 +255,22 @@ kbd {
   color: var(--secondary);
 }
 
+.track .like {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--quiet);
+}
+
+.track .like[aria-pressed="true"] {
+  color: var(--amber);
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -275,6 +291,18 @@ kbd {
   padding: 0 7px;
   border-color: var(--amber);
   color: var(--text);
+}
+
+/* A narrow player bar keeps the title room: the badge shows its swatch, and screen readers still get the name. */
+@media (max-width: 1000px) {
+  .playerbar .badge .name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 .swatch {

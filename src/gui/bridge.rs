@@ -79,9 +79,9 @@ impl Publisher {
     }
   }
 
-  /// True once no page socket has been open for a minute; no page can reach the process then.
-  pub(crate) fn abandoned(&mut self, now: Instant) -> bool {
-    if self.pushes.receiver_count() > 0 {
+  /// True once, for a minute, no page socket has been open and this process played nothing.
+  pub(crate) fn abandoned(&mut self, now: Instant, playing: bool) -> bool {
+    if playing || self.pushes.receiver_count() > 0 {
       self.alone_since = None;
       return false;
     }
@@ -210,13 +210,25 @@ pub(crate) mod tests {
     let t0 = Instant::now();
     let (link, mut publisher, _inbox) = booted(shared_app());
 
-    assert!(!publisher.abandoned(t0 + Duration::from_secs(30)));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(30), false));
     let page = link.pushes.subscribe();
-    assert!(!publisher.abandoned(t0 + Duration::from_secs(120)));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(120), false));
     drop(page);
-    assert!(!publisher.abandoned(t0 + Duration::from_secs(150)));
-    assert!(!publisher.abandoned(t0 + Duration::from_secs(209)));
-    assert!(publisher.abandoned(t0 + Duration::from_secs(210)));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(150), false));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(209), false));
+    assert!(publisher.abandoned(t0 + Duration::from_secs(210), false));
+  }
+
+  #[test]
+  fn a_bridge_with_no_page_stays_while_it_plays_and_quits_a_minute_after() {
+    let t0 = Instant::now();
+    let (_link, mut publisher, _inbox) = booted(shared_app());
+
+    assert!(!publisher.abandoned(t0, false));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(120), true));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(150), false));
+    assert!(!publisher.abandoned(t0 + Duration::from_secs(209), false));
+    assert!(publisher.abandoned(t0 + Duration::from_secs(210), false));
   }
   #[tokio::test]
   async fn a_lagging_socket_drops_the_backlog_and_gets_a_fresh_resync() {

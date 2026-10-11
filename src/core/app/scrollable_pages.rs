@@ -82,6 +82,27 @@ impl<T> ScrollableResultPages<Paged<T>> {
       .page_index_for_offset(new_page_offset)
       .expect("upserted page offset must exist in cache")
   }
+
+  /// Returns `true` if all pages from offset 0 to the end of the collection
+  /// are cached contiguously with no missing gaps.
+  pub fn is_complete(&self) -> bool {
+    if self.pages.is_empty() {
+      return false;
+    }
+
+    let mut expected_offset = 0;
+    for page in &self.pages {
+      if page.offset != expected_offset {
+        return false;
+      }
+      if page.next.is_none() {
+        return true;
+      }
+      expected_offset = page.offset + page.limit;
+    }
+
+    false
+  }
 }
 
 #[cfg(test)]
@@ -212,5 +233,99 @@ mod tests {
         .as_deref(),
       Some("0000000000000000000003")
     );
+  }
+
+  #[test]
+  fn is_complete_returns_false_when_empty() {
+    let cache: ScrollableResultPages<Paged<u32>> = ScrollableResultPages::new();
+    assert!(!cache.is_complete());
+  }
+
+  #[test]
+  fn is_complete_returns_true_for_single_terminal_page() {
+    let mut cache = ScrollableResultPages::new();
+    cache.upsert_page_by_offset(Paged {
+      items: vec![1, 2, 3],
+      offset: 0,
+      limit: 50,
+      total: 3,
+      next: None,
+      previous: None,
+    });
+    assert!(cache.is_complete());
+  }
+
+  #[test]
+  fn is_complete_returns_false_when_more_pages_exist() {
+    let mut cache = ScrollableResultPages::new();
+    cache.upsert_page_by_offset(Paged {
+      items: vec![1, 2],
+      offset: 0,
+      limit: 2,
+      total: 4,
+      next: Some("https://api.spotify.com/v1/playlists/1/tracks?offset=2".into()),
+      previous: None,
+    });
+    assert!(!cache.is_complete());
+  }
+
+  #[test]
+  fn is_complete_returns_true_for_contiguous_multipage() {
+    let mut cache = ScrollableResultPages::new();
+    cache.upsert_page_by_offset(Paged {
+      items: vec![1, 2],
+      offset: 0,
+      limit: 2,
+      total: 4,
+      next: Some("next_url".into()),
+      previous: None,
+    });
+    cache.upsert_page_by_offset(Paged {
+      items: vec![3, 4],
+      offset: 2,
+      limit: 2,
+      total: 4,
+      next: None,
+      previous: None,
+    });
+    assert!(cache.is_complete());
+  }
+
+  #[test]
+  fn is_complete_returns_false_when_there_is_a_gap() {
+    let mut cache = ScrollableResultPages::new();
+    cache.upsert_page_by_offset(Paged {
+      items: vec![1, 2],
+      offset: 0,
+      limit: 2,
+      total: 6,
+      next: Some("next_url".into()),
+      previous: None,
+    });
+    // Offset 2 is missing! Page at offset 4 inserted directly
+    cache.upsert_page_by_offset(Paged {
+      items: vec![5, 6],
+      offset: 4,
+      limit: 2,
+      total: 6,
+      next: None,
+      previous: None,
+    });
+    assert!(!cache.is_complete());
+  }
+
+  #[test]
+  fn is_complete_returns_false_when_offset_zero_is_missing() {
+    let mut cache = ScrollableResultPages::new();
+    // Cache has pages, but never fetched offset 0
+    cache.upsert_page_by_offset(Paged {
+      items: vec![3, 4],
+      offset: 2,
+      limit: 2,
+      total: 4,
+      next: None,
+      previous: None,
+    });
+    assert!(!cache.is_complete());
   }
 }

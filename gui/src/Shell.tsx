@@ -37,9 +37,11 @@ const NO_PLAYS: SessionPlay[] = [];
 export function Shell({
   state,
   send,
+  onQuit,
 }: {
   state: State;
   send: (action: Action) => void;
+  onQuit: () => void;
 }) {
   const [area, setArea] = useState<Area>("library");
   // A screen mounts on its first visit and then stays mounted, so its cursor survives a switch.
@@ -287,6 +289,7 @@ export function Shell({
             runSearch(text);
             go("search");
           }}
+          onQuit={onQuit}
           onClose={() => setOverlay(null)}
         />
       )}

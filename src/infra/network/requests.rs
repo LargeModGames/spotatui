@@ -447,8 +447,8 @@ fn response_is_json(response: &reqwest::Response) -> bool {
 
 #[cfg(test)]
 thread_local! {
-  /// Set by a timing test, so its request does not queue behind every other HTTP test.
-  static SKIP_PACING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+  /// Set by a test that does not measure the pacing, so its requests do not queue behind every other HTTP test.
+  pub(crate) static SKIP_PACING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub async fn pace_spotify_api_call() {
