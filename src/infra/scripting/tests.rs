@@ -80,6 +80,49 @@ fn track_change_handler_queues_notify() {
   }
 }
 
+#[test]fn empty_playback_fields_reach_lua_as_nil() {
+  let mut engine = ScriptEngine::new().unwrap();
+  *engine.shared.playback.borrow_mut() = Some(playback(Some(track("uri:1", "Song A")), true, 0));
+  engine
+    .load_source(
+      "test",
+      r#"
+        local pb = spotatui.playback()
+        local t = spotatui.current_track()
+        spotatui.notify(tostring(pb.device == nil) .. ":" .. tostring(pb.track.release_date == nil) .. ":" .. tostring(t.id == nil), 1)
+      "#,
+    )
+    .unwrap();
+
+  match one(&engine) {
+    Action::Notify(msg, 1) => assert_eq!(msg, "true:true:true"),
+    other => panic!("unexpected effect: {:?}", std::mem::discriminant(&other)),
+  }
+}
+
+#[test]
+fn empty_fields_in_an_event_playback_reach_lua_as_nil() {
+  let mut engine = ScriptEngine::new().unwrap();
+  engine
+    .load_source(
+      "test",
+      r#"
+        spotatui.on("track_change", function(pb)
+          spotatui.notify(tostring(pb.device == nil), 1)
+        end)
+      "#,
+    )
+    .unwrap();
+
+  *engine.shared.playback.borrow_mut() = Some(playback(Some(track("uri:1", "Song A")), true, 0));
+  engine.emit(ScriptEvent::TrackChange);
+
+  match one(&engine) {
+    Action::Notify(msg, 1) => assert_eq!(msg, "true"),
+    other => panic!("unexpected effect: {:?}", std::mem::discriminant(&other)),
+  }
+}
+
 #[test]
 fn erroring_handler_is_disabled_after_one_strike() {
   let mut engine = ScriptEngine::new().unwrap();
