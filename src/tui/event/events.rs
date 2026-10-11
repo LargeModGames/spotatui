@@ -1,6 +1,8 @@
 use super::key::Key;
 use crate::core::user_config::{normalize_tick_rate_milliseconds, DEFAULT_TICK_RATE_MILLISECONDS};
-use crossterm::event::{self, Event as CrosstermEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use crossterm::event::{
+  self, Event as CrosstermEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+};
 use std::{
   sync::{
     atomic::{AtomicU64, Ordering},
@@ -37,6 +39,20 @@ pub enum Event {
   Mouse(MouseEvent),
   /// A tick event occurred.
   Tick(Duration),
+}
+
+/// Whether the reader thread hands a mouse event to the UI loop. Every
+/// forwarded event locks the `App` and redraws, so pointer motion (`Moved`)
+/// and button releases are dropped. A left drag is kept: it scrubs the
+/// playbar progress line.
+fn forwards_mouse(kind: MouseEventKind) -> bool {
+  matches!(
+    kind,
+    MouseEventKind::Down(_)
+      | MouseEventKind::Drag(MouseButton::Left)
+      | MouseEventKind::ScrollUp
+      | MouseEventKind::ScrollDown
+  )
 }
 
 /// A small event handler that wrap crossterm input and tick event. Each event
@@ -87,10 +103,7 @@ impl Events {
               }
             }
             CrosstermEvent::Mouse(mouse)
-              if matches!(
-                mouse.kind,
-                MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-              ) && event_tx.send(Event::Mouse(mouse)).is_err() =>
+              if forwards_mouse(mouse.kind) && event_tx.send(Event::Mouse(mouse)).is_err() =>
             {
               break;
             }
@@ -134,5 +147,22 @@ impl Events {
   /// This function will block the current thread.
   pub fn next(&self) -> Result<Event, mpsc::RecvError> {
     self.rx.recv()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn left_drag_is_forwarded_to_the_mouse_handler() {
+    assert!(forwards_mouse(MouseEventKind::Drag(MouseButton::Left)));
+  }
+
+  #[test]
+  fn pointer_moves_are_not_forwarded() {
+    assert!(!forwards_mouse(MouseEventKind::Moved));
+    assert!(forwards_mouse(MouseEventKind::Down(MouseButton::Left)));
+    assert!(forwards_mouse(MouseEventKind::ScrollUp));
   }
 }

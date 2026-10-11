@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- **Dragging on the playbar progress bar scrubs**: pressing the left mouse button on the progress bar and dragging only seeked on the first click, because the terminal input thread dropped every mouse drag before it reached the playbar. Drags with the left mouse button now get through, so the position follows the pointer as you drag ([#659](https://github.com/LargeModGames/spotatui/issues/659)).
+
 - **Empty Lua plugin fields are `nil`**: missing values in playback, track, device and other snapshots now match the documented `nil` behavior, so guards such as `if track.release_date then` correctly skip absent values. JSON decoding and plugin storage keep their existing null sentinel ([#736](https://github.com/LargeModGames/spotatui/issues/736)).
 - **Clicking a row in a scrolled Settings list selects that row**: once the Behavior or Keybindings list had scrolled, a click counted rows from the top of the box without the scroll offset, so it selected a row scrolled out of view and the list jumped back to the top; a second click then edited that row. The click now adds the offset the list was drawn with, the way the other lists already do ([#661](https://github.com/LargeModGames/spotatui/issues/661)).
 
