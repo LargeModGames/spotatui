@@ -1,5 +1,5 @@
 use crate::core::app::{ActiveBlock, App, RouteId};
-use crate::core::user_config::KeyBindings;
+use crate::core::user_config::{KeyBindings, UserConfig};
 use crate::tui::event::Key;
 
 pub fn down_event(key: Key, keys: &KeyBindings) -> bool {
@@ -125,26 +125,53 @@ pub fn content_active_block_for_route(route_id: &RouteId) -> Option<ActiveBlock>
   }
 }
 
-pub fn handle_right_event(app: &mut App) {
-  match app.get_current_route().hovered_block {
-    ActiveBlock::MyPlaylists | ActiveBlock::Library => {
-      if let Some(active_block) = content_active_block_for_route(&app.get_current_route().id) {
-        app.set_current_route_state(Some(active_block), Some(active_block));
-      }
-    }
-    _ => {}
-  };
+pub fn sidebar_on_right(config: &UserConfig) -> bool {
+  config.behavior.sidebar_position == "right"
 }
 
-pub fn handle_left_event(app: &mut App) {
-  // TODO: This should send you back to either library or playlist based on last selection
-  app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+pub fn toward_sidebar_event(key: Key, config: &UserConfig) -> bool {
+  let keys = &config.keys;
+  if sidebar_on_right(config) {
+    right_event(key, keys)
+  } else {
+    left_event(key, keys)
+  }
+}
+
+pub fn toward_content_event(key: Key, config: &UserConfig) -> bool {
+  let keys = &config.keys;
+  if sidebar_on_right(config) {
+    left_event(key, keys)
+  } else {
+    right_event(key, keys)
+  }
+}
+
+pub fn focus_sidebar(app: &mut App) {
+  let target = app.view.last_sidebar_block.into(); // Library or MyPlaylists
+  app.set_current_route_state(Some(ActiveBlock::Empty), Some(target));
+}
+
+pub fn focus_content(app: &mut App) {
+  let hovered = app.get_current_route().hovered_block;
+  if matches!(hovered, ActiveBlock::Library | ActiveBlock::MyPlaylists) {
+    remember_sidebar_block(app, hovered);
+    if let Some(block) = content_active_block_for_route(&app.get_current_route().id) {
+      app.set_current_route_state(Some(block), Some(block));
+    }
+  }
+}
+
+pub fn remember_sidebar_block(app: &mut App, block: ActiveBlock) {
+  if matches!(block, ActiveBlock::Library | ActiveBlock::MyPlaylists) {
+    app.view.last_sidebar_block = block.into();
+  }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::source::Source;
+  use crate::core::{app::SidebarBlock, source::Source};
 
   #[test]
   fn the_playlist_sync_route_focuses_its_block_from_the_sidebar() {
@@ -231,13 +258,61 @@ mod tests {
     let mut app = App::default();
     // Spotify (default): left arrow focuses the Library list.
     app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
-    handle_left_event(&mut app);
+    focus_sidebar(&mut app);
     assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
 
     // Local: the Library list keeps its free rows, so it stays the top block.
     app.active_source = Source::Local;
     app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
-    handle_left_event(&mut app);
+    focus_sidebar(&mut app);
     assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+  }
+
+  #[test]
+  fn the_sidebar_key_is_left_unless_the_sidebar_is_on_the_right() {
+    for (position, sidebar_key, content_key) in [
+      ("left", Key::Left, Key::Right),
+      ("hidden", Key::Left, Key::Right),
+      ("right", Key::Right, Key::Left),
+    ] {
+      let mut config = UserConfig::new();
+      config.behavior.sidebar_position = position.to_string();
+
+      assert!(toward_sidebar_event(sidebar_key, &config));
+      assert!(!toward_sidebar_event(content_key, &config));
+      assert!(toward_content_event(content_key, &config));
+      assert!(!toward_content_event(sidebar_key, &config));
+    }
+  }
+
+  #[test]
+  fn returning_to_the_sidebar_goes_to_the_panel_it_left() {
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
+
+    focus_content(&mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::TrackTable
+    );
+
+    focus_sidebar(&mut app);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
+  #[test]
+  fn a_content_screen_does_not_overwrite_the_remembered_sidebar_panel() {
+    let mut app = App::default();
+    app.view.last_sidebar_block = ActiveBlock::MyPlaylists.into();
+    app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+
+    focus_content(&mut app);
+
+    assert_eq!(app.view.last_sidebar_block, SidebarBlock::Playlists);
   }
 }

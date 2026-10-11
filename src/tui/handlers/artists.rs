@@ -6,8 +6,8 @@ use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
-      common_key_events::handle_left_event(app)
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
+      common_key_events::focus_sidebar(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       if let Some(artists) = app.library().saved_artists.get_results(None) {

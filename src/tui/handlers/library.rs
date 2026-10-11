@@ -1,16 +1,16 @@
 use super::common_key_events;
-use crate::core::action::Action;
 #[cfg(feature = "local-files")]
 use crate::core::action::LibraryTarget;
 use crate::core::app::App;
 #[cfg(any(feature = "local-files", test))]
 use crate::core::source::Source;
+use crate::core::{action::Action, app::SidebarBlock};
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::right_event(k, &app.user_config.keys) => {
-      common_key_events::handle_right_event(app)
+    k if common_key_events::toward_content_event(k, &app.user_config) => {
+      common_key_events::focus_content(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => select_next(app),
     k if common_key_events::up_event(k, &app.user_config.keys) => select_previous(app),
@@ -51,6 +51,7 @@ pub(super) fn select_previous(app: &mut App) {
 }
 
 pub(super) fn activate_selected(app: &mut App) {
+  app.view.last_sidebar_block = SidebarBlock::Library;
   let Some(target) = app.library_rows().get(app.library_cursor()).copied() else {
     return;
   };
@@ -78,7 +79,8 @@ fn open_local_source(app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::action::LibraryTarget;
-  use crate::core::app::RouteId;
+  use crate::core::app::{ActiveBlock, RouteId};
+  use crate::core::test_helpers::app_with_sidebar;
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use std::sync::mpsc::channel;
@@ -169,5 +171,30 @@ mod tests {
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetLocalPlaylists)));
     assert_eq!(app.view.selected_playlist_index, Some(0));
     assert_eq!(app.view.local_playlists_index, 0);
+  }
+
+  // This also applies to playlist block
+  #[test]
+  fn with_the_sidebar_on_the_right_the_left_key_enters_the_content() {
+    let mut app = app_with_sidebar("right");
+    app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+    app.set_current_route_state(Some(ActiveBlock::Library), Some(ActiveBlock::Library));
+
+    handler(Key::Right, &mut app);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Library);
+
+    handler(Key::Left, &mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::AlbumTracks
+    );
+  }
+
+  #[test]
+  fn opening_a_library_row_remembers_the_library_panel() {
+    let mut app = App::default();
+    app.view.last_sidebar_block = SidebarBlock::Playlists;
+    activate_selected(&mut app);
+    assert_eq!(app.view.last_sidebar_block, SidebarBlock::Library);
   }
 }

@@ -8,8 +8,8 @@ pub fn handler(key: Key, app: &mut App) {
   // A row parked by an earlier key follows only that key; the paging arms below re-park.
   app.forget_pending_row_selection();
   match key {
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
-      common_key_events::handle_left_event(app)
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
+      common_key_events::focus_sidebar(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       let current_index = app.view.track_table_index;
@@ -403,11 +403,11 @@ fn saved_tracks_playback_request(app: &App) -> Option<(Vec<String>, usize)> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::PendingTrackSelection;
+  use crate::core::app::{ActiveBlock, PendingTrackSelection};
   use crate::core::geometry::Viewport;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{PlayableInfo, TrackInfo};
-  use crate::core::test_helpers::full_track;
+  use crate::core::test_helpers::{app_with_sidebar, full_track};
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use chrono::Utc;
@@ -1078,5 +1078,23 @@ mod tests {
       IoEvent::StartPlayback(_, _, _) => "StartPlayback",
       _ => "other",
     }
+  }
+
+  // This applies to any content window
+  #[test]
+  fn with_the_sidebar_on_the_right_the_right_key_leaves_the_track_table() {
+    let mut app = app_with_sidebar("right");
+    app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+
+    handler(Key::Left, &mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::TrackTable
+    );
+
+    handler(Key::Right, &mut app);
+    let current_route = app.get_current_route();
+    assert_eq!(current_route.active_block, ActiveBlock::Empty);
+    assert_eq!(current_route.hovered_block, ActiveBlock::Library);
   }
 }

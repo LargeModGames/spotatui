@@ -91,6 +91,32 @@ pub enum ActiveBlock {
   PluginScreen,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum SidebarBlock {
+  #[default]
+  Library,
+  Playlists,
+}
+
+impl From<SidebarBlock> for ActiveBlock {
+  fn from(block: SidebarBlock) -> Self {
+    match block {
+      SidebarBlock::Library => ActiveBlock::Library,
+      SidebarBlock::Playlists => ActiveBlock::MyPlaylists,
+    }
+  }
+}
+
+impl From<ActiveBlock> for SidebarBlock {
+  fn from(block: ActiveBlock) -> Self {
+    match block {
+      ActiveBlock::Library => SidebarBlock::Library,
+      ActiveBlock::MyPlaylists => SidebarBlock::Playlists,
+      _ => SidebarBlock::Library, // fallback for non-sidebar blocks
+    }
+  }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum InputContext {
   #[default]

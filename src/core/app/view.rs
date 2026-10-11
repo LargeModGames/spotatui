@@ -51,6 +51,9 @@ pub struct ViewState {
   pub queue_selected_index: usize,
   /// Cursor in the Local Files folder list.
   pub local_playlists_index: usize,
+  /// Hold the last sidebar block the user was on.
+  /// Defaults to `ActiveBlock::Library` since ActiveBlock has no default
+  pub last_sidebar_block: SidebarBlock,
 
   // Table cursors. A producer that replaces a list resets or clamps these
   // through an `App` method (`set_track_table`, `set_search_results`, ...),

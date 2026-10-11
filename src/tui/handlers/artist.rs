@@ -296,24 +296,61 @@ pub fn handler(key: Key, app: &mut App) {
       }
       k if common_key_events::left_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
+        let sidebar_right = common_key_events::sidebar_on_right(&app.user_config);
         match artist.artist_hovered_block {
-          ArtistBlock::TopTracks => common_key_events::handle_left_event(app),
+          ArtistBlock::TopTracks => {
+            if sidebar_right {
+              // far edge: wrap to the last visible column
+              artist.artist_hovered_block = if artist.related_artists_visible() {
+                ArtistBlock::RelatedArtists
+              } else {
+                ArtistBlock::Albums
+              };
+            } else {
+              common_key_events::focus_sidebar(app);
+            }
+          }
           ArtistBlock::Albums => {
             if artist.top_tracks_visible() {
               artist.artist_hovered_block = ArtistBlock::TopTracks;
+            } else if sidebar_right {
+              // far edge with no Top Tracks: wrap to Related Artists if it is shown
+              if artist.related_artists_visible() {
+                artist.artist_hovered_block = ArtistBlock::RelatedArtists;
+              }
             } else {
-              common_key_events::handle_left_event(app);
+              common_key_events::focus_sidebar(app);
             }
           }
-          ArtistBlock::RelatedArtists => {
-            artist.artist_hovered_block = ArtistBlock::Albums;
-          }
+          ArtistBlock::RelatedArtists => artist.artist_hovered_block = ArtistBlock::Albums,
           ArtistBlock::Empty => {}
         }
       }
       k if common_key_events::right_event(k, &app.user_config.keys) => {
         artist.artist_selected_block = ArtistBlock::Empty;
-        handle_down_press_on_hovered_block(app);
+        let sidebar_right = common_key_events::sidebar_on_right(&app.user_config);
+        match artist.artist_hovered_block {
+          ArtistBlock::TopTracks => artist.artist_hovered_block = ArtistBlock::Albums,
+          ArtistBlock::Albums => {
+            if artist.related_artists_visible() {
+              artist.artist_hovered_block = ArtistBlock::RelatedArtists;
+            } else if sidebar_right {
+              common_key_events::focus_sidebar(app);
+            } else if artist.top_tracks_visible() {
+              artist.artist_hovered_block = ArtistBlock::TopTracks;
+            }
+          }
+          ArtistBlock::RelatedArtists => {
+            if sidebar_right {
+              common_key_events::focus_sidebar(app);
+            } else if artist.top_tracks_visible() {
+              artist.artist_hovered_block = ArtistBlock::TopTracks;
+            } else {
+              artist.artist_hovered_block = ArtistBlock::Albums;
+            }
+          }
+          ArtistBlock::Empty => {}
+        }
       }
       k if common_key_events::high_event(k)
         && artist.artist_selected_block != ArtistBlock::Empty =>
@@ -410,6 +447,7 @@ mod tests {
   use crate::core::app::ActiveBlock;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{ArtistInfo, TrackInfo};
+  use crate::core::test_helpers::app_with_sidebar;
 
   fn track(id: &str, name: &str) -> TrackInfo {
     TrackInfo {
@@ -482,6 +520,16 @@ mod tests {
 
   fn app_hovering_with(mut app: App, page: Artist) -> App {
     app.artist = Some(page);
+    app
+  }
+
+  fn focused_artist_app(sidebar_position: &str, hovered: ArtistBlock, mut page: Artist) -> App {
+    page.artist_hovered_block = hovered;
+    let mut app = app_hovering_with(app_with_sidebar(sidebar_position), page);
+    app.set_current_route_state(
+      Some(ActiveBlock::ArtistBlock),
+      Some(ActiveBlock::ArtistBlock),
+    );
     app
   }
 
@@ -568,6 +616,78 @@ mod tests {
     handler(Key::Left, &mut app);
 
     assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+  }
+
+  #[test]
+  fn right_press_from_related_artists_focuses_the_right_sidebar() {
+    let page = artist_page(vec![related_artist("artist2", "Second")]);
+    let mut app = focused_artist_app("right", ArtistBlock::RelatedArtists, page);
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+  }
+
+  #[test]
+  fn right_press_from_albums_focuses_the_right_sidebar_when_related_artists_are_hidden() {
+    let mut app = focused_artist_app("right", ArtistBlock::Albums, artist_page(vec![]));
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
+  }
+
+  #[test]
+  fn right_press_from_top_tracks_still_moves_to_albums_with_the_sidebar_on_the_right() {
+    let page = artist_page(vec![related_artist("artist2", "Second")]);
+    let mut app = focused_artist_app("right", ArtistBlock::TopTracks, page);
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::ArtistBlock
+    );
+  }
+
+  #[test]
+  fn left_press_from_top_tracks_wraps_to_related_artists_with_the_sidebar_on_the_right() {
+    let page = artist_page(vec![related_artist("artist2", "Second")]);
+    let mut app = focused_artist_app("right", ArtistBlock::TopTracks, page);
+
+    handler(Key::Left, &mut app);
+
+    assert_eq!(hovered_block(&app), ArtistBlock::RelatedArtists);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::ArtistBlock
+    );
+  }
+
+  #[test]
+  fn left_press_from_top_tracks_wraps_to_albums_when_related_artists_are_hidden() {
+    let mut app = focused_artist_app("right", ArtistBlock::TopTracks, artist_page(vec![]));
+
+    handler(Key::Left, &mut app);
+
+    assert_eq!(hovered_block(&app), ArtistBlock::Albums);
+  }
+
+  #[test]
+  fn right_press_from_related_artists_still_wraps_with_the_sidebar_on_the_left() {
+    let page = artist_page(vec![related_artist("artist2", "Second")]);
+    let mut app = focused_artist_app("left", ArtistBlock::RelatedArtists, page);
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(hovered_block(&app), ArtistBlock::TopTracks);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::ArtistBlock
+    );
   }
 
   #[test]

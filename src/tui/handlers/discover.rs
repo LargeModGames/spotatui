@@ -7,8 +7,8 @@ const DISCOVER_OPTIONS_COUNT: usize = 2;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
-      common_key_events::handle_left_event(app)
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
+      common_key_events::focus_sidebar(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       let next_index = if app.view.discover_selected_index >= DISCOVER_OPTIONS_COUNT - 1 {
@@ -27,7 +27,8 @@ pub fn handler(key: Key, app: &mut App) {
       app.view.discover_selected_index = next_index;
     }
     // Left/Right to cycle time range (for Top Tracks)
-    k if common_key_events::right_event(k, &app.user_config.keys)
+    k if (common_key_events::right_event(k, &app.user_config.keys)
+      || common_key_events::left_event(k, &app.user_config.keys))
       && app.view.discover_selected_index == 1 =>
     {
       // Only cycle time range when Top Tracks is selected
@@ -141,6 +142,17 @@ mod tests {
 
     handler(Key::Char('['), &mut app);
     handler(Key::Char(']'), &mut app);
+
+    assert_eq!(app.view.discover_selected_index, 0);
+    assert_eq!(app.view.discover_time_range, before);
+  }
+
+  #[test]
+  fn right_does_not_cycle_time_range_on_the_artists_mix_row() {
+    let (mut app, _rx) = app_with_channel();
+    let before = app.view.discover_time_range;
+
+    handler(Key::Right, &mut app);
 
     assert_eq!(app.view.discover_selected_index, 0);
     assert_eq!(app.view.discover_time_range, before);
