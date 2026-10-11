@@ -6,7 +6,9 @@ use crate::tui::layout::{
   compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
 };
 use crate::tui::ui::player::{playbar_control_at, playbar_progress_line};
-use crate::tui::ui::settings::{filtered_setting_indices, settings_layout};
+use crate::tui::ui::settings::{
+  filtered_setting_indices, selected_setting_position, settings_layout,
+};
 use crate::tui::ui::tables::table_scroll_offset;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -358,9 +360,13 @@ fn selected_setting_expects_key_capture(app: &App) -> bool {
 
 fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
   // Rows are drawn from the filtered view, so a click resolves to a position in
-  // it before it means anything as an index into `settings_items`.
+  // it before it means anything as an index into `settings_items`. The last
+  // frame scrolled to keep the selection from before this click on screen, so
+  // the scroll offset comes from that selection's position in the same view.
   let visible = filtered_setting_indices(app);
-  let Some(clicked_row) = settings_item_index_from_click(list_area, mouse_row, visible.len())
+  let selected_position = selected_setting_position(app).unwrap_or(0);
+  let Some(clicked_row) =
+    list_item_index_from_click(list_area, mouse_row, selected_position, visible.len())
   else {
     return;
   };
@@ -787,28 +793,6 @@ fn settings_tab_index_from_click(
   }
 
   None
-}
-
-fn settings_item_index_from_click(
-  list_area: Rect,
-  mouse_row: u16,
-  item_count: usize,
-) -> Option<usize> {
-  if item_count == 0 || list_area.height <= 2 {
-    return None;
-  }
-
-  let inner_top = list_area.y.saturating_add(1);
-  let inner_bottom_exclusive = list_area
-    .y
-    .saturating_add(list_area.height)
-    .saturating_sub(1);
-  if mouse_row < inner_top || mouse_row >= inner_bottom_exclusive {
-    return None;
-  }
-
-  let row_index = (mouse_row - inner_top) as usize;
-  (row_index < item_count).then_some(row_index)
 }
 
 struct SettingsLayoutAreas {
@@ -1680,6 +1664,65 @@ mod tests {
     assert_eq!(app.view.settings_filter, "sort");
     assert_eq!(app.view.settings_selected_index, visible[1]);
     assert_ne!(visible[1], 1);
+  }
+
+  #[test]
+  fn clicking_the_top_row_of_a_scrolled_settings_list_selects_the_row_that_was_drawn() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 100,
+      height: 20,
+    };
+    open_settings(&mut app);
+    let visible = filtered_setting_indices(&app);
+    let areas = settings_layout_areas(&app).expect("settings layout areas");
+    let inner_height = (areas.list.height - 2) as usize;
+    assert!(
+      visible.len() > inner_height,
+      "the list must overflow its box to scroll"
+    );
+
+    // The last row is selected, so the drawn list is scrolled to the bottom.
+    app.view.settings_selected_index = *visible.last().unwrap();
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        areas.list.x + 2,
+        areas.list.y + 1,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(
+      app.view.settings_selected_index,
+      visible[visible.len() - inner_height]
+    );
+    assert!(!app.view.settings_edit_mode);
+  }
+
+  #[test]
+  fn clicking_a_settings_row_before_the_list_scrolls_selects_the_row_under_the_pointer() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 100,
+      height: 20,
+    };
+    open_settings(&mut app);
+    let visible = filtered_setting_indices(&app);
+    assert!(visible.len() > 2, "expected several Behavior rows");
+    app.view.settings_selected_index = visible[0];
+
+    let areas = settings_layout_areas(&app).expect("settings layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        areas.list.x + 2,
+        areas.list.y + 3,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(app.view.settings_selected_index, visible[2]);
   }
 
   #[test]

@@ -46,7 +46,7 @@ pub fn handler(key: Key, app: &mut App) {
         _ => {}
       }
     }
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
       match app.get_current_route().hovered_block {
         ActiveBlock::ArtistBlock
         | ActiveBlock::AlbumList
@@ -61,13 +61,13 @@ pub fn handler(key: Key, app: &mut App) {
         | ActiveBlock::Stats
         | ActiveBlock::PlaylistSync
         | ActiveBlock::LocalBrowser => {
-          app.set_current_route_state(None, Some(ActiveBlock::Library));
+          app.set_current_route_state(None, Some(app.view.last_sidebar_block.into()));
         }
         _ => {}
       }
     }
-    k if common_key_events::right_event(k, &app.user_config.keys) => {
-      common_key_events::handle_right_event(app)
+    k if common_key_events::toward_content_event(k, &app.user_config) => {
+      common_key_events::focus_content(app)
     }
     Key::Char('w') if app.get_current_route().hovered_block == ActiveBlock::PlayBar => {
       super::playbar::handler(key, app);
@@ -81,6 +81,7 @@ mod tests {
   use super::*;
   use crate::core::app::RouteId;
   use crate::core::source::Source;
+  use crate::core::test_helpers::app_with_sidebar;
 
   #[test]
   fn up_and_left_reach_the_library_under_a_free_source() {
@@ -174,6 +175,21 @@ mod tests {
   }
 
   #[test]
+  fn an_unfocused_content_screen_returns_to_the_remembered_playlist_panel() {
+    let mut app = App::default();
+    app.view.last_sidebar_block = ActiveBlock::MyPlaylists.into();
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::TrackTable));
+
+    handler(Key::Left, &mut app);
+
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
+  #[test]
   fn an_unfocused_stats_screen_moves_down_to_the_playbar() {
     for block in [
       ActiveBlock::Stats,
@@ -239,5 +255,15 @@ mod tests {
     handler(Key::Char('w'), &mut app);
 
     assert_eq!(app.status_message(), Some("No track currently playing"));
+  }
+
+  #[test]
+  fn with_the_sidebar_on_the_right_an_unfocused_screen_moves_right_to_the_sidebar() {
+    let mut app = app_with_sidebar("right");
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::TrackTable));
+
+    handler(Key::Right, &mut app);
+
+    assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Library);
   }
 }

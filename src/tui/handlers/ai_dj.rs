@@ -71,10 +71,10 @@ pub fn handler(key: Key, app: &mut App) {
     // `keys.move_left` defaults to a bare `h`, and this arm sits above
     // `Key::Char(c)`, so without the guard a prompt could never begin with one.
     k if !matches!(k, Key::Char(_))
-      && common_key_events::left_event(k, &app.user_config.keys)
+      && common_key_events::toward_sidebar_event(k, &app.user_config)
       && app.dj.input.is_empty() =>
     {
-      common_key_events::handle_left_event(app)
+      common_key_events::focus_sidebar(app)
     }
     Key::Enter => submit(app),
     Key::Char(c) => insert(app, c),

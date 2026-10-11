@@ -477,7 +477,7 @@ impl ScriptEngine {
   fn playback_value(&self) -> Value {
     let pb = self.shared.playback.borrow().clone();
     match pb {
-      Some(state) => self.lua.to_value(&state).unwrap_or(Value::Nil),
+      Some(state) => snapshot_to_lua(&self.lua, &state).unwrap_or(Value::Nil),
       None => Value::Nil,
     }
   }
@@ -1055,18 +1055,28 @@ fn discover_user_scripts(config_dir: &Path) -> Vec<(PathBuf, Option<PathBuf>)> {
   discovered
 }
 
+/// Serialize a plugin snapshot with `None` as Lua `nil`, as the docs promise.
+pub(super) fn snapshot_to_lua<T: serde::Serialize>(lua: &Lua, value: &T) -> mlua::Result<Value> {
+  lua.to_value_with(
+    value,
+    mlua::serde::SerializeOptions::new().serialize_none_to_null(false),
+  )
+}
+
 /// Serialize the plugin-facing snapshot for a data kind from `App` state.
 fn data_value_for(lua: &Lua, kind: PluginDataKind, app: &App) -> mlua::Result<Value> {
   match kind {
-    PluginDataKind::Playlists => lua.to_value(&plugin_api::playlists_snapshot(app)),
-    PluginDataKind::Queue => lua.to_value(&plugin_api::queue_snapshot(app)),
-    PluginDataKind::Search => lua.to_value(&plugin_api::search_results_snapshot(app)),
-    PluginDataKind::SavedTracks => lua.to_value(&plugin_api::saved_tracks_snapshot(app)),
-    PluginDataKind::SavedAlbums => lua.to_value(&plugin_api::saved_albums_snapshot(app)),
-    PluginDataKind::SavedShows => lua.to_value(&plugin_api::saved_shows_snapshot(app)),
-    PluginDataKind::RecentlyPlayed => lua.to_value(&plugin_api::recently_played_snapshot(app)),
-    PluginDataKind::Devices => lua.to_value(&plugin_api::device_list(app)),
-    PluginDataKind::Lyrics => lua.to_value(&plugin_api::lyrics_snapshot(app)),
+    PluginDataKind::Playlists => snapshot_to_lua(lua, &plugin_api::playlists_snapshot(app)),
+    PluginDataKind::Queue => snapshot_to_lua(lua, &plugin_api::queue_snapshot(app)),
+    PluginDataKind::Search => snapshot_to_lua(lua, &plugin_api::search_results_snapshot(app)),
+    PluginDataKind::SavedTracks => snapshot_to_lua(lua, &plugin_api::saved_tracks_snapshot(app)),
+    PluginDataKind::SavedAlbums => snapshot_to_lua(lua, &plugin_api::saved_albums_snapshot(app)),
+    PluginDataKind::SavedShows => snapshot_to_lua(lua, &plugin_api::saved_shows_snapshot(app)),
+    PluginDataKind::RecentlyPlayed => {
+      snapshot_to_lua(lua, &plugin_api::recently_played_snapshot(app))
+    }
+    PluginDataKind::Devices => snapshot_to_lua(lua, &plugin_api::device_list(app)),
+    PluginDataKind::Lyrics => snapshot_to_lua(lua, &plugin_api::lyrics_snapshot(app)),
   }
 }
 
