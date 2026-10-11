@@ -1,10 +1,10 @@
 use super::common_key_events;
-use crate::core::{action::Action, app::SidebarBlock};
 #[cfg(feature = "local-files")]
 use crate::core::action::LibraryTarget;
 use crate::core::app::App;
 #[cfg(any(feature = "local-files", test))]
 use crate::core::source::Source;
+use crate::core::{action::Action, app::SidebarBlock};
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
@@ -188,5 +188,13 @@ mod tests {
       app.get_current_route().active_block,
       ActiveBlock::AlbumTracks
     );
+  }
+
+  #[test]
+  fn opening_a_library_row_remembers_the_library_panel() {
+    let mut app = App::default();
+    app.view.last_sidebar_block = SidebarBlock::Playlists;
+    activate_selected(&mut app);
+    assert_eq!(app.view.last_sidebar_block, SidebarBlock::Library);
   }
 }

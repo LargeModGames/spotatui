@@ -628,4 +628,12 @@ mod tests {
       ActiveBlock::Dialog(DialogContext::PlaylistSyncPicker)
     );
   }
+
+  #[test]
+  fn opening_a_playlist_row_remembers_the_playlist_panel() {
+    let mut app = App::default();
+    app.view.last_sidebar_block = SidebarBlock::Library;
+    activate_selected(&mut app);
+    assert_eq!(app.view.last_sidebar_block, SidebarBlock::Playlists);
+  }
 }
