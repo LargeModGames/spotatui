@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::core::app::UserInfo;
+use crate::core::app::{App, UserInfo};
 use crate::core::plugin_api::PlaylistInfo;
 #[cfg(feature = "streaming")]
 use crate::core::plugin_api::TrackInfo;
@@ -145,6 +145,12 @@ pub fn full_track(id: &str, name: &str) -> FullTrack {
     track_number: 1,
     r#type: rspotify::model::Type::Track,
   }
+}
+
+pub fn app_with_sidebar(position: &str) -> App {
+  let mut app = App::default();
+  app.user_config.behavior.sidebar_position = position.to_string();
+  app
 }
 
 /// Scripted [`Onboarding`] double: hands out canned prompt answers in order

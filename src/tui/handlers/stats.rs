@@ -5,8 +5,8 @@ use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
-      common_key_events::handle_left_event(app)
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
+      common_key_events::focus_sidebar(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       if let Some(stats) = &app.stats_data {
@@ -172,8 +172,8 @@ mod tests {
     let (mut app, _rx) = app_with_track(None);
     app.push_navigation_stack(RouteId::Stats, ActiveBlock::Stats);
     // Left puts focus back on the sidebar; right must return it to the screen.
-    common_key_events::handle_left_event(&mut app);
-    common_key_events::handle_right_event(&mut app);
+    common_key_events::focus_sidebar(&mut app);
+    common_key_events::focus_content(&mut app);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Stats);
   }
 }

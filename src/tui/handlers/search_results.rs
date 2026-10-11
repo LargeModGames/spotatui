@@ -478,9 +478,9 @@ fn handle_radio_key(key: Key, app: &mut App) {
     Key::Esc => {
       app.view.search_selected_block = SearchResultBlock::Empty;
     }
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
       app.view.search_selected_block = SearchResultBlock::Empty;
-      common_key_events::handle_left_event(app);
+      common_key_events::focus_sidebar(app);
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       app.view.search_selected_block = SearchResultBlock::SongSearch;
@@ -541,10 +541,18 @@ pub fn handler(key: Key, app: &mut App) {
       app.view.search_selected_block = SearchResultBlock::Empty;
       match app.view.search_hovered_block {
         SearchResultBlock::AlbumSearch => {
-          common_key_events::handle_left_event(app);
+          if !common_key_events::sidebar_on_right(&app.user_config) {
+            common_key_events::focus_sidebar(app);
+          } else {
+            app.view.search_hovered_block = SearchResultBlock::PlaylistSearch;
+          }
         }
         SearchResultBlock::SongSearch => {
-          common_key_events::handle_left_event(app);
+          if !common_key_events::sidebar_on_right(&app.user_config) {
+            common_key_events::focus_sidebar(app);
+          } else {
+            app.view.search_hovered_block = SearchResultBlock::ArtistSearch;
+          }
         }
         SearchResultBlock::ArtistSearch => {
           app.view.search_hovered_block = SearchResultBlock::SongSearch;
@@ -553,7 +561,9 @@ pub fn handler(key: Key, app: &mut App) {
           app.view.search_hovered_block = SearchResultBlock::AlbumSearch;
         }
         SearchResultBlock::ShowSearch => {
-          common_key_events::handle_left_event(app);
+          if !common_key_events::sidebar_on_right(&app.user_config) {
+            common_key_events::focus_sidebar(app);
+          }
         }
         SearchResultBlock::Empty => {}
       }
@@ -568,12 +578,24 @@ pub fn handler(key: Key, app: &mut App) {
           app.view.search_hovered_block = SearchResultBlock::ArtistSearch;
         }
         SearchResultBlock::ArtistSearch => {
-          app.view.search_hovered_block = SearchResultBlock::SongSearch;
+          if common_key_events::sidebar_on_right(&app.user_config) {
+            common_key_events::focus_sidebar(app);
+          } else {
+            app.view.search_hovered_block = SearchResultBlock::SongSearch;
+          }
         }
         SearchResultBlock::PlaylistSearch => {
-          app.view.search_hovered_block = SearchResultBlock::AlbumSearch;
+          if common_key_events::sidebar_on_right(&app.user_config) {
+            common_key_events::focus_sidebar(app);
+          } else {
+            app.view.search_hovered_block = SearchResultBlock::AlbumSearch;
+          }
         }
-        SearchResultBlock::ShowSearch => {}
+        SearchResultBlock::ShowSearch => {
+          if common_key_events::sidebar_on_right(&app.user_config) {
+            common_key_events::focus_sidebar(app);
+          }
+        }
         SearchResultBlock::Empty => {}
       }
     }

@@ -21,6 +21,7 @@
 ### Fixed
 
 - **Empty Lua plugin fields are `nil`**: missing values in playback, track, device and other snapshots now match the documented `nil` behavior, so guards such as `if track.release_date then` correctly skip absent values. JSON decoding and plugin storage keep their existing null sentinel ([#736](https://github.com/LargeModGames/spotatui/issues/736)).
+- **Focus keys follow the sidebar position**: with `sidebar_position: right`, the right key still moved focus into the content and the left key did nothing, because the keys assumed a sidebar on the left even though it was drawn on the right. Left and right now move towards and away from the sidebar as it appears on screen. Going back to the sidebar also returns to the panel you left (Library or Playlists) instead of always Library ([#738](https://github.com/LargeModGames/spotatui/issues/738)).
 
 - **Sort menu shortcut letters sort again**: the sort menu lists a letter next to each field, but with the default keys `n` skipped to the next track, `d` opened the device picker and `a` jumped to the playing album instead of sorting, and the menu stayed open. The same happened to `A`, `T` and `R` in uppercase. The global keybinding match ran before the menu could see the key; the menu now gets every key while it is open, like the Party popup and the Create Playlist form, so each listed letter sorts and the menu closes ([#660](https://github.com/LargeModGames/spotatui/issues/660)).
 

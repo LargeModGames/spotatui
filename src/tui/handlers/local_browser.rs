@@ -7,8 +7,8 @@ use crate::tui::event::Key;
 /// tracks in the shared track table.
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::left_event(k, &app.user_config.keys) => {
-      common_key_events::handle_left_event(app)
+    k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
+      common_key_events::focus_sidebar(app)
     }
     k if common_key_events::down_event(k, &app.user_config.keys) => {
       app.view.local_playlists_index = common_key_events::on_down_press_handler(
@@ -60,7 +60,7 @@ mod tests {
     app.push_navigation_stack(RouteId::LocalBrowser, ActiveBlock::LocalBrowser);
 
     handler(Key::Left, &mut app);
-    super::common_key_events::handle_right_event(&mut app);
+    super::common_key_events::focus_content(&mut app);
 
     assert_eq!(
       app.get_current_route().active_block,
