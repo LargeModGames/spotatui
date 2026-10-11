@@ -140,12 +140,14 @@ pub fn toward_content_event(key: Key, config: &UserConfig) -> bool {
 }
 
 pub fn focus_sidebar(app: &mut App) {
-  app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+  let target = app.view.last_sidebar_block.into(); // Library or MyPlaylists
+  app.set_current_route_state(Some(ActiveBlock::Empty), Some(target));
 }
 
 pub fn focus_content(app: &mut App) {
   let hovered = app.get_current_route().hovered_block;
   if matches!(hovered, ActiveBlock::Library | ActiveBlock::MyPlaylists) {
+    app.view.last_sidebar_block = hovered.into(); // the cache update
     if let Some(block) = content_active_block_for_route(&app.get_current_route().id) {
       app.set_current_route_state(Some(block), Some(block));
     }
