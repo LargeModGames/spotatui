@@ -10,7 +10,7 @@ visible status message in their TUI, so act deliberately and report what happene
 
 ## Before anything else
 
-The eight spotatui tools are visible whenever the plugin's server is registered.
+The spotatui tools are visible whenever the plugin's server is registered.
 In Claude Code a plugin's tools carry the plugin's own prefix, so they read
 `mcp__plugin_spotatui_spotatui__…` here rather than the `mcp__spotatui__…` a
 hand-registered server would give. Whether a *call* succeeds is a separate
@@ -45,8 +45,19 @@ full-screen terminal app and needs a real terminal. Ask the user to start it.
 | `play_now` | Start one track immediately |
 | `skip_track` | Skip to the next track |
 | `set_dj_vibe` | Record a standing direction for the built-in auto-queue DJ |
+| `list_playlists` | Their playlists with URIs, track counts and `owned` |
+| `get_album` | An album's artists, release year and tracks, each with a URI |
+| `get_artist` | An artist's top tracks and albums, each with a URI |
+| `list_devices` | Their Spotify Connect devices and which one is active |
+| `transfer_playback` | Move playback to another Connect device, by id or name |
+| `create_playlist` | Create a playlist, optionally with tracks |
+| `add_to_playlist` | Add tracks to a playlist they own or collaborate on |
+| `remove_from_playlist` | Remove one track by URI and 0-based position; destructive |
+| `like_tracks` | Add tracks to Liked Songs, or remove them with `liked: false` |
+| `follow_artist` | Follow an artist, or unfollow with `follow: false` |
 
-That is the whole surface. Do not promise the user control beyond it; in
+The library, playlist and device tools are Spotify-only and take at most 20 tracks
+per call. That is the whole surface. Do not promise the user control beyond it; in
 particular there is no tool to toggle continuous auto-queue. Change the user's
 library or playlists only when they asked for it.
 

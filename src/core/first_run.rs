@@ -4,8 +4,8 @@
 //! in right after the picker; picking only free sources starts the app with
 //! the first one, and Spotify can still be added later with the in-app login.
 //!
-//! Only sources whose Cargo feature is compiled in are offered. A build with just
-//! Spotify (the slim build) shows no picker and logs in to Spotify.
+//! Only sources whose Cargo feature is compiled in are offered. A build with one
+//! source shows no picker, and a build with none (the slim build) asks nothing.
 //!
 //! This module is the selection *logic*; all presentation goes through the
 //! [`Onboarding`] trait (the terminal picker itself lives in `tui/first_run.rs`).
@@ -58,13 +58,17 @@ pub async fn run_first_run_picker(
   onboarding: &dyn Onboarding,
 ) -> Result<bool> {
   let options = compiled_in_sources();
+  let Some(&first) = options.first() else {
+    end_first_run(user_config, runtime_state, state_path, onboarding)?;
+    return Ok(false);
+  };
   let selections = if options.len() == 1 {
     options
   } else {
-    // Cancelled (esc / ctrl-c) or nothing checked: Spotify, the historical default.
+    // Cancelled (esc / ctrl-c) or nothing checked: the first source, Spotify when compiled in.
     onboarding
       .pick_sources(&options)?
-      .unwrap_or_else(|| vec![Source::Spotify])
+      .unwrap_or_else(|| vec![first])
   };
 
   apply_selections(
@@ -75,6 +79,25 @@ pub async fn run_first_run_picker(
     onboarding,
   )
   .await
+}
+
+fn end_first_run(
+  user_config: &UserConfig,
+  runtime_state: &RuntimeState,
+  state_path: Option<&Path>,
+  onboarding: &dyn Onboarding,
+) -> Result<()> {
+  // The global song counter opt-in is asked before this picker runs, so the
+  // user's choice already sits on `user_config`; save_config persists it here.
+  // The active source is runtime state, and its file marks the first run done.
+  save_config_or_warn(user_config, onboarding);
+  if let Some(state_path) = state_path {
+    crate::core::state::save(
+      state_path,
+      &PersistedRuntimeState::active_source(runtime_state.active_source),
+    )?;
+  }
+  Ok(())
 }
 
 /// Act on the sources the user chose. `active_source` is set to the first checked
@@ -90,16 +113,7 @@ async fn apply_selections(
   let active = selections[0];
 
   runtime_state.active_source = active;
-  // The global song counter opt-in is asked before this picker runs, so the
-  // user's choice already sits on `user_config`; save_config persists it here.
-  // The active source is runtime state, and its file marks the first run done.
-  save_config_or_warn(user_config, onboarding);
-  if let Some(state_path) = state_path {
-    crate::core::state::save(
-      state_path,
-      &PersistedRuntimeState::active_source(runtime_state.active_source),
-    )?;
-  }
+  end_first_run(user_config, runtime_state, state_path, onboarding)?;
 
   // Collect credentials / check prerequisites for each chosen free source.
   for source in &selections {
@@ -123,25 +137,24 @@ async fn apply_selections(
   Ok(false)
 }
 /// The sources whose Cargo feature is compiled into this build, in display order.
-/// Spotify is always present.
+/// Spotify comes first when `spotify-session` is compiled in.
 pub(crate) fn compiled_in_sources() -> Vec<Source> {
-  // `mut` is unused in a Spotify-only (slim) build where every push is cfg'd out.
-  #[cfg_attr(not(feature = "audio-decode"), allow(unused_mut))]
-  let mut options = vec![Source::Spotify];
-  #[cfg(feature = "youtube")]
-  options.push(Source::YouTube);
-  #[cfg(feature = "subsonic")]
-  options.push(Source::Subsonic);
-  #[cfg(feature = "internet-radio")]
-  options.push(Source::Radio);
-  #[cfg(feature = "local-files")]
-  options.push(Source::Local);
-  #[cfg(feature = "qobuz")]
-  options.push(Source::Qobuz);
-  // Needs nothing up front: macOS asks for Automation access on first use.
-  #[cfg(all(feature = "apple-music", target_os = "macos"))]
-  options.push(Source::AppleMusic);
-  options
+  [
+    (cfg!(feature = "spotify-session"), Source::Spotify),
+    (cfg!(feature = "youtube"), Source::YouTube),
+    (cfg!(feature = "subsonic"), Source::Subsonic),
+    (cfg!(feature = "internet-radio"), Source::Radio),
+    (cfg!(feature = "local-files"), Source::Local),
+    (cfg!(feature = "qobuz"), Source::Qobuz),
+    // Needs nothing up front: macOS asks for Automation access on first use.
+    (
+      cfg!(all(feature = "apple-music", target_os = "macos")),
+      Source::AppleMusic,
+    ),
+  ]
+  .into_iter()
+  .filter_map(|(compiled, source)| compiled.then_some(source))
+  .collect()
 }
 
 // `user_config` and `onboarding` are only read by credential/config-collecting
@@ -357,6 +370,40 @@ mod tests {
       compiled.contains(&Source::AppleMusic),
       Source::picker_sources().contains(&Source::AppleMusic)
     );
+  }
+
+  #[test]
+  fn spotify_is_offered_only_with_the_spotify_session() {
+    assert_eq!(
+      compiled_in_sources().contains(&Source::Spotify),
+      cfg!(feature = "spotify-session")
+    );
+  }
+
+  #[cfg(not(any(
+    feature = "spotify-session",
+    feature = "audio-decode",
+    all(feature = "apple-music", target_os = "macos")
+  )))]
+  #[tokio::test]
+  async fn a_build_with_no_source_ends_the_first_run_without_a_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_path = dir.path().join("state.yml");
+    let mut user_config = user_config_in(dir.path());
+    let mut runtime_state = RuntimeState::default();
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    let log_in = run_first_run_picker(
+      &mut user_config,
+      &mut runtime_state,
+      Some(&state_path),
+      &onboarding,
+    )
+    .await
+    .unwrap();
+
+    assert!(!log_in);
+    assert!(!is_first_run(&state_path, None));
   }
 
   #[cfg(feature = "subsonic")]

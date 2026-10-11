@@ -14,6 +14,7 @@
 use super::{brief, DjSuggestion, MAX_BATCH};
 use crate::core::action::Action;
 use crate::core::app::App;
+use crate::core::plugin_api::PlaylistInfo;
 use crate::infra::network::ids;
 use crate::infra::network::search::SPOTIFY_SEARCH_LIMIT;
 use serde_json::{json, Value};
@@ -906,6 +907,9 @@ pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Optio
       if !app.spotify_connected {
         return Some(not_connected());
       }
+      if let Some(refused) = uneditable_playlist(&app, playlist) {
+        return Some(refused);
+      }
       for uri in uris {
         app.apply(Action::AddTrackToPlaylist {
           playlist: playlist.clone(),
@@ -921,19 +925,24 @@ pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Optio
       playlist,
       uri,
       position,
-    } => Some(
-      spotify_write(app, Action::RemoveTrackFromPlaylist {
-        playlist: playlist.clone(),
-        track: uri.clone(),
-        position: *position,
-      })
-      .await
-      .unwrap_or_else(|| {
-        ToolOutcome::ok(format!(
-          "Removing {uri} at position {position} from {playlist}, if that is the track there"
-        ))
-      }),
-    ),
+    } => {
+      if let Some(refused) = uneditable_playlist(&*app.lock().await, playlist) {
+        return Some(refused);
+      }
+      Some(
+        spotify_write(app, Action::RemoveTrackFromPlaylist {
+          playlist: playlist.clone(),
+          track: uri.clone(),
+          position: *position,
+        })
+        .await
+        .unwrap_or_else(|| {
+          ToolOutcome::ok(format!(
+            "Removing {uri} at position {position} from {playlist}, if that is the track there"
+          ))
+        }),
+      )
+    }
     DjToolCall::FollowArtist { artist, follow } => {
       let action = if *follow {
         Action::FollowArtist(artist.clone())
@@ -983,15 +992,33 @@ async fn spotify_write(app: &Arc<Mutex<App>>, action: Action) -> Option<ToolOutc
   None
 }
 
+fn owns_playlist(app: &App, playlist: &PlaylistInfo) -> bool {
+  playlist.owner_id.is_some()
+    && playlist.owner_id.as_deref() == app.user().as_ref().map(|user| user.id.as_str())
+}
+
+/// An error for a loaded playlist the user neither owns nor collaborates on.
+fn uneditable_playlist(app: &App, uri: &str) -> Option<ToolOutcome> {
+  let playlist = app
+    .all_playlists()
+    .iter()
+    .find(|playlist| playlist.uri == uri)?;
+  (!playlist.collaborative && !owns_playlist(app, playlist)).then(|| {
+    ToolOutcome::error(format!(
+      "\"{}\" is not a playlist the user owns or collaborates on, so it cannot be edited",
+      playlist.name
+    ))
+  })
+}
+
 async fn playlists_outcome(app: &Arc<Mutex<App>>) -> ToolOutcome {
   let app = app.lock().await;
-  let user_id = app.user().as_ref().map(|user| user.id.clone());
   let playlists: Vec<Value> = app
     .all_playlists()
     .iter()
     .filter(|playlist| playlist.uri.starts_with("spotify:playlist:"))
     .map(|playlist| {
-      let owned = playlist.owner_id.is_some() && playlist.owner_id == user_id;
+      let owned = owns_playlist(&app, playlist);
       json!({
         "name": playlist.name,
         "uri": playlist.uri,
@@ -1746,6 +1773,34 @@ mod tests {
     for _ in 0..2 {
       assert!(matches!(rx.try_recv(), Ok(IoEvent::AddTrackToPlaylist(..))));
     }
+  }
+
+  #[tokio::test]
+  async fn a_followed_playlist_of_someone_else_is_not_edited() {
+    use crate::core::test_helpers::{playlist_info, user_info};
+    let (app, rx) = app_with_channel(true);
+    {
+      let mut app = app.lock().await;
+      *app.user_mut() = Some(user_info("me"));
+      app.all_playlists_mut().extend([
+        playlist_info("00000000000000000000p2", "Theirs", "other", false),
+        playlist_info("00000000000000000000p3", "Shared", "other", true),
+      ]);
+    }
+    for tool in ["add_to_playlist", "remove_from_playlist"] {
+      let args = json!({"playlist": "spotify:playlist:00000000000000000000p2", "uris": [TRACK], "uri": TRACK, "position": 0});
+      let outcome = execute_app_only(&app, &parse_call(tool, &args).unwrap())
+        .await
+        .unwrap();
+      assert!(outcome.is_error, "{tool}");
+    }
+    assert!(rx.try_recv().is_err(), "nothing reaches the pump");
+
+    let shared = json!({"playlist": "spotify:playlist:00000000000000000000p3", "uris": [TRACK]});
+    let outcome = execute_app_only(&app, &parse_call("add_to_playlist", &shared).unwrap())
+      .await
+      .unwrap();
+    assert!(!outcome.is_error);
   }
 
   #[tokio::test]

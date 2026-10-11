@@ -19,6 +19,7 @@ use librespot_protocol::devices::DeviceType;
 use protobuf::{EnumOrUnknown, Message as _, MessageField};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -311,16 +312,41 @@ pub async fn queue(session: &SpotifySession) -> anyhow::Result<Value> {
     .filter(|uri| uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:"))
     .take(QUEUE_LENGTH)
     .collect();
-  let mut queue = Vec::new();
-  for uri in &uris {
-    if let Some(item) = playable(session, uri).await? {
-      queue.push(item);
-    }
-  }
   Ok(json!({
     "currently_playing": playable(session, &state.track.uri).await?,
-    "queue": queue,
+    "queue": playables(session, &uris).await?,
   }))
+}
+
+/// The tracks and episodes of `uris` in order, one batched lookup per kind.
+async fn playables(session: &SpotifySession, uris: &[String]) -> anyhow::Result<Vec<Value>> {
+  let (tracks, episodes): (Vec<String>, Vec<String>) = uris
+    .iter()
+    .cloned()
+    .partition(|uri| uri.starts_with("spotify:track:"));
+  let mut found: HashMap<&str, Value> = HashMap::new();
+  for (uri, track) in tracks
+    .iter()
+    .zip(get_many::<Track>(session, &tracks).await?)
+  {
+    if let Some(track) = track {
+      found.insert(uri, json::track_full(&track));
+    }
+  }
+  for (uri, episode) in episodes
+    .iter()
+    .zip(get_many::<Episode>(session, &episodes).await?)
+  {
+    if let Some(episode) = episode {
+      found.insert(uri, json::episode_full(&episode));
+    }
+  }
+  Ok(
+    uris
+      .iter()
+      .filter_map(|uri| found.get(uri.as_str()).cloned())
+      .collect(),
+  )
 }
 
 /// A device that refuses a command answers 403, which the Web API words as a

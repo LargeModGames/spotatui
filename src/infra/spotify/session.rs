@@ -103,19 +103,25 @@ pub async fn current() -> Result<Arc<SpotifySession>, Unavailable> {
   if !may_connect(slot.last_failure, Instant::now()) {
     return Err(Unavailable::Offline);
   }
-  install(&mut slot, connect(None).await)
+  drop_refused_login(install(&mut slot, connect(None).await))
 }
 
 /// Connects with the credentials of a fresh login; librespot caches reusable
-/// ones on success. A non-Premium login is not kept.
+/// ones on success.
 pub async fn log_in(credentials: Credentials) -> Result<(), Unavailable> {
   let mut slot = slot().lock().await;
   *slot = Slot::default();
-  let result = install(&mut slot, connect(Some(credentials)).await);
+  drop_refused_login(install(&mut slot, connect(Some(credentials)).await)).map(|_| ())
+}
+
+/// A non-Premium login is not kept, so the next launch offers the login again.
+fn drop_refused_login(
+  result: Result<Arc<SpotifySession>, Unavailable>,
+) -> Result<Arc<SpotifySession>, Unavailable> {
   if matches!(result, Err(Unavailable::NotPremium)) {
     clear_cached_streaming_credentials(&get_default_cache_path());
   }
-  result.map(|_| ())
+  result
 }
 
 /// Logs out: drops the session and the cached login.
@@ -196,11 +202,7 @@ async fn connect(credentials: Option<Credentials>) -> Result<Connected> {
     session.shutdown();
     return Ok(Connected::NotPremium);
   }
-  info!(
-    "Spotify session connected for {} ({})",
-    session.username(),
-    session.country()
-  );
+  info!("Spotify session connected ({})", session.country());
   Ok(Connected::Session(SpotifySession {
     session,
     observer: tokio::sync::OnceCell::new(),

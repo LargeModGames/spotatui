@@ -292,7 +292,14 @@ impl Network {
   /// Toggles only the tracks whose liked state differs, after reading it.
   async fn dj_like(&self, uris: Vec<String>, liked: bool) -> ToolOutcome {
     let states = match self.library_contains_uris(&uris).await {
-      Ok(states) => states,
+      Ok(states) if states.len() == uris.len() => states,
+      Ok(states) => {
+        return ToolOutcome::error(format!(
+          "Could not read Liked Songs: Spotify answered for {} of {} track(s)",
+          states.len(),
+          uris.len()
+        ))
+      }
       Err(e) => return ToolOutcome::error(format!("Could not read Liked Songs: {e}")),
     };
     let mut app = self.app.lock().await;

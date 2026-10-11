@@ -36,7 +36,7 @@ pub(super) fn build_clap_app() -> ClapApp {
     .override_usage("Press `?` while running the app to see keybindings")
     .before_help(BANNER)
     .after_help(
-      "Client authentication settings are stored in the spotatui config directory (use --reconfigure-auth to update them)",
+      "The Spotify login is cached in the spotatui cache directory (use --reconfigure-auth to log in again)",
     )
     .arg(
       Arg::new("tick-rate")
@@ -59,7 +59,7 @@ screens more often and cost more CPU. Animation-heavy views keep their separate 
       Arg::new("reconfigure-auth")
         .long("reconfigure-auth")
         .action(clap::ArgAction::SetTrue)
-        .help("Rerun client authentication setup wizard"),
+        .help("Forget the cached Spotify login and log in again"),
     )
     .arg(
       Arg::new("play-file")
