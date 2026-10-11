@@ -9,6 +9,7 @@ use crate::core::plugin_api::{self, PluginPopup, PopupLine};
 use crate::core::theme::ThemeField;
 use crate::core::user_config::parse_theme_item;
 
+use super::engine::snapshot_to_lua;
 use super::events::VALID_EVENT_NAMES;
 use super::shared::{
   DataRequest, HttpResponseData, HttpResult, NewTimer, ScriptShared, COMMANDS_KEY,
@@ -82,7 +83,7 @@ pub(super) fn install_api(
     let playback = lua.create_function(move |lua, ()| {
       let pb = shared_pb.playback.borrow().clone();
       match pb {
-        Some(state) => lua.to_value(&state),
+        Some(state) => snapshot_to_lua(lua, &state),
         None => Ok(Value::Nil),
       }
     })?;
@@ -92,7 +93,7 @@ pub(super) fn install_api(
     let current_track = lua.create_function(move |lua, ()| {
       let pb = shared_ct.playback.borrow().clone();
       match pb.and_then(|s| s.track) {
-        Some(track) => lua.to_value(&track),
+        Some(track) => snapshot_to_lua(lua, &track),
         None => Ok(Value::Nil),
       }
     })?;
@@ -101,7 +102,7 @@ pub(super) fn install_api(
     let shared_dev = shared.clone();
     let devices = lua.create_function(move |lua, ()| {
       let devices = shared_dev.devices.borrow().clone();
-      lua.to_value(&devices)
+      snapshot_to_lua(lua, &devices)
     })?;
     tbl.set("devices", devices)?;
   }
@@ -385,18 +386,19 @@ pub(super) fn install_api(
   // generation advances.
   {
     let shared_pl = shared.clone();
-    let playlists =
-      lua.create_function(move |lua, ()| lua.to_value(&*shared_pl.playlists_cache.borrow()))?;
+    let playlists = lua
+      .create_function(move |lua, ()| snapshot_to_lua(lua, &*shared_pl.playlists_cache.borrow()))?;
     tbl.set("playlists", playlists)?;
 
     let shared_q = shared.clone();
     let queue =
-      lua.create_function(move |lua, ()| lua.to_value(&*shared_q.queue_cache.borrow()))?;
+      lua.create_function(move |lua, ()| snapshot_to_lua(lua, &*shared_q.queue_cache.borrow()))?;
     tbl.set("queue", queue)?;
 
     let shared_sr = shared.clone();
-    let search_results = lua
-      .create_function(move |lua, ()| lua.to_value(&*shared_sr.search_results_cache.borrow()))?;
+    let search_results = lua.create_function(move |lua, ()| {
+      snapshot_to_lua(lua, &*shared_sr.search_results_cache.borrow())
+    })?;
     tbl.set("search_results", search_results)?;
   }
 
@@ -583,7 +585,7 @@ pub(super) fn install_api(
   {
     let shared = shared.clone();
     let config =
-      lua.create_function(move |lua, ()| lua.to_value(&*shared.config_cache.borrow()))?;
+      lua.create_function(move |lua, ()| snapshot_to_lua(lua, &*shared.config_cache.borrow()))?;
     tbl.set("config", config)?;
   }
 
