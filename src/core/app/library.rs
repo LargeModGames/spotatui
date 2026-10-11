@@ -251,6 +251,10 @@ impl App {
     match context {
       SortContext::PlaylistTracks => {
         if let Some(playlist_id) = self.current_playlist_track_table_id() {
+          if self.try_sort_playlist_tracks_from_cached_pages(&playlist_id) {
+            return;
+          }
+
           self.dispatch(IoEvent::FetchAllPlaylistTracksAndSort(
             playlist_id.id().to_string(),
           ));

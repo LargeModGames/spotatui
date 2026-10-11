@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::sort::Sorter;
 
 /// Playlist URIs with this scheme address the local YouTube playlists file.
 pub(crate) const YOUTUBE_PLAYLIST_PREFIX: &str = "youtube:playlist:";
@@ -491,6 +492,63 @@ impl App {
     let selected_index = self.view.search_selected_playlists_index?;
     playlists.items.get(selected_index)?.id.clone()
   }
+
+    pub(crate) fn try_search_playlist_tracks_from_cached_pages(
+      &mut self,
+      playlist_id: &PlaylistId<'_>,
+      query: &str,
+    ) -> bool {
+      if !self.is_playlist_track_table_active_for(playlist_id)
+        || !self.playlist_track_pages.is_complete()
+      {
+        return false;
+      }
+
+      // Must be set so `playlist_track_search_is_current` passes
+      self.pending_playlist_track_search = Some(query.to_string());
+
+      let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|s| s.to_lowercase())
+        .collect();
+
+      let mut matches = Vec::new();
+      for page in &self.playlist_track_pages.pages {
+        for (position, item) in &page.items {
+          if let PlayableInfo::Track(track) = item {
+            if playlist_track_info_matches_terms(track, &terms) {
+              matches.push((track.clone(), *position as usize));
+            }
+          }
+        }
+      }
+
+      self.apply_playlist_track_search_results(playlist_id, query.to_string(), matches)
+    }
+
+    pub(crate) fn try_sort_playlist_tracks_from_cached_pages(
+      &mut self,
+      playlist_id: &PlaylistId<'_>,
+    ) -> bool {
+      if !self.is_playlist_track_table_active_for(playlist_id)
+        || !self.playlist_track_pages.is_complete()
+      {
+        return false;
+      }
+
+      let mut all_tracks: Vec<TrackInfo> = Vec::new();
+      for page in &self.playlist_track_pages.pages {
+        for (_, item) in &page.items {
+          if let PlayableInfo::Track(track) = item {
+            all_tracks.push(track.clone());
+          }
+        }
+      }
+
+      Sorter::new(self.playlist_sort).sort_tracks(&mut all_tracks);
+      let _ = self.apply_sorted_playlist_tracks_if_current(playlist_id, all_tracks);
+      true
+    }
 }
 
 #[cfg(test)]
@@ -650,4 +708,10 @@ mod tests {
       Some("37i9dQZF1DXcBWIGoYBM5M")
     );
   }
+}
+
+pub fn playlist_track_info_matches_terms(track: &TrackInfo, terms: &[String]) -> bool {
+  let haystack =
+    format!("{} {} {}", track.name, track.album, track.artists.join(" "),).to_lowercase();
+  terms.iter().all(|term| haystack.contains(term))
 }

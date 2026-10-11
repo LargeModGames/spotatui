@@ -82,6 +82,27 @@ impl<T> ScrollableResultPages<Paged<T>> {
       .page_index_for_offset(new_page_offset)
       .expect("upserted page offset must exist in cache")
   }
+
+  /// Returns `true` if all pages from offset 0 to the end of the collection
+  /// are cached contiguously with no missing gaps.
+  pub fn is_complete(&self) -> bool {
+    if self.pages.is_empty() {
+      return false;
+    }
+
+    let mut expected_offset = 0;
+    for page in &self.pages {
+      if page.offset != expected_offset {
+        return false;
+      }
+      if page.next.is_none() {
+        return true;
+      }
+      expected_offset = page.offset + page.limit;
+    }
+
+    false
+  }
 }
 
 #[cfg(test)]
