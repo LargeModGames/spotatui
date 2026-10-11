@@ -1,6 +1,6 @@
 use super::common_key_events;
 use crate::core::action::{Action, OpenTarget};
-use crate::core::app::{ActiveBlock, RouteId};
+use crate::core::app::{ActiveBlock, RouteId, SidebarBlock};
 use crate::core::app::{App, DialogContext, PlaylistFolderItem};
 use crate::core::requirement::{Capability, Requirement};
 use crate::core::source::Source;
@@ -223,6 +223,7 @@ pub(super) fn select_previous(app: &mut App) {
 
 /// The Enter consequence, routed by the active browse source.
 pub(super) fn activate_selected(app: &mut App) {
+  app.view.last_sidebar_block = SidebarBlock::Playlists;
   match app.active_source {
     Source::Local => open_local_folder(app),
     Source::Subsonic => open_subsonic_folder(app),

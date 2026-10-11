@@ -1,5 +1,5 @@
 use super::common_key_events;
-use crate::core::action::Action;
+use crate::core::{action::Action, app::SidebarBlock};
 #[cfg(feature = "local-files")]
 use crate::core::action::LibraryTarget;
 use crate::core::app::App;
@@ -51,6 +51,7 @@ pub(super) fn select_previous(app: &mut App) {
 }
 
 pub(super) fn activate_selected(app: &mut App) {
+  app.view.last_sidebar_block = SidebarBlock::Library;
   let Some(target) = app.library_rows().get(app.library_cursor()).copied() else {
     return;
   };
