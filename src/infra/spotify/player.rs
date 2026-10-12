@@ -1,7 +1,9 @@
 //! Playback state and remote control through connect-state. A hidden observer
 //! device keeps the account's device cluster, pushed by the dealer, in memory.
 
+use super::cast;
 use super::json;
+use super::lan::{self, CastDevice};
 use super::metadata::get_many;
 use super::router::{api_error, query_value, upstream_error};
 use super::session::SpotifySession;
@@ -21,9 +23,11 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const CONNECTION_ID_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a Cast device takes to join the cluster after its login.
+const CAST_JOIN_TIMEOUT: Duration = Duration::from_secs(15);
 const QUEUE_LENGTH: usize = 20;
 
 pub struct Observer {
@@ -32,6 +36,7 @@ pub struct Observer {
 
 impl Observer {
   pub async fn start(session: &Session) -> anyhow::Result<Arc<Self>> {
+    lan::start();
     let mut connection_ids =
       session
         .dealer()
@@ -296,10 +301,58 @@ pub async fn playback_state(session: &SpotifySession) -> anyhow::Result<Value> {
 pub async fn devices(session: &SpotifySession) -> anyhow::Result<Value> {
   let cluster = observer(session).await?.cluster();
   let own_id = session.session().device_id().to_string();
-  let devices: Vec<Value> = visible_devices(&cluster, &own_id)
+  let mut devices: Vec<Value> = visible_devices(&cluster, &own_id)
     .map(|(id, info)| device_json(id, info, *id == cluster.active_device_id))
     .collect();
+  let found = lan::cast_devices();
+  devices.extend(logged_out_cast_devices(&cluster, &found).map(cast_device_json));
   Ok(json!({ "devices": devices }))
+}
+
+/// Cast devices on the network that are not in the cluster under their id or their name.
+fn logged_out_cast_devices<'a>(
+  cluster: &'a Cluster,
+  found: &'a [CastDevice],
+) -> impl Iterator<Item = &'a CastDevice> {
+  found.iter().filter(move |device| {
+    !cluster.device.contains_key(&device.connect_id())
+      && !cluster.device.values().any(|info| info.name == device.name)
+  })
+}
+
+fn cast_device_json(device: &CastDevice) -> Value {
+  json!({
+    "id": device.connect_id(),
+    "name": device.name,
+    "type": if device.video { "CastVideo" } else { "CastAudio" },
+    "is_active": false,
+    "is_private_session": false,
+    "is_restricted": false,
+    "volume_percent": null,
+  })
+}
+
+/// Logs a Cast device in and waits until it joins the cluster.
+async fn wake_cast_device(
+  session: &SpotifySession,
+  observer: &Observer,
+  device: &CastDevice,
+) -> anyhow::Result<()> {
+  cast::log_in(session, device)
+    .await
+    .map_err(|e| api_error(StatusCode::BAD_GATEWAY, format!("{}: {e:#}", device.name)))?;
+  let id = device.connect_id();
+  let deadline = Instant::now() + CAST_JOIN_TIMEOUT;
+  while !observer.cluster().device.contains_key(&id) {
+    if Instant::now() >= deadline {
+      return Err(api_error(
+        StatusCode::GATEWAY_TIMEOUT,
+        format!("{} did not join after its login", device.name),
+      ));
+    }
+    tokio::time::sleep(Duration::from_millis(250)).await;
+  }
+  Ok(())
 }
 
 pub async fn queue(session: &SpotifySession) -> anyhow::Result<Value> {
@@ -564,6 +617,11 @@ fn transfer_source(cluster: &Cluster, to: &str) -> String {
 pub async fn transfer(session: &SpotifySession, body: Option<&Value>) -> anyhow::Result<Value> {
   let (to, play) = transfer_target(body)?;
   let observer = observer(session).await?;
+  if !observer.cluster().device.contains_key(to) {
+    if let Some(device) = lan::cast_devices().iter().find(|d| d.connect_id() == to) {
+      wake_cast_device(session, &observer, device).await?;
+    }
+  }
   let from = transfer_source(&observer.cluster(), to);
   let request = TransferRequest {
     transfer_options: TransferOptions {
@@ -683,6 +741,30 @@ mod tests {
       .insert("me".into(), device("spotatui", DeviceType::OBSERVER, false));
     let listed: Vec<&String> = visible_devices(&cluster, "me").map(|(id, _)| id).collect();
     assert_eq!(listed, vec!["phone"]);
+  }
+
+  #[test]
+  fn a_cast_device_in_the_cluster_is_not_listed_twice() {
+    let cast = |name: &str| CastDevice {
+      name: name.into(),
+      address: "192.168.1.20:8009".parse().unwrap(),
+      video: false,
+    };
+    let found = [cast("Bedroom"), cast("Kitchen"), cast("Office")];
+    let mut cluster = Cluster::new();
+    cluster.device.insert(
+      found[0].connect_id(),
+      device("Bedroom", DeviceType::CAST_AUDIO, false),
+    );
+    cluster.device.insert(
+      "other-id".into(),
+      device("Kitchen", DeviceType::CAST_AUDIO, false),
+    );
+    let listed: Vec<&str> = logged_out_cast_devices(&cluster, &found)
+      .map(|device| device.name.as_str())
+      .collect();
+    assert_eq!(listed, vec!["Office"]);
+    assert_eq!(cast_device_json(&found[2])["id"], found[2].connect_id());
   }
 
   #[test]

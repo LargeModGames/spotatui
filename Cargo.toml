@@ -109,6 +109,10 @@ librespot-oauth = { version = "=0.8.5", package = "spotatui-librespot-oauth", op
 librespot-metadata = { version = "=0.8.5", package = "spotatui-librespot-metadata", optional = true }
 librespot-protocol = { version = "=0.8.5", package = "spotatui-librespot-protocol", optional = true, default-features = false }
 protobuf = { version = "3.7", optional = true }
+# Google Cast speakers on the local network: the mDNS browse and the CASTV2 TLS link.
+mdns-sd = { version = "0.21", optional = true }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 futures = "0.3.32"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 # The GUI page server's request-head parser.
@@ -165,7 +169,7 @@ gui = ["dep:httparse"]
 self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
 # The librespot session without playback: browse, library, search and remote
 # control over Spotify's internal API. `streaming` adds native playback on top.
-spotify-session = ["librespot-core", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf"]
+spotify-session = ["librespot-core", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf", "dep:mdns-sd", "dep:rustls", "dep:tokio-rustls", "dep:md-5"]
 streaming = ["spotify-session", "librespot-playback", "librespot-connect", "queue"]
 # Audio backend features
 alsa-backend = ["streaming", "librespot-playback/alsa-backend"]
