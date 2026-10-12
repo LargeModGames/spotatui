@@ -106,10 +106,23 @@ export const Search = memo(function Search({
     );
   const cap = <T,>(list: T[]) =>
     tab === "All" ? list.slice(0, SHELF_CARDS) : list;
+  // The sticky track header sits under the bar, which grows when its chips wrap.
+  const page = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = page.current;
+    const sticky = bar.current;
+    if (!root || !sticky) return;
+    const observer = new ResizeObserver(() =>
+      root.style.setProperty("--search-bar-height", `${sticky.offsetHeight}px`),
+    );
+    observer.observe(sticky);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <div className="search-page">
-      <div className="search-bar">
+    <div ref={page} className="search-page">
+      <div ref={bar} className="search-bar">
         {search?.ran && (
           <div className="search-chips" role="group" aria-label="Result type">
             {TABS.map((name) => (

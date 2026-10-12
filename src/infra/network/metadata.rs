@@ -179,7 +179,8 @@ impl MetadataNetwork for Network {
         self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
         self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
       );
-      // The portrait is decoration: a failed fetch only leaves it out.
+      // The portrait is decoration: a failed fetch only leaves it out, and is not cached.
+      let artist_fetched = artist_res.is_ok();
       let image_url = artist_res
         .ok()
         .and_then(|artist| ArtistInfo::from(&artist).image_url);
@@ -235,7 +236,9 @@ impl MetadataNetwork for Network {
         related_artists,
         album_items,
       };
-      self.artist_cache.put(cache_key, data.clone());
+      if artist_fetched {
+        self.artist_cache.put(cache_key, data.clone());
+      }
       data
     };
 

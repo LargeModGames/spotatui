@@ -96,6 +96,8 @@ export function TopBar({
             value={query}
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={(event) => {
+              // Enter also confirms an IME composition; only a finished query runs.
+              if (event.nativeEvent.isComposing) return;
               if (event.key === "Enter") {
                 event.preventDefault();
                 onRun(query);

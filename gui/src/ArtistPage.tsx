@@ -127,7 +127,7 @@ export function ArtistPage({
         </section>
       )}
       {page.albums.length > 0 && (
-        <Shelf title="Discography">
+        <Shelf oneRow title="Discography">
           {page.albums.map((album, index) => {
             const year = yearOf(album.release_date);
             const kind = albumKind(album.album_type);
@@ -148,7 +148,7 @@ export function ArtistPage({
         </Shelf>
       )}
       {related.length > 0 && (
-        <Shelf title="Fans also like">
+        <Shelf oneRow title="Fans also like">
           {related.map((entry) => (
             <Card
               key={entry.id}

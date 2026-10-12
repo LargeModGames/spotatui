@@ -44,7 +44,8 @@ export function Home({
 }) {
   const asked = useRef({ top: false, mix: false });
   useEffect(() => {
-    if (!active) return;
+    // Before the resync the connection drops every action, so nothing counts as asked yet.
+    if (!active || !discover) return;
     const list = homeFetch(discover, asked.current);
     if (!list) return;
     asked.current = { ...asked.current, [list]: true };
@@ -68,7 +69,7 @@ export function Home({
   };
   const trackShelf = (title: string, tracks: TrackInfo[]) =>
     tracks.length > 0 && (
-      <Shelf title={title}>
+      <Shelf oneRow title={title}>
         {tracks.slice(0, SHELF_MAX).map((track, index) => (
           <Card
             key={`${index}-${track.uri ?? track.name}`}
@@ -125,7 +126,7 @@ export function Home({
         </div>
       </div>
       {recentShelf.length > 0 && (
-        <Shelf title="Recently played">
+        <Shelf oneRow title="Recently played">
           {recentShelf.slice(0, SHELF_MAX).map((track) => (
             <Card
               key={track.album_id}
@@ -134,15 +135,17 @@ export function Home({
               subtitle={track.artists.join(", ")}
               onOpen={() => openAlbum(track.album_id)}
               onPlay={() =>
-                track.uri &&
-                send({ PlayUris: { uris: [track.uri], offset: null } })
+                track.album_id
+                  ? playContext(`spotify:album:${track.album_id}`)
+                  : track.uri &&
+                    send({ PlayUris: { uris: [track.uri], offset: null } })
               }
             />
           ))}
         </Shelf>
       )}
       {spotify.length > 0 && (
-        <Shelf title="Your playlists">
+        <Shelf oneRow title="Your playlists">
           {spotify.slice(0, SHELF_MAX).map((playlist) => (
             <Card
               key={playlist.uri}
@@ -156,7 +159,7 @@ export function Home({
         </Shelf>
       )}
       {albums.length > 0 && (
-        <Shelf title="Saved albums">
+        <Shelf oneRow title="Saved albums">
           {albums.slice(0, SHELF_MAX).map((album, index) => (
             <Card
               key={album.id ?? `${index}-${album.name}`}

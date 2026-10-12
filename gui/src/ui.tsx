@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Children, useEffect, useRef, useState, type ReactNode } from "react";
 import { Glyph, type GlyphName } from "./Icon";
 
 /** Cover art, or a quiet tile with an icon when there is no image. */
@@ -105,14 +105,36 @@ export function Card({
 export function Shelf({
   title,
   children,
+  oneRow = false,
 }: {
   title: string;
   children: ReactNode;
+  /** Render only the cards the first grid row holds, so no clipped card takes focus. */
+  oneRow?: boolean;
 }) {
+  const cards = useRef<HTMLDivElement>(null);
+  const [columns, setColumns] = useState<number | null>(null);
+  useEffect(() => {
+    const grid = cards.current;
+    if (!oneRow || !grid) return;
+    const measure = () =>
+      setColumns(
+        getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean)
+          .length,
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [oneRow]);
+  const shown =
+    oneRow && columns ? Children.toArray(children).slice(0, columns) : children;
   return (
     <section className="shelf" aria-label={title}>
       <h2>{title}</h2>
-      <div className="shelf-cards">{children}</div>
+      <div ref={cards} className="shelf-cards">
+        {shown}
+      </div>
     </section>
   );
 }

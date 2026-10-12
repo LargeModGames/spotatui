@@ -217,7 +217,7 @@
 
 .search-row.head {
   position: sticky;
-  top: 60px;
+  top: var(--search-bar-height, 60px);
   z-index: 1;
   height: 36px;
   margin-bottom: 8px;
