@@ -462,7 +462,9 @@ fn focus_content_table(active_block: ActiveBlock, app: &mut App) {
 }
 
 fn focus_playbar(block: ActiveBlock, app: &mut App) {
-  common_key_events::remember_playbar_origin(app);
+  if block == ActiveBlock::PlayBar {
+    common_key_events::remember_playbar_origin(app);
+  }
   app.set_current_route_state(Some(block), Some(block));
 }
 
@@ -1457,6 +1459,50 @@ mod tests {
     assert_eq!(route.id, RouteId::MiniPlayer);
     assert_eq!(route.active_block, ActiveBlock::MiniPlayer);
     assert_eq!(route.hovered_block, ActiveBlock::MiniPlayer);
+  }
+
+  #[test]
+  fn miniplayer_playbar_click_preserves_the_main_layout_origin() {
+    let mut app = App::default_connected();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.set_current_route_state(Some(ActiveBlock::Home), Some(ActiveBlock::Home));
+    with_playbar_context(&mut app);
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let (main_x, main_y) =
+      find_playbar_control_click(&app, areas.playbar, PlaybarControl::PlayPause);
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), main_x, main_y),
+      &mut app,
+    );
+    assert_eq!(
+      app.view.last_playbar_origin,
+      Some(crate::core::app::PlaybarOrigin {
+        block: ActiveBlock::Home,
+        was_focused: true,
+      })
+    );
+
+    app.push_navigation_stack(RouteId::MiniPlayer, ActiveBlock::MiniPlayer);
+    let miniplayer_area =
+      miniplayer_playbar_area(Rect::new(0, 0, app.view.size.width, app.view.size.height));
+    let (mini_x, mini_y) =
+      find_playbar_control_click(&app, miniplayer_area, PlaybarControl::PlayPause);
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), mini_x, mini_y),
+      &mut app,
+    );
+
+    app.pop_navigation_stack();
+    common_key_events::leave_playbar(&mut app);
+
+    let route = app.get_current_route();
+    assert_eq!(route.id, RouteId::Home);
+    assert_eq!(route.active_block, ActiveBlock::Home);
+    assert_eq!(route.hovered_block, ActiveBlock::Home);
   }
 
   #[test]
