@@ -174,7 +174,9 @@ fn process_saved_track_search(app: &mut App, input: String) {
   }
 
   // A miss leaves the table alone: the cache cannot answer yet.
-  app.try_search_saved_tracks_from_cached_pages(&query);
+  if !app.try_search_saved_tracks_from_cached_pages(&query) {
+    app.set_status_message("Liked songs are still loading, please wait...", 3);
+  }
 }
 
 fn spotify_resource_id(base: &str, uri: &str, sep: &str, resource_type: &str) -> (String, bool) {
