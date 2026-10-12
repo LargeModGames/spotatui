@@ -55,6 +55,7 @@
   - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
 - [Help Wanted](#help-wanted)
 - [Maintainer](#maintainer)
+- [Code signing policy](#code-signing-policy)
 - [spotatui Contributors](#spotatui-contributors)
 - [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
 - [Roadmap](#roadmap)
@@ -538,6 +539,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for more details!
 Maintained by **[LargeModGames](https://github.com/LargeModGames)** ([@LargeModGames](https://twitter.com/LargeModGames) on Twitter).
 
 Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) by [Alexander Keliris](https://github.com/Rigellute).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+The Windows release files are built from this repository by the [release workflow](.github/workflows/cd.yml) on GitHub-hosted runners. Each signing request is approved by hand.
+
+- Committers and reviewers: [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [2570165831](https://github.com/2570165831)
+- Approvers: [LargeModGames](https://github.com/LargeModGames)
+
+Privacy: see the [privacy policy](https://spotatui.com/privacy) for the data spotatui sends and how to turn each part off.
 
 ## spotatui Contributors
 
