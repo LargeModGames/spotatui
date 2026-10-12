@@ -1,4 +1,10 @@
-import { Children, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Children,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Glyph, type GlyphName } from "./Icon";
 
 /** Cover art, or a quiet tile with an icon when there is no image. */
@@ -114,7 +120,7 @@ export function Shelf({
 }) {
   const cards = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState<number | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const grid = cards.current;
     if (!oneRow || !grid) return;
     const measure = () =>
