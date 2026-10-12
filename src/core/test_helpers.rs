@@ -153,6 +153,12 @@ pub fn app_with_sidebar(position: &str) -> App {
   app
 }
 
+pub fn app_with_playbar(position: &str) -> App {
+  let mut app = App::default();
+  app.user_config.behavior.playbar_position = position.to_string();
+  app
+}
+
 /// Scripted [`Onboarding`] double: hands out canned prompt answers in order
 /// (each with the trailing newline `read_line` would produce) and records
 /// everything shown.

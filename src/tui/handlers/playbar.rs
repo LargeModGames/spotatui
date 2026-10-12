@@ -1,13 +1,13 @@
 use super::common_key_events;
 use crate::core::action::Action;
-use crate::core::app::{ActiveBlock, App};
+use crate::core::app::App;
 use crate::tui::event::Key;
 use crate::tui::ui::player::PlaybarControl;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
-    k if common_key_events::up_event(k, &app.user_config.keys) => {
-      app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
+    k if common_key_events::away_from_playbar_event(k, &app.user_config) => {
+      common_key_events::leave_playbar(app);
     }
     k => {
       handle_action_key(k, app);
@@ -45,6 +45,7 @@ pub(crate) fn handle_control(control: PlaybarControl, app: &mut App) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::app::ActiveBlock;
 
   #[test]
   fn on_left_press() {

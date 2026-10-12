@@ -52,8 +52,10 @@ pub struct ViewState {
   /// Cursor in the Local Files folder list.
   pub local_playlists_index: usize,
   /// Hold the last sidebar block the user was on.
-  /// Defaults to `ActiveBlock::Library` since ActiveBlock has no default
+  /// Defaults to [`SidebarBlock::Library`]
   pub last_sidebar_block: SidebarBlock,
+  /// Block and focus state saved when the playbar takes focus.
+  pub last_playbar_origin: Option<PlaybarOrigin>,
 
   // Table cursors. A producer that replaces a list resets or clamps these
   // through an `App` method (`set_track_table`, `set_search_results`, ...),
@@ -199,4 +201,10 @@ pub struct ViewState {
   pub plugin_screen_scroll: u16,
   /// Scroll offset for the plugin popup.
   pub plugin_popup_scroll: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaybarOrigin {
+  pub block: ActiveBlock,
+  pub was_focused: bool,
 }

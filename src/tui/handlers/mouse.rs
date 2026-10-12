@@ -462,6 +462,7 @@ fn focus_content_table(active_block: ActiveBlock, app: &mut App) {
 }
 
 fn focus_playbar(block: ActiveBlock, app: &mut App) {
+  common_key_events::remember_playbar_origin(app);
   app.set_current_route_state(Some(block), Some(block));
 }
 
@@ -898,7 +899,7 @@ mod tests {
     TrackTableContext,
   };
   use crate::core::geometry::Viewport;
-  use crate::core::test_helpers::full_track;
+  use crate::core::test_helpers::{app_with_playbar, full_track};
   use crate::tui::ui::player::PlaybarControl;
   use chrono::{Duration, Utc};
   use crossterm::event::{KeyModifiers, MouseEvent};
@@ -1190,6 +1191,7 @@ mod tests {
       height: 50,
     };
     app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+    app.set_current_route_state(Some(ActiveBlock::Home), Some(ActiveBlock::Home));
     with_playbar_context(&mut app);
 
     let areas = main_layout_areas(&app).expect("layout areas");
@@ -1205,6 +1207,60 @@ mod tests {
     let route = app.get_current_route();
     assert_eq!(route.active_block, ActiveBlock::PlayBar);
     assert_eq!(route.hovered_block, ActiveBlock::PlayBar);
+    assert_eq!(
+      app.view.last_playbar_origin,
+      Some(crate::core::app::PlaybarOrigin {
+        block: ActiveBlock::Home,
+        was_focused: true,
+      })
+    );
+
+    common_key_events::leave_playbar(&mut app);
+    let route = app.get_current_route();
+    assert_eq!(route.active_block, ActiveBlock::Home);
+    assert_eq!(route.hovered_block, ActiveBlock::Home);
+  }
+
+  #[test]
+  fn leaving_the_playbar_from_a_sidebar_uses_the_adjacent_panel() {
+    for (position, origin, away, expected) in [
+      (
+        "top",
+        ActiveBlock::MyPlaylists,
+        Key::Down,
+        ActiveBlock::Library,
+      ),
+      (
+        "bottom",
+        ActiveBlock::Library,
+        Key::Up,
+        ActiveBlock::MyPlaylists,
+      ),
+    ] {
+      for was_focused in [false, true] {
+        let mut app = app_with_playbar(position);
+        let active = if was_focused {
+          origin
+        } else {
+          ActiveBlock::Empty
+        };
+        app.set_current_route_state(Some(active), Some(origin));
+
+        focus_playbar(ActiveBlock::PlayBar, &mut app);
+        playbar::handler(away, &mut app);
+
+        let route = app.get_current_route();
+        assert_eq!(
+          route.active_block,
+          if was_focused {
+            expected
+          } else {
+            ActiveBlock::Empty
+          }
+        );
+        assert_eq!(route.hovered_block, expected);
+      }
+    }
   }
 
   #[test]
