@@ -26,6 +26,7 @@
 - [About](#about)
 - [Features](#features)
 - [Installation](#installation)
+  - [Desktop app (preview)](#desktop-app-preview)
 - [Quickstart](#quickstart)
   - [Adding Spotify later](#adding-spotify-later)
 - [Music Sources](#music-sources)
@@ -158,6 +159,30 @@ Or download pre-built binaries from [GitHub Releases](https://github.com/LargeMo
 > **Which build has which sources?** The prebuilt Linux, macOS, and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz, and the macOS ones also Apple Music. A plain `cargo install --locked spotatui` does not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz` (on macOS, add `apple-music`).
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
+
+### Desktop app (preview)
+
+spotatui also comes as a desktop app: the same player in its own window, with a Spotify-style layout (Home, album and artist pages, Your Library, lyrics). It uses the same login, settings and history as the terminal app, and only one of the two runs at a time. Closing the window quits it.
+
+The preview plays **Spotify only** (Premium required) and does not update itself: download the new installer from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest) for each release.
+
+| System | File |
+|---|---|
+| Windows 10/11 (64-bit) | `spotatui-desktop_<version>_x64-setup.exe` |
+| macOS, Apple Silicon | `spotatui_<version>_aarch64.dmg` |
+| macOS, Intel | `spotatui_<version>_x64.dmg` |
+| Debian/Ubuntu | `spotatui-desktop_<version>_amd64.deb` or `_arm64.deb` |
+| Fedora | `spotatui-desktop-<version>-1.x86_64.rpm` or `.aarch64.rpm` |
+| Other Linux | `spotatui-desktop_<version>_amd64.AppImage` or `_aarch64.AppImage` |
+
+The installers are not signed yet, so your system warns on the first start:
+
+- **Windows:** SmartScreen says "Windows protected your PC". Click **More info**, then **Run anyway**.
+- **macOS:** macOS refuses to open the app the first time. Close the dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm. If macOS says the app is damaged, run `xattr -dr com.apple.quarantine /Applications/spotatui.app` once.
+
+On Linux the app needs glibc 2.39 and WebKitGTK 4.1 (`webkit2gtk-4.1`): Ubuntu 24.04 or newer, Debian 13, Fedora 40 or newer, or Arch. If the window stays blank on Wayland with an NVIDIA GPU, start it with `GDK_BACKEND=x11 spotatui-desktop`. The app already sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless you set it yourself.
+
+To [drive the desktop app from a coding agent](#ai-dj) over MCP, also install the terminal `spotatui`: the agent starts `spotatui mcp`, which only the terminal binary has.
 
 ## Quickstart
 

@@ -606,6 +606,7 @@ pub struct BehaviorConfigString {
   pub streaming_device_name: Option<String>,
   pub streaming_bitrate: Option<u16>,
   pub streaming_audio_cache: Option<bool>,
+  pub streaming_autoplay: Option<bool>,
   pub sync_token: Option<String>,
   pub local_music_path: Option<String>,
   pub subsonic_url: Option<String>,
@@ -792,6 +793,9 @@ pub struct BehaviorConfig {
   pub streaming_bitrate: u16,
   /// Keep played audio in the cache directory.
   pub streaming_audio_cache: bool,
+  /// Play related songs when a list ends. Spotify keeps this per device,
+  /// so librespot cannot read it from the account.
+  pub streaming_autoplay: bool,
   pub sync_token: Option<String>,
   /// Filesystem path to the local music library root (browsed by the Local
   /// Files screen). Defaults to the OS music directory; `None` if unavailable.
@@ -1204,6 +1208,7 @@ impl UserConfig {
         streaming_device_name: "spotatui".to_string(),
         streaming_bitrate: STREAMING_BITRATE_DEFAULT,
         streaming_audio_cache: false,
+        streaming_autoplay: true,
         sync_token: None,
         local_music_path: dirs::audio_dir().map(|p| p.to_string_lossy().to_string()),
         subsonic_url: None,
@@ -1775,6 +1780,9 @@ impl UserConfig {
     if let Some(audio_cache) = behavior_config.streaming_audio_cache {
       self.behavior.streaming_audio_cache = audio_cache;
     }
+    if let Some(autoplay) = behavior_config.streaming_autoplay {
+      self.behavior.streaming_autoplay = autoplay;
+    }
     if let Some(local_music_path) = behavior_config.local_music_path {
       let trimmed = local_music_path.trim();
       self.behavior.local_music_path = if trimmed.is_empty() {
@@ -2304,6 +2312,7 @@ impl UserConfig {
       streaming_device_name: Some(self.behavior.streaming_device_name.clone()),
       streaming_bitrate: Some(self.behavior.streaming_bitrate),
       streaming_audio_cache: Some(self.behavior.streaming_audio_cache),
+      streaming_autoplay: Some(self.behavior.streaming_autoplay),
       // --- Phase 2/3/6 new fields (persist whatever the user set) ---
       gauge_filled_icon: Some(self.behavior.gauge_filled_icon.clone()),
       gauge_unfilled_icon: Some(self.behavior.gauge_unfilled_icon.clone()),

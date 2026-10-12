@@ -200,6 +200,14 @@ jobs:
             The Linux, macOS, and Windows builds include the extra music sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz). The YouTube source needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
 
             To update use "spotatui update --install" or use your package manager of choice.
+
+            ## Desktop app (preview, unsigned)
+
+            spotatui in its own window, with the same player, login and settings as the terminal app. The preview plays Spotify (Premium) only, and it does not update itself. Its installers are added to this release a few minutes after it is published.
+
+            - **Windows 10/11 (64-bit)** → `spotatui-desktop_*_x64-setup.exe`. The installer is not signed, so SmartScreen warns: click **More info**, then **Run anyway**.
+            - **macOS** → `spotatui_*_aarch64.dmg` (Apple Silicon) or `spotatui_*_x64.dmg` (Intel). Drag spotatui to Applications and open it. The app is not notarized, so macOS refuses the first launch: close that dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm.
+            - **Linux (amd64, arm64)** → `.deb` (Debian/Ubuntu), `.rpm` (Fedora) or `.AppImage`. Needs glibc 2.39 and WebKitGTK 4.1: Ubuntu 24.04+, Debian 13, Fedora 40+, Arch.
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -212,6 +220,119 @@ jobs:
           NEW_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "Version: $NEW_VERSION"
           sed -i "s/version *= *\"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
+
+  # The Tauri desktop app (desktop/), attached to the release the job above
+  # created. It runs after the release so a failed installer never holds up the
+  # console binaries or the publish jobs; a failed row can be re-run alone.
+  # The installer names carry no OS word, so self-update's OS+arch fallback and
+  # the .deb, winget and Homebrew lookups never pick one up.
+  desktop:
+    name: Desktop ${{ matrix.os }}
+    needs: release
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundles: deb,rpm,appimage
+          - os: ubuntu-24.04-arm # AppImage on arm64 is unverified
+            bundles: deb,rpm,appimage
+          - os: macos-15-intel
+            bundles: app,dmg
+          - os: macos-latest
+            bundles: app,dmg
+          - os: windows-latest
+            bundles: nsis
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      # desktop/build.rs refuses a release build without gui/dist.
+      - name: Build the page
+        working-directory: gui
+        run: npm ci && npm run build
+
+      # libfuse2t64 is for the AppImage tooling.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf libfuse2t64
+
+      # Static portaudio, so the app runs without Homebrew (checked below).
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install portaudio
+          echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version 2.12.2 --locked
+
+      # No --locked: desktop/Cargo.lock is refreshed in the release commit.
+      - name: Build the desktop bundles
+        working-directory: desktop
+        run: cargo tauri build --ci --bundles ${{ matrix.bundles }}
+
+      - name: Warn when desktop/Cargo.lock is stale
+        run: git diff --quiet -- desktop/Cargo.lock || echo "::warning file=desktop/Cargo.lock::desktop/Cargo.lock was stale for this release; refresh it in the next release commit."
+
+      - name: Check the macOS app links only system libraries
+        if: runner.os == 'macOS'
+        working-directory: desktop/target/release/bundle/macos
+        run: |
+          status=0
+          for bin in *.app/Contents/MacOS/*; do
+            otool -L "$bin"
+            foreign=$(otool -L "$bin" | tail -n +2 | awk '{print $1}' | grep -v -e '^/System/' -e '^/usr/lib/' || true)
+            if [ -n "$foreign" ]; then
+              echo "::error::$bin links libraries outside /System and /usr/lib: $foreign"
+              status=1
+            fi
+          done
+          # The oldest macOS the portaudio bottle supports, for minimumSystemVersion.
+          otool -l "$(brew --prefix portaudio)/lib/libportaudio.dylib" | grep -A4 LC_BUILD_VERSION || true
+          exit $status
+
+      - name: Show the Linux binary's shared libraries
+        if: runner.os == 'Linux'
+        run: ldd desktop/target/release/spotatui-desktop || echo "::warning::ldd failed on desktop/target/release/spotatui-desktop"
+
+      - name: Upload installers to the release
+        working-directory: desktop/target/release/bundle
+        run: |
+          shopt -s nullglob
+          files=(deb/*.deb rpm/*.rpm appimage/*.AppImage dmg/*.dmg nsis/*-setup.exe)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No installers found under desktop/target/release/bundle"
+            exit 1
+          fi
+          upload=()
+          for f in "${files[@]}"; do
+            (cd "$(dirname "$f")" && if command -v sha256sum >/dev/null; then sha256sum "$(basename "$f")"; else shasum -a 256 "$(basename "$f")"; fi) > "$f.sha256"
+            upload+=("$f" "$f.sha256")
+          done
+          gh release upload "$GITHUB_REF_NAME" "${upload[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 
   announce-discord:
     name: Announce on Discord

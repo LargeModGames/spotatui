@@ -578,7 +578,14 @@ async fn handle_player_events(
           transport_recovery_pending = false;
         }
       }
-      PlayerEvent::Paused { .. } | PlayerEvent::Stopped { .. } | PlayerEvent::EndOfTrack { .. } => {
+      PlayerEvent::Stopped { .. } => {
+        audibly_playing = false;
+        if stop_disarms_watchdog(session_lost) {
+          progress_watchdog_armed = false;
+          transport_recovery_pending = false;
+        }
+      }
+      PlayerEvent::Paused { .. } | PlayerEvent::EndOfTrack { .. } => {
         audibly_playing = false;
       }
       PlayerEvent::Seeked { .. }
@@ -1275,6 +1282,12 @@ fn recovery_watchdog_should_escalate(desired_playing: bool, stalled_for: Duratio
   desired_playing && stalled_for >= STALLED_PLAYBACK_RECOVERY_TIMEOUT
 }
 
+/// Spirc stops on purpose at the end of its list, and a new backend cannot add tracks;
+/// only a lost session keeps the watchdog armed.
+fn stop_disarms_watchdog(session_lost: bool) -> bool {
+  !session_lost
+}
+
 /// Reissue the published Spotify queue slot, honoring its desired-playing
 /// state: a slot the user paused is reloaded silently so a stale Spirc event
 /// cannot restart it.
@@ -1503,7 +1516,7 @@ async fn disconnect_streaming_player(
 mod tests {
   use super::{
     merge_recovery_requests, recovery_needs_native_selection, recovery_watchdog_should_escalate,
-    session_disconnect_recovery, should_replay_published_queue_slot,
+    session_disconnect_recovery, should_replay_published_queue_slot, stop_disarms_watchdog,
     unavailable_is_transport_related, SessionDisconnectReason, SessionDisconnectRecovery,
     StreamingConnectionState, StreamingRecoveryRequest, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
@@ -1527,6 +1540,12 @@ mod tests {
       false,
       STALLED_PLAYBACK_RECOVERY_TIMEOUT * 2
     ));
+  }
+
+  #[test]
+  fn a_stop_at_the_end_of_the_list_disarms_the_watchdog_unless_the_session_is_lost() {
+    assert!(stop_disarms_watchdog(false));
+    assert!(!stop_disarms_watchdog(true));
   }
 
   #[test]

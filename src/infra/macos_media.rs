@@ -23,10 +23,14 @@ use objc2_media_player::{
   MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// Set by a desktop shell that owns NSApplication: its window and Dock icon must stay.
+pub(crate) static HOST_OWNS_NSAPP: AtomicBool = AtomicBool::new(false);
 
 /// Events that can be received from external macOS media controls (media keys, Control Center, etc.)
 #[derive(Debug, Clone)]
@@ -82,13 +86,15 @@ impl MacMediaManager {
     thread::spawn(move || {
       // Initialize NSApplication with raw msg_send because objc2-app-kit's
       // sharedApplication() requires MainThreadMarker (unavailable in CLI apps).
-      unsafe {
-        let cls = AnyClass::get(c"NSApplication").expect("NSApplication class not found");
-        let app: objc2::rc::Retained<AnyObject> = msg_send![cls, sharedApplication];
-        // NSApplicationActivationPolicyProhibited = 2 (no Dock icon, no menu bar)
-        let _activation_policy_set: bool = msg_send![&app, setActivationPolicy: 2isize];
+      if !HOST_OWNS_NSAPP.load(Ordering::SeqCst) {
+        unsafe {
+          let cls = AnyClass::get(c"NSApplication").expect("NSApplication class not found");
+          let app: objc2::rc::Retained<AnyObject> = msg_send![cls, sharedApplication];
+          // NSApplicationActivationPolicyProhibited = 2 (no Dock icon, no menu bar)
+          let _activation_policy_set: bool = msg_send![&app, setActivationPolicy: 2isize];
+        }
+        info!("macos media: NSApplication initialized with Prohibited activation policy");
       }
-      info!("macos media: NSApplication initialized with Prohibited activation policy");
 
       // Get the shared command center
       let command_center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };

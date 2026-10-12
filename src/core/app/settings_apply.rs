@@ -267,6 +267,11 @@ impl App {
             self.user_config.behavior.streaming_audio_cache = *v;
           }
         }
+        "behavior.streaming_autoplay" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.streaming_autoplay = *v;
+          }
+        }
         "behavior.enable_announcements" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_announcements = *v;

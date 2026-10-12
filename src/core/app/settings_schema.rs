@@ -89,6 +89,7 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
     | "behavior.streaming_device_name"
     | "behavior.streaming_bitrate"
     | "behavior.streaming_audio_cache"
+    | "behavior.streaming_autoplay"
     | "keys.jump_to_album"
     | "keys.jump_to_artist_album"
     | "keys.jump_to_context"
@@ -330,6 +331,13 @@ impl App {
           name: "Streaming Audio Cache".to_string(),
           description: "Keep played audio in the cache directory (applies on restart)".to_string(),
           value: SettingValue::Bool(self.user_config.behavior.streaming_audio_cache),
+        },
+        #[cfg(feature = "streaming")]
+        SettingItem {
+          id: "behavior.streaming_autoplay".to_string(),
+          name: "Autoplay".to_string(),
+          description: "Play related songs when a list ends (applies on restart)".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.streaming_autoplay),
         },
         SettingItem {
           id: "behavior.startup_behavior".to_string(),

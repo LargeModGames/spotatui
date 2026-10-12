@@ -1,0 +1,70 @@
+# The Tauri desktop shell under desktop/. It is a standalone crate with its
+# own Cargo.lock, so the eight ci.yml legs never compile Tauri; this workflow
+# is the only place that does. Pull requests run Linux only; pushes to main and
+# manual runs add macOS and Windows, so a break there shows up after the merge.
+# No paths filter: the shell depends on the root crate by path.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+name: Desktop
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: |
+      !contains(format('{0} {1} {2}', github.event.head_commit.message, github.event.pull_request.title, github.event.pull_request.body), '[skip ci]')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "macos-latest", "windows-latest"]') }}
+    env:
+      # Keep in sync with the spotatui dependency's features in desktop/Cargo.toml.
+      FEATURES: "telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,macos-media,windows-media"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
+          echo "RUSTFLAGS=-C linker-features=-lld" >> "$GITHUB_ENV"
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install portaudio
+          # The release links portaudio statically; probe it the same way here.
+          echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            desktop -> desktop/target
+      # No --locked: desktop/Cargo.lock is refreshed with each release, so a
+      # root dependency change only makes it stale (see the warning step).
+      - name: Clippy (desktop shell)
+        run: cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings
+      - name: Warn when desktop/Cargo.lock is stale
+        if: ${{ !cancelled() }}
+        run: git diff --quiet -- desktop/Cargo.lock || echo "::warning file=desktop/Cargo.lock::desktop/Cargo.lock is stale. Refresh it with cargo metadata --manifest-path desktop/Cargo.toml and commit it."
+      # The root crate under the exact desktop feature list on this OS,
+      # including the macOS and Windows arms of the hosted entry.
+      - name: Clippy (root, desktop features)
+        run: cargo clippy --locked --no-default-features --features "$FEATURES" -- -D warnings
+      - name: Test (desktop shell)
+        if: runner.os == 'Linux'
+        run: cargo test --manifest-path desktop/Cargo.toml

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "spotatui-desktop",
+  "mainBinaryName": "spotatui-desktop",
+  "identifier": "com.largemodgames.spotatui",
+  "build": {
+    "frontendDist": "splash"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "app", "dmg", "deb", "rpm", "appimage"],
+    "category": "Music",
+    "shortDescription": "Spotify client",
+    "longDescription": "spotatui desktop: a Spotify client with native streaming.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libasound2t64 | libasound2", "libssl3"]
+      },
+      "rpm": {
+        "depends": ["alsa-lib", "openssl-libs"]
+      }
+    }
+  }
+}

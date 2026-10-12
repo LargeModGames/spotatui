@@ -1,0 +1,38 @@
+# The Tauri desktop shell. Not a workspace member: its own Cargo.lock keeps
+# Tauri out of the root package, its CI legs, Nix and crates.io.
+[package]
+name = "spotatui-desktop"
+version = "0.44.0"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tokio = { version = "1.52", features = ["rt-multi-thread"] }
+anyhow = "1"
+serde_json = "1"
+# Spotify only: the desktop app ships no other source yet.
+spotatui = { path = "..", default-features = false, features = [
+  "telemetry",
+  "gui",
+  "streaming",
+  "discord-rpc",
+  "self-update",
+  "scripting",
+  "mcp-server",
+  "mpris",
+  "macos-media",
+  "windows-media",
+] }
+
+# Profiles do not inherit from the root package.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -20,7 +20,7 @@ mod startup;
 mod streaming;
 
 #[cfg(feature = "gui")]
-pub use gui::run_gui;
+pub use gui::{run_gui, run_gui_hosted, GuiHost};
 
 use crate::core::migrations::apply_legacy_state_file_migrations;
 use anyhow::{anyhow, Result};

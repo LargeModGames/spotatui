@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>spotatui</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font: 15px system-ui, sans-serif;
+        background: #121212;
+        color: #fff;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      main {
+        max-width: 560px;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 22px;
+      }
+      pre {
+        white-space: pre-wrap;
+        color: #b3b3b3;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>spotatui could not start</h1>
+      <pre id="error"></pre>
+    </main>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        document.getElementById("error").textContent =
+          window.__SPOTATUI_ERROR || "Unknown error.";
+      });
+    </script>
+  </body>
+</html>

@@ -10,6 +10,17 @@ We maintain security fixes only for the current stable release stream.
 | 0.44  | :white_check_mark: |
 | < 0.44  | :x:                |
 
+## Desktop app
+
+The desktop app (preview) shows the browser GUI's page in the system WebView (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux) instead of a browser tab. The page still comes from spotatui's own server on `127.0.0.1`, with the same protections:
+
+- the server listens on loopback only, and the window opens with a one-time launch code, valid for 60 seconds, that the page trades for a session token over its socket;
+- every request must name the exact loopback host and port, and a request with an `Origin` must come from that same origin, which blocks DNS rebinding and other sites;
+- the page gets no Tauri IPC: the app registers no commands and grants the page no capabilities;
+- the window only navigates within that loopback origin, so a link cannot load another site inside the app.
+
+The installers are not code-signed yet. Download them only from this repository's GitHub releases, and compare a download with its `.sha256` file when in doubt.
+
 ## Reporting a Vulnerability
 
 - Please report vulnerabilities privately via GitHub Security Advisories (Security > Report a vulnerability) instead of opening a public issue.

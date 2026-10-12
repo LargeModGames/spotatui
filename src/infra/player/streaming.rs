@@ -550,6 +550,8 @@ pub struct StreamingConfig {
   pub bitrate: u16,
   /// Enable audio caching
   pub audio_cache: bool,
+  /// Play related songs when a list ends
+  pub autoplay: bool,
   /// Cache directory path
   pub cache_path: Option<PathBuf>,
   /// Initial volume (0-100)
@@ -562,6 +564,7 @@ impl Default for StreamingConfig {
       device_name: "spotatui".to_string(),
       bitrate: 320,
       audio_cache: false,
+      autoplay: true,
       cache_path: None,
       initial_volume: 100,
     }
@@ -635,6 +638,8 @@ impl StreamingPlayer {
     // Create session configuration using spotify-player's client_id
     let mut session_config = SessionConfig {
       client_id: SPOTIFY_PLAYER_CLIENT_ID.to_string(),
+      // The account has no autoplay attribute: Spotify keeps autoplay per device.
+      autoplay: Some(config.autoplay),
       ..Default::default()
     };
     // Reuse a persisted device id so every launch and recovery registers as the

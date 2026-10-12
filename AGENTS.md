@@ -72,6 +72,19 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
   `npm run shots` (Playwright, after a one-time `npx playwright install chromium firefox webkit`)
   renders the page against the fake bridge in `gui/e2e/` and writes one PNG per
   scene and browser to `gui/shots/`; CI uploads them as the `gui-shots` artifact.
+- `.github/workflows/desktop.yml` is the only place that compiles the Tauri shell
+  in `desktop/`: `ubuntu-24.04` on pull requests, plus `macos-latest` and
+  `windows-latest` on `main` and manual runs. It lints the shell, lints the root
+  crate with `--locked` under the shell's exact feature list on each OS, and runs
+  the shell's tests on Linux. The local gate when `desktop/`, `src/runtime/gui.rs`
+  or `src/gui/` changes:
+  `cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings` and
+  `cargo test --manifest-path desktop/Cargo.toml`.
+- **Two locks.** `desktop/` has its own committed `Cargo.lock`, separate from the
+  root `Cargo.lock` the eight legs check. Desktop jobs run **without**
+  `--locked`, so a root dependency change only makes the desktop lock stale: the
+  job prints a `::warning::` and keeps going. Refresh it in the release commit
+  (`how_to_release.md` step 1), together with the `desktop/Cargo.toml` version.
 
 Details: `.github/workflows/AGENTS.md`.
 
@@ -89,19 +102,23 @@ the slim build, check the `N filtered out` count actually says your test ran.
 ## Architecture
 
 One cargo package: a `[lib]` (`src/lib.rs`, private modules, public API =
-`run_cli`, plus `run_gui` under `gui`) plus two `[[bin]]` shims in `src/bin/` -
-`spotatui` (console) and `spotatui-gui`, the browser frontend behind the
-off-by-default `gui` feature, which also owns the crate-root
-`windows_subsystem` attribute. Six top-level units under `src/`:
+`run_cli`, plus `run_gui`, `run_gui_hosted` and `GuiHost` under `gui`) plus two
+`[[bin]]` shims in `src/bin/` - `spotatui` (console) and `spotatui-gui`, the
+browser frontend behind the off-by-default `gui` feature, which also owns the
+crate-root `windows_subsystem` attribute. Outside that package, `desktop/` is the
+Tauri desktop app: a standalone crate (not a workspace member, `publish = false`,
+its own `Cargo.lock`) that depends on the root crate by path with `gui` and shows
+the same loopback page in a native window through `run_gui_hosted`. Tauri never
+enters the root package, its lock, crates.io or Nix. Six top-level units under `src/`:
 
 | Unit | Role |
 |------|------|
 | `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), the shared action vocabulary (`action/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
 | `infra/` | Spotify: Web API shapes (`network/`) answered from Spotify's internal API (`spotify/`, feature `spotify-session`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
-| `gui/` | Browser frontend (feature `gui`): the loopback page server with its Host/Origin/launch-code checks (`server.rs`), the JSON push protocol over the display revisions (`protocol.rs`), the socket bridge to the tick loop (`bridge.rs`), and the first-launch questions over the socket (`onboarding.rs`, a blocking `Onboarding` that waits for the page); `build.rs` embeds `gui/dist` |
+| `gui/` | Browser frontend (feature `gui`): the loopback page server with its Host/Origin/launch-code checks (`server.rs`), the JSON push protocol over the display revisions (`protocol.rs`), the socket bridge to the tick loop (`bridge.rs`), and the first-launch questions over the socket (`onboarding.rs`, a blocking `Onboarding` that waits for the page); `build.rs` embeds `gui/dist`. The `desktop/` shell shows the same page, served unchanged, through `run_gui_hosted` |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
-| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` and `run_gui` its callers, plus the boot login rule `spotify_auth_mode`: the device login only when the first-run picker chose Spotify or on `--reconfigure-auth`, a subcommand needs a cached login with a live session, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui` or `gui`), `gui.rs::run_gui` (the browser frontend: the loopback server first, boot with the first-launch questions answered in the page, then a tick loop with no terminal), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
+| `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` and `run_gui` its callers, plus the boot login rule `spotify_auth_mode`: the device login only when the first-run picker chose Spotify or on `--reconfigure-auth`, a subcommand needs a cached login with a live session, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui` or `gui`), `gui.rs::run_gui` (the browser frontend: the loopback server first, boot with the first-launch questions answered in the page, then a tick loop with no terminal; `run_gui_hosted` is the same run with a desktop shell's window, a `GuiHost`, in place of the system browser), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
 
 ### Data flow
 
