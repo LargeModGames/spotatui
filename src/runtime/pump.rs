@@ -124,9 +124,11 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
 
     // Source-agnostic service events (lyrics, cover art, telemetry,
     // announcements, friends, stats/recap) only touch `App` and their own HTTP
-    // clients — never the Spotify client, pacing, or `Network` state — so they
+    // clients — never the Spotify login or `Network` state — so they
     // run concurrently on a detached task instead of queueing behind
-    // rate-limited Spotify calls on this serial pump (and vice versa).
+    // rate-limited Spotify calls on this serial pump (and vice versa). The one
+    // Spotify call here, the lyrics of a Spotify track, goes through the free
+    // request funnel, so it keeps the shared rate window and the deadline.
     if Network::runs_on_service_lane(&io_event) {
       let mut service_network = Network::new(None, &network.app);
       tokio::spawn(async move {

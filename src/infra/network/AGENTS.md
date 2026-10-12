@@ -17,8 +17,11 @@ worth knowing before adding an event:
   handoff.
 - **Service lane**: `Network::runs_on_service_lane` lists events that run on a
   detached task so slow, source-agnostic work cannot head-of-line-block the serial
-  pump. The service lane's `Network` is built with **no Spotify client** - adding a
-  `self.spotify()` call to a service-lane handler panics.
+  pump. The service lane's `Network` is built with **no Spotify login**
+  (`Network::new(None, ..)`) and must not touch `Network` state. A service-lane
+  handler that needs Spotify (the Spotify lyrics) calls only the free funnel
+  `requests::spotify_api_request_json_for`, which applies the shared rate window
+  and the deadline, and falls back when that call fails.
 - **Spotify lane**: `Network::runs_on_spotify_lane` lists slow Spotify work (the
   DJ crawl, the DJ tool calls) that runs in order on one worker beside the pump,
   with a `Network` from `spotify_lane_network` (the pump's client, limits,

@@ -2,7 +2,7 @@
 //! so the handlers above the request funnel do not change.
 
 use super::session::{self, SpotifySession};
-use super::{catalog, library, listening, player, playlists, search};
+use super::{catalog, library, listening, lyrics, player, playlists, search};
 use crate::infra::network::requests::SpotifyApiError;
 use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
@@ -12,6 +12,7 @@ enum Route {
   Me,
   Track(String),
   Tracks,
+  TrackLyrics(String),
   Album(String),
   AlbumTracks(String),
   Artist(String),
@@ -76,6 +77,7 @@ impl Route {
       ("POST", ["me", "player", "queue"]) => Self::AddToQueue,
       ("GET", ["tracks", track]) => Self::Track(id(track)),
       ("GET", ["tracks"]) => Self::Tracks,
+      ("GET", ["tracks", track, "lyrics"]) => Self::TrackLyrics(id(track)),
       ("GET", ["albums", album]) => Self::Album(id(album)),
       ("GET", ["albums", album, "tracks"]) => Self::AlbumTracks(id(album)),
       ("GET", ["artists", artist]) => Self::Artist(id(artist)),
@@ -179,6 +181,7 @@ async fn run(
     Route::Me => me(session).await,
     Route::Track(id) => catalog::track(session, &id).await,
     Route::Tracks => catalog::tracks_by_ids(session, value("ids").unwrap_or_default()).await,
+    Route::TrackLyrics(id) => lyrics::track_lyrics(session, &id).await,
     Route::Album(id) => catalog::album(session, &id).await,
     Route::AlbumTracks(id) => catalog::album_tracks(session, &id, paging(20)).await,
     Route::Artist(id) => catalog::artist(session, &id).await,
@@ -370,6 +373,10 @@ mod tests {
       Some(Route::AlbumTracks("xyz".into()))
     );
     assert_eq!(Route::parse(&Method::GET, "tracks"), Some(Route::Tracks));
+    assert_eq!(
+      Route::parse(&Method::GET, "tracks/abc/lyrics"),
+      Some(Route::TrackLyrics("abc".into()))
+    );
     assert_eq!(
       Route::parse(&Method::GET, "artists/abc"),
       Some(Route::Artist("abc".into()))

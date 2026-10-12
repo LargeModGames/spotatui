@@ -1,10 +1,12 @@
 //! Track lyrics from Spotify's color-lyrics endpoint.
 
-use super::router::{retry_read, upstream_error};
-use super::session;
+use super::router::{api_error, retry_read, upstream_error};
+use super::session::SpotifySession;
 use librespot_core::error::ErrorKind;
 use librespot_core::SpotifyId;
+use reqwest::StatusCode;
 use serde::Deserialize;
+use serde_json::Value;
 
 /// Lyrics lines as `(start ms, text)`; the start is `0` on every line when not synced.
 #[derive(Debug, PartialEq)]
@@ -33,22 +35,20 @@ struct Line {
   words: String,
 }
 
-/// The lyrics of one track, or `None` when Spotify has none for it.
-pub async fn track_lyrics(base62: &str) -> anyhow::Result<Option<SpotifyLyrics>> {
-  let id = SpotifyId::from_base62(base62)?;
-  let session = session::current()
-    .await
-    .map_err(|reason| anyhow::anyhow!(reason.message()))?;
+/// The color-lyrics JSON of one track, or `null` when Spotify has none for it.
+pub async fn track_lyrics(session: &SpotifySession, id: &str) -> anyhow::Result<Value> {
+  let track = SpotifyId::from_base62(id)
+    .map_err(|_| api_error(StatusCode::BAD_REQUEST, "Invalid track id"))?;
   let spclient = session.session().spclient();
-  match retry_read(|| spclient.get_lyrics(&id)).await {
-    Ok(bytes) => Ok(parse_lyrics(&bytes)),
-    Err(error) if error.kind == ErrorKind::NotFound => Ok(None),
+  match retry_read(|| spclient.get_lyrics(&track)).await {
+    Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+    Err(error) if error.kind == ErrorKind::NotFound => Ok(Value::Null),
     Err(error) => Err(upstream_error(error)),
   }
 }
 
-fn parse_lyrics(bytes: &[u8]) -> Option<SpotifyLyrics> {
-  let body = serde_json::from_slice::<Response>(bytes).ok()?.lyrics;
+pub fn parse_lyrics(value: Value) -> Option<SpotifyLyrics> {
+  let body = serde_json::from_value::<Response>(value).ok()?.lyrics;
   let synced = body.sync_type == "LINE_SYNCED";
   let lines: Vec<(u128, String)> = body
     .lines
@@ -69,9 +69,10 @@ fn parse_lyrics(bytes: &[u8]) -> Option<SpotifyLyrics> {
 mod tests {
   use super::*;
 
-  fn body(sync_type: &str, lines: &str) -> Vec<u8> {
+  fn body(sync_type: &str, lines: &str) -> Value {
     format!(r#"{{"lyrics":{{"syncType":"{sync_type}","lines":[{lines}],"provider":"MusixMatch"}},"colors":{{}}}}"#)
-      .into_bytes()
+      .parse()
+      .unwrap()
   }
 
   #[test]
@@ -82,7 +83,7 @@ mod tests {
          {"startTimeMs":"4210","words":"♪","syllables":[],"endTimeMs":"0"}"#,
     );
     assert_eq!(
-      parse_lyrics(&json),
+      parse_lyrics(json),
       Some(SpotifyLyrics {
         lines: vec![(960, "One more time".into()), (4210, "♪".into())],
         synced: true,
@@ -96,7 +97,7 @@ mod tests {
       "UNSYNCED",
       r#"{"startTimeMs":"0","words":"first"},{"startTimeMs":"0","words":"second"}"#,
     );
-    let lyrics = parse_lyrics(&json).unwrap();
+    let lyrics = parse_lyrics(json).unwrap();
     assert!(!lyrics.synced);
     assert_eq!(
       lyrics.lines,
@@ -105,9 +106,9 @@ mod tests {
   }
 
   #[test]
-  fn empty_lines_mean_no_lyrics() {
-    assert_eq!(parse_lyrics(&body("LINE_SYNCED", "")), None);
-    assert_eq!(parse_lyrics(b"not json"), None);
+  fn empty_lines_or_a_missing_track_mean_no_lyrics() {
+    assert_eq!(parse_lyrics(body("LINE_SYNCED", "")), None);
+    assert_eq!(parse_lyrics(Value::Null), None);
   }
 
   #[test]
@@ -117,7 +118,7 @@ mod tests {
       r#"{"startTimeMs":"x","words":"bad"},{"startTimeMs":"1500","words":"good"}"#,
     );
     assert_eq!(
-      parse_lyrics(&json).unwrap().lines,
+      parse_lyrics(json).unwrap().lines,
       vec![(1500, "good".into())]
     );
   }

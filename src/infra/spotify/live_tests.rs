@@ -310,11 +310,8 @@ async fn player_reads_parse_into_the_app_types() {
 #[tokio::test]
 #[ignore = "contacts Spotify with the cached login"]
 async fn lyrics_load_for_a_spotify_track() {
-  ALLOW_IN_TESTS.store(true, std::sync::atomic::Ordering::Relaxed);
-  let lyrics = super::lyrics::track_lyrics(ONE_MORE_TIME)
-    .await
-    .unwrap()
-    .expect("Spotify has lyrics for One More Time");
+  let value = call(Method::GET, &format!("tracks/{ONE_MORE_TIME}/lyrics"), &[]).await;
+  let lyrics = super::lyrics::parse_lyrics(value).expect("Spotify has lyrics for One More Time");
   println!("synced: {}, lines: {}", lyrics.synced, lyrics.lines.len());
   assert!(!lyrics.lines.is_empty());
 }

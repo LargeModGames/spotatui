@@ -65,7 +65,8 @@ fn track_identity(snapshot: &crate::infra::media_metadata::PlaybackSnapshot) -> 
 
 /// The base62 id that gets Spotify's own lyrics; `None` keeps the LRCLIB lookup.
 fn spotify_lyrics_id(item_uri: Option<&str>) -> Option<String> {
-  item_uri?.strip_prefix("spotify:track:").map(str::to_string)
+  let id = item_uri?.strip_prefix("spotify:track:")?;
+  (id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| id.to_string())
 }
 
 /// Resolve what cover art to fetch for the track described by `snapshot`.
@@ -949,6 +950,8 @@ mod tests {
   fn local_files_episodes_and_other_sources_give_no_lyrics_id() {
     for uri in [
       Some("spotify:local:Daft+Punk:Discovery:One+More+Time:320"),
+      // What a native Spotify local file reports: the local URI behind the track prefix.
+      Some("spotify:track:spotify:local:Daft+Punk:Discovery:One+More+Time:320"),
       Some("spotify:episode:4rOoJ6Egrf8K2IrywzwOMk"),
       Some("file:///music/one-more-time.flac"),
       Some("youtube:FGBhQbmPwH8"),

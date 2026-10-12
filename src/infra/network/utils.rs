@@ -1,6 +1,8 @@
 use super::Network;
 use crate::core::app::{Announcement, AnnouncementLevel, App, LyricsStatus};
 use chrono::{DateTime, Utc};
+#[cfg(feature = "spotify-session")]
+use reqwest::Method;
 use serde::{de::Error as _, Deserialize, Deserializer};
 use std::collections::HashSet;
 use std::env;
@@ -125,14 +127,19 @@ async fn spotify_lyrics(
 ) -> Option<(Vec<(u128, String)>, bool)> {
   #[cfg(feature = "spotify-session")]
   if let Some(id) = spotify_id {
-    match crate::infra::spotify::lyrics::track_lyrics(id).await {
-      Ok(Some(lyrics)) if lyrics.synced => return Some((lyrics.lines, true)),
-      Ok(Some(lyrics)) => {
+    let path = format!("tracks/{id}/lyrics");
+    // The funnel already logs a failed request.
+    let value = super::requests::spotify_api_request_json_for(Method::GET, &path, &[], None).await;
+    match value
+      .ok()
+      .and_then(crate::infra::spotify::lyrics::parse_lyrics)
+    {
+      Some(lyrics) if lyrics.synced => return Some((lyrics.lines, true)),
+      Some(lyrics) => {
         let text: Vec<String> = lyrics.lines.into_iter().map(|(_, line)| line).collect();
         return Some((synthesize_plain_lyrics(&text.join("\n"), duration), false));
       }
-      Ok(None) => log::debug!("Spotify has no lyrics for {id}; trying LRCLIB"),
-      Err(e) => log::warn!("Spotify lyrics for {id} failed: {e:#}; trying LRCLIB"),
+      None => log::debug!("No Spotify lyrics for {id}; trying LRCLIB"),
     }
   }
   #[cfg(not(feature = "spotify-session"))]
