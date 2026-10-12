@@ -8,7 +8,7 @@
 
 ### Changed
 
-- **`behavior.disable_auto_update` stops the desktop app's update check too**: before, the desktop app still asked GitHub for a new release at launch and every 6 hours and only skipped the download. Now it looks only when you press Check for updates on the Settings page, as the terminal app already skipped the check. Turning auto-update back on checks at once.
+- **`behavior.disable_auto_update` stops the desktop app's update check too**: before, the desktop app still asked GitHub for a new release at launch and every 6 hours and only skipped the download. Now those timed checks stop and Check for updates on the Settings page looks on demand, as the terminal app already skipped its check at start. Turning auto-update back on checks at once.
 
 ### Fixed
 

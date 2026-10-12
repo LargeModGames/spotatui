@@ -195,7 +195,7 @@ const GUI_SETTINGS: &[(&str, &str, Option<&str>)] = &[
   (
     "behavior.disable_auto_update",
     "updates",
-    Some("Do not look for updates on your own; check, download and install them from this page yourself"),
+    Some("Skip the checks at launch and every 6 hours; check, download and install updates from this page yourself"),
   ),
   (
     "behavior.auto_update_delay",
