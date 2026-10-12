@@ -68,7 +68,7 @@ tempfile = { version = "3", optional = true }
 # bundle scrape. Same `cipher 0.4` line as librespot, so no graph fork.
 base64 = { version = "0.22", optional = true }
 regex = { version = "1", optional = true }
-aes = { version = "0.8", optional = true }
+aes = { version = "0.9", optional = true }
 cbc = { version = "0.1", optional = true }
 ctr = { version = "0.9", optional = true }
 hkdf = { version = "0.13", optional = true }
