@@ -203,8 +203,9 @@ pub struct ViewState {
   pub plugin_popup_scroll: u16,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlaybarOrigin {
+  pub route: RouteId,
   pub block: ActiveBlock,
   pub was_focused: bool,
 }

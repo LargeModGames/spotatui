@@ -45,7 +45,7 @@ pub(crate) fn handle_control(control: PlaybarControl, app: &mut App) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::ActiveBlock;
+  use crate::core::app::{ActiveBlock, RouteId};
 
   #[test]
   fn on_left_press() {
@@ -66,5 +66,28 @@ mod tests {
     handler(Key::Char('w'), &mut app);
 
     assert_eq!(app.status_message(), Some("No track currently playing"));
+  }
+
+  #[test]
+  fn an_origin_from_another_route_is_ignored_when_leaving_the_playbar() {
+    let mut app = App::default();
+    app.set_current_route_state(Some(ActiveBlock::Home), Some(ActiveBlock::Home));
+    common_key_events::remember_playbar_origin(&mut app);
+    app.set_current_route_state(Some(ActiveBlock::PlayBar), Some(ActiveBlock::PlayBar));
+
+    app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+    common_key_events::remember_playbar_origin(&mut app);
+    app.set_current_route_state(Some(ActiveBlock::PlayBar), Some(ActiveBlock::PlayBar));
+    assert_eq!(
+      app.pop_navigation_stack().map(|route| route.id),
+      Some(RouteId::AlbumTracks)
+    );
+
+    handler(Key::Up, &mut app);
+
+    let route = app.get_current_route();
+    assert_eq!(route.id, RouteId::Home);
+    assert_eq!(route.active_block, ActiveBlock::Empty);
+    assert_eq!(route.hovered_block, ActiveBlock::MyPlaylists);
   }
 }

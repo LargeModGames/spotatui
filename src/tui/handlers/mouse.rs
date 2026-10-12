@@ -1212,6 +1212,7 @@ mod tests {
     assert_eq!(
       app.view.last_playbar_origin,
       Some(crate::core::app::PlaybarOrigin {
+        route: RouteId::Home,
         block: ActiveBlock::Home,
         was_focused: true,
       })
@@ -1481,6 +1482,7 @@ mod tests {
     assert_eq!(
       app.view.last_playbar_origin,
       Some(crate::core::app::PlaybarOrigin {
+        route: RouteId::Home,
         block: ActiveBlock::Home,
         was_focused: true,
       })

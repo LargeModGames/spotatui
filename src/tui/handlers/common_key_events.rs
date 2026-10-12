@@ -219,11 +219,13 @@ pub fn remember_playbar_origin(app: &mut App) {
     ActiveBlock::Empty | ActiveBlock::PlayBar
   ) {
     PlaybarOrigin {
+      route: route.id.clone(),
       block: route.active_block,
       was_focused: true,
     }
   } else if route.hovered_block != ActiveBlock::PlayBar {
     PlaybarOrigin {
+      route: route.id.clone(),
       block: route.hovered_block,
       was_focused: false,
     }
@@ -239,14 +241,21 @@ pub fn hover_playbar(app: &mut App) {
 }
 
 pub fn leave_playbar(app: &mut App) {
-  let origin = app.view.last_playbar_origin.unwrap_or(PlaybarOrigin {
-    block: if playbar_on_top(&app.user_config) {
-      ActiveBlock::Library
-    } else {
-      ActiveBlock::MyPlaylists
-    },
-    was_focused: false,
-  });
+  let current_route = app.get_current_route().id.clone();
+  let origin = app
+    .view
+    .last_playbar_origin
+    .clone()
+    .filter(|origin| origin.route == current_route)
+    .unwrap_or(PlaybarOrigin {
+      route: current_route.clone(),
+      block: if playbar_on_top(&app.user_config) {
+        ActiveBlock::Library
+      } else {
+        ActiveBlock::MyPlaylists
+      },
+      was_focused: false,
+    });
   let target = match origin.block {
     ActiveBlock::Library | ActiveBlock::MyPlaylists | ActiveBlock::Empty => {
       if playbar_on_top(&app.user_config) {
