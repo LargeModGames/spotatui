@@ -518,7 +518,6 @@ impl App {
   pub fn clear_saved_track_filter(&mut self) {
     let showing_saved_tracks = self.track_table.context == Some(TrackTableContext::SavedTracks);
     self.active_saved_track_filter = None;
-    self.pending_saved_track_search = None;
     self.view.input_context = InputContext::GlobalSearch;
 
     // Don't overwrite the table if the user has navigated away to a playlist or album!
@@ -540,7 +539,6 @@ impl App {
     matches: Vec<TrackInfo>,
   ) -> bool {
     self.active_saved_track_filter = Some(query);
-    self.pending_saved_track_search = None;
     self.forget_pending_row_selection();
     self.view.track_table_index = 0;
     self.track_table.tracks = matches;
@@ -1273,7 +1271,6 @@ mod tests {
 
     assert!(app.is_saved_track_filter_active());
     assert_eq!(app.active_saved_track_filter.as_deref(), Some("track 2-1"));
-    assert!(app.pending_saved_track_search.is_none());
     assert_eq!(cached_track_names(&app), vec!["Track 2-1"]);
     assert_eq!(
       app.view.track_table_index, 0,
@@ -1373,7 +1370,6 @@ mod tests {
     app.clear_saved_track_filter();
 
     assert!(!app.is_saved_track_filter_active());
-    assert!(app.pending_saved_track_search.is_none());
     assert_eq!(app.view.input_context, InputContext::GlobalSearch);
     assert_eq!(cached_track_names(&app), vec!["Track 0-0", "Track 0-1"]);
     assert_eq!(app.view.track_table_index, 0, "the parked row is dropped");

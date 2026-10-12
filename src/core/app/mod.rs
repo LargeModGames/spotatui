@@ -636,7 +636,6 @@ pub struct App {
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,
   active_saved_track_filter: Option<String>,
-  pending_saved_track_search: Option<String>,
 }
 
 impl App {
