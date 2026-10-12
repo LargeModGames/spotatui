@@ -173,10 +173,9 @@ pub struct SettingItem {
 }
 
 impl App {
-  /// Load settings for the current category into settings_items
-  pub fn load_settings_for_category(&mut self) {
-    self.settings_items = match self.view.settings_category {
-      SettingsCategory::Behavior => vec![
+  /// The Behavior rows, apart from the state of the Settings screen.
+  pub(crate) fn behavior_setting_items(&self) -> Vec<SettingItem> {
+    vec![
         SettingItem {
           id: "behavior.seek_milliseconds".to_string(),
           name: "Seek Duration (ms)".to_string(),
@@ -541,7 +540,13 @@ impl App {
           description: "Visual pixel size (1-3)".to_string(),
           value: SettingValue::Number(self.user_config.behavior.cover_art_dither_pixel_scale as i64),
         },
-      ],
+    ]
+  }
+
+  /// Load settings for the current category into settings_items
+  pub fn load_settings_for_category(&mut self) {
+    self.settings_items = match self.view.settings_category {
+      SettingsCategory::Behavior => self.behavior_setting_items(),
       SettingsCategory::Icons => vec![
         SettingItem {
           id: "behavior.liked_icon".to_string(),

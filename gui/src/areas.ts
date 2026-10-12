@@ -18,12 +18,25 @@ export type ShellCommand =
   | "room"
   | "lyrics"
   | "toggle"
-  | "escape";
+  | "escape"
+  | "settings";
+
+/** Whether the page runs on macOS, where Cmd takes the place of Ctrl. */
+export const MAC =
+  typeof navigator !== "undefined" &&
+  /Mac|iPhone|iPad/.test(navigator.platform);
+
+/** The settings shortcut, as `aria-keyshortcuts` names it and as a title shows it. */
+export const SETTINGS_KEY = MAC
+  ? { aria: "Meta+,", label: "⌘," }
+  : { aria: "Control+,", label: "Ctrl+," };
 
 /** A key press as the window handler sees it, reduced to plain data. */
 export interface ShellKey {
   key: string;
   modified: boolean;
+  /** Only the platform's command modifier is held: Cmd on macOS, Ctrl elsewhere. */
+  command: boolean;
   composing: boolean;
   handled: boolean;
   /** The target takes text: an input, a textarea, a select or an editable element. */
@@ -35,7 +48,10 @@ export interface ShellKey {
 
 /** What a key does on the whole page; null leaves it to the browser. Screen keys run first. */
 export function shellKey(press: ShellKey): ShellCommand | null {
-  if (press.handled || press.modified || press.composing) return null;
+  if (press.handled || press.composing) return null;
+  if (press.command && press.key === ",")
+    return press.overlay ? null : "settings";
+  if (press.modified) return null;
   if (press.key === "Escape") return "escape";
   if (press.typing || press.overlay) return null;
   if (press.key === " ") return press.interactive ? null : "toggle";

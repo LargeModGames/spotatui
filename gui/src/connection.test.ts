@@ -108,6 +108,13 @@ describe("Connection", () => {
     expect(state.channels.route?.payload).toBe("queue");
   });
 
+  it("keeps the running version from hello", () => {
+    const { connection, sockets } = harness("abc");
+    expect(connection.getState().version).toBeNull();
+    sockets[0].handlers.message(hello("t1"));
+    expect(connection.getState().version).toBe("0");
+  });
+
   it("the first route message marks the app booted", () => {
     const { connection, sockets } = harness("abc");
     sockets[0].handlers.message(hello("t1"));
@@ -164,6 +171,7 @@ describe("showsOnboarding", () => {
     position: null,
     booted: false,
     onboarding: null,
+    version: null,
   };
   const view = { transcript: "", pending: null };
 

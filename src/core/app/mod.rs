@@ -422,6 +422,9 @@ pub struct App {
   search_liked_view: Vec<String>,
   /// The liked marks the LikedMarks revision last counted.
   liked_marks_view: Vec<String>,
+  /// The desktop shell's updater; `None` without one.
+  #[cfg(feature = "gui")]
+  update_status: Option<crate::core::update::UpdateStatus>,
   /// The decoded-source list whose rows landed in the track table.
   source_table_uri: Option<String>,
   track_table_view: TrackTableView,

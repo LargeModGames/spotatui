@@ -21,6 +21,8 @@ The desktop app (preview) shows the browser GUI's page in the system WebView (We
 
 The installers are not code-signed yet. Download them only from this repository's GitHub releases, and compare a download with its `.sha256` file when in doubt.
 
+The app updates itself from the latest stable release's `latest.json`. It installs an update only when the bundle's signature matches the public key built into the app, so a changed download or a release asset uploaded without the private key is refused. The private key exists only as a repository secret and on the maintainer's machine.
+
 ## Reporting a Vulnerability
 
 - Please report vulnerabilities privately via GitHub Security Advisories (Security > Report a vulnerability) instead of opening a public issue.

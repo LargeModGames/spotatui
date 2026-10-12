@@ -153,6 +153,8 @@ To skip the check for one run, use `spotatui --no-update` (or `-U`) or set `SPOT
 
 `spotatui update` shows your current and latest versions. Add `--install` to install the update immediately. If your package manager owns the installation, set `disable_auto_update: true` so spotatui does not replace its binary.
 
+The desktop app has its own updater: installed from the Windows installer, the macOS app or the AppImage, it checks the latest stable release, verifies the update's signature, and installs it the next time you quit. The same two settings control it, also on its Settings page. A `.deb` or `.rpm` install does not update itself.
+
 ---
 
 ## Connecting to Spotify

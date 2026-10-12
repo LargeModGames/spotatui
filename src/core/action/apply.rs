@@ -267,6 +267,11 @@ impl App {
       Action::ShowPopup(popup) => self.show_plugin_popup(popup),
       Action::ClosePopup => self.close_plugin_popup(),
       Action::SetTheme(pairs) => self.set_theme_colors(pairs),
+      Action::SetSetting { id, value } => {
+        return ActionOutcome::SettingsSaved {
+          saved: self.set_setting(&id, value),
+        };
+      }
       Action::SaveSettings => {
         return ActionOutcome::SettingsSaved {
           saved: self.save_settings_from_items(),

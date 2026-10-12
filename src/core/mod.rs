@@ -47,5 +47,7 @@ pub mod state;
 pub mod test_helpers;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod theme;
+#[cfg(feature = "gui")]
+pub mod update;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod user_config;

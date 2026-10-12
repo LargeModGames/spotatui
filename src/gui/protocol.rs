@@ -12,6 +12,7 @@ use crate::core::plugin_api::{
 };
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
+use crate::core::update::{UpdateAsk, UpdateStatus};
 use crate::gui::onboarding::{OnboardingReply, OnboardingView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -132,7 +133,75 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: Vec<String>,
   },
+  /// The settings rows the page offers, in display order.
+  Settings {
+    rev: u64,
+    payload: Vec<SettingRow>,
+  },
+  /// The desktop shell's updater; `null` without one.
+  Update {
+    rev: u64,
+    payload: Option<UpdateStatus>,
+  },
 }
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SettingRow {
+  id: String,
+  /// `playback`, `streaming`, `integrations` or `updates`.
+  group: &'static str,
+  name: String,
+  description: String,
+  value: SettingRowValue,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum SettingRowValue {
+  Bool {
+    value: bool,
+  },
+  Number {
+    value: i64,
+  },
+  Text {
+    value: String,
+  },
+  /// Set with a `Text` input that names one of `options`.
+  Choice {
+    value: String,
+    options: Vec<String>,
+  },
+}
+
+/// The Behavior rows the page offers: (id, group, a description for the desktop app).
+/// The other rows only mean something in a terminal.
+const GUI_SETTINGS: &[(&str, &str, Option<&str>)] = &[
+  ("behavior.seek_milliseconds", "playback", None),
+  ("behavior.volume_increment", "playback", None),
+  ("behavior.stop_after_current_track", "playback", None),
+  ("behavior.keepawake_enabled", "playback", None),
+  ("behavior.enable_media_keys", "playback", None),
+  ("behavior.enable_streaming", "streaming", None),
+  ("behavior.streaming_device_name", "streaming", None),
+  ("behavior.streaming_bitrate", "streaming", None),
+  ("behavior.streaming_audio_cache", "streaming", None),
+  ("behavior.streaming_autoplay", "streaming", None),
+  ("behavior.enable_discord_rpc", "integrations", None),
+  ("behavior.enable_global_song_count", "integrations", None),
+  (
+    "behavior.disable_auto_update",
+    "updates",
+    Some("Only look for updates; download and install them from this page yourself"),
+  ),
+  (
+    "behavior.auto_update_delay",
+    "updates",
+    Some("How long a release must be out before it downloads: '0' for at once, or for example '10m', '2h', '7d'"),
+  ),
+];
 
 #[derive(Serialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
@@ -432,8 +501,16 @@ pub(crate) struct StatsMovement {
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ClientMessage {
-  Action { action: Box<Action> },
-  Onboarding { reply: OnboardingReply },
+  Action {
+    action: Box<Action>,
+  },
+  Onboarding {
+    reply: OnboardingReply,
+  },
+  /// Only a desktop shell has an updater to ask.
+  Update {
+    ask: UpdateAsk,
+  },
   Quit,
 }
 
@@ -613,7 +690,48 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: app.liked_marks_view().to_vec(),
     },
+    DisplayDomain::Settings => ServerMessage::Settings {
+      rev,
+      payload: settings(app),
+    },
+    DisplayDomain::Update => ServerMessage::Update {
+      rev,
+      payload: app.update_status().cloned(),
+    },
   })
+}
+
+fn settings(app: &App) -> Vec<SettingRow> {
+  use crate::core::app::SettingValue;
+  let items = app.behavior_setting_items();
+  GUI_SETTINGS
+    .iter()
+    .filter(|(_, group, _)| *group != "updates" || app.update_status().is_some())
+    .filter_map(|(id, group, description)| {
+      let item = items
+        .iter()
+        .find(|item| item.id == *id && app.setting_offered(item))?;
+      let value = match &item.value {
+        SettingValue::Bool(value) => SettingRowValue::Bool { value: *value },
+        SettingValue::Number(value) => SettingRowValue::Number { value: *value },
+        SettingValue::String(value) => SettingRowValue::Text {
+          value: value.clone(),
+        },
+        SettingValue::Cycle(value, options) => SettingRowValue::Choice {
+          value: value.clone(),
+          options: options.iter().map(|option| option.to_string()).collect(),
+        },
+        SettingValue::Color(_) | SettingValue::Key(_) | SettingValue::Preset(_) => return None,
+      };
+      Some(SettingRow {
+        id: item.id.clone(),
+        group,
+        name: item.name.clone(),
+        description: description.map_or_else(|| item.description.clone(), str::to_string),
+        value,
+      })
+    })
+    .collect()
 }
 
 fn artist(app: &App) -> ArtistPayload {
@@ -975,7 +1093,9 @@ mod tests {
         "playlist_sync",
         "track_table",
         "recently_played",
-        "liked_marks"
+        "liked_marks",
+        "settings",
+        "update"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -1534,6 +1654,49 @@ mod tests {
       editable,
       &serde_json::json!(["spotify:playlist:mine", "spotify:playlist:shared"])
     );
+  }
+
+  #[test]
+  fn the_settings_channel_offers_the_gui_rows_and_the_update_rows_only_with_an_updater() {
+    let (mut app, _rx) = app();
+    let ids = |app: &App| -> Vec<String> {
+      settings(app)
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>()
+    };
+
+    let without = ids(&app);
+    let before = app.display_revisions();
+    app.set_update_status(UpdateStatus::Idle);
+
+    assert_eq!(without[0], "behavior.seek_milliseconds");
+    assert!(!without
+      .iter()
+      .any(|id| id.starts_with("behavior.tick_rate")));
+    assert!(!without.contains(&"behavior.disable_auto_update".to_string()));
+    let rows = &pushed(&diff(&before, &app), "settings")["payload"];
+    assert!(rows
+      .as_array()
+      .unwrap()
+      .iter()
+      .any(|row| row["id"] == "behavior.disable_auto_update"
+        && row["group"] == "updates"
+        && row["value"]["kind"] == "bool"));
+  }
+
+  #[test]
+  fn an_update_status_rides_the_update_channel() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.set_update_status(UpdateStatus::Ready {
+      version: "0.45.0".to_string(),
+    });
+
+    let update = &pushed(&diff(&before, &app), "update")["payload"];
+    assert_eq!(update["state"], "ready");
+    assert_eq!(update["version"], "0.45.0");
   }
 
   #[test]

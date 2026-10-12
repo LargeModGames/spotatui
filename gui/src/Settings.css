@@ -1,0 +1,181 @@
+/* The Settings page: a title, a section per group, a row per setting. */
+.settings {
+  min-height: 0;
+  padding: 32px 32px 48px;
+  overflow-y: auto;
+  outline: none;
+}
+
+.settings > * {
+  max-width: 800px;
+}
+
+.settings h1 {
+  margin: 0 0 32px;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.settings section + section {
+  margin-top: 32px;
+}
+
+.settings h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.settings-empty {
+  margin: 0;
+  color: var(--sub);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  min-height: 40px;
+  padding: 8px 0;
+}
+
+.setting-text {
+  flex: 1 1 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setting-name {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.setting-about {
+  font-size: 14px;
+  color: var(--sub);
+}
+
+.setting-name.failed {
+  color: #e5534b;
+}
+
+.update-row .setting-name {
+  flex: 1 1 280px;
+}
+
+.switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--quiet);
+  transition: background-color 0.15s;
+}
+
+.switch:hover {
+  background: #8f8f8f;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
+}
+
+.switch[aria-checked="true"]:hover {
+  background: #f4b95e;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--frame);
+  transition: transform 0.15s;
+}
+
+.switch[aria-checked="true"] .switch-knob {
+  transform: translateX(16px);
+}
+
+.setting-select,
+.setting-field {
+  height: 32px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text);
+  font: 14px var(--sans);
+}
+
+.setting-select {
+  min-width: 140px;
+  cursor: pointer;
+}
+
+.setting-select:hover,
+.setting-field:hover {
+  background: var(--hover);
+}
+
+.setting-field.number {
+  width: 112px;
+  font-variant-numeric: tabular-nums;
+}
+
+.setting-field.text {
+  width: 220px;
+}
+
+.setting-field:focus {
+  outline: none;
+  border-color: var(--text);
+}
+
+.update-button {
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0 16px;
+  border: 1px solid var(--quiet);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.update-button:not(:disabled):hover {
+  border-color: var(--text);
+  transform: scale(1.04);
+}
+
+.update-button.go {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.switch:focus-visible,
+.setting-select:focus-visible,
+.update-button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1000px) {
+  .settings {
+    padding: 24px 16px 32px;
+  }
+}

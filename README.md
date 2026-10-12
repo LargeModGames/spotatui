@@ -164,7 +164,7 @@ See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Insta
 
 spotatui also comes as a desktop app: the same player in its own window, with a Spotify-style layout (Home, album and artist pages, Your Library, lyrics). It uses the same login, settings and history as the terminal app, and only one of the two runs at a time. Closing the window quits it.
 
-The preview plays **Spotify only** (Premium required) and does not update itself: download the new installer from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest) for each release.
+The preview plays **Spotify only** (Premium required). Installed from the Windows installer, the macOS app or the AppImage, it updates itself; a `.deb` or `.rpm` install updates with a new download from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest). The `behavior.disable_auto_update` and `behavior.auto_update_delay` settings, also on the app's Settings page, control the updates.
 
 | System | File |
 |---|---|

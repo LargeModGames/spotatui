@@ -1,6 +1,7 @@
 import type { NowPlaying } from "../src/bindings/NowPlaying";
 import type { PlaylistInfo } from "../src/bindings/PlaylistInfo";
 import type { ServerMessage } from "../src/bindings/ServerMessage";
+import type { SettingRow } from "../src/bindings/SettingRow";
 import type { Source } from "../src/bindings/Source";
 import type { TrackInfo } from "../src/bindings/TrackInfo";
 
@@ -26,6 +27,8 @@ const revisions = {
   track_table: 1,
   recently_played: 1,
   liked_marks: 1,
+  settings: 1,
+  update: 1,
 };
 
 export const hello: ServerMessage = {
@@ -781,4 +784,95 @@ export const artist: ServerMessage[] = [
       },
     },
   },
+];
+
+function setting(
+  id: string,
+  group: string,
+  name: string,
+  description: string,
+  value: SettingRow["value"],
+): SettingRow {
+  return { id: `behavior.${id}`, group, name, description, value };
+}
+
+/** The desktop app's settings rows, with a downloaded update waiting to install. */
+export const settings: ServerMessage[] = [
+  {
+    kind: "settings",
+    rev: 1,
+    payload: [
+      setting(
+        "seek_milliseconds",
+        "playback",
+        "Seek Duration (ms)",
+        "Milliseconds to skip when seeking",
+        { kind: "number", value: 5000 },
+      ),
+      setting(
+        "volume_increment",
+        "playback",
+        "Volume Increment",
+        "Volume change per keypress (0-100)",
+        { kind: "number", value: 10 },
+      ),
+      setting(
+        "stop_after_current_track",
+        "playback",
+        "Stop After Current Track",
+        "Pause playback when the current track finishes",
+        { kind: "bool", value: false },
+      ),
+      setting(
+        "enable_media_keys",
+        "playback",
+        "Media Key Controls",
+        "Let OS media keys, headphone buttons, and remote controls (playerctl, Now Playing) control playback",
+        { kind: "bool", value: true },
+      ),
+      setting(
+        "enable_streaming",
+        "streaming",
+        "Native Streaming",
+        "Play Spotify in spotatui as a Connect device (applies on restart)",
+        { kind: "bool", value: true },
+      ),
+      setting(
+        "streaming_device_name",
+        "streaming",
+        "Streaming Device Name",
+        "The Connect device name other Spotify apps show (applies on restart)",
+        { kind: "text", value: "spotatui" },
+      ),
+      setting(
+        "streaming_bitrate",
+        "streaming",
+        "Streaming Bitrate",
+        "Native streaming quality in kbps (applies on restart)",
+        { kind: "choice", value: "320", options: ["96", "160", "320"] },
+      ),
+      setting(
+        "enable_discord_rpc",
+        "integrations",
+        "Discord Rich Presence",
+        "Show your current track in Discord",
+        { kind: "bool", value: true },
+      ),
+      setting(
+        "disable_auto_update",
+        "updates",
+        "Disable Auto-Update",
+        "Only look for updates; download and install them from this page yourself",
+        { kind: "bool", value: false },
+      ),
+      setting(
+        "auto_update_delay",
+        "updates",
+        "Auto-Update Delay",
+        "How long a release must be out before it downloads: '0' for at once, or for example '10m', '2h', '7d'",
+        { kind: "text", value: "0" },
+      ),
+    ],
+  },
+  { kind: "update", rev: 1, payload: { state: "ready", version: "0.44.0" } },
 ];

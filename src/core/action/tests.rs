@@ -3357,6 +3357,123 @@ fn save_settings_without_a_config_path_reports_failure_and_raises_the_error_fram
 }
 
 #[test]
+fn set_setting_writes_one_row_and_keeps_the_settings_screen_staging() {
+  use crate::core::action::SettingInput;
+  use crate::core::user_config::UserConfigPaths;
+
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.user_config.path_to_config = Some(UserConfigPaths {
+    config_file_path: dir.path().join("config.yml"),
+  });
+  app.load_settings_for_category();
+  let staged = app.settings_items.clone();
+
+  let outcome = app.apply(Action::SetSetting {
+    id: "behavior.seek_milliseconds".to_string(),
+    value: SettingInput::Number(7000),
+  });
+
+  assert_eq!(outcome, ActionOutcome::SettingsSaved { saved: true });
+  assert_eq!(app.user_config.behavior.seek_milliseconds, 7000);
+  assert_eq!(app.settings_items, staged);
+  let written = std::fs::read_to_string(dir.path().join("config.yml")).unwrap();
+  assert!(written.contains("seek_milliseconds: 7000"));
+}
+
+#[test]
+fn set_setting_refuses_a_value_of_the_wrong_kind_and_an_unknown_id() {
+  use crate::core::action::SettingInput;
+
+  let (mut app, _rx) = app_with_channel();
+  let seek = app.user_config.behavior.seek_milliseconds;
+
+  let wrong_kind = app.apply(Action::SetSetting {
+    id: "behavior.seek_milliseconds".to_string(),
+    value: SettingInput::Text("fast".to_string()),
+  });
+  let unknown_id = app.apply(Action::SetSetting {
+    id: "behavior.no_such_row".to_string(),
+    value: SettingInput::Bool(true),
+  });
+
+  assert_eq!(wrong_kind, ActionOutcome::SettingsSaved { saved: false });
+  assert_eq!(unknown_id, ActionOutcome::SettingsSaved { saved: false });
+  assert_eq!(app.user_config.behavior.seek_milliseconds, seek);
+  assert!(app.api_error().is_empty());
+}
+
+#[cfg(feature = "self-update")]
+#[test]
+fn set_setting_refuses_an_auto_update_delay_that_does_not_parse() {
+  use crate::core::action::SettingInput;
+  use crate::core::user_config::UserConfigPaths;
+
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.user_config.path_to_config = Some(UserConfigPaths {
+    config_file_path: dir.path().join("config.yml"),
+  });
+  let delay = |text: &str| Action::SetSetting {
+    id: "behavior.auto_update_delay".to_string(),
+    value: SettingInput::Text(text.to_string()),
+  };
+
+  let bad = app.apply(delay("1 week"));
+  assert_eq!(bad, ActionOutcome::SettingsSaved { saved: false });
+  assert!(!dir.path().join("config.yml").exists());
+
+  let good = app.apply(delay("2h"));
+  assert_eq!(good, ActionOutcome::SettingsSaved { saved: true });
+  assert_eq!(app.user_config.behavior.auto_update_delay, "2h");
+}
+
+#[test]
+fn set_setting_pushes_the_settings_rows_even_when_the_write_fails() {
+  use crate::core::action::SettingInput;
+  use crate::core::app::DisplayDomain;
+
+  let (mut app, _rx) = app_with_channel();
+  let before = app.display_revisions().get(DisplayDomain::Settings);
+
+  let outcome = app.apply(Action::SetSetting {
+    id: "behavior.stop_after_current_track".to_string(),
+    value: SettingInput::Bool(true),
+  });
+
+  assert_eq!(outcome, ActionOutcome::SettingsSaved { saved: false });
+  assert!(app.user_config.behavior.stop_after_current_track);
+  assert_ne!(app.display_revisions().get(DisplayDomain::Settings), before);
+}
+
+#[cfg(feature = "streaming")]
+#[test]
+fn set_setting_takes_a_choice_only_from_its_options() {
+  use crate::core::action::SettingInput;
+  use crate::core::user_config::UserConfigPaths;
+
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.spotify_connected = true;
+  app.user_config.path_to_config = Some(UserConfigPaths {
+    config_file_path: dir.path().join("config.yml"),
+  });
+
+  let bad = app.apply(Action::SetSetting {
+    id: "behavior.streaming_bitrate".to_string(),
+    value: SettingInput::Text("999".to_string()),
+  });
+  let good = app.apply(Action::SetSetting {
+    id: "behavior.streaming_bitrate".to_string(),
+    value: SettingInput::Text("160".to_string()),
+  });
+
+  assert_eq!(bad, ActionOutcome::SettingsSaved { saved: false });
+  assert_eq!(good, ActionOutcome::SettingsSaved { saved: true });
+  assert_eq!(app.user_config.behavior.streaming_bitrate, 160);
+}
+
+#[test]
 fn cycle_visualizer_style_steps_the_configured_style() {
   let (mut app, _rx) = app_with_channel();
   let before = app.user_config.behavior.visualizer_style;

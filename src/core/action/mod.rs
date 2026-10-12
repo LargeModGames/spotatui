@@ -340,6 +340,12 @@ pub enum Action {
   /// Commit the Settings screen's staged rows and write `config.yml`; the
   /// outcome says whether the write succeeded.
   SaveSettings,
+  /// Set one settings row and write `config.yml`; the outcome says whether
+  /// the write succeeded. An unknown id or a value of the wrong kind changes nothing.
+  SetSetting {
+    id: String,
+    value: SettingInput,
+  },
   /// Cycle the visualizer style and persist it.
   CycleVisualizerStyle,
   /// Answer the community-playlist pin prompt: keep the pin, or hide it and
@@ -406,6 +412,15 @@ pub enum ActionOutcome {
   Queued { accepted: usize },
   /// [`Action::SaveSettings`]: whether `config.yml` was written.
   SettingsSaved { saved: bool },
+}
+
+/// A settings row's new value from a frontend; a choice row takes `Text`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub enum SettingInput {
+  Bool(bool),
+  Number(i64),
+  Text(String),
 }
 
 /// An absolute repeat mode, mirroring Spotify's three states without the

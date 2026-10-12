@@ -13,6 +13,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcxMkVFQzYyMzQ5MjgwOEEKUldTS2dKSTBZdXd1Y1YwUjJDWFpoL3R5ZURCS21OZkdTVTNhZjVCWmVmT3UrR1NhbUF3SGlCaDAK",
+      "requireSignedVersion": true,
+      "endpoints": [
+        "https://github.com/LargeModGames/spotatui/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "app", "dmg", "deb", "rpm", "appimage"],

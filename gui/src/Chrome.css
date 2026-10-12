@@ -147,6 +147,23 @@
   color: var(--accent);
 }
 
+.update-pill {
+  height: 28px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.update-pill:hover {
+  transform: scale(1.04);
+}
+
 .device {
   display: flex;
   align-items: center;

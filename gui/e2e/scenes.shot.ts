@@ -17,6 +17,7 @@ import {
   room,
   search,
   session,
+  settings,
   stats,
 } from "./fixtures";
 
@@ -323,4 +324,12 @@ test("track menu", async ({ page }) => {
   await page.getByRole("menuitem", { name: "Add to playlist" }).hover();
   await page.getByRole("menu", { name: "Add to playlist" }).waitFor();
   await shot(page, "track-menu");
+});
+
+test("settings", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...settings]);
+  await page.getByText("Set Fire to the Rain").first().waitFor();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByText("Version 0.44.0 is ready").scrollIntoViewIfNeeded();
+  await shot(page, "settings");
 });

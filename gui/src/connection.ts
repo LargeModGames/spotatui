@@ -32,6 +32,8 @@ export interface State {
   booted: boolean;
   /** The first-launch questions; the page shows them until the app has booted. */
   onboarding: OnboardingView | null;
+  /** The running spotatui version, from the hello. */
+  version: string | null;
 }
 
 /** Reads the one-time launch code from the fragment and removes it from the address bar. */
@@ -60,6 +62,7 @@ export class Connection {
     position: null,
     booted: false,
     onboarding: null,
+    version: null,
   };
   private socket: Socket | null = null;
   private readonly listeners = new Set<() => void>();
@@ -119,7 +122,10 @@ export class Connection {
         if (message.payload.token)
           this.storage.setItem(TOKEN_KEY, message.payload.token);
         // A token resumes the same process, whose revisions only rise, so the resync overwrites the store.
-        return this.update({ connected: true });
+        return this.update({
+          connected: true,
+          version: message.payload.version,
+        });
       case "onboarding":
         return this.update({ onboarding: message.payload });
       case "tick":

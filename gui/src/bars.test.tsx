@@ -1,8 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { NowPlaying } from "./bindings/NowPlaying";
+import type { UpdateAsk } from "./bindings/UpdateAsk";
+import type { UpdateStatus } from "./bindings/UpdateStatus";
 import type { Page } from "./nav";
 import { PlayerBar, type Panel } from "./PlayerBar";
+import { byName } from "./testTree";
 import { TopBar } from "./TopBar";
 
 const song: NowPlaying = {
@@ -122,28 +125,67 @@ describe("PlayerBar", () => {
 });
 
 describe("TopBar", () => {
-  const bar = ({
+  const topBar = ({
     page = "home" as Page,
     device = "This PC" as string | null,
     connected = true,
     canBack = false,
     query = "",
-  } = {}) =>
-    renderToStaticMarkup(
-      <TopBar
-        page={page}
-        canBack={canBack}
-        canForward={false}
-        onBack={() => {}}
-        onForward={() => {}}
-        onPage={() => {}}
-        query={query}
-        onQuery={() => {}}
-        onRun={() => {}}
-        device={device}
-        connected={connected}
-      />,
+    update = null as UpdateStatus | null,
+    onPage = (() => {}) as (page: Page) => void,
+    onUpdate = (() => {}) as (ask: UpdateAsk) => void,
+  } = {}) => (
+    <TopBar
+      page={page}
+      canBack={canBack}
+      canForward={false}
+      onBack={() => {}}
+      onForward={() => {}}
+      onPage={onPage}
+      query={query}
+      onQuery={() => {}}
+      onRun={() => {}}
+      device={device}
+      connected={connected}
+      update={update}
+      onUpdate={onUpdate}
+    />
+  );
+  const bar = (options: Parameters<typeof topBar>[0] = {}) =>
+    renderToStaticMarkup(topBar(options));
+
+  it("the gear opens Settings and is marked on the Settings page", () => {
+    const pages: Page[] = [];
+    (
+      byName(topBar({ onPage: (page) => pages.push(page) }), "Settings").props
+        .onClick as () => void
+    )();
+    expect(pages).toEqual(["settings"]);
+    expect(tag(bar(), "Settings")).toMatch(/title="Settings \((Ctrl\+|⌘),\)"/);
+    expect(tag(bar(), "Settings")).not.toContain("aria-current");
+    expect(tag(bar({ page: "settings" }), "Settings")).toContain(
+      'aria-current="page"',
     );
+  });
+
+  it("offers a downloaded update as a pill that installs it", () => {
+    const asks: UpdateAsk[] = [];
+    const ready = topBar({
+      update: { state: "ready", version: "0.44.0" },
+      onUpdate: (ask) => asks.push(ask),
+    });
+    expect(renderToStaticMarkup(ready)).toContain(
+      'title="Restart to install version 0.44.0"',
+    );
+    (byName(ready, "Update ready").props.onClick as () => void)();
+    expect(asks).toEqual(["install"]);
+    for (const update of [
+      null,
+      { state: "available", version: "0.44.0" },
+      { state: "downloading", version: "0.44.0", percent: 40 },
+    ] as UpdateStatus[])
+      expect(bar({ update })).not.toContain("Update ready");
+  });
 
   it("marks the current page and names each page's digit key", () => {
     const home = bar();

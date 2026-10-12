@@ -203,7 +203,7 @@ jobs:
 
             ## Desktop app (preview, unsigned)
 
-            spotatui in its own window, with the same player, login and settings as the terminal app. The preview plays Spotify (Premium) only, and it does not update itself. Its installers are added to this release a few minutes after it is published.
+            spotatui in its own window, with the same player, login and settings as the terminal app. The preview plays Spotify (Premium) only. Its installers are added to this release a few minutes after it is published. The Windows installer, the macOS app and the AppImage update themselves from then on; a `.deb` or `.rpm` install updates with a new download from this page.
 
             - **Windows 10/11 (64-bit)** → `spotatui-desktop_*_x64-setup.exe`. The installer is not signed, so SmartScreen warns: click **More info**, then **Run anyway**.
             - **macOS** → `spotatui_*_aarch64.dmg` (Apple Silicon) or `spotatui_*_x64.dmg` (Intel). Drag spotatui to Applications and open it. The app is not notarized, so macOS refuses the first launch: close that dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm.
@@ -226,6 +226,8 @@ jobs:
   # console binaries or the publish jobs; a failed row can be re-run alone.
   # The installer names carry no OS word, so self-update's OS+arch fallback and
   # the .deb, winget and Homebrew lookups never pick one up.
+  # The updater bundles (.AppImage, -setup.exe, .app.tar.gz) are signed with the
+  # TAURI_SIGNING_PRIVATE_KEY secret; only this job turns them on.
   desktop:
     name: Desktop ${{ matrix.os }}
     needs: release
@@ -248,8 +250,10 @@ jobs:
             bundles: deb,rpm,appimage
           - os: macos-15-intel
             bundles: app,dmg
+            arch: x64
           - os: macos-latest
             bundles: app,dmg
+            arch: aarch64
           - os: windows-latest
             bundles: nsis
 
@@ -290,9 +294,13 @@ jobs:
         run: cargo install tauri-cli --version 2.12.2 --locked
 
       # No --locked: desktop/Cargo.lock is refreshed in the release commit.
+      # The updater bundles are on here only, so local and PR builds need no key.
       - name: Build the desktop bundles
         working-directory: desktop
-        run: cargo tauri build --ci --bundles ${{ matrix.bundles }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: cargo tauri build --ci --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Warn when desktop/Cargo.lock is stale
         run: git diff --quiet -- desktop/Cargo.lock || echo "::warning file=desktop/Cargo.lock::desktop/Cargo.lock was stale for this release; refresh it in the next release commit."
@@ -318,6 +326,21 @@ jobs:
         if: runner.os == 'Linux'
         run: ldd desktop/target/release/spotatui-desktop || echo "::warning::ldd failed on desktop/target/release/spotatui-desktop"
 
+      # Both macOS rows build <productName>.app.tar.gz; the arch keeps them apart.
+      - name: Name the macOS update bundle by arch
+        if: runner.os == 'macOS'
+        working-directory: desktop/target/release/bundle/macos
+        run: |
+          shopt -s nullglob
+          src=(*.app.tar.gz)
+          if [ ${#src[@]} -ne 1 ] || [ ! -f "${src[0]}.sig" ]; then
+            echo "::error::Expected one signed .app.tar.gz, found: ${src[*]}"
+            exit 1
+          fi
+          name="spotatui_${GITHUB_REF_NAME#v}_${{ matrix.arch }}.app.tar.gz"
+          mv "${src[0]}" "$name"
+          mv "${src[0]}.sig" "$name.sig"
+
       - name: Upload installers to the release
         working-directory: desktop/target/release/bundle
         run: |
@@ -332,7 +355,71 @@ jobs:
             (cd "$(dirname "$f")" && if command -v sha256sum >/dev/null; then sha256sum "$(basename "$f")"; else shasum -a 256 "$(basename "$f")"; fi) > "$f.sha256"
             upload+=("$f" "$f.sha256")
           done
+          # The updater checks the .sig against the key in the app instead of a .sha256.
+          upload+=(appimage/*.AppImage.sig nsis/*-setup.exe.sig macos/*.app.tar.gz macos/*.app.tar.gz.sig)
           gh release upload "$GITHUB_REF_NAME" "${upload[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
+  # latest.json, the file the desktop updater reads from the latest release.
+  # Stable tags only, so a prerelease never reaches users. One failed desktop
+  # row skips this job, so no manifest ships without a platform; re-running that
+  # row runs it again.
+  desktop-manifest:
+    name: Desktop update manifest
+    needs: desktop
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Download the update signatures
+        run: gh release download "$GITHUB_REF_NAME" --pattern '*.sig' --dir sigs --repo "$GITHUB_REPOSITORY"
+
+      - name: Build and upload latest.json
+        env:
+          TAG: ${{ github.ref_name }}
+          BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}
+          CHANGELOG_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md
+        run: |
+          heading=$(grep -m1 "^## \[$TAG\]" CHANGELOG.md || true)
+          if [ -n "$heading" ]; then
+            anchor=$(printf '%s' "${heading#\#\# }" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9 -' | tr ' ' '-')
+            CHANGELOG_URL="$CHANGELOG_URL#$anchor"
+          fi
+          platforms='{}'
+          add() {
+            local key=$1 pattern f name
+            shift
+            for pattern in "$@"; do
+              f=$(find sigs -maxdepth 1 -type f -name "$pattern" -print -quit)
+              if [ -n "$f" ]; then
+                name=$(basename "$f" .sig)
+                platforms=$(jq --arg k "$key" --arg sig "$(cat "$f")" --arg url "$BASE_URL/$name" '. + {($k): {signature: $sig, url: $url}}' <<<"$platforms")
+                return
+              fi
+            done
+            echo "::warning::No $key update bundle in $TAG"
+          }
+          add windows-x86_64 '*_x64-setup.exe.sig'
+          add darwin-x86_64 '*_x64.app.tar.gz.sig'
+          add darwin-aarch64 '*_aarch64.app.tar.gz.sig'
+          add linux-x86_64 '*_amd64.AppImage.sig' '*_x86_64.AppImage.sig'
+          add linux-aarch64 '*_aarch64.AppImage.sig' '*_arm64.AppImage.sig'
+          for key in windows-x86_64 linux-x86_64; do
+            if ! jq -e --arg k "$key" 'has($k)' <<<"$platforms" >/dev/null; then
+              echo "::error::latest.json needs $key"
+              exit 1
+            fi
+          done
+          jq -n --arg version "${TAG#v}" --arg notes "What changed: $CHANGELOG_URL" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
 
   announce-discord:
     name: Announce on Discord

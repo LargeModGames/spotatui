@@ -31,6 +31,11 @@ pub enum DisplayDomain {
   RecentlyPlayed,
   /// The liked track ids among the rows a frontend can show.
   LikedMarks,
+  /// The settings rows a frontend offers.
+  Settings,
+  /// The desktop shell's updater.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  Update,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -59,12 +64,14 @@ pub struct DisplayRevisions {
   track_table: u64,
   recently_played: u64,
   liked_marks: u64,
+  settings: u64,
+  update: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 21] = [
+  pub const ALL: [DisplayDomain; 23] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -86,6 +93,8 @@ impl DisplayDomain {
     DisplayDomain::TrackTable,
     DisplayDomain::RecentlyPlayed,
     DisplayDomain::LikedMarks,
+    DisplayDomain::Settings,
+    DisplayDomain::Update,
   ];
 }
 
@@ -113,6 +122,8 @@ impl DisplayRevisions {
       DisplayDomain::TrackTable => &mut self.track_table,
       DisplayDomain::RecentlyPlayed => &mut self.recently_played,
       DisplayDomain::LikedMarks => &mut self.liked_marks,
+      DisplayDomain::Settings => &mut self.settings,
+      DisplayDomain::Update => &mut self.update,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -141,6 +152,8 @@ impl DisplayRevisions {
       DisplayDomain::TrackTable => self.track_table,
       DisplayDomain::RecentlyPlayed => self.recently_played,
       DisplayDomain::LikedMarks => self.liked_marks,
+      DisplayDomain::Settings => self.settings,
+      DisplayDomain::Update => self.update,
     }
   }
 }
@@ -174,5 +187,22 @@ impl App {
   #[cfg(feature = "gui")]
   pub(crate) fn queue_view(&self) -> &(Option<QueueState>, Vec<TrackInfo>, Option<TrackInfo>) {
     &self.queue_view
+  }
+
+  #[cfg(feature = "gui")]
+  pub(crate) fn update_status(&self) -> Option<&crate::core::update::UpdateStatus> {
+    self.update_status.as_ref()
+  }
+
+  #[cfg(feature = "gui")]
+  pub(crate) fn set_update_status(&mut self, status: crate::core::update::UpdateStatus) {
+    if self.update_status.as_ref() != Some(&status) {
+      // The Updates rows show only with an updater.
+      if self.update_status.is_none() {
+        self.display_revisions.bump(DisplayDomain::Settings);
+      }
+      self.update_status = Some(status);
+      self.display_revisions.bump(DisplayDomain::Update);
+    }
   }
 }

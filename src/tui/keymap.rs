@@ -713,6 +713,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::ClosePopup => literal("<Esc>", "Plugin popup"),
     Action::SetTheme(_) => Unbound(PLUGIN_ONLY),
     Action::SaveSettings => binding(|k| k.save_settings),
+    Action::SetSetting { .. } => Unbound("the GUI's settings page sets one row"),
     Action::CycleVisualizerStyle => literal("V", "Audio analysis"),
     Action::SetScreenContent { .. } => Unbound(PLUGIN_ONLY),
     Action::ShowScreen(_) => Unbound(PLUGIN_ONLY),
@@ -803,7 +804,7 @@ mod tests {
   use std::path::{Path, PathBuf};
 
   use super::*;
-  use crate::core::action::{DiscoverTarget, ListTarget, OpenTarget, RepeatSetting};
+  use crate::core::action::{DiscoverTarget, ListTarget, OpenTarget, RepeatSetting, SettingInput};
   use crate::core::plugin_api::{PluginPopup, PluginScreenContent, ShowInfo, TrackInfo};
   use crate::core::sort::SortField;
   use crate::core::test_helpers::full_track;
@@ -935,6 +936,7 @@ mod tests {
     "SetPlaybarSegment",
     "SetRepeat",
     "SetScreenContent",
+    "SetSetting",
     "SetShuffle",
     "SetTheme",
     "SetVolume",
@@ -1232,6 +1234,10 @@ mod tests {
       Action::ClosePopup,
       Action::SetTheme(vec![(ThemeField::Active, Color::Reset)]),
       Action::SaveSettings,
+      Action::SetSetting {
+        id: text(),
+        value: SettingInput::Bool(true),
+      },
       Action::CycleVisualizerStyle,
       Action::AnswerCommunityPinPrompt { keep: false },
       Action::OpenRecap,

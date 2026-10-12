@@ -1370,6 +1370,8 @@ impl Network {
     {
       let mut app = self.app.lock().await;
       app.spotify_connected = true;
+      // Spotify-only settings rows show now.
+      app.bump_display(crate::core::app::DisplayDomain::Settings);
       // `LikedSongs.available` reads the flag; a page must learn it can fetch now.
       app.bump_display(crate::core::app::DisplayDomain::LikedSongs);
       app.bump_display(crate::core::app::DisplayDomain::Party);

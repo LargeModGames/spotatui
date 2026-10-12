@@ -10,7 +10,8 @@ import type { ReactNode } from "react";
 import type { Action } from "./bindings/Action";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { SessionPlay } from "./bindings/SessionPlay";
-import { shellKey, type ShellKey } from "./areas";
+import type { UpdateAsk } from "./bindings/UpdateAsk";
+import { MAC, shellKey, type ShellKey } from "./areas";
 import { AlbumPage } from "./AlbumPage";
 import { ArtistPage } from "./ArtistPage";
 import "./Chrome.css";
@@ -43,6 +44,7 @@ import { QueueDrawer } from "./QueueDrawer";
 import { Room } from "./Room";
 import { Search } from "./Search";
 import { Session } from "./Session";
+import { Settings } from "./Settings";
 import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
@@ -59,10 +61,12 @@ const WIDE = "(min-width: 1101px)";
 export function Shell({
   state,
   send,
+  onUpdate,
   onQuit,
 }: {
   state: State;
   send: (action: Action) => void;
+  onUpdate: (ask: UpdateAsk) => void;
   onQuit: () => void;
 }) {
   const { channels } = state;
@@ -308,6 +312,15 @@ export function Shell({
         onBack={() => show(goBack(history), false)}
       />
     ),
+    settings: (
+      <Settings
+        rows={channels.settings?.payload ?? null}
+        update={channels.update?.payload ?? null}
+        version={state.version}
+        send={send}
+        onUpdate={onUpdate}
+      />
+    ),
   };
 
   // The search field takes the keyboard even when Search is already the page.
@@ -339,6 +352,9 @@ export function Shell({
       } else if (command === "escape") {
         if (overlay) setOverlay(null);
         else if (!blurText() && room) setRoom(false);
+      } else if (command === "settings") {
+        setRoom(false);
+        open({ page: "settings" });
       } else if (command.area === "search") openSearch();
       else open({ page: command.area } as View);
       event.preventDefault();
@@ -386,6 +402,8 @@ export function Shell({
           onRun={runSearch}
           device={playback?.device ?? null}
           connected={state.connected}
+          update={channels.update?.payload ?? null}
+          onUpdate={onUpdate}
         />
         <LibraryPanel
           playlists={channels.library?.payload ?? null}
@@ -490,6 +508,10 @@ function describe(event: KeyboardEvent, overlay: boolean): ShellKey {
   return {
     key: event.key,
     modified: event.ctrlKey || event.metaKey || event.altKey,
+    command:
+      !event.altKey &&
+      (MAC ? event.metaKey : event.ctrlKey) &&
+      !(MAC ? event.ctrlKey : event.metaKey),
     composing: event.isComposing,
     handled: event.defaultPrevented,
     typing: target !== null && isText(target),

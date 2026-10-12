@@ -23,6 +23,18 @@ describe("applyChannel", () => {
     );
   });
 
+  it("keeps a null update payload, the browser build's no updater", () => {
+    const start = applyChannel({}, { kind: "update", rev: 2, payload: null });
+    expect(start.update?.payload).toBeNull();
+    expect(
+      applyChannel(start, {
+        kind: "update",
+        rev: 1,
+        payload: { state: "ready", version: "1.0.0" },
+      }),
+    ).toBe(start);
+  });
+
   it("ignores a message below the stored rev", () => {
     const start = { route: route(3) };
     expect(applyChannel(start, route(2))).toBe(start);

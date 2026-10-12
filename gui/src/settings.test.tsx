@@ -1,0 +1,210 @@
+import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import type { Action } from "./bindings/Action";
+import type { SettingRow } from "./bindings/SettingRow";
+import type { UpdateAsk } from "./bindings/UpdateAsk";
+import type { UpdateStatus } from "./bindings/UpdateStatus";
+import { SettingControl, Settings, UpdateRow } from "./Settings";
+import { byName } from "./testTree";
+
+const rows: SettingRow[] = [
+  {
+    id: "behavior.seek_milliseconds",
+    group: "playback",
+    name: "Seek Duration (ms)",
+    description: "Milliseconds to skip when seeking",
+    value: { kind: "number", value: 5000 },
+  },
+  {
+    id: "behavior.streaming_bitrate",
+    group: "streaming",
+    name: "Streaming Bitrate",
+    description: "Audio quality for native streaming",
+    value: { kind: "choice", value: "320", options: ["96", "160", "320"] },
+  },
+  {
+    id: "behavior.enable_discord_rpc",
+    group: "integrations",
+    name: "Discord Rich Presence",
+    description: "Show the playing track on Discord",
+    value: { kind: "bool", value: true },
+  },
+  {
+    id: "behavior.auto_update_delay",
+    group: "updates",
+    name: "Auto-update delay",
+    description: "How long a release must be out before it downloads",
+    value: { kind: "text", value: "0" },
+  },
+];
+
+const page = (update: UpdateStatus | null, shown = rows) =>
+  renderToStaticMarkup(
+    <Settings
+      rows={shown}
+      update={update}
+      version="0.43.0"
+      send={() => {}}
+      onUpdate={() => {}}
+    />,
+  );
+
+/** The handlers a control element carries. */
+interface Handlers {
+  onClick?: () => void;
+  onCommit?: (draft: string) => void;
+  onChange?: (event: { currentTarget: { value: string } }) => void;
+}
+
+/** The actions a row's control sends when `act` drives its handlers. */
+const sent = (row: SettingRow, act: (handlers: Handlers) => void) => {
+  const actions: Action[] = [];
+  const control = SettingControl({
+    row,
+    send: (action) => actions.push(action),
+  }) as ReactElement<Handlers>;
+  act(control.props);
+  return actions;
+};
+
+describe("Settings", () => {
+  it("shows each row under its group's heading, in order, with its control", () => {
+    const html = page({ state: "idle" });
+    const order = [
+      ">Settings</h1>",
+      ">Playback</h2>",
+      "Seek Duration (ms)",
+      ">Streaming</h2>",
+      "Streaming Bitrate",
+      ">Integrations</h2>",
+      "Discord Rich Presence",
+      ">Updates</h2>",
+      "Auto-update delay",
+    ].map((text) => html.indexOf(text));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html).toContain("Show the playing track on Discord");
+    expect(html).toMatch(
+      /role="switch"[^>]*aria-checked="true"[^>]*aria-labelledby="behavior.enable_discord_rpc-name"/,
+    );
+    expect(html).toMatch(/<input[^>]*type="number"[^>]*value="5000"/);
+    expect(html).toMatch(/<option value="320" selected="">320<\/option>/);
+    expect(html).toMatch(/<input[^>]*type="text"[^>]*value="0"/);
+    expect(html).toContain("data-focus");
+  });
+
+  it("has no Updates section without an updater", () => {
+    const html = page(null, rows.slice(0, 3));
+    expect(html).not.toContain(">Updates</h2>");
+    expect(html).not.toContain("latest version");
+  });
+
+  it("says it is loading before the rows arrive", () => {
+    expect(
+      renderToStaticMarkup(
+        <Settings
+          rows={null}
+          update={null}
+          version={null}
+          send={() => {}}
+          onUpdate={() => {}}
+        />,
+      ),
+    ).toContain("Loading…");
+  });
+
+  it("a switch click sends the flipped value", () => {
+    const actions = sent(rows[2], (control) => control.onClick?.());
+    expect(actions).toEqual([
+      {
+        SetSetting: {
+          id: "behavior.enable_discord_rpc",
+          value: { Bool: false },
+        },
+      },
+    ]);
+  });
+
+  it("a number commit sends the number and an unchanged one sends nothing", () => {
+    const actions = sent(rows[0], (control) => {
+      control.onCommit?.("7500");
+      control.onCommit?.("5000");
+    });
+    expect(actions).toEqual([
+      {
+        SetSetting: {
+          id: "behavior.seek_milliseconds",
+          value: { Number: 7500 },
+        },
+      },
+    ]);
+  });
+
+  it("a select change sends the option as text", () => {
+    const actions = sent(rows[1], (control) =>
+      control.onChange?.({ currentTarget: { value: "160" } }),
+    );
+    expect(actions).toEqual([
+      {
+        SetSetting: {
+          id: "behavior.streaming_bitrate",
+          value: { Text: "160" },
+        },
+      },
+    ]);
+  });
+
+  it("the Updates section shows the action for each state", () => {
+    const cases: [UpdateStatus, string, string | null][] = [
+      [{ state: "idle" }, "You have the latest version (0.43.0)", "check"],
+      [
+        { state: "up_to_date" },
+        "You have the latest version (0.43.0)",
+        "check",
+      ],
+      [{ state: "available", version: "0.44.0" }, "is available", "download"],
+      [
+        { state: "downloading", version: "0.44.0", percent: 10 },
+        "Downloading version 0.44.0 (10%)",
+        null,
+      ],
+      [{ state: "ready", version: "0.44.0" }, "is ready", "install"],
+      [
+        { state: "manual", version: "0.44.0" },
+        "Download it from the release page",
+        null,
+      ],
+      [{ state: "failed", message: "Network down" }, "Network down", "check"],
+    ];
+    const labels = {
+      check: "Check for updates",
+      download: "Download",
+      install: "Restart to update",
+    };
+    for (const [status, text, ask] of cases) {
+      expect(page(status)).toContain(text);
+      const asks: UpdateAsk[] = [];
+      const row = (
+        <UpdateRow
+          status={status}
+          version="0.43.0"
+          onUpdate={(next) => asks.push(next)}
+        />
+      );
+      if (ask === null) {
+        expect(renderToStaticMarkup(row)).not.toContain("<button");
+        continue;
+      }
+      const label =
+        status.state === "failed"
+          ? "Try again"
+          : labels[ask as keyof typeof labels];
+      (byName(row, label).props.onClick as () => void)();
+      expect(asks).toEqual([ask]);
+    }
+    expect(page({ state: "checking" })).toMatch(
+      /<button[^>]*disabled=""[^>]*>Check for updates</,
+    );
+  });
+});

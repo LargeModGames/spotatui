@@ -3,10 +3,14 @@
 
 //! The spotatui desktop app: a Tauri window around the GUI's loopback page.
 
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+mod updater;
+
+use spotatui::{UpdateLink, UpdateStatus};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::SeqCst};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use updater::Pending;
 
 /// How long a quit waits for the app to save the session and stop playback.
 const SHUTDOWN_LIMIT: Duration = Duration::from_secs(10);
@@ -18,6 +22,29 @@ struct Life {
   serving: AtomicBool,
   /// The app thread finished its shutdown.
   done: AtomicBool,
+  /// `OPEN`, then `INSTALLING` or `GAVE_UP`, never both.
+  install: AtomicU8,
+}
+
+const OPEN: u8 = 0;
+const INSTALLING: u8 = 1;
+const GAVE_UP: u8 = 2;
+
+impl Life {
+  fn begin_install(&self) -> bool {
+    self
+      .install
+      .compare_exchange(OPEN, INSTALLING, SeqCst, SeqCst)
+      .is_ok()
+  }
+
+  /// False when an install already runs: stopping it would leave a half-written app.
+  fn give_up(&self) -> bool {
+    self
+      .install
+      .compare_exchange(OPEN, GAVE_UP, SeqCst, SeqCst)
+      .is_ok()
+  }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -35,6 +62,14 @@ fn main() -> anyhow::Result<()> {
   let (done_tx, done_rx) = mpsc::channel::<()>();
   let handle = runtime.handle().clone();
   let worker_life = Arc::clone(&life);
+  let (status, status_rx) = tokio::sync::watch::channel(UpdateStatus::Idle);
+  let (requests, request_rx) = tokio::sync::mpsc::unbounded_channel();
+  let pending = Arc::new(Pending::default());
+  let updates = UpdateLink {
+    status: status_rx,
+    requests,
+  };
+  let worker_pending = Arc::clone(&pending);
   let app = tauri::Builder::default()
     // First plugin: a second launch focuses this window and exits before it boots.
     .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -44,13 +79,25 @@ fn main() -> anyhow::Result<()> {
         let _ = window.set_focus();
       }
     }))
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(move |app| {
       let app = app.handle().clone();
+      tauri::async_runtime::spawn(updater::serve(app.clone(), status, request_rx, pending));
       // `ask_page` blocks its thread, so the app runs on a thread of its own, not a runtime worker.
       std::thread::Builder::new()
         .name("spotatui".into())
         .stack_size(16 << 20)
-        .spawn(move || worker(app, handle, worker_life, closed, done_tx))?;
+        .spawn(move || {
+          worker(
+            app,
+            handle,
+            worker_life,
+            closed,
+            done_tx,
+            updates,
+            worker_pending,
+          )
+        })?;
       Ok(())
     })
     .build(tauri::generate_context!())?;
@@ -58,7 +105,9 @@ fn main() -> anyhow::Result<()> {
     if let RunEvent::Exit = event {
       if must_wait(life.serving.load(SeqCst), life.done.load(SeqCst)) {
         let _ = close_tx.send(true);
-        let _ = done_rx.recv_timeout(SHUTDOWN_LIMIT);
+        if done_rx.recv_timeout(SHUTDOWN_LIMIT).is_err() && !life.give_up() {
+          let _ = done_rx.recv();
+        }
       }
     }
   });
@@ -77,6 +126,8 @@ fn worker(
   life: Arc<Life>,
   closed: tokio::sync::watch::Receiver<bool>,
   done: mpsc::Sender<()>,
+  updates: UpdateLink,
+  pending: Arc<Pending>,
 ) {
   let _guard = ExitOnPanic(app.clone());
   let show_app = app.clone();
@@ -85,11 +136,15 @@ fn worker(
     show: Box::new(move |url| show_main(&show_app, url)),
     serving: Box::new(move || serving_life.serving.store(true, SeqCst)),
     closed,
+    updates: Some(updates),
   };
   let result = runtime.block_on(spotatui::run_gui_hosted(host));
+  // Before `done`: a quit from the window ends the process right after it.
+  let restart = result.is_ok() && pending.is_ready() && life.begin_install() && pending.install();
   life.done.store(true, SeqCst);
   let _ = done.send(());
   match result {
+    Ok(()) if restart => app.request_restart(),
     Ok(()) => app.exit(0),
     Err(e) => show_error(&app, &format!("{e:#}")),
   }
@@ -151,6 +206,16 @@ mod tests {
     assert!(!must_wait(true, true));
     assert!(!must_wait(false, false));
     assert!(!must_wait(false, true));
+  }
+
+  #[test]
+  fn an_install_and_a_quit_that_stops_waiting_exclude_each_other() {
+    let life = Life::default();
+    assert!(life.begin_install());
+    assert!(!life.give_up());
+    let life = Life::default();
+    assert!(life.give_up());
+    assert!(!life.begin_install());
   }
 
   #[test]

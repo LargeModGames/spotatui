@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import type { Action } from "./bindings/Action";
+import type { UpdateAsk } from "./bindings/UpdateAsk";
 import { showsOnboarding, type Connection } from "./connection";
 import { Onboarding } from "./Onboarding";
 import { Shell } from "./Shell";
@@ -10,6 +11,10 @@ export function App({ connection }: { connection: Connection }) {
   // One function for the whole session, so a tick does not re-render the memoized lists.
   const send = useMemo(
     () => (action: Action) => connection.send({ type: "action", action }),
+    [connection],
+  );
+  const ask = useMemo(
+    () => (ask: UpdateAsk) => connection.send({ type: "update", ask }),
     [connection],
   );
 
@@ -36,6 +41,7 @@ export function App({ connection }: { connection: Connection }) {
     <Shell
       state={state}
       send={send}
+      onUpdate={ask}
       onQuit={() => connection.send({ type: "quit" })}
     />
   );

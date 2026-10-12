@@ -29,6 +29,42 @@ impl App {
     true
   }
 
+  /// Set one Behavior row and write `config.yml`, past the Settings screen's staged rows.
+  pub(crate) fn set_setting(&mut self, id: &str, input: crate::core::action::SettingInput) -> bool {
+    use crate::core::action::SettingInput;
+    let Some(mut item) = self
+      .behavior_setting_items()
+      .into_iter()
+      .find(|item| item.id == id && self.setting_offered(item))
+    else {
+      return false;
+    };
+    item.value = match (item.value, input) {
+      (SettingValue::Bool(_), SettingInput::Bool(v)) => SettingValue::Bool(v),
+      (SettingValue::Number(_), SettingInput::Number(v)) => SettingValue::Number(v),
+      // The check the terminal field makes: a bad delay in config.yml stops the next launch.
+      (SettingValue::String(_), SettingInput::Text(v))
+        if id == "behavior.auto_update_delay"
+          && crate::core::user_config::parse_update_delay_secs(&v).is_err() =>
+      {
+        return false;
+      }
+      (SettingValue::String(_), SettingInput::Text(v)) => SettingValue::String(v),
+      (SettingValue::Cycle(_, options), SettingInput::Text(v)) if options.contains(&v.as_str()) => {
+        SettingValue::Cycle(v, options)
+      }
+      _ => return false,
+    };
+    let staged = std::mem::replace(&mut self.settings_items, vec![item]);
+    let staged_saved = std::mem::take(&mut self.settings_saved_items);
+    let saved = self.save_settings_from_items();
+    self.settings_items = staged;
+    self.settings_saved_items = staged_saved;
+    // Also after a failed write: the live value changed all the same.
+    self.display_revisions.bump(DisplayDomain::Settings);
+    saved
+  }
+
   /// Override live theme colors field by field, the runtime `set_theme` path.
   pub(crate) fn set_theme_colors(
     &mut self,

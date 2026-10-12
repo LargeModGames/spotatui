@@ -1,6 +1,9 @@
-import { AREAS } from "./areas";
+import { AREAS, SETTINGS_KEY } from "./areas";
+import type { UpdateAsk } from "./bindings/UpdateAsk";
+import type { UpdateStatus } from "./bindings/UpdateStatus";
 import { Glyph, type GlyphName } from "./Icon";
 import type { Page } from "./nav";
+import { readyVersion } from "./settingsModel";
 
 const PAGE_GLYPHS: Partial<Record<Page, GlyphName>> = {
   discover: "discover",
@@ -24,6 +27,8 @@ export function TopBar({
   onRun,
   device,
   connected,
+  update,
+  onUpdate,
 }: {
   page: Page;
   canBack: boolean;
@@ -36,7 +41,10 @@ export function TopBar({
   onRun: (query: string) => void;
   device: string | null;
   connected: boolean;
+  update: UpdateStatus | null;
+  onUpdate: (ask: UpdateAsk) => void;
 }) {
+  const ready = readyVersion(update);
   return (
     <header className="topbar">
       <div className="topbar-start">
@@ -116,6 +124,27 @@ export function TopBar({
             </button>
           ))}
         </nav>
+        {ready && (
+          <button
+            type="button"
+            className="update-pill"
+            title={`Restart to install version ${ready}`}
+            onClick={() => onUpdate("install")}
+          >
+            Update ready
+          </button>
+        )}
+        <button
+          type="button"
+          className="page-button"
+          aria-label="Settings"
+          title={`Settings (${SETTINGS_KEY.label})`}
+          aria-keyshortcuts={SETTINGS_KEY.aria}
+          aria-current={page === "settings" ? "page" : undefined}
+          onClick={() => onPage("settings")}
+        >
+          <Glyph name="gear" size={20} />
+        </button>
         <span className="device">
           <span className={connected && device ? "dot on" : "dot"} />
           <span className="device-name" title={device ?? undefined}>
