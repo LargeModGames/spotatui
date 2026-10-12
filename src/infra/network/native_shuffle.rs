@@ -223,6 +223,7 @@ enum ShuffleTarget {
   },
 }
 
+#[cfg(feature = "streaming")]
 fn resolve_shuffle_target(
   app: &App,
   context_id: &Option<PlayContextId<'static>>,
@@ -1321,6 +1322,7 @@ mod tests {
     assert_eq!(full_fetch_reload_seek_ms(81_000, Some(80_000)), 80_000);
   }
 
+  #[cfg(feature = "streaming")]
   #[test]
   fn active_saved_track_filter_skips_native_shuffle_target() {
     let (tx, _rx) = std::sync::mpsc::channel();
