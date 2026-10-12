@@ -576,7 +576,8 @@ impl App {
   }
 
   pub fn is_saved_track_filter_active(&self) -> bool {
-    self.active_saved_track_filter.is_some()
+    self.track_table.context == Some(TrackTableContext::SavedTracks)
+      && self.active_saved_track_filter.is_some()
   }
 
   pub fn next_missing_saved_tracks_offset(&self, page_index: usize) -> Option<u32> {
