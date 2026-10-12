@@ -6,6 +6,10 @@
 
 - **Spotify's own lyrics for Spotify tracks**: a Spotify track now gets its lyrics from Spotify, line-synced where Spotify has the timing. Before, every track got its lyrics from LRCLIB through a title, artist and duration lookup, which missed many tracks. When Spotify has no lyrics for a track, spotatui asks LRCLIB as before. Local Files, Subsonic, Internet Radio, YouTube, Qobuz and Apple Music tracks still use LRCLIB only.
 
+### Fixed
+
+- **Search and sort in a playlist see your own edits**: search and sort read the playlist pages that opening it had already loaded, and those pages were not refreshed after you removed or added a track in spotatui (also from another screen, MCP, the DJ or a Lua plugin), so a removed track came back and an added one was missing on a playlist longer than one page. An add or a remove now marks the loaded pages out of date, so the next search or sort fetches the playlist from Spotify again ([#750](https://github.com/LargeModGames/spotatui/issues/750)).
+
 ## [v0.44.0] 2026-10-12
 
 ### Added
@@ -47,8 +51,6 @@
 - **Search and sort in a loaded playlist answer at once**: once every page of a playlist has loaded, the Ctrl+f search inside it and sorting its columns now use the songs spotatui already has instead of downloading the playlist from Spotify again. The search matches each word you type against the title, the album and the artists, ignoring case. A playlist that is still loading searches and sorts the way it did before ([#742](https://github.com/LargeModGames/spotatui/pull/742)).
 
 ### Fixed
-
-- **Search and sort in a playlist see your own edits**: search and sort read the playlist pages that opening it had already loaded, and those pages were not refreshed after you removed or added a track in spotatui, so a removed track came back and an added one was missing on a playlist longer than one page. An add or a remove now marks the loaded pages out of date, so the next search or sort fetches the playlist from Spotify again ([#750](https://github.com/LargeModGames/spotatui/issues/750)).
 
 - **Dragging on the playbar progress bar scrubs**: pressing the left mouse button on the progress bar and dragging only seeked on the first click, because the terminal input thread dropped every mouse drag before it reached the playbar. Drags with the left mouse button now get through, so the position follows the pointer as you drag ([#659](https://github.com/LargeModGames/spotatui/issues/659)).
 

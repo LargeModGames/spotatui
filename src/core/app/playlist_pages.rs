@@ -210,11 +210,14 @@ impl App {
   /// Mark the open playlist's cached pages as stale after a mutation (an add
   /// or a remove). `is_complete` then reads false, so the next search or sort
   /// walks Spotify again instead of reading pages that no longer match the
-  /// server. No-op when `playlist_id` is not the active playlist track table;
+  /// server. This checks the same condition as the cached search and sort, not
+  /// the current route, so an edit made from another screen (search results,
+  /// MCP, the DJ or a Lua plugin) still lands: going Back does not reload the
+  /// pages. No-op when `playlist_id` is not the active playlist track table;
   /// `reset_playlist_tracks_view` clears the mark via `clear()` when a
   /// playlist opens.
   pub fn mark_playlist_track_pages_stale(&mut self, playlist_id: &PlaylistId<'_>) {
-    if self.is_current_route_playlist_track_table_for(playlist_id) {
+    if self.is_playlist_track_table_active_for(playlist_id) {
       self.playlist_track_pages.mark_stale();
     }
   }
@@ -902,6 +905,36 @@ mod tests {
 
     app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
     assert!(app.is_current_route_playlist_track_table_for(&playlist_id));
+  }
+
+  #[test]
+  fn an_edit_from_another_screen_marks_the_open_playlist_pages_stale() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let open_playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+    let other_playlist_id = playlist_id("37i9dQZF1DXcBWIGoYBM5M");
+    let page = playlist_page(
+      0,
+      2,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    );
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(open_playlist_id.clone());
+    app.playlist_track_pages.upsert_page_by_offset(page);
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    assert!(app.playlist_track_pages.is_complete());
+    assert!(!app.is_current_route_playlist_track_table_for(&open_playlist_id));
+
+    // An edit to a playlist that isn't open leaves the cache alone.
+    app.mark_playlist_track_pages_stale(&other_playlist_id);
+    assert!(app.playlist_track_pages.is_complete());
+
+    // An edit to the open playlist from the search screen marks it, so the
+    // search or sort after going Back walks Spotify again.
+    app.mark_playlist_track_pages_stale(&open_playlist_id);
+    assert!(!app.playlist_track_pages.is_complete());
   }
 
   #[cfg(any(
