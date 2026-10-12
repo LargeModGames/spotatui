@@ -223,6 +223,53 @@ enum ShuffleTarget {
   },
 }
 
+fn resolve_shuffle_target(
+  app: &App,
+  context_id: &Option<PlayContextId<'static>>,
+  uris: &Option<Vec<PlayableId<'static>>>,
+  offset: Option<usize>,
+) -> Option<ShuffleTarget> {
+  match (context_id, uris) {
+    (Some(PlayContextId::Playlist(id)), maybe_uris) => {
+      // The playlist Enter path passes the selected track as a single-item
+      // URI list; without it there is nothing to pin first, so fall back.
+      let selected_uri = maybe_uris
+        .as_ref()
+        .and_then(|v| v.first())
+        .map(|u| u.uri())?;
+      Some(ShuffleTarget::Playlist {
+        id: id.clone(),
+        selected_uri,
+      })
+    }
+    (Some(PlayContextId::Album(id)), _) => Some(ShuffleTarget::Album {
+      id: id.clone(),
+      selected: offset.unwrap_or(0),
+    }),
+    (None, Some(list)) => {
+      // Raw URI lists are only shuffleable when they stand in for Liked
+      // Songs (the full library is fetchable); search/recommendation lists
+      // have no larger backing context.
+      //
+      // When a search filter is active on Liked Songs, skip the full library
+      // fetch so playback and shuffle stay strictly scoped to the filtered hits.
+      let is_saved_tracks = matches!(
+        app.track_table.context,
+        Some(TrackTableContext::SavedTracks)
+      );
+
+      if !is_saved_tracks || list.is_empty() {
+        return None;
+      }
+      Some(ShuffleTarget::SavedTracks {
+        list: list.iter().map(|u| u.uri()).collect(),
+        selected: offset.unwrap_or(0),
+      })
+    }
+    _ => None,
+  }
+}
+
 #[cfg(feature = "streaming")]
 impl Network {
   /// Intercept a native `StartPlayback` when shuffle is on and the target is a
@@ -236,43 +283,12 @@ impl Network {
     uris: &Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
   ) -> bool {
-    let target = match (context_id, uris) {
-      (Some(PlayContextId::Playlist(id)), maybe_uris) => {
-        // The playlist Enter path passes the selected track as a single-item
-        // URI list; without it there is nothing to pin first, so fall back.
-        let Some(selected_uri) = maybe_uris.as_ref().and_then(|v| v.first()).map(|u| u.uri())
-        else {
-          return false;
-        };
-        ShuffleTarget::Playlist {
-          id: id.clone(),
-          selected_uri,
-        }
-      }
-      (Some(PlayContextId::Album(id)), _) => ShuffleTarget::Album {
-        id: id.clone(),
-        selected: offset.unwrap_or(0),
-      },
-      (None, Some(list)) => {
-        // Raw URI lists are only shuffleable when they stand in for Liked
-        // Songs (the full library is fetchable); search/recommendation lists
-        // have no larger backing context.
-        let is_saved_tracks = {
-          let app = self.app.lock().await;
-          matches!(
-            app.track_table.context,
-            Some(TrackTableContext::SavedTracks)
-          )
-        };
-        if !is_saved_tracks || list.is_empty() {
-          return false;
-        }
-        ShuffleTarget::SavedTracks {
-          list: list.iter().map(|u| u.uri()).collect(),
-          selected: offset.unwrap_or(0),
-        }
-      }
-      _ => return false,
+    let target = {
+      let app = self.app.lock().await;
+      let Some(target) = resolve_shuffle_target(&app, context_id, uris, offset) else {
+        return false;
+      };
+      target
     };
 
     let (original, order, fetch) = match target {
