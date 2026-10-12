@@ -26,8 +26,8 @@ describe("searchModel", () => {
     expect(year(null)).toBe("");
   });
 
-  it("disables a tab with no results but never Everything", () => {
+  it("disables a tab with no results but never All", () => {
     expect(tabHasResults(empty, "Albums")).toBe(false);
-    expect(tabHasResults(empty, "Everything")).toBe(true);
+    expect(tabHasResults(empty, "All")).toBe(true);
   });
 });

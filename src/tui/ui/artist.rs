@@ -193,6 +193,7 @@ mod tests {
         ..Default::default()
       },
       related_artists,
+      image_url: None,
       top_tracks: vec![top_track("One")],
       selected_album_index: 0,
       selected_related_artist_index: 0,

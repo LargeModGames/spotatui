@@ -223,7 +223,7 @@ export function CommandMode({
             onKeyDown={onKeyDown}
           />
           <span className="tag">
-            {parsed.verb || link ? "COMMAND" : "SEARCH"}
+            {parsed.verb || link ? "Command" : "Search"}
           </span>
         </label>
         <div className="palette-help">
@@ -260,13 +260,13 @@ export function CommandMode({
         )}
         <div className="palette-lists">
           <div className="recent">
-            <span className="eyebrow">RECENT · ↑</span>
+            <span className="label">Recent · ↑</span>
             {recent.slice(0, 5).map((entry) => (
               <span key={entry}>{entry}</span>
             ))}
           </div>
           <div className="verbs">
-            <span className="eyebrow">COMMANDS · tab to complete</span>
+            <span className="label">Commands · tab to complete</span>
             {verbs.map((verb) => (
               <span key={verb}>
                 <b>{verb}</b> <span>{COMMANDS[verb].what}</span>

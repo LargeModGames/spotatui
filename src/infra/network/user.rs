@@ -294,6 +294,7 @@ impl UserNetwork for Network {
         }
         app.recently_played = Some(domain_page);
         app.sort_recently_played_items();
+        app.bump_display(crate::core::app::DisplayDomain::RecentlyPlayed);
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::RecentlyPlayed);

@@ -1,0 +1,826 @@
+/* Top bar: on the black frame, no panel box. */
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 560px) minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 0 8px;
+  background: var(--frame);
+}
+
+.topbar-start,
+.topbar-center,
+.topbar-end {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.topbar-start {
+  gap: 8px;
+}
+
+.wordmark {
+  margin: 0 16px 0 8px;
+  font: 800 22px var(--sans);
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+
+.wordmark span {
+  color: var(--accent);
+  text-shadow: 0 0 10px rgb(240 168 58 / 40%);
+}
+
+.history-button,
+.page-button {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sub);
+}
+
+.history-button {
+  background: rgb(255 255 255 / 7%);
+}
+
+.history-button:not(:disabled):hover,
+.page-button:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.topbar-center {
+  gap: 8px;
+}
+
+.home-button {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--sub);
+}
+
+.home-button:hover {
+  color: var(--text);
+  background: var(--hover);
+  transform: scale(1.04);
+}
+
+.home-button[aria-current="page"] {
+  color: var(--text);
+}
+
+.top-search {
+  flex: 1;
+  min-width: 0;
+  max-width: 480px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  border-radius: 500px;
+  background: var(--raised);
+  color: var(--sub);
+  cursor: text;
+}
+
+.top-search:hover {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--press);
+}
+
+.top-search:focus-within,
+.top-search.active {
+  box-shadow: inset 0 0 0 2px var(--text);
+}
+
+.top-search svg {
+  flex-shrink: 0;
+}
+
+.top-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: 16px var(--sans);
+}
+
+.top-search input::placeholder {
+  color: var(--sub);
+}
+
+.top-search input::-webkit-search-cancel-button {
+  filter: invert(1);
+}
+
+.topbar-end {
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.topbar-end nav {
+  display: flex;
+  gap: 4px;
+}
+
+.page-button[aria-current="page"] {
+  color: var(--accent);
+}
+
+.device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-right: 8px;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--sub);
+}
+
+.device-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--quiet);
+}
+
+.dot.on {
+  background: var(--live);
+}
+
+@media (max-width: 1000px) {
+  .wordmark,
+  .device-name {
+    display: none;
+  }
+
+  /* The side groups keep their width; the search field takes what is left. */
+  .topbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+}
+
+/* Party and Stats size their own `.cover` tiles on this base. */
+.cover {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--raised);
+}
+
+/* Player bar: on the black frame, three columns of 30, 40 and 30 percent. */
+.playerbar {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 4fr) minmax(0, 3fr);
+  align-items: center;
+  gap: 16px;
+  padding: 0 8px;
+  background: var(--frame);
+}
+
+.now-track {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+.now-track .cover-art {
+  width: 56px;
+  height: 56px;
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.titles > * {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.titles strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.titles span {
+  font-size: 12px;
+  color: var(--sub);
+}
+
+.like {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--sub);
+}
+
+.like:not(:disabled):hover {
+  color: var(--text);
+  transform: scale(1.04);
+}
+
+.like[aria-pressed="true"],
+.like[aria-pressed="true"]:hover {
+  color: var(--accent);
+}
+
+.playerbar .badge {
+  flex-shrink: 0;
+  height: 22px;
+  border-radius: 4px;
+}
+
+/* A narrow player bar keeps the title room: the badge shows its swatch, and screen readers still get the name. */
+@media (max-width: 1000px) {
+  .playerbar .badge .name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+.transport {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--sub);
+}
+
+.icon-button:not(:disabled):hover {
+  color: var(--text);
+}
+
+.icon-button[aria-pressed="true"],
+.icon-button[aria-pressed="true"]:not(:disabled):hover {
+  color: var(--accent);
+}
+
+/* The dot under a pressed button. */
+.icon-button[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.icon-button sup {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  font: 700 9px var(--sans);
+}
+
+.play-toggle {
+  width: 32px;
+  height: 32px;
+  margin: 0 8px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--frame);
+}
+
+.play-toggle:not(:disabled):hover {
+  transform: scale(1.06);
+}
+
+.progress {
+  width: 100%;
+  max-width: 722px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sub);
+}
+
+.progress > span {
+  min-width: 40px;
+}
+
+.progress > span:first-child {
+  text-align: right;
+}
+
+.meter {
+  position: relative;
+  flex-grow: 1;
+  height: 16px;
+  cursor: pointer;
+}
+
+.meter::before,
+.meter > div {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.meter::before {
+  content: "";
+  right: 0;
+  background: rgb(255 255 255 / 30%);
+}
+
+.meter > div {
+  background: var(--text);
+}
+
+/* The knob shows on hover and on keyboard focus. */
+.meter > div::after {
+  content: "";
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  display: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 2px 4px rgb(0 0 0 / 50%);
+}
+
+.meter:not([aria-disabled="true"]):hover > div,
+.meter:focus-visible > div {
+  background: var(--accent);
+}
+
+.meter:not([aria-disabled="true"]):hover > div::after,
+.meter:focus-visible > div::after {
+  display: block;
+}
+
+.meter[aria-disabled="true"] {
+  cursor: default;
+}
+
+.meter:focus-visible {
+  outline: none;
+}
+
+.side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.side .meter {
+  flex: 0 1 93px;
+  min-width: 40px;
+}
+
+.devices-box {
+  position: relative;
+  display: flex;
+}
+
+.devices-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 16px);
+  z-index: 10;
+  width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 16px 8px 8px;
+  box-sizing: border-box;
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow:
+    0 16px 24px rgb(0 0 0 / 30%),
+    0 6px 8px rgb(0 0 0 / 20%);
+}
+
+.devices-popover h2 {
+  margin: 0 8px 12px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.devices-popover h3 {
+  margin: 16px 8px 4px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.device-current,
+.devices-popover li button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.device-current {
+  color: var(--accent);
+}
+
+.device-current > span,
+.devices-popover li button > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.device-current span span {
+  font-size: 13px;
+}
+
+.devices-popover ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.devices-popover li button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+}
+
+.devices-popover li button:not(:disabled):hover,
+.devices-popover li button:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.devices-popover li button span span {
+  font-size: 12px;
+  color: var(--sub);
+  text-transform: capitalize;
+}
+
+.device-empty {
+  margin: 0;
+  padding: 8px;
+  font-size: 13px;
+  color: var(--sub);
+}
+
+@media (max-width: 1000px) {
+  .side .meter {
+    display: none;
+  }
+}
+
+/* Right panel contents: the now playing view and the queue. */
+.now-panel,
+.queue-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.now-panel {
+  overflow-y: auto;
+}
+
+.queue-panel:focus {
+  outline: none;
+}
+
+.panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 16px 8px;
+  background: var(--panel);
+}
+
+.panel-head h2 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.panel-close {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sub);
+}
+
+.panel-close:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.panel-empty {
+  margin: 0;
+  padding: 8px 16px;
+  color: var(--sub);
+}
+
+.now-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 16px 16px;
+}
+
+.now-body > .cover-art {
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 50%);
+}
+
+.now-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.now-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.now-text h3 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.now-text p {
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sub);
+}
+
+.next-card {
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.next-card h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.next-track {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.next-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.next-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.next-text > span {
+  font-size: 13px;
+  color: var(--sub);
+}
+
+.artist-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.artist-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+
+.panel-body h3 {
+  margin: 16px 8px 8px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.panel-body ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.panel-body ol:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 4px;
+}
+
+.queue-panel li:hover .queue-row {
+  background: var(--hover);
+}
+
+.queue-panel li[aria-selected="true"] .queue-row {
+  background: var(--press);
+}
+
+.queue-panel li[aria-selected="true"] strong {
+  color: var(--accent);
+}
+
+.queue-panel .mirror {
+  opacity: 0.7;
+}
+
+.queue-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.queue-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-text strong {
+  font-weight: 500;
+}
+
+.queue-text span {
+  font-size: 13px;
+  color: var(--sub);
+}
+
+.queue-row .time {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sub);
+}
+
+.queue-panel .keys {
+  gap: 14px;
+  padding: 10px 16px;
+}
+
+/* Toast: bottom center, above the player bar. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  z-index: 30;
+  max-width: min(480px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: 0 16px 24px rgb(0 0 0 / 40%);
+  transform: translateX(-50%);
+}
+
+.toast.error {
+  border-left-color: #e5534b;
+}
+
+.toast button {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sub);
+}
+
+.toast button:hover {
+  color: var(--text);
+  background: var(--hover);
+}

@@ -1,38 +1,43 @@
-/* The command palette: a dialog over a dimmed screen. */
+/* The command palette: a centered dialog over a dimmed window. */
 .palette-scrim {
   position: fixed;
   inset: 0;
-  z-index: 10;
-  background: rgba(10, 9, 8, 0.72);
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  background: rgb(0 0 0 / 60%);
 }
 
 .palette {
-  position: absolute;
-  top: 84px;
-  left: 50%;
-  width: min(780px, calc(100vw - 32px));
-  transform: translateX(-50%);
-  background: var(--raised);
-  border: 1px solid var(--amber);
-  border-radius: 2px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
-  font-family: var(--mono);
-  max-height: calc(100vh - 100px);
+  width: min(680px, 100%);
+  max-height: 76vh;
   overflow-y: auto;
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 60%);
 }
 
 .palette-input {
   display: flex;
   align-items: center;
-  gap: 14px;
-  height: 60px;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--rule);
+  gap: 12px;
+  height: 56px;
+  margin: 12px 12px 0;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--hover);
+}
+
+.palette-input:focus-within {
+  border-color: var(--text);
 }
 
 .palette-input > span:first-child {
-  color: var(--amber);
-  font-size: 22px;
+  color: var(--sub);
+  font: 20px var(--mono);
 }
 
 .palette-input input {
@@ -42,27 +47,27 @@
   outline: none;
   background: transparent;
   color: var(--text);
-  font: 20px var(--mono);
+  font: 18px var(--sans);
 }
 
 .palette-input .tag {
-  padding: 3px 7px;
-  background: var(--amber);
-  color: var(--ink);
-  font-size: 10px;
-  letter-spacing: 0.14em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--frame);
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .palette-help {
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--rule);
-  color: var(--secondary);
-  font-size: 11px;
+  padding: 10px 28px;
+  color: var(--sub);
+  font-size: 13px;
 }
 
 .palette ul {
   margin: 0;
-  padding: 6px 0;
+  padding: 0 12px 8px;
   list-style: none;
 }
 
@@ -70,91 +75,101 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 42px;
-  padding: 0 20px;
+  height: 48px;
+  padding: 0 16px;
+  border-radius: 4px;
   cursor: pointer;
 }
 
+.palette li:hover {
+  background: var(--hover);
+}
+
 .palette li[aria-selected="true"] {
-  background: #26221e;
-  box-shadow: inset 2px 0 0 var(--amber);
+  background: var(--press);
 }
 
 .palette li .n {
   width: 18px;
-  font-size: 12px;
-  color: var(--quiet);
-}
-
-.palette li[aria-selected="true"] .n {
-  color: var(--amber);
+  color: var(--sub);
+  font-variant-numeric: tabular-nums;
 }
 
 .palette li .kind {
-  width: 44px;
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  color: var(--quiet);
+  width: 56px;
+  color: var(--sub);
+  font-size: 12px;
 }
 
 .palette li .what {
   flex-grow: 1;
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font: 14px var(--sans);
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.palette li .what b {
+  font-weight: 400;
 }
 
 .palette li .what span {
-  color: var(--secondary);
+  color: var(--sub);
 }
 
 .palette-lists {
   display: grid;
   grid-template-columns: 1fr 1.4fr;
-  border-top: 1px solid var(--rule);
-  font-size: 12px;
+  gap: 8px;
+  padding: 4px 12px 0;
+  font-size: 13px;
 }
 
 .palette-lists > div {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 12px 20px;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: #181818;
 }
 
-.palette .recent {
-  border-right: 1px solid var(--rule);
+.palette .label {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.palette .recent > span:not(.label) {
+  color: var(--sub);
+  font-family: var(--mono);
 }
 
 .palette .verbs b {
-  color: var(--amber);
+  font-family: var(--mono);
   font-weight: 400;
 }
 
+.palette .verbs span span {
+  color: var(--sub);
+}
+
 .palette .keys {
-  padding: 10px 20px;
   flex-wrap: wrap;
+  padding: 12px 28px;
+  border-top: none;
 }
 
 @media (max-width: 800px) {
+  .palette-scrim {
+    padding-top: 48px;
+  }
+
   .palette {
-    top: 60px;
-    max-height: calc(100vh - 76px);
+    max-height: calc(100vh - 64px);
   }
 
   .palette-lists {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  .palette .recent {
-    border-right: none;
-    border-bottom: 1px solid var(--rule);
-  }
-}
-
-.palette .verbs span span {
-  font-family: var(--sans);
-  color: var(--quiet);
 }

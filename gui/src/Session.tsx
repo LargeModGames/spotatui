@@ -20,6 +20,7 @@ import {
   type Marker,
 } from "./sessionModel";
 import { SourceBadge } from "./SourceBadge";
+import { Cover } from "./ui";
 import { usePosition } from "./usePosition";
 
 const PAST_COVERS = 5;
@@ -115,7 +116,7 @@ export function Session({
 
       <div className="timeline" aria-label="Timeline">
         <div className="lane past">
-          <span className="eyebrow">← PAST</span>
+          <span className="label">Played</span>
           <div className="covers">
             {firstShown > 0 && <span className="more">+{firstShown} more</span>}
             {recent.map((entry, index) => {
@@ -135,7 +136,7 @@ export function Session({
                       <span>{markerLabel(marker)}</span>
                     </button>
                   ))}
-                  <Cover
+                  <CoverCard
                     image={entry.image_url}
                     title={entry.title}
                     meta={entry.artists.join(", ")}
@@ -161,7 +162,7 @@ export function Session({
           </div>
         </div>
         <div className="lane now">
-          <span className="eyebrow">NOW</span>
+          <span className="label">Now playing</span>
           {item ? (
             <div className="now-block">
               {item.image_url ? (
@@ -181,10 +182,10 @@ export function Session({
           )}
         </div>
         <div className="lane upcoming">
-          <span className="eyebrow">UP NEXT →</span>
+          <span className="label">Coming up</span>
           <div className="covers">
             {upNext.slice(0, NEXT_COVERS).map((track, index) => (
-              <Cover
+              <CoverCard
                 key={`${index}-${track.uri ?? track.name}`}
                 image={track.image_url}
                 title={track.name}
@@ -206,7 +207,7 @@ export function Session({
           role="dialog"
           aria-label="Marker details"
         >
-          <span className="eyebrow">{markerHeading(inspect, plays)}</span>
+          <span className="label">{markerHeading(inspect, plays)}</span>
           <span>{markerDetail(inspect, plays)}</span>
           <button type="button" onClick={() => setInspect(null)}>
             Close
@@ -246,8 +247,9 @@ export function Session({
                     }}
                   >
                     <span className="at">{timeOfDay(entry.started_at_ms)}</span>
+                    <Cover src={entry.image_url} size={40} />
                     <span className="name">
-                      <b>{entry.title}</b>{" "}
+                      <b>{entry.title}</b>
                       <span>{entry.artists.join(", ")}</span>
                     </span>
                     {source && <SourceBadge source={source} />}
@@ -317,7 +319,7 @@ export function Session({
   );
 }
 
-function Cover({
+function CoverCard({
   image,
   title,
   meta,
@@ -366,8 +368,10 @@ function NextRow({
       <span className="at">
         {start !== null ? `≈ ${timeOfDay(start)}` : ""}
       </span>
+      <Cover src={track.image_url} size={40} />
       <span className="name">
-        <b>{track.name}</b> <span>{track.artists.join(", ")}</span>
+        <b>{track.name}</b>
+        <span>{track.artists.join(", ")}</span>
       </span>
       {source && <SourceBadge source={source} />}
     </li>
@@ -391,8 +395,8 @@ function markerTitle(marker: Marker): string {
 /** A pause inside a play has a length but no known clock time, so it names the song. */
 function markerHeading(marker: Marker, plays: SessionPlay[]): string {
   if (marker.kind === "pause")
-    return `PAUSED · DURING ${(plays[marker.before - 1]?.title ?? "A SONG").toUpperCase()}`;
-  const what = marker.kind === "source" ? "SOURCE CHANGE" : "GAP";
+    return `Paused during ${plays[marker.before - 1]?.title ?? "a song"}`;
+  const what = marker.kind === "source" ? "Source change" : "Gap";
   return `${what} · ${timeOfDay(marker.at)}`;
 }
 

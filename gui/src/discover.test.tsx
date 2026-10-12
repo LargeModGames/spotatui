@@ -41,11 +41,11 @@ const render = (discover: DiscoverPayload | null) =>
   );
 
 describe("Discover", () => {
-  it("lists the top tracks of the range with a liked mark and no unliked mark", () => {
+  it("lists the top tracks of the range and marks only the liked one", () => {
     const html = render(payload);
     expect(html).toContain("Your top tracks, 6 months");
-    expect(html).toMatch(/id="discover-0"[^]*?♥ liked/);
-    expect(html).not.toContain("not liked");
+    expect(html).toMatch(/id="discover-0"[^]*?>Liked</);
+    expect(html.match(/>Liked</g)).toHaveLength(1);
     expect(html).toContain("Add 2 to queue");
   });
 

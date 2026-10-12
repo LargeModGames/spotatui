@@ -1,0 +1,206 @@
+/* A list page (Liked Songs, a playlist) and the track table every page shares. */
+.list-page {
+  min-width: 0;
+  padding-bottom: 24px;
+}
+
+.list-page .tone-liked > .cover-art.empty {
+  background: linear-gradient(135deg, #5b3fd1, #7fb4d8);
+  color: var(--text);
+}
+
+.page-meta .badge {
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.list-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 24px;
+}
+
+.list-shuffle {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--sub);
+}
+
+.list-shuffle:not(:disabled):hover {
+  color: var(--text);
+}
+
+.list-empty {
+  margin: 0;
+  padding: 8px 24px;
+  color: var(--sub);
+}
+
+.track-table {
+  container-type: inline-size;
+  padding: 0 24px;
+}
+
+.track-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 6fr) minmax(0, 4fr) minmax(120px, 1fr);
+  column-gap: 16px;
+  align-items: center;
+  height: 56px;
+  padding: 0 16px;
+  border-radius: 4px;
+  color: var(--sub);
+  font-size: 14px;
+}
+
+.track-table.no-album .track-row {
+  grid-template-columns: 24px minmax(0, 1fr) minmax(120px, auto);
+}
+
+.track-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 36px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.track-rows:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.track-rows .track-row {
+  cursor: default;
+}
+
+.track-rows .track-row:hover {
+  background: var(--hover);
+}
+
+.track-rows .track-row[aria-selected="true"] {
+  background: var(--press);
+}
+
+.track-row .n {
+  display: grid;
+  justify-items: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.track-row .n > * {
+  grid-area: 1 / 1;
+}
+
+.row-play {
+  display: none;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+}
+
+.track-rows .track-row:hover .index {
+  visibility: hidden;
+}
+
+.track-rows .track-row:hover .row-play {
+  display: grid;
+}
+
+.track-row.now .index,
+.track-row.now .title {
+  color: var(--accent);
+}
+
+.title-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.title-cell > .cover-art {
+  border-radius: 4px;
+}
+
+.title-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.track-row .title,
+.track-row .artists,
+.track-row .album {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-row .title {
+  font-size: 16px;
+  color: var(--text);
+}
+
+.track-row .artists {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.track-row .artists > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-row .artists .badge {
+  height: 16px;
+  padding: 0 4px;
+  font-size: 9px;
+}
+
+.track-row .time {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.track-row .link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
+.track-row .link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+@container (max-width: 560px) {
+  .track-row,
+  .track-table.no-album .track-row {
+    grid-template-columns: 24px minmax(0, 1fr) minmax(112px, auto);
+  }
+
+  .track-row .album {
+    display: none;
+  }
+}

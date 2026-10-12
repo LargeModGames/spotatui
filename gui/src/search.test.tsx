@@ -27,6 +27,9 @@ const results: SearchPayload = {
   tracks: [
     track("Firestone", "1", "spotify:track:1"),
     track("Stay", "2", "spotify:track:2"),
+    track("Stole the Show", "3", "spotify:track:3"),
+    track("Carry Me", "4", "spotify:track:4"),
+    track("Raging", "5", "spotify:track:5"),
   ],
   artists: [
     { id: "k", uri: "spotify:artist:k", name: "Kygo", image_url: null },
@@ -48,30 +51,43 @@ const results: SearchPayload = {
   liked: ["1"],
 };
 
-const render = (search: SearchPayload | null) =>
+const render = (search: SearchPayload | null, waiting = false) =>
   renderToStaticMarkup(
     <Search
       search={search}
-      waiting={false}
+      waiting={waiting}
       source={{ active: "Spotify", compiled: ["Spotify", "Local", "YouTube"] }}
       playingUri="spotify:track:2"
+      run={() => {}}
       query="kygo"
-      onQuery={() => {}}
-      onRun={() => {}}
+      open={() => {}}
       send={() => {}}
     />,
   );
 
 describe("Search", () => {
-  it("shows the top artist, the albums with their year and marks only the liked songs", () => {
+  it("leads with the top artist and the first four songs, then the album shelf with its year", () => {
     const html = render(results);
-    expect(html).toContain("TOP RESULT · ARTIST");
-    expect(html).toContain("Play Kygo");
-    expect(html).toMatch(/disabled="">Open artist/);
-    expect(html).toContain("Kygo · 2016");
-    expect(html).toMatch(/id="search-0"[^]*?♥ liked/);
-    expect(html).not.toContain(">new<");
-    expect(html).toContain("▶ Stay");
+    expect(html).toContain('aria-label="Top result"');
+    expect(html).toContain('aria-label="Play Kygo"');
+    expect(html).toMatch(/class="search-kind">Artist</);
+    expect(html).toContain("search-3");
+    expect(html).not.toContain("search-4");
+    expect(html).toContain('<section class="shelf" aria-label="Albums">');
+    expect(html).toContain("2016 · Kygo");
+  });
+
+  it("marks only the liked songs and the playing one", () => {
+    const html = render(results);
+    expect(html).toMatch(/id="search-0"[^]*?>Liked</);
+    expect(html.match(/>Liked</g)).toHaveLength(1);
+    expect(html).toMatch(/class="search-row now"[^]*?Playing: <\/span>Stay/);
+  });
+
+  it("offers the filter chips with All pressed and the empty kinds disabled", () => {
+    const html = render(results);
+    expect(html).toMatch(/aria-pressed="true">All</);
+    expect(html).toMatch(/disabled="">Playlists</);
   });
 
   it("offers the other sources but not Local, which searches Spotify", () => {
@@ -82,11 +98,22 @@ describe("Search", () => {
 
   it("uses one column when a source finds songs only", () => {
     const html = render({ ...results, artists: [], albums: [] });
-    expect(html).toContain('class="search-body"');
-    expect(html).not.toContain("TOP RESULT");
+    expect(html).toContain('class="search-lead"');
+    expect(html).not.toContain("Top result");
   });
 
-  it("asks for a search before one ran", () => {
-    expect(render(null)).toContain("Type a search and press Enter.");
+  it("asks for a search before one ran and says when one is running", () => {
+    expect(render(null)).toContain(
+      "Search for songs, artists, albums and playlists",
+    );
+    const waiting = render(null, true);
+    expect(waiting).toContain("Searching…");
+    expect(waiting).not.toContain("Search for songs");
+  });
+
+  it("says when a search found nothing", () => {
+    expect(
+      render({ ...results, tracks: [], artists: [], albums: [] }),
+    ).toContain("No results found for “kygo”.");
   });
 });

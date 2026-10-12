@@ -1,0 +1,66 @@
+/* The lyrics view: big lines on one muted color, the sung ones dimmed. */
+.lyrics-page {
+  --lyrics-bg: #4a3b6b;
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 48px 48px 40vh;
+  box-sizing: border-box;
+  background: var(--lyrics-bg);
+  color: var(--text);
+  outline: none;
+}
+
+.lyrics-page-note {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.lyrics-page-unsynced {
+  margin: 0 0 24px;
+  color: rgb(255 255 255 / 70%);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.lyrics-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 880px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.lyrics-lines li {
+  transition: color 0.2s;
+}
+
+.lyrics-lines li.past {
+  color: rgb(255 255 255 / 70%);
+}
+
+.lyrics-lines li.future {
+  color: rgb(0 0 0 / 55%);
+}
+
+.lyrics-lines li[aria-current="true"] {
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  .lyrics-page {
+    padding: 32px 24px 40vh;
+  }
+
+  .lyrics-lines {
+    font-size: 22px;
+  }
+}

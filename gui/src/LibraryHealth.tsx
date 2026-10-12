@@ -8,6 +8,7 @@ import {
   selectedIndex,
   SYNC_SOURCES,
 } from "./healthModel";
+import { Glyph } from "./Icon";
 import { KeyHints } from "./KeyHints";
 import "./LibraryHealth.css";
 import { Swatch } from "./SourceBadge";
@@ -76,8 +77,8 @@ export function LibraryHealth({
   return (
     <div ref={root} className="health" tabIndex={-1} onKeyDown={onKeyDown}>
       <section className="health-main">
-        <button type="button" className="eyebrow crumb" onClick={onBack}>
-          LIBRARY / LIBRARY HEALTH
+        <button type="button" className="crumb" onClick={onBack}>
+          <Glyph name="back" /> Back
         </button>
         <div className="health-title">
           <h1>Library health</h1>
@@ -108,13 +109,13 @@ export function LibraryHealth({
           </div>
         ) : (
           <>
-            <div className="link-row head eyebrow" aria-hidden="true">
+            <div className="link-row head" aria-hidden="true">
               <span>#</span>
-              <span>PLAYLIST</span>
+              <span>Playlist</span>
               {SYNC_SOURCES.map((source) => (
-                <span key={source}>{source.toUpperCase()}</span>
+                <span key={source}>{source}</span>
               ))}
-              <span className="when">LAST SYNC</span>
+              <span className="when">Last sync</span>
             </div>
             <div
               role="listbox"
@@ -161,7 +162,7 @@ export function LibraryHealth({
       <aside aria-label="Selected playlist">
         {link ? (
           <>
-            <span className="eyebrow">LINKED PLAYLIST</span>
+            <span className="label">Linked playlist</span>
             <h2>{link.name}</h2>
             <span className="sub">
               {link.source} playlist · {link.mirrors.length}{" "}

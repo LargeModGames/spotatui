@@ -17,6 +17,7 @@ import {
   relaying,
 } from "./partyModel";
 import { type QueueCursor, queueKey, queueRow } from "./queueModel";
+import { Cover } from "./ui";
 import { usePosition } from "./usePosition";
 
 /** The listening party: host or join, then the room with the listeners and the host's queue. */
@@ -97,7 +98,7 @@ function Start({
       )}
       <div className="party-start">
         <section aria-label="Host a party">
-          <span className="eyebrow">HOST</span>
+          <span className="label">Host</span>
           <h2>Start a party</h2>
           <p>You get a code to share. Guests hear what you play on Spotify.</p>
           <button
@@ -113,7 +114,7 @@ function Start({
           </button>
         </section>
         <section aria-label="Join a party">
-          <span className="eyebrow">JOIN</span>
+          <span className="label">Join</span>
           <h2>Join a party</h2>
           <form
             onSubmit={(event) => {
@@ -258,15 +259,11 @@ function Room({
       </div>
       <div className="party-room">
         <section aria-label="Everyone hears">
-          <span className="eyebrow">
-            {following ? "EVERYONE HEARS" : "YOU HEAR"}
+          <span className="label">
+            {following ? "Everyone hears" : "You hear"}
           </span>
           <div className="hears">
-            {item?.image_url ? (
-              <img className="cover big" src={item.image_url} alt="" />
-            ) : (
-              <span className="cover big" />
-            )}
+            <Cover src={item?.image_url} size={120} />
             <div>
               <span className="song">{item?.title ?? "Nothing playing"}</span>
               {item && (
@@ -292,9 +289,7 @@ function Room({
               Play a Spotify song or wait for the next one to follow again.
             </p>
           )}
-          <span className="eyebrow rule">
-            EACH LISTENER PLAYS THEIR OWN COPY
-          </span>
+          <span className="label">Each listener plays their own copy</span>
           <ul className="listeners">
             {listeners(room).map((listener, index) => (
               <li key={`${index}-${listener.name}`}>
@@ -331,10 +326,11 @@ function Room({
             <p className="empty">Nothing is queued.</p>
           ) : (
             <>
-              <div className="qrow head eyebrow" aria-hidden="true">
+              <div className="qrow head" aria-hidden="true">
                 <span>#</span>
-                <span>SONG</span>
-                <span>GUESTS</span>
+                <span />
+                <span>Song</span>
+                <span>Guests</span>
               </div>
               {native.length > 0 && (
                 <ol
@@ -361,8 +357,9 @@ function Room({
                       onClick={() => setWant({ index, uri: track.uri })}
                     >
                       <span className="n">{index + 1}</span>
+                      <Cover src={track.image_url} size={40} />
                       <span className="name">
-                        <b>{track.name}</b>{" "}
+                        <b>{track.name}</b>
                         <span>{track.artists.join(", ")}</span>
                       </span>
                       <span className="only">only you</span>
@@ -377,8 +374,9 @@ function Room({
                     className="qrow"
                   >
                     <span className="n">{native.length + index + 1}</span>
+                    <Cover src={track.image_url} size={40} />
                     <span className="name">
-                      <b>{track.name}</b>{" "}
+                      <b>{track.name}</b>
                       <span>{track.artists.join(", ")}</span>
                     </span>
                     <span>guests follow</span>

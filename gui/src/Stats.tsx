@@ -144,9 +144,9 @@ export const Stats = memo(function Stats({
           ) : (
             <div className="stats-lists">
               <section aria-label="Top artists">
-                <div className="eyebrow list-head">
-                  <span>TOP ARTISTS</span>
-                  {period !== "all" && <span>VS ALL TIME</span>}
+                <div className="list-head">
+                  <h2>Top artists</h2>
+                  {period !== "all" && <span>vs all time</span>}
                 </div>
                 {stats.top_artists.slice(0, SHOWN).map((row, index) => {
                   const move = moveText(row, index + 1);
@@ -162,20 +162,19 @@ export const Stats = memo(function Stats({
                 })}
               </section>
               <section aria-label="Top albums">
-                <div className="eyebrow list-head">
-                  <span>TOP ALBUMS</span>
+                <div className="list-head">
+                  <h2>Top albums</h2>
                 </div>
                 {stats.top_albums.slice(0, SHOWN).map((row, index) => (
                   <div key={row.title} className="line album">
                     <span className="n">{index + 1}</span>
-                    <span className="cover" />
                     <b>{row.title}</b>
                   </div>
                 ))}
               </section>
               <section aria-label="Top tracks">
-                <div className="eyebrow list-head">
-                  <span>TOP TRACKS</span>
+                <div className="list-head">
+                  <h2>Top tracks</h2>
                 </div>
                 <div
                   role="listbox"
@@ -203,11 +202,7 @@ export const Stats = memo(function Stats({
           )}
           {stats.week_tracks.length > 0 && (
             <section className="week" aria-label="Last 7 days">
-              <span className="eyebrow">
-                THIS WEEK,
-                <br />
-                TOP FIVE
-              </span>
+              <h2>This week, top five</h2>
               {stats.week_tracks.map((row, index) => (
                 <div key={`${index}-${row.uri ?? row.title}`}>
                   <span className="rank">{index + 1}</span>

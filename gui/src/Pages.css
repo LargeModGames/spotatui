@@ -1,0 +1,185 @@
+/* Home, the album page and the artist page. */
+.home,
+.album-page,
+.artist-page {
+  container-type: inline-size;
+  padding-bottom: 32px;
+}
+
+.home-top {
+  padding: 24px 24px 16px;
+  background: linear-gradient(#3a2e1f, var(--panel) 260px);
+}
+
+.home-top h1 {
+  margin: 0 0 20px;
+  font-size: 32px;
+  font-weight: 800;
+}
+
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@container (min-width: 860px) {
+  .quick-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.quick-tile {
+  position: relative;
+  min-width: 0;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 7%);
+  transition: background 0.15s;
+}
+
+.quick-tile:hover,
+.quick-tile:focus-within {
+  background: rgb(255 255 255 / 16%);
+}
+
+.quick-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 0 56px 0 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+}
+
+.quick-open .cover-art {
+  border-radius: 4px 0 0 4px;
+}
+
+.quick-liked {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 4px 0 0 4px;
+  background: linear-gradient(135deg, #4b3a8f, #a7c4c8);
+}
+
+.quick-name {
+  min-width: 0;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-play {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  translate: 0 -50%;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.quick-play .play-button {
+  width: 32px;
+  height: 32px;
+}
+
+.quick-tile:hover .quick-play,
+.quick-tile:focus-within .quick-play {
+  opacity: 1;
+}
+
+/* One row of cards per shelf: rows past the first collapse and are clipped. */
+.home .shelf-cards,
+.artist-page .shelf-cards {
+  grid-template-rows: min-content;
+  grid-auto-rows: 0;
+  overflow: hidden;
+}
+
+.meta-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.meta-link:hover {
+  text-decoration: underline;
+}
+
+.meta-dot::before {
+  content: " · ";
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 24px;
+}
+
+.icon-action {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--sub);
+}
+
+.icon-action:not(:disabled):hover {
+  color: var(--text);
+}
+
+.outline-action {
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--quiet);
+  border-radius: 999px;
+  background: none;
+  font-weight: 700;
+}
+
+.outline-action:hover {
+  border-color: var(--text);
+  transform: scale(1.04);
+}
+
+.page-tracks,
+.page-section {
+  padding: 0 24px;
+}
+
+.page-section h2 {
+  margin: 8px 0 12px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.text-action {
+  margin: 12px 0 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--sub);
+}
+
+.text-action:hover {
+  color: var(--text);
+}
+
+.page-footnote {
+  margin: 24px;
+  font-size: 13px;
+  color: var(--sub);
+}

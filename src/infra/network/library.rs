@@ -1725,9 +1725,7 @@ impl LibraryNetwork for Network {
       Ok(_) => {
         let mut app = self.app.lock().await;
         app.saved_album_ids_set_mut().remove(album_id.id());
-        // Reload saved albums to refresh UI
-        // dispatching event would require loop access, but we can't from here easily unless we return IoEvent
-        // For now, assume optimistic update is handled or manually remove
+        app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None));
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -1741,6 +1739,7 @@ impl LibraryNetwork for Network {
         app
           .saved_album_ids_set_mut()
           .insert(album_id.id().to_string());
+        app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None));
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }

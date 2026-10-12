@@ -4,11 +4,13 @@ import type { NowPlaying } from "./bindings/NowPlaying";
 import type { QueuePayload } from "./bindings/QueuePayload";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import { clock, sourceOf } from "./format";
+import { Glyph } from "./Icon";
 import { KeyHints } from "./KeyHints";
 import { type QueueCursor, queueKey, queueRow } from "./queueModel";
 import { SourceBadge } from "./SourceBadge";
+import { Cover } from "./ui";
 
-/** The queue over the current screen: the native queue can be played, moved and removed; Spotify's is read-only. */
+/** The docked queue panel: the native queue can be played, moved and removed; Spotify's is read-only. */
 export function QueueDrawer({
   queue,
   item,
@@ -33,10 +35,14 @@ export function QueueDrawer({
 
   const list = useRef<HTMLOListElement>(null);
   const panel = useRef<HTMLElement>(null);
-  // The drawer holds the keyboard even before the queue arrives, and hands it to the list once it does.
+  // The panel takes the keyboard when it opens, and hands it to the list once the queue arrives,
+  // but never pulls it away from another part of the page.
   const hasList = native.length > 0;
+  const opened = useRef(false);
   useLayoutEffect(() => {
-    (list.current ?? panel.current)?.focus();
+    if (!opened.current || document.activeElement === panel.current)
+      (list.current ?? panel.current)?.focus();
+    opened.current = true;
   }, [hasList]);
   useLayoutEffect(() => {
     list.current
@@ -46,10 +52,9 @@ export function QueueDrawer({
 
   const now = queue?.now ?? null;
   return (
-    <aside
+    <section
       ref={panel}
-      className="drawer"
-      role="dialog"
+      className="queue-panel"
       aria-label="Queue"
       tabIndex={-1}
       onKeyDown={(event) => {
@@ -60,35 +65,43 @@ export function QueueDrawer({
         }
       }}
     >
-      <header>
+      <header className="panel-head">
         <h2>Queue</h2>
-        <button type="button" aria-label="Close" onClick={onClose}>
-          ×
+        <button
+          type="button"
+          className="panel-close"
+          aria-label="Close queue"
+          onClick={onClose}
+        >
+          <Glyph name="close" />
         </button>
       </header>
-      <div className="drawer-body">
-        <span className="eyebrow">NOW PLAYING</span>
+      <div className="panel-body">
+        <h3>Now playing</h3>
         {now ? (
           <Row track={now} />
         ) : item ? (
-          <div className="row">
-            <span className="name">
-              <b>{item.title}</b> <span>{item.artists.join(", ")}</span>
+          <div className="queue-row">
+            <Cover src={item.image_url} size={40} />
+            <span className="queue-text">
+              <strong>{item.title}</strong>
+              <span>{item.artists.join(", ")}</span>
             </span>
           </div>
         ) : (
-          <p className="empty">Nothing is playing.</p>
+          <p className="panel-empty">Nothing is playing.</p>
         )}
-        <span className="eyebrow">UP NEXT</span>
+        <h3>Next in queue</h3>
         {native.length === 0 ? (
-          <p className="empty">Nothing is queued.</p>
+          <p className="panel-empty">Nothing is queued.</p>
         ) : (
           <ol
             ref={list}
             role="listbox"
-            aria-label="Up next"
+            aria-label="Next in queue"
             aria-activedescendant={`queue-${cursor}`}
             tabIndex={0}
+            data-focus
             onKeyDown={(event) => {
               if (event.ctrlKey || event.metaKey || event.altKey) return;
               const press = queueKey(event.key, cursor, native);
@@ -119,8 +132,8 @@ export function QueueDrawer({
         )}
         {mirrored.length > 0 && (
           <>
-            <span className="eyebrow">SPOTIFY QUEUE</span>
-            <ol className="mirror">
+            <h3>Next from: Spotify</h3>
+            <ol className="mirror" aria-label="Next from Spotify">
               {mirrored.map((track, index) => (
                 <li key={`${index}-${track.uri ?? track.name}`}>
                   <Row track={track} />
@@ -131,18 +144,20 @@ export function QueueDrawer({
         )}
       </div>
       <KeyHints hints={["enter play", "x remove", "J K move", "esc close"]} />
-    </aside>
+    </section>
   );
 }
 
 function Row({ track }: { track: TrackInfo }) {
   const source = sourceOf(track.uri);
   return (
-    <div className="row">
-      <span className="name">
-        <b>{track.name}</b> <span>{track.artists.join(", ")}</span>
+    <div className="queue-row">
+      <Cover src={track.image_url} size={40} />
+      <span className="queue-text">
+        <strong>{track.name}</strong>
+        <span>{track.artists.join(", ")}</span>
       </span>
-      {source && <SourceBadge source={source} />}
+      {source && source !== "Spotify" && <SourceBadge source={source} />}
       <span className="time">
         {track.duration_ms > 0 ? clock(track.duration_ms) : "live"}
       </span>

@@ -64,16 +64,26 @@ const drawer = (uri: string) =>
 describe("QueueDrawer", () => {
   it("lists now playing, the native queue and the read-only Spotify queue", () => {
     const html = drawer("spotify:track:0");
+    expect(html).toMatch(/<section[^>]*aria-label="Queue"/);
+    expect(html).toContain(">Now playing<");
     expect(html).toContain("Set Fire to the Rain");
+    expect(html).toContain(">Next in queue<");
+    expect(html).toMatch(/role="listbox"[^>]*aria-activedescendant="queue-0"/);
     expect(html).toMatch(/id="queue-0"[^>]*aria-selected="true"/);
     expect(html).toContain("Lovesong");
-    expect(html).toContain("SPOTIFY QUEUE");
+    expect(html).toContain(">Next from: Spotify<");
     expect(html).toContain("Freeze");
   });
 
   it("hides the Spotify queue while another source plays", () => {
     const html = drawer("file:///21/05.flac");
-    expect(html).not.toContain("SPOTIFY QUEUE");
+    expect(html).not.toContain("Next from: Spotify");
     expect(html).not.toContain("Freeze");
+  });
+
+  it("offers a close button and no dialog", () => {
+    const html = drawer("spotify:track:0");
+    expect(html).toContain('aria-label="Close queue"');
+    expect(html).not.toContain('role="dialog"');
   });
 });

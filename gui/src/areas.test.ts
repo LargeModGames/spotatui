@@ -14,7 +14,7 @@ const press = (key: string, patch: Partial<ShellKey> = {}): ShellKey => ({
 
 describe("shellKey", () => {
   it("a digit switches to its area", () => {
-    expect(shellKey(press("1"))).toEqual({ area: "library" });
+    expect(shellKey(press("1"))).toEqual({ area: "home" });
     expect(shellKey(press("5"))).toEqual({ area: "stats" });
     expect(shellKey(press("7"))).toBeNull();
   });

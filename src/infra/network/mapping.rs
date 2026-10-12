@@ -39,6 +39,23 @@ fn first_image(images: &[rspotify::model::image::Image]) -> Option<String> {
   images.first().map(|img| img.url.clone())
 }
 
+/// A track's cover: the smallest image at least 300 px wide, which stays sharp on a
+/// card, else the largest; with no widths known, the first (Spotify lists largest first).
+fn track_cover(images: &[rspotify::model::image::Image]) -> Option<String> {
+  images
+    .iter()
+    .filter(|img| img.width.is_some_and(|width| width >= 300))
+    .min_by_key(|img| img.width)
+    .or_else(|| {
+      images
+        .iter()
+        .filter(|img| img.width.is_some())
+        .max_by_key(|img| img.width)
+    })
+    .or_else(|| images.first())
+    .map(|img| img.url.clone())
+}
+
 /// Convert a chrono `Duration` to non-negative milliseconds.
 fn duration_ms(duration: chrono::Duration) -> u64 {
   duration.num_milliseconds().max(0) as u64
@@ -97,8 +114,7 @@ impl From<&FullTrack> for TrackInfo {
       is_local: t.is_local,
       track_number: t.track_number,
       explicit: t.explicit,
-      // Spotify cover art is resolved separately from album images, not here.
-      image_url: None,
+      image_url: track_cover(&t.album.images),
       release_date: t.album.release_date.clone(),
     }
   }
@@ -515,6 +531,33 @@ mod tests {
 
     ft.album.release_date = None;
     assert_eq!(TrackInfo::from(&ft).release_date, None);
+  }
+
+  #[test]
+  fn full_track_takes_the_album_cover_sized_for_a_card() {
+    let image = |url: &str, width: Option<u32>| rspotify::model::image::Image {
+      url: url.to_string(),
+      width,
+      height: width,
+    };
+    let mut ft = full_track("4uLU6hMCjMI75M1A2tKUQC", "A");
+    let cover = |ft: &FullTrack| TrackInfo::from(ft).image_url;
+
+    ft.album.images = vec![
+      image("640", Some(640)),
+      image("64", Some(64)),
+      image("300", Some(300)),
+    ];
+    assert_eq!(cover(&ft).as_deref(), Some("300"));
+
+    ft.album.images = vec![image("64", Some(64)), image("120", Some(120))];
+    assert_eq!(cover(&ft).as_deref(), Some("120"));
+
+    ft.album.images = vec![image("first", None), image("second", None)];
+    assert_eq!(cover(&ft).as_deref(), Some("first"));
+
+    ft.album.images.clear();
+    assert_eq!(cover(&ft), None);
   }
 
   #[test]

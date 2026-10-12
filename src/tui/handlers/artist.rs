@@ -475,6 +475,7 @@ mod tests {
     Artist {
       artist_id: "artist1".to_string(),
       artist_name: "First".to_string(),
+      image_url: None,
       albums: Paged::default(),
       related_artists,
       top_tracks,

@@ -27,6 +27,10 @@ pub enum DisplayDomain {
   PlaylistSync,
   /// The rows of the shared track table and the list they belong to.
   TrackTable,
+  /// Spotify's recently played tracks.
+  RecentlyPlayed,
+  /// The liked track ids among the rows a frontend can show.
+  LikedMarks,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -53,12 +57,14 @@ pub struct DisplayRevisions {
   discover: u64,
   playlist_sync: u64,
   track_table: u64,
+  recently_played: u64,
+  liked_marks: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 19] = [
+  pub const ALL: [DisplayDomain; 21] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -78,6 +84,8 @@ impl DisplayDomain {
     DisplayDomain::Discover,
     DisplayDomain::PlaylistSync,
     DisplayDomain::TrackTable,
+    DisplayDomain::RecentlyPlayed,
+    DisplayDomain::LikedMarks,
   ];
 }
 
@@ -103,6 +111,8 @@ impl DisplayRevisions {
       DisplayDomain::Discover => &mut self.discover,
       DisplayDomain::PlaylistSync => &mut self.playlist_sync,
       DisplayDomain::TrackTable => &mut self.track_table,
+      DisplayDomain::RecentlyPlayed => &mut self.recently_played,
+      DisplayDomain::LikedMarks => &mut self.liked_marks,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -129,6 +139,8 @@ impl DisplayRevisions {
       DisplayDomain::Discover => self.discover,
       DisplayDomain::PlaylistSync => self.playlist_sync,
       DisplayDomain::TrackTable => self.track_table,
+      DisplayDomain::RecentlyPlayed => self.recently_played,
+      DisplayDomain::LikedMarks => self.liked_marks,
     }
   }
 }

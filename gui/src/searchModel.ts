@@ -1,22 +1,16 @@
 import type { SearchPayload } from "./bindings/SearchPayload";
 import type { Source } from "./bindings/Source";
 
-export type Tab = "Everything" | "Tracks" | "Albums" | "Artists" | "Playlists";
+export type Tab = "All" | "Songs" | "Artists" | "Albums" | "Playlists";
 
-export const TABS: Tab[] = [
-  "Everything",
-  "Tracks",
-  "Albums",
-  "Artists",
-  "Playlists",
-];
+export const TABS: Tab[] = ["All", "Songs", "Artists", "Albums", "Playlists"];
 
-/** Whether a tab has anything to show; Everything always does. */
+/** Whether a tab has anything to show; All always does. */
 export function tabHasResults(search: SearchPayload, tab: Tab): boolean {
   switch (tab) {
-    case "Everything":
+    case "All":
       return true;
-    case "Tracks":
+    case "Songs":
       return search.tracks.length > 0;
     case "Albums":
       return search.albums.length > 0;

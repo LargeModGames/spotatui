@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Action } from "./bindings/Action";
 import type { StatusPayload } from "./bindings/StatusPayload";
+import { Glyph } from "./Icon";
 import { toastView } from "./toastModel";
 
 /** The api error first, else the status message. Both expire on the server. */
@@ -39,7 +40,7 @@ export function Toast({
               setDismissed(shownError);
             }}
           >
-            ×
+            <Glyph name="close" />
           </button>
         </div>
       ) : (

@@ -19,8 +19,10 @@ import {
   type DiscoverList,
 } from "./discoverModel";
 import { clock } from "./format";
+import { Glyph } from "./Icon";
 import { KeyHints } from "./KeyHints";
 import { clampCursor, playRequest, step } from "./libraryModel";
+import { Cover } from "./ui";
 
 /** Discover as lists: your top tracks per range and the top artists mix. The map needs data that does not exist yet. */
 export const Discover = memo(function Discover({
@@ -174,9 +176,15 @@ export const Discover = memo(function Discover({
                     onClick={() => setWant(index)}
                     onDoubleClick={() => play(index)}
                   >
-                    <span className="n">{now ? "▶" : index + 1}</span>
+                    <span className="n">
+                      {now ? <Glyph name="play" size={12} /> : index + 1}
+                    </span>
+                    <Cover src={track.image_url} size={40} />
                     <span className="what">
-                      <b>{track.name}</b>
+                      <b>
+                        {now && <span className="sr-only">Playing: </span>}
+                        {track.name}
+                      </b>
                       <span>
                         {[track.artists.join(", "), track.album]
                           .filter(Boolean)
@@ -184,7 +192,12 @@ export const Discover = memo(function Discover({
                       </span>
                     </span>
                     <span className="mark">
-                      {track.id && liked.has(track.id) ? "♥ liked" : ""}
+                      {track.id && liked.has(track.id) && (
+                        <>
+                          <Glyph name="heart" size={16} filled />
+                          <span className="sr-only">Liked</span>
+                        </>
+                      )}
                     </span>
                     <span className="time">{clock(track.duration_ms)}</span>
                   </div>
@@ -193,7 +206,7 @@ export const Discover = memo(function Discover({
             </div>
           </section>
           <aside aria-label="This list">
-            <span className="eyebrow">IN THIS LIST</span>
+            <span className="label">In this list</span>
             <h2>{heading}</h2>
             <p>
               {rows.length > 0

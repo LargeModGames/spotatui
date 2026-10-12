@@ -1,37 +1,26 @@
-/* Discover as lists: the picks, then the aside with the list's actions. */
+/* Discover as lists: the rows, then the aside with the list's actions. */
 .discover {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 20px 40px 0;
-}
-
-.discover button {
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-
-.discover button:disabled {
-  cursor: default;
-  opacity: 0.4;
+  padding: 24px 24px 0;
 }
 
 .discover-head {
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 8px 18px;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .discover h1 {
   margin: 0;
-  font: 400 44px var(--serif);
+  font-size: 32px;
+  font-weight: 700;
 }
 
 .discover-head span,
 .discover .empty {
-  color: var(--secondary);
+  color: var(--sub);
 }
 
 .discover .empty {
@@ -42,9 +31,9 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
-  gap: 56px;
-  padding-top: 22px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 32px;
+  padding-top: 24px;
 }
 
 .discover-body > section {
@@ -57,93 +46,73 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px 24px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--rule);
+  gap: 8px 16px;
+  padding-bottom: 16px;
 }
 
-.segmented {
+.discover .segmented,
+.discover .ranges {
   display: flex;
-  border: 1px solid var(--rule);
-  border-radius: 2px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.segmented button {
+.discover .segmented button,
+.discover .ranges button {
   height: 32px;
-  padding: 0 14px;
+  padding: 0 12px;
   border: none;
-  background: transparent;
-  color: var(--secondary);
+  border-radius: 999px;
+  background: var(--raised);
+  font-size: 14px;
 }
 
-.segmented button + button {
-  border-left: 1px solid var(--rule);
+.discover .segmented button:hover,
+.discover .ranges button:hover {
+  background: var(--hover);
 }
 
-.segmented button[aria-pressed="true"] {
+.discover .segmented button[aria-pressed="true"],
+.discover .ranges button[aria-pressed="true"] {
   background: var(--text);
-  color: var(--ink);
-  font-weight: 700;
-}
-
-.ranges {
-  display: flex;
-  gap: 6px;
-  font: 11px var(--mono);
-}
-
-.ranges button {
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--rule);
-  border-radius: 2px;
-  background: transparent;
-  color: var(--soft);
-}
-
-.ranges button[aria-pressed="true"] {
-  border-color: var(--amber);
-  background: var(--amber);
-  color: var(--ink);
-  font-weight: 700;
+  color: var(--frame);
 }
 
 .discover-rows {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  border-radius: 4px;
+  outline: none;
   scrollbar-gutter: stable;
 }
 
 .discover-rows:focus-visible {
-  outline: 1px solid var(--amber);
-  outline-offset: -1px;
+  outline: 1px solid var(--quiet);
 }
 
 .pick {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 70px 52px;
+  grid-template-columns: 24px 40px minmax(0, 1fr) 28px 56px;
   column-gap: 12px;
   align-items: center;
-  min-height: 46px;
-  padding: 2px 10px;
-  border-bottom: 1px solid var(--line);
+  height: 56px;
+  padding: 0 16px 0 8px;
+  border-radius: 4px;
+}
+
+.pick:hover {
+  background: var(--hover);
 }
 
 .pick[aria-selected="true"] {
-  background: var(--line);
-  box-shadow: inset 2px 0 0 var(--amber);
+  background: var(--press);
 }
 
 .pick .n,
 .pick .time {
-  font: 11px var(--mono);
-  color: var(--quiet);
-}
-
-.pick .time {
-  font-size: 12px;
-  color: var(--secondary);
+  color: var(--sub);
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
@@ -161,68 +130,81 @@
 }
 
 .pick .what b {
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 400;
 }
 
 .pick .what span {
-  font-size: 12px;
-  color: var(--secondary);
+  color: var(--sub);
 }
 
 .pick.now .what b,
-.pick.now .n {
-  color: var(--amber);
+.pick.now .n,
+.pick .mark {
+  color: var(--accent);
 }
 
 .pick .mark {
-  font: 11px var(--mono);
-  color: var(--amber);
+  display: grid;
+  place-items: center;
 }
 
 .discover aside {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-self: start;
+  gap: 8px;
+  padding: 20px;
+  border-radius: var(--radius);
+  background: var(--raised);
 }
 
-.discover aside .eyebrow {
-  letter-spacing: 0.14em;
+.discover aside .label {
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .discover h2 {
   margin: 0;
-  font: 400 30px/1.05 var(--serif);
+  font-size: 22px;
+  font-weight: 700;
 }
 
 .discover aside p {
   margin: 0;
-  color: var(--secondary);
+  color: var(--sub);
 }
 
 .discover-actions {
   display: flex;
-  gap: 10px;
-  margin-top: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .discover-actions button {
-  height: 38px;
-  padding: 0 14px;
-  border: 1px solid var(--rule);
-  border-radius: 2px;
-  background: transparent;
-}
-
-.discover-actions .primary {
+  height: 32px;
   padding: 0 16px;
-  border: none;
-  background: var(--amber);
-  color: var(--ink);
+  border: 1px solid var(--quiet);
+  border-radius: 999px;
+  background: transparent;
   font-weight: 700;
 }
 
+.discover-actions button:not(:disabled):hover {
+  border-color: var(--text);
+  transform: scale(1.04);
+}
+
+.discover-actions .primary {
+  border: none;
+  background: var(--text);
+  color: var(--frame);
+}
+
 .discover .keys {
-  padding: 10px 0;
+  padding: 12px 0;
   border-top: none;
 }
 
@@ -235,12 +217,8 @@
 }
 
 @media (max-width: 900px) {
-  .discover {
-    padding: 16px 16px 0;
-  }
-
   .pick {
-    grid-template-columns: 30px minmax(0, 1fr) 52px;
+    grid-template-columns: 24px 40px minmax(0, 1fr) 56px;
   }
 
   .pick .mark {

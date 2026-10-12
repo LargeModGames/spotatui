@@ -6,7 +6,7 @@ import type { NowPlaying } from "./bindings/NowPlaying";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { Position } from "./connection";
 import { clock, sourceOf } from "./format";
-import { Icon } from "./Icon";
+import { Glyph } from "./Icon";
 import "./Room.css";
 import {
   activeLyric,
@@ -34,6 +34,7 @@ export function Room({
   showLyrics,
   active,
   send,
+  onClose,
 }: {
   item: NowPlaying | null;
   position: Position | null;
@@ -45,6 +46,7 @@ export function Room({
   showLyrics: boolean;
   active: boolean;
   send: (action: Action) => void;
+  onClose: () => void;
 }) {
   const playing = item?.is_playing ?? false;
   // A hidden Room keeps no animation frame running.
@@ -88,6 +90,14 @@ export function Room({
 
   return (
     <div className="room" data-focus tabIndex={-1}>
+      <button
+        type="button"
+        className="room-close"
+        aria-label="Exit full screen"
+        onClick={onClose}
+      >
+        <Glyph name="close" size={20} />
+      </button>
       <figure>
         {item?.image_url || shown?.image_url ? (
           <img
@@ -101,15 +111,15 @@ export function Room({
         {caption && <figcaption>{caption}</figcaption>}
       </figure>
       <section className="room-album" aria-label="Album">
-        <span className="eyebrow">
+        <span className="room-state">
           {!item
-            ? "NOTHING PLAYING"
+            ? "Full screen"
             : inOrder
-              ? `NOW LISTENING · SONG ${index + 1} OF ${tracks.length}`
-              : "NOW LISTENING"}
+              ? `Now playing · Song ${index + 1} of ${tracks.length}`
+              : "Now playing"}
         </span>
         <div className="room-title">
-          <h1>{title || item?.title || "—"}</h1>
+          <h1>{title || item?.title || "Nothing playing"}</h1>
           <div>
             <span className="room-artist">{artist}</span>
             {item && <em>{item.title}</em>}
@@ -152,10 +162,7 @@ export function Room({
             disabled={!connected}
             onClick={() => send("PreviousTrack")}
           >
-            <Icon size={18}>
-              <path d="M19 5 9 12l10 7V5z" />
-              <path d="M5 5v14" />
-            </Icon>
+            <Glyph name="previous" size={20} />
           </button>
           <button
             type="button"
@@ -164,15 +171,7 @@ export function Room({
             disabled={!connected}
             onClick={() => send("TogglePlayback")}
           >
-            {playing ? (
-              <Icon size={20} stroke={2.5}>
-                <path d="M8 5v14M16 5v14" />
-              </Icon>
-            ) : (
-              <Icon size={20} stroke={2}>
-                <path d="M7 4.5v15l12-7.5z" fill="currentColor" />
-              </Icon>
-            )}
+            <Glyph name={playing ? "pause" : "play"} size={24} />
           </button>
           <button
             type="button"
@@ -180,10 +179,7 @@ export function Room({
             disabled={!connected}
             onClick={() => send("NextTrack")}
           >
-            <Icon size={18}>
-              <path d="m5 5 10 7-10 7V5z" />
-              <path d="M19 5v14" />
-            </Icon>
+            <Glyph name="next" size={20} />
           </button>
           {item && (
             <span className="room-time">
@@ -285,7 +281,11 @@ function Sides({
               }
             >
               <span className="n">
-                {at === index ? "▶" : track.track_number || at + 1}
+                {at === index ? (
+                  <Glyph name="play" size={12} />
+                ) : (
+                  track.track_number || at + 1
+                )}
               </span>
               <span className="name">{track.name}</span>
               <span className="time">{clock(track.duration_ms)}</span>
@@ -297,8 +297,8 @@ function Sides({
   );
   return (
     <div className="sides">
-      {side("SIDE A", sideA, 0)}
-      {side("SIDE B", sideB, sideA.length)}
+      {side("Side A", sideA, 0)}
+      {side("Side B", sideB, sideA.length)}
     </div>
   );
 }
@@ -325,7 +325,7 @@ function Lyrics({ lyrics, ms }: { lyrics: LyricsPayload | null; ms: number }) {
     return <p className="room-note">No lyrics for this song.</p>;
   return (
     <div className="lyrics">
-      {!synced && <span className="eyebrow">TIMING ESTIMATED</span>}
+      {!synced && <span className="label">Timing estimated</span>}
       <ol ref={panel}>
         {lines.map((line, row) => (
           <li

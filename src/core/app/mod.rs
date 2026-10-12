@@ -420,6 +420,8 @@ pub struct App {
   discover_view: DiscoverView,
   /// The liked marks the Search revision last counted.
   search_liked_view: Vec<String>,
+  /// The liked marks the LikedMarks revision last counted.
+  liked_marks_view: Vec<String>,
   /// The decoded-source list whose rows landed in the track table.
   source_table_uri: Option<String>,
   track_table_view: TrackTableView,

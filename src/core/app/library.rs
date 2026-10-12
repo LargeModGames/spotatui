@@ -85,6 +85,8 @@ impl App {
 
   pub(crate) fn followed_artist_ids_set_mut(&mut self) -> &mut HashSet<String> {
     self.display_revisions.bump(DisplayDomain::Library);
+    // The artist page shows whether its artist is followed.
+    self.display_revisions.bump(DisplayDomain::Artist);
     &mut self.followed_artist_ids_set
   }
 
@@ -196,6 +198,7 @@ pub struct SelectedFullAlbum {
 pub struct Artist {
   pub artist_id: String,
   pub artist_name: String,
+  pub image_url: Option<String>,
   pub albums: crate::core::pagination::Paged<crate::core::plugin_api::AlbumInfo>,
   pub related_artists: Vec<crate::core::plugin_api::ArtistInfo>,
   pub top_tracks: Vec<crate::core::plugin_api::TrackInfo>,

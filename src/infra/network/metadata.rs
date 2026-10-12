@@ -72,6 +72,7 @@ impl<T: Clone> MetadataTtlCache<T> {
 /// The raw responses `get_artist` assembles, cached as one unit.
 #[derive(Clone)]
 pub(super) struct CachedArtistData {
+  image_url: Option<String>,
   top_tracks: Vec<FullTrack>,
   related_artists: Vec<FullArtist>,
   album_items: Vec<SimplifiedAlbum>,
@@ -157,6 +158,7 @@ impl MetadataNetwork for Network {
 
     let cached = self.artist_cache.get(&cache_key);
     let CachedArtistData {
+      image_url,
       top_tracks,
       related_artists,
       album_items,
@@ -172,10 +174,15 @@ impl MetadataNetwork for Network {
       }
 
       // A refused or missing half leaves its list empty and keeps the other.
-      let (top_tracks_res, related_artists_res) = tokio::join!(
+      let (artist_res, top_tracks_res, related_artists_res) = tokio::join!(
+        self.spotify_get_typed::<FullArtist>(&artist_path, &[]),
         self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
         self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
       );
+      // The portrait is decoration: a failed fetch only leaves it out.
+      let image_url = artist_res
+        .ok()
+        .and_then(|artist| ArtistInfo::from(&artist).image_url);
 
       let top_tracks = match top_tracks_res {
         Ok(res) => res.tracks,
@@ -223,6 +230,7 @@ impl MetadataNetwork for Network {
       }
 
       let data = CachedArtistData {
+        image_url,
         top_tracks,
         related_artists,
         album_items,
@@ -265,18 +273,20 @@ impl MetadataNetwork for Network {
       app.dispatch(IoEvent::CurrentUserSavedAlbumsContains(album_check));
     }
 
-    // Check if the related artists are followed.
-    let follow_check: Vec<String> = related_artists
-      .iter()
-      .map(|artist| artist.id.id().to_string())
+    // Check if the artist and the related artists are followed.
+    let follow_check: Vec<String> = std::iter::once(artist_id_str.clone())
+      .chain(
+        related_artists
+          .iter()
+          .map(|artist| artist.id.id().to_string()),
+      )
       .collect();
-    if !follow_check.is_empty() {
-      app.dispatch(IoEvent::UserArtistFollowCheck(follow_check));
-    }
+    app.dispatch(IoEvent::UserArtistFollowCheck(follow_check));
 
     app.artist = Some(Artist {
       artist_id: artist_id_str,
       artist_name: input_artist_name,
+      image_url,
       albums,
       related_artists: domain_related_artists,
       top_tracks: domain_top_tracks,
@@ -501,7 +511,12 @@ impl MetadataNetwork for Network {
         let domain_page =
           crate::infra::network::mapping::map_cursor_page(&res.artists, |a| ArtistInfo::from(a));
         let mut app = self.app.lock().await;
-        app.library_mut().saved_artists.add_pages(domain_page);
+        let artists = &mut app.library_mut().saved_artists;
+        // The first page starts the list again, so a refetch does not repeat it.
+        if after.is_none() {
+          artists.clear();
+        }
+        artists.add_pages(domain_page);
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -511,14 +526,28 @@ impl MetadataNetwork for Network {
     let uris: Vec<String> = artist_ids.iter().map(|id| id.uri()).collect();
     if let Err(e) = self.library_remove_uris(&uris).await {
       self.handle_error(e).await;
+      return;
     }
+    let mut app = self.app.lock().await;
+    let followed = app.followed_artist_ids_set_mut();
+    for id in &artist_ids {
+      followed.remove(id.id());
+    }
+    app.dispatch(IoEvent::GetFollowedArtists(None));
   }
 
   async fn user_follow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>) {
     let uris: Vec<String> = artist_ids.iter().map(|id| id.uri()).collect();
     if let Err(e) = self.library_save_uris(&uris).await {
       self.handle_error(e).await;
+      return;
     }
+    let mut app = self.app.lock().await;
+    let followed = app.followed_artist_ids_set_mut();
+    for id in &artist_ids {
+      followed.insert(id.id().to_string());
+    }
+    app.dispatch(IoEvent::GetFollowedArtists(None));
   }
 
   async fn user_artist_check_follow(&mut self, artist_ids: Vec<ArtistId<'static>>) {
@@ -526,11 +555,12 @@ impl MetadataNetwork for Network {
     match self.library_contains_uris(&uris).await {
       Ok(is_following) => {
         let mut app = self.app.lock().await;
+        let followed = app.followed_artist_ids_set_mut();
         for (id, is_following) in artist_ids.iter().zip(is_following) {
           if is_following {
-            app
-              .followed_artist_ids_set_mut()
-              .insert(id.id().to_string());
+            followed.insert(id.id().to_string());
+          } else {
+            followed.remove(id.id());
           }
         }
       }
@@ -606,6 +636,8 @@ pub(crate) mod tests {
     String::from_utf8_lossy(&buf[..n]).to_string()
   }
 
+  const ARTIST_JSON: &str = r#"{"external_urls":{},"followers":{"href":null,"total":0},"genres":[],"href":"","id":"artist","images":[{"url":"https://i.scdn.co/image/portrait","width":640,"height":640}],"name":"Test Artist","popularity":0}"#;
+
   async fn get_artist_recovers_from_related_artists(
     related_status: &'static str,
     related_status_code: u16,
@@ -617,7 +649,7 @@ pub(crate) mod tests {
       let base_url = format!("http://{local_addr}/v1/");
 
       let server = tokio::spawn(async move {
-        for _ in 0..3 {
+        for _ in 0..4 {
           let (mut stream, _) = listener.accept().await.unwrap();
           let request = read_http_request(&mut stream).await;
 
@@ -636,6 +668,8 @@ pub(crate) mod tests {
               r#"{"items":[],"total":0,"limit":50,"offset":0,"href":"","next":null,"previous":null}"#
                 .to_string(),
             )
+          } else if request.lines().next().unwrap_or_default().contains("/artists/artist ") {
+            ("200 OK", ARTIST_JSON.to_string())
           } else {
             panic!("unexpected request: {request}");
           };
@@ -679,6 +713,10 @@ pub(crate) mod tests {
         .as_ref()
         .expect("app.artist should be populated for a recoverable related-artists error");
       assert_eq!(artist.artist_name, "Test Artist");
+      assert_eq!(
+        artist.image_url.as_deref(),
+        Some("https://i.scdn.co/image/portrait")
+      );
       assert!(
         app_guard
           .display_revisions()
@@ -720,7 +758,7 @@ pub(crate) mod tests {
       let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
 
       let server = tokio::spawn(async move {
-        for _ in 0..4 {
+        for _ in 0..5 {
           let (mut stream, _) = listener.accept().await.unwrap();
           let request = read_http_request(&mut stream).await;
           let request_line = request.lines().next().unwrap_or_default().to_string();
@@ -766,6 +804,8 @@ pub(crate) mod tests {
                 r#"{"error":{"status":400,"message":"Invalid limit"}}"#.to_string(),
               ),
             }
+          } else if request_line.contains("/artists/artist ") {
+            ("200 OK", ARTIST_JSON.to_string())
           } else {
             panic!("unexpected request: {request}");
           };

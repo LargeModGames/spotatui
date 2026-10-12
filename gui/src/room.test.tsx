@@ -73,15 +73,20 @@ const render = (
       showLyrics={patch.showLyrics ?? false}
       active={false}
       send={() => {}}
+      onClose={() => {}}
     />,
   );
 
 describe("Room", () => {
+  it("offers a button that leaves full screen", () => {
+    expect(render()).toContain('aria-label="Exit full screen"');
+  });
+
   it("marks the playing row and counts through the album in order", () => {
     const html = render();
-    expect(html).toContain("NOW LISTENING · SONG 3 OF 4");
+    expect(html).toContain("Now playing · Song 3 of 4");
     expect(html).toMatch(/class="now" aria-current="true"/);
-    expect(html).toContain("SIDE A");
+    expect(html).toContain("Side A");
     expect(html).toContain("9:00 in");
     expect(html).toContain("2011 · 4 songs · 16 minutes · plays from Spotify");
   });
@@ -90,7 +95,7 @@ describe("Room", () => {
     const html = render({
       item: { ...item, context_uri: "spotify:playlist:1" },
     });
-    expect(html).not.toContain("SONG 3 OF 4");
+    expect(html).not.toContain("Song 3 of 4");
     expect(html).not.toContain("left");
   });
 
@@ -113,7 +118,7 @@ describe("Room", () => {
         ],
       },
     });
-    expect(html).toContain("TIMING ESTIMATED");
+    expect(html).toContain("Timing estimated");
     expect(html).not.toContain('aria-current="true"');
     expect(
       render({

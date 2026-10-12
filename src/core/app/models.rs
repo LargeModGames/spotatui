@@ -142,6 +142,55 @@ impl App {
     }
   }
 
+  /// The liked track ids among the track table, the album page, the artist's top
+  /// tracks, recently played and Liked Songs, sorted.
+  pub(crate) fn visible_liked_ids(&self) -> Vec<String> {
+    let album: &[TrackInfo] = match self.album_table_context {
+      AlbumTableContext::Full => self
+        .selected_album_full
+        .as_ref()
+        .map_or(&[], |selected| &selected.album.tracks),
+      AlbumTableContext::Simplified => self
+        .selected_album_simplified
+        .as_ref()
+        .map_or(&[], |selected| &selected.tracks.items),
+    };
+    let liked: std::collections::BTreeSet<&String> = self
+      .track_table
+      .tracks
+      .iter()
+      .chain(album)
+      .chain(self.artist.iter().flat_map(|artist| &artist.top_tracks))
+      .chain(self.recently_played.iter().flat_map(|page| &page.items))
+      .chain(
+        self
+          .library
+          .saved_tracks
+          .pages
+          .iter()
+          .flat_map(|page| &page.items),
+      )
+      .filter_map(|track| track.id.as_ref())
+      .filter(|id| self.liked_song_ids_set.contains(*id))
+      .collect();
+    liked.into_iter().cloned().collect()
+  }
+
+  /// Bump LikedMarks when the liked state of a visible row changes.
+  pub(super) fn note_liked_marks_changes(&mut self) {
+    let liked = self.visible_liked_ids();
+    if liked != self.liked_marks_view {
+      self.liked_marks_view = liked;
+      self.display_revisions.bump(DisplayDomain::LikedMarks);
+    }
+  }
+
+  /// The liked marks the LikedMarks revision counted.
+  #[cfg(feature = "gui")]
+  pub(crate) fn liked_marks_view(&self) -> &[String] {
+    &self.liked_marks_view
+  }
+
   /// The playlist the track table holds, once its rows landed.
   fn track_table_uri(&self) -> Option<String> {
     match self.track_table.context {

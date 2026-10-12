@@ -9,11 +9,16 @@ export interface SidebarRow {
   uri: string;
   name: string;
   count: number | null;
+  /** The cover; optional so a hand-made row needs none. */
+  image?: string | null;
 }
 
 const PLAYLIST_KEYS: Record<
   Exclude<Source, "Radio" | "AppleMusic">,
-  Exclude<keyof SourcePlaylists, "radio">
+  Exclude<
+    keyof SourcePlaylists,
+    "radio" | "saved_albums" | "followed_artists" | "editable"
+  >
 > = {
   Spotify: "spotify",
   Local: "local",
@@ -47,11 +52,13 @@ export function playlistsFor(
       uri: station.uri ?? station.name,
       name: station.name,
       count: null,
+      image: station.image_url,
     }));
   return playlists[PLAYLIST_KEYS[source]].map((playlist) => ({
     uri: playlist.uri,
     name: playlist.name,
     count: playlist.track_count,
+    image: playlist.image_url,
   }));
 }
 
@@ -111,4 +118,21 @@ export function playRequest(
   const uris = tracks.flatMap((track) => (track.uri ? [track.uri] : []));
   const offset = tracks.slice(0, cursor).filter((track) => track.uri).length;
   return { PlayUris: { uris, offset } };
+}
+
+/** "1 song", "42 songs". */
+export function songCount(count: number): string {
+  return count === 1 ? "1 song" : `${count} songs`;
+}
+
+/** The cover of a library playlist of any source, by URI. */
+export function playlistImage(
+  playlists: SourcePlaylists | null,
+  uri: string,
+): string | null {
+  if (!playlists) return null;
+  const lists = Object.values(PLAYLIST_KEYS).map((key) => playlists[key]);
+  return (
+    lists.flat().find((playlist) => playlist.uri === uri)?.image_url ?? null
+  );
 }

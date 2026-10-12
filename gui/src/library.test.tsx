@@ -1,11 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LikedSongs } from "./bindings/LikedSongs";
+import type { PlaylistSyncPayload } from "./bindings/PlaylistSyncPayload";
 import type { SourcePayload } from "./bindings/SourcePayload";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
-import { Library } from "./Library";
-import { UpNext } from "./UpNext";
+import type { TrackTablePayload } from "./bindings/TrackTablePayload";
+import { LibraryPanel } from "./LibraryPanel";
+import { ListPage } from "./ListPage";
+import type { View } from "./nav";
+import { TrackTable } from "./TrackTable";
 
 const track = (name: string, uri: string): TrackInfo => ({
   uri,
@@ -14,8 +18,8 @@ const track = (name: string, uri: string): TrackInfo => ({
   album: "21",
   duration_ms: 243_000,
   id: null,
-  album_id: null,
-  artist_refs: [],
+  album_id: "a21",
+  artist_refs: [{ id: "adele", name: "Adele" }],
   is_playable: true,
   is_local: false,
   track_number: 0,
@@ -24,7 +28,7 @@ const track = (name: string, uri: string): TrackInfo => ({
   release_date: null,
 });
 
-const source: SourcePayload = {
+const local: SourcePayload = {
   active: "Local",
   compiled: ["Spotify", "Local"],
 };
@@ -58,75 +62,259 @@ const playlists: SourcePlaylists = {
   subsonic: [],
   qobuz: [],
   youtube: [],
-  radio: [],
+  radio: [track("Score radio", "radio:https://radio.example")],
+  saved_albums: [],
+  followed_artists: [],
+  editable: [],
 };
 
-const render = (songs: LikedSongs | null, playingUri: string | null = null) =>
+const sync: PlaylistSyncPayload = {
+  running: false,
+  last_summary: null,
+  last_failed: false,
+  links: [
+    {
+      id: "a",
+      source: "Local",
+      name: "Soundtrack CD rips",
+      last_line: null,
+      last_failed: false,
+      mirrors: [
+        {
+          source: "Qobuz",
+          matched: 3,
+          unmatched: [
+            {
+              master_key: "k",
+              title: "Levels",
+              artist: "Avicii",
+              reason: "NoCandidate",
+            },
+          ],
+          last_run: null,
+        },
+      ],
+    },
+  ],
+};
+
+const panel = (
+  source: SourcePayload | null,
+  view: View = { page: "home" },
+  payload: PlaylistSyncPayload | null = null,
+) =>
   renderToStaticMarkup(
-    <Library
+    <LibraryPanel
       playlists={playlists}
-      liked={songs}
-      table={null}
+      artists={null}
       source={source}
-      playingUri={playingUri}
-      upNext={[]}
-      sync={null}
-      statusRev={null}
-      statusError={false}
+      sync={payload}
+      view={view}
+      open={() => {}}
       send={() => {}}
     />,
   );
 
-describe("Library", () => {
-  it("shows the active source's playlists with their counts under its heading", () => {
-    const html = render(liked);
-    expect(html).toContain("PLAYLISTS · LOCAL");
-    expect(html).toContain("Soundtrack CD rips");
-    expect(html).toContain('class="count">318<');
-    expect(html).toMatch(
-      /<button type="button" aria-current="page">Liked Songs</,
+describe("LibraryPanel", () => {
+  it("pins Liked Songs, then lists the active source's playlists with their song counts", () => {
+    const html = panel(local);
+    expect(html).toContain("Your Library");
+    expect(html.indexOf("Liked Songs")).toBeLessThan(
+      html.indexOf("Soundtrack CD rips"),
     );
-    expect(html).toMatch(/<button type="button" title="Soundtrack CD rips">/);
+    expect(html).toContain("Playlist · 318 songs");
+    expect(html).toContain("Library health");
   });
 
-  it("presses the chip of the active source only", () => {
-    const html = render(liked);
-    expect(html).toContain('aria-pressed="true">Local<');
-    expect(html).toContain('aria-pressed="false">Spotify<');
+  it("marks the open playlist as the current page", () => {
+    const html = panel(local, {
+      page: "playlist",
+      uri: "file:///rips",
+      name: "Soundtrack CD rips",
+      source: "Local",
+    });
+    expect(html).toMatch(/title="Soundtrack CD rips" aria-current="page"/);
+    expect(html).not.toMatch(/title="Liked Songs" aria-current/);
+    expect(panel(local, { page: "liked" })).toMatch(
+      /title="Liked Songs" aria-current="page"/,
+    );
   });
 
-  it("marks the first row as the cursor and the playing row with an arrow", () => {
-    const html = render(liked, "file:///21/05.flac");
+  it("offers the Albums and Artists filters for Spotify only", () => {
+    const spotify = panel({ ...local, active: "Spotify" });
+    expect(spotify).toContain('aria-pressed="true">Playlists<');
+    expect(spotify).toContain('aria-pressed="false">Albums<');
+    expect(spotify).toContain('aria-pressed="false">Artists<');
+    const other = panel(local);
+    expect(other).toContain(">Playlists<");
+    expect(other).not.toContain(">Albums<");
+    expect(other).not.toContain(">Artists<");
+  });
+
+  it("selects the active source when several sources are compiled", () => {
+    expect(panel(local)).toContain('aria-label="Source"');
+    expect(panel(local)).toMatch(/<option value="Local" selected="">/);
+    expect(panel({ active: "Local", compiled: ["Local"] })).not.toContain(
+      'aria-label="Source"',
+    );
+  });
+
+  it("lists stations as radio stations", () => {
+    const html = panel({ ...local, active: "Radio" });
+    expect(html).toContain("Score radio");
+    expect(html).toContain("Radio station");
+  });
+
+  it("counts the unmatched tracks on the Library health row", () => {
+    expect(panel(local, { page: "home" }, sync)).toContain("1 unmatched");
+    expect(panel(local)).toContain("Playlist sync");
+  });
+});
+
+const page = (
+  view: Extract<View, { page: "liked" | "playlist" }>,
+  options: {
+    songs?: LikedSongs | null;
+    table?: TrackTablePayload | null;
+    playlists?: SourcePlaylists;
+    playingUri?: string | null;
+  } = {},
+) =>
+  renderToStaticMarkup(
+    <ListPage
+      view={view}
+      liked={options.songs === undefined ? liked : options.songs}
+      table={options.table ?? null}
+      playlists={options.playlists ?? playlists}
+      source={local}
+      playingUri={options.playingUri ?? null}
+      statusRev={null}
+      statusError={false}
+      active
+      open={() => {}}
+      send={() => {}}
+    />,
+  );
+
+const rips: Extract<View, { page: "playlist" }> = {
+  page: "playlist",
+  uri: "file:///rips",
+  name: "Soundtrack CD rips",
+  source: "Local",
+};
+
+describe("ListPage", () => {
+  it("heads an opened playlist with its library cover", () => {
+    const covered = {
+      ...playlists,
+      local: [{ ...playlists.local[0], image_url: "file:///rips.jpg" }],
+    };
+    expect(page(rips, { playlists: covered })).toContain(
+      'src="file:///rips.jpg"',
+    );
+  });
+
+  it("heads Liked Songs with its song count and a play button", () => {
+    const html = page({ page: "liked" });
+    expect(html).toContain(">Liked Songs</h1>");
+    expect(html).toContain("40 songs, 2 loaded");
+    expect(html).toContain('aria-label="Play Liked Songs"');
+  });
+
+  it("marks the first row as the cursor and the playing row", () => {
+    const html = page({ page: "liked" }, { playingUri: "file:///21/05.flac" });
     expect(html).toContain('aria-activedescendant="liked-0"');
     expect(html).toMatch(/id="liked-0"[^>]*aria-selected="true"/);
-    expect(html).toMatch(/id="liked-1"[^>]*class="row now"/);
-    expect(html).toContain(">▶<");
+    expect(html).toMatch(/id="liked-1"[^>]*class="track-row now"/);
     expect(html).toContain('class="swatch local"');
     expect(html).toContain(">4:03<");
-    expect(html).toContain("2 of 40");
   });
 
   it("explains an empty list: no session, still loading, or none liked", () => {
     const none = { ...liked, tracks: [], total: 0, has_more: false };
-    expect(render({ ...none, available: false })).toContain(
-      "Liked Songs needs a Spotify session.",
+    expect(
+      page({ page: "liked" }, { songs: { ...none, available: false } }),
+    ).toContain("Liked Songs needs a Spotify session.");
+    expect(
+      page({ page: "liked" }, { songs: { ...none, loaded: false } }),
+    ).toContain("Loading Liked Songs…");
+    expect(page({ page: "liked" }, { songs: none })).toContain(
+      "No liked songs yet.",
     );
-    expect(render({ ...none, loaded: false })).toContain(
-      "Loading Liked Songs…",
+  });
+
+  it("shows a playlist's rows only once the table holds that playlist", () => {
+    const table: TrackTablePayload = {
+      uri: "file:///rips",
+      tracks: liked.tracks,
+      has_more: true,
+    };
+    expect(page(rips, { table: { ...table, uri: "file:///other" } })).toContain(
+      "Loading Soundtrack CD rips…",
     );
-    expect(render(none)).toContain("No liked songs yet.");
+    const html = page(rips, { table });
+    expect(html).toContain(">Soundtrack CD rips</h1>");
+    expect(html).toContain("2+ songs");
+    expect(html).toContain('id="playlist-1"');
+    expect(
+      page(rips, { table: { ...table, tracks: [], has_more: false } }),
+    ).toContain("This playlist is empty.");
   });
 });
 
-describe("UpNext", () => {
-  it("numbers the queued tracks and says when nothing is queued", () => {
+describe("TrackTable", () => {
+  const table = (
+    props: Partial<{
+      showAlbum: boolean;
+      showCover: boolean;
+      open: (view: View) => void;
+    }>,
+  ) =>
+    renderToStaticMarkup(
+      <TrackTable
+        label="Songs"
+        idPrefix="album"
+        tracks={[track("Hello", "spotify:track:h")]}
+        cursor={0}
+        playingUri={null}
+        onKeyDown={() => {}}
+        onPick={() => {}}
+        onPlay={() => {}}
+        {...props}
+      />,
+    );
+
+  it("links the artist and the album only when it can open them", () => {
+    const linked = table({ open: () => {} });
+    expect(linked).toContain('class="link" tabindex="-1">Adele<');
+    expect(linked).toContain('class="link" tabindex="-1">21<');
+    expect(table({})).not.toContain('class="link"');
+  });
+
+  it("links no artist or album of a row from another source, ids or not", () => {
     const html = renderToStaticMarkup(
-      <UpNext tracks={[track("Lovesong", "file:///21/10.flac")]} />,
+      <TrackTable
+        label="Songs"
+        idPrefix="sub"
+        tracks={[track("Hello", "subsonic:track:h")]}
+        cursor={0}
+        playingUri={null}
+        onKeyDown={() => {}}
+        onPick={() => {}}
+        onPlay={() => {}}
+        open={() => {}}
+      />,
     );
-    expect(html).toContain('class="n">1<');
-    expect(html).toContain("Lovesong");
-    expect(renderToStaticMarkup(<UpNext tracks={[]} />)).toContain(
-      "Nothing is queued.",
-    );
+    expect(html).not.toContain('class="link"');
+  });
+
+  it("drops the album column and the cover when asked", () => {
+    const full = table({});
+    expect(full).toContain(">Album<");
+    expect(full).toContain("cover-art");
+    const bare = table({ showAlbum: false, showCover: false });
+    expect(bare).not.toContain(">Album<");
+    expect(bare).not.toContain("cover-art");
+    expect(bare).toContain('aria-activedescendant="album-0"');
   });
 });

@@ -6,6 +6,7 @@ import {
   clampCursor,
   listPlayRequest,
   openRow,
+  playlistImage,
   playlistsFor,
   playRequest,
   step,
@@ -36,6 +37,9 @@ const empty: SourcePlaylists = {
   qobuz: [],
   youtube: [],
   radio: [],
+  saved_albums: [],
+  followed_artists: [],
+  editable: [],
 };
 
 describe("upNext", () => {
@@ -84,10 +88,15 @@ describe("playlistsFor", () => {
       radio: [track("Score radio", "radio:https://radio.example")],
     };
     expect(playlistsFor(playlists, "Local")).toEqual([
-      { uri: "file:///rips", name: "Rips", count: 3 },
+      { uri: "file:///rips", name: "Rips", count: 3, image: null },
     ]);
     expect(playlistsFor(playlists, "Radio")).toEqual([
-      { uri: "radio:https://radio.example", name: "Score radio", count: null },
+      {
+        uri: "radio:https://radio.example",
+        name: "Score radio",
+        count: null,
+        image: null,
+      },
     ]);
     expect(playlistsFor(playlists, "Qobuz")).toEqual([]);
     expect(playlistsFor(playlists, "AppleMusic")).toEqual([]);
@@ -173,5 +182,32 @@ describe("listPlayRequest", () => {
     expect(listPlayRequest("Qobuz", "qobuz:playlist:1", tracks, 1)).toEqual({
       PlayUris: { uris: ["spotify:track:a", "spotify:track:b"], offset: 1 },
     });
+  });
+});
+
+describe("playlistImage", () => {
+  const playlist = (uri: string, image_url: string | null) => ({
+    uri,
+    name: uri,
+    owner: "me",
+    track_count: 1,
+    id: null,
+    owner_id: null,
+    collaborative: false,
+    public: null,
+    image_url,
+  });
+
+  it("finds the cover of a playlist of any source by URI", () => {
+    const lists = {
+      ...empty,
+      spotify: [playlist("spotify:playlist:1", "https://i.scdn.co/1")],
+      youtube: [playlist("youtube:playlist:2", "https://i.ytimg.com/2")],
+    };
+    expect(playlistImage(lists, "youtube:playlist:2")).toBe(
+      "https://i.ytimg.com/2",
+    );
+    expect(playlistImage(lists, "spotify:playlist:9")).toBeNull();
+    expect(playlistImage(null, "spotify:playlist:1")).toBeNull();
   });
 });

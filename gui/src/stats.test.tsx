@@ -55,7 +55,7 @@ describe("Stats", () => {
   });
 
   it("hides the all-time comparison when all time is the period", () => {
-    expect(render({ ...loaded, period: "all" })).not.toContain("VS ALL TIME");
+    expect(render({ ...loaded, period: "all" })).not.toContain("vs all time");
   });
 
   it("says when there is no history or nothing is loaded yet", () => {

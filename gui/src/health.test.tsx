@@ -39,13 +39,14 @@ const render = (payload: PlaylistSyncPayload | null) =>
   );
 
 describe("LibraryHealth", () => {
-  it("shows each link's master and mirror state, the unmatched tracks and the last run", () => {
+  it("shows each link's master and mirror state, the unmatched tracks, the last run and a way back", () => {
     const html = render(sync);
     expect(html).toContain('class="cell master">MASTER<');
     expect(html).toContain('class="cell unmatched">1 unmatched<');
     expect(html).toContain("Levels – Avicii: no match");
     expect(html).toContain("skipped (Qobuz is not logged in)");
     expect(html).toContain("Sync all now");
+    expect(html).toMatch(/class="crumb"[^]*? Back<\/button>/);
   });
 
   it("says which build can link when there are no links", () => {

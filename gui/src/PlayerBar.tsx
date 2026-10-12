@@ -1,23 +1,43 @@
+import { useCallback, useRef, useState } from "react";
 import type { Action } from "./bindings/Action";
+import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { PlaybackPayload } from "./bindings/PlaybackPayload";
 import type { Position } from "./connection";
+import { DevicesPopover } from "./DevicesPopover";
 import { clock, sourceOf } from "./format";
-import { Icon } from "./Icon";
+import { Glyph } from "./Icon";
 import { SourceBadge } from "./SourceBadge";
+import { Cover } from "./ui";
 import { usePosition } from "./usePosition";
+
+/** What the right panel shows; null hides it. */
+export type Panel = "now" | "queue" | null;
+
+/** The volume an unmute restores when the mute happened elsewhere. */
+const UNMUTE_VOLUME = 50;
 
 export function PlayerBar({
   playback,
   position,
   connected,
-  send,
+  devices,
+  panel,
+  onPanel,
+  lyricsOpen,
+  onLyrics,
   onRoom,
+  send,
 }: {
   playback: PlaybackPayload | null;
   position: Position | null;
   connected: boolean;
+  devices: DeviceInfo[];
+  panel: Panel;
+  onPanel: (panel: Panel) => void;
+  lyricsOpen: boolean;
+  onLyrics: () => void;
+  onRoom: () => void;
   send: (action: Action) => void;
-  onRoom: (lyrics: boolean) => void;
 }) {
   const item = playback?.item ?? null;
   const playing = item?.is_playing ?? false;
@@ -29,108 +49,90 @@ export function PlayerBar({
   const source = sourceOf(item?.uri ?? null);
   const repeat = item?.repeat ?? "off";
   const liked = playback?.liked ?? false;
+
+  const [unmuteTo, setUnmuteTo] = useState(UNMUTE_VOLUME);
+  const [devicesOpen, setDevicesOpen] = useState(false);
+  const devicesBox = useRef<HTMLDivElement>(null);
+  const closeDevices = useCallback(() => {
+    setDevicesOpen(false);
+    // The keyboard goes back to the button only when it was in the popover.
+    const box = devicesBox.current;
+    if (box?.contains(document.activeElement))
+      box.querySelector<HTMLElement>(".icon-button")?.focus();
+  }, []);
+
   return (
     <footer className="playerbar">
-      <div className="track">
-        {item?.image_url ? (
-          <img className="cover" src={item.image_url} alt="" />
-        ) : (
-          <span className="cover" />
-        )}
+      <div className="now-track">
+        <Cover src={item?.image_url} size={56} />
         <div className="titles">
-          <strong>{item?.title ?? "Nothing playing"}</strong>
-          {item && (
-            <span>
-              {[item.artists.join(", "), item.album]
-                .filter(Boolean)
-                .join(" · ")}
-            </span>
-          )}
+          <strong title={item?.title}>
+            {item?.title ?? "Nothing playing"}
+          </strong>
+          {item && <span>{item.artists.join(", ")}</span>}
         </div>
         {source === "Spotify" && (
           <button
+            type="button"
             className="like"
             aria-label="Like"
             aria-pressed={liked}
             disabled={!connected}
             onClick={() => send("ToggleSaveCurrentItem")}
           >
-            <Icon>
-              <path
-                d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"
-                fill={liked ? "currentColor" : "none"}
-              />
-            </Icon>
+            <Glyph name="heart" filled={liked} />
           </button>
         )}
-        {source && <SourceBadge source={source} />}
+        {source && source !== "Spotify" && <SourceBadge source={source} />}
       </div>
       <div className="transport">
         <div className="buttons">
           <button
-            className="toggle"
+            type="button"
+            className="icon-button"
             aria-label="Shuffle"
             aria-pressed={item?.shuffle ?? false}
             disabled={!connected}
             onClick={() => send("ToggleShuffle")}
           >
-            <Icon>
-              <path d="M16 3h5v5" />
-              <path d="M4 20 21 3" />
-              <path d="M21 16v5h-5" />
-              <path d="m15 15 6 6" />
-              <path d="M4 4l5 5" />
-            </Icon>
+            <Glyph name="shuffle" />
           </button>
           <button
+            type="button"
+            className="icon-button"
             aria-label="Previous"
             disabled={!connected}
             onClick={() => send("PreviousTrack")}
           >
-            <Icon size={18}>
-              <path d="M19 5 9 12l10 7V5z" />
-              <path d="M5 5v14" />
-            </Icon>
+            <Glyph name="previous" />
           </button>
           <button
-            className="play"
+            type="button"
+            className="play-toggle"
             aria-label={playing ? "Pause" : "Play"}
             disabled={!connected}
             onClick={() => send("TogglePlayback")}
           >
-            {playing ? (
-              <Icon stroke={3}>
-                <path d="M8 5v14M16 5v14" />
-              </Icon>
-            ) : (
-              <Icon stroke={2}>
-                <path d="M7 4.5v15l12-7.5z" fill="currentColor" />
-              </Icon>
-            )}
+            <Glyph name={playing ? "pause" : "play"} />
           </button>
           <button
+            type="button"
+            className="icon-button"
             aria-label="Next"
             disabled={!connected}
             onClick={() => send("NextTrack")}
           >
-            <Icon size={18}>
-              <path d="m5 5 10 7-10 7V5z" />
-              <path d="M19 5v14" />
-            </Icon>
+            <Glyph name="next" />
           </button>
           <button
-            className="toggle"
+            type="button"
+            className="icon-button"
             aria-label={repeat === "track" ? "Repeat one" : "Repeat"}
             aria-pressed={repeat !== "off"}
             disabled={!connected}
             onClick={() => send("CycleRepeat")}
           >
-            <Icon>
-              <path d="m17 2 4 4-4 4" />
-              <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
-              <path d="m7 22-4-4 4-4" />
-              <path d="M21 13v1a4 4 0 0 1-4 4H3" />
-            </Icon>
+            <Glyph name="repeat" />
             {repeat === "track" && <sup>1</sup>}
           </button>
         </div>
@@ -148,16 +150,72 @@ export function PlayerBar({
         </div>
       </div>
       <div className="side">
-        <button type="button" className="link" onClick={() => onRoom(false)}>
-          Room <kbd>r</kbd>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Now playing view"
+          aria-pressed={panel === "now"}
+          onClick={() => onPanel(panel === "now" ? null : "now")}
+        >
+          <Glyph name="panel" />
         </button>
-        <button type="button" className="link" onClick={() => onRoom(true)}>
-          Lyrics <kbd>l</kbd>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Lyrics"
+          aria-keyshortcuts="l"
+          aria-pressed={lyricsOpen}
+          onClick={onLyrics}
+        >
+          <Glyph name="lyrics" />
         </button>
-        <Icon>
-          <path d="M11 5 6 9H2v6h4l5 4V5z" />
-          <path d="M15.5 8.5a5 5 0 0 1 0 7" />
-        </Icon>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Queue"
+          aria-keyshortcuts="Shift+Q"
+          aria-pressed={panel === "queue"}
+          onClick={() => onPanel(panel === "queue" ? null : "queue")}
+        >
+          <Glyph name="queue" />
+        </button>
+        <div className="devices-box" ref={devicesBox}>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Connect to a device"
+            aria-haspopup="dialog"
+            aria-expanded={devicesOpen}
+            disabled={!connected}
+            onClick={() => setDevicesOpen((open) => !open)}
+          >
+            <Glyph name="devices" />
+          </button>
+          {devicesOpen && (
+            <DevicesPopover
+              devices={devices}
+              current={playback?.device ?? null}
+              send={send}
+              onClose={closeDevices}
+            />
+          )}
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={volume === 0 ? "Unmute" : "Mute"}
+          disabled={!connected}
+          onClick={() => {
+            if (volume === 0) {
+              send({ SetVolume: unmuteTo });
+            } else {
+              setUnmuteTo(volume);
+              send({ SetVolume: 0 });
+            }
+          }}
+        >
+          <Glyph name={volume === 0 ? "mute" : "volume"} />
+        </button>
         <Meter
           label="Volume"
           ratio={volume / 100}
@@ -166,6 +224,15 @@ export function PlayerBar({
           onPick={(ratio) => send({ SetVolume: Math.round(ratio * 100) })}
           onStep={(up) => send(up ? "VolumeUp" : "VolumeDown")}
         />
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Full screen"
+          aria-keyshortcuts="r"
+          onClick={() => onRoom()}
+        >
+          <Glyph name="fullscreen" />
+        </button>
       </div>
     </footer>
   );

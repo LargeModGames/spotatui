@@ -7,8 +7,8 @@ use crate::core::app::{App, DiscoverTimeRange, DisplayDomain, DisplayRevisions, 
 use crate::core::first_run::compiled_in_sources;
 use crate::core::playlist_sync::Unmatched;
 use crate::core::plugin_api::{
-  device_list, route_name, AlbumInfo, ArtistInfo, DeviceInfo, PlaybackState, PlaylistInfo,
-  QueueItemSnapshot, QueueSnapshot, TrackInfo,
+  device_list, recently_played_snapshot, route_name, AlbumInfo, ArtistInfo, DeviceInfo,
+  PlaybackState, PlaylistInfo, QueueItemSnapshot, QueueSnapshot, TrackInfo,
 };
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
@@ -116,6 +116,22 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: Box<TrackTablePayload>,
   },
+  /// The artist the app last fetched for its artist page.
+  Artist {
+    rev: u64,
+    payload: Box<ArtistPayload>,
+  },
+  /// Spotify's recently played tracks, most recent first.
+  RecentlyPlayed {
+    rev: u64,
+    payload: Vec<TrackInfo>,
+  },
+  /// The liked Spotify track ids among the rows the page can show: the track
+  /// table, the album, the artist's top tracks, recently played and Liked Songs.
+  LikedMarks {
+    rev: u64,
+    payload: Vec<String>,
+  },
 }
 
 #[derive(Serialize)]
@@ -212,6 +228,12 @@ pub(crate) struct SourcePlaylists {
   youtube: Vec<PlaylistInfo>,
   /// Stations are playable rows (`radio:<url>`), not playlists.
   radio: Vec<TrackInfo>,
+  /// Spotify's saved albums cached so far; `OpenLibrary(Albums)` fetches them.
+  saved_albums: Vec<AlbumInfo>,
+  /// Spotify's followed artists cached so far; `OpenLibrary(Artists)` fetches them.
+  followed_artists: Vec<ArtistInfo>,
+  /// The URIs of the Spotify playlists the user can add tracks to.
+  editable: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -300,6 +322,26 @@ pub(crate) struct LyricLine {
 pub(crate) struct AlbumPayload {
   /// With its tracks; `null` before the first album fetch.
   album: Option<AlbumInfo>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct ArtistPayload {
+  /// `null` before the first artist fetch.
+  page: Option<ArtistPage>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct ArtistPage {
+  id: String,
+  name: String,
+  image_url: Option<String>,
+  /// The user follows this artist, as the last follow check found.
+  following: bool,
+  top_tracks: Vec<TrackInfo>,
+  albums: Vec<AlbumInfo>,
+  related_artists: Vec<ArtistInfo>,
 }
 
 #[derive(Serialize)]
@@ -559,8 +601,33 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
         }),
       }
     }
-    DisplayDomain::Artist => return None,
+    DisplayDomain::Artist => ServerMessage::Artist {
+      rev,
+      payload: Box::new(artist(app)),
+    },
+    DisplayDomain::RecentlyPlayed => ServerMessage::RecentlyPlayed {
+      rev,
+      payload: recently_played_snapshot(app),
+    },
+    DisplayDomain::LikedMarks => ServerMessage::LikedMarks {
+      rev,
+      payload: app.liked_marks_view().to_vec(),
+    },
   })
+}
+
+fn artist(app: &App) -> ArtistPayload {
+  ArtistPayload {
+    page: app.artist.as_ref().map(|artist| ArtistPage {
+      id: artist.artist_id.clone(),
+      name: artist.artist_name.clone(),
+      image_url: artist.image_url.clone(),
+      following: app.followed_artist_ids_set().contains(&artist.artist_id),
+      top_tracks: artist.top_tracks.clone(),
+      albums: artist.albums.items.clone(),
+      related_artists: artist.related_artists.clone(),
+    }),
+  }
 }
 
 fn playlist_sync(app: &App) -> PlaylistSyncPayload {
@@ -768,7 +835,29 @@ fn playlists(app: &App) -> SourcePlaylists {
     qobuz: app.qobuz_playlists().clone(),
     youtube: app.youtube_playlists().clone(),
     radio: app.radio_stations().clone(),
+    saved_albums: saved_albums(app),
+    followed_artists: app
+      .library()
+      .saved_artists
+      .pages
+      .iter()
+      .flat_map(|page| page.items.iter().cloned())
+      .collect(),
+    editable: app
+      .editable_playlists()
+      .into_iter()
+      .map(|playlist| playlist.uri.clone())
+      .collect(),
   }
+}
+
+fn saved_albums(app: &App) -> Vec<AlbumInfo> {
+  let mut pages: Vec<_> = app.library().saved_albums.pages.iter().collect();
+  pages.sort_by_key(|page| page.offset);
+  pages
+    .into_iter()
+    .flat_map(|page| page.items.iter().map(|saved| saved.album.clone()))
+    .collect()
 }
 
 fn playback(app: &App) -> PlaybackPayload {
@@ -875,6 +964,7 @@ mod tests {
         "devices",
         "search",
         "lyrics",
+        "artist",
         "library",
         "liked",
         "queue",
@@ -883,7 +973,9 @@ mod tests {
         "session",
         "discover",
         "playlist_sync",
-        "track_table"
+        "track_table",
+        "recently_played",
+        "liked_marks"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -1315,6 +1407,151 @@ mod tests {
   }
 
   #[test]
+  fn fetched_followed_artists_ride_the_library_channel() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(crate::core::pagination::CursorPaged {
+        items: vec![ArtistInfo {
+          name: "Avicii".to_string(),
+          ..ArtistInfo::default()
+        }],
+        ..Default::default()
+      });
+
+    let library = &pushed(&diff(&before, &app), "library")["payload"];
+    assert_eq!(library["followed_artists"][0]["name"], "Avicii");
+  }
+
+  #[test]
+  fn a_fetched_artist_rides_the_artist_channel_with_its_follow_state() {
+    use crate::core::app::{Artist, ArtistBlock};
+    let (mut app, _rx) = app();
+    assert!(pushed(&resync(&app), "artist")["payload"]["page"].is_null());
+    let before = app.display_revisions();
+
+    app.artist = Some(Artist {
+      artist_id: "kygo".to_string(),
+      artist_name: "Kygo".to_string(),
+      image_url: Some("https://i.scdn.co/image/kygo".to_string()),
+      albums: Paged {
+        items: vec![AlbumInfo {
+          name: "Cloud Nine".to_string(),
+          ..AlbumInfo::default()
+        }],
+        ..Paged::default()
+      },
+      related_artists: vec![],
+      top_tracks: liked_page(0, 2, 2, false).items,
+      selected_album_index: 0,
+      selected_related_artist_index: 0,
+      selected_top_track_index: 0,
+      artist_hovered_block: ArtistBlock::TopTracks,
+      artist_selected_block: ArtistBlock::TopTracks,
+    });
+    app.bump_display(DisplayDomain::Artist);
+
+    let payload = &pushed(&diff(&before, &app), "artist")["payload"];
+    assert_eq!(payload["page"]["name"], "Kygo");
+    assert_eq!(payload["page"]["image_url"], "https://i.scdn.co/image/kygo");
+    assert_eq!(payload["page"]["top_tracks"][1]["name"], "Track 1");
+    assert_eq!(payload["page"]["albums"][0]["name"], "Cloud Nine");
+    assert_eq!(payload["page"]["following"], false);
+
+    let before = app.display_revisions();
+    app.followed_artist_ids_set_mut().insert("kygo".to_string());
+    let page = &pushed(&diff(&before, &app), "artist")["payload"]["page"];
+    assert_eq!(page["following"], true);
+  }
+
+  #[test]
+  fn saved_albums_ride_the_library_channel_in_offset_order() {
+    use crate::core::plugin_api::SavedAlbumInfo;
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+    let page = |offset: u32, name: &str| Paged {
+      items: vec![SavedAlbumInfo {
+        album: AlbumInfo {
+          name: name.to_string(),
+          ..AlbumInfo::default()
+        },
+        added_at: String::new(),
+      }],
+      offset,
+      ..Paged::default()
+    };
+
+    app.store_saved_albums_page(page(1, "Second"));
+    app.store_saved_albums_page(page(0, "First"));
+
+    let albums = &pushed(&diff(&before, &app), "library")["payload"]["saved_albums"];
+    assert_eq!(albums[0]["name"], "First");
+    assert_eq!(albums[1]["name"], "Second");
+  }
+
+  #[test]
+  fn a_visible_row_turning_liked_pushes_the_liked_marks_channel() {
+    let (mut app, _rx) = app();
+    let mut rows = liked_page(0, 2, 2, false).items;
+    rows[0].id = Some("seen".to_string());
+    rows[1].id = Some("other".to_string());
+    app.recently_played = Some(crate::core::pagination::CursorPaged {
+      items: rows,
+      ..Default::default()
+    });
+    app.liked_song_ids_set_mut().insert("unseen".to_string());
+    app.note_display_changes();
+    let before = app.display_revisions();
+
+    app.liked_song_ids_set_mut().insert("seen".to_string());
+    app.note_display_changes();
+
+    let marks = &pushed(&diff(&before, &app), "liked_marks")["payload"];
+    assert_eq!(marks, &serde_json::json!(["seen"]));
+  }
+
+  #[test]
+  fn the_library_channel_names_the_playlists_the_user_can_edit() {
+    use crate::core::app::UserInfo;
+    let (mut app, _rx) = app();
+    *app.user_mut() = Some(UserInfo {
+      id: "me".to_string(),
+      ..UserInfo::default()
+    });
+    let before = app.display_revisions();
+
+    *app.all_playlists_mut() = vec![
+      playlist_info("mine", "Mine", "me", false),
+      playlist_info("shared", "Shared", "friend", true),
+      playlist_info("theirs", "Theirs", "friend", false),
+    ];
+
+    let editable = &pushed(&diff(&before, &app), "library")["payload"]["editable"];
+    assert_eq!(
+      editable,
+      &serde_json::json!(["spotify:playlist:mine", "spotify:playlist:shared"])
+    );
+  }
+
+  #[test]
+  fn recently_played_rides_its_own_channel() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.recently_played = Some(crate::core::pagination::CursorPaged {
+      items: liked_page(0, 1, 1, false).items,
+      ..Default::default()
+    });
+    app.bump_display(DisplayDomain::RecentlyPlayed);
+
+    let recent = &pushed(&diff(&before, &app), "recently_played")["payload"];
+    assert_eq!(recent[0]["name"], "Track 0");
+  }
+
+  #[test]
   fn opening_the_playing_tracks_album_from_the_page_fetches_it_by_track_id() {
     let (mut app, rx) = app();
 
@@ -1548,6 +1785,8 @@ mod tests {
     written::<DiscoverPayload>(&dir, &cfg);
     written::<PlaylistSyncPayload>(&dir, &cfg);
     written::<TrackTablePayload>(&dir, &cfg);
+    written::<ArtistPayload>(&dir, &cfg);
+    written::<ArtistPage>(&dir, &cfg);
     written::<ArtistInfo>(&dir, &cfg);
     written::<AlbumInfo>(&dir, &cfg);
     written::<PlaylistInfo>(&dir, &cfg);

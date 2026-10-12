@@ -24,6 +24,8 @@ const revisions = {
   discover: 1,
   playlist_sync: 1,
   track_table: 1,
+  recently_played: 1,
+  liked_marks: 1,
 };
 
 export const hello: ServerMessage = {
@@ -211,6 +213,13 @@ export const library: ServerMessage[] = [
       qobuz: [],
       youtube: [],
       radio: [],
+      saved_albums: [],
+      followed_artists: [],
+      editable: [
+        "spotify:playlist:1",
+        "spotify:playlist:2",
+        "spotify:playlist:4",
+      ],
     },
   },
   {
@@ -247,6 +256,9 @@ export const libraryUnavailable: ServerMessage[] = [
       qobuz: [],
       youtube: [],
       radio: [],
+      saved_albums: [],
+      followed_artists: [],
+      editable: [],
     },
   },
   {
@@ -700,15 +712,73 @@ export const filmScores: ServerMessage[] = [
         ["Cornfield Chase", "Hans Zimmer", 126],
         ["Now We Are Free", "Hans Zimmer", 254],
         ["Concerning Hobbits", "Howard Shore", 175],
-      ].map(([name, artist, seconds], index) =>
-        track(
+      ].map(([name, artist, seconds], index) => ({
+        ...track(
           name as string,
           seconds as number,
           `spotify:track:f${index}`,
           artist as string,
         ),
-      ),
+        id: `f${index}`,
+        album_id: "interstellar",
+        artist_refs: [{ id: "zimmer", name: artist as string }],
+        is_local: false,
+      })),
       has_more: false,
+    },
+  },
+  { kind: "liked_marks", rev: 1, payload: ["f1"] },
+];
+
+/** Two songs of Adele's 21 played lately, so Home shows the album. */
+export const recentlyPlayed: ServerMessage[] = [
+  {
+    kind: "recently_played",
+    rev: 1,
+    payload: adele21.slice(0, 2).map(([name, seconds], index) => ({
+      ...track(name, seconds, `spotify:track:a${index}`),
+      album: "21",
+      album_id: "21",
+      artist_refs: [{ id: "adele", name: "Adele" }],
+      is_local: false,
+    })),
+  },
+];
+
+/** Adele's artist page: her top songs from 21 and the album. */
+export const artist: ServerMessage[] = [
+  {
+    kind: "artist",
+    rev: 1,
+    payload: {
+      page: {
+        id: "adele",
+        name: "Adele",
+        image_url: null,
+        following: false,
+        top_tracks: adele21.slice(0, 6).map(([name, seconds], index) => ({
+          ...track(name, seconds, `spotify:track:a${index}`),
+          album: "21",
+          album_id: "21",
+          is_local: false,
+        })),
+        albums: [
+          {
+            id: "21",
+            uri: "spotify:album:21",
+            name: "21",
+            artists: [{ id: "adele", name: "Adele" }],
+            album_type: "album",
+            release_date: "2011-01-24",
+            total_tracks: 11,
+            image_url: null,
+            tracks: [],
+          },
+        ],
+        related_artists: [
+          { id: "sam", uri: null, name: "Sam Smith", image_url: null },
+        ],
+      },
     },
   },
 ];
