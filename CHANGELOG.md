@@ -6,6 +6,10 @@
 
 - **A setting to turn lyrics off**: `behavior.enable_lyrics` (Settings > Lyrics, in the terminal and the desktop app, on by default). Off, spotatui no longer sends the title, artist and length of each track to LRCLIB, or to Spotify for Spotify tracks, and the lyrics view says no lyrics were found.
 
+### Changed
+
+- **`behavior.disable_auto_update` stops the desktop app's update check too**: before, the desktop app still asked GitHub for a new release at launch and every 6 hours and only skipped the download. Now it looks only when you press Check for updates on the Settings page, as the terminal app already skipped the check. Turning auto-update back on checks at once.
+
 ### Fixed
 
 - **Playbar navigation follows its configured position**: when the playbar was set to `top`, you still had to press Down to access it, even though the layout placed it at the top. Navigating to and from the playbar now follows its actual position.

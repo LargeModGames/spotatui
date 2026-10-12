@@ -241,9 +241,10 @@ async fn serve_until_quit(
         }
       }
       _ = update_checks.tick(), if update_requests.is_some() => {
-        let check = update_check(&app.lock().await.user_config.behavior);
-        last_check = Some(check);
-        ask_updater(check);
+        if let Some(check) = scheduled_check(&app.lock().await.user_config.behavior) {
+          last_check = Some(check);
+          ask_updater(check);
+        }
       }
       status = async {
         match update_status.as_mut() {
@@ -266,8 +267,7 @@ async fn serve_until_quit(
           driver.run_pending_script_commands(&mut app);
           publisher.publish(&app);
           // A changed auto-update setting reaches the updater at once.
-          let check = update_check(&app.user_config.behavior);
-          if last_check.is_some_and(|last| last != check) {
+          if let Some(check) = changed_check(last_check, &app.user_config.behavior) {
             last_check = Some(check);
             ask_updater(check);
           }
@@ -312,9 +312,57 @@ fn update_check(behavior: &BehaviorConfig) -> UpdateRequest {
   }
 }
 
+/// The check at launch and every 6 hours; none while auto-update is off.
+fn scheduled_check(behavior: &BehaviorConfig) -> Option<UpdateRequest> {
+  (!behavior.disable_auto_update).then(|| update_check(behavior))
+}
+
+/// The check a settings change sends: the new settings after an earlier check,
+/// or the first check when auto-update is turned on.
+fn changed_check(last: Option<UpdateRequest>, behavior: &BehaviorConfig) -> Option<UpdateRequest> {
+  match last {
+    Some(last) => Some(update_check(behavior)).filter(|check| *check != last),
+    None => scheduled_check(behavior),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn behavior(disable_auto_update: bool) -> BehaviorConfig {
+    let mut behavior = crate::core::user_config::UserConfig::new().behavior;
+    behavior.disable_auto_update = disable_auto_update;
+    behavior
+  }
+
+  #[test]
+  fn no_scheduled_update_check_runs_while_auto_update_is_off() {
+    assert_eq!(scheduled_check(&behavior(true)), None);
+    assert_eq!(
+      scheduled_check(&behavior(false)),
+      Some(update_check(&behavior(false)))
+    );
+  }
+
+  #[test]
+  fn turning_auto_update_on_before_any_check_asks_for_one() {
+    assert_eq!(changed_check(None, &behavior(true)), None);
+    assert_eq!(
+      changed_check(None, &behavior(false)),
+      Some(update_check(&behavior(false)))
+    );
+  }
+
+  #[test]
+  fn a_settings_change_after_a_check_sends_only_a_different_check() {
+    let on = update_check(&behavior(false));
+    assert_eq!(changed_check(Some(on), &behavior(false)), None);
+    assert_eq!(
+      changed_check(Some(on), &behavior(true)),
+      Some(update_check(&behavior(true)))
+    );
+  }
 
   #[test]
   fn the_launch_url_carries_the_code_in_the_fragment() {
