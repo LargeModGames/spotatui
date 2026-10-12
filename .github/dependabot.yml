@@ -16,6 +16,18 @@ updates:
     assignees:
       - "LargeModGames"
     open-pull-requests-limit: 10
+    ignore:
+      # The Qobuz crypto crates stay on librespot's `cipher 0.4` line; lift
+      # these when the librespot fork moves to cipher 0.5.
+      - dependency-name: "aes"
+        versions: [">=0.9"]
+      - dependency-name: "cbc"
+        versions: [">=0.2"]
+      - dependency-name: "ctr"
+        versions: [">=0.10"]
+      # tui-bar-graph takes a colorgrad 0.8 `Gradient`; lift this when it moves.
+      - dependency-name: "colorgrad"
+        versions: [">=0.9"]
     groups:
       # Group librespot crates together (they usually update in sync)
       librespot:
