@@ -26,9 +26,10 @@
   gives a `::warning::`, never a failure; the release commit refreshes it.
 - The cd.yml `desktop` job runs on tags only, after `release`, and uploads the
   installers plus `.sha256` files to that release with `gh release upload
-  --clobber`. It installs `tauri-cli` 2.12.2, builds `gui/dist` first (the
-  shell's `build.rs` refuses a release build without it) and runs
-  `cargo tauri build --ci --bundles <list>` from `desktop/`.
+  --clobber`. It runs the prebuilt `@tauri-apps/cli` 2.12.2 from npm, builds
+  `gui/dist` first (the shell's `build.rs` refuses a release build without
+  it) and runs
+  `npx @tauri-apps/cli@2.12.2 build --ci --bundles <list>` from `desktop/`.
 - Only that build turns on `createUpdaterArtifacts` (through `--config`) and
   passes the `TAURI_SIGNING_PRIVATE_KEY` and `_PASSWORD` secrets, so
   `desktop.yml` and local builds need no key. It uploads the `.sig` of the

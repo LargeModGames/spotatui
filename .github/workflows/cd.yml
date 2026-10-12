@@ -293,17 +293,15 @@ jobs:
           brew install portaudio
           echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
 
-      - name: Install tauri-cli
-        run: cargo install tauri-cli --version 2.12.2 --locked
-
       # No --locked: desktop/Cargo.lock is refreshed in the release commit.
+      # The prebuilt CLI from npm: `cargo install tauri-cli` compiled for up to 19 minutes per row.
       # The updater bundles are on here only, so local and PR builds need no key.
       - name: Build the desktop bundles
         working-directory: desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: cargo tauri build --ci --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+        run: npx --yes @tauri-apps/cli@2.12.2 build --ci --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Warn when desktop/Cargo.lock is stale
         run: git diff --quiet -- desktop/Cargo.lock || echo "::warning file=desktop/Cargo.lock::desktop/Cargo.lock was stale for this release; refresh it in the next release commit."
