@@ -275,7 +275,11 @@ async fn serve_until_quit(
         // The socket answers these itself; boot is over by now.
         Some(ClientMessage::Onboarding { .. }) => {}
         Some(ClientMessage::Update { ask }) => match ask {
-          UpdateAsk::Check => ask_updater(update_check(&app.lock().await.user_config.behavior)),
+          UpdateAsk::Check => {
+            let check = update_check(&app.lock().await.user_config.behavior);
+            last_check = Some(check);
+            ask_updater(check);
+          }
           UpdateAsk::Download => ask_updater(UpdateRequest::Download),
           UpdateAsk::Install => {
             if matches!(app.lock().await.update_status(), Some(UpdateStatus::Ready { .. })) {
