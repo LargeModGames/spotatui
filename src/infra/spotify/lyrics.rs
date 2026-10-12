@@ -62,7 +62,8 @@ pub fn parse_lyrics(value: Value) -> Option<SpotifyLyrics> {
       Some((start, line.words))
     })
     .collect();
-  (!lines.is_empty()).then_some(SpotifyLyrics { lines, synced })
+  let has_text = lines.iter().any(|(_, words)| !words.trim().is_empty());
+  has_text.then_some(SpotifyLyrics { lines, synced })
 }
 
 #[cfg(test)]
@@ -109,6 +110,18 @@ mod tests {
   fn empty_lines_or_a_missing_track_mean_no_lyrics() {
     assert_eq!(parse_lyrics(body("LINE_SYNCED", "")), None);
     assert_eq!(parse_lyrics(Value::Null), None);
+  }
+
+  #[test]
+  fn only_blank_lines_mean_no_lyrics_but_a_blank_gap_stays() {
+    let blank = body("UNSYNCED", r#"{"startTimeMs":"0","words":" "}"#);
+    assert_eq!(parse_lyrics(blank), None);
+
+    let with_gap = body(
+      "LINE_SYNCED",
+      r#"{"startTimeMs":"1000","words":"one"},{"startTimeMs":"2000","words":""}"#,
+    );
+    assert_eq!(parse_lyrics(with_gap).unwrap().lines.len(), 2);
   }
 
   #[test]
