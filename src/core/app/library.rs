@@ -422,6 +422,10 @@ impl App {
   }
 
   pub fn set_saved_tracks_to_table_continuous(&mut self) {
+    if self.active_saved_track_filter.is_some() {
+      return;
+    }
+
     let (tracks, active_index, _) = self.saved_tracks_prefix();
     self.library.saved_tracks.index = active_index;
     self.replace_track_table_tracks(tracks);
@@ -438,6 +442,7 @@ impl App {
   }
 
   pub fn reset_saved_tracks_view(&mut self) {
+    self.active_saved_track_filter = None;
     self.saved_tracks_prefetch_generation = self.saved_tracks_prefetch_generation.wrapping_add(1);
     self.saved_tracks_prefetch_in_flight.clear();
     self.saved_tracks_mut().clear();
@@ -481,6 +486,7 @@ impl App {
         self.push_navigation_stack(RouteId::PlaylistSync, ActiveBlock::PlaylistSync);
       }
       LibraryTarget::LikedSongs => {
+        self.clear_saved_track_filter();
         self.reset_saved_tracks_view();
         self.dispatch(IoEvent::GetCurrentSavedTracks(None));
         self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
@@ -510,6 +516,65 @@ impl App {
         self.open_ai_dj_screen();
       }
     }
+  }
+
+  pub fn clear_saved_track_filter(&mut self) {
+    let showing_saved_tracks = self.track_table.context == Some(TrackTableContext::SavedTracks);
+    self.active_saved_track_filter = None;
+    self.view.input_context = InputContext::GlobalSearch;
+
+    // Don't overwrite the table if the user has navigated away to a playlist or album!
+    if !showing_saved_tracks {
+      return;
+    }
+
+    if self.library.saved_tracks.pages.is_empty() {
+      self.track_table.tracks.clear();
+      self.view.track_table_index = 0;
+      return;
+    }
+    self.set_saved_tracks_to_table_continuous();
+  }
+
+  pub fn apply_saved_track_search_results(&mut self, query: String, matches: Vec<TrackInfo>) {
+    self.active_saved_track_filter = Some(query);
+    self.forget_pending_row_selection();
+    self.view.track_table_index = 0;
+    self.track_table.tracks = matches;
+  }
+
+  pub(crate) fn try_search_saved_tracks_from_cached_pages(&mut self, query: &str) -> bool {
+    if self.track_table.context != Some(TrackTableContext::SavedTracks)
+      || !self.library.saved_tracks.is_complete()
+    {
+      return false;
+    }
+
+    let terms: Vec<String> = query.split_whitespace().map(|s| s.to_lowercase()).collect();
+
+    let mut matches = Vec::new();
+    for page in &self.library.saved_tracks.pages {
+      for track in &page.items {
+        // If track has an ID and the user unliked it in this session, skip it!
+        if let Some(id) = &track.id {
+          if !self.liked_song_ids_set().contains(id) {
+            continue;
+          }
+        }
+
+        if playlist_track_info_matches_terms(track, &terms) {
+          matches.push(track.clone());
+        }
+      }
+    }
+
+    self.apply_saved_track_search_results(query.to_string(), matches);
+    true
+  }
+
+  pub fn is_saved_track_filter_active(&self) -> bool {
+    self.track_table.context == Some(TrackTableContext::SavedTracks)
+      && self.active_saved_track_filter.is_some()
   }
 
   pub fn next_missing_saved_tracks_offset(&self, page_index: usize) -> Option<u32> {
@@ -1138,5 +1203,216 @@ mod tests {
     assert_eq!(tracks.len(), 4);
     assert_eq!(last_page, 1);
     assert!(!has_more);
+  }
+
+  /// A Liked Songs page of the shape the network layer caches it in.
+  fn saved_track_page(offset: u32, ids: &[&str], has_next: bool) -> Paged<TrackInfo> {
+    Paged {
+      items: ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| TrackInfo::from(&full_track(id, &format!("Track {offset}-{index}"))))
+        .collect(),
+      limit: ids.len() as u32,
+      next: has_next.then(|| "https://example.com/me/tracks?next".to_string()),
+      offset,
+      previous: None,
+      total: 4,
+    }
+  }
+
+  /// A Liked Songs table over a cache of `pages`, whose every id is in the liked
+  /// set — the state `try_search_saved_tracks_from_cached_pages` reads.
+  fn saved_track_search_app(pages: &[(u32, &[&str], bool)]) -> App {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.track_table.context = Some(TrackTableContext::SavedTracks);
+    for (offset, ids, has_next) in pages {
+      app
+        .library
+        .saved_tracks
+        .upsert_page_by_offset(saved_track_page(*offset, ids, *has_next));
+      for id in *ids {
+        app.liked_song_ids_set_mut().insert(id.to_string());
+      }
+    }
+    app.set_saved_tracks_to_table_continuous();
+    app
+  }
+
+  fn cached_track_names(app: &App) -> Vec<String> {
+    app
+      .track_table
+      .tracks
+      .iter()
+      .map(|track| track.name.clone())
+      .collect()
+  }
+
+  #[test]
+  fn saved_track_search_filters_the_complete_liked_cache() {
+    let mut app = saved_track_search_app(&[
+      (
+        0,
+        &["0000000000000000000001", "0000000000000000000002"],
+        true,
+      ),
+      (
+        2,
+        &["0000000000000000000003", "0000000000000000000004"],
+        false,
+      ),
+    ]);
+    app.view.track_table_index = 1;
+    app.select_row_when_next_page_lands(1);
+
+    assert!(app.try_search_saved_tracks_from_cached_pages("track 2-1"));
+
+    assert!(app.is_saved_track_filter_active());
+    assert_eq!(app.active_saved_track_filter.as_deref(), Some("track 2-1"));
+    assert_eq!(cached_track_names(&app), vec!["Track 2-1"]);
+    assert_eq!(
+      app.view.track_table_index, 0,
+      "the cursor resets onto the hits"
+    );
+    assert!(
+      app.pending_track_table_selection.is_none(),
+      "a row parked for the unfiltered page is dropped"
+    );
+  }
+
+  #[test]
+  fn saved_track_search_skips_tracks_unliked_this_session() {
+    let mut app = saved_track_search_app(&[(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    )]);
+    // Unliked from the table: the id leaves the liked set the filter reads.
+    app
+      .liked_song_ids_set_mut()
+      .remove("0000000000000000000002");
+
+    assert!(app.try_search_saved_tracks_from_cached_pages("track 0"));
+
+    assert_eq!(cached_track_names(&app), vec!["Track 0-0"]);
+  }
+
+  #[test]
+  fn saved_track_search_is_refused_off_the_liked_songs_table() {
+    let mut app = saved_track_search_app(&[(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    )]);
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+
+    assert!(!app.try_search_saved_tracks_from_cached_pages("track 0"));
+
+    assert!(!app.is_saved_track_filter_active());
+    assert_eq!(app.track_table.tracks.len(), 2, "the rows are untouched");
+  }
+
+  #[test]
+  fn saved_track_search_waits_for_the_whole_cache() {
+    let mut app = saved_track_search_app(&[(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      true,
+    )]);
+    assert!(
+      !app.library.saved_tracks.is_complete(),
+      "a page still follows, so a match could hide below the cache"
+    );
+
+    assert!(!app.try_search_saved_tracks_from_cached_pages("track 0-1"));
+
+    assert!(!app.is_saved_track_filter_active());
+    assert_eq!(app.track_table.tracks.len(), 2, "the rows are untouched");
+  }
+
+  #[test]
+  fn a_late_liked_page_does_not_replace_the_filtered_rows() {
+    let mut app = saved_track_search_app(&[(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    )]);
+    assert!(app.try_search_saved_tracks_from_cached_pages("track 0-1"));
+
+    // The prefetched page lands while the filter is up.
+    app
+      .library
+      .saved_tracks
+      .upsert_page_by_offset(saved_track_page(2, &["0000000000000000000003"], true));
+    app.refresh_saved_tracks_table();
+
+    assert_eq!(cached_track_names(&app), vec!["Track 0-1"]);
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::SavedTracks)
+    );
+  }
+
+  #[test]
+  fn clearing_the_saved_track_filter_restores_the_cached_liked_view() {
+    let mut app = saved_track_search_app(&[(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    )]);
+    app.view.track_table_index = 1;
+    app.select_row_when_next_page_lands(1);
+    assert!(app.try_search_saved_tracks_from_cached_pages("track 0-1"));
+    app.view.input_context = InputContext::SavedTrackSearch;
+
+    app.clear_saved_track_filter();
+
+    assert!(!app.is_saved_track_filter_active());
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
+    assert_eq!(cached_track_names(&app), vec!["Track 0-0", "Track 0-1"]);
+    assert_eq!(app.view.track_table_index, 0, "the parked row is dropped");
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::SavedTracks)
+    );
+  }
+
+  #[test]
+  fn clearing_the_saved_track_filter_empties_a_table_with_no_cache() {
+    let mut app = saved_track_search_app(&[(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    )]);
+    assert!(app.try_search_saved_tracks_from_cached_pages("track 0-1"));
+    app.saved_tracks_mut().clear();
+
+    app.clear_saved_track_filter();
+
+    assert!(!app.is_saved_track_filter_active());
+    assert!(app.track_table.tracks.is_empty());
+    assert_eq!(app.view.track_table_index, 0);
+  }
+
+  #[test]
+  fn reopening_liked_songs_drops_an_active_filter() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.track_table.context = Some(TrackTableContext::SavedTracks);
+    app.active_saved_track_filter = Some("track 0-1".to_string());
+    app.track_table.tracks = vec![TrackInfo::from(&full_track(
+      "0000000000000000000002",
+      "Track 0-1",
+    ))];
+
+    app.open_library_section(LibraryTarget::LikedSongs);
+
+    assert!(!app.is_saved_track_filter_active());
+    assert!(app.track_table.tracks.is_empty());
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetCurrentSavedTracks(None))
+    ));
   }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Playbar navigation follows its configured position**: when the playbar was set to `top`, you still had to press Down to access it, even though the layout placed it at the top. Navigating to and from the playbar now follows its actual position.
+
 ## [v0.45.0] 2026-10-12
 
 ### Added

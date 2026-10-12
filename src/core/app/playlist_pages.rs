@@ -191,6 +191,8 @@ impl App {
     playlist_id: PlaylistId<'static>,
     context: TrackTableContext,
   ) {
+    self.active_saved_track_filter = None;
+    self.view.input_context = InputContext::GlobalSearch;
     self.playlist_tracks_prefetch_generation =
       self.playlist_tracks_prefetch_generation.wrapping_add(1);
     self.playlist_tracks_prefetch_in_flight.clear();

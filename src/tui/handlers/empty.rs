@@ -11,40 +11,28 @@ pub fn handler(key: Key, app: &mut App) {
       let current_hovered = app.get_current_route().hovered_block;
       app.set_current_route_state(Some(current_hovered), None);
     }
-    k if common_key_events::down_event(k, &app.user_config.keys) => {
-      match app.get_current_route().hovered_block {
-        ActiveBlock::Library => {
-          app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
-        }
-        ActiveBlock::ArtistBlock
-        | ActiveBlock::AlbumList
-        | ActiveBlock::AlbumTracks
-        | ActiveBlock::Artists
-        | ActiveBlock::Podcasts
-        | ActiveBlock::EpisodeTable
-        | ActiveBlock::Home
-        | ActiveBlock::Discover
-        | ActiveBlock::MyPlaylists
-        | ActiveBlock::RecentlyPlayed
-        | ActiveBlock::TrackTable
-        | ActiveBlock::Stats
-        | ActiveBlock::PlaylistSync
-        | ActiveBlock::LocalBrowser => {
-          app.set_current_route_state(None, Some(ActiveBlock::PlayBar));
-        }
-        _ => {}
-      }
+    k if common_key_events::down_event(k, &app.user_config.keys)
+      && app.get_current_route().hovered_block == ActiveBlock::Library =>
+    {
+      app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
     }
-    k if common_key_events::up_event(k, &app.user_config.keys) => {
-      match app.get_current_route().hovered_block {
-        ActiveBlock::MyPlaylists => {
-          app.set_current_route_state(None, Some(ActiveBlock::Library));
-        }
-        ActiveBlock::PlayBar => {
-          app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
-        }
-        _ => {}
-      }
+    k if common_key_events::up_event(k, &app.user_config.keys)
+      && app.get_current_route().hovered_block == ActiveBlock::MyPlaylists =>
+    {
+      app.set_current_route_state(None, Some(ActiveBlock::Library));
+    }
+    k if common_key_events::toward_playbar_event(k, &app.user_config)
+      && common_key_events::block_borders_playbar(
+        app.get_current_route().hovered_block,
+        &app.user_config,
+      ) =>
+    {
+      common_key_events::hover_playbar(app);
+    }
+    k if common_key_events::away_from_playbar_event(k, &app.user_config)
+      && app.get_current_route().hovered_block == ActiveBlock::PlayBar =>
+    {
+      common_key_events::leave_playbar(app);
     }
     k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
       match app.get_current_route().hovered_block {
@@ -81,7 +69,7 @@ mod tests {
   use super::*;
   use crate::core::app::RouteId;
   use crate::core::source::Source;
-  use crate::core::test_helpers::app_with_sidebar;
+  use crate::core::test_helpers::{app_with_playbar, app_with_sidebar};
 
   #[test]
   fn up_and_left_reach_the_library_under_a_free_source() {
@@ -201,6 +189,41 @@ mod tests {
 
       handler(Key::Down, &mut app);
       assert_eq!(app.get_current_route().hovered_block, ActiveBlock::PlayBar);
+    }
+  }
+
+  #[test]
+  fn keyboard_navigation_reaches_the_playbar_from_its_configured_edge() {
+    for (position, origin, toward, away) in [
+      ("top", ActiveBlock::Library, Key::Up, Key::Down),
+      ("bottom", ActiveBlock::MyPlaylists, Key::Down, Key::Up),
+    ] {
+      let mut app = app_with_playbar(position);
+      app.set_current_route_state(Some(ActiveBlock::Empty), Some(origin));
+
+      handler(toward, &mut app);
+      assert_eq!(app.get_current_route().hovered_block, ActiveBlock::PlayBar);
+
+      handler(away, &mut app);
+      assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+      assert_eq!(app.get_current_route().hovered_block, origin);
+    }
+  }
+
+  #[test]
+  fn leaving_the_playbar_restores_the_content_block_that_opened_it() {
+    for (position, toward, away) in [("top", Key::Up, Key::Down), ("bottom", Key::Down, Key::Up)] {
+      let mut app = app_with_playbar(position);
+      app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::TrackTable));
+
+      handler(toward, &mut app);
+      assert_eq!(app.get_current_route().hovered_block, ActiveBlock::PlayBar);
+
+      handler(away, &mut app);
+      assert_eq!(
+        app.get_current_route().hovered_block,
+        ActiveBlock::TrackTable
+      );
     }
   }
 

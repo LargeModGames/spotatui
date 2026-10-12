@@ -224,6 +224,54 @@ enum ShuffleTarget {
 }
 
 #[cfg(feature = "streaming")]
+fn resolve_shuffle_target(
+  app: &App,
+  context_id: &Option<PlayContextId<'static>>,
+  uris: &Option<Vec<PlayableId<'static>>>,
+  offset: Option<usize>,
+) -> Option<ShuffleTarget> {
+  match (context_id, uris) {
+    (Some(PlayContextId::Playlist(id)), maybe_uris) => {
+      // The playlist Enter path passes the selected track as a single-item
+      // URI list; without it there is nothing to pin first, so fall back.
+      let selected_uri = maybe_uris
+        .as_ref()
+        .and_then(|v| v.first())
+        .map(|u| u.uri())?;
+      Some(ShuffleTarget::Playlist {
+        id: id.clone(),
+        selected_uri,
+      })
+    }
+    (Some(PlayContextId::Album(id)), _) => Some(ShuffleTarget::Album {
+      id: id.clone(),
+      selected: offset.unwrap_or(0),
+    }),
+    (None, Some(list)) => {
+      // Raw URI lists are only shuffleable when they stand in for Liked
+      // Songs (the full library is fetchable); search/recommendation lists
+      // have no larger backing context.
+      //
+      // When a search filter is active on Liked Songs, skip the full library
+      // fetch so playback and shuffle stay strictly scoped to the filtered hits.
+      let is_saved_tracks = matches!(
+        app.track_table.context,
+        Some(TrackTableContext::SavedTracks)
+      ) && !app.is_saved_track_filter_active();
+
+      if !is_saved_tracks || list.is_empty() {
+        return None;
+      }
+      Some(ShuffleTarget::SavedTracks {
+        list: list.iter().map(|u| u.uri()).collect(),
+        selected: offset.unwrap_or(0),
+      })
+    }
+    _ => None,
+  }
+}
+
+#[cfg(feature = "streaming")]
 impl Network {
   /// Intercept a native `StartPlayback` when shuffle is on and the target is a
   /// shuffleable Spotify context. Returns `true` when this path handled the
@@ -236,43 +284,12 @@ impl Network {
     uris: &Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
   ) -> bool {
-    let target = match (context_id, uris) {
-      (Some(PlayContextId::Playlist(id)), maybe_uris) => {
-        // The playlist Enter path passes the selected track as a single-item
-        // URI list; without it there is nothing to pin first, so fall back.
-        let Some(selected_uri) = maybe_uris.as_ref().and_then(|v| v.first()).map(|u| u.uri())
-        else {
-          return false;
-        };
-        ShuffleTarget::Playlist {
-          id: id.clone(),
-          selected_uri,
-        }
-      }
-      (Some(PlayContextId::Album(id)), _) => ShuffleTarget::Album {
-        id: id.clone(),
-        selected: offset.unwrap_or(0),
-      },
-      (None, Some(list)) => {
-        // Raw URI lists are only shuffleable when they stand in for Liked
-        // Songs (the full library is fetchable); search/recommendation lists
-        // have no larger backing context.
-        let is_saved_tracks = {
-          let app = self.app.lock().await;
-          matches!(
-            app.track_table.context,
-            Some(TrackTableContext::SavedTracks)
-          )
-        };
-        if !is_saved_tracks || list.is_empty() {
-          return false;
-        }
-        ShuffleTarget::SavedTracks {
-          list: list.iter().map(|u| u.uri()).collect(),
-          selected: offset.unwrap_or(0),
-        }
-      }
-      _ => return false,
+    let target = {
+      let app = self.app.lock().await;
+      let Some(target) = resolve_shuffle_target(&app, context_id, uris, offset) else {
+        return false;
+      };
+      target
     };
 
     let (original, order, fetch) = match target {
@@ -1303,5 +1320,35 @@ mod tests {
   #[test]
   fn pending_mid_track_reload_preserves_its_captured_position() {
     assert_eq!(full_fetch_reload_seek_ms(81_000, Some(80_000)), 80_000);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn active_saved_track_filter_skips_native_shuffle_target() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      Some(std::time::SystemTime::now()),
+    );
+    app.track_table.context = Some(TrackTableContext::SavedTracks);
+
+    let dummy_track = PlayableId::Track(
+      rspotify::model::TrackId::from_id("owowowowowowo")
+        .unwrap()
+        .into_static(),
+    );
+    let uris = Some(vec![dummy_track]);
+
+    // When filter is active: must return None (so native shuffle does not fetch whole library)
+    app.apply_saved_track_search_results("query".to_string(), vec![]);
+    assert!(resolve_shuffle_target(&app, &None, &uris, Some(0)).is_none());
+
+    // When filter is cleared: regular SavedTracks shuffle target is selected
+    app.clear_saved_track_filter();
+    assert!(matches!(
+      resolve_shuffle_target(&app, &None, &uris, Some(0)),
+      Some(ShuffleTarget::SavedTracks { .. })
+    ));
   }
 }

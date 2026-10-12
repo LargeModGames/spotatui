@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, App, RouteId};
+use crate::core::app::{ActiveBlock, App, PlaybarOrigin, RouteId};
 use crate::core::user_config::{KeyBindings, UserConfig};
 use crate::tui::event::Key;
 
@@ -166,6 +166,112 @@ pub fn remember_sidebar_block(app: &mut App, block: ActiveBlock) {
   if matches!(block, ActiveBlock::Library | ActiveBlock::MyPlaylists) {
     app.view.last_sidebar_block = block.into();
   }
+}
+
+pub fn playbar_on_top(config: &UserConfig) -> bool {
+  config.behavior.playbar_position == "top"
+}
+
+pub fn toward_playbar_event(key: Key, config: &UserConfig) -> bool {
+  let keys = &config.keys;
+  if playbar_on_top(config) {
+    up_event(key, keys)
+  } else {
+    down_event(key, keys)
+  }
+}
+
+pub fn away_from_playbar_event(key: Key, config: &UserConfig) -> bool {
+  let keys = &config.keys;
+  if playbar_on_top(config) {
+    down_event(key, keys)
+  } else {
+    up_event(key, keys)
+  }
+}
+
+/// Unfocused content plus the sidebar panel that actually touches the playbar.
+pub fn block_borders_playbar(block: ActiveBlock, config: &UserConfig) -> bool {
+  match block {
+    ActiveBlock::Library => playbar_on_top(config),
+    ActiveBlock::MyPlaylists => !playbar_on_top(config),
+    ActiveBlock::ArtistBlock
+    | ActiveBlock::AlbumList
+    | ActiveBlock::AlbumTracks
+    | ActiveBlock::Artists
+    | ActiveBlock::Podcasts
+    | ActiveBlock::EpisodeTable
+    | ActiveBlock::Home
+    | ActiveBlock::Discover
+    | ActiveBlock::RecentlyPlayed
+    | ActiveBlock::TrackTable
+    | ActiveBlock::Stats
+    | ActiveBlock::PlaylistSync
+    | ActiveBlock::LocalBrowser => true,
+    _ => false,
+  }
+}
+
+pub fn remember_playbar_origin(app: &mut App) {
+  let route = app.get_current_route();
+  let origin = if !matches!(
+    route.active_block,
+    ActiveBlock::Empty | ActiveBlock::PlayBar
+  ) {
+    PlaybarOrigin {
+      route: route.id.clone(),
+      block: route.active_block,
+      was_focused: true,
+    }
+  } else if route.hovered_block != ActiveBlock::PlayBar {
+    PlaybarOrigin {
+      route: route.id.clone(),
+      block: route.hovered_block,
+      was_focused: false,
+    }
+  } else {
+    return;
+  };
+  app.view.last_playbar_origin = Some(origin);
+}
+
+pub fn hover_playbar(app: &mut App) {
+  remember_playbar_origin(app);
+  app.set_current_route_state(None, Some(ActiveBlock::PlayBar));
+}
+
+pub fn leave_playbar(app: &mut App) {
+  let current_route = app.get_current_route().id.clone();
+  let origin = app
+    .view
+    .last_playbar_origin
+    .clone()
+    .filter(|origin| origin.route == current_route)
+    .unwrap_or(PlaybarOrigin {
+      route: current_route.clone(),
+      block: if playbar_on_top(&app.user_config) {
+        ActiveBlock::Library
+      } else {
+        ActiveBlock::MyPlaylists
+      },
+      was_focused: false,
+    });
+  let target = match origin.block {
+    ActiveBlock::Library | ActiveBlock::MyPlaylists | ActiveBlock::Empty => {
+      if playbar_on_top(&app.user_config) {
+        ActiveBlock::Library
+      } else {
+        ActiveBlock::MyPlaylists
+      }
+    }
+    block => block,
+  };
+  let active = if origin.was_focused {
+    target
+  } else {
+    ActiveBlock::Empty
+  };
+  app.set_current_route_state(Some(active), Some(target));
 }
 
 #[cfg(test)]

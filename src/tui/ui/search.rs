@@ -60,6 +60,7 @@ pub fn draw_input_and_help_box(
 
   let input_title = match app.view.input_context {
     InputContext::PlaylistTrackSearch => "Search Playlist",
+    InputContext::SavedTrackSearch => "Search Liked Songs",
     InputContext::GlobalSearch => "Search",
   };
 
@@ -463,5 +464,47 @@ mod tests {
         "{spotify_panel} panel should render under Spotify: {content}"
       );
     }
+  }
+
+  fn rendered_input(app: &App, area: Rect) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+      .draw(|f| {
+        draw_input_and_help_box(
+          f,
+          app,
+          area,
+          // The help and settings boxes only matter for the compact-row
+          // decision; the title under test is on the input box itself.
+          Rect::new(0, 0, 0, 0),
+          Rect::new(0, 0, 0, 0),
+        )
+      })
+      .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..area.height)
+      .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect()
+  }
+
+  /// The input box title names the search it feeds, so a saved-track search is
+  /// not mistaken for a global one.
+  #[test]
+  fn saved_track_search_input_titles_the_box() {
+    let mut app = App::default();
+    app.view.input_context = InputContext::SavedTrackSearch;
+    app.view.input = "cherry".chars().collect();
+
+    let content = rendered_input(&app, Rect::new(0, 0, 40, 3));
+
+    assert!(
+      content.contains("Search Liked Songs"),
+      "the input box should title the saved-track search: {content}"
+    );
+    assert!(
+      !content.contains("Search Playlist"),
+      "the saved-track search is not the playlist one: {content}"
+    );
   }
 }

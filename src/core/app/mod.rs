@@ -652,6 +652,7 @@ pub struct App {
   /// Where this run's log file is being written, resolved once here so draw
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,
+  active_saved_track_filter: Option<String>,
 }
 
 impl App {
