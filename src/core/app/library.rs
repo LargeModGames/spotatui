@@ -516,9 +516,16 @@ impl App {
   }
 
   pub fn clear_saved_track_filter(&mut self) {
+    let showing_saved_tracks = self.track_table.context == Some(TrackTableContext::SavedTracks);
     self.active_saved_track_filter = None;
     self.pending_saved_track_search = None;
     self.view.input_context = InputContext::GlobalSearch;
+
+    // Don't overwrite the table if the user has navigated away to a playlist or album!
+    if !showing_saved_tracks {
+      return;
+    }
+
     if self.library.saved_tracks.pages.is_empty() {
       self.track_table.tracks.clear();
       self.view.track_table_index = 0;
