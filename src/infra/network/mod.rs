@@ -105,6 +105,8 @@ pub enum IoEvent {
   /// Playlist id/URI, track id/URI, position.
   RemoveTrackFromPlaylistAtPosition(String, String, usize),
   GetUser,
+  /// The audio analysis of a Spotify track, by base62 id, for the pitch view.
+  GetAudioAnalysis(String),
   /// Playable URI (track or episode) to toggle in saved tracks.
   ToggleSaveTrack(String),
   /// Track id/URI, market.
@@ -689,6 +691,13 @@ impl Network {
       }
       IoEvent::GetUser => {
         self.get_user().await;
+      }
+      IoEvent::GetAudioAnalysis(track_id) => {
+        // A detached task, so the pump does not wait for it.
+        tokio::spawn(metadata::fetch_audio_analysis(
+          Arc::clone(&self.app),
+          track_id,
+        ));
       }
       IoEvent::GetDevices => {
         self.get_devices(true).await;
@@ -1794,6 +1803,15 @@ mod tests {
   use crate::core::app::App;
   use crate::core::user_config::UserConfig;
   use std::time::{Duration, SystemTime};
+  #[test]
+  fn the_audio_analysis_fetch_starts_on_the_pump_behind_the_auth_gate() {
+    let event = IoEvent::GetAudioAnalysis(String::new());
+    assert!(!Network::runs_on_spotify_lane(&event));
+    assert!(!Network::runs_on_service_lane(&event));
+    assert!(!Network::event_bypasses_spotify_auth(&event));
+    assert!(!Network::event_is_transport(&event));
+  }
+
   #[test]
   fn every_service_lane_event_bypasses_spotify_auth() {
     use crate::infra::history::RecapPeriod;

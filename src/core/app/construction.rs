@@ -5,6 +5,7 @@ impl Default for App {
     App {
       spectrum_data: None,
       audio_capture_active: false,
+      audio_analysis: AnalysisState::Idle,
       view: ViewState {
         search_hovered_block: SearchResultBlock::SongSearch,
         ..ViewState::default()

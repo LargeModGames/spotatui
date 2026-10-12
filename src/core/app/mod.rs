@@ -77,6 +77,7 @@ use std::sync::mpsc::channel;
 
 mod album_theme;
 mod apple_music;
+mod audio_analysis;
 mod construction;
 mod discover;
 mod display_revisions;
@@ -119,6 +120,7 @@ mod volume;
 #[cfg(test)]
 mod test_support;
 
+pub use audio_analysis::*;
 pub use discover::*;
 pub use display_revisions::*;
 pub use friends::*;
@@ -161,6 +163,8 @@ pub struct App {
   navigation_stack: Vec<Route>,
   pub spectrum_data: Option<crate::infra::audio::SpectrumData>,
   pub audio_capture_active: bool,
+  /// The audio analysis of the Spotify track a frontend wants to draw.
+  audio_analysis: AnalysisState,
   /// Presentation state of the terminal frontend (cursors, scroll offsets, edit
   /// buffers, focus, popups, terminal geometry). See [`ViewState`]: handlers and
   /// draw functions write it freely; nothing outside `tui/` and these `App`

@@ -17,6 +17,7 @@
 // binary itself.
 #![allow(dead_code)]
 
+use crate::core::app::{AnalysisSection, AnalysisSegment, TrackAnalysis};
 use crate::core::pagination::{CursorPaged, Paged};
 use crate::core::plugin_api::{
   AlbumInfo, ArtistInfo, ArtistRef, EpisodeInfo, PlayableInfo, PlaylistInfo, ResumePointInfo,
@@ -387,6 +388,82 @@ pub fn map_cursor_page<U, T>(page: &CursorBasedPage<U>, f: impl Fn(&U) -> T) -> 
   }
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RawAnalysis {
+  sections: Vec<RawSection>,
+  segments: Vec<RawSegment>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RawSection {
+  start: f64,
+  tempo: f32,
+  tempo_confidence: f32,
+  key: i32,
+  key_confidence: f32,
+  mode: i32,
+  time_signature: i32,
+  time_signature_confidence: f32,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RawSegment {
+  start: f64,
+  loudness_start: f32,
+  loudness_max: f32,
+  loudness_max_time: f64,
+  pitches: Vec<f32>,
+}
+
+fn seconds_to_ms(seconds: f64) -> u32 {
+  (seconds * 1000.0).round().max(0.0) as u32
+}
+
+/// Spotify's audio-analysis JSON as the [`TrackAnalysis`] the pitch view draws.
+pub fn track_analysis(value: serde_json::Value) -> anyhow::Result<TrackAnalysis> {
+  let raw: RawAnalysis = serde_json::from_value(value)?;
+  Ok(TrackAnalysis {
+    sections: raw
+      .sections
+      .iter()
+      .map(|section| AnalysisSection {
+        start_ms: seconds_to_ms(section.start),
+        tempo: section.tempo,
+        tempo_confidence: section.tempo_confidence,
+        key: u8::try_from(section.key).ok().filter(|key| *key < 12),
+        key_confidence: section.key_confidence,
+        minor: match section.mode {
+          0 => Some(true),
+          1 => Some(false),
+          _ => None,
+        },
+        time_signature: u8::try_from(section.time_signature).unwrap_or(0),
+        time_signature_confidence: section.time_signature_confidence,
+      })
+      .collect(),
+    segments: raw
+      .segments
+      .iter()
+      .map(|segment| {
+        let mut pitches = [0.0; 12];
+        for (slot, pitch) in pitches.iter_mut().zip(&segment.pitches) {
+          *slot = *pitch;
+        }
+        AnalysisSegment {
+          start_ms: seconds_to_ms(segment.start),
+          loudness_start: segment.loudness_start,
+          loudness_max: segment.loudness_max,
+          loudness_max_ms: seconds_to_ms(segment.loudness_max_time),
+          pitches,
+        }
+      })
+      .collect(),
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -627,5 +704,59 @@ mod tests {
     // Paging metadata is copied verbatim.
     assert_eq!(mapped.offset, 40);
     assert_eq!(mapped.total, 43);
+  }
+
+  #[test]
+  fn audio_analysis_json_maps_seconds_to_milliseconds() {
+    let analysis = track_analysis(serde_json::json!({
+      "meta": { "status_code": 0 },
+      "beats": [{ "start": 0.5, "duration": 0.5, "confidence": 0.9 }],
+      "sections": [{
+        "start": 12.25, "tempo": 123.0, "tempo_confidence": 0.8, "key": 6,
+        "key_confidence": 0.6, "mode": 0, "time_signature": 4, "time_signature_confidence": 1.0
+      }],
+      "segments": [{
+        "start": 1.5, "loudness_start": -30.0, "loudness_max": -6.5, "loudness_max_time": 0.045,
+        "pitches": [1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25]
+      }]
+    }))
+    .unwrap();
+
+    let segment = &analysis.segments[0];
+    assert_eq!(
+      (segment.loudness_start, segment.loudness_max),
+      (-30.0, -6.5)
+    );
+    assert_eq!(segment.loudness_max_ms, 45);
+    let section = &analysis.sections[0];
+    assert_eq!(section.start_ms, 12_250);
+    assert_eq!(
+      (section.key, section.minor, section.time_signature),
+      (Some(6), Some(true), 4)
+    );
+    assert_eq!(analysis.segments[0].start_ms, 1_500);
+    assert_eq!(analysis.segments[0].pitches[11], 0.25);
+  }
+
+  #[test]
+  fn an_undetected_key_or_mode_maps_to_none() {
+    let analysis =
+      track_analysis(serde_json::json!({ "sections": [{ "key": -1, "mode": -1 }] })).unwrap();
+
+    assert_eq!(analysis.sections[0].key, None);
+    assert_eq!(analysis.sections[0].minor, None);
+  }
+
+  #[test]
+  fn pitch_lists_are_padded_or_cut_to_twelve() {
+    let fourteen = vec![0.1_f32; 14];
+    let analysis = track_analysis(serde_json::json!({
+      "segments": [{ "pitches": [0.5] }, { "pitches": fourteen }]
+    }))
+    .unwrap();
+
+    assert_eq!(analysis.segments[0].pitches[0], 0.5);
+    assert_eq!(analysis.segments[0].pitches[1], 0.0);
+    assert_eq!(analysis.segments[1].pitches, [0.1; 12]);
   }
 }

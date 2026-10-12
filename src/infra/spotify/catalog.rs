@@ -1,11 +1,12 @@
-//! Catalogue reads: tracks, albums, artists, shows and recommendations.
+//! Catalogue reads: tracks, albums, artists, shows, recommendations and audio analysis.
 
 use super::json;
 use super::metadata::{get_many, get_one};
-use super::router::{api_error, query_value, upstream_error, Paging};
+use super::router::{api_error, query_value, retry_read, upstream_error, Paging};
 use super::session::SpotifySession;
+use librespot_core::SpotifyId;
 use librespot_metadata::{Album, Artist, Episode, Show, Track};
-use reqwest::StatusCode;
+use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
 
 const RECOMMENDATION_COUNT: usize = 50;
@@ -243,6 +244,18 @@ pub async fn recommendations(
   let station: Value = serde_json::from_slice(&bytes)?;
   let uris = station_track_uris(&station);
   Ok(json!({ "tracks": simplified_tracks(session, &uris).await? }))
+}
+
+/// `GET audio-analysis/{id}`: the same JSON the Web API returned.
+pub async fn audio_analysis(session: &SpotifySession, id: &str) -> anyhow::Result<Value> {
+  let track = SpotifyId::from_base62(id)
+    .map_err(|_| api_error(StatusCode::BAD_REQUEST, "Invalid track id"))?;
+  let endpoint = format!("/audio-attributes/v1/audio-analysis/{}", track.to_base62());
+  let spclient = session.session().spclient();
+  let bytes = retry_read(|| spclient.request_as_json(&Method::GET, &endpoint, None, None))
+    .await
+    .map_err(upstream_error)?;
+  Ok(serde_json::from_slice(&bytes)?)
 }
 
 #[cfg(test)]

@@ -196,6 +196,27 @@ async fn catalogue_routes_parse_into_the_app_types() {
 
 #[tokio::test]
 #[ignore = "contacts Spotify with the cached login"]
+async fn audio_analysis_parses_into_pitch_segments() {
+  let value = call(Method::GET, &format!("audio-analysis/{ONE_MORE_TIME}"), &[]).await;
+  let analysis = crate::infra::network::mapping::track_analysis(value).unwrap();
+  let peaks = analysis.segments.iter().map(|segment| segment.loudness_max);
+  let quietest = peaks.clone().fold(f32::MAX, f32::min);
+  let loudest = peaks.fold(f32::MIN, f32::max);
+  println!(
+    "sections: {}, segments: {}, peak loudness {quietest:.1} to {loudest:.1} dB",
+    analysis.sections.len(),
+    analysis.segments.len()
+  );
+  assert!(!analysis.sections.is_empty());
+  assert!(quietest < loudest && loudest < 0.0);
+  assert!(analysis
+    .segments
+    .iter()
+    .any(|segment| segment.pitches.iter().any(|pitch| *pitch > 0.0)));
+}
+
+#[tokio::test]
+#[ignore = "contacts Spotify with the cached login"]
 async fn library_routes_parse_into_the_app_types() {
   let _: Page<SavedTrack> = typed("me/tracks", &q(&[("limit", "20")])).await;
   let _: Page<SavedAlbum> = typed("me/albums", &q(&[("limit", "5")])).await;
