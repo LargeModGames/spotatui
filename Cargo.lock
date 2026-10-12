@@ -5764,7 +5764,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "backtrace",
- "base64 0.22.1",
+ "base64 0.23.1",
  "block2",
  "bytes",
  "cbc",

@@ -66,7 +66,7 @@ md-5 = { version = "0.11", optional = true }
 tempfile = { version = "3", optional = true }
 # Qobuz transport: the signed-request and key-derivation primitives plus the
 # bundle scrape. Same `cipher 0.4` line as librespot, so no graph fork.
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 regex = { version = "1", optional = true }
 aes = { version = "0.8", optional = true }
 cbc = { version = "0.1", optional = true }
