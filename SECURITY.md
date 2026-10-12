@@ -7,8 +7,8 @@ We maintain security fixes only for the current stable release stream.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.44  | :white_check_mark: |
-| < 0.44  | :x:                |
+| 0.45  | :white_check_mark: |
+| < 0.45  | :x:                |
 
 ## Desktop app
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v0.45.0] 2026-10-12
 
 ### Added
 
@@ -11,8 +11,11 @@
 - **A desktop app (preview)**: spotatui now also comes as a desktop app for Windows, macOS and Linux: the same player in its own window, with the same login, settings and history as the terminal app. The release page carries a Windows installer (`spotatui-desktop_<version>_x64-setup.exe`), macOS disk images for Apple Silicon and Intel (`spotatui_<version>_aarch64.dmg`, `_x64.dmg`), and Linux `.deb`, `.rpm` and `.AppImage` packages for amd64 and arm64. The preview plays Spotify only (Premium). The installers are not signed, so Windows SmartScreen and macOS Gatekeeper warn on the first start; the README and the release notes give the steps past them. Closing the window quits the app after saving the session, and only one spotatui, terminal or desktop, runs at a time. On Linux it needs glibc 2.39 and WebKitGTK 4.1 (Ubuntu 24.04 or newer, Debian 13, Fedora 40 or newer, Arch). To drive it from a coding agent over MCP, install the terminal `spotatui` too: `spotatui mcp` is only in the terminal binary.
 
 - **A Spotify-style layout for the desktop app**: Your Library sits on the left (Liked Songs, your playlists and Library health), the playing track and the next one in the queue on the right, and the player bar with the device picker at the bottom. Home shows shelves of recently played albums, your playlists, your saved albums, your top tracks and an artists mix. An album page shows the artists, the year and the length, with Play and Save to library; an artist page has the popular tracks, the discography and a Follow button. Every Spotify song row has a heart that saves the song to Liked Songs or removes it, and a menu with Add to playlist, Add to queue, Go to artist, Go to album and Share > Copy song link. The lyrics page shows the lyrics of the playing track and, when they are synced, keeps the current line in the middle while it plays.
+
 - **A Settings page in the desktop app**: the Behavior settings that apply to the GUI, saved to `config.yml` at once, as in the terminal app's Settings.
+
 - **The desktop app updates itself**: installed from the Windows installer, the macOS app or the AppImage, it finds, downloads and installs signed updates from the latest stable release; `behavior.disable_auto_update` and `behavior.auto_update_delay` control it, and a `.deb` or `.rpm` install updates through a new download.
+
 - **Autoplay for native streaming**: when a list ends, spotatui now plays related songs, as the Spotify app does. Spotify keeps its Autoplay switch per device, so spotatui could not read it from your account and always stopped; the new `behavior.streaming_autoplay` setting (Settings > Autoplay, on by default) decides it. It applies on restart.
 
 ### Fixed
