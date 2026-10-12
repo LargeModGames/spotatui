@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Spotify's own lyrics for Spotify tracks**: a Spotify track now gets its lyrics from Spotify, line-synced where Spotify has the timing. Before, every track got its lyrics from LRCLIB through a title, artist and duration lookup, which missed many tracks. When Spotify has no lyrics for a track, spotatui asks LRCLIB as before. Local Files, Subsonic, Internet Radio, YouTube, Qobuz and Apple Music tracks still use LRCLIB only.
+
 ## [v0.44.0] 2026-10-12
 
 ### Added

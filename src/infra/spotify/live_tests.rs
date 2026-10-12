@@ -306,3 +306,15 @@ async fn player_reads_parse_into_the_app_types() {
   let _: Option<CurrentPlaybackContext> = serde_json::from_value(state).unwrap();
   let _: CurrentUserQueue = typed("me/player/queue", &[]).await;
 }
+
+#[tokio::test]
+#[ignore = "contacts Spotify with the cached login"]
+async fn lyrics_load_for_a_spotify_track() {
+  ALLOW_IN_TESTS.store(true, std::sync::atomic::Ordering::Relaxed);
+  let lyrics = super::lyrics::track_lyrics(ONE_MORE_TIME)
+    .await
+    .unwrap()
+    .expect("Spotify has lyrics for One More Time");
+  println!("synced: {}, lines: {}", lyrics.synced, lyrics.lines.len());
+  assert!(!lyrics.lines.is_empty());
+}

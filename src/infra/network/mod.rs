@@ -177,7 +177,8 @@ pub enum IoEvent {
   IncrementGlobalSongCount,
   FetchGlobalSongCount,
   FetchAnnouncements,
-  GetLyrics(String, Vec<String>, f64),
+  /// Title, artists, duration in seconds, and the base62 id of a Spotify track.
+  GetLyrics(String, Vec<String>, f64, Option<String>),
   /// Get user's top tracks for Discover feature (with time range)
   GetUserTopTracks(crate::core::app::DiscoverTimeRange),
   /// Get Top Artists Mix - fetches top artists and their top tracks
@@ -959,8 +960,8 @@ impl Network {
       IoEvent::FetchAnnouncements => {
         self.fetch_announcements().await;
       }
-      IoEvent::GetLyrics(track, artists, duration) => {
-        self.get_lyrics(track, artists, duration).await;
+      IoEvent::GetLyrics(track, artists, duration, spotify_id) => {
+        self.get_lyrics(track, artists, duration, spotify_id).await;
       }
       #[cfg(feature = "art-decode")]
       IoEvent::FetchCoverArt(request) => {
@@ -1800,7 +1801,7 @@ mod tests {
       IoEvent::FetchGlobalSongCount,
       IoEvent::IncrementGlobalSongCount,
       IoEvent::FetchAnnouncements,
-      IoEvent::GetLyrics(String::new(), Vec::new(), 0.0),
+      IoEvent::GetLyrics(String::new(), Vec::new(), 0.0, None),
       IoEvent::GetFriendCode,
       IoEvent::GetFriends,
       IoEvent::AddFriendByCode(String::new()),

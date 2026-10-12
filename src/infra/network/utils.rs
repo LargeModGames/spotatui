@@ -74,7 +74,13 @@ struct AnnouncementRecord {
 }
 
 pub trait UtilsNetwork {
-  async fn get_lyrics(&mut self, track: String, artists: Vec<String>, duration: f64);
+  async fn get_lyrics(
+    &mut self,
+    track: String,
+    artists: Vec<String>,
+    duration: f64,
+    spotify_id: Option<String>,
+  );
   async fn increment_global_song_count(&mut self);
   async fn fetch_global_song_count(&mut self);
   async fn fetch_announcements(&mut self);
@@ -98,6 +104,11 @@ fn apply_lyrics_response(app: &mut App, lrc_resp: Option<LrcResponse>, duration:
       .filter(|text| !text.trim().is_empty())
       .map(|plain| (synthesize_plain_lyrics(plain, duration), false))
   });
+  publish_lyrics(app, found);
+}
+
+/// Publish lyrics lines for the current track, or not found.
+fn publish_lyrics(app: &mut App, found: Option<(Vec<(u128, String)>, bool)>) {
   match found {
     Some((lyrics, synced)) => app.set_lyrics(LyricsStatus::Found, Some(lyrics), synced),
     None => app.set_lyrics(LyricsStatus::NotFound, None, false),
@@ -106,8 +117,37 @@ fn apply_lyrics_response(app: &mut App, lrc_resp: Option<LrcResponse>, duration:
     .plugin_data_generations
     .bump(crate::core::app::PluginDataKind::Lyrics);
 }
+
+/// Spotify's lyrics for a Spotify track; `None` sends the lookup to LRCLIB.
+async fn spotify_lyrics(
+  spotify_id: Option<&str>,
+  duration: f64,
+) -> Option<(Vec<(u128, String)>, bool)> {
+  #[cfg(feature = "spotify-session")]
+  if let Some(id) = spotify_id {
+    match crate::infra::spotify::lyrics::track_lyrics(id).await {
+      Ok(Some(lyrics)) if lyrics.synced => return Some((lyrics.lines, true)),
+      Ok(Some(lyrics)) => {
+        let text: Vec<String> = lyrics.lines.into_iter().map(|(_, line)| line).collect();
+        return Some((synthesize_plain_lyrics(&text.join("\n"), duration), false));
+      }
+      Ok(None) => log::debug!("Spotify has no lyrics for {id}; trying LRCLIB"),
+      Err(e) => log::warn!("Spotify lyrics for {id} failed: {e:#}; trying LRCLIB"),
+    }
+  }
+  #[cfg(not(feature = "spotify-session"))]
+  let _ = (spotify_id, duration);
+  None
+}
+
 impl UtilsNetwork for Network {
-  async fn get_lyrics(&mut self, track: String, artists: Vec<String>, duration: f64) {
+  async fn get_lyrics(
+    &mut self,
+    track: String,
+    artists: Vec<String>,
+    duration: f64,
+    spotify_id: Option<String>,
+  ) {
     // The identity latch and the plugin-facing `lyrics_state_is_current` gate
     // both key on the joined display credit (`primary_artist()`), so build the
     // identity from the same join here.
@@ -121,6 +161,14 @@ impl UtilsNetwork for Network {
         return;
       }
       app.set_lyrics(LyricsStatus::Loading, None, false);
+    }
+
+    if let Some(found) = spotify_lyrics(spotify_id.as_deref(), duration).await {
+      let mut app = self.app.lock().await;
+      if app.desired_lyrics_identity.as_ref() == Some(&request_identity) {
+        publish_lyrics(&mut app, Some(found));
+      }
+      return;
     }
 
     let lrc_resp = fetch_lrclib_lyrics(client, &track, &artists, duration).await;

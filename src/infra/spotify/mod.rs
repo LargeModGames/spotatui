@@ -7,6 +7,7 @@ mod library;
 mod listening;
 #[cfg(test)]
 mod live_tests;
+pub mod lyrics;
 mod metadata;
 mod player;
 mod playlists;
