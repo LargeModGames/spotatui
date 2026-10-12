@@ -6,6 +6,8 @@
 
 - **Spotify's own lyrics for Spotify tracks**: a Spotify track now gets its lyrics from Spotify, line-synced where Spotify has the timing. Before, every track got its lyrics from LRCLIB through a title, artist and duration lookup, which missed many tracks. When Spotify has no lyrics for a track, spotatui asks LRCLIB as before. Local Files, Subsonic, Internet Radio, YouTube, Qobuz and Apple Music tracks still use LRCLIB only.
 
+- **The spotify-tui pitch visualizer is back**: while a Spotify track plays, `v` opens the Spotify Pitch view, drawn from Spotify's own audio analysis: the strength of the twelve pitch classes (C to B) in the part of the song playing now, drawn as Cava bars that rise with the loudness of the music and fall with gravity, and the tempo, key and time signature of the current section with their confidence. It needs no audio capture, so it also works when Spotify plays on your phone or another device. `V` cycles Cava, Bar Graph and Spotify Pitch; for every other source the visualizer opens on your saved style, as before. Compared with the old spotify-tui view, the bars now show the part of the song that plays now instead of the next one, they move like Cava instead of jumping, the last section of a song no longer blanks the screen, and an undetected key shows "?" instead of C.
+
 ## [v0.44.0] 2026-10-12
 
 ### Added

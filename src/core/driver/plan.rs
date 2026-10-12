@@ -140,9 +140,39 @@ pub(super) fn cover_art_action(
   }
 }
 
+/// The base62 id of the playing Spotify track, if it can have an audio analysis.
+pub(super) fn audio_analysis_track(
+  session: bool,
+  is_track: bool,
+  item_id: Option<&str>,
+) -> Option<&str> {
+  let base62 = |id: &&str| id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric());
+  item_id.filter(|id| session && is_track && base62(id))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  const TRACK: &str = "0DiWol3AO6WpXZgp0goxAV";
+
+  #[test]
+  fn a_spotify_track_has_an_analysis_only_with_a_session() {
+    assert_eq!(audio_analysis_track(true, true, Some(TRACK)), Some(TRACK));
+    assert_eq!(audio_analysis_track(false, true, Some(TRACK)), None);
+  }
+
+  #[test]
+  fn episodes_spotify_local_files_and_hex_ids_get_no_analysis() {
+    assert_eq!(audio_analysis_track(true, false, Some(TRACK)), None);
+    for id in [
+      "spotify:local:Daft+Punk:Discovery:One+More+Time:320",
+      "c0ffee00c0ffee00c0ffee00c0ffee00",
+    ] {
+      assert_eq!(audio_analysis_track(true, true, Some(id)), None, "{id}");
+    }
+    assert_eq!(audio_analysis_track(true, true, None), None);
+  }
 
   #[test]
   fn first_tick_with_a_session_saves_immediately() {

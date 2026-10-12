@@ -13,6 +13,7 @@ use crate::core::state::{
 };
 use crate::core::user_config::{
   color_to_string, key_to_config_string, normalize_tick_rate_milliseconds, UserConfig,
+  VisualizerStyle,
 };
 use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
 use crate::infra::network::sync::{ControlMode, PartySession, PartyStatus};
@@ -165,6 +166,13 @@ pub struct App {
   pub audio_capture_active: bool,
   /// The audio analysis of the Spotify track a frontend wants to draw.
   audio_analysis: AnalysisState,
+  /// Whether a Spotify track plays, set by the tick.
+  spotify_track_playing: bool,
+  /// The pitch view's clock, started from the last position update.
+  analysis_clock: Option<AnalysisClock>,
+  /// The 12 pitch levels the pitch view shows, and how fast each one falls.
+  pitch_levels: [f32; 12],
+  pitch_fall: [f32; 12],
   /// Presentation state of the terminal frontend (cursors, scroll offsets, edit
   /// buffers, focus, popups, terminal geometry). See [`ViewState`]: handlers and
   /// draw functions write it freely; nothing outside `tui/` and these `App`

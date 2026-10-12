@@ -6,6 +6,10 @@ impl Default for App {
       spectrum_data: None,
       audio_capture_active: false,
       audio_analysis: AnalysisState::Idle,
+      spotify_track_playing: false,
+      analysis_clock: None,
+      pitch_levels: [0.0; 12],
+      pitch_fall: [0.0; 12],
       view: ViewState {
         search_hovered_block: SearchResultBlock::SongSearch,
         ..ViewState::default()

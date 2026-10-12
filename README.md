@@ -73,7 +73,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 - **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), [YouTube](#youtube), [Qobuz](#qobuz), or [Apple Music](#apple-music) on macOS. The free sources need no Spotify account; press `d` to switch between them at any time.
 - **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
 - **Synced lyrics.** Line-by-line lyrics that follow playback.
-- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing.
+- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing, and for Spotify tracks the pitch view of the original spotify-tui.
 - **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
 - **[Playlist sync](docs/playlist-sync.md).** Link one playlist as the master and mirror it onto Spotify, Qobuz, Subsonic or YouTube. Runs at startup and from `spotatui sync`.
 - **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
@@ -388,6 +388,8 @@ The **audio visualizer** (press `v`) uses **local real-time FFT analysis** of yo
 > **macOS:** macOS doesn't natively expose system audio loopback. Install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid), route system audio through it, and set it as your default input device.
 >
 > **Note:** The visualizer is **system-wide**: it captures all audio on your system, so it also reacts to YouTube videos, games, and any other source.
+
+While a Spotify track plays, `v` opens the **Spotify Pitch** view instead, the visualizer of the original spotify-tui: the strength of the twelve pitch classes (C to B) drawn as Cava bars that rise with the loudness of the music and fall with gravity, with the tempo, key and time signature of the current section, from Spotify's own audio analysis. It needs no audio capture, so it also works when Spotify plays on another device. Press `V` to switch between Cava, Bar Graph and Spotify Pitch.
 ## Using with [spotifyd](https://github.com/Spotifyd/spotifyd)
 
 > **Note:** If you're using native streaming, you don't need spotifyd!

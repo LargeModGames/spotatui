@@ -68,7 +68,7 @@ This table shows what is possible with the Spotify API, what is implemented, and
 | shuffle | ✅ | Toggle shuffle | Yes |
 | **Other** |
 | recommendations | ✅ | Get recommendations, answered from Spotify's internal API (the Web API endpoint answers 403 for apps registered after 2024-11-27); the AI DJ still has the model do the recommending | Yes |
-| audio_analysis | ❌ | Get audio analysis (visualization now uses local FFT, not this endpoint) | Yes |
+| audio_analysis | ✅ | Get audio analysis, answered from Spotify's internal API; the Spotify Pitch view draws it | Yes |
 | featured_playlists | ❌ | Get featured playlists | Yes |
 | new_releases | ❌ | Get new releases | Yes |
 | categories | ❌ | Get categories | Yes |
