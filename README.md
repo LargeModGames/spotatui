@@ -445,7 +445,7 @@ You may be asked to re-authenticate with Spotify the first time.
 1. [Install OpenSSL](https://docs.rs/openssl/0.10.25/openssl/#automatic)
 1. [Install Rust](https://www.rust-lang.org/tools/install)
 1. [Install `xorg-dev`](https://github.com/aweinstock314/rust-clipboard#prerequisites) (required for clipboard support)
-1. **Linux only (glibc):** Install ALSA + pkg-config for the default build (`librespot` alsa-backend and cpal). Musl builds use rodio instead, so they don't need libasound for librespot. Package list matches [docs/installation.md#prerequisites](docs/installation.md#prerequisites).
+1. **Linux only:** Install ALSA + pkg-config for the default build. This applies to both glibc and musl targets: glibc uses the `librespot` alsa-backend, and both use cpal (audio visualization, and rodio on musl), which links ALSA on Linux. Package list matches [docs/installation.md#prerequisites](docs/installation.md#prerequisites).
    ```bash
    # Debian/Ubuntu
    sudo apt-get install libasound2-dev pkg-config
