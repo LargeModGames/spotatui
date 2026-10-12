@@ -191,6 +191,7 @@ const GUI_SETTINGS: &[(&str, &str, Option<&str>)] = &[
   ("behavior.streaming_autoplay", "streaming", None),
   ("behavior.enable_discord_rpc", "integrations", None),
   ("behavior.enable_global_song_count", "integrations", None),
+  ("behavior.enable_lyrics", "integrations", None),
   (
     "behavior.disable_auto_update",
     "updates",

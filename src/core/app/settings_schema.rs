@@ -434,6 +434,12 @@ impl App {
           value: SettingValue::Bool(self.user_config.behavior.enable_announcements),
         },
         SettingItem {
+          id: "behavior.enable_lyrics".to_string(),
+          name: "Lyrics".to_string(),
+          description: "Look up lyrics for each track: the title, artist and length go to LRCLIB, or to Spotify for Spotify tracks".to_string(),
+          value: SettingValue::Bool(self.user_config.behavior.enable_lyrics),
+        },
+        SettingItem {
           id: "behavior.enable_monthly_recap_prompt".to_string(),
           name: "Monthly Recap Prompt".to_string(),
           description: "Show a popup once a month when your listening recap is ready".to_string(),

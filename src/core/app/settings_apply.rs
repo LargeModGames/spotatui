@@ -313,6 +313,11 @@ impl App {
             self.user_config.behavior.enable_announcements = *v;
           }
         }
+        "behavior.enable_lyrics" => {
+          if let SettingValue::Bool(v) = &setting.value {
+            self.user_config.behavior.enable_lyrics = *v;
+          }
+        }
         "behavior.enable_monthly_recap_prompt" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_monthly_recap_prompt = *v;

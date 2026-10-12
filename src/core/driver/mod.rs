@@ -69,6 +69,30 @@ fn spotify_lyrics_id(item_uri: Option<&str>) -> Option<String> {
   (id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| id.to_string())
 }
 
+/// Fetch a track's lyrics, or publish "not found" at once when the user turned lyrics off.
+fn request_track_lyrics(
+  app: &mut App,
+  title: String,
+  artists: Vec<String>,
+  duration_secs: f64,
+  item_uri: Option<&str>,
+) {
+  app.desired_lyrics_identity = Some((title.clone(), artists.join(", ")));
+  if app.user_config.behavior.enable_lyrics {
+    app.dispatch(IoEvent::GetLyrics(
+      title,
+      artists,
+      duration_secs,
+      spotify_lyrics_id(item_uri),
+    ));
+  } else {
+    app.set_lyrics(crate::core::app::LyricsStatus::NotFound, None, false);
+    app
+      .plugin_data_generations
+      .bump(crate::core::app::PluginDataKind::Lyrics);
+  }
+}
+
 /// Resolve what cover art to fetch for the track described by `snapshot`.
 ///
 /// Local files carry embedded artwork read straight from the file (no URL), so
@@ -324,13 +348,13 @@ impl Driver {
               // LRCLIB lookup needs the structured artist list so it can fall
               // back to the primary artist alone for collaborations (#410).
               let artists = snapshot.metadata.artists.clone();
-              app.desired_lyrics_identity = Some((title.clone(), artists.join(", ")));
-              app.dispatch(IoEvent::GetLyrics(
+              request_track_lyrics(
+                app,
                 title,
                 artists,
                 snapshot.metadata.duration_ms as f64 / 1000.0,
-                spotify_lyrics_id(snapshot.item_uri.as_deref()),
-              ));
+                snapshot.item_uri.as_deref(),
+              );
             } else {
               app.desired_lyrics_identity = None;
               app.set_lyrics(crate::core::app::LyricsStatus::NotFound, None, false);
@@ -976,6 +1000,33 @@ mod tests {
     ] {
       assert_eq!(spotify_lyrics_id(uri), None, "{uri:?}");
     }
+  }
+
+  #[test]
+  fn a_track_change_fetches_lyrics_when_lyrics_are_on() {
+    let (mut app, rx) = app_on(RouteId::Home, ActiveBlock::Home, false);
+
+    request_track_lyrics(&mut app, "One".into(), vec!["Two".into()], 180.0, None);
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetLyrics(..))));
+  }
+
+  #[test]
+  fn a_track_change_sends_no_lyrics_request_when_lyrics_are_off() {
+    let (mut app, rx) = app_on(RouteId::Home, ActiveBlock::Home, false);
+    app.user_config.behavior.enable_lyrics = false;
+
+    request_track_lyrics(&mut app, "One".into(), vec!["Two".into()], 180.0, None);
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+      app.lyrics_status(),
+      crate::core::app::LyricsStatus::NotFound
+    );
+    assert_eq!(
+      app.desired_lyrics_identity,
+      Some(("One".to_string(), "Two".to_string()))
+    );
   }
 
   #[test]

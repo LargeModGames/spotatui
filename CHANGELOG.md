@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A setting to turn lyrics off**: `behavior.enable_lyrics` (Settings > Lyrics, in the terminal and the desktop app, on by default). Off, spotatui no longer sends the title, artist and length of each track to LRCLIB, or to Spotify for Spotify tracks, and the lyrics view says no lyrics were found.
+
 ### Fixed
 
 - **Playbar navigation follows its configured position**: when the playbar was set to `top`, you still had to press Down to access it, even though the layout placed it at the top. Navigating to and from the playbar now follows its actual position.

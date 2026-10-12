@@ -544,6 +544,7 @@ pub struct BehaviorConfigString {
   pub enable_discord_rpc: Option<bool>,
   pub discord_rpc_client_id: Option<String>,
   pub enable_announcements: Option<bool>,
+  pub enable_lyrics: Option<bool>,
   pub announcement_feed_url: Option<String>,
   pub enable_monthly_recap_prompt: Option<bool>,
   pub pin_community_playlist: Option<bool>,
@@ -670,6 +671,7 @@ pub struct BehaviorConfig {
   pub enable_discord_rpc: bool,
   pub discord_rpc_client_id: Option<String>,
   pub enable_announcements: bool,
+  pub enable_lyrics: bool,
   pub announcement_feed_url: Option<String>,
   pub enable_monthly_recap_prompt: bool,
   /// Pin the public "spotatui community" playlist to the top of the Spotify
@@ -1202,6 +1204,7 @@ impl UserConfig {
         enable_discord_rpc: true,
         discord_rpc_client_id: None,
         enable_announcements: true,
+        enable_lyrics: true,
         announcement_feed_url: None,
         enable_monthly_recap_prompt: true,
         pin_community_playlist: true,
@@ -1623,6 +1626,10 @@ impl UserConfig {
 
     if let Some(enable_announcements) = behavior_config.enable_announcements {
       self.behavior.enable_announcements = enable_announcements;
+    }
+
+    if let Some(enable_lyrics) = behavior_config.enable_lyrics {
+      self.behavior.enable_lyrics = enable_lyrics;
     }
 
     if let Some(enable_monthly_recap_prompt) = behavior_config.enable_monthly_recap_prompt {
@@ -2292,6 +2299,7 @@ impl UserConfig {
       enable_discord_rpc: Some(self.behavior.enable_discord_rpc),
       discord_rpc_client_id: self.behavior.discord_rpc_client_id.clone(),
       enable_announcements: Some(self.behavior.enable_announcements),
+      enable_lyrics: Some(self.behavior.enable_lyrics),
       announcement_feed_url: self.behavior.announcement_feed_url.clone(),
       enable_monthly_recap_prompt: Some(self.behavior.enable_monthly_recap_prompt),
       pin_community_playlist: Some(self.behavior.pin_community_playlist),
