@@ -40,7 +40,9 @@ use crate::core::source::{MediaSource, Searcher, Source};
 use crate::core::state::PersistedRuntimeState;
 use crate::infra::audio::{LocalPlayer, PreparedStream};
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{advance_index, replay_file, snapshot_tracks};
+use crate::infra::queue::{
+  advance_index, apply_resolved, placeholder_uri, replay_file, snapshot_tracks,
+};
 
 const LOGIN_EXPIRED: &str = "Qobuz: login expired, press `d` and pick Qobuz to log in again";
 
@@ -472,6 +474,7 @@ fn spawn_fetch(
   track_id: String,
   quality: u8,
 ) {
+  spawn_resolve(app, session);
   let app = Arc::clone(app);
   let source = Arc::clone(&session.source);
   let fetch_id = session.fetch_id;
@@ -484,6 +487,42 @@ fn spawn_fetch(
     }
   });
   session.fetch = Some(task.abort_handle());
+}
+
+/// Look the current track up in the catalogue when it is a placeholder (a URI
+/// started from outside the track table, as an MCP or AI DJ `play_now` sends,
+/// #716), so the playbar and the OS media controls show its title instead of
+/// the URI. Runs on its own task: neither the pump nor the stream waits for
+/// it. The answer lands only while the session still plays that fetch and
+/// that row; a failed lookup keeps the placeholder and never stops playback.
+fn spawn_resolve(app: &Arc<Mutex<App>>, session: &QobuzPlaybackState) {
+  let Some(uri) = placeholder_uri(&session.tracks, session.index) else {
+    return;
+  };
+  let Ok(track_id) = track_id_from_uri(&uri).map(str::to_string) else {
+    return;
+  };
+  let app = Arc::clone(app);
+  let source = Arc::clone(&session.source);
+  let fetch_id = session.fetch_id;
+  tokio::spawn(async move {
+    let track = match source.track_info(&track_id).await {
+      Ok(track) => track,
+      Err(e) => {
+        log::info!("[qobuz] no catalogue entry for {uri}: {e:#}");
+        return;
+      }
+    };
+    let mut guard = app.lock().await;
+    if let Some(s) = guard
+      .qobuz_playback
+      .as_mut()
+      .filter(|s| s.fetch_id == fetch_id)
+    {
+      let index = s.index;
+      apply_resolved(&mut s.tracks, index, &uri, track);
+    }
+  });
 }
 
 /// A failed fetch: tear the session down only if it still waits for this

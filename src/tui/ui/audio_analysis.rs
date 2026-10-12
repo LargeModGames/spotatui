@@ -1,4 +1,4 @@
-use crate::core::app::App;
+use crate::core::app::{key_label, section_at, AnalysisState, App, PITCH_NAMES};
 use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle};
 use crate::tui::layout::main_layout_margin;
 use ratatui::{
@@ -9,8 +9,11 @@ use ratatui::{
   widgets::{Block, Borders, Paragraph},
   Frame,
 };
+use std::time::Instant;
 
 use tui_bar_graph::{BarGraph, BarStyle, ColorMode};
+
+const STYLE_HINT: &str = "Press 'V' to cycle visualizer style";
 
 /// The analysis screen's two rows: the info strip and the visualizer block.
 fn analysis_areas(root: Rect, margin: u16) -> [Rect; 2] {
@@ -47,17 +50,23 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
   let tick_rate = app.user_config.behavior.animation_tick_rate_milliseconds;
   let tick_rate = normalize_tick_rate_milliseconds(tick_rate as i64);
   let visualizer_style = app.user_config.behavior.visualizer_style;
+  let pitch_view = app.pitch_view_shows();
+  let (style_name, chart_name) = if pitch_view {
+    ("Spotify Pitch", "Pitches")
+  } else {
+    (visualizer_style.name(), "Spectrum")
+  };
 
   let info_block = Block::default()
     .title(Span::styled(
-      format!("Audio Visualization ({})", visualizer_style.name()),
+      format!("Audio Visualization ({style_name})"),
       Style::default().fg(app.user_config.theme.inactive.into()),
     ))
     .borders(Borders::ALL)
     .border_style(Style::default().fg(app.user_config.theme.inactive.into()));
 
   let bar_chart_title = &format!(
-    "Spectrum | {} FPS | Press {} to exit",
+    "{chart_name} | {} FPS | Press {} to exit",
     1000 / tick_rate,
     app.user_config.keys.back
   );
@@ -66,6 +75,17 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     .style(white)
     .title(Span::styled(bar_chart_title, gray))
     .border_style(gray);
+
+  if pitch_view {
+    draw_pitch(
+      f,
+      app,
+      info_block,
+      bar_chart_block,
+      [info_area, visualizer_area],
+    );
+    return;
+  }
 
   // Check if we have spectrum data from local audio capture
   if let Some(ref spectrum) = app.spectrum_data {
@@ -79,7 +99,6 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
 
     let peak = spectrum.bands.iter().copied().fold(0.0f32, f32::max);
     let peak_text = format!("Peak: {:.0}%", peak * 100.0);
-    let style_hint = "Press 'V' to cycle visualizer style";
 
     let texts = vec![Line::from(vec![
       Span::styled(
@@ -93,7 +112,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
       ),
       Span::raw("  |  "),
       Span::styled(
-        style_hint,
+        STYLE_HINT,
         Style::default().fg(app.user_config.theme.hint.into()),
       ),
     ])];
@@ -143,6 +162,97 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
       .style(Style::default().fg(app.user_config.theme.text.into()));
     f.render_widget(empty_p, visualizer_area);
   }
+}
+
+/// The Spotify pitch view: tempo, key and time signature of the current section,
+/// and the 12 pitch bars of the current segment.
+fn draw_pitch(
+  f: &mut Frame<'_>,
+  app: &App,
+  info_block: Block<'_>,
+  chart_block: Block<'_>,
+  [info_area, chart_area]: [Rect; 2],
+) {
+  let theme = &app.user_config.theme;
+  let text = Style::default().fg(theme.text.into());
+  let hint = Span::styled(STYLE_HINT, Style::default().fg(theme.hint.into()));
+  let AnalysisState::Ready(_, analysis) = app.audio_analysis() else {
+    let message = match app.audio_analysis() {
+      AnalysisState::Unavailable(_) => "Spotify has no pitch analysis for this track",
+      AnalysisState::Failed(..) => "Could not load the pitch analysis; trying again soon",
+      _ => "Loading the pitch analysis...",
+    };
+    f.render_widget(
+      Paragraph::new(Line::from(hint)).block(info_block),
+      info_area,
+    );
+    f.render_widget(
+      Paragraph::new(message).block(chart_block).style(text),
+      chart_area,
+    );
+    return;
+  };
+
+  let position = app.analysis_position_ms(Instant::now()).unwrap_or(0);
+  let mut info = Vec::new();
+  if let Some(section) = section_at(analysis, position) {
+    info.push(Span::styled(
+      format!(
+        "{:.0} BPM ({:.0}%)  {} ({:.0}%)  {}/4 ({:.0}%)",
+        section.tempo,
+        section.tempo_confidence * 100.0,
+        key_label(section.key, section.minor),
+        section.key_confidence * 100.0,
+        section.time_signature,
+        section.time_signature_confidence * 100.0
+      ),
+      text,
+    ));
+    info.push(Span::raw("  |  "));
+  }
+  info.push(hint);
+  f.render_widget(
+    Paragraph::new(Line::from(info)).block(info_block),
+    info_area,
+  );
+
+  let inner = chart_block.inner(chart_area);
+  f.render_widget(chart_block, chart_area);
+  let [bars_area, labels_area] = inner.layout(&Layout::vertical([
+    Constraint::Min(1),
+    Constraint::Length(1),
+  ]));
+  let count = visualizer_bar_count(VisualizerStyle::Cava, bars_area.width);
+  let bands: Vec<f32> = interpolate_bands(&app.pitch_levels(), count)
+    .into_iter()
+    .map(|value| value as f32)
+    .collect();
+  render_cava(f, &bands, bars_area, theme.analysis_bar.into());
+  f.render_widget(
+    Paragraph::new(pitch_labels(labels_area.width, count)).style(text),
+    labels_area,
+  );
+}
+
+/// The note names under the pitch bars, each under the bar that carries its pitch class.
+fn pitch_labels(width: u16, bars: usize) -> String {
+  let mut line = vec![' '; usize::from(width)];
+  if bars < 2 {
+    return line.into_iter().collect();
+  }
+  let (bar_width, spacing) = cava_bar_layout(width, bars as u16);
+  let step = bar_width + spacing;
+  let x_offset = width.saturating_sub(bars as u16 * step - spacing) / 2;
+  for (pitch, name) in PITCH_NAMES.iter().enumerate() {
+    let bar = (pitch * (bars - 1) + 5) / 11;
+    let x = usize::from(x_offset + bar as u16 * step + bar_width / 2);
+    for (offset, letter) in name.chars().enumerate() {
+      if let Some(cell) = line.get_mut(x + offset) {
+        *cell = letter;
+      }
+    }
+  }
+  line.into_iter().collect()
 }
 
 /// Render bar graph-style visualization using tui-bar-graph
@@ -414,5 +524,88 @@ mod tests {
       !content.contains("Press q to exit"),
       "spectrum title must not still show the default key: {content}"
     );
+  }
+
+  fn screen_text(app: &App) -> String {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    terminal.draw(|f| draw(f, app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..30)
+      .flat_map(|y| (0..140).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect()
+  }
+
+  #[test]
+  fn pitch_view_names_tempo_key_and_time_signature() {
+    use crate::core::app::{AnalysisFetch, AnalysisSection, AnalysisSegment, TrackAnalysis};
+
+    let mut app = App::default();
+    app.get_audio_analysis();
+    app.sync_audio_analysis(Some("track1"));
+    app.set_audio_analysis(
+      "track1",
+      AnalysisFetch::Found(TrackAnalysis {
+        sections: vec![AnalysisSection {
+          start_ms: 0,
+          tempo: 123.0,
+          tempo_confidence: 0.82,
+          key: Some(6),
+          key_confidence: 0.64,
+          minor: Some(true),
+          time_signature: 4,
+          time_signature_confidence: 1.0,
+        }],
+        segments: vec![AnalysisSegment {
+          start_ms: 0,
+          loudness_start: 0.0,
+          loudness_max: 0.0,
+          loudness_max_ms: 0,
+          pitches: [1.0; 12],
+        }],
+      }),
+    );
+
+    let content = screen_text(&app);
+
+    for expected in [
+      "Audio Visualization (Spotify Pitch)",
+      "Pitches |",
+      "123 BPM (82%)",
+      "F# minor (64%)",
+      "4/4 (100%)",
+      "C#",
+    ] {
+      assert!(
+        content.contains(expected),
+        "missing {expected:?}: {content}"
+      );
+    }
+  }
+
+  #[test]
+  fn pitch_labels_run_from_c_under_the_first_bar_to_b_under_the_last() {
+    let line = pitch_labels(120, visualizer_bar_count(VisualizerStyle::Cava, 120));
+
+    assert_eq!(line.chars().count(), 120);
+    assert!(line.trim_start().starts_with("C "), "{line:?}");
+    assert!(line.trim_end().ends_with('B'), "{line:?}");
+    let names: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!(names, PITCH_NAMES);
+  }
+
+  #[test]
+  fn pitch_view_says_when_spotify_has_no_analysis() {
+    let mut app = App::default();
+    app.get_audio_analysis();
+    app.sync_audio_analysis(Some("track1"));
+    app.set_audio_analysis("track1", crate::core::app::AnalysisFetch::Missing);
+
+    let content = screen_text(&app);
+
+    assert!(content.contains("Spotify has no pitch analysis for this track"));
+    assert!(!content.contains("No audio capture available"));
   }
 }

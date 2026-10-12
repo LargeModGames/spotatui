@@ -19,6 +19,7 @@ enum Route {
   Artists,
   ArtistTopTracks(String),
   RelatedArtists(String),
+  AudioAnalysis(String),
   ArtistAlbums(String),
   Show(String),
   ShowEpisodes(String),
@@ -88,6 +89,7 @@ impl Route {
       ("GET", ["shows", show]) => Self::Show(id(show)),
       ("GET", ["shows", show, "episodes"]) => Self::ShowEpisodes(id(show)),
       ("GET", ["recommendations"]) => Self::Recommendations,
+      ("GET", ["audio-analysis", track]) => Self::AudioAnalysis(id(track)),
       ("GET", ["me", "top", "tracks"]) => Self::TopTracks,
       ("GET", ["me", "top", "artists"]) => Self::TopArtists,
       ("GET", ["me", "player", "recently-played"]) => Self::RecentlyPlayed,
@@ -192,6 +194,7 @@ async fn run(
     Route::Show(id) => catalog::show(session, &id).await,
     Route::ShowEpisodes(id) => catalog::show_episodes(session, &id, paging(20)).await,
     Route::Recommendations => catalog::recommendations(session, query).await,
+    Route::AudioAnalysis(id) => catalog::audio_analysis(session, &id).await,
     Route::TopTracks => listening::top_tracks(session, value("time_range"), paging(20).limit).await,
     Route::TopArtists => {
       listening::top_artists(session, value("time_range"), paging(20).limit).await
@@ -382,6 +385,10 @@ mod tests {
       Some(Route::Artist("abc".into()))
     );
     assert_eq!(Route::parse(&Method::GET, "artists"), Some(Route::Artists));
+    assert_eq!(
+      Route::parse(&Method::GET, "audio-analysis/abc"),
+      Some(Route::AudioAnalysis("abc".into()))
+    );
   }
 
   #[test]

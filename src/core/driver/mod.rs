@@ -299,7 +299,7 @@ impl Driver {
     // (every source) and cover art (cover-art feature) — so both light up
     // for Spotify, local files, Subsonic, radio and YouTube through a single
     // path.
-    {
+    let playing = {
       let snapshot = crate::infra::media_metadata::current_playback_snapshot(app);
 
       self.play_counter.tick(app, snapshot.as_ref());
@@ -403,7 +403,19 @@ impl Driver {
           }
         }
       }
-    }
+
+      let (is_track, item_id) = snapshot.as_ref().map_or((false, None), |snapshot| {
+        (
+          snapshot.item_kind == crate::infra::media_metadata::PlaybackItemKind::Track,
+          snapshot.item_id.as_deref(),
+        )
+      });
+      let track = plan::audio_analysis_track(app.spotify_connected, is_track, item_id);
+      app.sync_audio_analysis(track);
+      snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.is_playing)
+    };
 
     // Output device lost mid-track (Bluetooth headphones disconnected, a USB
     // DAC unplugged). cpal pauses the stream and reports it, after which no
@@ -813,9 +825,14 @@ impl Driver {
         }
       }
     }
+    app.note_analysis_clock(playing, env.now);
+    if app.pitch_view_shows() {
+      app.step_pitch_levels(env.now, elapsed);
+    }
 
+    // The pitch view draws Spotify's analysis, so it needs no capture.
     #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-    match env.viz_bars {
+    match env.viz_bars.filter(|_| !app.pitch_view_shows()) {
       Some(desired_bars) => {
         // Built at the count we are about to ask for, so the first frame
         // does not immediately throw the fresh cavacore plan away.

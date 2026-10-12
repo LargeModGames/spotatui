@@ -43,10 +43,25 @@ impl App {
     }
   }
 
+  /// Cycles Cava, Bar Graph, then the Spotify pitch view while a Spotify track plays.
+  /// The pitch view is not saved: it is the default for every Spotify track.
   pub(crate) fn cycle_visualizer_style(&mut self) {
-    self.user_config.behavior.visualizer_style = self.user_config.behavior.visualizer_style.next();
-    // Save the config so the preference persists
-    let _ = self.user_config.save_config();
+    let style = self.user_config.behavior.visualizer_style;
+    let first = VisualizerStyle::all()[0];
+    let next = if self.pitch_view_shows() {
+      self.view.pitch_dismissed = true;
+      first
+    } else if self.pitch_view_available() && style.next() == first {
+      self.view.pitch_dismissed = false;
+      return;
+    } else {
+      style.next()
+    };
+    if next != style {
+      self.user_config.behavior.visualizer_style = next;
+      // Save the config so the preference persists
+      let _ = self.user_config.save_config();
+    }
   }
 
   // Apply changes from settings_items back to user_config

@@ -1,12 +1,15 @@
 use super::{ids, IoEvent, Network};
 use crate::core::app::{
-  ActiveBlock, Artist, ArtistBlock, EpisodeTableContext, RouteId, ScrollableResultPages,
-  SelectedFullShow, SelectedShow,
+  ActiveBlock, AnalysisFetch, App, Artist, ArtistBlock, EpisodeTableContext, RouteId,
+  ScrollableResultPages, SelectedFullShow, SelectedShow,
 };
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
-use crate::infra::network::mapping::map_page;
-use crate::infra::network::requests::{is_forbidden_error, is_not_found_error};
+use crate::infra::network::mapping::{self, map_page};
+use crate::infra::network::requests::{
+  is_forbidden_error, is_not_found_error, spotify_api_request_json_for,
+};
 use anyhow::anyhow;
+use reqwest::Method;
 use rspotify::model::{
   album::{FullAlbum, SimplifiedAlbum},
   artist::FullArtist,
@@ -17,6 +20,8 @@ use rspotify::model::{
 };
 use rspotify::prelude::*;
 use serde::Deserialize;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Minimal id-keyed TTL cache for metadata responses, so re-entering the same
 /// album/artist from a list within the TTL doesn't pay a fresh round trip plus
@@ -550,6 +555,27 @@ impl MetadataNetwork for Network {
   }
 }
 
+/// Fetches the audio analysis of `track_id` off the pump. Never the error screen:
+/// the pitch view shows its own empty state.
+pub(super) async fn fetch_audio_analysis(app: Arc<Mutex<App>>, track_id: String) {
+  if !app.lock().await.audio_analysis_pending(&track_id) {
+    return;
+  }
+  let path = format!("audio-analysis/{track_id}");
+  let fetch = match spotify_api_request_json_for(Method::GET, &path, &[], None).await {
+    Ok(value) => match mapping::track_analysis(value) {
+      Ok(analysis) => AnalysisFetch::Found(analysis),
+      Err(e) => {
+        log::warn!("unreadable audio analysis for {track_id}: {e:#}");
+        AnalysisFetch::Missing
+      }
+    },
+    Err(e) if is_not_found_error(&e) => AnalysisFetch::Missing,
+    Err(_) => AnalysisFetch::Failed,
+  };
+  app.lock().await.set_audio_analysis(&track_id, fetch);
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
   use super::*;
@@ -778,5 +804,91 @@ pub(crate) mod tests {
     })
     .await
     .expect("test timed out");
+  }
+
+  /// Fetches the analysis of `track1` from a server that answers once with `status` and `body`.
+  async fn audio_analysis_from(status: &'static str, body: &'static str) -> App {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let request = read_http_request(&mut stream).await;
+      assert!(request.contains("/audio-analysis/track1"), "{request}");
+      let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let app = Arc::new(Mutex::new(App::new(
+      tx,
+      UserConfig::new(),
+      Some(std::time::SystemTime::now()),
+    )));
+    app.lock().await.want_audio_analysis(Some("track1"));
+    let (_spotify, _fake) = fake_spotify_login(base_url);
+
+    fetch_audio_analysis(Arc::clone(&app), "track1".to_string()).await;
+
+    server.await.unwrap();
+    Arc::try_unwrap(app).ok().unwrap().into_inner()
+  }
+
+  #[tokio::test]
+  async fn an_audio_analysis_reply_lands_for_the_wanted_track() {
+    let app = tokio::time::timeout(
+      Duration::from_secs(30),
+      audio_analysis_from("200 OK", r#"{"sections":[],"segments":[{"start":0.5}]}"#),
+    )
+    .await
+    .expect("test timed out");
+
+    match app.audio_analysis() {
+      crate::core::app::AnalysisState::Ready(id, analysis) => {
+        assert_eq!(id, "track1");
+        assert_eq!(analysis.segments[0].start_ms, 500);
+      }
+      other => panic!("expected the analysis, got {other:?}"),
+    }
+  }
+
+  #[tokio::test]
+  async fn a_missing_audio_analysis_marks_the_track_without_opening_the_error_screen() {
+    let app = tokio::time::timeout(
+      Duration::from_secs(30),
+      audio_analysis_from(
+        "404 Not Found",
+        r#"{"error":{"status":404,"message":"not found"}}"#,
+      ),
+    )
+    .await
+    .expect("test timed out");
+
+    assert_eq!(
+      *app.audio_analysis(),
+      crate::core::app::AnalysisState::Unavailable("track1".into())
+    );
+    assert!(app.api_error().is_empty());
+    assert_ne!(app.get_current_route().id, RouteId::Error);
+  }
+
+  #[tokio::test]
+  async fn a_failed_audio_analysis_fetch_is_not_read_as_a_missing_analysis() {
+    let app = tokio::time::timeout(
+      Duration::from_secs(30),
+      audio_analysis_from(
+        "503 Service Unavailable",
+        r#"{"error":{"status":503,"message":"down"}}"#,
+      ),
+    )
+    .await
+    .expect("test timed out");
+
+    assert!(matches!(
+      app.audio_analysis(),
+      crate::core::app::AnalysisState::Failed(id, _) if id == "track1"
+    ));
+    assert!(app.api_error().is_empty());
   }
 }

@@ -413,15 +413,14 @@ impl App {
     }
   }
 
-  /// Toggle the audio analysis visualization view
-  /// This now uses local FFT analysis instead of the deprecated Spotify API
+  /// Opens the audio analysis screen: the Spotify pitch view while a Spotify
+  /// track plays, else the captured spectrum.
   pub fn get_audio_analysis(&mut self) {
     info!("entering audio analysis view");
     if self.get_current_route().id != RouteId::Analysis {
-      // Enter visualization mode
+      self.view.pitch_dismissed = false;
       self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
     }
-    // Spectrum data will be updated by the audio capture system on each tick
   }
 
   /// Open the album page of the item playing now, through the ownership

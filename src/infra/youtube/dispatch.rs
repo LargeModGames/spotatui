@@ -29,13 +29,17 @@ use anyhow::{Context, Result};
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
-use super::{is_youtube_uri, video_id_from_uri, YouTubePlaybackState, YouTubeSource};
+use super::{
+  is_youtube_uri, uri_for_video_id, video_id_from_uri, YouTubePlaybackState, YouTubeSource,
+};
 use crate::core::app::App;
 use crate::core::plugin_api::TrackInfo;
 use crate::core::source::{Searcher, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{advance_index, is_placeholder, replay_file, snapshot_tracks};
+use crate::infra::queue::{
+  advance_index, apply_resolved, is_placeholder, replay_file, snapshot_tracks,
+};
 
 /// Skip direction within the YouTube queue.
 #[derive(Clone, Copy)]
@@ -437,12 +441,16 @@ async fn acquire_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
   }
 }
 
-/// Download a video's audio into a fresh tempfile. Must be awaited **without**
-/// holding the `App` lock (this is the slowest download of any source).
-async fn download_audio(source: &YouTubeSource, video_id: &str) -> Result<NamedTempFile> {
+/// Download a video's audio into a fresh tempfile, with the metadata yt-dlp
+/// printed for it when it could be read. Must be awaited **without** holding
+/// the `App` lock (this is the slowest download of any source).
+async fn download_audio(
+  source: &YouTubeSource,
+  video_id: &str,
+) -> Result<(NamedTempFile, Option<TrackInfo>)> {
   let tmp = NamedTempFile::with_suffix(".m4a").context("creating temp file for YouTube audio")?;
-  source.download_audio(video_id, tmp.path()).await?;
-  Ok(tmp)
+  let resolved = source.download_audio(video_id, tmp.path()).await?;
+  Ok((tmp, resolved))
 }
 
 /// Download the audio for `uri` into a tempfile, for the native queue engine's
@@ -450,7 +458,7 @@ async fn download_audio(source: &YouTubeSource, video_id: &str) -> Result<NamedT
 /// slot is still current before touching the shared player).
 pub(crate) async fn download_for_queue(source: &YouTubeSource, uri: &str) -> Result<NamedTempFile> {
   let video_id = video_id_from_uri(uri)?.to_string();
-  download_audio(source, &video_id).await
+  download_audio(source, &video_id).await.map(|(tmp, _)| tmp)
 }
 
 /// Decode-failure hint: without ffmpeg on `$PATH`, yt-dlp leaves the download
@@ -464,7 +472,7 @@ fn decode_hint(e: impl std::fmt::Display) -> String {
 async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: usize) {
   // Snapshot the track metadata under one short lock, from whichever browse
   // view the request came from.
-  let tracks = {
+  let mut tracks = {
     let guard = app.lock().await;
     let search = guard
       .search_results()
@@ -517,7 +525,7 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
   }
 
   // Download off the lock, then decode on the blocking pool.
-  let tmp = match download_audio(&source, &video_id).await {
+  let (tmp, resolved) = match download_audio(&source, &video_id).await {
     Ok(t) => t,
     Err(e) => {
       set_error(app, format!("Cannot download YouTube audio: {e}")).await;
@@ -533,6 +541,10 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
       let volume = app.lock().await.runtime_state.volume_percent;
       player.set_volume(volume);
 
+      // An off-screen URI (#716) takes the title the download printed.
+      if let Some(track) = resolved {
+        apply_resolved(&mut tracks, index, &uri_for_video_id(&video_id), track);
+      }
       let display = tracks[index].name.clone();
       let mut guard = app.lock().await;
       // Publish the session exactly once, now that the source is decoding.
@@ -689,7 +701,7 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
     guard.set_status_message(format!("Fetching {name}\u{2026}"), 30);
   }
 
-  let tmp = match download_audio(&source, &video_id).await {
+  let (tmp, resolved) = match download_audio(&source, &video_id).await {
     Ok(t) => t,
     Err(e) => {
       teardown_youtube(app).await;
@@ -714,7 +726,10 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
   .await;
 
   match result {
-    Ok(Ok(())) => commit_index(app, target, tmp).await,
+    Ok(Ok(())) => {
+      let resolved = resolved.map(|track| (uri_for_video_id(&video_id), track));
+      commit_index(app, target, tmp, resolved).await
+    }
     Ok(Err(e)) => {
       teardown_youtube(app).await;
       set_error(app, decode_hint(e)).await;
@@ -730,12 +745,23 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
 /// in the new track's tempfile (dropping the previous one). Ordering is safe:
 /// the blocking `play_file` already cleared the old source from the sink, so
 /// rodio no longer holds the old file by the time it is dropped here.
-async fn commit_index(app: &Arc<Mutex<App>>, target: usize, tmp: NamedTempFile) {
+///
+/// `resolved` is the metadata the download printed for the URI it fetched;
+/// it replaces the row only while that row is the URI's placeholder (#716).
+async fn commit_index(
+  app: &Arc<Mutex<App>>,
+  target: usize,
+  tmp: NamedTempFile,
+  resolved: Option<(String, TrackInfo)>,
+) {
   let mut guard = app.lock().await;
   let display = if let Some(s) = guard.youtube_playback.as_mut() {
     s.index = target;
     s.advancing = false;
     s.tempfile = tmp;
+    if let Some((uri, track)) = resolved {
+      apply_resolved(&mut s.tracks, target, &uri, track);
+    }
     s.tracks.get(target).map(|t| t.name.clone())
   } else {
     None

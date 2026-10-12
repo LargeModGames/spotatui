@@ -902,6 +902,11 @@ impl HistoryCollector {
     match snapshot {
       Some(snapshot) => {
         let identity = SessionIdentity::from_snapshot(&snapshot);
+        if let Some(current) = &mut self.current {
+          if current.identity.resolves_to(&identity) {
+            current.adopt_resolved_metadata(&snapshot, identity.clone());
+          }
+        }
         let should_roll = self.current.as_ref().is_some_and(|current| {
           current.identity != identity
             || (current.last_progress_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS
@@ -958,9 +963,35 @@ impl SessionIdentity {
       source: history_source_from_snapshot(snapshot),
     }
   }
+
+  /// A track started from a bare URI (#716) shows the URI as its title until
+  /// its source looks the real metadata up, mid-track. That swap is the same
+  /// listen, not a new one: same item, context and source, and this identity
+  /// is the placeholder (no artists, the URI as the title).
+  fn resolves_to(&self, next: &SessionIdentity) -> bool {
+    let is_placeholder = self.artists.is_empty()
+      && self.item_uri.is_some()
+      && self.item_uri.as_deref() == Some(self.title.as_str());
+    is_placeholder
+      && self.title != next.title
+      && self.item_id == next.item_id
+      && self.item_uri == next.item_uri
+      && self.context_uri == next.context_uri
+      && self.source == next.source
+  }
 }
 
 impl ActiveListenSession {
+  /// Take the looked-up metadata into the open session instead of rolling it,
+  /// so the listen keeps its start time and the time already heard.
+  fn adopt_resolved_metadata(&mut self, snapshot: &PlaybackSnapshot, identity: SessionIdentity) {
+    self.identity = identity;
+    self.title = snapshot.metadata.title.clone();
+    self.artists = snapshot.metadata.artists.clone();
+    self.album = snapshot.metadata.album.clone();
+    self.image_url = snapshot.metadata.image_url.clone();
+  }
+
   fn from_snapshot(snapshot: PlaybackSnapshot, started_at: DateTime<Utc>) -> Self {
     let source = history_source_from_snapshot(&snapshot);
     let identity = SessionIdentity::from_snapshot(&snapshot);
@@ -2900,6 +2931,49 @@ mod tests {
       shuffle: false,
       repeat: None,
     }
+  }
+
+  /// A paused snapshot of a Subsonic `uri`: paused, so the collector never
+  /// counts listening time and never appends to the real listens file.
+  fn subsonic_snapshot(uri: &str, title: &str, artists: &[&str]) -> PlaybackSnapshot {
+    let mut snap = snapshot(title, false);
+    snap.metadata.artists = artists.iter().map(|a| a.to_string()).collect();
+    snap.item_uri = Some(uri.to_string());
+    snap
+  }
+
+  #[test]
+  fn a_placeholder_title_resolved_mid_track_keeps_the_same_listen() {
+    let uri = "subsonic:track:42";
+    let mut collector = HistoryCollector::default();
+    assert!(collector
+      .observe(Some(subsonic_snapshot(uri, uri, &[])))
+      .unwrap()
+      .is_none());
+    let started_at = collector.current.as_ref().unwrap().started_at;
+
+    let resolved = subsonic_snapshot(uri, "Real Title", &["Real Artist"]);
+    assert!(collector.observe(Some(resolved)).unwrap().is_none());
+
+    let current = collector.current.as_ref().unwrap();
+    assert_eq!(current.started_at, started_at, "the listen was rolled");
+    assert_eq!(current.title, "Real Title");
+    assert_eq!(current.artists, ["Real Artist"]);
+  }
+
+  #[test]
+  fn only_a_placeholder_for_the_same_item_takes_new_metadata() {
+    let uri = "subsonic:track:42";
+    let placeholder = SessionIdentity::from_snapshot(&subsonic_snapshot(uri, uri, &[]));
+    let resolved = SessionIdentity::from_snapshot(&subsonic_snapshot(uri, "Real", &["A"]));
+    assert!(placeholder.resolves_to(&resolved));
+
+    // A real title changing is a new track, not a lookup.
+    assert!(!resolved.resolves_to(&placeholder));
+    // Another item behind the placeholder is a new track too.
+    let other =
+      SessionIdentity::from_snapshot(&subsonic_snapshot("subsonic:track:7", "Real", &["A"]));
+    assert!(!placeholder.resolves_to(&other));
   }
 
   #[test]
