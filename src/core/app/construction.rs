@@ -238,6 +238,8 @@ impl Default for App {
       plugin_playbar_segments: std::collections::BTreeMap::new(),
       plugin_popup: None,
       log_path: crate::core::paths::app_log_path().display().to_string(),
+      active_saved_track_filter: None,
+      pending_saved_track_search: None,
     }
   }
 }

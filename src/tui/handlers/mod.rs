@@ -46,7 +46,7 @@ mod track_table;
 use crate::core::action::{Action, CopyTarget, NavTarget};
 use crate::core::app::{
   ActiveBlock, App, ArtistBlock, InputContext, PlaybackOwner, RouteId, SearchResultBlock,
-  NOTHING_PLAYING_STATUS,
+  TrackTableContext, NOTHING_PLAYING_STATUS,
 };
 use crate::core::requirement::{Availability, Capability, Requirement};
 use crate::core::source::Source;
@@ -270,12 +270,23 @@ pub fn handle_app(key: Key, app: &mut App) {
     }
     Key::Ctrl('f')
       if app.get_current_route().active_block == ActiveBlock::TrackTable
-        && app.is_playlist_track_table_context() =>
+        && (app.is_playlist_track_table_context()
+          || app.track_table.context == Some(TrackTableContext::SavedTracks)) =>
     {
+      let context = if app.is_playlist_track_table_context() {
+        Some(InputContext::PlaylistTrackSearch)
+      } else if app.track_table.context == Some(TrackTableContext::SavedTracks) {
+        Some(InputContext::SavedTrackSearch)
+      } else {
+        None
+      };
+
+      let Some(input_context) = context else { return };
+
       app.view.input.clear();
       app.view.input_idx = 0;
       app.view.input_cursor_position = 0;
-      app.view.input_context = InputContext::PlaylistTrackSearch;
+      app.view.input_context = input_context;
       app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
     }
     _ if key == app.user_config.keys.search => {
@@ -1072,6 +1083,33 @@ mod tests {
 
     assert_eq!(app.view.input_context, InputContext::PlaylistTrackSearch);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Input);
+  }
+
+  #[test]
+  fn ctrl_f_in_saved_track_table_opens_saved_track_search_input() {
+    let mut app = App::default();
+    // The continuous saved-tracks table is what names the context.
+    app.set_saved_tracks_to_table_continuous();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+
+    handle_app(Key::Ctrl('f'), &mut app);
+
+    assert_eq!(app.view.input_context, InputContext::SavedTrackSearch);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Input);
+  }
+
+  #[test]
+  fn ctrl_f_off_a_track_table_leaves_the_input_context_alone() {
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+
+    handle_app(Key::Ctrl('f'), &mut app);
+
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::TrackTable
+    );
   }
 
   #[test]

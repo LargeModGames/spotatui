@@ -118,9 +118,11 @@ impl From<ActiveBlock> for SidebarBlock {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[allow(clippy::enum_variant_names)]
 pub enum InputContext {
   #[default]
   GlobalSearch,
+  SavedTrackSearch,
   PlaylistTrackSearch,
 }
 

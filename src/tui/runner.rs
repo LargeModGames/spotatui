@@ -41,12 +41,17 @@ fn cover_art_full_image_support() -> bool {
 }
 
 fn back_key_clears_playlist_filter(app: &mut App, active_block: ActiveBlock) -> bool {
-  if active_block == ActiveBlock::TrackTable && app.is_playlist_track_filter_active() {
-    app.clear_playlist_track_filter();
-    true
-  } else {
-    false
+  if active_block == ActiveBlock::TrackTable {
+    if app.is_playlist_track_filter_active() {
+      app.clear_playlist_track_filter();
+      return true;
+    }
+    if app.is_saved_track_filter_active() {
+      app.clear_saved_track_filter();
+      return true;
+    }
   }
+  false
 }
 
 /// The runner normally handles the configurable back key before `handle_app`.
@@ -215,6 +220,43 @@ mod tests {
 
     assert!(app.active_playlist_track_filter.is_none());
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  }
+
+  #[test]
+  fn back_key_clears_the_saved_track_filter_before_navigation_pop() {
+    let mut app = app();
+    app.track_table.context = Some(TrackTableContext::SavedTracks);
+    app.apply_saved_track_search_results("query".to_string(), vec![]);
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+
+    assert!(back_key_clears_playlist_filter(
+      &mut app,
+      ActiveBlock::TrackTable
+    ));
+
+    assert!(!app.is_saved_track_filter_active());
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  }
+
+  #[test]
+  fn back_key_without_a_filter_falls_through_to_navigation() {
+    let mut app = app();
+    app.track_table.context = Some(TrackTableContext::SavedTracks);
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+
+    assert!(!back_key_clears_playlist_filter(
+      &mut app,
+      ActiveBlock::TrackTable
+    ));
+
+    // A filter is none of the back key's business off the TrackTable block.
+    app.apply_saved_track_search_results("query".to_string(), vec![]);
+
+    assert!(!back_key_clears_playlist_filter(
+      &mut app,
+      ActiveBlock::MyPlaylists
+    ));
+    assert!(app.is_saved_track_filter_active());
   }
 
   // Both help tests assert through `key_reaches_handlers_before_back`, the function

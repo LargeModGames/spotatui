@@ -71,7 +71,7 @@ pub fn handler(key: Key, app: &mut App) {
       app.view.input_cursor_position += compute_character_width(next_c);
     }
     Key::Esc => match app.view.input_context {
-      InputContext::PlaylistTrackSearch => {
+      InputContext::PlaylistTrackSearch | InputContext::SavedTrackSearch => {
         app.view.input_context = InputContext::GlobalSearch;
         app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
       }
@@ -106,6 +106,10 @@ pub fn handler(key: Key, app: &mut App) {
 fn process_input(app: &mut App, input: String) {
   if app.view.input_context == InputContext::PlaylistTrackSearch {
     process_playlist_track_search(app, input);
+    return;
+  }
+  if app.view.input_context == InputContext::SavedTrackSearch {
+    process_saved_track_search(app, input);
     return;
   }
 
@@ -158,6 +162,21 @@ fn process_playlist_track_search(app: &mut App, input: String) {
     });
   }
 }
+
+fn process_saved_track_search(app: &mut App, input: String) {
+  let query = input.trim().to_string();
+  app.view.input_context = InputContext::GlobalSearch;
+  app.set_current_route_state(Some(ActiveBlock::TrackTable), Some(ActiveBlock::TrackTable));
+
+  if query.is_empty() {
+    app.clear_saved_track_filter();
+    return;
+  }
+
+  // A miss leaves the table alone: the cache cannot answer yet.
+  app.try_search_saved_tracks_from_cached_pages(&query);
+}
+
 fn spotify_resource_id(base: &str, uri: &str, sep: &str, resource_type: &str) -> (String, bool) {
   let uri_prefix = format!("{}{}{}", base, resource_type, sep);
   let id_string_with_query_params = uri.trim_start_matches(&uri_prefix);
@@ -224,6 +243,10 @@ fn compute_character_width(character: char) -> u16 {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::pagination::Paged;
+  use crate::core::plugin_api::TrackInfo;
+  use crate::core::test_helpers::full_track;
+  use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use rspotify::model::idtypes::PlaylistId;
   use rspotify::prelude::Id;
@@ -410,6 +433,114 @@ mod tests {
     handler(Key::Enter, &mut app);
 
     assert!(app.active_playlist_track_filter.is_none());
+    assert!(rx.try_recv().is_err());
+  }
+
+  /// A Liked Songs table over a one-page cache whose ids are all liked, which
+  /// is what the saved-track search reads.
+  fn app_with_liked_songs_cache(ids: &[&str]) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+    let items = ids
+      .iter()
+      .enumerate()
+      .map(|(index, id)| TrackInfo::from(&full_track(id, &format!("Track {index}"))))
+      .collect();
+    app.library_mut().saved_tracks.upsert_page_by_offset(Paged {
+      items,
+      limit: ids.len() as u32,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: ids.len() as u32,
+    });
+    for id in ids {
+      app.liked_song_ids_set_mut().insert(id.to_string());
+    }
+    // Loading the continuous table is what names the context SavedTracks.
+    app.set_saved_tracks_to_table_continuous();
+    (app, rx)
+  }
+
+  #[test]
+  fn saved_track_search_esc_returns_focus_to_track_table() {
+    let mut app = App::default();
+    app.view.input_context = InputContext::SavedTrackSearch;
+
+    handler(Key::Esc, &mut app);
+
+    let current_route = app.get_current_route();
+    assert_eq!(current_route.active_block, ActiveBlock::TrackTable);
+    assert_eq!(current_route.hovered_block, ActiveBlock::TrackTable);
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
+  }
+
+  #[test]
+  fn saved_track_search_enter_filters_the_cached_liked_rows() {
+    let (mut app, rx) = app_with_liked_songs_cache(&[
+      "0000000000000000000001",
+      "0000000000000000000002",
+      "0000000000000000000003",
+    ]);
+    app.view.input_context = InputContext::SavedTrackSearch;
+    app.view.input = str_to_vec_char("Track 1");
+    app.view.input_idx = app.view.input.len();
+    app.view.input_cursor_position = app.view.input.len() as u16;
+
+    handler(Key::Enter, &mut app);
+
+    assert!(app.is_saved_track_filter_active());
+    assert_eq!(
+      app
+        .track_table
+        .tracks
+        .iter()
+        .map(|track| track.name.as_str())
+        .collect::<Vec<_>>(),
+      vec!["Track 1"]
+    );
+    assert_eq!(app.view.input_context, InputContext::GlobalSearch);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::TrackTable
+    );
+    assert!(
+      rx.try_recv().is_err(),
+      "the cached pages answer the search; nothing is dispatched"
+    );
+  }
+
+  #[test]
+  fn empty_saved_track_search_clears_the_filter_without_dispatching() {
+    let (mut app, rx) = app_with_liked_songs_cache(&[
+      "0000000000000000000001",
+      "0000000000000000000002",
+      "0000000000000000000003",
+    ]);
+    app.view.input_context = InputContext::SavedTrackSearch;
+    assert!(app.try_search_saved_tracks_from_cached_pages("Track 1"));
+
+    handler(Key::Enter, &mut app);
+
+    assert!(!app.is_saved_track_filter_active());
+    assert_eq!(app.track_table.tracks.len(), 3, "the cached rows come back");
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn saved_track_search_without_a_complete_cache_leaves_the_table_alone() {
+    let (mut app, rx) = app_with_liked_songs_cache(&["0000000000000000000001"]);
+    // The table still has a page to fetch, so the cache cannot answer yet.
+    app.saved_tracks_mut().pages[0].next = Some("next".to_string());
+    app.view.input_context = InputContext::SavedTrackSearch;
+    app.view.input = str_to_vec_char("Track 0");
+    app.view.input_idx = app.view.input.len();
+    app.view.input_cursor_position = app.view.input.len() as u16;
+
+    handler(Key::Enter, &mut app);
+
+    assert!(!app.is_saved_track_filter_active());
+    assert_eq!(app.track_table.tracks.len(), 1);
     assert!(rx.try_recv().is_err());
   }
 

@@ -119,6 +119,9 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('q') if app.is_playlist_track_filter_active() => {
       app.clear_playlist_track_filter();
     }
+    Key::Char('q') if app.is_saved_track_filter_active() => {
+      app.clear_saved_track_filter();
+    }
     Key::Char('s') => handle_save_track_event(app),
     Key::Char('S') => play_random_song(app),
     k if k == app.user_config.keys.jump_to_end => jump_to_end(app),
@@ -748,6 +751,36 @@ mod tests {
     assert!(app.active_playlist_track_filter.is_none());
     assert_eq!(app.track_table.tracks.len(), 2);
     assert_eq!(app.playlist_track_positions, Some(vec![0, 1]));
+  }
+
+  #[test]
+  fn q_clears_the_saved_track_filter_and_restores_cached_rows() {
+    let (mut app, _rx) = app_with_saved_tracks();
+    let page = saved_tracks_page(
+      0,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    );
+
+    app.library_mut().saved_tracks.upsert_page_by_offset(page);
+    app.set_saved_tracks_to_table_continuous();
+    app.apply_saved_track_search_results(
+      "track 2".to_string(),
+      vec![TrackInfo::from(&full_track(
+        "0000000000000000000002",
+        "Track 2",
+      ))],
+    );
+
+    handler(Key::Char('q'), &mut app);
+
+    assert!(!app.is_saved_track_filter_active());
+    assert_eq!(app.track_table.tracks.len(), 2);
+    assert_eq!(app.view.track_table_index, 0);
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::SavedTracks)
+    );
   }
 
   #[test]
