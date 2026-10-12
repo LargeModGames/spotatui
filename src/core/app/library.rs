@@ -537,12 +537,11 @@ impl App {
     &mut self,
     query: String,
     matches: Vec<TrackInfo>,
-  ) -> bool {
+  ) -> () {
     self.active_saved_track_filter = Some(query);
     self.forget_pending_row_selection();
     self.view.track_table_index = 0;
     self.track_table.tracks = matches;
-    true
   }
 
   pub(crate) fn try_search_saved_tracks_from_cached_pages(&mut self, query: &str) -> bool {
@@ -570,7 +569,8 @@ impl App {
       }
     }
 
-    self.apply_saved_track_search_results(query.to_string(), matches)
+    self.apply_saved_track_search_results(query.to_string(), matches);
+    true
   }
 
   pub fn is_saved_track_filter_active(&self) -> bool {
