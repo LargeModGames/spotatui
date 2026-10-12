@@ -591,6 +591,7 @@ Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) b
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Muu79"><img src="https://avatars.githubusercontent.com/u/35148226?v=4?s=100" width="100px;" alt="Muaaz Bhyat"/><br /><sub><b>Muaaz Bhyat</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Muu79" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/jum-apzn"><img src="https://avatars.githubusercontent.com/u/335973771?v=4?s=100" width="100px;" alt="점[dot]"/><br /><sub><b>점[dot]</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=jum-apzn" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://web.samtalks.us"><img src="https://avatars.githubusercontent.com/u/15819181?v=4?s=100" width="100px;" alt="Samuel"/><br /><sub><b>Samuel</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=TheCodedKid" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TastyHeadphones"><img src="https://avatars.githubusercontent.com/u/76083688?v=4?s=100" width="100px;" alt="TastyHeadphones"/><br /><sub><b>TastyHeadphones</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=TastyHeadphones" title="Documentation">📖</a></td>
     </tr>
   </tbody>
 </table>
