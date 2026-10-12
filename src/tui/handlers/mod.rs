@@ -273,15 +273,11 @@ pub fn handle_app(key: Key, app: &mut App) {
         && (app.is_playlist_track_table_context()
           || app.track_table.context == Some(TrackTableContext::SavedTracks)) =>
     {
-      let context = if app.is_playlist_track_table_context() {
-        Some(InputContext::PlaylistTrackSearch)
-      } else if app.track_table.context == Some(TrackTableContext::SavedTracks) {
-        Some(InputContext::SavedTrackSearch)
+      let input_context = if app.is_playlist_track_table_context() {
+        InputContext::PlaylistTrackSearch
       } else {
-        None
+        InputContext::SavedTrackSearch
       };
-
-      let Some(input_context) = context else { return };
 
       app.view.input.clear();
       app.view.input_idx = 0;
