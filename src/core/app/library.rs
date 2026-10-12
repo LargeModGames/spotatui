@@ -533,11 +533,7 @@ impl App {
     self.set_saved_tracks_to_table_continuous();
   }
 
-  pub fn apply_saved_track_search_results(
-    &mut self,
-    query: String,
-    matches: Vec<TrackInfo>,
-  ) -> () {
+  pub fn apply_saved_track_search_results(&mut self, query: String, matches: Vec<TrackInfo>) {
     self.active_saved_track_filter = Some(query);
     self.forget_pending_row_selection();
     self.view.track_table_index = 0;
