@@ -256,7 +256,7 @@ fn resolve_shuffle_target(
       let is_saved_tracks = matches!(
         app.track_table.context,
         Some(TrackTableContext::SavedTracks)
-      );
+      ) && !app.is_saved_track_filter_active();
 
       if !is_saved_tracks || list.is_empty() {
         return None;
@@ -1319,5 +1319,34 @@ mod tests {
   #[test]
   fn pending_mid_track_reload_preserves_its_captured_position() {
     assert_eq!(full_fetch_reload_seek_ms(81_000, Some(80_000)), 80_000);
+  }
+
+  #[test]
+  fn active_saved_track_filter_skips_native_shuffle_target() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      Some(std::time::SystemTime::now()),
+    );
+    app.track_table.context = Some(TrackTableContext::SavedTracks);
+
+    let dummy_track = PlayableId::Track(
+      rspotify::model::TrackId::from_id("owowowowowowo")
+        .unwrap()
+        .into_static(),
+    );
+    let uris = Some(vec![dummy_track]);
+
+    // When filter is active: must return None (so native shuffle does not fetch whole library)
+    app.apply_saved_track_search_results("query".to_string(), vec![]);
+    assert!(resolve_shuffle_target(&app, &None, &uris, Some(0)).is_none());
+
+    // When filter is cleared: regular SavedTracks shuffle target is selected
+    app.clear_saved_track_filter();
+    assert!(matches!(
+      resolve_shuffle_target(&app, &None, &uris, Some(0)),
+      Some(ShuffleTarget::SavedTracks { .. })
+    ));
   }
 }
