@@ -447,6 +447,7 @@ impl App {
 
   pub fn reset_saved_tracks_view(&mut self) {
     self.active_saved_track_filter = None;
+    self.track_table_epoch = self.track_table_epoch.wrapping_add(1);
     self.saved_tracks_prefetch_generation = self.saved_tracks_prefetch_generation.wrapping_add(1);
     self.saved_tracks_prefetch_in_flight.clear();
     self.saved_tracks_mut().clear();
@@ -945,6 +946,18 @@ mod tests {
       .map(|t| t.name.as_str())
       .collect();
     assert_eq!(names, vec!["Charlie", "Bravo", "Alpha"]);
+  }
+
+  #[test]
+  fn a_radio_result_is_dropped_once_liked_songs_opened_after_the_request() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.get_recommendations_for_track_id("0000000000000000000001".to_string());
+    assert!(app.radio_result_is_current());
+
+    app.reset_saved_tracks_view();
+
+    assert!(!app.radio_result_is_current());
   }
 
   #[test]

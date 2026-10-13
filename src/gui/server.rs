@@ -603,7 +603,7 @@ mod tests {
     .unwrap();
 
     let mut values = Vec::new();
-    for _ in 0..25 {
+    for _ in 0..26 {
       values.push(next_json(&mut socket).await);
     }
     let kinds: Vec<_> = values.iter().map(|value| value["kind"].clone()).collect();
@@ -634,7 +634,8 @@ mod tests {
         "recently_played",
         "liked_marks",
         "settings",
-        "update"
+        "update",
+        "show"
       ]
     );
     assert!(values[0]["payload"]["token"].is_string());
