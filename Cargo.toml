@@ -169,7 +169,7 @@ gui = ["dep:httparse"]
 self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
 # The librespot session without playback: browse, library, search and remote
 # control over Spotify's internal API. `streaming` adds native playback on top.
-spotify-session = ["librespot-core", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf", "dep:mdns-sd", "dep:rustls", "dep:tokio-rustls", "dep:md-5"]
+spotify-session = ["librespot-core", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf", "dep:mdns-sd", "dep:rustls", "dep:tokio-rustls", "dep:md-5", "dep:base64"]
 streaming = ["spotify-session", "librespot-playback", "librespot-connect", "queue"]
 # Audio backend features
 alsa-backend = ["streaming", "librespot-playback/alsa-backend"]

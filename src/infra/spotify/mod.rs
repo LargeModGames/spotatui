@@ -16,5 +16,6 @@ mod playlists;
 mod router;
 mod search;
 pub mod session;
+mod zeroconf;
 
 pub use router::route;

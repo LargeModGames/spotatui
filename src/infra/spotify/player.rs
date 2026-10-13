@@ -3,10 +3,11 @@
 
 use super::cast;
 use super::json;
-use super::lan::{self, CastDevice};
+use super::lan::{self, CastDevice, ConnectSpeaker};
 use super::metadata::get_many;
 use super::router::{api_error, query_value, upstream_error};
 use super::session::SpotifySession;
+use super::zeroconf;
 use anyhow::anyhow;
 use futures::StreamExt;
 use librespot_core::dealer::protocol::{Message, TransferOptions};
@@ -26,8 +27,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const CONNECTION_ID_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a Cast device takes to join the cluster after its login.
-const CAST_JOIN_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a network device takes to join the cluster after its login.
+const JOIN_TIMEOUT: Duration = Duration::from_secs(15);
 const QUEUE_LENGTH: usize = 20;
 
 pub struct Observer {
@@ -304,27 +305,66 @@ pub async fn devices(session: &SpotifySession) -> anyhow::Result<Value> {
   let mut devices: Vec<Value> = visible_devices(&cluster, &own_id)
     .map(|(id, info)| device_json(id, info, *id == cluster.active_device_id))
     .collect();
-  let found = lan::cast_devices();
-  devices.extend(logged_out_cast_devices(&cluster, &found).map(cast_device_json));
+  let found = lan_devices();
+  devices.extend(logged_out_lan_devices(&cluster, &found).map(lan_device_json));
   Ok(json!({ "devices": devices }))
 }
 
-/// Cast devices on the network that are not in the cluster under their id or their name.
-fn logged_out_cast_devices<'a>(
+/// A speaker on the network that must log in before a transfer.
+enum LanDevice {
+  Cast(CastDevice),
+  Speaker(ConnectSpeaker),
+}
+
+impl LanDevice {
+  /// The id the device has in the cluster after its login.
+  fn id(&self) -> String {
+    match self {
+      Self::Cast(device) => device.connect_id(),
+      Self::Speaker(speaker) => speaker.device_id.clone(),
+    }
+  }
+
+  fn name(&self) -> &str {
+    match self {
+      Self::Cast(device) => &device.name,
+      Self::Speaker(speaker) => &speaker.name,
+    }
+  }
+}
+
+fn lan_devices() -> Vec<LanDevice> {
+  let cast = lan::cast_devices().into_iter().map(LanDevice::Cast);
+  let speakers = lan::connect_speakers().into_iter().map(LanDevice::Speaker);
+  cast.chain(speakers).collect()
+}
+
+/// Devices on the network that are not in the cluster under their id or their name.
+fn logged_out_lan_devices<'a>(
   cluster: &'a Cluster,
-  found: &'a [CastDevice],
-) -> impl Iterator<Item = &'a CastDevice> {
+  found: &'a [LanDevice],
+) -> impl Iterator<Item = &'a LanDevice> {
   found.iter().filter(move |device| {
-    !cluster.device.contains_key(&device.connect_id())
-      && !cluster.device.values().any(|info| info.name == device.name)
+    !cluster.device.contains_key(&device.id())
+      && !cluster
+        .device
+        .values()
+        .any(|info| info.name == device.name())
   })
 }
 
-fn cast_device_json(device: &CastDevice) -> Value {
+fn lan_device_json(device: &LanDevice) -> Value {
+  let kind = match device {
+    LanDevice::Cast(cast) if cast.video => "CastVideo",
+    LanDevice::Cast(_) => "CastAudio",
+    LanDevice::Speaker(speaker) => device_type(
+      <DeviceType as protobuf::Enum>::from_str(&speaker.device_type).unwrap_or(DeviceType::UNKNOWN),
+    ),
+  };
   json!({
-    "id": device.connect_id(),
-    "name": device.name,
-    "type": if device.video { "CastVideo" } else { "CastAudio" },
+    "id": device.id(),
+    "name": device.name(),
+    "type": kind,
     "is_active": false,
     "is_private_session": false,
     "is_restricted": false,
@@ -332,22 +372,24 @@ fn cast_device_json(device: &CastDevice) -> Value {
   })
 }
 
-/// Logs a Cast device in and waits until it joins the cluster.
-async fn wake_cast_device(
+/// Logs a network device in and waits until it joins the cluster.
+async fn wake_lan_device(
   session: &SpotifySession,
   observer: &Observer,
-  device: &CastDevice,
+  device: &LanDevice,
 ) -> anyhow::Result<()> {
-  cast::log_in(session, device)
-    .await
-    .map_err(|e| api_error(StatusCode::BAD_GATEWAY, format!("{}: {e:#}", device.name)))?;
-  let id = device.connect_id();
-  let deadline = Instant::now() + CAST_JOIN_TIMEOUT;
+  let login = match device {
+    LanDevice::Cast(cast) => cast::log_in(session, cast).await,
+    LanDevice::Speaker(speaker) => zeroconf::log_in(session, &speaker.url).await,
+  };
+  login.map_err(|e| api_error(StatusCode::BAD_GATEWAY, format!("{}: {e:#}", device.name())))?;
+  let id = device.id();
+  let deadline = Instant::now() + JOIN_TIMEOUT;
   while !observer.cluster().device.contains_key(&id) {
     if Instant::now() >= deadline {
       return Err(api_error(
         StatusCode::GATEWAY_TIMEOUT,
-        format!("{} did not join after its login", device.name),
+        format!("{} did not join after its login", device.name()),
       ));
     }
     tokio::time::sleep(Duration::from_millis(250)).await;
@@ -618,8 +660,8 @@ pub async fn transfer(session: &SpotifySession, body: Option<&Value>) -> anyhow:
   let (to, play) = transfer_target(body)?;
   let observer = observer(session).await?;
   if !observer.cluster().device.contains_key(to) {
-    if let Some(device) = lan::cast_devices().iter().find(|d| d.connect_id() == to) {
-      wake_cast_device(session, &observer, device).await?;
+    if let Some(device) = lan_devices().iter().find(|device| device.id() == to) {
+      wake_lan_device(session, &observer, device).await?;
     }
   }
   let from = transfer_source(&observer.cluster(), to);
@@ -744,27 +786,50 @@ mod tests {
   }
 
   #[test]
-  fn a_cast_device_in_the_cluster_is_not_listed_twice() {
-    let cast = |name: &str| CastDevice {
-      name: name.into(),
-      address: "192.168.1.20:8009".parse().unwrap(),
-      video: false,
+  fn a_network_device_in_the_cluster_is_not_listed_twice() {
+    let cast = |name: &str| {
+      LanDevice::Cast(CastDevice {
+        name: name.into(),
+        address: "192.168.1.20:8009".parse().unwrap(),
+        video: false,
+      })
     };
-    let found = [cast("Bedroom"), cast("Kitchen"), cast("Office")];
+    let speaker = |name: &str, id: &str| {
+      LanDevice::Speaker(ConnectSpeaker {
+        name: name.into(),
+        url: "http://192.168.1.30:35390/zc".into(),
+        device_id: id.into(),
+        device_type: "AVR".into(),
+      })
+    };
+    let found = [
+      cast("Bedroom"),
+      cast("Kitchen"),
+      cast("Office"),
+      speaker("Soundbar", "bar-id"),
+      speaker("Receiver", "avr-id"),
+    ];
     let mut cluster = Cluster::new();
     cluster.device.insert(
-      found[0].connect_id(),
+      found[0].id(),
       device("Bedroom", DeviceType::CAST_AUDIO, false),
     );
     cluster.device.insert(
       "other-id".into(),
       device("Kitchen", DeviceType::CAST_AUDIO, false),
     );
-    let listed: Vec<&str> = logged_out_cast_devices(&cluster, &found)
-      .map(|device| device.name.as_str())
+    cluster.device.insert(
+      "bar-id".into(),
+      device("Soundbar", DeviceType::SPEAKER, false),
+    );
+    let listed: Vec<&str> = logged_out_lan_devices(&cluster, &found)
+      .map(LanDevice::name)
       .collect();
-    assert_eq!(listed, vec!["Office"]);
-    assert_eq!(cast_device_json(&found[2])["id"], found[2].connect_id());
+    assert_eq!(listed, vec!["Office", "Receiver"]);
+    assert_eq!(lan_device_json(&found[2])["id"], found[2].id());
+    assert_eq!(lan_device_json(&found[2])["type"], "CastAudio");
+    assert_eq!(lan_device_json(&found[4])["id"], "avr-id");
+    assert_eq!(lan_device_json(&found[4])["type"], "AVR");
   }
 
   #[test]

@@ -1,14 +1,20 @@
-//! Google Cast speakers on the local network, kept current by an mDNS browse.
+//! Speakers on the local network that are not logged in yet, kept current by an
+//! mDNS browse: Google Cast devices and Spotify Connect (zeroconf) speakers.
 
+use super::zeroconf::SUPPORTED_TOKEN_TYPES;
 use md5::{Digest, Md5};
-use mdns_sd::{ServiceDaemon, ServiceEvent};
+use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
 const CAST_SERVICE: &str = "_googlecast._tcp.local.";
+const CONNECT_SERVICE: &str = "_spotify-connect._tcp.local.";
 /// Bit 0 of the `ca` capability mask: the device has a video output.
 const VIDEO_OUT: u32 = 1;
+const INFO_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CastDevice {
@@ -27,6 +33,21 @@ impl CastDevice {
   }
 }
 
+/// A Spotify Connect speaker that answers zeroconf `getInfo` at `url`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConnectSpeaker {
+  pub name: String,
+  pub url: String,
+  pub device_id: String,
+  /// The `deviceType` of `getInfo`, such as `SPEAKER` or `AVR`.
+  pub device_type: String,
+}
+
+enum Entry {
+  Cast(CastDevice),
+  Speaker(ConnectSpeaker),
+}
+
 /// A device from the TXT name (`fn`), the capability mask (`ca`) and the first IPv4 address.
 fn cast_device(
   name: Option<&str>,
@@ -43,9 +64,65 @@ fn cast_device(
   })
 }
 
-fn found() -> &'static Mutex<HashMap<String, CastDevice>> {
-  static FOUND: OnceLock<Mutex<HashMap<String, CastDevice>>> = OnceLock::new();
-  FOUND.get_or_init(Default::default)
+/// A speaker from its `getInfo` reply, when spotatui can log it in.
+fn connect_speaker(url: &str, info: &Value) -> Option<ConnectSpeaker> {
+  let token_type = info["tokenType"].as_str()?;
+  if !SUPPORTED_TOKEN_TYPES.contains(&token_type) {
+    return None;
+  }
+  let text = |key: &str| info[key].as_str().filter(|value| !value.is_empty());
+  Some(ConnectSpeaker {
+    name: text("remoteName")?.to_string(),
+    url: url.to_string(),
+    device_id: text("deviceID")?.to_string(),
+    device_type: text("deviceType").unwrap_or("UNKNOWN").to_string(),
+  })
+}
+
+fn first_ipv4(service: &ResolvedService) -> Option<IpAddr> {
+  service
+    .get_addresses_v4()
+    .into_iter()
+    .next()
+    .map(IpAddr::V4)
+}
+
+fn resolve_cast(service: &ResolvedService) -> Option<Entry> {
+  cast_device(
+    service.get_property_val_str("fn"),
+    service.get_property_val_str("ca"),
+    first_ipv4(service),
+    service.get_port(),
+  )
+  .map(Entry::Cast)
+}
+
+fn resolve_speaker(service: &ResolvedService) -> Option<Entry> {
+  let url = format!(
+    "http://{}:{}{}",
+    first_ipv4(service)?,
+    service.get_port(),
+    service.get_property_val_str("CPath").unwrap_or("/")
+  );
+  let info: Value = reqwest::blocking::Client::builder()
+    .timeout(INFO_TIMEOUT)
+    .build()
+    .ok()?
+    .get(&url)
+    .query(&[("action", "getInfo")])
+    .send()
+    .ok()?
+    .json()
+    .ok()?;
+  connect_speaker(&url, &info).map(Entry::Speaker)
+}
+
+fn found() -> MutexGuard<'static, HashMap<String, Entry>> {
+  static FOUND: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
+  FOUND
+    .get_or_init(Default::default)
+    .lock()
+    .unwrap_or_else(|e| e.into_inner())
 }
 
 /// Starts the browse once; later calls do nothing.
@@ -54,7 +131,7 @@ pub fn start() {
   DAEMON.get_or_init(|| match browse() {
     Ok(daemon) => Some(daemon),
     Err(e) => {
-      log::warn!("Cast device browse did not start: {e:#}");
+      log::warn!("Speaker browse did not start: {e:#}");
       None
     }
   });
@@ -62,58 +139,70 @@ pub fn start() {
 
 fn browse() -> anyhow::Result<ServiceDaemon> {
   let daemon = ServiceDaemon::new()?;
-  let events = daemon.browse(CAST_SERVICE)?;
+  watch(&daemon, CAST_SERVICE, resolve_cast)?;
+  watch(&daemon, CONNECT_SERVICE, resolve_speaker)?;
+  Ok(daemon)
+}
+
+fn watch(
+  daemon: &ServiceDaemon,
+  service_type: &str,
+  resolve: fn(&ResolvedService) -> Option<Entry>,
+) -> anyhow::Result<()> {
+  let events = daemon.browse(service_type)?;
   std::thread::Builder::new()
-    .name("cast-browse".into())
+    .name(format!("browse {service_type}"))
     .spawn(move || {
       while let Ok(event) = events.recv() {
-        let mut found = found().lock().unwrap_or_else(|e| e.into_inner());
         match event {
           ServiceEvent::ServiceResolved(service) => {
-            let ip = service
-              .get_addresses_v4()
-              .into_iter()
-              .next()
-              .map(IpAddr::V4);
-            match cast_device(
-              service.get_property_val_str("fn"),
-              service.get_property_val_str("ca"),
-              ip,
-              service.get_port(),
-            ) {
-              Some(device) => {
-                found.insert(service.get_fullname().to_string(), device);
-              }
-              None => {
-                found.remove(service.get_fullname());
-              }
-            }
+            let entry = resolve(&service);
+            let fullname = service.get_fullname().to_string();
+            match entry {
+              Some(entry) => found().insert(fullname, entry),
+              None => found().remove(&fullname),
+            };
           }
           ServiceEvent::ServiceRemoved(_, fullname) => {
-            found.remove(&fullname);
+            found().remove(&fullname);
           }
           _ => {}
         }
       }
     })?;
-  Ok(daemon)
+  Ok(())
 }
 
 /// The Cast devices seen so far, by name.
 pub fn cast_devices() -> Vec<CastDevice> {
   let mut devices: Vec<CastDevice> = found()
-    .lock()
-    .unwrap_or_else(|e| e.into_inner())
     .values()
-    .cloned()
+    .filter_map(|entry| match entry {
+      Entry::Cast(device) => Some(device.clone()),
+      Entry::Speaker(_) => None,
+    })
     .collect();
   devices.sort_by(|a, b| a.name.cmp(&b.name));
   devices
 }
 
+/// The Spotify Connect speakers seen so far, by name.
+pub fn connect_speakers() -> Vec<ConnectSpeaker> {
+  let mut speakers: Vec<ConnectSpeaker> = found()
+    .values()
+    .filter_map(|entry| match entry {
+      Entry::Speaker(speaker) => Some(speaker.clone()),
+      Entry::Cast(_) => None,
+    })
+    .collect();
+  speakers.sort_by(|a, b| a.name.cmp(&b.name));
+  speakers
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::json;
   use std::net::Ipv4Addr;
 
   const IP: Option<IpAddr> = Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)));
@@ -138,5 +227,41 @@ mod tests {
     assert_eq!(cast_device(None, None, IP, 8009), None);
     assert_eq!(cast_device(Some(""), None, IP, 8009), None);
     assert_eq!(cast_device(Some("Kitchen"), None, None, 8009), None);
+  }
+
+  #[test]
+  fn a_speaker_comes_from_its_get_info_reply() {
+    let url = "http://192.168.1.30:35390/zc";
+    let info = json!({
+      "remoteName": "Living Room",
+      "deviceID": "727bdb7f",
+      "deviceType": "SPEAKER",
+      "tokenType": "accesstoken",
+    });
+    assert_eq!(
+      connect_speaker(url, &info),
+      Some(ConnectSpeaker {
+        name: "Living Room".into(),
+        url: url.into(),
+        device_id: "727bdb7f".into(),
+        device_type: "SPEAKER".into(),
+      })
+    );
+  }
+
+  #[test]
+  fn a_speaker_with_an_unsupported_token_type_is_not_listed() {
+    let info =
+      |token_type: &str| json!({ "remoteName": "Room", "deviceID": "id", "tokenType": token_type });
+    assert_eq!(connect_speaker("u", &info("authorization_code")), None);
+    assert_eq!(connect_speaker("u", &info("default")), None);
+    assert!(connect_speaker("u", &info("accesstoken")).is_some());
+    assert_eq!(
+      connect_speaker(
+        "u",
+        &json!({ "deviceID": "id", "tokenType": "accesstoken" })
+      ),
+      None
+    );
   }
 }
