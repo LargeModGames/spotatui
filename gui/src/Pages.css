@@ -1,7 +1,9 @@
-/* Home, the album page and the artist page. */
+/* Home, the album, artist, radio and recently played pages. */
 .home,
 .album-page,
-.artist-page {
+.artist-page,
+.radio-page,
+.recent-page {
   container-type: inline-size;
   padding-bottom: 32px;
 }
@@ -103,6 +105,33 @@
   overflow: hidden;
 }
 
+.shelf-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.shelf-head h2 {
+  min-width: 0;
+}
+
+.shelf-more {
+  flex-shrink: 0;
+  margin: 0 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sub);
+}
+
+.shelf-more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .meta-link {
   padding: 0;
   border: none;
@@ -137,6 +166,11 @@
 
 .icon-action:not(:disabled):hover {
   color: var(--text);
+}
+
+.icon-action.on,
+.icon-action.on:not(:disabled):hover {
+  color: var(--accent);
 }
 
 .outline-action {

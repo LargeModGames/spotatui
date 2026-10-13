@@ -5,4 +5,8 @@ export type HelloPayload = { version: string,
 /**
  * Present only on the connect that traded a launch code.
  */
-token: string | null, revisions: DisplayRevisions, };
+token: string | null, revisions: DisplayRevisions, 
+/**
+ * A desktop shell can shrink its window to the mini player.
+ */
+window: boolean, };

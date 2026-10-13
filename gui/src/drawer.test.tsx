@@ -33,6 +33,22 @@ const queue: QueuePayload = {
         track: track("Freeze", "spotify:track:1"),
         episode: null,
       },
+      {
+        kind: "episode",
+        track: null,
+        episode: {
+          id: "e",
+          uri: "spotify:episode:e",
+          name: "Episode 400",
+          duration_ms: 3_600_000,
+          show_name: "Lex Fridman Podcast",
+          description: "",
+          release_date: "2026-10-01",
+          is_playable: true,
+          resume_point: null,
+          image_url: null,
+        },
+      },
     ],
   },
 };
@@ -73,6 +89,14 @@ describe("QueueDrawer", () => {
     expect(html).toContain("Lovesong");
     expect(html).toContain(">Next from: Spotify<");
     expect(html).toContain("Freeze");
+  });
+
+  it("lists a queued episode with its show name", () => {
+    const html = drawer("spotify:track:0");
+    expect(html).toMatch(
+      /<strong>Episode 400<\/strong><span>Lex Fridman Podcast<\/span>/,
+    );
+    expect(html).toContain("1:00:00");
   });
 
   it("hides the Spotify queue while another source plays", () => {

@@ -5,4 +5,8 @@ export type AlbumPayload = {
 /**
  * With its tracks; `null` before the first album fetch.
  */
-album: AlbumInfo | null, };
+album: AlbumInfo | null, 
+/**
+ * The album is in the user's library, as the last check found.
+ */
+saved: boolean, };

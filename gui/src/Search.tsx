@@ -11,6 +11,7 @@ import type { AlbumInfo } from "./bindings/AlbumInfo";
 import type { ArtistInfo } from "./bindings/ArtistInfo";
 import type { PlaylistInfo } from "./bindings/PlaylistInfo";
 import type { SearchPayload } from "./bindings/SearchPayload";
+import type { ShowInfo } from "./bindings/ShowInfo";
 import type { SourcePayload } from "./bindings/SourcePayload";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import { clock, sourceOf } from "./format";
@@ -22,6 +23,7 @@ import "./Search.css";
 import {
   otherSources,
   scopeLabel,
+  showView,
   TABS,
   tabHasResults,
   year,
@@ -79,13 +81,19 @@ export const Search = memo(function Search({
   const artists = search?.artists ?? [];
   const albums = search?.albums ?? [];
   const playlists = search?.playlists ?? [];
+  const shows = (search?.shows ?? []).filter((show) => show.id !== null);
   const asked = query.trim();
   const others = active && asked ? otherSources(compiled, active) : [];
   const rerun = () => {
     if (asked) run(asked);
   };
   const nothing =
-    tracks.length + artists.length + albums.length + playlists.length === 0;
+    tracks.length +
+      artists.length +
+      albums.length +
+      playlists.length +
+      shows.length ===
+    0;
   const top: Top | null = artists[0]
     ? { kind: "artist", artist: artists[0] }
     : albums[0]
@@ -232,6 +240,13 @@ export const Search = memo(function Search({
                   open={open}
                   send={send}
                 />
+              ))}
+            </Shelf>
+          )}
+          {(tab === "All" || tab === "Podcasts") && shows.length > 0 && (
+            <Shelf title="Podcasts">
+              {cap(shows).map((show, index) => (
+                <ShowCard key={`${index}-${show.id}`} show={show} open={open} />
               ))}
             </Shelf>
           )}
@@ -409,6 +424,20 @@ function PlaylistCard({
           : play(playlist.uri, send)
       }
       onPlay={() => play(playlist.uri, send)}
+    />
+  );
+}
+
+function ShowCard({ show, open }: { show: ShowInfo; open: OpenView }) {
+  return (
+    <Card
+      image={show.image_url}
+      title={show.name}
+      subtitle={show.publisher || "Podcast"}
+      onOpen={() => {
+        const view = showView(show);
+        if (view) open(view);
+      }}
     />
   );
 }

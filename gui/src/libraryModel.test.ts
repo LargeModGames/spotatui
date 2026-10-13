@@ -1,16 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { AlbumInfo } from "./bindings/AlbumInfo";
+import type { LibraryNode } from "./bindings/LibraryNode";
 import type { QueuePayload } from "./bindings/QueuePayload";
+import type { Source } from "./bindings/Source";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import {
+  ALBUM_SORTS,
+  ARTIST_SORTS,
   clampCursor,
+  createPlaylistAction,
+  createsPlaylists,
+  focusAfterAsk,
+  libraryTree,
   listPlayRequest,
+  loadExpanded,
+  nearEnd,
   openRow,
   playlistImage,
+  playlistRemoval,
   playlistsFor,
   playRequest,
+  removePlaylist,
+  saveExpanded,
+  sortAlbums,
+  sortArtists,
+  sortChoice,
   step,
   upNext,
+  wantsNextPage,
+  type TreeRow,
 } from "./libraryModel";
 
 const track = (name: string, uri: string | null): TrackInfo => ({
@@ -38,7 +57,12 @@ const empty: SourcePlaylists = {
   youtube: [],
   radio: [],
   saved_albums: [],
+  saved_albums_has_more: false,
   followed_artists: [],
+  saved_shows: [],
+  saved_shows_has_more: false,
+  saved_show_ids: [],
+  folders: null,
   editable: [],
 };
 
@@ -209,5 +233,320 @@ describe("playlistImage", () => {
     );
     expect(playlistImage(lists, "spotify:playlist:9")).toBeNull();
     expect(playlistImage(null, "spotify:playlist:1")).toBeNull();
+  });
+});
+
+const list = (uri: string, name: string, collaborative = false) => ({
+  uri,
+  name,
+  owner: "me",
+  track_count: 2,
+  id: null,
+  owner_id: null,
+  collaborative,
+  public: null,
+  image_url: null,
+});
+
+describe("createPlaylistAction", () => {
+  it("creates a Spotify or a YouTube playlist by trimmed name", () => {
+    expect(createPlaylistAction("Spotify", "  Road trip ")).toEqual({
+      CreatePlaylist: { name: "Road trip", track_uris: [] },
+    });
+    expect(createPlaylistAction("YouTube", "Mix")).toEqual({
+      CreateYouTubePlaylist: "Mix",
+    });
+  });
+
+  it("refuses a blank name and a source without playlist creation", () => {
+    expect(createPlaylistAction("Spotify", "   ")).toBeNull();
+    expect(createPlaylistAction("Local", "Mix")).toBeNull();
+    expect(createsPlaylists("Spotify")).toBe(true);
+    expect(createsPlaylists("YouTube")).toBe(true);
+    expect(createsPlaylists("Qobuz")).toBe(false);
+    expect(createsPlaylists(null)).toBe(false);
+  });
+});
+
+describe("playlistRemoval", () => {
+  const lists: SourcePlaylists = {
+    ...empty,
+    spotify: [
+      list("spotify:playlist:mine", "Mine"),
+      list("spotify:playlist:jam", "Jam", true),
+      list("spotify:playlist:theirs", "Theirs"),
+    ],
+    editable: ["spotify:playlist:mine", "spotify:playlist:jam"],
+  };
+  const removal = (source: Source, uri: string, name: string) =>
+    playlistRemoval(source, { uri, name }, lists);
+
+  it("deletes an owned Spotify playlist and removes any other one", () => {
+    expect(removal("Spotify", "spotify:playlist:mine", "Mine")).toEqual({
+      uri: "spotify:playlist:mine",
+      name: "Mine",
+      label: "Delete",
+      action: { UnfollowPlaylist: "spotify:playlist:mine" },
+      title: "Delete from Your Library?",
+      body: "This will delete Mine from Your Library.",
+      confirm: "Delete",
+    });
+    for (const [uri, name] of [
+      ["spotify:playlist:jam", "Jam"],
+      ["spotify:playlist:theirs", "Theirs"],
+    ])
+      expect(removal("Spotify", uri, name)).toMatchObject({
+        label: "Remove from Your Library",
+        action: { UnfollowPlaylist: uri },
+        body: `This will remove ${name} from Your Library.`,
+        confirm: "Remove",
+      });
+  });
+
+  it("deletes a YouTube playlist and leaves the other sources alone", () => {
+    expect(removal("YouTube", "youtube:playlist:1", "Later")).toMatchObject({
+      label: "Delete",
+      action: { DeletePlaylist: "youtube:playlist:1" },
+      body: "This will delete Later from spotatui. This cannot be undone.",
+    });
+    for (const source of ["Local", "Subsonic", "Qobuz", "Radio"] as const)
+      expect(removal(source, "x", "X")).toBeNull();
+  });
+});
+
+describe("removePlaylist", () => {
+  it("sends the removal and leaves the open playlist for home", () => {
+    const removal = playlistRemoval(
+      "Spotify",
+      { uri: "spotify:playlist:p", name: "P" },
+      empty,
+    );
+    if (!removal) throw new Error("no removal");
+    const send = vi.fn();
+    const open = vi.fn();
+    removePlaylist(
+      removal,
+      {
+        page: "playlist",
+        uri: "spotify:playlist:p",
+        name: "P",
+        source: "Spotify",
+      },
+      send,
+      open,
+    );
+    expect(send).toHaveBeenCalledWith({
+      UnfollowPlaylist: "spotify:playlist:p",
+    });
+    expect(open).toHaveBeenCalledWith({ page: "home" });
+    open.mockClear();
+    removePlaylist(removal, { page: "liked" }, send, open);
+    expect(open).not.toHaveBeenCalled();
+  });
+});
+
+describe("focusAfterAsk", () => {
+  const row = { name: "row", isConnected: true };
+  const create = { name: "create", isConnected: true };
+  const rows = { name: "rows", isConnected: true };
+
+  it("returns to the opener on cancel and skips it after a confirmed removal", () => {
+    expect(focusAfterAsk(false, row, [create, rows])).toBe(row);
+    expect(focusAfterAsk(true, row, [create, rows])).toBe(create);
+  });
+
+  it("falls back to a stable element that is still in the page", () => {
+    const gone = { ...row, isConnected: false };
+    expect(focusAfterAsk(false, gone, [null, rows])).toBe(rows);
+    expect(focusAfterAsk(true, row, [null, null])).toBeNull();
+  });
+});
+
+describe("libraryTree", () => {
+  const playlists = [
+    list("p:a", "A"),
+    list("p:b", "B"),
+    list("p:c", "C"),
+    list("p:loose", "Loose"),
+  ];
+  const nodes: LibraryNode[] = [
+    {
+      kind: "folder",
+      name: "Outer",
+      uri: "f:outer",
+      children: [
+        { kind: "playlist", uri: "p:a" },
+        {
+          kind: "folder",
+          name: "Inner",
+          uri: "f:inner",
+          children: [{ kind: "playlist", uri: "p:b" }],
+        },
+        { kind: "playlist", uri: "p:gone" },
+      ],
+    },
+    { kind: "playlist", uri: "p:c" },
+  ];
+  const shape = (rows: TreeRow[]) =>
+    rows.map((row) =>
+      row.kind === "folder"
+        ? `${row.depth} [${row.expanded ? "-" : "+"}] ${row.name}`
+        : `${row.depth} ${row.row.name}`,
+    );
+
+  it("hides a closed folder's playlists and ends with the playlists outside the tree", () => {
+    expect(shape(libraryTree(nodes, playlists, new Set()))).toEqual([
+      "0 [+] Outer",
+      "0 C",
+      "0 Loose",
+    ]);
+    expect(shape(libraryTree(nodes, playlists, new Set(["f:inner"])))).toEqual([
+      "0 [+] Outer",
+      "0 C",
+      "0 Loose",
+    ]);
+  });
+
+  it("indents the open folders' rows and skips playlists it has no info for", () => {
+    expect(
+      shape(libraryTree(nodes, playlists, new Set(["f:outer", "f:inner"]))),
+    ).toEqual(["0 [-] Outer", "1 A", "1 [-] Inner", "2 B", "0 C", "0 Loose"]);
+  });
+});
+
+describe("sortAlbums", () => {
+  const album = (
+    name: string,
+    artist: string | null,
+    release_date: string | null,
+  ): AlbumInfo => ({
+    id: name,
+    uri: null,
+    name,
+    artists: artist ? [{ id: null, name: artist }] : [],
+    album_type: null,
+    release_date,
+    total_tracks: null,
+    image_url: null,
+    tracks: [],
+  });
+  // In the server's order: newest added first.
+  const albums = [
+    album("beta", "Zed", "2001"),
+    album("Alpha", "abba", "1999-05"),
+    album("gamma", null, null),
+  ];
+  const names = (sort: string) => sortAlbums(albums, sort).map((a) => a.name);
+
+  it("keeps the server order for default and newest added, and reverses it for oldest added", () => {
+    expect(names("default")).toEqual(["beta", "Alpha", "gamma"]);
+    expect(names("date_added:desc")).toEqual(["beta", "Alpha", "gamma"]);
+    expect(names("date_added")).toEqual(["gamma", "Alpha", "beta"]);
+    expect(names("bogus")).toEqual(["beta", "Alpha", "gamma"]);
+  });
+
+  it("sorts by name and first artist ignoring case, and by release date", () => {
+    expect(names("name")).toEqual(["Alpha", "beta", "gamma"]);
+    expect(names("name:desc")).toEqual(["gamma", "beta", "Alpha"]);
+    expect(names("artist")).toEqual(["gamma", "Alpha", "beta"]);
+    expect(names("artist:desc")).toEqual(["beta", "Alpha", "gamma"]);
+    expect(names("release_date")).toEqual(["gamma", "Alpha", "beta"]);
+    expect(names("release_date:desc")).toEqual(["beta", "Alpha", "gamma"]);
+    expect(albums.map((a) => a.name)).toEqual(["beta", "Alpha", "gamma"]);
+  });
+});
+
+describe("sortArtists", () => {
+  const artist = (name: string) => ({
+    id: name,
+    uri: null,
+    name,
+    image_url: null,
+  });
+  const artists = [artist("björk"), artist("ABBA"), artist("Coldplay")];
+  const names = (sort: string) => sortArtists(artists, sort).map((a) => a.name);
+
+  it("keeps the server order by default and sorts names ignoring case", () => {
+    expect(names("default")).toEqual(["björk", "ABBA", "Coldplay"]);
+    expect(names("date_added")).toEqual(["björk", "ABBA", "Coldplay"]);
+    expect(names("name")).toEqual(["ABBA", "björk", "Coldplay"]);
+    expect(names("name:desc")).toEqual(["Coldplay", "björk", "ABBA"]);
+  });
+});
+
+describe("sortChoice", () => {
+  it("takes a known option and falls back to default", () => {
+    expect(sortChoice(ALBUM_SORTS, "artist:desc")).toBe("artist:desc");
+    expect(sortChoice(ARTIST_SORTS, "artist:desc")).toBe("default");
+    expect(sortChoice(ARTIST_SORTS, null)).toBe("default");
+  });
+
+  it("labels the orders as the list page and Settings do", () => {
+    expect(ALBUM_SORTS.map((option) => option.label)).toEqual([
+      "Recently added",
+      "Name (A-Z)",
+      "Name (Z-A)",
+      "Date added (oldest first)",
+      "Date added (newest first)",
+      "Artist (A-Z)",
+      "Artist (Z-A)",
+      "Release date (oldest first)",
+      "Release date (newest first)",
+    ]);
+    expect(ARTIST_SORTS).toEqual(ALBUM_SORTS.slice(0, 3));
+  });
+});
+
+describe("next page", () => {
+  it("counts a box within the margin of its end, or too short to scroll, as near the end", () => {
+    const box = (scrollTop: number, scrollHeight: number) => ({
+      scrollTop,
+      scrollHeight,
+      clientHeight: 500,
+    });
+    expect(nearEnd(box(0, 2000))).toBe(false);
+    expect(nearEnd(box(1300, 2000))).toBe(true);
+    expect(nearEnd(box(0, 300))).toBe(true);
+  });
+
+  it("does not count a hidden box as near the end", () => {
+    expect(nearEnd({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 })).toBe(
+      false,
+    );
+  });
+
+  it("asks once per pushed list, and only while more pages exist", () => {
+    const first = [1, 2];
+    // An index bump on cached pages pushes an equal list of the same length.
+    const bumped = [1, 2];
+    expect(wantsNextPage(true, true, first, null)).toBe(true);
+    expect(wantsNextPage(true, true, first, first)).toBe(false);
+    expect(wantsNextPage(true, true, bumped, first)).toBe(true);
+    expect(wantsNextPage(false, true, bumped, first)).toBe(false);
+    expect(wantsNextPage(true, false, bumped, first)).toBe(false);
+  });
+});
+
+describe("expanded folders storage", () => {
+  it("round-trips the open folders and survives junk or a blocked storage", () => {
+    const saved = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => void saved.set(key, value),
+    };
+    saveExpanded(storage, new Set(["f:a", "f:b"]));
+    expect([...loadExpanded(storage)]).toEqual(["f:a", "f:b"]);
+    for (const key of saved.keys()) saved.set(key, "{not json");
+    expect(loadExpanded(storage).size).toBe(0);
+    const blocked = {
+      getItem: (): string | null => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    expect(loadExpanded(blocked).size).toBe(0);
+    expect(() => saveExpanded(blocked, new Set(["f:a"]))).not.toThrow();
   });
 });

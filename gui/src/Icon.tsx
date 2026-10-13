@@ -105,6 +105,12 @@ const PATHS = {
   link: (
     <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7L12 6.3M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
   ),
+  mini: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <rect x="12" y="11" width="6" height="5" rx="1" />
+    </>
+  ),
   music: (
     <>
       <path d="M9 18V5l11-2v13" />

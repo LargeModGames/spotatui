@@ -1,0 +1,117 @@
+/* The mini player: the whole small window, or a centered card on a large page. */
+.mini-player {
+  height: 100vh;
+  height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: var(--frame);
+  color: var(--text);
+}
+
+.mini-card {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 420px;
+  height: 100%;
+  max-height: 520px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  padding: 16px 16px 12px;
+  background: var(--panel);
+}
+
+/* A page larger than the card frames it. */
+@media (min-width: 452px) and (min-height: 552px) {
+  .mini-card {
+    border-radius: var(--radius);
+    box-shadow: 0 16px 48px rgb(0 0 0 / 50%);
+  }
+}
+
+.mini-card.idle {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Over the cover, below the exit button, so the controls stay reachable. */
+.mini-player ~ .toast {
+  top: 52px;
+  bottom: auto;
+}
+
+.mini-exit {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: var(--text);
+}
+
+.mini-exit:not(:disabled):hover {
+  background: var(--hover);
+}
+
+/* The cover takes the largest square the room left by the controls holds. */
+.mini-cover {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  container-type: size;
+}
+
+.mini-cover > .cover-art {
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
+}
+
+.mini-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mini-meta .titles {
+  flex-grow: 1;
+}
+
+.mini-meta .titles strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.mini-meta .titles span {
+  font-size: 13px;
+}
+
+.mini-meta .badge {
+  flex-shrink: 0;
+  height: 22px;
+  border-radius: 4px;
+}
+
+.mini-card .transport {
+  gap: 8px;
+}
+
+.mini-card .progress > span {
+  min-width: 36px;
+}
+
+.mini-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--quiet);
+}
+
+.mini-empty p {
+  margin: 0;
+  font-size: 14px;
+}

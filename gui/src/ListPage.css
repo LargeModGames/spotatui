@@ -34,6 +34,57 @@
   color: var(--text);
 }
 
+.list-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.list-count {
+  color: var(--sub);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.list-filter,
+.list-sort {
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text);
+  font: 14px var(--sans);
+}
+
+.list-filter {
+  width: 200px;
+  min-width: 0;
+}
+
+.list-sort {
+  cursor: pointer;
+}
+
+.list-filter:hover,
+.list-sort:hover {
+  background: var(--hover);
+}
+
+.list-filter:focus {
+  outline: none;
+  border-color: var(--text);
+}
+
+.list-sort:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
 .list-empty {
   margin: 0;
   padding: 8px 24px;

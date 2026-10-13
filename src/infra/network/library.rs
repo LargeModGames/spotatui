@@ -1788,6 +1788,8 @@ impl LibraryNetwork for Network {
         app
           .saved_show_ids_set_mut()
           .insert(show_id.id().to_string());
+        // The saved-shows list gets the new show at its top.
+        app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
       }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
@@ -1805,7 +1807,7 @@ impl LibraryNetwork for Network {
         if !saved_shows.items.is_empty() {
           let domain_page =
             crate::infra::network::mapping::map_page(&saved_shows, |s| ShowInfo::from(&s.show));
-          app.library_mut().saved_shows.add_pages(domain_page);
+          app.store_saved_shows_page(domain_page);
         }
         // Bump even on an empty page (see saved-albums note above).
         app
@@ -1838,9 +1840,7 @@ impl LibraryNetwork for Network {
     playlist_id: PlaylistId<'static>,
   ) {
     match self.library_remove_uris(&[playlist_id.uri()]).await {
-      Ok(_) => {
-        // Handled
-      }
+      Ok(_) => self.app.lock().await.dispatch(IoEvent::GetPlaylists),
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
   }
@@ -1914,10 +1914,11 @@ impl LibraryNetwork for Network {
       Ok(_) => {
         {
           let mut app = self.app.lock().await;
-          // A remove never refetches: the cached pages now show a track that
-          // is no longer there. Mark them stale so the next search or sort
-          // walks Spotify again instead of bringing the removed track back.
+          // The cached pages still hold the removed track. Mark them stale so
+          // a search or sort walks Spotify again, and reload the open table:
+          // every later row moved up one position.
           app.mark_playlist_track_pages_stale(&playlist_id);
+          app.reload_playlist_tracks(playlist_id);
         }
         self
           .show_status_message("Removed from playlist".to_string(), 3)

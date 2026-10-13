@@ -65,6 +65,7 @@ impl App {
     seed_tracks: Option<Vec<String>>,
     first_track: Option<TrackInfo>,
   ) {
+    self.begin_radio_request();
     let user_country = self.get_user_country();
     self.dispatch(IoEvent::GetRecommendationsForSeed(
       seed_artists,
@@ -75,6 +76,7 @@ impl App {
   }
 
   pub fn get_recommendations_for_track_id(&mut self, id: String) {
+    self.begin_radio_request();
     let user_country = self.get_user_country();
     self.dispatch(IoEvent::GetRecommendationsForTrackId(id, user_country));
   }

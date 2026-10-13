@@ -55,6 +55,7 @@ const search: SearchPayload = {
     },
   ],
   playlists: [],
+  shows: [],
   liked: [],
 };
 

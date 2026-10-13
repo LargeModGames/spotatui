@@ -8,6 +8,7 @@ import "./Pages.css";
 import {
   albumKind,
   albumPlay,
+  copyLink,
   lengthLine,
   releaseLine,
   trackKey,
@@ -20,12 +21,15 @@ import { PageHeader, PlayButton } from "./ui";
 export function AlbumPage({
   id,
   album,
+  saved,
   playingUri,
   open,
   send,
 }: {
   id: string;
   album: AlbumInfo | null;
+  /** The album is in the user's library. */
+  saved: boolean;
   playingUri: string | null;
   open: OpenView;
   send: (action: Action) => void;
@@ -63,6 +67,7 @@ export function AlbumPage({
   const year = yearOf(album.release_date);
   const released = releaseLine(album.release_date);
   const albumId = album.id;
+  const saveLabel = saved ? "Remove from Your Library" : "Save to Your Library";
 
   return (
     <section className="album-page">
@@ -106,13 +111,35 @@ export function AlbumPage({
         />
         <button
           type="button"
-          className="icon-action"
-          aria-label="Save to library"
-          title="Save to library"
+          className={saved ? "icon-action on" : "icon-action"}
+          aria-label={saveLabel}
+          title={saveLabel}
+          aria-pressed={saved}
           disabled={!albumId}
-          onClick={() => albumId && send({ SaveAlbum: albumId })}
+          onClick={() =>
+            albumId &&
+            send(saved ? { UnsaveAlbum: albumId } : { SaveAlbum: albumId })
+          }
         >
-          <Glyph name="heart" size={32} />
+          <Glyph name="heart" size={32} filled={saved} />
+        </button>
+        <button
+          type="button"
+          className="icon-action"
+          aria-label="Copy album link"
+          title="Copy album link"
+          disabled={!albumId}
+          onClick={() =>
+            albumId &&
+            void copyLink(
+              `https://open.spotify.com/album/${albumId}`,
+              "Copied the album link.",
+              send,
+              navigator.clipboard,
+            )
+          }
+        >
+          <Glyph name="link" size={28} />
         </button>
       </div>
       <div className="page-tracks">

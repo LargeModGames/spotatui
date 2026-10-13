@@ -1,8 +1,12 @@
+import type { EpisodeInfo } from "../src/bindings/EpisodeInfo";
 import type { NowPlaying } from "../src/bindings/NowPlaying";
 import type { PlaylistInfo } from "../src/bindings/PlaylistInfo";
+import type { ResumePointInfo } from "../src/bindings/ResumePointInfo";
 import type { ServerMessage } from "../src/bindings/ServerMessage";
 import type { SettingRow } from "../src/bindings/SettingRow";
+import type { ShowInfo } from "../src/bindings/ShowInfo";
 import type { Source } from "../src/bindings/Source";
+import type { SourcePlaylists } from "../src/bindings/SourcePlaylists";
 import type { TrackInfo } from "../src/bindings/TrackInfo";
 
 const revisions = {
@@ -29,11 +33,12 @@ const revisions = {
   liked_marks: 1,
   settings: 1,
   update: 1,
+  show: 1,
 };
 
 export const hello: ServerMessage = {
   kind: "hello",
-  payload: { version: "0.0.0-shot", token: "shot", revisions },
+  payload: { version: "0.0.0-shot", token: "shot", revisions, window: false },
 };
 
 const sourceChoices: [Source, string, string][] = [
@@ -217,7 +222,12 @@ export const library: ServerMessage[] = [
       youtube: [],
       radio: [],
       saved_albums: [],
+      saved_albums_has_more: false,
       followed_artists: [],
+      saved_shows: [],
+      saved_shows_has_more: false,
+      saved_show_ids: [],
+      folders: null,
       editable: [
         "spotify:playlist:1",
         "spotify:playlist:2",
@@ -260,7 +270,12 @@ export const libraryUnavailable: ServerMessage[] = [
       youtube: [],
       radio: [],
       saved_albums: [],
+      saved_albums_has_more: false,
       followed_artists: [],
+      saved_shows: [],
+      saved_shows_has_more: false,
+      saved_show_ids: [],
+      folders: null,
       editable: [],
     },
   },
@@ -354,6 +369,7 @@ export const search: ServerMessage[] = [
         tracks: [],
       })),
       playlists: [],
+      shows: [],
       liked: ["f1", "f2"],
     },
   },
@@ -512,6 +528,7 @@ export const room: ServerMessage[] = [
     kind: "album",
     rev: 1,
     payload: {
+      saved: false,
       album: {
         id: "21",
         uri: "spotify:album:21",
@@ -728,6 +745,8 @@ export const filmScores: ServerMessage[] = [
         is_local: false,
       })),
       has_more: false,
+      positions: [0, 1, 2, 3],
+      radio: null,
     },
   },
   { kind: "liked_marks", rev: 1, payload: ["f1"] },
@@ -875,4 +894,202 @@ export const settings: ServerMessage[] = [
     ],
   },
   { kind: "update", rev: 1, payload: { state: "ready", version: "0.44.0" } },
+];
+
+function withLibrary(change: Partial<SourcePlaylists>): ServerMessage[] {
+  return library.map((message) =>
+    message.kind === "library"
+      ? { ...message, payload: { ...message.payload, ...change } }
+      : message,
+  );
+}
+
+/** The Spotify playlists with two of them in a closed folder. */
+export const libraryFolders: ServerMessage[] = withLibrary({
+  folders: [
+    {
+      kind: "folder",
+      name: "Chill & focus",
+      uri: "spotify:user:jay:folder:focus",
+      children: [
+        { kind: "playlist", uri: "spotify:playlist:1" },
+        { kind: "playlist", uri: "spotify:playlist:3" },
+      ],
+    },
+    { kind: "playlist", uri: "spotify:playlist:2" },
+    { kind: "playlist", uri: "spotify:playlist:4" },
+    { kind: "playlist", uri: "spotify:playlist:5" },
+  ],
+});
+
+function podcastShow(
+  id: string,
+  name: string,
+  publisher: string,
+  description = "",
+): ShowInfo {
+  return {
+    id,
+    uri: `spotify:show:${id}`,
+    name,
+    description,
+    publisher,
+    image_url: null,
+  };
+}
+
+const shows: ShowInfo[] = [
+  podcastShow(
+    "s1",
+    "Score Notes",
+    "Cue Sheet Media",
+    "Every week two composers take one film score apart, cue by cue: the themes, the orchestration and the sessions that made it.",
+  ),
+  podcastShow("s2", "Leitmotif Hour", "Main Title Radio"),
+  podcastShow("s3", "Cue by Cue", "Reel Audio"),
+  podcastShow("s4", "The Temp Track", "Studio B Podcasts"),
+];
+
+/** A Spotify search for film scores: two songs and four podcast shows. */
+export const podcastSearch: ServerMessage[] = [
+  {
+    kind: "search",
+    rev: 1,
+    payload: {
+      ran: true,
+      query: "film score",
+      tracks: [
+        hit("Time", "t1", "Inception", "Hans Zimmer", 275),
+        hit("Cornfield Chase", "t2", "Interstellar", "Hans Zimmer", 126),
+      ],
+      artists: [],
+      albums: [],
+      playlists: [],
+      shows,
+      liked: [],
+    },
+  },
+];
+
+function episode(
+  id: string,
+  name: string,
+  minutes: number,
+  release_date: string,
+  resume_point: ResumePointInfo | null,
+  description: string,
+): EpisodeInfo {
+  return {
+    id,
+    uri: `spotify:episode:${id}`,
+    name,
+    duration_ms: minutes * 60_000,
+    show_name: "",
+    description,
+    release_date,
+    is_playable: true,
+    resume_point,
+    image_url: null,
+  };
+}
+
+/** Score Notes, followed: a new episode, one half played and one played through. */
+export const podcast: ServerMessage[] = [
+  {
+    kind: "show",
+    rev: 1,
+    payload: {
+      page: {
+        show: shows[0],
+        saved: true,
+        loaded: true,
+        total: 3,
+        has_more: false,
+        episodes: [
+          episode(
+            "e3",
+            "The organ of Interstellar",
+            57,
+            "2026-10-07",
+            null,
+            "Why a church organ carries a film about space, and how the recording sessions in London shaped it.",
+          ),
+          episode(
+            "e2",
+            "Ninety themes for Middle-earth",
+            48,
+            "2026-09-30",
+            { fully_played: false, resume_position_ms: 24 * 60_000 },
+            "Every culture gets a theme: a walk through the leitmotifs of the trilogy.",
+          ),
+          episode(
+            "e1",
+            "Dragons, bagpipes and John Powell",
+            51,
+            "2026-09-23",
+            { fully_played: true, resume_position_ms: 0 },
+            "The score that taught a generation to love Celtic flutes.",
+          ),
+        ],
+      },
+    },
+  },
+];
+
+/** Eight Spotify songs played lately, each with an id, so a row opens its song radio. */
+export const history: ServerMessage[] = [
+  {
+    kind: "recently_played",
+    rev: 1,
+    payload: (
+      [
+        ["Freeze", "Kygo", "Freeze", 487],
+        ["Cornfield Chase", "Hans Zimmer", "Interstellar", 126],
+        ["Rolling in the Deep", "Adele", "21", 228],
+        ["Faded", "Alan Walker", "Different World", 212],
+        ["Nuvole Bianche", "Ludovico Einaudi", "Una Mattina", 358],
+        ["Wake Me Up", "Avicii", "True", 247],
+        ["Time", "Hans Zimmer", "Inception", 275],
+        ["Firestone", "Kygo, Conrad Sewell", "Cloud Nine", 272],
+      ] as const
+    ).map(([name, artist, album, seconds], index) =>
+      hit(name, `h${index}`, album, artist, seconds),
+    ),
+  },
+];
+
+/** The song radio of Cornfield Chase, the second row of `history`. */
+export const songRadio: ServerMessage[] = [
+  {
+    kind: "track_table",
+    rev: 1,
+    payload: {
+      uri: null,
+      tracks: (
+        [
+          ["Day One", "Hans Zimmer", "Interstellar", 199],
+          ["Experience", "Ludovico Einaudi", "In a Time Lapse", 315],
+          [
+            "Arrival of the Birds",
+            "The Cinematic Orchestra",
+            "The Crimson Wing",
+            158,
+          ],
+          ["Mountains", "Hans Zimmer", "Interstellar", 219],
+          [
+            "On the Nature of Daylight",
+            "Max Richter",
+            "The Blue Notebooks",
+            372,
+          ],
+          ["Una Mattina", "Ludovico Einaudi", "Una Mattina", 202],
+        ] as const
+      ).map(([name, artist, album, seconds], index) =>
+        hit(name, `r${index}`, album, artist, seconds),
+      ),
+      has_more: false,
+      positions: null,
+      radio: "h1",
+    },
+  },
 ];

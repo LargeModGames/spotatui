@@ -126,7 +126,11 @@ export function Home({
         </div>
       </div>
       {recentShelf.length > 0 && (
-        <Shelf oneRow title="Recently played">
+        <Shelf
+          oneRow
+          title="Recently played"
+          onMore={() => open({ page: "recent" })}
+        >
           {recentShelf.slice(0, SHELF_MAX).map((track) => (
             <Card
               key={track.album_id}

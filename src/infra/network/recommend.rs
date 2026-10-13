@@ -112,6 +112,10 @@ impl RecommendationNetwork for Network {
         };
 
         let mut app = self.app.lock().await;
+        // Another list opened in the table while this radio was in flight.
+        if !app.radio_result_is_current() {
+          return;
+        }
         // Check if these tracks are liked (only the rspotify recommendations,
         // not the prepended domain-layer seed track).
         let track_check = ids::track_check_ids(full_tracks.iter().map(|t| t.id.as_ref()));
@@ -125,6 +129,10 @@ impl RecommendationNetwork for Network {
           app.track_table.tracks.insert(0, track);
         }
         app.track_table.context = Some(TrackTableContext::RecommendedTracks);
+        app.set_radio_seed_id(match (&seed_artists, &seed_tracks) {
+          (None, Some(tracks)) => tracks.first().map(|id| id.id().to_string()),
+          _ => None,
+        });
         app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
       }
       Err(e) => {

@@ -94,6 +94,30 @@ describe("Settings", () => {
     expect(html).toContain("data-focus");
   });
 
+  it("shows the default sort rows under a Library heading", () => {
+    const library: SettingRow = {
+      id: "behavior.default_sort_playlist_tracks",
+      group: "library",
+      name: "Default Playlist Sort",
+      description: "How a playlist's tracks are sorted when it opens",
+      value: {
+        kind: "choice",
+        value: "name:desc",
+        options: ["default", "name", "name:desc"],
+      },
+    };
+    const html = page(null, [rows[0], library]);
+    const order = [">Playback</h2>", ">Library</h2>", "Default Playlist Sort"];
+    const at = order.map((text) => html.indexOf(text));
+    expect(at.every((index) => index >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(html).toContain('aria-labelledby="settings-library"');
+    expect(html).toMatch(
+      /<option value="name:desc" selected="">Title \(Z-A\)<\/option>/,
+    );
+    expect(html).toContain('<option value="default">Custom order</option>');
+  });
+
   it("has no Updates section without an updater", () => {
     const html = page(null, rows.slice(0, 3));
     expect(html).not.toContain(">Updates</h2>");
@@ -150,6 +174,31 @@ describe("Settings", () => {
         SetSetting: {
           id: "behavior.streaming_bitrate",
           value: { Text: "160" },
+        },
+      },
+    ]);
+  });
+
+  it("a default sort select sends the raw token, not its label", () => {
+    const library: SettingRow = {
+      id: "behavior.default_sort_playlist_tracks",
+      group: "library",
+      name: "Default Playlist Sort",
+      description: "",
+      value: {
+        kind: "choice",
+        value: "default",
+        options: ["default", "date_added:desc"],
+      },
+    };
+    const actions = sent(library, (control) =>
+      control.onChange?.({ currentTarget: { value: "date_added:desc" } }),
+    );
+    expect(actions).toEqual([
+      {
+        SetSetting: {
+          id: "behavior.default_sort_playlist_tracks",
+          value: { Text: "date_added:desc" },
         },
       },
     ]);

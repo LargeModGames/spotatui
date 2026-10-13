@@ -65,6 +65,11 @@ describe("shellKey", () => {
     expect(shellKey(press("/", { typing: true }))).toBeNull();
   });
 
+  it("capital T switches the mini player, but not from a text field", () => {
+    expect(shellKey(press("T"))).toBe("mini");
+    expect(shellKey(press("T", { typing: true }))).toBeNull();
+  });
+
   it("capital Q opens the queue and plain q is left to the screen", () => {
     expect(shellKey(press("Q"))).toBe("queue");
     expect(shellKey(press("q"))).toBeNull();

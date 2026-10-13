@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SearchPayload } from "./bindings/SearchPayload";
-import { otherSources, scopeLabel, tabHasResults, year } from "./searchModel";
+import {
+  otherSources,
+  scopeLabel,
+  showView,
+  tabHasResults,
+  year,
+} from "./searchModel";
 
 const empty: SearchPayload = {
   ran: true,
@@ -9,6 +15,7 @@ const empty: SearchPayload = {
   artists: [],
   albums: [],
   playlists: [],
+  shows: [],
   liked: [],
 };
 
@@ -29,5 +36,33 @@ describe("searchModel", () => {
   it("disables a tab with no results but never All", () => {
     expect(tabHasResults(empty, "Albums")).toBe(false);
     expect(tabHasResults(empty, "All")).toBe(true);
+  });
+
+  it("offers the Podcasts tab only for a show it can open", () => {
+    const show = {
+      id: null,
+      uri: null,
+      name: "Lex",
+      description: "",
+      publisher: "Lex Fridman",
+      image_url: null,
+    };
+    expect(tabHasResults({ ...empty, shows: [show] }, "Podcasts")).toBe(false);
+    expect(
+      tabHasResults({ ...empty, shows: [{ ...show, id: "s" }] }, "Podcasts"),
+    ).toBe(true);
+  });
+
+  it("opens a show by id and skips one without an id", () => {
+    const show = {
+      id: "s",
+      uri: "spotify:show:s",
+      name: "Lex",
+      description: "",
+      publisher: "Lex Fridman",
+      image_url: null,
+    };
+    expect(showView(show)).toEqual({ page: "show", id: "s", name: "Lex" });
+    expect(showView({ ...show, id: null })).toBeNull();
   });
 });

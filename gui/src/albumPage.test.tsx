@@ -36,11 +36,12 @@ const album: AlbumInfo = {
   tracks: [track("Firestone"), track("Stay")],
 };
 
-const render = (id: string, value: AlbumInfo | null) =>
+const render = (id: string, value: AlbumInfo | null, saved = false) =>
   renderToStaticMarkup(
     <AlbumPage
       id={id}
       album={value}
+      saved={saved}
       playingUri={null}
       open={() => {}}
       send={() => {}}
@@ -70,13 +71,24 @@ describe("AlbumPage", () => {
     expect(html).toContain("2 songs, 8 min");
   });
 
-  it("offers play and save, lists the tracks and ends on the release date", () => {
+  it("offers play, save and the link, lists the tracks and ends on the release date", () => {
     const html = render("al", album);
     expect(html).toContain('aria-label="Play Cloud Nine"');
-    expect(html).toContain('aria-label="Save to library"');
+    expect(html).toMatch(
+      /aria-label="Save to Your Library"[^>]*aria-pressed="false"/,
+    );
+    expect(html).toContain('aria-label="Copy album link"');
     expect(html).toContain('role="listbox"');
     expect(html).toContain("Firestone");
     expect(html).toContain("Stay");
     expect(html).toContain("May 13, 2016");
+  });
+
+  it("offers to remove a saved album with a pressed, filled heart", () => {
+    const html = render("al", album, true);
+    expect(html).toMatch(
+      /class="icon-action on"[^>]*aria-label="Remove from Your Library"[^>]*aria-pressed="true"[^>]*><svg[^>]*fill="currentColor"/,
+    );
+    expect(html).not.toContain("Save to Your Library");
   });
 });

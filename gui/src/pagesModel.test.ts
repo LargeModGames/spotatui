@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { Action } from "./bindings/Action";
 import type { AlbumInfo } from "./bindings/AlbumInfo";
 import type { DiscoverPayload } from "./bindings/DiscoverPayload";
 import type { TrackInfo } from "./bindings/TrackInfo";
+import type { TrackTablePayload } from "./bindings/TrackTablePayload";
 import {
   albumKind,
   albumPlay,
+  copyLink,
   greeting,
   homeFetch,
   lengthLine,
+  radioRows,
   recentAlbums,
   releaseLine,
   trackKey,
@@ -153,5 +157,52 @@ describe("trackKey", () => {
     expect(trackKey("j", 0, 3)).toEqual({ kind: "move", next: 1 });
     expect(trackKey("ArrowUp", 2, 3)).toEqual({ kind: "move", next: 1 });
     expect(trackKey("x", 0, 3)).toBeNull();
+  });
+});
+
+describe("radioRows", () => {
+  const table = (radio: string | null): TrackTablePayload => ({
+    uri: null,
+    tracks: [track("1", "a")],
+    has_more: false,
+    positions: null,
+    radio,
+  });
+
+  it("hands out the rows only when they are this seed's radio", () => {
+    expect(radioRows(table("seed"), "seed")?.map((row) => row.id)).toEqual([
+      "1",
+    ]);
+    expect(radioRows(table("other"), "seed")).toBeNull();
+    expect(radioRows(table(null), "seed")).toBeNull();
+    expect(radioRows(null, "seed")).toBeNull();
+  });
+});
+
+describe("copyLink", () => {
+  const link = "https://open.spotify.com/album/al";
+
+  it("writes the link and confirms it", async () => {
+    const sent: Action[] = [];
+    const written: string[] = [];
+    await copyLink(link, "Copied the album link.", (a) => sent.push(a), {
+      writeText: async (text) => {
+        written.push(text);
+      },
+    });
+    expect(written).toEqual([link]);
+    expect(sent).toEqual([{ Notify: ["Copied the album link.", 3] }]);
+  });
+
+  it("reports an error when the write fails or there is no clipboard", async () => {
+    const sent: Action[] = [];
+    await copyLink(link, "done", (a) => sent.push(a), {
+      writeText: () => Promise.reject(new Error("denied")),
+    });
+    await copyLink(link, "done", (a) => sent.push(a), undefined);
+    expect(sent).toEqual([
+      { NotifyError: ["Could not copy the link.", 4] },
+      { NotifyError: ["Could not copy the link.", 4] },
+    ]);
   });
 });

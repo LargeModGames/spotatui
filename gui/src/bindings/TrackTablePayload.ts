@@ -8,4 +8,12 @@ export type TrackTablePayload = { uri: string | null, tracks: Array<TrackInfo>,
 /**
  * `LoadMore(PlaylistTracks)` fetches the next page.
  */
-has_more: boolean, };
+has_more: boolean, 
+/**
+ * Each row's position in its Spotify playlist, for `RemoveTrackFromPlaylist`; `null` for any other table.
+ */
+positions: Array<number> | null, 
+/**
+ * The seed track id when the rows are that track's radio.
+ */
+radio: string | null, };

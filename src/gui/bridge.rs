@@ -26,6 +26,8 @@ pub(crate) struct Link {
   onboarding: Arc<BrowserOnboarding>,
   pushes: broadcast::Sender<String>,
   inbox: mpsc::UnboundedSender<ClientMessage>,
+  /// A desktop shell can resize its window.
+  window: bool,
 }
 
 /// The tick loop's side of the bridge.
@@ -40,6 +42,7 @@ pub(crate) struct Publisher {
 pub(crate) fn channel(
   app: SharedApp,
   onboarding: Arc<BrowserOnboarding>,
+  window: bool,
 ) -> (Link, Publisher, mpsc::UnboundedReceiver<ClientMessage>) {
   let (pushes, _) = broadcast::channel(64);
   let (inbox, messages) = mpsc::unbounded_channel();
@@ -56,6 +59,7 @@ pub(crate) fn channel(
       onboarding,
       pushes,
       inbox,
+      window,
     },
     publisher,
     messages,
@@ -114,7 +118,7 @@ where
     None => DisplayRevisions::default(),
   };
   let mut outgoing = vec![
-    protocol::hello(revisions, token),
+    protocol::hello(revisions, token, link.window),
     protocol::onboarding(views.borrow_and_update().clone()),
   ];
   outgoing.extend(resync(&apps).await);
@@ -185,7 +189,7 @@ pub(crate) mod tests {
     app: Arc<Mutex<App>>,
   ) -> (Link, Publisher, mpsc::UnboundedReceiver<ClientMessage>) {
     let (_boot, apps) = watch::channel(Some(app));
-    channel(apps, Arc::new(BrowserOnboarding::new()))
+    channel(apps, Arc::new(BrowserOnboarding::new()), false)
   }
 
   #[tokio::test]

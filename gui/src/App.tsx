@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 import type { Action } from "./bindings/Action";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
+import type { WindowMode } from "./bindings/WindowMode";
 import { showsOnboarding, type Connection } from "./connection";
 import { Onboarding } from "./Onboarding";
 import { Shell } from "./Shell";
@@ -15,6 +16,10 @@ export function App({ connection }: { connection: Connection }) {
   );
   const ask = useMemo(
     () => (ask: UpdateAsk) => connection.send({ type: "update", ask }),
+    [connection],
+  );
+  const resize = useMemo(
+    () => (mode: WindowMode) => connection.send({ type: "window", mode }),
     [connection],
   );
 
@@ -42,6 +47,7 @@ export function App({ connection }: { connection: Connection }) {
       state={state}
       send={send}
       onUpdate={ask}
+      onWindow={state.window ? resize : null}
       onQuit={() => connection.send({ type: "quit" })}
     />
   );

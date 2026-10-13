@@ -2,11 +2,17 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { Action } from "./bindings/Action";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { QueuePayload } from "./bindings/QueuePayload";
-import type { TrackInfo } from "./bindings/TrackInfo";
 import { clock, sourceOf } from "./format";
 import { Glyph } from "./Icon";
 import { KeyHints } from "./KeyHints";
-import { type QueueCursor, queueKey, queueRow } from "./queueModel";
+import {
+  itemLine,
+  type QueueCursor,
+  queueKey,
+  type QueueLine,
+  queueRow,
+  trackLine,
+} from "./queueModel";
 import { SourceBadge } from "./SourceBadge";
 import { Cover } from "./ui";
 
@@ -26,9 +32,10 @@ export function QueueDrawer({
   // The Web API queue mirrors Spotify playback only; under another source it is stale.
   const spotify = sourceOf(item?.uri ?? null) === "Spotify";
   const mirrored = spotify
-    ? (queue?.spotify.items ?? []).flatMap((entry) =>
-        entry.track ? [entry.track] : [],
-      )
+    ? (queue?.spotify.items ?? []).flatMap((entry) => {
+        const line = itemLine(entry);
+        return line ? [line] : [];
+      })
     : [];
   const [want, setWant] = useState<QueueCursor>({ index: 0, uri: null });
   const cursor = queueRow(native, want);
@@ -79,7 +86,7 @@ export function QueueDrawer({
       <div className="panel-body">
         <h3>Now playing</h3>
         {now ? (
-          <Row track={now} />
+          <Row line={trackLine(now)} />
         ) : item ? (
           <div className="queue-row">
             <Cover src={item.image_url} size={40} />
@@ -125,7 +132,7 @@ export function QueueDrawer({
                     });
                 }}
               >
-                <Row track={track} />
+                <Row line={trackLine(track)} />
               </li>
             ))}
           </ol>
@@ -134,9 +141,9 @@ export function QueueDrawer({
           <>
             <h3>Next from: Spotify</h3>
             <ol className="mirror" aria-label="Next from Spotify">
-              {mirrored.map((track, index) => (
-                <li key={`${index}-${track.uri ?? track.name}`}>
-                  <Row track={track} />
+              {mirrored.map((line, index) => (
+                <li key={`${index}-${line.uri ?? line.title}`}>
+                  <Row line={line} />
                 </li>
               ))}
             </ol>
@@ -148,18 +155,18 @@ export function QueueDrawer({
   );
 }
 
-function Row({ track }: { track: TrackInfo }) {
-  const source = sourceOf(track.uri);
+function Row({ line }: { line: QueueLine }) {
+  const source = sourceOf(line.uri);
   return (
     <div className="queue-row">
-      <Cover src={track.image_url} size={40} />
+      <Cover src={line.image} size={40} />
       <span className="queue-text">
-        <strong>{track.name}</strong>
-        <span>{track.artists.join(", ")}</span>
+        <strong>{line.title}</strong>
+        <span>{line.subtitle}</span>
       </span>
       {source && source !== "Spotify" && <SourceBadge source={source} />}
       <span className="time">
-        {track.duration_ms > 0 ? clock(track.duration_ms) : "live"}
+        {line.duration_ms > 0 ? clock(line.duration_ms) : "live"}
       </span>
     </div>
   );

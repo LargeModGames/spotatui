@@ -12,10 +12,9 @@ fn main() {
   let dist = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
     .join("gui")
     .join("dist");
-  // Watched only when present: a missing path would rerun the script on every build.
-  if dist.is_dir() {
-    println!("cargo:rerun-if-changed={}", dist.display());
-  }
+  // Watched also when missing: the script then reruns on every build until the
+  // frontend is built, so a later `npm run build` is never missed.
+  println!("cargo:rerun-if-changed={}", dist.display());
   let mut files = Vec::new();
   collect(&dist, &dist, &mut files);
   files.sort();

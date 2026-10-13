@@ -36,6 +36,8 @@ pub enum DisplayDomain {
   /// The desktop shell's updater.
   #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   Update,
+  /// The podcast show the app holds for its show page, with its episodes.
+  Show,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -66,12 +68,13 @@ pub struct DisplayRevisions {
   liked_marks: u64,
   settings: u64,
   update: u64,
+  show: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
   #[cfg(feature = "gui")]
-  pub const ALL: [DisplayDomain; 23] = [
+  pub const ALL: [DisplayDomain; 24] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -95,6 +98,7 @@ impl DisplayDomain {
     DisplayDomain::LikedMarks,
     DisplayDomain::Settings,
     DisplayDomain::Update,
+    DisplayDomain::Show,
   ];
 }
 
@@ -124,6 +128,7 @@ impl DisplayRevisions {
       DisplayDomain::LikedMarks => &mut self.liked_marks,
       DisplayDomain::Settings => &mut self.settings,
       DisplayDomain::Update => &mut self.update,
+      DisplayDomain::Show => &mut self.show,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -154,6 +159,7 @@ impl DisplayRevisions {
       DisplayDomain::LikedMarks => self.liked_marks,
       DisplayDomain::Settings => self.settings,
       DisplayDomain::Update => self.update,
+      DisplayDomain::Show => self.show,
     }
   }
 }

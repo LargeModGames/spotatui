@@ -43,7 +43,7 @@ describe("trackMenu", () => {
   it("offers Spotify's track entries in three groups", () => {
     expect(labels(trackMenu(track(), false, [playlist]))).toEqual([
       ["Add to playlist", "Save to your Liked Songs", "Add to queue"],
-      ["Go to artist", "Go to album"],
+      ["Go to song radio", "Go to artist", "Go to album"],
       ["Share"],
     ]);
   });
@@ -71,12 +71,12 @@ describe("trackMenu", () => {
 
   it("goes straight to a lone artist and lists several in a submenu", () => {
     const lone = track({ artist_refs: [{ id: "zedd", name: "Zedd" }] });
-    expect(trackMenu(lone, false, [])[1][0]).toEqual({
+    expect(trackMenu(lone, false, [])[1][1]).toEqual({
       label: "Go to artist",
       kind: "open",
       view: { page: "artist", id: "zedd", name: "Zedd" },
     });
-    const many = trackMenu(track(), false, [])[1][0];
+    const many = trackMenu(track(), false, [])[1][1];
     expect(many.kind === "submenu" && many.entries.map((e) => e.label)).toEqual(
       ["Zedd", "Foxes"],
     );
@@ -103,5 +103,50 @@ describe("trackMenu", () => {
     expect(
       trackMenu(track({ uri: "radio:https://x", id: null }), false, []),
     ).toEqual([]);
+  });
+});
+
+describe("trackMenu in a list", () => {
+  it("offers the list's remove after Add to playlist", () => {
+    const remove = {
+      RemoveTrackFromPlaylist: {
+        playlist: "spotify:playlist:p1",
+        track: "spotify:track:t1",
+        position: 4,
+      },
+    };
+    const [edit] = trackMenu(track(), false, [playlist], { remove });
+    expect(edit.map((entry) => entry.label)).toEqual([
+      "Add to playlist",
+      "Remove from this playlist",
+      "Save to your Liked Songs",
+      "Add to queue",
+    ]);
+    expect(edit[1]).toEqual({
+      label: "Remove from this playlist",
+      kind: "action",
+      action: remove,
+    });
+  });
+
+  it("opens the song radio of the track by its id and name", () => {
+    expect(trackMenu(track(), false, [])[1][0]).toEqual({
+      label: "Go to song radio",
+      kind: "open",
+      view: { page: "radio", id: "t1", name: "Clarity" },
+    });
+  });
+
+  it("copies the album link next to the song link, and shares nothing for an episode", () => {
+    const share = trackMenu(track(), false, [])[2][0];
+    expect(share.kind === "submenu" && share.entries[1]).toMatchObject({
+      label: "Copy album link",
+      text: "https://open.spotify.com/album/a1",
+    });
+    const episode = track({ uri: "spotify:episode:e1", id: "e1" });
+    expect(labels(trackMenu(episode, false, []))).toEqual([
+      ["Save to your Liked Songs", "Add to queue"],
+      ["Go to artist", "Go to album"],
+    ]);
   });
 });

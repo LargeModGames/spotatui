@@ -2,6 +2,7 @@
 import type { AlbumInfo } from "./AlbumInfo";
 import type { ArtistInfo } from "./ArtistInfo";
 import type { PlaylistInfo } from "./PlaylistInfo";
+import type { ShowInfo } from "./ShowInfo";
 import type { TrackInfo } from "./TrackInfo";
 
 export type SearchPayload = { 
@@ -13,6 +14,10 @@ ran: boolean,
  * The query the results answer; the page ignores results for an older query.
  */
 query: string | null, tracks: Array<TrackInfo>, artists: Array<ArtistInfo>, albums: Array<AlbumInfo>, playlists: Array<PlaylistInfo>, 
+/**
+ * Podcast shows; only a Spotify search finds them.
+ */
+shows: Array<ShowInfo>, 
 /**
  * The Spotify track ids among `tracks` that are in Liked Songs.
  */

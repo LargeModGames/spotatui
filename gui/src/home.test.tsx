@@ -43,7 +43,12 @@ const library = (count: number): SourcePlaylists => ({
   youtube: [],
   radio: [],
   saved_albums: [],
+  saved_albums_has_more: false,
   followed_artists: [],
+  saved_shows: [],
+  saved_shows_has_more: false,
+  saved_show_ids: [],
+  folders: null,
   editable: [],
 });
 
@@ -103,6 +108,14 @@ describe("Home", () => {
     expect(html).toContain("Album a");
     expect(html).toContain("Album b");
     expect(html.split("Play Album a").length).toBe(2);
+  });
+
+  it("offers Show all on the recently played shelf only", () => {
+    const html = render([track("One", "a")], library(1), discover);
+    expect(html).toMatch(
+      /<button[^>]*class="shelf-more"[^>]*aria-label="Show all: Recently played"[^>]*>Show all<\/button>/,
+    );
+    expect(html.split('class="shelf-more"').length).toBe(2);
   });
 
   it("draws the top tracks shelf and skips empty shelves", () => {

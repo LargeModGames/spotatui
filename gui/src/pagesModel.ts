@@ -2,6 +2,7 @@ import type { Action } from "./bindings/Action";
 import type { AlbumInfo } from "./bindings/AlbumInfo";
 import type { DiscoverPayload } from "./bindings/DiscoverPayload";
 import type { TrackInfo } from "./bindings/TrackInfo";
+import type { TrackTablePayload } from "./bindings/TrackTablePayload";
 import { playRequest, step } from "./libraryModel";
 
 /** One row of cards, as Spotify's Home shows it. */
@@ -92,4 +93,28 @@ export function trackKey(
   if (key === "q") return { kind: "queue" };
   const move = step(key, cursor, length, false);
   return move ? { kind: "move", next: move.next } : null;
+}
+
+/** The radio's rows; null while the shared track table holds other rows. */
+export function radioRows(
+  table: TrackTablePayload | null,
+  seed: string,
+): TrackInfo[] | null {
+  return table && table.radio === seed ? table.tracks : null;
+}
+
+/** Copy a link and report it in a toast, the way the track menu does. */
+export function copyLink(
+  text: string,
+  done: string,
+  send: (action: Action) => void,
+  clipboard: Pick<Clipboard, "writeText"> | undefined,
+): Promise<void> {
+  const failed = () => send({ NotifyError: ["Could not copy the link.", 4] });
+  const write = clipboard?.writeText(text);
+  if (!write) {
+    failed();
+    return Promise.resolve();
+  }
+  return write.then(() => send({ Notify: [done, 3] }), failed);
 }

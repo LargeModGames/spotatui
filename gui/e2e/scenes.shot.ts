@@ -4,12 +4,16 @@ import {
   artist,
   discover,
   filmScores,
+  history,
   hello,
   idle,
   library,
+  libraryFolders,
   libraryUnavailable,
   onboarding,
   playing,
+  podcast,
+  podcastSearch,
   partyHosting,
   partyNone,
   recentlyPlayed,
@@ -18,6 +22,7 @@ import {
   search,
   session,
   settings,
+  songRadio,
   stats,
 } from "./fixtures";
 
@@ -332,4 +337,142 @@ test("settings", async ({ page }) => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByText("Version 0.44.0 is ready").scrollIntoViewIfNeeded();
   await shot(page, "settings");
+});
+
+test("library folders", async ({ page }) => {
+  await openWith(page, [...playing, ...libraryFolders]);
+  const panel = page.getByRole("navigation", { name: "Your Library" });
+  await panel.getByRole("button", { name: "Create playlist" }).waitFor();
+  await panel.getByRole("button", { name: /Chill & focus/ }).click();
+  await panel.getByRole("button", { name: /Film scores/ }).waitFor();
+  await page.mouse.move(0, 0);
+  // The chevron turns on a short transition.
+  await page.evaluate(() =>
+    Promise.all(document.getAnimations().map((motion) => motion.finished)),
+  );
+  await shot(page, "library-folders");
+});
+
+test("playlist menu", async ({ page }) => {
+  await openWith(page, [...playing, ...library]);
+  await page
+    .getByRole("navigation", { name: "Your Library" })
+    .getByRole("button", { name: /Discover Weekly/ })
+    .click({ button: "right" });
+  await page
+    .getByRole("menuitem", { name: "Remove from Your Library" })
+    .waitFor();
+  await shot(page, "playlist-menu");
+});
+
+test("list sort and filter", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...filmScores]);
+  await page
+    .getByRole("navigation", { name: "Your Library" })
+    .getByRole("button", { name: "Film scores" })
+    .click();
+  const list = page.getByRole("region", { name: "Film scores" });
+  await list.getByRole("listbox", { name: "Film scores" }).waitFor();
+  await list.getByRole("searchbox", { name: "Filter" }).fill("zimmer");
+  await list
+    .getByRole("combobox", { name: "Sort by" })
+    .selectOption("duration:desc");
+  await list.getByText("3 of 4").waitFor();
+  await shot(page, "list-sort-filter");
+});
+
+test("podcast", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...podcastSearch, ...podcast]);
+  await page.getByText("Set Fire to the Rain").first().waitFor();
+  await page.keyboard.press("2");
+  await page
+    .getByRole("button", { name: /Score Notes/ })
+    .first()
+    .click();
+  await page
+    .getByRole("listbox", { name: "Episodes of Score Notes" })
+    .waitFor();
+  await page
+    .getByRole("option", { name: /John Powell/ })
+    .scrollIntoViewIfNeeded();
+  await shot(page, "podcast");
+});
+
+test("search podcasts", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...podcastSearch]);
+  await page.getByText("Set Fire to the Rain").first().waitFor();
+  await page.keyboard.press("2");
+  await page.keyboard.type("film score");
+  await page
+    .getByRole("group", { name: "Result type" })
+    .getByRole("button", { name: "Podcasts" })
+    .click();
+  await page.mouse.move(0, 0);
+  await page.getByRole("button", { name: /Leitmotif Hour/ }).waitFor();
+  await shot(page, "search-podcasts");
+});
+
+test("song radio", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...history, ...songRadio]);
+  await page
+    .getByRole("navigation", { name: "Your Library" })
+    .getByRole("button", { name: /Recently played/ })
+    .click();
+  await page
+    .getByRole("listbox", { name: "Recently played" })
+    .getByRole("option", { name: /Cornfield Chase/ })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Go to song radio" }).click();
+  await page
+    .getByRole("listbox", { name: "Cornfield Chase Radio" })
+    .getByText("Arrival of the Birds")
+    .waitFor();
+  await page.mouse.move(0, 0);
+  await shot(page, "radio");
+});
+
+test("recently played", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...history]);
+  await page
+    .getByRole("navigation", { name: "Your Library" })
+    .getByRole("button", { name: /Recently played/ })
+    .click();
+  await page
+    .getByRole("listbox", { name: "Recently played" })
+    .getByText("Nuvole Bianche")
+    .waitFor();
+  await shot(page, "recently-played");
+});
+
+test("saved album", async ({ page }) => {
+  await openWith(page, [
+    ...playing,
+    ...library,
+    ...recentlyPlayed,
+    ...room.map((message) =>
+      message.kind === "album"
+        ? { ...message, payload: { ...message.payload, saved: true } }
+        : message,
+    ),
+  ]);
+  await page
+    .getByRole("region", { name: "Recently played" })
+    .getByRole("button", { name: /21/ })
+    .first()
+    .click();
+  await page.getByRole("listbox", { name: "21" }).waitFor();
+  await page
+    .getByRole("button", { name: "Remove from Your Library" })
+    .waitFor();
+  await shot(page, "album-saved");
+});
+
+test("mini player", async ({ page }) => {
+  await openWith(page, [...playing, ...library]);
+  await page.getByText("Set Fire to the Rain").first().waitFor();
+  await page.keyboard.press("Shift+T");
+  // The desktop shell shrinks its window once the page is in the mini mode.
+  await page.setViewportSize({ width: 360, height: 420 });
+  await page.getByRole("region", { name: "Mini player" }).waitFor();
+  await shot(page, "mini-player");
 });

@@ -1,0 +1,94 @@
+/* A small modal dialog over a dimmed window: the name and confirm dialogs. */
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 60%);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(420px, 100%);
+  padding: 24px;
+  border-radius: var(--radius);
+  background: #282828;
+  box-shadow: 0 16px 24px rgb(0 0 0 / 50%);
+}
+
+.dialog h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.dialog p {
+  margin: 0;
+  color: var(--sub);
+}
+
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--sub);
+}
+
+.dialog-field input {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: #3e3e3e;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.dialog-field input:focus {
+  outline: none;
+  border-color: var(--sub);
+}
+
+.dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-buttons button {
+  height: 40px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 20px;
+  font-weight: 700;
+}
+
+.dialog-cancel {
+  background: transparent;
+  color: var(--text);
+}
+
+.dialog-cancel:hover {
+  background: var(--hover);
+}
+
+.dialog-confirm {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.dialog-confirm:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.dialog-confirm:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

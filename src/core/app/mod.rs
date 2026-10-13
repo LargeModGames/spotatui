@@ -284,6 +284,12 @@ pub struct App {
   pub recently_played:
     Option<crate::core::pagination::CursorPaged<crate::core::plugin_api::TrackInfo>>,
   pub recommendations_seed: String,
+  /// The seed track id of the recommendation rows in the track table.
+  radio_seed_id: Option<String>,
+  /// Moves on every write that opens other rows in the track table, and on a radio request.
+  track_table_epoch: u64,
+  /// The epoch of the last radio request; its rows land only while no other list opened.
+  radio_epoch: Option<u64>,
   pub recommendations_context: Option<RecommendationsContext>,
   search_results: SearchResult,
   pub selected_album_simplified: Option<SelectedAlbum>,

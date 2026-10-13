@@ -131,12 +131,15 @@ fn worker(
 ) {
   let _guard = ExitOnPanic(app.clone());
   let show_app = app.clone();
+  let window_app = app.clone();
+  let restore = Restore::default();
   let serving_life = Arc::clone(&life);
   let host = spotatui::GuiHost {
     show: Box::new(move |url| show_main(&show_app, url)),
     serving: Box::new(move || serving_life.serving.store(true, SeqCst)),
     closed,
     updates: Some(updates),
+    window: Some(Box::new(move |mode| set_window(&window_app, mode, &restore))),
   };
   let result = runtime.block_on(spotatui::run_gui_hosted(host));
   // Before `done`: a quit from the window ends the process right after it.
@@ -161,6 +164,49 @@ fn show_main(app: &AppHandle, url: &str) -> anyhow::Result<()> {
     .on_navigation(move |to| (to.host_str().map(str::to_string), to.port()) == origin)
     .build()?;
   Ok(())
+}
+
+/// The main window's place before it shrank to the mini player: position, inner size, maximized.
+type Restore = std::sync::Mutex<Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>, bool)>>;
+
+/// The mini player's window size, in logical pixels.
+const MINI_SIZE: (f64, f64) = (360.0, 420.0);
+
+/// Shrinks the main window to the mini player and keeps it on top, or puts it back.
+fn set_window(app: &AppHandle, mode: spotatui::WindowMode, restore: &Restore) {
+  let Some(window) = app.get_webview_window("main") else {
+    return;
+  };
+  let mut saved = restore.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let result = match mode {
+    spotatui::WindowMode::Mini => (|| {
+      if saved.is_none() {
+        // Unmaximized first, so the saved bounds are the normal ones.
+        let maximized = window.is_maximized()?;
+        window.unmaximize()?;
+        *saved = Some((window.outer_position()?, window.inner_size()?, maximized));
+      }
+      window.set_min_size(None::<tauri::Size>)?;
+      window.set_size(tauri::LogicalSize::new(MINI_SIZE.0, MINI_SIZE.1))?;
+      window.set_always_on_top(true)
+    })(),
+    spotatui::WindowMode::Full => (|| {
+      window.set_always_on_top(false)?;
+      window.set_min_size(Some(tauri::LogicalSize::new(800.0, 600.0)))?;
+      if let Some((position, size, maximized)) = saved.take() {
+        // Back on the first monitor before the resize, so its scale applies.
+        window.set_position(position)?;
+        window.set_size(size)?;
+        if maximized {
+          window.maximize()?;
+        }
+      }
+      Ok(())
+    })(),
+  };
+  if let Err(e) = result {
+    log::warn!("could not resize the window: {e}");
+  }
 }
 
 /// Replaces the main window with a window that keeps the error until the user closes it.

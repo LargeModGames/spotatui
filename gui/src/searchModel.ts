@@ -1,9 +1,19 @@
 import type { SearchPayload } from "./bindings/SearchPayload";
+import type { ShowInfo } from "./bindings/ShowInfo";
 import type { Source } from "./bindings/Source";
+import type { View } from "./nav";
 
-export type Tab = "All" | "Songs" | "Artists" | "Albums" | "Playlists";
+export type Tab =
+  "All" | "Songs" | "Artists" | "Albums" | "Playlists" | "Podcasts";
 
-export const TABS: Tab[] = ["All", "Songs", "Artists", "Albums", "Playlists"];
+export const TABS: Tab[] = [
+  "All",
+  "Songs",
+  "Artists",
+  "Albums",
+  "Playlists",
+  "Podcasts",
+];
 
 /** Whether a tab has anything to show; All always does. */
 export function tabHasResults(search: SearchPayload, tab: Tab): boolean {
@@ -18,7 +28,16 @@ export function tabHasResults(search: SearchPayload, tab: Tab): boolean {
       return search.artists.length > 0;
     case "Playlists":
       return search.playlists.length > 0;
+    case "Podcasts":
+      return search.shows.some((show) => show.id !== null);
   }
+}
+
+/** The show page a podcast hit opens; null for a show without an id. */
+export function showView(show: ShowInfo): View | null {
+  return show.id === null
+    ? null
+    : { page: "show", id: show.id, name: show.name };
 }
 
 /** The year of a release date such as `2016-05-13`; empty when unknown. */

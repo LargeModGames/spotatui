@@ -4,7 +4,13 @@ import type { SettingRow } from "./bindings/SettingRow";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
 import "./Settings.css";
-import { commitValue, sections, setSetting, updateLine } from "./settingsModel";
+import {
+  commitValue,
+  optionLabel,
+  sections,
+  setSetting,
+  updateLine,
+} from "./settingsModel";
 
 /** The Settings page: the desktop app's Behavior rows by group, and the updater. */
 export const Settings = memo(function Settings({
@@ -126,7 +132,7 @@ export function SettingControl({
         >
           {value.options.map((option) => (
             <option key={option} value={option}>
-              {option}
+              {optionLabel(row.id, option)}
             </option>
           ))}
         </select>

@@ -47,6 +47,7 @@ const player = (
       lyricsOpen={lyricsOpen}
       onLyrics={() => {}}
       onRoom={() => {}}
+      onMini={() => {}}
       send={() => {}}
     />,
   );
@@ -114,12 +115,19 @@ describe("PlayerBar", () => {
     expect(tag(player(song, { volume: 0 }), "Unmute")).toContain("<button");
   });
 
+  it("offers the mini player under Shift+T", () => {
+    const button = tag(player(song), "Open mini player");
+    expect(button).toContain("<button");
+    expect(button).toContain('aria-keyshortcuts="Shift+T"');
+  });
+
   it("disables the transport and the device picker without a connection", () => {
     const html = player(song, { connected: false });
     for (const label of ["Play", "Next", "Connect to a device", "Mute"])
       expect(tag(html, label)).toContain('disabled=""');
     expect(tag(html, "Seek")).toContain('aria-disabled="true"');
     expect(tag(html, "Full screen")).not.toContain("disabled");
+    expect(tag(html, "Open mini player")).not.toContain("disabled");
     expect(tag(html, "Connect to a device")).toContain('aria-expanded="false"');
   });
 });

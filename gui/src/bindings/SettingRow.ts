@@ -3,6 +3,6 @@ import type { SettingRowValue } from "./SettingRowValue";
 
 export type SettingRow = { id: string, 
 /**
- * `playback`, `streaming`, `integrations` or `updates`.
+ * `playback`, `streaming`, `integrations`, `library` or `updates`.
  */
 group: string, name: string, description: string, value: SettingRowValue, };

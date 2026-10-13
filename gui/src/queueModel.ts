@@ -1,6 +1,41 @@
 import type { Action } from "./bindings/Action";
+import type { QueueItemSnapshot } from "./bindings/QueueItemSnapshot";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import { clampCursor } from "./libraryModel";
+
+/** What a drawer row shows, for a track or a podcast episode. */
+export interface QueueLine {
+  uri: string | null;
+  title: string;
+  /** The artists of a track, the show of an episode. */
+  subtitle: string;
+  image: string | null;
+  duration_ms: number;
+}
+
+export function trackLine(track: TrackInfo): QueueLine {
+  return {
+    uri: track.uri,
+    title: track.name,
+    subtitle: track.artists.join(", "),
+    image: track.image_url,
+    duration_ms: track.duration_ms,
+  };
+}
+
+/** A Spotify queue item's row; null for an item with no payload. */
+export function itemLine(item: QueueItemSnapshot): QueueLine | null {
+  if (item.track) return trackLine(item.track);
+  const episode = item.episode;
+  if (!episode) return null;
+  return {
+    uri: episode.uri,
+    title: episode.name,
+    subtitle: episode.show_name || "Podcast episode",
+    image: episode.image_url,
+    duration_ms: episode.duration_ms,
+  };
+}
 
 /** A cursor that follows a track, so a key pressed before the queue update lands still acts on that track. */
 export interface QueueCursor {

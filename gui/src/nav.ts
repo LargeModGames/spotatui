@@ -8,6 +8,9 @@ export type View =
   | { page: "playlist"; uri: string; name: string; source: Source }
   | { page: "album"; id: string }
   | { page: "artist"; id: string; name: string }
+  | { page: "show"; id: string; name: string }
+  | { page: "radio"; id: string; name: string }
+  | { page: "recent" }
   | { page: "search" }
   | { page: "lyrics" }
   | { page: "discover" }
@@ -71,6 +74,12 @@ export function openAction(view: View): Action | null {
       return { Open: { Album: { id: view.id, from_search: false } } };
     case "artist":
       return { Open: { Artist: { id: view.id, name: view.name } } };
+    case "show":
+      return { Open: { Show: view.id } };
+    case "radio":
+      return { RecommendFromTrackId: { id: view.id, name: view.name } };
+    case "recent":
+      return { Navigate: "RecentlyPlayed" };
     case "stats":
       return { OpenLibrary: "Stats" };
     default:
@@ -85,6 +94,9 @@ export interface Loaded {
   tableUri: string | null;
   albumId: string | null;
   artistId: string | null;
+  showId: string | null;
+  /** The seed track id of the radio rows the track table holds. */
+  radioId: string | null;
 }
 
 /** The fetch to send when a view shows: a new open always fetches, back and
@@ -99,15 +111,22 @@ export function fetchFor(
     view.page === "liked" ||
     view.page === "album" ||
     view.page === "artist" ||
+    view.page === "show" ||
+    view.page === "radio" ||
+    view.page === "recent" ||
     (view.page === "playlist" && view.source === "Spotify");
   if (spotifyOnly && !loaded.spotify) return null;
   if (!fresh) {
+    // Radio rows differ on every fetch, so back and forward keep the rows they had.
     const held =
       view.page === "home" ||
+      view.page === "recent" ||
       (view.page === "liked" && loaded.liked) ||
       (view.page === "playlist" && loaded.tableUri === view.uri) ||
       (view.page === "album" && loaded.albumId === view.id) ||
-      (view.page === "artist" && loaded.artistId === view.id);
+      (view.page === "artist" && loaded.artistId === view.id) ||
+      (view.page === "show" && loaded.showId === view.id) ||
+      (view.page === "radio" && loaded.radioId === view.id);
     if (held) return null;
   }
   return openAction(view);

@@ -2,6 +2,7 @@ import {
   memo,
   useContext,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -12,9 +13,10 @@ import { clock, sourceOf } from "./format";
 import { Glyph } from "./Icon";
 import "./ListPage.css";
 import type { OpenView } from "./nav";
+import { rowKeys } from "./sortModel";
 import { SourceBadge } from "./SourceBadge";
 import { TrackActionsContext, TrackMenu, type TrackActions } from "./TrackMenu";
-import { spotifyTrack, trackMenu } from "./trackMenuModel";
+import { spotifyTrack, trackMenu, type RowContext } from "./trackMenuModel";
 import { Cover } from "./ui";
 
 /** The `# / Title / Album / duration` table; the cursor row is `aria-selected`. */
@@ -30,6 +32,7 @@ export const TrackTable = memo(function TrackTable({
   onPick,
   onPlay,
   open,
+  rowContext,
 }: {
   label: string;
   idPrefix: string;
@@ -42,24 +45,32 @@ export const TrackTable = memo(function TrackTable({
   onPick: (index: number) => void;
   onPlay: (index: number) => void;
   open?: OpenView;
+  /** What the list adds to a row's menu; `index` is the row's index in `tracks`. */
+  rowContext?: (track: TrackInfo, index: number) => RowContext;
 }) {
   const list = useRef<HTMLDivElement>(null);
   const actions = useContext(TrackActionsContext);
+  // The row is kept as it was when the menu opened: a reorder under it must not retarget the menu.
   const [menu, setMenu] = useState<{
     index: number;
     at: { x: number; y: number };
+    track: TrackInfo;
+    context: RowContext | undefined;
   } | null>(null);
   const openMenu = (index: number, at: { x: number; y: number }) => {
+    const track = tracks[index];
     onPick(index);
-    setMenu({ index, at });
+    if (track)
+      setMenu({ index, at, track, context: rowContext?.(track, index) });
   };
-  const menuTrack = menu ? tracks[menu.index] : undefined;
-  // The cursor row follows a key press and a page that lands under the cursor.
+  const keys = useMemo(() => rowKeys(tracks), [tracks]);
+  const cursorTrack = tracks[cursor];
+  // The cursor row follows a key press, a page that lands under the cursor, and a reorder.
   useLayoutEffect(() => {
     list.current
       ?.querySelector('[aria-selected="true"]')
       ?.scrollIntoView({ block: "nearest" });
-  }, [cursor, tracks.length]);
+  }, [cursor, tracks.length, cursorTrack]);
 
   return (
     <div className={showAlbum ? "track-table" : "track-table no-album"}>
@@ -104,7 +115,7 @@ export const TrackTable = memo(function TrackTable({
           const source = sourceOf(track.uri);
           return (
             <div
-              key={`${index}-${track.uri ?? track.name}`}
+              key={keys[index]}
               id={`${idPrefix}-${index}`}
               role="option"
               className={now ? "track-row now" : "track-row"}
@@ -184,13 +195,14 @@ export const TrackTable = memo(function TrackTable({
           );
         })}
       </div>
-      {actions && menu && menuTrack && (
+      {actions && menu && (
         <TrackMenu
-          label={`Options for ${menuTrack.name}`}
+          label={`Options for ${menu.track.name}`}
           groups={trackMenu(
-            menuTrack,
-            menuTrack.id !== null && actions.liked.has(menuTrack.id),
+            menu.track,
+            menu.track.id !== null && actions.liked.has(menu.track.id),
             actions.playlists,
+            menu.context,
           )}
           at={menu.at}
           actions={actions}

@@ -1,4 +1,10 @@
-import { useCallback, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import type { Action } from "./bindings/Action";
 import type { LikedSongs } from "./bindings/LikedSongs";
 import type { SourcePayload } from "./bindings/SourcePayload";
@@ -6,21 +12,26 @@ import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { TrackTablePayload } from "./bindings/TrackTablePayload";
 import { Glyph } from "./Icon";
-import {
-  clampCursor,
-  listPlayRequest,
-  playlistImage,
-  playRequest,
-  songCount,
-  step,
-} from "./libraryModel";
+import { clampCursor, playlistImage, songCount, step } from "./libraryModel";
 import "./ListPage.css";
 import type { OpenView, View } from "./nav";
+import {
+  filterTracks,
+  isDefaultSort,
+  parseSort,
+  removeAction,
+  shownPlayRequest,
+  SORT_OPTIONS,
+  sortTracks,
+  sortValue,
+} from "./sortModel";
 import { SourceBadge } from "./SourceBadge";
 import { TrackTable } from "./TrackTable";
+import type { RowContext } from "./trackMenuModel";
 import { PageHeader, PlayButton } from "./ui";
 
 const NO_TRACKS: TrackInfo[] = [];
+const NO_URIS: string[] = [];
 
 /** Liked Songs or an opened playlist: the header, the play row and the track table. */
 export function ListPage({
@@ -33,6 +44,7 @@ export function ListPage({
   statusError,
   open,
   send,
+  defaultSort,
 }: {
   view: Extract<View, { page: "liked" | "playlist" }>;
   liked: LikedSongs | null;
@@ -46,6 +58,8 @@ export function ListPage({
   active: boolean;
   open: OpenView;
   send: (action: Action) => void;
+  /** The sort a list opens with, `field[:desc]`. */
+  defaultSort?: string | null;
 }) {
   const playlist = view.page === "playlist" ? view : null;
   // The shell hands Liked Songs a fresh object each render, a playlist the view it opened.
@@ -56,14 +70,30 @@ export function ListPage({
   const [openedAt, setOpenedAt] = useState(statusRev);
   // The playlist whose open failed; it stays failed after the error expires, until it is opened again.
   const [failedUri, setFailedUri] = useState<string | null>(null);
+  const initialSort = sortValue(parseSort(defaultSort));
+  const [sortBy, setSortBy] = useState(initialSort);
+  const [filter, setFilter] = useState("");
   const [shownFor, setShownFor] = useState<typeof shown>(shown);
+  const [sortDefault, setSortDefault] = useState(initialSort);
   if (shownFor !== shown) {
     setShownFor(shown);
     setWant(0);
     setOpenedAt(statusRev);
     setFailedUri(null);
+    setSortBy(initialSort);
+    setFilter("");
+  }
+  if (sortDefault !== initialSort) {
+    setSortDefault(initialSort);
+    setSortBy(initialSort);
+    setWant(0);
   }
   const landed = playlist !== null && table?.uri === playlist.uri;
+  // While the list shows, an error is old news; one after a reload starts means the reload failed.
+  if (landed && (openedAt !== statusRev || failedUri !== null)) {
+    setOpenedAt(statusRev);
+    setFailedUri(null);
+  }
   if (
     shownFor === shown &&
     playlist !== null &&
@@ -82,16 +112,46 @@ export function ListPage({
   const hasMore = playlist
     ? landed && table.has_more
     : (liked?.has_more ?? false);
-  const cursor = clampCursor(want, tracks.length);
+  const sorted = useMemo(
+    () => sortTracks(tracks, parseSort(sortBy)),
+    [tracks, sortBy],
+  );
+  const shownFilter = useDeferredValue(filter);
+  const rows = useMemo(
+    () => filterTracks(sorted, shownFilter),
+    [sorted, shownFilter],
+  );
+  const filtering = shownFilter.trim() !== "";
+  const reordered = filtering || !isDefaultSort(parseSort(sortBy));
+  const shownTracks = useMemo(
+    () => (reordered ? rows.map((row) => row.track) : tracks),
+    [reordered, rows, tracks],
+  );
+  const cursor = clampCursor(want, shownTracks.length);
 
   const play = useCallback(
     (index: number) => {
-      const action = playlist
-        ? listPlayRequest(playlist.source, playlist.uri, tracks, index)
-        : playRequest(tracks, index);
+      const action = shownPlayRequest(playlist, reordered, shownTracks, index);
       if (action) send(action);
     },
-    [playlist, tracks, send],
+    [playlist, reordered, shownTracks, send],
+  );
+
+  const editable = playlists?.editable ?? NO_URIS;
+  const positions = landed ? table.positions : null;
+  const rowContext = useCallback(
+    (track: TrackInfo, index: number): RowContext => {
+      const original = rows[index]?.index ?? index;
+      const remove = removeAction(
+        playlist,
+        editable,
+        positions,
+        track,
+        original,
+      );
+      return remove ? { remove } : {};
+    },
+    [playlist, editable, positions, rows],
   );
 
   const onKeyDown = useCallback(
@@ -103,20 +163,20 @@ export function ListPage({
         return;
       }
       if (event.key === "q") {
-        const track = tracks[cursor];
+        const track = shownTracks[cursor];
         // A held key repeats; one press queues the row once.
         if (track && !event.repeat) send({ QueueTrack: track });
         event.preventDefault();
         return;
       }
-      const move = step(event.key, cursor, tracks.length, hasMore);
+      const move = step(event.key, cursor, shownTracks.length, hasMore);
       if (!move) return;
       event.preventDefault();
       setWant(move.next);
       if (move.loadMore)
         send({ LoadMore: playlist ? "PlaylistTracks" : "SavedTracks" });
     },
-    [cursor, tracks, hasMore, playlist, play, send],
+    [cursor, shownTracks, hasMore, playlist, play, send],
   );
 
   const title = playlist ? playlist.name : "Liked Songs";
@@ -142,7 +202,7 @@ export function ListPage({
       </span>
     )
   );
-  const first = tracks.findIndex((track) => track.uri);
+  const first = shownTracks.findIndex((track) => track.uri);
 
   return (
     <section className="list-page" aria-label={title}>
@@ -168,8 +228,44 @@ export function ListPage({
         >
           <Glyph name="shuffle" size={28} />
         </button>
+        <div className="list-tools">
+          <span className="list-count" aria-live="polite">
+            {filtering &&
+              tracks.length > 0 &&
+              `${rows.length} of ${tracks.length}`}
+          </span>
+          <input
+            type="search"
+            className="list-filter"
+            aria-label="Filter"
+            placeholder="Filter"
+            autoComplete="off"
+            value={filter}
+            onChange={(event) => {
+              setFilter(event.target.value);
+              setWant(0);
+            }}
+          />
+          <select
+            className="list-sort"
+            aria-label="Sort by"
+            value={sortBy}
+            onChange={(event) => {
+              setSortBy(event.target.value);
+              setWant(0);
+            }}
+          >
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
-      {tracks.length === 0 ? (
+      {tracks.length > 0 && shownTracks.length === 0 ? (
+        <p className="list-empty">No songs match “{shownFilter.trim()}”.</p>
+      ) : tracks.length === 0 ? (
         <p className="list-empty">
           {playlist
             ? landed
@@ -187,13 +283,14 @@ export function ListPage({
         <TrackTable
           label={title}
           idPrefix={playlist ? "playlist" : "liked"}
-          tracks={tracks}
+          tracks={shownTracks}
           cursor={cursor}
           playingUri={playingUri}
           onKeyDown={onKeyDown}
           onPick={setWant}
           onPlay={play}
           open={open}
+          rowContext={rowContext}
         />
       )}
     </section>

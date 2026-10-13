@@ -22,6 +22,31 @@
   color: var(--sub);
 }
 
+.library-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.library-create {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sub);
+}
+
+.library-create:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
 .library-source {
   min-width: 0;
   max-width: 112px;
@@ -64,6 +89,29 @@
 .library-filters button[aria-pressed="true"] {
   background: var(--text);
   color: var(--panel);
+}
+
+.library-sort {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 16px 4px;
+}
+
+.library-sort select {
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--sub);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.library-sort select:hover {
+  background: var(--raised);
+  color: var(--text);
 }
 
 .library-rows {
@@ -133,6 +181,26 @@
   color: var(--accent);
 }
 
+.library-more {
+  display: none;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border-radius: 50%;
+  color: var(--sub);
+}
+
+.library-more:hover {
+  color: var(--text);
+}
+
+.library-row:hover .library-more,
+.library-row:focus-visible .library-more {
+  display: grid;
+}
+
 .liked-tile {
   display: grid;
   place-items: center;
@@ -142,6 +210,34 @@
   border-radius: 4px;
   background: linear-gradient(135deg, #5b3fd1, #7fb4d8);
   color: var(--text);
+}
+
+.recent-tile,
+.folder-tile {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--sub);
+}
+
+.recent-tile {
+  background: linear-gradient(135deg, #2f4d5c, #7fc48e);
+  color: var(--text);
+}
+
+.folder-chevron {
+  display: grid;
+  margin-left: auto;
+  color: var(--sub);
+  transition: transform 0.15s;
+}
+
+.library-folder[aria-expanded="true"] .folder-chevron {
+  transform: rotate(90deg);
 }
 
 .library-empty {

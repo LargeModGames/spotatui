@@ -48,6 +48,7 @@ const results: SearchPayload = {
     },
   ],
   playlists: [],
+  shows: [],
   liked: ["1"],
 };
 
@@ -109,6 +110,27 @@ describe("Search", () => {
     const waiting = render(null, true);
     expect(waiting).toContain("Searching…");
     expect(waiting).not.toContain("Search for songs");
+  });
+
+  it("shows a Podcasts shelf and chip for the shows it can open", () => {
+    const show = {
+      id: "s",
+      uri: "spotify:show:s",
+      name: "Lex Fridman Podcast",
+      description: "",
+      publisher: "Lex Fridman",
+      image_url: null,
+    };
+    const html = render({
+      ...results,
+      shows: [show, { ...show, id: null, name: "No Id Show" }],
+    });
+    expect(html).toContain('<section class="shelf" aria-label="Podcasts">');
+    expect(html).toContain("Lex Fridman Podcast");
+    expect(html).toMatch(/class="card-subtitle">Lex Fridman</);
+    expect(html).not.toContain("No Id Show");
+    expect(html).not.toMatch(/disabled="">Podcasts</);
+    expect(render(results)).toMatch(/disabled="">Podcasts</);
   });
 
   it("says when a search found nothing", () => {

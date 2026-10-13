@@ -11,6 +11,12 @@ export type MenuEntry =
   | { label: string; kind: "copy"; text: string; done: string }
   | { label: string; kind: "submenu"; entries: MenuEntry[] };
 
+/** What the list around a row adds to its menu. */
+export interface RowContext {
+  /** Removes this row from the playlist the list shows. */
+  remove?: Action | null;
+}
+
 /** A Spotify track the heart and the Spotify-only entries can act on. */
 export function spotifyTrack(track: TrackInfo): boolean {
   return sourceOf(track.uri) === "Spotify" && track.id !== null;
@@ -21,9 +27,11 @@ export function trackMenu(
   track: TrackInfo,
   liked: boolean,
   playlists: PlaylistInfo[],
+  context: RowContext = {},
 ): MenuEntry[][] {
   const uri = track.uri;
   const spotify = spotifyTrack(track);
+  const song = spotify && (uri?.startsWith("spotify:track:") ?? false);
   const edit: MenuEntry[] = [];
   if (spotify && uri && playlists.length > 0)
     edit.push({
@@ -34,6 +42,12 @@ export function trackMenu(
         kind: "action",
         action: { AddTrackToPlaylist: { playlist: playlist.uri, track: uri } },
       })),
+    });
+  if (context.remove)
+    edit.push({
+      label: "Remove from this playlist",
+      kind: "action",
+      action: context.remove,
     });
   if (spotify && uri)
     edit.push({
@@ -52,6 +66,12 @@ export function trackMenu(
     });
 
   const go: MenuEntry[] = [];
+  if (song && track.id)
+    go.push({
+      label: "Go to song radio",
+      kind: "open",
+      view: { page: "radio", id: track.id, name: track.name },
+    });
   if (spotify) {
     const artists: MenuEntry[] = track.artist_refs.flatMap((artist) =>
       artist.id
@@ -75,22 +95,26 @@ export function trackMenu(
       });
   }
 
-  const share: MenuEntry[] = spotify
-    ? [
-        {
-          label: "Share",
-          kind: "submenu",
-          entries: [
-            {
-              label: "Copy song link",
-              kind: "copy",
-              text: `https://open.spotify.com/track/${track.id}`,
-              done: "Copied the song link.",
-            },
-          ],
-        },
-      ]
-    : [];
+  const links: MenuEntry[] = [];
+  if (song) {
+    links.push({
+      label: "Copy song link",
+      kind: "copy",
+      text: `https://open.spotify.com/track/${track.id}`,
+      done: "Copied the song link.",
+    });
+    if (track.album_id)
+      links.push({
+        label: "Copy album link",
+        kind: "copy",
+        text: `https://open.spotify.com/album/${track.album_id}`,
+        done: "Copied the album link.",
+      });
+  }
+  const share: MenuEntry[] =
+    links.length > 0
+      ? [{ label: "Share", kind: "submenu", entries: links }]
+      : [];
 
   return [edit, go, share].filter((group) => group.length > 0);
 }

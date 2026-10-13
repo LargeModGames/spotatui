@@ -19,7 +19,8 @@ export type ShellCommand =
   | "lyrics"
   | "toggle"
   | "escape"
-  | "settings";
+  | "settings"
+  | "mini";
 
 /** Whether the page runs on macOS, where Cmd takes the place of Ctrl. */
 export const MAC =
@@ -61,6 +62,8 @@ export function shellKey(press: ShellKey): ShellCommand | null {
   if (press.key === ":") return "command";
   if (press.key === "r") return "room";
   if (press.key === "l") return "lyrics";
+  // The terminal's mini player key.
+  if (press.key === "T") return "mini";
   const target = AREAS.find((entry) => entry.key === press.key);
   return target ? { area: target.area } : null;
 }

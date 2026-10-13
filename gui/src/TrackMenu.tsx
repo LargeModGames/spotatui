@@ -59,7 +59,7 @@ export function TrackMenu({
   );
 }
 
-function MenuList({
+export function MenuList({
   label,
   groups,
   at,

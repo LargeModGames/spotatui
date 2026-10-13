@@ -11,6 +11,7 @@ import type { Action } from "./bindings/Action";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { SessionPlay } from "./bindings/SessionPlay";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
+import type { WindowMode } from "./bindings/WindowMode";
 import { MAC, shellKey, type ShellKey } from "./areas";
 import { AlbumPage } from "./AlbumPage";
 import { ArtistPage } from "./ArtistPage";
@@ -26,6 +27,7 @@ import { LibraryPanel } from "./LibraryPanel";
 import { upNext } from "./libraryModel";
 import { ListPage } from "./ListPage";
 import { LyricsPage } from "./LyricsPage";
+import { miniCommand, MiniPlayer } from "./MiniPlayer";
 import {
   fetchFor,
   goBack,
@@ -39,8 +41,11 @@ import {
 } from "./nav";
 import { NowPlayingPanel } from "./NowPlayingPanel";
 import { Party } from "./Party";
+import { PodcastPage } from "./PodcastPage";
 import { PlayerBar, type Panel } from "./PlayerBar";
 import { QueueDrawer } from "./QueueDrawer";
+import { RadioPage } from "./RadioPage";
+import { RecentlyPlayed } from "./RecentlyPlayed";
 import { Room } from "./Room";
 import { Search } from "./Search";
 import { Session } from "./Session";
@@ -62,11 +67,14 @@ export function Shell({
   state,
   send,
   onUpdate,
+  onWindow,
   onQuit,
 }: {
   state: State;
   send: (action: Action) => void;
   onUpdate: (ask: UpdateAsk) => void;
+  /** Resizes the desktop shell's window; null without one. */
+  onWindow: ((mode: WindowMode) => void) | null;
   onQuit: () => void;
 }) {
   const { channels } = state;
@@ -83,6 +91,8 @@ export function Shell({
   const tableUri = channels.track_table?.payload.uri ?? null;
   const albumId = channels.album?.payload.album?.id ?? null;
   const artistId = channels.artist?.payload.page?.id ?? null;
+  const showId = channels.show?.payload.page?.show.id ?? null;
+  const radioId = channels.track_table?.payload.radio ?? null;
   const show = useCallback(
     (next: History, fresh: boolean) => {
       const action = fetchFor(next.now, fresh, {
@@ -91,6 +101,8 @@ export function Shell({
         tableUri,
         albumId,
         artistId,
+        showId,
+        radioId,
       });
       if (action) send(action);
       setHistory(next);
@@ -100,7 +112,7 @@ export function Shell({
           : { ...seen, [next.now.page]: next.now },
       );
     },
-    [send, spotify, likedLoaded, tableUri, albumId, artistId],
+    [send, spotify, likedLoaded, tableUri, albumId, artistId, showId, radioId],
   );
   const open = useCallback(
     (next: View) => show(push(history, next), true),
@@ -131,6 +143,34 @@ export function Shell({
     window.matchMedia(WIDE).matches ? "now" : null,
   );
   const [room, setRoom] = useState(false);
+  const [mini, setMini] = useState(false);
+  const showMini = useCallback((on: boolean) => {
+    setMini(on);
+    if (!on) return;
+    setOverlay(null);
+    setRoom(false);
+  }, []);
+  // The desktop shell follows the mode once the hello brings onWindow: a reload can find its window mini.
+  const windowWas = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (!onWindow || windowWas.current === mini) return;
+    windowWas.current = mini;
+    onWindow(mini ? "mini" : "full");
+  }, [mini, onWindow]);
+  // Leaving the mini player hands the keyboard back to the page; the mini player takes it itself.
+  const miniWas = useRef(mini);
+  useEffect(() => {
+    const left = miniWas.current && !mini;
+    miniWas.current = mini;
+    if (!left) return;
+    focusScreen(page);
+    if (document.activeElement === document.body)
+      document
+        .querySelector<HTMLElement>(
+          '.playerbar [aria-label="Open mini player"]',
+        )
+        ?.focus();
+  }, [mini, page]);
   // The Room fetches the playing track's album over the one the album page showed.
   const roomWas = useRef(room);
   useEffect(() => {
@@ -193,6 +233,15 @@ export function Shell({
   const playlistView = viewOf("playlist");
   const albumView = viewOf("album");
   const artistView = viewOf("artist");
+  const showView = viewOf("show");
+  const radioView = viewOf("radio");
+  // The Library defaults from Settings: the sort each list starts with.
+  const settingRows = channels.settings?.payload;
+  const choice = (id: string) => {
+    const value = settingRows?.find((row) => row.id === id)?.value;
+    return value?.kind === "choice" ? value.value : null;
+  };
+  const trackSort = choice("behavior.default_sort_playlist_tracks");
   const pages: Record<Page, ReactNode> = {
     home: (
       <Home
@@ -214,6 +263,7 @@ export function Shell({
         source={channels.source?.payload ?? null}
         playingUri={playingUri}
         statusRev={statusRev}
+        defaultSort={trackSort}
         statusError={statusError}
         active={page === "liked"}
         open={open}
@@ -229,6 +279,7 @@ export function Shell({
         source={channels.source?.payload ?? null}
         playingUri={playingUri}
         statusRev={statusRev}
+        defaultSort={trackSort}
         statusError={statusError}
         active={page === "playlist"}
         open={open}
@@ -239,6 +290,7 @@ export function Shell({
       <AlbumPage
         id={albumView.id}
         album={channels.album?.payload.album ?? null}
+        saved={channels.album?.payload.saved ?? false}
         playingUri={playingUri}
         open={open}
         send={send}
@@ -250,6 +302,41 @@ export function Shell({
         name={artistView.name}
         artist={channels.artist?.payload ?? null}
         playingUri={playingUri}
+        open={open}
+        send={send}
+      />
+    ),
+    show: showView && (
+      <PodcastPage
+        id={showView.id}
+        name={showView.name}
+        show={channels.show?.payload ?? null}
+        playingUri={playingUri}
+        active={page === "show"}
+        open={open}
+        send={send}
+      />
+    ),
+    radio: radioView && (
+      <RadioPage
+        id={radioView.id}
+        name={radioView.name}
+        table={channels.track_table?.payload ?? null}
+        available={spotify}
+        statusRev={statusRev}
+        statusError={statusError}
+        playingUri={playingUri}
+        active={page === "radio"}
+        open={open}
+        send={send}
+      />
+    ),
+    recent: (
+      <RecentlyPlayed
+        recent={channels.recently_played?.payload ?? null}
+        available={spotify}
+        playingUri={playingUri}
+        active={page === "recent"}
         open={open}
         send={send}
       />
@@ -336,7 +423,8 @@ export function Shell({
   // A layout effect: the keys work from the first painted frame.
   useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const command = shellKey(describe(event, overlay !== null));
+      const pressed = shellKey(describe(event, overlay !== null));
+      const command = mini ? miniCommand(pressed) : pressed;
       if (!command) return;
       if (command === "toggle") send("TogglePlayback");
       else if (command === "queue")
@@ -349,8 +437,11 @@ export function Shell({
       } else if (command === "lyrics") {
         if (room) setRoomLyrics((shown) => !shown);
         else toggleLyrics();
+      } else if (command === "mini") {
+        showMini(!mini);
       } else if (command === "escape") {
-        if (overlay) setOverlay(null);
+        if (mini) setMini(false);
+        else if (overlay) setOverlay(null);
         else if (!blurText() && room) setRoom(false);
       } else if (command === "settings") {
         setRoom(false);
@@ -361,7 +452,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [send, overlay, openSearch, room, toggleLyrics, open]);
+  }, [send, overlay, openSearch, room, mini, showMini, toggleLyrics, open]);
 
   // A switch or a closed overlay hands the keyboard to the page; the first render leaves focus alone.
   const shown = useRef({ page, overlay });
@@ -389,7 +480,17 @@ export function Shell({
   );
   return (
     <TrackActionsContext.Provider value={trackActions}>
-      <main className={panel ? "shell" : "shell no-right"}>
+      {mini && (
+        <MiniPlayer
+          playback={playback}
+          position={state.position}
+          connected={state.connected}
+          send={send}
+          onExit={() => setMini(false)}
+        />
+      )}
+      {/* Hidden, not unmounted: the pages keep their cursors for the way back. */}
+      <main className={panel ? "shell" : "shell no-right"} hidden={mini}>
         <TopBar
           page={page}
           canBack={history.back.length > 0}
@@ -408,6 +509,8 @@ export function Shell({
         <LibraryPanel
           playlists={channels.library?.payload ?? null}
           artists={playlists?.followed_artists ?? null}
+          albumSort={choice("behavior.default_sort_saved_albums")}
+          artistSort={choice("behavior.default_sort_saved_artists")}
           source={channels.source?.payload ?? null}
           sync={channels.playlist_sync?.payload ?? null}
           view={view}
@@ -458,6 +561,7 @@ export function Shell({
           lyricsOpen={page === "lyrics"}
           onLyrics={toggleLyrics}
           onRoom={() => setRoom(true)}
+          onMini={() => showMini(true)}
           send={send}
         />
         {room && (
@@ -493,12 +597,13 @@ export function Shell({
             onClose={() => setOverlay(null)}
           />
         )}
-        <Toast
-          status={channels.status?.payload ?? null}
-          route={channels.route?.payload ?? null}
-          send={send}
-        />
       </main>
+      {/* Outside the main view, so the mini player shows it too. */}
+      <Toast
+        status={channels.status?.payload ?? null}
+        route={channels.route?.payload ?? null}
+        send={send}
+      />
     </TrackActionsContext.Provider>
   );
 }

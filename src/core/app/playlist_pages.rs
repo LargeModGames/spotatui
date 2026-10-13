@@ -193,6 +193,7 @@ impl App {
   ) {
     self.active_saved_track_filter = None;
     self.view.input_context = InputContext::GlobalSearch;
+    self.track_table_epoch = self.track_table_epoch.wrapping_add(1);
     self.playlist_tracks_prefetch_generation =
       self.playlist_tracks_prefetch_generation.wrapping_add(1);
     self.playlist_tracks_prefetch_in_flight.clear();
@@ -222,6 +223,28 @@ impl App {
     if self.is_playlist_track_table_active_for(playlist_id) {
       self.playlist_track_pages.mark_stale();
     }
+  }
+
+  /// Refetch the open playlist from its first page: a remove moved the
+  /// position of every later row. A filtered table keeps the stale mark only.
+  pub(crate) fn reload_playlist_tracks(&mut self, playlist_id: PlaylistId<'static>) {
+    let context = match self.track_table.context {
+      Some(TrackTableContext::MyPlaylists) => TrackTableContext::MyPlaylists,
+      Some(TrackTableContext::PlaylistSearch) => TrackTableContext::PlaylistSearch,
+      _ => return,
+    };
+    if !self.is_playlist_track_table_active_for(&playlist_id)
+      || self.is_playlist_track_filter_active()
+    {
+      return;
+    }
+    let cursor = self.view.track_table_index;
+    let id = playlist_id.id().to_string();
+    self.reset_playlist_tracks_view(playlist_id, context);
+    // A frontend shows the list as loading, not as empty, until the first page lands.
+    self.pending_playlist_open = Some(id.clone());
+    self.pending_track_table_selection = Some(PendingTrackSelection::Index(cursor));
+    self.dispatch(IoEvent::GetPlaylistItems(id, 0));
   }
 
   pub fn is_playlist_track_filter_active(&self) -> bool {
@@ -476,6 +499,59 @@ mod tests {
 
   fn track_info(id: &str, name: &str) -> TrackInfo {
     TrackInfo::from(&full_track(id, name))
+  }
+
+  #[test]
+  fn a_remove_refetches_the_open_playlist_from_its_first_page_and_keeps_the_cursor() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let id = playlist_id("37i9dQZF1DXcBWIGoYBM5M");
+    app.playlist_track_table_id = Some(id.clone());
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_offset = 40;
+    app.view.track_table_index = 3;
+
+    app.reload_playlist_tracks(id);
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetPlaylistItems(playlist, 0)) if playlist == "37i9dQZF1DXcBWIGoYBM5M"
+    ));
+    assert_eq!(
+      app.pending_track_table_selection,
+      Some(PendingTrackSelection::Index(3))
+    );
+  }
+
+  #[test]
+  fn a_radio_result_is_dropped_once_a_playlist_opened_after_the_request() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.get_recommendations_for_track_id("0000000000000000000001".to_string());
+    assert!(app.radio_result_is_current());
+
+    app.open_playlist_tracks(
+      playlist_id("37i9dQZF1DXcBWIGoYBM5M"),
+      TrackTableContext::MyPlaylists,
+    );
+
+    assert!(!app.radio_result_is_current());
+    app.get_recommendations_for_track_id("0000000000000000000002".to_string());
+    assert!(app.radio_result_is_current());
+  }
+
+  #[test]
+  fn a_remove_from_another_playlist_or_a_filtered_table_refetches_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.playlist_track_table_id = Some(playlist_id("37i9dQZF1DXcBWIGoYBM5M"));
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+
+    app.reload_playlist_tracks(playlist_id("1111111111111111111111"));
+    app.active_playlist_track_filter = Some("rock".to_string());
+    app.reload_playlist_tracks(playlist_id("37i9dQZF1DXcBWIGoYBM5M"));
+
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]

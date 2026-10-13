@@ -493,6 +493,16 @@ pub async fn remove_items(
     .map(|(position, uri)| remove_op(position, &uri))
     .collect();
   if ops.is_empty() {
+    // A position that holds another track now means the list moved under the page.
+    let positioned = entries.iter().any(|entry| {
+      entry["positions"]
+        .as_array()
+        .is_some_and(|given| !given.is_empty())
+    });
+    anyhow::ensure!(
+      !positioned,
+      "The playlist changed since it loaded; open it again and retry"
+    );
     return Ok(json!({ "snapshot_id": hex(current.revision()) }));
   }
   let changes = list_changes(session, current.revision(), ops);

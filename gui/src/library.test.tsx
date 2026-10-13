@@ -64,7 +64,12 @@ const playlists: SourcePlaylists = {
   youtube: [],
   radio: [track("Score radio", "radio:https://radio.example")],
   saved_albums: [],
+  saved_albums_has_more: false,
   followed_artists: [],
+  saved_shows: [],
+  saved_shows_has_more: false,
+  saved_show_ids: [],
+  folders: null,
   editable: [],
 };
 
@@ -248,6 +253,8 @@ describe("ListPage", () => {
       uri: "file:///rips",
       tracks: liked.tracks,
       has_more: true,
+      positions: null,
+      radio: null,
     };
     expect(page(rips, { table: { ...table, uri: "file:///other" } })).toContain(
       "Loading Soundtrack CD rips…",

@@ -12,6 +12,7 @@ use crate::core::user_config::{parse_update_delay_secs, BehaviorConfig};
 use crate::gui::bridge::{self, Publisher};
 use crate::gui::onboarding::BrowserOnboarding;
 use crate::gui::protocol::ClientMessage;
+pub use crate::gui::protocol::WindowMode;
 use crate::gui::server;
 use anyhow::Result;
 use std::sync::Arc;
@@ -30,7 +31,12 @@ pub struct GuiHost {
   /// Turns true when the window closed; a dropped sender counts as closed.
   pub closed: tokio::sync::watch::Receiver<bool>,
   pub updates: Option<UpdateLink>,
+  /// Resizes the shell's window when the page asks for the mini player.
+  pub window: Option<SetWindow>,
 }
+
+/// Sets the shell's window to a mode the page asked for.
+pub type SetWindow = Box<dyn Fn(WindowMode) + Send>;
 
 /// The app's half of a desktop shell's updater.
 pub struct UpdateLink {
@@ -74,14 +80,15 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
   if hosted {
     crate::infra::macos_media::HOST_OWNS_NSAPP.store(true, std::sync::atomic::Ordering::SeqCst);
   }
-  let (show, serving, closed, updates) = match host {
+  let (show, serving, closed, updates, window) = match host {
     Some(GuiHost {
       show,
       serving,
       closed,
       updates,
-    }) => (Some(show), Some(serving), Some(closed), updates),
-    None => (None, None, None, None),
+      window,
+    }) => (Some(show), Some(serving), Some(closed), updates, window),
+    None => (None, None, None, None, None),
   };
   let mut instance_lock = instance::acquire()?;
   if let Err(e) = crate::core::migrations::apply_legacy_state_file_migrations() {
@@ -90,7 +97,7 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
   // The page answers the first-launch questions, so it must be up before boot asks them.
   let onboarding = Arc::new(BrowserOnboarding::new());
   let (boot_done, apps) = tokio::sync::watch::channel(None);
-  let (link, publisher, inbox) = bridge::channel(apps, Arc::clone(&onboarding));
+  let (link, publisher, inbox) = bridge::channel(apps, Arc::clone(&onboarding), window.is_some());
   let (port, access) = server::spawn_listener(server::ASSETS, link).await?;
   let url = launch_url(port, &access.issue(Instant::now())?);
   match show {
@@ -146,8 +153,11 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
     publisher,
     inbox,
     tick_rate,
-    closed,
-    updates,
+    ShellLinks {
+      closed,
+      updates,
+      window,
+    },
   )
   .await;
   app.lock().await.close_io_channel();
@@ -158,6 +168,13 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
   Ok(())
 }
 
+/// What a desktop shell links to the tick loop; all `None` in a browser.
+struct ShellLinks {
+  closed: Option<tokio::sync::watch::Receiver<bool>>,
+  updates: Option<UpdateLink>,
+  window: Option<SetWindow>,
+}
+
 /// Ticks the driver, pushes to the page and applies its actions until a quit.
 async fn serve_until_quit(
   app: &Arc<Mutex<App>>,
@@ -165,9 +182,13 @@ async fn serve_until_quit(
   mut publisher: Publisher,
   mut inbox: UnboundedReceiver<ClientMessage>,
   tick_rate: Duration,
-  closed: Option<tokio::sync::watch::Receiver<bool>>,
-  updates: Option<UpdateLink>,
+  shell: ShellLinks,
 ) {
+  let ShellLinks {
+    closed,
+    updates,
+    window,
+  } = shell;
   // A shell's window owns the page's life, so a page gone a minute is no reason to quit.
   let hosted = closed.is_some();
   let window_closed = async {
@@ -288,6 +309,11 @@ async fn serve_until_quit(
             }
           }
         },
+        Some(ClientMessage::Window { mode }) => {
+          if let Some(set) = &window {
+            set(mode);
+          }
+        }
         Some(ClientMessage::Quit) | None => break,
       },
       () = &mut ctrl_c => break,

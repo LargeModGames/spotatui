@@ -172,6 +172,7 @@ describe("showsOnboarding", () => {
     booted: false,
     onboarding: null,
     version: null,
+    window: false,
   };
   const view = { transcript: "", pending: null };
 

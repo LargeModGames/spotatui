@@ -4,9 +4,10 @@ import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { PlaybackPayload } from "./bindings/PlaybackPayload";
 import type { Position } from "./connection";
 import { DevicesPopover } from "./DevicesPopover";
-import { clock, sourceOf } from "./format";
+import { sourceOf } from "./format";
 import { Glyph } from "./Icon";
 import { SourceBadge } from "./SourceBadge";
+import { Meter, Progress, Transport } from "./Transport";
 import { Cover } from "./ui";
 import { usePosition } from "./usePosition";
 
@@ -26,6 +27,7 @@ export function PlayerBar({
   lyricsOpen,
   onLyrics,
   onRoom,
+  onMini,
   send,
 }: {
   playback: PlaybackPayload | null;
@@ -37,17 +39,15 @@ export function PlayerBar({
   lyricsOpen: boolean;
   onLyrics: () => void;
   onRoom: () => void;
+  /** Switches to the mini player. */
+  onMini: () => void;
   send: (action: Action) => void;
 }) {
   const item = playback?.item ?? null;
   const playing = item?.is_playing ?? false;
-  const duration = item?.duration_ms ?? 0;
   const elapsed = usePosition(position, playing);
-  const ms = duration ? Math.min(elapsed, duration) : elapsed;
-  const length = item?.is_live ? "live" : clock(duration);
   const volume = playback?.volume ?? 0;
   const source = sourceOf(item?.uri ?? null);
-  const repeat = item?.repeat ?? "off";
   const liked = playback?.liked ?? false;
 
   const [unmuteTo, setUnmuteTo] = useState(UNMUTE_VOLUME);
@@ -86,68 +86,13 @@ export function PlayerBar({
         {source && source !== "Spotify" && <SourceBadge source={source} />}
       </div>
       <div className="transport">
-        <div className="buttons">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Shuffle"
-            aria-pressed={item?.shuffle ?? false}
-            disabled={!connected}
-            onClick={() => send("ToggleShuffle")}
-          >
-            <Glyph name="shuffle" />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Previous"
-            disabled={!connected}
-            onClick={() => send("PreviousTrack")}
-          >
-            <Glyph name="previous" />
-          </button>
-          <button
-            type="button"
-            className="play-toggle"
-            aria-label={playing ? "Pause" : "Play"}
-            disabled={!connected}
-            onClick={() => send("TogglePlayback")}
-          >
-            <Glyph name={playing ? "pause" : "play"} />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Next"
-            disabled={!connected}
-            onClick={() => send("NextTrack")}
-          >
-            <Glyph name="next" />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={repeat === "track" ? "Repeat one" : "Repeat"}
-            aria-pressed={repeat !== "off"}
-            disabled={!connected}
-            onClick={() => send("CycleRepeat")}
-          >
-            <Glyph name="repeat" />
-            {repeat === "track" && <sup>1</sup>}
-          </button>
-        </div>
-        <div className="progress">
-          <span>{clock(ms)}</span>
-          <Meter
-            label="Seek"
-            ratio={duration ? ms / duration : 0}
-            text={`${clock(ms)} of ${length}`}
-            disabled={!connected || !duration}
-            onPick={(ratio) => send({ SeekTo: Math.round(ratio * duration) })}
-            onStep={(up) => send(up ? "SeekForward" : "SeekBackward")}
-          />
-          <span>{length}</span>
-        </div>
+        <Transport item={item} connected={connected} send={send} />
+        <Progress
+          item={item}
+          elapsed={elapsed}
+          connected={connected}
+          send={send}
+        />
       </div>
       <div className="side">
         <button
@@ -227,6 +172,15 @@ export function PlayerBar({
         <button
           type="button"
           className="icon-button"
+          aria-label="Open mini player"
+          aria-keyshortcuts="Shift+T"
+          onClick={() => onMini()}
+        >
+          <Glyph name="mini" />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
           aria-label="Full screen"
           aria-keyshortcuts="r"
           onClick={() => onRoom()}
@@ -236,59 +190,4 @@ export function PlayerBar({
       </div>
     </footer>
   );
-}
-
-const STEP_KEYS: Record<string, boolean> = {
-  ArrowRight: true,
-  ArrowUp: true,
-  ArrowLeft: false,
-  ArrowDown: false,
-};
-
-/** A thin slider: a click picks the fraction of its width left of the pointer, an arrow key steps. */
-function Meter({
-  label,
-  ratio,
-  text,
-  disabled,
-  onPick,
-  onStep,
-}: {
-  label: string;
-  ratio: number;
-  text: string;
-  disabled: boolean;
-  onPick: (ratio: number) => void;
-  onStep: (up: boolean) => void;
-}) {
-  return (
-    <div
-      className="meter"
-      role="slider"
-      tabIndex={disabled ? -1 : 0}
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(clamp(ratio) * 100)}
-      aria-valuetext={text}
-      aria-disabled={disabled}
-      onClick={(event) => {
-        if (disabled) return;
-        const box = event.currentTarget.getBoundingClientRect();
-        onPick(clamp((event.clientX - box.left) / box.width));
-      }}
-      onKeyDown={(event) => {
-        const up = STEP_KEYS[event.key];
-        if (disabled || up === undefined) return;
-        event.preventDefault();
-        onStep(up);
-      }}
-    >
-      <div style={{ width: `${clamp(ratio) * 100}%` }} />
-    </div>
-  );
-}
-
-function clamp(ratio: number): number {
-  return Math.min(1, Math.max(0, ratio));
 }

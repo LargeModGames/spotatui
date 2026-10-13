@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SettingRow } from "./bindings/SettingRow";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
+import { ALBUM_SORTS, ARTIST_SORTS } from "./libraryModel";
 import {
   commitValue,
+  optionLabel,
   readyVersion,
   sections,
   setSetting,
@@ -33,6 +35,26 @@ describe("sections", () => {
     expect(
       sections([rpc, seek], false).map((section) => section.heading),
     ).toEqual(["Playback", "Integrations"]);
+  });
+
+  it("puts the default sort rows under Library, after Playback", () => {
+    const sorts = [
+      "default_sort_playlist_tracks",
+      "default_sort_saved_albums",
+      "default_sort_saved_artists",
+    ].map((id) =>
+      row(`behavior.${id}`, "library", {
+        kind: "choice",
+        value: "default",
+        options: ["default", "name"],
+      }),
+    );
+    const shown = sections([...sorts, seek], false);
+    expect(shown.map((section) => section.heading)).toEqual([
+      "Playback",
+      "Library",
+    ]);
+    expect(shown[1].rows).toEqual(sorts);
   });
 
   it("shows Updates whenever there is an updater, and only then", () => {
@@ -130,5 +152,29 @@ describe("readyVersion", () => {
     expect(readyVersion({ state: "ready", version: "0.44.0" })).toBe("0.44.0");
     expect(readyVersion({ state: "available", version: "0.44.0" })).toBeNull();
     expect(readyVersion(null)).toBeNull();
+  });
+});
+
+describe("optionLabel", () => {
+  it("labels each default sort row's tokens", () => {
+    expect(
+      optionLabel("behavior.default_sort_playlist_tracks", "default"),
+    ).toBe("Custom order");
+    expect(
+      optionLabel("behavior.default_sort_playlist_tracks", "date_added:desc"),
+    ).toBe("Date added (newest first)");
+    expect(optionLabel("behavior.default_sort_saved_albums", "name:desc")).toBe(
+      ALBUM_SORTS.find((sort) => sort.value === "name:desc")?.label,
+    );
+    expect(optionLabel("behavior.default_sort_saved_artists", "name")).toBe(
+      ARTIST_SORTS.find((sort) => sort.value === "name")?.label,
+    );
+  });
+
+  it("shows the option itself for any other row or an unknown token", () => {
+    expect(optionLabel("behavior.streaming_bitrate", "320")).toBe("320");
+    expect(optionLabel("behavior.default_sort_saved_albums", "rating")).toBe(
+      "rating",
+    );
   });
 });

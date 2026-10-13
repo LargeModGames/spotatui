@@ -1,7 +1,7 @@
 use super::{ids, IoEvent, Network};
 use crate::core::app::{
   ActiveBlock, AnalysisFetch, App, Artist, ArtistBlock, EpisodeTableContext, RouteId,
-  ScrollableResultPages, SelectedFullShow, SelectedShow,
+  SelectedFullShow, SelectedShow,
 };
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
 use crate::infra::network::mapping::{self, map_page};
@@ -354,6 +354,9 @@ impl MetadataNetwork for Network {
           if !track_check.is_empty() {
             app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));
           }
+          app.dispatch(IoEvent::CurrentUserSavedAlbumsContains(vec![id
+            .id()
+            .to_string()]));
           app.selected_album_simplified = Some(crate::core::app::SelectedAlbum {
             album: album_info,
             tracks: tracks_domain,
@@ -404,6 +407,9 @@ impl MetadataNetwork for Network {
         if !track_check.is_empty() {
           app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));
         }
+        app.dispatch(IoEvent::CurrentUserSavedAlbumsContains(vec![album_id
+          .id()
+          .to_string()]));
         app.selected_album_full = Some(crate::core::app::SelectedFullAlbum {
           album: album_info,
           selected_index: 0,
@@ -430,17 +436,16 @@ impl MetadataNetwork for Network {
       .await
     {
       Ok(episodes) => {
-        if !episodes.items.is_empty() {
-          let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
-          let mut app = self.app.lock().await;
-          app.library_mut().show_episodes = ScrollableResultPages::new();
-          app.library_mut().show_episodes.add_pages(domain_page);
-
-          app.selected_show_simplified = Some(SelectedShow { show: *show });
-
-          app.episode_table_context = EpisodeTableContext::Simplified;
-
-          app.bump_display(crate::core::app::DisplayDomain::Artist);
+        let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
+        let mut app = self.app.lock().await;
+        app.dispatch(IoEvent::CurrentUserSavedShowsContains(vec![show_id
+          .id()
+          .to_string()]));
+        let empty = domain_page.items.is_empty();
+        app.store_show_episodes_page(domain_page, true);
+        app.selected_show_simplified = Some(SelectedShow { show: *show });
+        app.episode_table_context = EpisodeTableContext::Simplified;
+        if !empty {
           app.push_navigation_stack(RouteId::PodcastEpisodes, ActiveBlock::EpisodeTable);
         }
       }
@@ -466,7 +471,11 @@ impl MetadataNetwork for Network {
         app.selected_show_full = Some(selected_show);
 
         app.episode_table_context = EpisodeTableContext::Full;
-        app.bump_display(crate::core::app::DisplayDomain::Artist);
+        // The episodes in the cache belong to the show opened before this one.
+        let id = show_id.id().to_string();
+        app.clear_show_episodes();
+        app.dispatch(IoEvent::GetCurrentShowEpisodes(id.clone(), None));
+        app.dispatch(IoEvent::CurrentUserSavedShowsContains(vec![id]));
         app.push_navigation_stack(RouteId::PodcastEpisodes, ActiveBlock::EpisodeTable);
       }
       Err(e) => {
@@ -487,10 +496,16 @@ impl MetadataNetwork for Network {
       .await
     {
       Ok(episodes) => {
-        if !episodes.items.is_empty() {
+        let first = offset.unwrap_or(0) == 0;
+        // An empty first page still lands, so a show with no episodes stops loading.
+        if first || !episodes.items.is_empty() {
           let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
           let mut app = self.app.lock().await;
-          app.library_mut().show_episodes.add_pages(domain_page);
+          // Another show opened while this page was in flight.
+          if app.selected_show_id() != Some(show_id.id()) {
+            return;
+          }
+          app.store_show_episodes_page(domain_page, first);
         }
       }
       Err(e) => {

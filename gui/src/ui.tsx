@@ -112,11 +112,16 @@ export function Shelf({
   title,
   children,
   oneRow = false,
+  onMore,
+  moreLabel = "Show all",
 }: {
   title: string;
   children: ReactNode;
   /** Render only the cards the first grid row holds, so no clipped card takes focus. */
   oneRow?: boolean;
+  /** Opens the full list; given, the title row shows a `moreLabel` button. */
+  onMore?: () => void;
+  moreLabel?: string;
 }) {
   const cards = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState<number | null>(null);
@@ -137,7 +142,21 @@ export function Shelf({
     oneRow && columns ? Children.toArray(children).slice(0, columns) : children;
   return (
     <section className="shelf" aria-label={title}>
-      <h2>{title}</h2>
+      {onMore ? (
+        <div className="shelf-head">
+          <h2>{title}</h2>
+          <button
+            type="button"
+            className="shelf-more"
+            aria-label={`${moreLabel}: ${title}`}
+            onClick={onMore}
+          >
+            {moreLabel}
+          </button>
+        </div>
+      ) : (
+        <h2>{title}</h2>
+      )}
       <div ref={cards} className="shelf-cards">
         {shown}
       </div>

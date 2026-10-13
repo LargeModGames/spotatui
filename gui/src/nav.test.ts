@@ -61,6 +61,18 @@ describe("openAction", () => {
     });
     expect(openAction({ page: "discover" })).toBeNull();
   });
+
+  it("a show opens by id, a radio by its seed track, and recent plays by the library route", () => {
+    expect(openAction({ page: "show", id: "s1", name: "Pod" })).toEqual({
+      Open: { Show: "s1" },
+    });
+    expect(openAction({ page: "radio", id: "t1", name: "Song" })).toEqual({
+      RecommendFromTrackId: { id: "t1", name: "Song" },
+    });
+    expect(openAction({ page: "recent" })).toEqual({
+      Navigate: "RecentlyPlayed",
+    });
+  });
 });
 
 describe("fetchFor", () => {
@@ -70,6 +82,8 @@ describe("fetchFor", () => {
     tableUri: "spotify:playlist:1",
     albumId: "a1",
     artistId: "k1",
+    showId: "s1",
+    radioId: "t1",
   };
   const playlist: View = {
     page: "playlist",
@@ -88,6 +102,19 @@ describe("fetchFor", () => {
     expect(fetchFor({ page: "liked" }, false, loaded)).toBeNull();
     expect(fetchFor(playlist, false, loaded)).toBeNull();
     expect(fetchFor({ page: "album", id: "a1" }, false, loaded)).toBeNull();
+  });
+
+  it("back and forward keep the show, the radio rows and recent plays the channels hold", () => {
+    expect(
+      fetchFor({ page: "show", id: "s1", name: "Pod" }, false, loaded),
+    ).toBeNull();
+    expect(
+      fetchFor({ page: "radio", id: "t1", name: "Song" }, false, loaded),
+    ).toBeNull();
+    expect(fetchFor({ page: "recent" }, false, loaded)).toBeNull();
+    expect(
+      fetchFor({ page: "radio", id: "t2", name: "Other" }, false, loaded),
+    ).toEqual({ RecommendFromTrackId: { id: "t2", name: "Other" } });
   });
 
   it("back to an album the channel no longer holds fetches it again", () => {

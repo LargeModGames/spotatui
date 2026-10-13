@@ -8,7 +8,7 @@ use crate::core::first_run::compiled_in_sources;
 use crate::core::playlist_sync::Unmatched;
 use crate::core::plugin_api::{
   device_list, recently_played_snapshot, route_name, AlbumInfo, ArtistInfo, DeviceInfo,
-  PlaybackState, PlaylistInfo, QueueItemSnapshot, QueueSnapshot, TrackInfo,
+  EpisodeInfo, PlaybackState, PlaylistInfo, QueueItemSnapshot, QueueSnapshot, ShowInfo, TrackInfo,
 };
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
@@ -143,13 +143,18 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: Option<UpdateStatus>,
   },
+  /// The podcast show the app last fetched for its show page.
+  Show {
+    rev: u64,
+    payload: Box<ShowPayload>,
+  },
 }
 
 #[derive(Serialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct SettingRow {
   id: String,
-  /// `playback`, `streaming`, `integrations` or `updates`.
+  /// `playback`, `streaming`, `integrations`, `library` or `updates`.
   group: &'static str,
   name: String,
   description: String,
@@ -192,6 +197,9 @@ const GUI_SETTINGS: &[(&str, &str, Option<&str>)] = &[
   ("behavior.enable_discord_rpc", "integrations", None),
   ("behavior.enable_global_song_count", "integrations", None),
   ("behavior.enable_lyrics", "integrations", None),
+  ("behavior.default_sort_playlist_tracks", "library", None),
+  ("behavior.default_sort_saved_albums", "library", None),
+  ("behavior.default_sort_saved_artists", "library", None),
   (
     "behavior.disable_auto_update",
     "updates",
@@ -211,6 +219,8 @@ pub(crate) struct HelloPayload {
   /// Present only on the connect that traded a launch code.
   token: Option<String>,
   revisions: DisplayRevisions,
+  /// A desktop shell can shrink its window to the mini player.
+  window: bool,
 }
 
 #[derive(Serialize)]
@@ -285,6 +295,25 @@ pub(crate) struct TrackTablePayload {
   tracks: Vec<TrackInfo>,
   /// `LoadMore(PlaylistTracks)` fetches the next page.
   has_more: bool,
+  /// Each row's position in its Spotify playlist, for `RemoveTrackFromPlaylist`; `null` for any other table.
+  positions: Option<Vec<usize>>,
+  /// The seed track id when the rows are that track's radio.
+  radio: Option<String>,
+}
+
+/// A playlist folder of the Spotify rootlist, or a playlist inside one.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum LibraryNode {
+  Folder {
+    name: String,
+    uri: String,
+    children: Vec<LibraryNode>,
+  },
+  Playlist {
+    uri: String,
+  },
 }
 
 /// Every source's sidebar list; the page shows the one for the active source.
@@ -300,10 +329,20 @@ pub(crate) struct SourcePlaylists {
   radio: Vec<TrackInfo>,
   /// Spotify's saved albums cached so far; `OpenLibrary(Albums)` fetches them.
   saved_albums: Vec<AlbumInfo>,
+  /// `LoadMore(SavedAlbums)` fetches the next page.
+  saved_albums_has_more: bool,
   /// Spotify's followed artists cached so far; `OpenLibrary(Artists)` fetches them.
   followed_artists: Vec<ArtistInfo>,
+  /// Spotify's saved podcast shows cached so far; `OpenLibrary(Podcasts)` fetches them.
+  saved_shows: Vec<ShowInfo>,
+  /// `LoadMore(SavedShows)` fetches the next page.
+  saved_shows_has_more: bool,
+  /// The ids of the saved shows among every show the app has seen.
+  saved_show_ids: Vec<String>,
   /// The URIs of the Spotify playlists the user can add tracks to.
   editable: Vec<String>,
+  /// The Spotify playlists in their folders; `null` without the rootlist, so the flat list stands.
+  folders: Option<Vec<LibraryNode>>,
 }
 
 #[derive(Serialize)]
@@ -317,6 +356,8 @@ pub(crate) struct SearchPayload {
   artists: Vec<ArtistInfo>,
   albums: Vec<AlbumInfo>,
   playlists: Vec<PlaylistInfo>,
+  /// Podcast shows; only a Spotify search finds them.
+  shows: Vec<ShowInfo>,
   /// The Spotify track ids among `tracks` that are in Liked Songs.
   liked: Vec<String>,
 }
@@ -392,6 +433,41 @@ pub(crate) struct LyricLine {
 pub(crate) struct AlbumPayload {
   /// With its tracks; `null` before the first album fetch.
   album: Option<AlbumInfo>,
+  /// The album is in the user's library, as the last check found.
+  saved: bool,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct ShowPayload {
+  /// `null` before the first show fetch.
+  page: Option<PodcastPage>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PodcastPage {
+  show: ShowInfo,
+  /// The show is in the user's library, as the last check found.
+  saved: bool,
+  /// False until the first episode page landed; no episodes before that is still loading.
+  loaded: bool,
+  /// The episodes cached so far, newest first.
+  episodes: Vec<EpisodeInfo>,
+  /// The show's episode count as Spotify reports it.
+  total: u32,
+  /// `LoadMore(ShowEpisodes)` fetches the next page.
+  has_more: bool,
+}
+
+/// The size of the desktop shell's window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum WindowMode {
+  Full,
+  /// A small window that stays on top.
+  Mini,
 }
 
 #[derive(Serialize)]
@@ -512,15 +588,24 @@ pub(crate) enum ClientMessage {
   Update {
     ask: UpdateAsk,
   },
+  /// Only a desktop shell has a window to resize.
+  Window {
+    mode: WindowMode,
+  },
   Quit,
 }
 
-pub(crate) fn hello(revisions: DisplayRevisions, token: Option<String>) -> ServerMessage {
+pub(crate) fn hello(
+  revisions: DisplayRevisions,
+  token: Option<String>,
+  window: bool,
+) -> ServerMessage {
   ServerMessage::Hello {
     payload: HelloPayload {
       version: env!("CARGO_PKG_VERSION"),
       token,
       revisions,
+      window,
     },
   }
 }
@@ -676,6 +761,8 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
           uri: view.uri.clone(),
           tracks: view.tracks.clone(),
           has_more: view.has_more,
+          positions: view.positions.clone(),
+          radio: view.radio.clone(),
         }),
       }
     }
@@ -699,7 +786,40 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
       rev,
       payload: app.update_status().cloned(),
     },
+    DisplayDomain::Show => ServerMessage::Show {
+      rev,
+      payload: Box::new(show(app)),
+    },
   })
+}
+
+fn show(app: &App) -> ShowPayload {
+  use crate::core::app::EpisodeTableContext;
+  let selected = match app.episode_table_context {
+    EpisodeTableContext::Full => app.selected_show_full.as_ref().map(|full| &full.show),
+    EpisodeTableContext::Simplified => app
+      .selected_show_simplified
+      .as_ref()
+      .map(|simplified| &simplified.show),
+  };
+  let mut pages: Vec<_> = app.library().show_episodes.pages.iter().collect();
+  pages.sort_by_key(|page| page.offset);
+  ShowPayload {
+    page: selected.map(|show| PodcastPage {
+      show: show.clone(),
+      saved: show
+        .id
+        .as_ref()
+        .is_some_and(|id| app.saved_show_ids_set().contains(id)),
+      loaded: !pages.is_empty(),
+      episodes: pages
+        .iter()
+        .flat_map(|page| page.items.iter().cloned())
+        .collect(),
+      total: pages.last().map_or(0, |page| page.total),
+      has_more: pages.last().is_some_and(|page| page.has_next()),
+    }),
+  }
 }
 
 fn settings(app: &App) -> Vec<SettingRow> {
@@ -807,23 +927,28 @@ fn lyrics(app: &App) -> LyricsPayload {
 
 fn album(app: &App) -> AlbumPayload {
   use crate::core::app::AlbumTableContext;
-  AlbumPayload {
-    album: match app.album_table_context {
-      AlbumTableContext::Full => app
-        .selected_album_full
+  let album = match app.album_table_context {
+    AlbumTableContext::Full => app
+      .selected_album_full
+      .as_ref()
+      .map(|selected| selected.album.clone()),
+    AlbumTableContext::Simplified => {
+      app
+        .selected_album_simplified
         .as_ref()
-        .map(|selected| selected.album.clone()),
-      AlbumTableContext::Simplified => {
-        app
-          .selected_album_simplified
-          .as_ref()
-          .map(|selected| AlbumInfo {
-            tracks: selected.tracks.items.clone(),
-            total_tracks: Some(selected.tracks.total),
-            ..selected.album.clone()
-          })
-      }
-    },
+        .map(|selected| AlbumInfo {
+          tracks: selected.tracks.items.clone(),
+          total_tracks: Some(selected.tracks.total),
+          ..selected.album.clone()
+        })
+    }
+  };
+  AlbumPayload {
+    saved: album
+      .as_ref()
+      .and_then(|album| album.id.as_ref())
+      .is_some_and(|id| app.saved_album_ids_set().contains(id)),
+    album,
   }
 }
 
@@ -930,6 +1055,7 @@ fn search(app: &App) -> SearchPayload {
     artists: items(&results.artists),
     albums: items(&results.albums),
     playlists: items(&results.playlists),
+    shows: items(&results.shows),
     liked: app.search_liked_ids(),
   }
 }
@@ -955,6 +1081,7 @@ fn playlists(app: &App) -> SourcePlaylists {
     youtube: app.youtube_playlists().clone(),
     radio: app.radio_stations().clone(),
     saved_albums: saved_albums(app),
+    saved_albums_has_more: last_page_has_next(&app.library().saved_albums.pages),
     followed_artists: app
       .library()
       .saved_artists
@@ -962,12 +1089,50 @@ fn playlists(app: &App) -> SourcePlaylists {
       .iter()
       .flat_map(|page| page.items.iter().cloned())
       .collect(),
+    saved_shows: saved_shows(app),
+    saved_shows_has_more: last_page_has_next(&app.library().saved_shows.pages),
+    saved_show_ids: app.saved_show_ids_set().iter().cloned().collect(),
     editable: app
       .editable_playlists()
       .into_iter()
       .map(|playlist| playlist.uri.clone())
       .collect(),
+    folders: app.playlist_folder_nodes().as_ref().map(|nodes| {
+      fn convert(node: &crate::core::app::PlaylistFolderNode) -> LibraryNode {
+        match node.node_type {
+          crate::core::app::PlaylistFolderNodeType::Folder => LibraryNode::Folder {
+            name: node.name.clone().unwrap_or_default(),
+            uri: node.uri.clone(),
+            children: node.children.iter().map(convert).collect(),
+          },
+          crate::core::app::PlaylistFolderNodeType::Playlist => LibraryNode::Playlist {
+            uri: node.uri.clone(),
+          },
+        }
+      }
+      nodes.iter().map(convert).collect()
+    }),
   }
+}
+
+fn last_page_has_next<T>(pages: &[crate::core::pagination::Paged<T>]) -> bool {
+  pages
+    .iter()
+    .max_by_key(|page| page.offset)
+    .is_some_and(|page| page.has_next())
+}
+
+/// The saved shows still saved, in offset order: an unsave keeps the cached row.
+fn saved_shows(app: &App) -> Vec<ShowInfo> {
+  let mut pages: Vec<_> = app.library().saved_shows.pages.iter().collect();
+  pages.sort_by_key(|page| page.offset);
+  let saved = app.saved_show_ids_set();
+  pages
+    .into_iter()
+    .flat_map(|page| page.items.iter())
+    .filter(|show| show.id.as_ref().is_some_and(|id| saved.contains(id)))
+    .cloned()
+    .collect()
 }
 
 fn saved_albums(app: &App) -> Vec<AlbumInfo> {
@@ -1096,7 +1261,8 @@ mod tests {
         "recently_played",
         "liked_marks",
         "settings",
-        "update"
+        "update",
+        "show"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -1614,6 +1780,191 @@ mod tests {
   }
 
   #[test]
+  fn the_album_page_says_if_its_album_is_saved_and_follows_an_unsave() {
+    use crate::core::app::{AlbumTableContext, SelectedAlbum};
+    let (mut app, _rx) = app();
+    app.selected_album_simplified = Some(SelectedAlbum {
+      album: AlbumInfo {
+        id: Some("21".to_string()),
+        name: "21".to_string(),
+        ..AlbumInfo::default()
+      },
+      tracks: liked_page(0, 1, 1, false),
+      selected_index: 0,
+    });
+    app.album_table_context = AlbumTableContext::Simplified;
+    app.saved_album_ids_set_mut().insert("21".to_string());
+    let before = app.display_revisions();
+    assert_eq!(pushed(&resync(&app), "album")["payload"]["saved"], true);
+
+    app.saved_album_ids_set_mut().remove("21");
+
+    assert_eq!(
+      pushed(&diff(&before, &app), "album")["payload"]["saved"],
+      false
+    );
+  }
+
+  fn episode(n: u32) -> EpisodeInfo {
+    EpisodeInfo {
+      id: Some(format!("e{n}")),
+      uri: Some(format!("spotify:episode:e{n}")),
+      name: format!("Episode {n}"),
+      duration_ms: 60_000,
+      show_name: String::new(),
+      description: String::new(),
+      release_date: String::new(),
+      is_playable: true,
+      resume_point: None,
+      image_url: None,
+    }
+  }
+
+  #[test]
+  fn a_fetched_show_rides_the_show_channel_with_its_episodes_and_saved_state() {
+    use crate::core::app::{EpisodeTableContext, SelectedFullShow};
+    let (mut app, _rx) = app();
+    assert!(pushed(&resync(&app), "show")["payload"]["page"].is_null());
+    let before = app.display_revisions();
+
+    app.selected_show_full = Some(SelectedFullShow {
+      show: ShowInfo {
+        id: Some("pod".to_string()),
+        name: "Pod".to_string(),
+        ..ShowInfo::default()
+      },
+    });
+    app.episode_table_context = EpisodeTableContext::Full;
+    app.store_show_episodes_page(
+      Paged {
+        items: vec![episode(0), episode(1)],
+        offset: 0,
+        limit: 2,
+        total: 5,
+        next: Some("next".to_string()),
+        ..Paged::default()
+      },
+      true,
+    );
+
+    let page = &pushed(&diff(&before, &app), "show")["payload"]["page"];
+    assert_eq!(page["show"]["name"], "Pod");
+    assert_eq!(page["episodes"][1]["name"], "Episode 1");
+    assert_eq!(page["total"], 5);
+    assert_eq!(page["has_more"], true);
+    assert_eq!(page["saved"], false);
+
+    let before = app.display_revisions();
+    app.saved_show_ids_set_mut().insert("pod".to_string());
+    let page = &pushed(&diff(&before, &app), "show")["payload"]["page"];
+    assert_eq!(page["saved"], true);
+  }
+
+  #[test]
+  fn a_first_episode_page_replaces_the_episodes_of_the_show_before() {
+    let (mut app, _rx) = app();
+    let page = |items| Paged {
+      items,
+      ..Paged::default()
+    };
+    app.store_show_episodes_page(page(vec![episode(0)]), true);
+
+    app.store_show_episodes_page(page(vec![episode(7)]), true);
+
+    let pages = &app.library().show_episodes.pages;
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].items[0].name, "Episode 7");
+  }
+
+  #[test]
+  fn saved_shows_ride_the_library_channel_and_an_unsaved_show_leaves_it() {
+    let (mut app, _rx) = app();
+    let show = |id: &str| ShowInfo {
+      id: Some(id.to_string()),
+      name: id.to_string(),
+      ..ShowInfo::default()
+    };
+    app.store_saved_shows_page(Paged {
+      items: vec![show("a"), show("b")],
+      ..Paged::default()
+    });
+    let library = &pushed(&resync(&app), "library")["payload"];
+    assert_eq!(library["saved_shows"].as_array().unwrap().len(), 2);
+    assert!(app.saved_show_ids_set().contains("a"));
+    let before = app.display_revisions();
+
+    app.saved_show_ids_set_mut().remove("a");
+
+    let library = &pushed(&diff(&before, &app), "library")["payload"];
+    assert_eq!(library["saved_shows"][0]["name"], "b");
+    assert_eq!(library["saved_shows"].as_array().unwrap().len(), 1);
+  }
+
+  #[test]
+  fn the_rootlist_folders_ride_the_library_channel_as_a_tree() {
+    use crate::core::app::{PlaylistFolderNode, PlaylistFolderNodeType};
+    let (mut app, _rx) = app();
+    assert!(pushed(&resync(&app), "library")["payload"]["folders"].is_null());
+    let before = app.display_revisions();
+
+    *app.playlist_folder_nodes_mut() = Some(vec![PlaylistFolderNode {
+      name: Some("Gym".to_string()),
+      node_type: PlaylistFolderNodeType::Folder,
+      uri: "spotify:user:me:folder:1".to_string(),
+      children: vec![PlaylistFolderNode {
+        name: None,
+        node_type: PlaylistFolderNodeType::Playlist,
+        uri: "spotify:playlist:p1".to_string(),
+        children: vec![],
+      }],
+    }]);
+
+    let folders = &pushed(&diff(&before, &app), "library")["payload"]["folders"];
+    assert_eq!(folders[0]["kind"], "folder");
+    assert_eq!(folders[0]["name"], "Gym");
+    assert_eq!(folders[0]["children"][0]["kind"], "playlist");
+    assert_eq!(folders[0]["children"][0]["uri"], "spotify:playlist:p1");
+  }
+
+  #[test]
+  fn a_playlist_table_sends_its_row_positions_and_a_radio_table_its_seed() {
+    use crate::core::app::TrackTableContext;
+    use rspotify::model::idtypes::PlaylistId;
+    let (mut app, _rx) = app();
+    app.playlist_track_table_id = Some(PlaylistId::from_id("p1").unwrap().into_static());
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.track_table.tracks = liked_page(0, 2, 2, false).items;
+    app.playlist_track_positions = Some(vec![4, 9]);
+    app.note_display_changes();
+    let table = &pushed(&resync(&app), "track_table")["payload"];
+    assert_eq!(table["positions"], serde_json::json!([4, 9]));
+    assert!(table["radio"].is_null());
+    let before = app.display_revisions();
+
+    app.track_table.context = Some(TrackTableContext::RecommendedTracks);
+    app.set_radio_seed_id(Some("seed".to_string()));
+    app.note_display_changes();
+
+    let table = &pushed(&diff(&before, &app), "track_table")["payload"];
+    assert!(table["positions"].is_null());
+    assert_eq!(table["radio"], "seed");
+  }
+
+  #[test]
+  fn hello_says_whether_a_shell_can_resize_its_window() {
+    let (app, _rx) = app();
+    let message = encode(&hello(app.display_revisions(), None, true));
+    let hello: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(hello["payload"]["window"], true);
+    let ClientMessage::Window { mode } =
+      serde_json::from_str(r#"{"type":"window","mode":"mini"}"#).unwrap()
+    else {
+      panic!("not a window message");
+    };
+    assert_eq!(mode, WindowMode::Mini);
+  }
+
+  #[test]
   fn a_visible_row_turning_liked_pushes_the_liked_marks_channel() {
     let (mut app, _rx) = app();
     let mut rows = liked_page(0, 2, 2, false).items;
@@ -1966,6 +2317,11 @@ mod tests {
     written::<crate::gui::onboarding::SourceChoice>(&dir, &cfg);
     written::<OnboardingReply>(&dir, &cfg);
     written::<crate::gui::onboarding::OnboardingReplyAnswer>(&dir, &cfg);
+    written::<LibraryNode>(&dir, &cfg);
+    written::<ShowPayload>(&dir, &cfg);
+    written::<PodcastPage>(&dir, &cfg);
+    written::<ShowInfo>(&dir, &cfg);
+    written::<WindowMode>(&dir, &cfg);
     for entry in std::fs::read_dir(&dir).unwrap() {
       let path = entry.unwrap().path();
       assert!(

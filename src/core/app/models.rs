@@ -63,6 +63,10 @@ pub struct TrackTableView {
   pub uri: Option<String>,
   pub tracks: Vec<TrackInfo>,
   pub has_more: bool,
+  /// Each row's position in its Spotify playlist, for a remove; `None` for any other table.
+  pub positions: Option<Vec<usize>>,
+  /// The seed track id when the rows are that track's recommendations.
+  pub radio: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -72,6 +76,7 @@ pub enum PendingTrackSelection {
 
 impl App {
   pub fn replace_track_table_tracks(&mut self, tracks: Vec<TrackInfo>) {
+    self.track_table_epoch = self.track_table_epoch.wrapping_add(1);
     self.playlist_track_positions = None;
 
     let track_count = tracks.len();
@@ -102,6 +107,7 @@ impl App {
     if context != TrackTableContext::AppleMusicPlaylist {
       self.cancel_apple_music_browse();
     }
+    self.track_table_epoch = self.track_table_epoch.wrapping_add(1);
     self.track_table.tracks = tracks;
     self.track_table.context = Some(context);
     self.view.track_table_index = 0;
@@ -213,14 +219,31 @@ impl App {
   pub(super) fn note_track_table_changes(&mut self) {
     let uri = self.track_table_uri();
     let has_more = self.track_table_has_more_rows();
+    let positions = match self.track_table.context {
+      Some(TrackTableContext::MyPlaylists | TrackTableContext::PlaylistSearch) if uri.is_some() => {
+        self.playlist_track_positions.clone()
+      }
+      _ => None,
+    };
+    let radio = match self.track_table.context {
+      Some(TrackTableContext::RecommendedTracks) => self.radio_seed_id.clone(),
+      _ => None,
+    };
     let view = &self.track_table_view;
-    if view.uri == uri && view.has_more == has_more && view.tracks == self.track_table.tracks {
+    if view.uri == uri
+      && view.has_more == has_more
+      && view.positions == positions
+      && view.radio == radio
+      && view.tracks == self.track_table.tracks
+    {
       return;
     }
     self.track_table_view = TrackTableView {
       uri,
       tracks: self.track_table.tracks.clone(),
       has_more,
+      positions,
+      radio,
     };
     self.display_revisions.bump(DisplayDomain::TrackTable);
   }
@@ -229,6 +252,22 @@ impl App {
   #[cfg(feature = "gui")]
   pub(crate) fn track_table_view(&self) -> &TrackTableView {
     &self.track_table_view
+  }
+
+  /// Name the seed track of the recommendation rows the caller writes with it.
+  pub(crate) fn set_radio_seed_id(&mut self, id: Option<String>) {
+    self.radio_seed_id = id;
+  }
+
+  /// Start a radio request; its rows may land until another list opens in the table.
+  pub(super) fn begin_radio_request(&mut self) {
+    self.track_table_epoch = self.track_table_epoch.wrapping_add(1);
+    self.radio_epoch = Some(self.track_table_epoch);
+  }
+
+  /// No other list opened in the track table since the last radio request.
+  pub(crate) fn radio_result_is_current(&self) -> bool {
+    self.radio_epoch == Some(self.track_table_epoch)
   }
 
   pub(crate) fn search_results(&self) -> &SearchResult {

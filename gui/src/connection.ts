@@ -34,6 +34,8 @@ export interface State {
   onboarding: OnboardingView | null;
   /** The running spotatui version, from the hello. */
   version: string | null;
+  /** A desktop shell can shrink its window to the mini player, from the hello. */
+  window: boolean;
 }
 
 /** Reads the one-time launch code from the fragment and removes it from the address bar. */
@@ -63,6 +65,7 @@ export class Connection {
     booted: false,
     onboarding: null,
     version: null,
+    window: false,
   };
   private socket: Socket | null = null;
   private readonly listeners = new Set<() => void>();
@@ -125,6 +128,7 @@ export class Connection {
         return this.update({
           connected: true,
           version: message.payload.version,
+          window: message.payload.window,
         });
       case "onboarding":
         return this.update({ onboarding: message.payload });

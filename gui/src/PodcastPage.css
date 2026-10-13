@@ -1,0 +1,173 @@
+/* A podcast show: the header, the description and the episode list. */
+.podcast-page {
+  container-type: inline-size;
+  min-width: 0;
+  padding-bottom: 32px;
+}
+
+.podcast-empty {
+  margin: 0;
+  padding: 8px 24px;
+  color: var(--sub);
+}
+
+.page-section .podcast-empty {
+  padding: 8px 0;
+}
+
+.show-about {
+  max-width: 720px;
+  margin-bottom: 16px;
+}
+
+.show-description {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  color: var(--sub);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.show-description.open {
+  display: block;
+}
+
+.episode-rows:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.episode-row {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  border-top: 1px solid var(--rule);
+  border-radius: 4px;
+  cursor: default;
+}
+
+.episode-row:hover {
+  background: var(--hover);
+}
+
+.episode-row[aria-selected="true"] {
+  background: var(--press);
+}
+
+.episode-row > .cover-art {
+  flex-shrink: 0;
+  border-radius: 8px;
+}
+
+.episode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.episode-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.episode-row.now .episode-name {
+  color: var(--accent);
+}
+
+.episode-description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  color: var(--sub);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.episode-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 4px;
+  color: var(--sub);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.episode-meta .meta-dot::before {
+  content: "· ";
+}
+
+.episode-play {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--frame);
+}
+
+.episode-play:not(:disabled):hover {
+  transform: scale(1.06);
+}
+
+.episode-play:disabled {
+  opacity: 0.4;
+}
+
+.episode-played {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.episode-progress {
+  position: relative;
+  width: 80px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--quiet);
+}
+
+.episode-progress > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--text);
+}
+
+.episode-copy {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--sub);
+}
+
+.episode-copy:not(:disabled):hover {
+  color: var(--text);
+}
+
+@container (max-width: 560px) {
+  .episode-row > .cover-art {
+    display: none;
+  }
+}
