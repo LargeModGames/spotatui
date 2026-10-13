@@ -36,6 +36,7 @@ const render = (discover: DiscoverPayload | null) =>
   renderToStaticMarkup(
     <Discover
       discover={discover}
+      connected={false}
       active={false}
       open={() => {}}
       send={() => {}}

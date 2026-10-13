@@ -248,6 +248,7 @@ export function Shell({
         recent={channels.recently_played?.payload ?? null}
         playlists={channels.library?.payload ?? null}
         discover={channels.discover?.payload ?? null}
+        connected={state.connected}
         active={page === "home"}
         playingUri={playingUri}
         open={open}
@@ -375,6 +376,7 @@ export function Shell({
     discover: (
       <Discover
         discover={channels.discover?.payload ?? null}
+        connected={state.connected}
         active={page === "discover"}
         open={open}
         send={send}

@@ -71,17 +71,21 @@ describe("recentAlbums", () => {
 
 describe("asksDiscover", () => {
   it("asks once the channel says a session exists and nothing landed", () => {
-    expect(asksDiscover(discover({}))).toBe(true);
+    expect(asksDiscover(discover({}), true)).toBe(true);
   });
 
   it("waits for the channel, a session and a running fetch", () => {
-    expect(asksDiscover(null)).toBe(false);
-    expect(asksDiscover(discover({ available: false }))).toBe(false);
-    expect(asksDiscover(discover({ loading: true }))).toBe(false);
+    expect(asksDiscover(null, true)).toBe(false);
+    expect(asksDiscover(discover({ available: false }), true)).toBe(false);
+    expect(asksDiscover(discover({ loading: true }), true)).toBe(false);
+  });
+
+  it("waits for the socket during a reconnect, when the store still holds the old channel", () => {
+    expect(asksDiscover(discover({}), false)).toBe(false);
   });
 
   it("skips shelves that already landed, even empty ones", () => {
-    expect(asksDiscover(discover({ shelves: [] }))).toBe(false);
+    expect(asksDiscover(discover({ shelves: [] }), true)).toBe(false);
   });
 });
 

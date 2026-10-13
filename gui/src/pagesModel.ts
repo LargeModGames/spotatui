@@ -29,9 +29,13 @@ export function recentAlbums(recent: TrackInfo[]): TrackInfo[] {
   });
 }
 
-/** Whether a page still has to ask for the Made For You shelves. */
-export function asksDiscover(discover: DiscoverPayload | null): boolean {
+/** Whether a page still has to ask for the Made For You shelves; a closed socket drops the ask. */
+export function asksDiscover(
+  discover: DiscoverPayload | null,
+  connected: boolean,
+): boolean {
   return (
+    connected &&
     discover !== null &&
     discover.available &&
     !discover.loading &&

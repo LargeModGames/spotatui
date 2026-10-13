@@ -10,11 +10,13 @@ import { Card, Shelf } from "./ui";
 /** Discover: the shelves of Spotify's Made For You page. */
 export const Discover = memo(function Discover({
   discover,
+  connected,
   active,
   open,
   send,
 }: {
   discover: DiscoverPayload | null;
+  connected: boolean;
   active: boolean;
   open: OpenView;
   send: (action: Action) => void;
@@ -22,10 +24,10 @@ export const Discover = memo(function Discover({
   // The shell's open skips the fetch before a session is known; ask once it is.
   const asked = useRef(false);
   useEffect(() => {
-    if (!active || asked.current || !asksDiscover(discover)) return;
+    if (!active || asked.current || !asksDiscover(discover, connected)) return;
     asked.current = true;
     send({ OpenLibrary: "Discover" });
-  }, [active, discover, send]);
+  }, [active, connected, discover, send]);
 
   const available = discover?.available ?? false;
   const shelves = discover?.shelves ?? [];

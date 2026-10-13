@@ -81,6 +81,7 @@ const render = (
       recent={recent}
       playlists={playlists}
       discover={disc}
+      connected={false}
       active={false}
       playingUri={null}
       open={() => {}}

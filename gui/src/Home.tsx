@@ -30,6 +30,7 @@ export function Home({
   recent,
   playlists,
   discover,
+  connected,
   active,
   open,
   send,
@@ -38,6 +39,7 @@ export function Home({
   recent: TrackInfo[] | null;
   playlists: SourcePlaylists | null;
   discover: DiscoverPayload | null;
+  connected: boolean;
   active: boolean;
   playingUri: string | null;
   open: OpenView;
@@ -45,11 +47,10 @@ export function Home({
 }) {
   const asked = useRef(false);
   useEffect(() => {
-    // Before the resync the connection drops every action, so nothing counts as asked yet.
-    if (!active || asked.current || !asksDiscover(discover)) return;
+    if (!active || asked.current || !asksDiscover(discover, connected)) return;
     asked.current = true;
     send({ OpenLibrary: "Discover" });
-  }, [active, discover, send]);
+  }, [active, connected, discover, send]);
 
   const spotify = playlists?.spotify ?? [];
   const albums = playlists?.saved_albums ?? [];

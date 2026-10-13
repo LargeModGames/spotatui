@@ -1377,6 +1377,10 @@ impl Network {
       app.dispatch(IoEvent::GetUser);
       app.dispatch(IoEvent::GetPlaylists);
       app.dispatch(IoEvent::GetCurrentPlayback);
+      // An open Discover skipped its fetch without a session.
+      if app.get_current_route().id == crate::core::app::RouteId::Discover {
+        app.fetch_discover();
+      }
     }
     self
       .show_status_message(
@@ -2032,6 +2036,30 @@ mod tests {
     assert!(loaded
       .iter()
       .any(|event| matches!(event, IoEvent::GetPlaylists)));
+    assert!(!loaded
+      .iter()
+      .any(|event| matches!(event, IoEvent::GetMadeForYou)));
+  }
+
+  #[tokio::test]
+  async fn a_finished_login_loads_the_open_discover_page() {
+    let (app, io_rx) = app_with_a_session_and_channel();
+    {
+      let mut app = app.lock().await;
+      app.spotify_connected = false;
+      app.push_navigation_stack(
+        crate::core::app::RouteId::Discover,
+        crate::core::app::ActiveBlock::Discover,
+      );
+    }
+    Network::new(None, &app)
+      .handle_network_event(IoEvent::CompleteSpotifyLogin)
+      .await;
+
+    assert!(io_rx
+      .try_iter()
+      .any(|event| matches!(event, IoEvent::GetMadeForYou)));
+    assert!(app.lock().await.discover_loading());
   }
 
   #[tokio::test]
