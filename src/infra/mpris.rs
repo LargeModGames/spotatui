@@ -8,7 +8,7 @@
 //! This module is only available on Linux with the `mpris` feature enabled.
 
 use anyhow::Result;
-use mpris_server::{Metadata, PlaybackStatus, Player, Time};
+use mpris_server::{Metadata, PlaybackStatus, Player, Time, TrackId};
 use std::thread;
 use tokio::sync::mpsc;
 
@@ -53,6 +53,58 @@ pub enum MprisCommand {
   Shuffle(bool),               // shuffle state
   LoopStatus(LoopStatusEvent), // loop/repeat state
   Stopped,
+}
+
+/// Object-path prefix of the track ids spotatui publishes. `/org/mpris` is
+/// reserved by the specification.
+const TRACK_ID_PREFIX: &str = "/org/spotatui/track/";
+
+/// The `mpris:trackid` for a track: a D-Bus object path derived from its
+/// metadata, so every path that publishes the same track (the native player's
+/// track change, the driver's sync with cover art) yields the same id.
+/// `DefaultHasher::new()` uses fixed keys, so the id is stable for the process.
+fn track_object_path(title: &str, artists: &[String], album: &str, duration_ms: u32) -> String {
+  use std::hash::{DefaultHasher, Hash, Hasher};
+  let mut hasher = DefaultHasher::new();
+  (title, artists, album, duration_ms).hash(&mut hasher);
+  format!("{TRACK_ID_PREFIX}{:016x}", hasher.finish())
+}
+
+/// The metadata published for a track, with the `mpris:trackid` clients send
+/// back in SetPosition. Without it, e.g. `playerctl position 60` refuses to send
+/// the call at all. The path is always a valid object path (a constant prefix and
+/// hex digits); should that ever fail, the id is left out as before.
+fn build_metadata(
+  title: &str,
+  artists: &[String],
+  album: &str,
+  duration_ms: u32,
+  art_url: Option<&str>,
+) -> Metadata {
+  let mut builder = Metadata::builder();
+  if let Ok(id) = TrackId::try_from(track_object_path(title, artists, album, duration_ms)) {
+    builder = builder.trackid(id);
+  }
+  builder = builder
+    .title(title)
+    .artist(artists.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+    .album(album)
+    .length(Time::from_millis(duration_ms as i64));
+  if let Some(url) = art_url {
+    builder = builder.art_url(url);
+  }
+  builder.build()
+}
+
+/// Whether a `SetPosition` call is for the current track. The specification
+/// says to ignore a stale id; only an id spotatui published for another track
+/// is treated as stale. Clients that send `NoTrack` or an id of their own kept
+/// working before spotatui published any id, so they still do.
+fn set_position_targets_current(current: Option<&str>, requested: &str) -> bool {
+  match current {
+    Some(current) if requested.starts_with(TRACK_ID_PREFIX) => requested == current,
+    _ => true,
+  }
 }
 
 /// Manager for the MPRIS D-Bus server
@@ -144,7 +196,15 @@ impl MprisManager {
         });
 
         let tx = event_tx.clone();
-        player.connect_set_position(move |_player, _track_id, position| {
+        player.connect_set_position(move |player, track_id, position| {
+          let current = player.metadata().trackid();
+          if !set_position_targets_current(
+            current.as_ref().map(|id| id.as_str()),
+            track_id.as_str(),
+          ) {
+            log::debug!("MPRIS: ignoring SetPosition for a previous track ({track_id})");
+            return;
+          }
           let _ = tx.send(MprisEvent::SetPosition(position.as_micros()));
         });
 
@@ -183,17 +243,8 @@ impl MprisManager {
               duration_ms,
               art_url,
             } => {
-              let mut builder = Metadata::builder()
-                .title(&title)
-                .artist(artists.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                .album(&album)
-                .length(Time::from_millis(duration_ms as i64));
-
-              if let Some(url) = &art_url {
-                builder = builder.art_url(url);
-              }
-
-              let metadata = builder.build();
+              let metadata =
+                build_metadata(&title, &artists, &album, duration_ms, art_url.as_deref());
 
               if let Err(e) = player.set_metadata(metadata).await {
                 log::warn!("MPRIS: Failed to set metadata: {}", e);
@@ -320,5 +371,107 @@ impl MprisManager {
   /// Update loop/repeat status
   pub fn set_loop_status(&self, status: LoopStatusEvent) {
     let _ = self.command_tx.send(MprisCommand::LoopStatus(status));
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn artists(names: &[&str]) -> Vec<String> {
+    names.iter().map(|n| n.to_string()).collect()
+  }
+
+  #[test]
+  fn the_same_track_always_gets_the_same_id() {
+    let a = track_object_path("Pave Low", &artists(&["Dame"]), "Herz gegen Fame", 248_000);
+    let b = track_object_path("Pave Low", &artists(&["Dame"]), "Herz gegen Fame", 248_000);
+    assert_eq!(a, b);
+  }
+
+  #[test]
+  fn another_title_artist_album_or_length_gets_another_id() {
+    let base = track_object_path("Pave Low", &artists(&["Dame"]), "Herz gegen Fame", 248_000);
+    for other in [
+      track_object_path("Low Life", &artists(&["Dame"]), "Herz gegen Fame", 248_000),
+      track_object_path(
+        "Pave Low",
+        &artists(&["Someone"]),
+        "Herz gegen Fame",
+        248_000,
+      ),
+      track_object_path("Pave Low", &artists(&["Dame"]), "Another Album", 248_000),
+      track_object_path("Pave Low", &artists(&["Dame"]), "Herz gegen Fame", 249_000),
+    ] {
+      assert_ne!(base, other);
+    }
+  }
+
+  #[test]
+  fn the_id_is_a_valid_track_id_outside_the_reserved_mpris_namespace() {
+    let path = track_object_path("Ünïcödé / title?", &artists(&["A", "B"]), "", 0);
+    assert!(TrackId::try_from(path.as_str()).is_ok(), "{path}");
+    assert!(path.starts_with(TRACK_ID_PREFIX));
+    assert!(!path.starts_with("/org/mpris"));
+  }
+
+  #[test]
+  fn fields_do_not_run_into_each_other_in_the_id() {
+    assert_ne!(
+      track_object_path("t", &artists(&["A B"]), "x", 1),
+      track_object_path("t", &artists(&["A", "B"]), "x", 1)
+    );
+    assert_ne!(
+      track_object_path("ab", &artists(&[]), "c", 1),
+      track_object_path("a", &artists(&[]), "bc", 1)
+    );
+  }
+
+  #[test]
+  fn published_metadata_carries_the_track_id_set_position_needs() {
+    let metadata = build_metadata(
+      "Pave Low",
+      &artists(&["Dame"]),
+      "Herz gegen Fame",
+      248_000,
+      Some("https://i.scdn.co/image/x"),
+    );
+    let expected = TrackId::try_from(track_object_path(
+      "Pave Low",
+      &artists(&["Dame"]),
+      "Herz gegen Fame",
+      248_000,
+    ))
+    .unwrap();
+    assert_eq!(metadata.trackid(), Some(expected));
+    assert_eq!(metadata.title(), Some("Pave Low"));
+  }
+
+  #[test]
+  fn set_position_for_the_current_track_is_applied() {
+    let current = track_object_path("Pave Low", &artists(&["Dame"]), "Album", 1);
+    assert!(set_position_targets_current(Some(&current), &current));
+  }
+
+  #[test]
+  fn set_position_for_a_previous_spotatui_track_is_ignored() {
+    let current = track_object_path("Low Life", &artists(&["Dame"]), "Album", 1);
+    let previous = track_object_path("Pave Low", &artists(&["Dame"]), "Album", 1);
+    assert!(!set_position_targets_current(Some(&current), &previous));
+  }
+
+  #[test]
+  fn set_position_with_a_foreign_or_missing_id_is_still_applied() {
+    let current = track_object_path("Pave Low", &artists(&["Dame"]), "Album", 1);
+    for requested in [
+      "/org/mpris/MediaPlayer2/TrackList/NoTrack",
+      "/some/client/id",
+    ] {
+      assert!(
+        set_position_targets_current(Some(&current), requested),
+        "{requested}"
+      );
+    }
+    assert!(set_position_targets_current(None, &current));
   }
 }
