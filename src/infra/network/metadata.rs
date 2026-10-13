@@ -530,16 +530,20 @@ impl MetadataNetwork for Network {
           crate::infra::network::mapping::map_cursor_page(&res.artists, |a| ArtistInfo::from(a));
         let mut app = self.app.lock().await;
         let artists = &mut app.library_mut().saved_artists;
-        // The first page starts the list again, so a refetch does not repeat it.
         if after.is_none() {
           artists.clear();
         }
         artists.add_pages(domain_page);
+        app.set_saved_artists_to_table_continuous();
       }
-      Err(e) => self.handle_error(anyhow!(e)).await,
+      Err(e) => {
+        let mut app = self.app.lock().await;
+        app.clear_saved_artists_in_flight();
+        drop(app);
+        self.handle_error(anyhow!(e)).await;
+      }
     }
   }
-
   async fn user_unfollow_artists(&mut self, artist_ids: Vec<ArtistId<'static>>) {
     let uris: Vec<String> = artist_ids.iter().map(|id| id.uri()).collect();
     if let Err(e) = self.library_remove_uris(&uris).await {

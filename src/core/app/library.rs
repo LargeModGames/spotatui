@@ -657,6 +657,8 @@ impl App {
 
   /// Replace `self.artists` with all cached pages and apply any pending landing selection.
   pub fn set_saved_artists_to_table_continuous(&mut self) {
+    self.saved_artists_prefetch_in_flight = None;
+
     self.artists = self.saved_artists_flattened();
     self.display_revisions.bump(DisplayDomain::Artist);
 
@@ -666,26 +668,23 @@ impl App {
   }
 
   pub fn get_current_user_saved_artists_next(&mut self) {
-    match self
-      .library
-      .saved_artists
-      .get_results(Some(self.library.saved_artists.index + 1))
-      .cloned()
-    {
-      Some(saved_artists) => {
-        self.set_saved_artists_to_table(&saved_artists);
-        self.library_mut().saved_artists.index += 1
-      }
-      None => {
-        if let Some(saved_artists) = &self.library.saved_artists.clone().get_results(None) {
-          if let Some(last_artist) = saved_artists.items.last() {
-            if let Some(after) = last_artist.id.as_deref() {
-              self.dispatch(IoEvent::GetFollowedArtists(Some(after.to_string())));
-            }
-          }
-        }
-      }
+    if !self.current_saved_artists_has_more() {
+      return;
     }
+
+    if let Some(cursor) = self.next_saved_artists_cursor() {
+      // If this cursor is already fetching, ignore
+      if self.saved_artists_prefetch_in_flight.as_deref() == Some(&cursor) {
+        return;
+      }
+
+      self.saved_artists_prefetch_in_flight = Some(cursor.clone());
+      self.dispatch(IoEvent::GetFollowedArtists(Some(cursor)));
+    }
+  }
+
+  pub fn clear_saved_artists_in_flight(&mut self) {
+    self.saved_artists_prefetch_in_flight = None;
   }
 
   pub fn get_current_user_saved_artists_previous(&mut self) {
