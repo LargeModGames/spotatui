@@ -47,6 +47,8 @@ export function Home({
 }) {
   const asked = useRef(false);
   useEffect(() => {
+    // A drop can swallow the ask, so a reconnect may ask once more.
+    if (!connected) asked.current = false;
     if (!active || asked.current || !asksDiscover(discover, connected)) return;
     asked.current = true;
     send({ OpenLibrary: "Discover" });

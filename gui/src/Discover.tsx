@@ -24,6 +24,8 @@ export const Discover = memo(function Discover({
   // The shell's open skips the fetch before a session is known; ask once it is.
   const asked = useRef(false);
   useEffect(() => {
+    // A drop can swallow the ask, so a reconnect may ask once more.
+    if (!connected) asked.current = false;
     if (!active || asked.current || !asksDiscover(discover, connected)) return;
     asked.current = true;
     send({ OpenLibrary: "Discover" });
