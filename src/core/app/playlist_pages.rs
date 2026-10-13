@@ -261,7 +261,30 @@ impl App {
       self.playlist_track_positions = None;
       return;
     }
+    // An add or remove may have left the cached pages behind the playlist.
+    // Restoring them would show the rows from before that edit, the removed
+    // track included, so walk Spotify again from the first page.
+    if self.playlist_track_pages.stale {
+      self.refetch_stale_playlist_tracks();
+      return;
+    }
     self.set_playlist_tracks_to_table_continuous();
+  }
+
+  /// Rebuild the page cache and the visible table from the first page after an
+  /// add or remove left the cached pages stale. Reuses the open-playlist reset,
+  /// so the fetch responses rebuild the table through the one existing
+  /// `set_playlist_tracks_to_table_continuous` restore path.
+  fn refetch_stale_playlist_tracks(&mut self) {
+    let Some(playlist_id) = self.current_playlist_track_table_id() else {
+      return;
+    };
+    let Some(context) = self.track_table.context.take() else {
+      return;
+    };
+    self.reset_playlist_tracks_view(playlist_id.clone(), context);
+    self.set_status_message("Loading playlist…", 3);
+    self.dispatch(IoEvent::GetPlaylistItems(playlist_id.id().to_string(), 0));
   }
 
   pub fn apply_playlist_track_search_results(
@@ -934,6 +957,45 @@ mod tests {
     assert!(app.active_playlist_track_filter.is_none());
     assert_eq!(app.track_table.tracks.len(), 2);
     assert_eq!(app.playlist_track_positions, Some(vec![0, 1]));
+  }
+
+  #[test]
+  fn clearing_the_search_after_an_edit_refetches_instead_of_showing_stale_rows() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let playlist_id = playlist_id("37i9dQZF1DX4WYpdgoIcn6");
+    let page = playlist_page(
+      0,
+      2,
+      &["0000000000000000000001", "0000000000000000000002"],
+      false,
+    );
+
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app.playlist_track_table_id = Some(playlist_id.clone());
+    app.playlist_track_pages.upsert_page_by_offset(page);
+    // A remove marked the cached pages stale: the removed track is still in
+    // them, so restoring the cache would bring it back.
+    app.playlist_track_pages.mark_stale();
+    app.active_playlist_track_filter = Some("second".to_string());
+    app.track_table.tracks = vec![track_info("0000000000000000000002", "Second")];
+    app.playlist_track_positions = Some(vec![1]);
+
+    app.clear_playlist_track_filter();
+
+    assert!(app.active_playlist_track_filter.is_none());
+    assert!(
+      app.track_table.tracks.is_empty(),
+      "stale cached rows must not be restored"
+    );
+    assert!(app.playlist_track_pages.pages.is_empty());
+    match rx.recv().unwrap() {
+      IoEvent::GetPlaylistItems(id, offset) => {
+        assert_eq!(id, playlist_id.id());
+        assert_eq!(offset, 0);
+      }
+      _ => panic!("expected a fresh first-page fetch"),
+    }
   }
 
   #[test]
