@@ -7,6 +7,14 @@ use super::pump::start_tokio;
 #[cfg(feature = "streaming")]
 use super::streaming::launch::{deferred_streaming_startup, DeferredStreamingContext};
 use crate::core::app::App;
+#[cfg(all(
+  feature = "streaming",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+use crate::core::app::PlaybackOwner;
 use crate::core::driver::{Driver, MprisHandle};
 use crate::core::user_config::{StartupBehavior, UserConfig};
 #[cfg(feature = "discord-rpc")]
@@ -1021,10 +1029,16 @@ async fn handle_mpris_events(
 
     // Dynamically fetch the current active player so MPRIS can target the correct player
     // and not the stale player. The old player can be stale on, e.g., native streaming recovery.
+    // While another Spotify device plays, the idle local player would swallow the command
+    // (#797): leave it out, so every arm takes its App fallback like the TUI does.
     #[cfg(feature = "streaming")]
     let current_player = {
       let app_lock = app.lock().await;
-      app_lock.streaming_player.clone()
+      let native_playing = shared_is_playing.load(Ordering::Relaxed);
+      app_lock
+        .streaming_player
+        .clone()
+        .filter(|_| local_player_takes_media_keys(app_lock.playback_owner(), native_playing))
     };
 
     match event {
@@ -1038,20 +1052,10 @@ async fn handle_mpris_events(
           }
           continue;
         }
-        // Fallback: dispatch IoEvent
-        let mut app_lock = app.lock().await;
-        let is_playing = app_lock.native_is_playing.unwrap_or_else(|| {
-          app_lock
-            .current_playback_context
-            .as_ref()
-            .map(|c| c.is_playing)
-            .unwrap_or(false)
-        });
-        if is_playing {
-          app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
-        } else {
-          app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
-        }
+        // Fallback: the same toggle as the TUI's play/pause. It follows the playback
+        // owner; `native_is_playing` still describes the idle local player while
+        // another device plays, so reading it here would resume instead of pause.
+        app.lock().await.toggle_playback();
       }
       MprisEvent::Play => {
         #[cfg(feature = "streaming")]
@@ -1381,6 +1385,10 @@ async fn handle_macos_media_events(
       continue;
     }
 
+    if route_remote_spotify_macos_event(&event, &mut *app.lock().await, &shared_is_playing) {
+      continue;
+    }
+
     let Some(player) = player::active_streaming_player(&app).await else {
       // A parked backend resumes through the fallback, which rebuilds it.
       if matches!(event, MacMediaEvent::PlayPause | MacMediaEvent::Play) {
@@ -1421,6 +1429,48 @@ async fn handle_macos_media_events(
       }
     }
   }
+}
+
+/// While another Spotify device plays (a phone, a Connect speaker), a media key
+/// drives it through the same transport the keyboard uses, not the idle local
+/// player, which would swallow it (#797). Next/previous already went this way.
+#[cfg(all(feature = "macos-media", target_os = "macos"))]
+fn route_remote_spotify_macos_event(
+  event: &macos_media::MacMediaEvent,
+  app: &mut App,
+  shared_is_playing: &std::sync::atomic::AtomicBool,
+) -> bool {
+  use macos_media::MacMediaEvent;
+  use std::sync::atomic::Ordering;
+  let native_playing = shared_is_playing.load(Ordering::Relaxed);
+  if local_player_takes_media_keys(app.playback_owner(), native_playing) {
+    return false;
+  }
+  match event {
+    MacMediaEvent::PlayPause => app.toggle_playback(),
+    MacMediaEvent::Play => app.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None)),
+    MacMediaEvent::Pause | MacMediaEvent::Stop => {
+      app.dispatch_spotify_fallback(IoEvent::PausePlayback)
+    }
+    MacMediaEvent::Next => app.next_track(),
+    MacMediaEvent::Previous => app.previous_track(),
+  }
+  true
+}
+
+/// Whether a media key (MPRIS, macOS) goes to the local librespot player. Not
+/// while another Spotify device owns playback: the local player is idle then and
+/// ignores it (#797). A local player that is itself playing still takes it, as
+/// in a pull-back that Spotify has not confirmed yet (#693).
+#[cfg(all(
+  feature = "streaming",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+fn local_player_takes_media_keys(owner: PlaybackOwner, native_playing: bool) -> bool {
+  native_playing || owner != PlaybackOwner::Spotify
 }
 
 /// While Music owns playback, a media key that still reaches spotatui drives
@@ -1626,4 +1676,42 @@ async fn route_decoded_windows_event(
     }
   }
   true
+}
+
+#[cfg(all(
+  test,
+  feature = "streaming",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+mod media_key_tests {
+  use super::*;
+
+  #[test]
+  fn another_spotify_device_takes_the_media_keys_from_the_idle_local_player() {
+    assert!(!local_player_takes_media_keys(
+      PlaybackOwner::Spotify,
+      false
+    ));
+  }
+
+  #[test]
+  fn a_local_player_that_plays_keeps_the_media_keys_before_spotify_confirms_it() {
+    assert!(local_player_takes_media_keys(PlaybackOwner::Spotify, true));
+  }
+
+  #[test]
+  fn the_local_player_keeps_the_media_keys_for_every_other_owner() {
+    for owner in [
+      PlaybackOwner::NativeSpotify,
+      PlaybackOwner::Queue,
+      PlaybackOwner::Decoded,
+      PlaybackOwner::AppleMusic,
+      PlaybackOwner::None,
+    ] {
+      assert!(local_player_takes_media_keys(owner, false), "{owner:?}");
+    }
+  }
 }

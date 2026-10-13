@@ -621,6 +621,23 @@ mod tests {
     ));
   }
 
+  /// The media-key fallback for another device (#797) leans on this: the idle
+  /// local player says "not playing", but the toggle reads the other device and
+  /// pauses it instead of starting it.
+  #[test]
+  fn toggle_pauses_another_device_that_plays_while_the_local_player_is_idle() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.spotify_connected = true;
+    app.native_is_playing = Some(false);
+    app.current_playback_context = Some(make_external_context());
+    assert_eq!(app.playback_owner(), PlaybackOwner::Spotify);
+
+    app.toggle_playback();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+  }
+
   /// When the native queue slot owns playback, `next_track` advances the queue
   /// instead of driving the streaming player's own `next`.
   #[cfg(feature = "streaming")]
