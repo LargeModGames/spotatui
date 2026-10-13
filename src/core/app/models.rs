@@ -319,6 +319,10 @@ impl App {
     self.pending_track_table_selection = Some(PendingTrackSelection::Index(index));
   }
 
+  pub(crate) fn select_artist_when_next_page_lands(&mut self, index: usize) {
+    self.pending_artist_selection = Some(index);
+  }
+
   /// Drop a row parked for an in-flight page: the user moved on since.
   pub(crate) fn forget_pending_row_selection(&mut self) {
     self.pending_track_table_selection = None;
