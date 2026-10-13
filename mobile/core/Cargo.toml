@@ -1,0 +1,47 @@
+# The Rust half of the Android app: the spotatui core in-process, loaded by the
+# Expo native module. Not a workspace member: its own Cargo.lock keeps the
+# Android build out of the root package and its CI legs.
+[package]
+name = "spotatui-mobile-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "spotatui_mobile"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+log = "0.4"
+tokio = { version = "1.52", features = ["rt-multi-thread"] }
+spotatui = { path = "../..", default-features = false, features = [
+  "telemetry",
+  "gui",
+  "streaming",
+] }
+
+# The versions cpal links: ndk-context must be the same crate cpal reads.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+ndk-context = "0.1.1"
+
+# Profiles do not inherit from the root package. Full debug info makes a
+# library of over 400 MB, too large to install on a phone for each test, and
+# unoptimized dependencies decode audio too slowly on a phone CPU.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 2
+
+[profile.dev.package.spotatui]
+debug = "line-tables-only"
+opt-level = 0
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
