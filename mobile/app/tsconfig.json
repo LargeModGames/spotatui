@@ -11,6 +11,9 @@
       ],
       "@gui/*": [
         "../../gui/src/*"
+      ],
+      "react": [
+        "./node_modules/@types/react"
       ]
     }
   },
