@@ -126,6 +126,8 @@ fn speaker_at(url: &str) -> Option<Entry> {
     .query(&[("action", "getInfo")])
     .send()
     .ok()?
+    .error_for_status()
+    .ok()?
     .json()
     .ok()?;
   connect_speaker(url, &info).map(Entry::Speaker)
@@ -139,16 +141,16 @@ fn found() -> MutexGuard<'static, HashMap<String, Entry>> {
     .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Starts the browse once; later calls do nothing.
+/// Starts the browse once; a later call tries again after a failed start.
 pub fn start() {
-  static DAEMON: OnceLock<Option<ServiceDaemon>> = OnceLock::new();
-  DAEMON.get_or_init(|| match browse() {
-    Ok(daemon) => Some(daemon),
-    Err(e) => {
-      log::warn!("Speaker browse did not start: {e:#}");
-      None
+  static DAEMON: Mutex<Option<ServiceDaemon>> = Mutex::new(None);
+  let mut daemon = DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+  if daemon.is_none() {
+    match browse() {
+      Ok(started) => *daemon = Some(started),
+      Err(e) => log::warn!("Speaker browse did not start: {e:#}"),
     }
-  });
+  }
 }
 
 fn browse() -> anyhow::Result<ServiceDaemon> {
