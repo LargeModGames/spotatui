@@ -618,6 +618,53 @@ impl App {
     self.display_revisions.bump(DisplayDomain::Artist);
   }
 
+  /// Flatten all cached pages in order, deduplicating by artist ID.
+  pub(crate) fn saved_artists_flattened(&self) -> Vec<ArtistInfo> {
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut artists = Vec::new();
+
+    for page in &self.library.saved_artists.pages {
+      for artist in &page.items {
+        if let Some(ref id) = artist.id {
+          if !seen_ids.insert(id.clone()) {
+            continue; // Skip duplicate if already seen
+          }
+        }
+        artists.push(artist.clone());
+      }
+    }
+
+    artists
+  }
+
+  /// Check whether the last cached page has a next page available.
+  pub fn current_saved_artists_has_more(&self) -> bool {
+    self
+      .library
+      .saved_artists
+      .pages
+      .last()
+      .is_some_and(|page| page.has_next())
+  }
+
+  /// Get the `after` cursor for fetching the next page (ID of the last loaded artist).
+  pub fn next_saved_artists_cursor(&self) -> Option<String> {
+    if !self.current_saved_artists_has_more() {
+      return None;
+    }
+    self.artists.last().and_then(|artist| artist.id.clone())
+  }
+
+  /// Replace `self.artists` with all cached pages and apply any pending landing selection.
+  pub fn set_saved_artists_to_table_continuous(&mut self) {
+    self.artists = self.saved_artists_flattened();
+    self.display_revisions.bump(DisplayDomain::Artist);
+
+    if let Some(target) = self.pending_artist_selection.take() {
+      self.view.artists_list_index = target.min(self.artists.len().saturating_sub(1));
+    }
+  }
+
   pub fn get_current_user_saved_artists_next(&mut self) {
     match self
       .library
