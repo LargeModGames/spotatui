@@ -613,11 +613,6 @@ impl App {
       .is_some_and(|saved_tracks| saved_tracks.next.is_some())
   }
 
-  pub fn set_saved_artists_to_table(&mut self, saved_artists_page: &CursorPaged<ArtistInfo>) {
-    self.artists = saved_artists_page.items.clone();
-    self.display_revisions.bump(DisplayDomain::Artist);
-  }
-
   /// Flatten all cached pages in order, deduplicating by artist ID.
   pub(crate) fn saved_artists_flattened(&self) -> Vec<ArtistInfo> {
     let mut seen_ids = std::collections::HashSet::new();
@@ -685,16 +680,6 @@ impl App {
 
   pub fn clear_saved_artists_in_flight(&mut self) {
     self.saved_artists_prefetch_in_flight = None;
-  }
-
-  pub fn get_current_user_saved_artists_previous(&mut self) {
-    if self.library.saved_artists.index > 0 {
-      self.library_mut().saved_artists.index -= 1;
-    }
-
-    if let Some(saved_artists) = &self.library.saved_artists.get_results(None).cloned() {
-      self.set_saved_artists_to_table(saved_artists);
-    }
   }
 
   pub fn get_current_user_saved_tracks_next(&mut self) {
