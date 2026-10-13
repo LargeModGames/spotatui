@@ -147,6 +147,7 @@ impl App {
     }
   }
 
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   /// The liked track ids among the track table, the album page, the artist's top
   /// tracks, recently played and Liked Songs, sorted.
   pub(crate) fn visible_liked_ids(&self) -> Vec<String> {
@@ -182,11 +183,15 @@ impl App {
   }
 
   /// Bump LikedMarks when the liked state of a visible row changes.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   pub(super) fn note_liked_marks_changes(&mut self) {
-    let liked = self.visible_liked_ids();
-    if liked != self.liked_marks_view {
-      self.liked_marks_view = liked;
-      self.display_revisions.bump(DisplayDomain::LikedMarks);
+    #[cfg(feature = "gui")]
+    {
+      let liked = self.visible_liked_ids();
+      if liked != self.liked_marks_view {
+        self.liked_marks_view = liked;
+        self.display_revisions.bump(DisplayDomain::LikedMarks);
+      }
     }
   }
 

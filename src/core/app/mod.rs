@@ -422,6 +422,7 @@ pub struct App {
   /// The liked marks the Search revision last counted.
   search_liked_view: Vec<String>,
   /// The liked marks the LikedMarks revision last counted.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   liked_marks_view: Vec<String>,
   /// The desktop shell's updater; `None` without one.
   #[cfg(feature = "gui")]

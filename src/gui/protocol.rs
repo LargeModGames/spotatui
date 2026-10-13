@@ -1681,6 +1681,35 @@ mod tests {
   }
 
   #[test]
+  fn the_album_channel_carries_the_saved_state_and_a_save_rerides_it() {
+    use crate::core::app::{AlbumTableContext, SelectedAlbum};
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app.selected_album_simplified = Some(SelectedAlbum {
+      album: AlbumInfo {
+        id: Some("21".to_string()),
+        uri: Some("spotify:album:21".to_string()),
+        name: "21".to_string(),
+        ..AlbumInfo::default()
+      },
+      tracks: liked_page(0, 2, 11, true),
+      selected_index: 0,
+    });
+    app.album_table_context = AlbumTableContext::Simplified;
+    app.bump_display(DisplayDomain::Album);
+
+    let payload = &pushed(&diff(&before, &app), "album")["payload"];
+    assert_eq!(payload["saved"], false);
+
+    let before = app.display_revisions();
+    app.saved_album_ids_set_mut().insert("21".to_string());
+    let payload = &pushed(&diff(&before, &app), "album")["payload"];
+    assert_eq!(payload["saved"], true);
+    assert_eq!(payload["album"]["name"], "21");
+  }
+
+  #[test]
   fn a_fetched_album_rides_the_album_channel_with_its_page_of_tracks() {
     use crate::core::app::{AlbumTableContext, SelectedAlbum};
     let (mut app, _rx) = app();
@@ -1789,6 +1818,39 @@ mod tests {
     let albums = &pushed(&diff(&before, &app), "library")["payload"]["saved_albums"];
     assert_eq!(albums[0]["name"], "First");
     assert_eq!(albums[1]["name"], "Second");
+  }
+
+  #[test]
+  fn opening_a_cached_saved_album_pushes_its_saved_state() {
+    use crate::core::plugin_api::SavedAlbumInfo;
+    let (mut app, rx) = app();
+    let before = app.display_revisions();
+
+    // A complete saved-albums page for a one-track album.
+    app.store_saved_albums_page(Paged {
+      items: vec![SavedAlbumInfo {
+        album: AlbumInfo {
+          id: Some("21".to_string()),
+          name: "21".to_string(),
+          tracks: liked_page(0, 1, 1, false).items,
+          total_tracks: Some(1),
+          ..AlbumInfo::default()
+        },
+        added_at: String::new(),
+      }],
+      offset: 0,
+      limit: 1,
+      total: 1,
+      ..Paged::default()
+    });
+
+    // Opening the cached album dispatches no save check.
+    app.open_saved_album("21".to_string());
+    assert!(rx.try_recv().is_err());
+
+    let payload = &pushed(&diff(&before, &app), "album")["payload"];
+    assert_eq!(payload["album"]["id"], "21");
+    assert_eq!(payload["saved"], true);
   }
 
   #[test]

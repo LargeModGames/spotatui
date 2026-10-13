@@ -97,9 +97,11 @@ describe("Home", () => {
     );
   });
 
-  it("puts Liked Songs first in the quick grid and gives it the focus", () => {
+  it("puts Liked Songs first in the quick grid, with the page holding the focus", () => {
     const html = render(null, library(2), null);
-    expect(html).toMatch(/data-focus="true"[^>]*>.*?Liked Songs/);
+    expect(html).toMatch(/<section[^>]*data-focus="true"[^>]*tabindex="-1"/);
+    // No button in the grid carries the focus marker.
+    expect(html).not.toMatch(/<button[^>]*data-focus="true"/);
     expect(html.indexOf("Liked Songs")).toBeLessThan(html.indexOf("P0"));
   });
 

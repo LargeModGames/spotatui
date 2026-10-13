@@ -695,6 +695,13 @@ impl App {
 
   /// Show a fetched saved-albums page; one whose offset is already cached replaces that copy.
   pub(crate) fn store_saved_albums_page(&mut self, page: Paged<SavedAlbumInfo>) {
+    // Every album on a saved-albums page is saved, so the album page's
+    // heart can show its state without a separate save check.
+    for saved_album in &page.items {
+      if let Some(id) = saved_album.album.id.as_deref() {
+        self.saved_album_ids_set_mut().insert(id.to_string());
+      }
+    }
     let albums = &mut self.library_mut().saved_albums;
     match albums
       .pages
@@ -1213,6 +1220,17 @@ mod tests {
     assert!(rx.try_recv().is_err());
     assert_eq!(app.library.saved_albums.index, 1);
     assert_eq!(app.view.album_list_index, 0);
+  }
+
+  #[test]
+  fn a_saved_albums_page_marks_its_albums_saved() {
+    let mut app = App::default();
+    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true));
+    app.store_saved_albums_page(saved_album_page(2, &["a3"], false));
+
+    assert!(app.saved_album_ids_set().contains("a1"));
+    assert!(app.saved_album_ids_set().contains("a2"));
+    assert!(app.saved_album_ids_set().contains("a3"));
   }
 
   #[test]

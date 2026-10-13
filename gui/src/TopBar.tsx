@@ -104,6 +104,15 @@ export function TopBar({
               } else if (event.key === "Escape") {
                 event.preventDefault();
                 event.currentTarget.blur();
+              } else if (event.key === "ArrowDown" && page === "search") {
+                // Move into the results like the old Search input did.
+                const results = document.querySelector<HTMLElement>(
+                  '[data-area="search"] [role="listbox"]',
+                );
+                if (results?.querySelector('[role="option"]')) {
+                  event.preventDefault();
+                  results.focus({ preventScroll: true });
+                }
               }
             }}
           />

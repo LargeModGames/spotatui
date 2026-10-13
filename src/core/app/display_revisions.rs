@@ -30,6 +30,7 @@ pub enum DisplayDomain {
   /// Spotify's recently played tracks.
   RecentlyPlayed,
   /// The liked track ids among the rows a frontend can show.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   LikedMarks,
   /// The settings rows a frontend offers.
   Settings,

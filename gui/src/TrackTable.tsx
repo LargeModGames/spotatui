@@ -206,7 +206,11 @@ export const TrackTable = memo(function TrackTable({
           )}
           at={menu.at}
           actions={actions}
-          onClose={() => setMenu(null)}
+          onClose={() => {
+            setMenu(null);
+            // The menu leaves focus on <body>; the list keeps j/k/Enter.
+            list.current?.focus({ preventScroll: true });
+          }}
         />
       )}
     </div>

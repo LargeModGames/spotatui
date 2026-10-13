@@ -66,7 +66,7 @@ export function Home({
   const forYou = madeForYou(discover);
 
   return (
-    <section className="home">
+    <section className="home" data-focus tabIndex={-1}>
       <div className="home-top">
         <h1>{greeting(new Date().getHours())}</h1>
         <div className="quick-grid">
@@ -74,7 +74,6 @@ export function Home({
             <button
               type="button"
               className="quick-open"
-              data-focus
               onClick={() => open({ page: "liked" })}
             >
               <span className="quick-liked" aria-hidden="true">
