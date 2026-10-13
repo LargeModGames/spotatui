@@ -1,5 +1,6 @@
 //! Spotify through the official client's internal API, over a librespot session.
 
+mod browse;
 mod cast;
 mod catalog;
 pub mod credentials;

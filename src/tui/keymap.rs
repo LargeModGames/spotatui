@@ -684,7 +684,6 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
         NO_AI_DJ
       }
     }
-    Action::OpenDiscover(_) => literal(ENTER, "Discover"),
     Action::SelectSource(_) => literal(ENTER, "Source and device picker"),
     Action::OpenAddTrackDialog => literal("w", "Track table"),
     Action::OpenAddTrackDialogFor { .. } => literal(
@@ -804,7 +803,7 @@ mod tests {
   use std::path::{Path, PathBuf};
 
   use super::*;
-  use crate::core::action::{DiscoverTarget, ListTarget, OpenTarget, RepeatSetting, SettingInput};
+  use crate::core::action::{ListTarget, OpenTarget, RepeatSetting, SettingInput};
   use crate::core::plugin_api::{PluginPopup, PluginScreenContent, ShowInfo, TrackInfo};
   use crate::core::sort::SortField;
   use crate::core::test_helpers::full_track;
@@ -1191,7 +1190,6 @@ mod tests {
       Action::Open(OpenTarget::SavedAlbum(text())),
       Action::OpenShowEpisodes(ShowInfo::default()),
       Action::OpenLibrary(LibraryTarget::Discover),
-      Action::OpenDiscover(DiscoverTarget::ArtistsMix),
       Action::SelectSource(Source::Spotify),
       Action::OpenAddTrackDialog,
       Action::OpenAddTrackDialogFor {

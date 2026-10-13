@@ -266,8 +266,8 @@ test("discover", async ({ page }) => {
   await page.getByText("Set Fire to the Rain").first().waitFor();
   await page.keyboard.press("3");
   await page
-    .getByRole("listbox", { name: /Your top tracks/ })
-    .getByText("Lose Somebody")
+    .getByRole("region", { name: "Your Daily Mixes" })
+    .getByText("Daily Mix 2")
     .waitFor();
   await shot(page, "discover");
 });

@@ -464,6 +464,7 @@ impl App {
   pub fn open_library_section(&mut self, target: LibraryTarget) {
     match target {
       LibraryTarget::Discover => {
+        self.fetch_discover();
         self.push_navigation_stack(RouteId::Discover, ActiveBlock::Discover);
       }
       // The row pushes the route immediately; only the global navigate

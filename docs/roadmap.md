@@ -52,8 +52,8 @@ This table shows what is possible with the Spotify API, what is implemented, and
 | user_follow_artists | ✅ | Follow artists | Yes |
 | user_unfollow_artists | ✅ | Unfollow artists | Yes |
 | current_user_recently_played | ✅ | Get recently played | Yes |
-| current_user_top_artists | ✅ | Get top artists | Yes |
-| current_user_top_tracks | ✅ | Get top tracks | Yes |
+| current_user_top_artists | ❌ | Get top artists; Stats ranks your artists from the local listening history | No |
+| current_user_top_tracks | ❌ | Get top tracks; Stats ranks your tracks from the local listening history, and Discover shows Spotify's Made For You playlists | No |
 | **Playback** |
 | device | ✅ | Get available devices | Yes |
 | current_playback | ✅ | Get current playback state | Yes |

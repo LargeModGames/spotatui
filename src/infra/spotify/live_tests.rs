@@ -254,12 +254,6 @@ async fn library_routes_parse_into_the_app_types() {
   let owner = call(Method::GET, &format!("playlists/{}", playlist.id.id()), &[]).await;
   assert!(owner["owner"]["id"].is_string());
 
-  let _: Page<FullTrack> = typed(
-    "me/top/tracks",
-    &q(&[("time_range", "medium_term"), ("limit", "50")]),
-  )
-  .await;
-  let _: Page<FullArtist> = typed("me/top/artists", &q(&[("limit", "5")])).await;
   let _: CursorBasedPage<PlayHistory> =
     typed("me/player/recently-played", &q(&[("limit", "50")])).await;
 }
@@ -335,4 +329,27 @@ async fn lyrics_load_for_a_spotify_track() {
   let lyrics = super::lyrics::parse_lyrics(value).expect("Spotify has lyrics for One More Time");
   println!("synced: {}, lines: {}", lyrics.synced, lyrics.lines.len());
   assert!(!lyrics.lines.is_empty());
+}
+
+#[derive(Deserialize)]
+struct MadeForYou {
+  sections: Vec<crate::core::app::DiscoverShelf>,
+}
+
+#[tokio::test]
+#[ignore = "contacts Spotify with the cached login"]
+async fn made_for_you_lists_spotify_playlists_that_open() {
+  let page: MadeForYou = typed("views/made-for-x", &[]).await;
+  for shelf in &page.sections {
+    println!("{}: {} playlists", shelf.title, shelf.playlists.len());
+  }
+  let playlist = page
+    .sections
+    .iter()
+    .flat_map(|shelf| &shelf.playlists)
+    .next()
+    .expect("a Made For You playlist");
+  let id = playlist.uri.trim_start_matches("spotify:playlist:");
+  let items: Page<PlaylistItem> = typed(&format!("playlists/{id}/items"), &[]).await;
+  assert!(!items.items.is_empty(), "{} has no rows", playlist.name);
 }

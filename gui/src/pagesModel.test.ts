@@ -7,10 +7,12 @@ import type { TrackTablePayload } from "./bindings/TrackTablePayload";
 import {
   albumKind,
   albumPlay,
+  asksDiscover,
   copyLink,
+  discoverView,
   greeting,
-  homeFetch,
   lengthLine,
+  madeForYou,
   radioRows,
   recentAlbums,
   releaseLine,
@@ -42,10 +44,7 @@ const track = (
 const discover = (over: Partial<DiscoverPayload>): DiscoverPayload => ({
   available: true,
   loading: false,
-  top_tracks_range: null,
-  top_tracks: [],
-  artists_mix: [],
-  liked_ids: [],
+  shelves: null,
   ...over,
 });
 
@@ -70,30 +69,49 @@ describe("recentAlbums", () => {
   });
 });
 
-describe("homeFetch", () => {
-  const none = { top: false, mix: false };
-
-  it("asks for the top tracks first, even before the channel landed", () => {
-    expect(homeFetch(null, none)).toBe("top");
-    expect(homeFetch(discover({}), none)).toBe("top");
+describe("asksDiscover", () => {
+  it("asks once the channel says a session exists and nothing landed", () => {
+    expect(asksDiscover(discover({}))).toBe(true);
   });
 
-  it("asks for the artists mix once the top tracks were asked for", () => {
-    expect(homeFetch(discover({}), { top: true, mix: false })).toBe("mix");
-    expect(homeFetch(discover({}), { top: true, mix: true })).toBeNull();
+  it("waits for the channel, a session and a running fetch", () => {
+    expect(asksDiscover(null)).toBe(false);
+    expect(asksDiscover(discover({ available: false }))).toBe(false);
+    expect(asksDiscover(discover({ loading: true }))).toBe(false);
   });
 
-  it("waits while a fetch runs and without a Spotify session", () => {
-    expect(homeFetch(discover({ loading: true }), none)).toBeNull();
-    expect(homeFetch(discover({ available: false }), none)).toBeNull();
+  it("skips shelves that already landed, even empty ones", () => {
+    expect(asksDiscover(discover({ shelves: [] }))).toBe(false);
+  });
+});
+
+describe("madeForYou", () => {
+  const mix = (uri: string) => ({
+    uri,
+    name: uri,
+    description: null,
+    image_url: `https://i.scdn.co/${uri}`,
   });
 
-  it("skips lists that already have tracks", () => {
-    const full = discover({
-      top_tracks: [track("1", "a")],
-      artists_mix: [track("2", "b")],
+  it("lists each playlist once in page order", () => {
+    const shelves = [
+      { title: "Uniquely yours", playlists: [mix("a"), mix("b")] },
+      { title: "Daily", playlists: [mix("b"), mix("c")] },
+    ];
+    expect(
+      madeForYou(discover({ shelves })).map((playlist) => playlist.uri),
+    ).toEqual(["a", "b", "c"]);
+    expect(madeForYou(null)).toEqual([]);
+  });
+
+  it("opens a card as a Spotify playlist that carries its cover", () => {
+    expect(discoverView(mix("a"))).toEqual({
+      page: "playlist",
+      uri: "a",
+      name: "a",
+      source: "Spotify",
+      image: "https://i.scdn.co/a",
     });
-    expect(homeFetch(full, none)).toBeNull();
   });
 });
 

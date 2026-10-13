@@ -59,7 +59,13 @@ describe("openAction", () => {
     expect(openAction({ page: "artist", id: "a1", name: "Kygo" })).toEqual({
       Open: { Artist: { id: "a1", name: "Kygo" } },
     });
-    expect(openAction({ page: "discover" })).toBeNull();
+    expect(openAction({ page: "party" })).toBeNull();
+  });
+
+  it("discover asks for Made For You through its library row", () => {
+    expect(openAction({ page: "discover" })).toEqual({
+      OpenLibrary: "Discover",
+    });
   });
 
   it("a show opens by id, a radio by its seed track, and recent plays by the library route", () => {

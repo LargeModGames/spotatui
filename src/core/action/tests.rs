@@ -2173,7 +2173,7 @@ fn open_library_rows_push_their_routes_and_fetch() {
 
   app.apply(Action::OpenLibrary(LibraryTarget::Discover));
   assert_eq!(app.get_current_route().id, RouteId::Discover);
-  assert!(rx.try_recv().is_err());
+  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetMadeForYou)));
 
   app.apply(Action::OpenLibrary(LibraryTarget::Albums));
   assert_eq!(app.get_current_route().id, RouteId::AlbumList);
@@ -2879,12 +2879,9 @@ fn favorite_radio_station_without_a_stream_url_reports_it() {
   );
 }
 
-// --- podcasts, episodes, the native queue and the Discover rows ---
+// --- podcasts, episodes, the native queue and the Discover page ---
 
-use super::DiscoverTarget;
-use crate::core::app::{
-  DiscoverTimeRange, EpisodeTableContext, SelectedFullShow, SelectedShow, TrackTableContext,
-};
+use crate::core::app::{EpisodeTableContext, SelectedFullShow, SelectedShow};
 use crate::core::plugin_api::{EpisodeInfo, ShowInfo};
 
 fn show_info(id: Option<&str>, name: &str) -> ShowInfo {
@@ -3118,87 +3115,31 @@ fn queue_track_rejects_a_radio_stream() {
 }
 
 #[test]
-fn open_discover_artists_mix_fetches_when_the_cache_is_empty() {
+fn opening_discover_while_its_fetch_runs_does_not_fetch_again() {
   let (mut app, rx) = app_with_channel();
 
-  app.apply(Action::OpenDiscover(DiscoverTarget::ArtistsMix));
+  app.apply(Action::OpenLibrary(LibraryTarget::Discover));
+  app.apply(Action::OpenLibrary(LibraryTarget::Discover));
 
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::GetTopArtistsMix)));
+  assert!(app.discover_loading());
   assert_eq!(
-    app.get_current_route().id,
-    RouteId::Home,
-    "the fetch pushes no route"
+    rx.try_iter()
+      .filter(|event| matches!(event, IoEvent::GetMadeForYou))
+      .count(),
+    1
   );
 }
 
 #[test]
-fn open_discover_artists_mix_shows_the_cache_when_loaded() {
-  let (mut app, rx) = app_with_channel();
-  app.discover_artists_mix = vec![track("0000000000000000000001", "One")];
-  // A stale in-range cursor must be reset to the top, not clamped.
-  app.select_track_row(4);
+fn a_failed_discover_fetch_keeps_the_shelves_already_shown() {
+  let (mut app, _rx) = app_with_channel();
+  app.end_discover_fetch(Some(crate::core::test_helpers::discover_shelves()));
+  app.fetch_discover();
 
-  app.apply(Action::OpenDiscover(DiscoverTarget::ArtistsMix));
+  app.end_discover_fetch(None);
 
-  assert_eq!(app.track_table.tracks.len(), 1);
-  assert_eq!(
-    app.track_table.context,
-    Some(TrackTableContext::DiscoverPlaylist)
-  );
-  assert_eq!(app.view.track_table_index, 0);
-  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
-  assert!(rx.try_recv().is_err(), "a cached mix needs no fetch");
-}
-
-#[test]
-fn open_discover_top_tracks_carries_the_time_range() {
-  let (mut app, rx) = app_with_channel();
-
-  app.apply(Action::OpenDiscover(DiscoverTarget::TopTracks(
-    DiscoverTimeRange::Long,
-  )));
-
-  assert!(matches!(
-    rx.try_recv(),
-    Ok(IoEvent::GetUserTopTracks(DiscoverTimeRange::Long))
-  ));
-}
-
-#[test]
-fn open_discover_top_tracks_shows_the_cache_when_loaded() {
-  let (mut app, rx) = app_with_channel();
-  app.discover_top_tracks = vec![track("0000000000000000000001", "One")];
-  app.select_track_row(4);
-
-  app.apply(Action::OpenDiscover(DiscoverTarget::TopTracks(
-    DiscoverTimeRange::Short,
-  )));
-
-  assert_eq!(app.track_table.tracks.len(), 1);
-  assert_eq!(
-    app.track_table.context,
-    Some(TrackTableContext::DiscoverPlaylist)
-  );
-  assert_eq!(app.view.track_table_index, 0);
-  assert_eq!(app.get_current_route().id, RouteId::TrackTable);
-  assert!(rx.try_recv().is_err(), "a cached page needs no fetch");
-}
-
-#[test]
-fn open_discover_while_loading_is_a_noop() {
-  for target in [
-    DiscoverTarget::ArtistsMix,
-    DiscoverTarget::TopTracks(DiscoverTimeRange::Medium),
-  ] {
-    let (mut app, rx) = app_with_channel();
-    app.discover_loading = true;
-
-    app.apply(Action::OpenDiscover(target));
-
-    assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
-    assert_eq!(app.get_current_route().id, RouteId::Home);
-    assert_eq!(app.track_table.context, None);
-  }
+  assert!(!app.discover_loading());
+  assert_eq!(app.discover_shelves().len(), 2);
 }
 
 // --- the create-playlist form and the friends social graph ---

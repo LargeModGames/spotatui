@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::core::app::{App, UserInfo};
+use crate::core::app::{App, DiscoverPlaylist, DiscoverShelf, UserInfo};
 use crate::core::plugin_api::PlaylistInfo;
 #[cfg(feature = "streaming")]
 use crate::core::plugin_api::TrackInfo;
@@ -36,6 +36,29 @@ pub fn queued_track(uri: &str, name: &str) -> TrackInfo {
 }
 
 /// Domain [`UserInfo`] for tests. `display_name` mirrors `private_user`.
+/// Two Made For You shelves: "Daily" with Daily Mix 1 and 2, "New" with Release Radar.
+pub fn discover_shelves() -> Vec<DiscoverShelf> {
+  let playlist = |id: &str, name: &str| DiscoverPlaylist {
+    uri: format!("spotify:playlist:{id}"),
+    name: name.to_string(),
+    description: Some(format!("{name} for you")),
+    image_url: None,
+  };
+  vec![
+    DiscoverShelf {
+      title: "Daily".to_string(),
+      playlists: vec![
+        playlist("37i9dQZF1E000000000001", "Daily Mix 1"),
+        playlist("37i9dQZF1E000000000002", "Daily Mix 2"),
+      ],
+    },
+    DiscoverShelf {
+      title: "New".to_string(),
+      playlists: vec![playlist("37i9dQZEVXb00000000003", "Release Radar")],
+    },
+  ]
+}
+
 pub fn user_info(id: &str) -> UserInfo {
   UserInfo {
     id: id.to_string(),

@@ -31,9 +31,6 @@ pub fn handler(key: Key, app: &mut App) {
             app.view.track_table_index = 0;
             return;
           }
-          Some(TrackTableContext::DiscoverPlaylist) => {
-            // Discover playlists don't support pagination
-          }
           Some(TrackTableContext::SavedTracks) => {
             if app.current_saved_tracks_has_more_tracks() {
               app.select_row_when_next_page_lands(tracks_len);
@@ -199,23 +196,6 @@ fn play_random_song(app: &mut App) {
         }
       }
       TrackTableContext::AlbumSearch => {}
-      TrackTableContext::DiscoverPlaylist => {
-        // Play random track from currently displayed discover playlist, but keep the full list
-        // so next/previous can continue within the mix.
-        let mut playable_ids: Vec<String> = Vec::new();
-        for track in &app.track_table.tracks {
-          if let Some(playable_id) = track.uri.clone() {
-            playable_ids.push(playable_id);
-          }
-        }
-        if !playable_ids.is_empty() {
-          let rand_idx = rand::random_range(0..playable_ids.len());
-          app.apply(Action::PlayUris {
-            uris: playable_ids,
-            offset: Some(rand_idx),
-          });
-        }
-      }
       TrackTableContext::LocalPlaylist | TrackTableContext::SubsonicPlaylist => {
         // Single-file playback: play one random track from the folder/playlist.
         // Wire shape changed with the Action conversion: this used to send the
@@ -311,7 +291,7 @@ fn on_enter(app: &mut App) {
           // with an offset.
         };
       }
-      TrackTableContext::RecommendedTracks | TrackTableContext::DiscoverPlaylist => {
+      TrackTableContext::RecommendedTracks => {
         // The whole list is sent so playback can continue past the selection.
         let (uris, offset) = common_key_events::uri_playback_request(
           tracks.iter().map(|track| track.uri.clone()),

@@ -3,7 +3,7 @@
 //! least the last one it applied for that channel. Hello's revisions are informational.
 
 use crate::core::action::Action;
-use crate::core::app::{App, DiscoverTimeRange, DisplayDomain, DisplayRevisions, SessionPlay};
+use crate::core::app::{App, DiscoverShelf, DisplayDomain, DisplayRevisions, SessionPlay};
 use crate::core::first_run::compiled_in_sources;
 use crate::core::playlist_sync::Unmatched;
 use crate::core::plugin_api::{
@@ -102,7 +102,7 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: Vec<SessionPlay>,
   },
-  /// Spotify's top tracks for one range and the top artists mix.
+  /// The shelves of Spotify's Made For You page.
   Discover {
     rev: u64,
     payload: Box<DiscoverPayload>,
@@ -401,14 +401,10 @@ pub(crate) struct SyncMirrorView {
 pub(crate) struct DiscoverPayload {
   /// False without a Spotify session.
   available: bool,
-  /// A fetch runs; the page cannot tell which list it is for.
+  /// A fetch runs; the shelves already shown stay until it lands.
   loading: bool,
-  /// The range `top_tracks` belongs to; `null` before the first landing.
-  top_tracks_range: Option<DiscoverTimeRange>,
-  top_tracks: Vec<TrackInfo>,
-  artists_mix: Vec<TrackInfo>,
-  /// The ids among both lists that are in Liked Songs.
-  liked_ids: Vec<String>,
+  /// `null` until the first fetch lands.
+  shelves: Option<Vec<DiscoverShelf>>,
 }
 
 #[derive(Serialize)]
@@ -742,10 +738,7 @@ fn channel_message(app: &App, domain: DisplayDomain, rev: u64) -> Option<ServerM
         payload: Box::new(DiscoverPayload {
           available: view.available,
           loading: view.loading,
-          top_tracks_range: view.range,
-          top_tracks: view.top_tracks.clone(),
-          artists_mix: view.artists_mix.clone(),
-          liked_ids: view.liked_ids.clone(),
+          shelves: view.shelves.clone(),
         }),
       }
     }
@@ -2103,21 +2096,20 @@ mod tests {
   }
 
   #[test]
-  fn landed_top_tracks_push_the_discover_channel_with_their_range_and_liked_marks() {
-    use crate::core::app::DiscoverTimeRange;
+  fn landed_made_for_you_shelves_push_the_discover_channel() {
     let (mut app, _rx) = app();
     let before = app.display_revisions();
-    let mut page = liked_page(0, 2, 2, false);
-    page.items[1].id = Some("liked".to_string());
 
-    app.set_discover_top_tracks(DiscoverTimeRange::Long, page.items);
-    app.liked_song_ids_set_mut().insert("liked".to_string());
+    app.end_discover_fetch(Some(crate::core::test_helpers::discover_shelves()));
     app.note_display_changes();
 
     let discover = &pushed(&diff(&before, &app), "discover")["payload"];
-    assert_eq!(discover["top_tracks_range"], "Long");
-    assert_eq!(discover["top_tracks"][1]["name"], "Track 1");
-    assert_eq!(discover["liked_ids"], serde_json::json!(["liked"]));
+    assert_eq!(discover["shelves"][1]["title"], "New");
+    assert_eq!(
+      discover["shelves"][1]["playlists"][0]["name"],
+      "Release Radar"
+    );
+    assert_eq!(discover["loading"], false);
     assert_eq!(discover["available"], true);
   }
 
@@ -2176,23 +2168,17 @@ mod tests {
   }
 
   #[test]
-  fn opening_another_range_from_the_page_fetches_it_instead_of_the_cache() {
-    use crate::core::action::DiscoverTarget;
-    use crate::core::app::DiscoverTimeRange;
+  fn opening_discover_from_the_page_fetches_made_for_you_again() {
+    use crate::core::action::LibraryTarget;
     let (mut app, rx) = app();
-    app.set_discover_top_tracks(DiscoverTimeRange::Medium, liked_page(0, 1, 1, false).items);
+    app.end_discover_fetch(Some(crate::core::test_helpers::discover_shelves()));
 
     apply_from_page(
       &mut app,
-      &action_frame(Action::OpenDiscover(DiscoverTarget::TopTracks(
-        DiscoverTimeRange::Short,
-      ))),
+      &action_frame(Action::OpenLibrary(LibraryTarget::Discover)),
     );
 
-    assert!(matches!(
-      rx.try_recv(),
-      Ok(IoEvent::GetUserTopTracks(DiscoverTimeRange::Short))
-    ));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetMadeForYou)));
   }
 
   #[test]

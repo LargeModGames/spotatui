@@ -5,7 +5,14 @@ import type { Source } from "./bindings/Source";
 export type View =
   | { page: "home" }
   | { page: "liked" }
-  | { page: "playlist"; uri: string; name: string; source: Source }
+  | {
+      page: "playlist";
+      uri: string;
+      name: string;
+      source: Source;
+      /** The cover, for a playlist that is not in the library. */
+      image?: string | null;
+    }
   | { page: "album"; id: string }
   | { page: "artist"; id: string; name: string }
   | { page: "show"; id: string; name: string }
@@ -82,6 +89,8 @@ export function openAction(view: View): Action | null {
       return { Navigate: "RecentlyPlayed" };
     case "stats":
       return { OpenLibrary: "Stats" };
+    case "discover":
+      return { OpenLibrary: "Discover" };
     default:
       return null;
   }
@@ -114,6 +123,7 @@ export function fetchFor(
     view.page === "show" ||
     view.page === "radio" ||
     view.page === "recent" ||
+    view.page === "discover" ||
     (view.page === "playlist" && view.source === "Spotify");
   if (spotifyOnly && !loaded.spotify) return null;
   if (!fresh) {
@@ -121,6 +131,7 @@ export function fetchFor(
     const held =
       view.page === "home" ||
       view.page === "recent" ||
+      view.page === "discover" ||
       (view.page === "liked" && loaded.liked) ||
       (view.page === "playlist" && loaded.tableUri === view.uri) ||
       (view.page === "album" && loaded.albumId === view.id) ||

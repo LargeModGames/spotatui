@@ -26,7 +26,6 @@ pub enum TrackTableContext {
   PlaylistSearch,
   SavedTracks,
   RecommendedTracks,
-  DiscoverPlaylist,
   LocalPlaylist,
   SubsonicPlaylist,
   YouTubePlaylist,

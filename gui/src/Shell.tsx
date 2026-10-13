@@ -376,7 +376,7 @@ export function Shell({
       <Discover
         discover={channels.discover?.payload ?? null}
         active={page === "discover"}
-        playingUri={playingUri}
+        open={open}
         send={send}
       />
     ),

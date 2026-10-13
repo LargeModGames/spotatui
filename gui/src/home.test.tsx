@@ -55,10 +55,20 @@ const library = (count: number): SourcePlaylists => ({
 const discover: DiscoverPayload = {
   available: true,
   loading: false,
-  top_tracks_range: "Medium",
-  top_tracks: [track("Firestone", "x")],
-  artists_mix: [],
-  liked_ids: [],
+  shelves: [
+    {
+      title: "Uniquely yours",
+      playlists: [
+        {
+          uri: "spotify:playlist:daylist",
+          name: "daylist",
+          description: "Your day in a playlist.",
+          image_url: null,
+        },
+      ],
+    },
+    { title: "Your Daily Mixes", playlists: [] },
+  ],
 };
 
 const render = (
@@ -110,19 +120,20 @@ describe("Home", () => {
     expect(html.split("Play Album a").length).toBe(2);
   });
 
-  it("offers Show all on the recently played shelf only", () => {
+  it("offers Show all on the recently played and Made For You shelves only", () => {
     const html = render([track("One", "a")], library(1), discover);
     expect(html).toMatch(
       /<button[^>]*class="shelf-more"[^>]*aria-label="Show all: Recently played"[^>]*>Show all<\/button>/,
     );
-    expect(html.split('class="shelf-more"').length).toBe(2);
+    expect(html).toContain('aria-label="Show all: Made For You"');
+    expect(html.split('class="shelf-more"').length).toBe(3);
   });
 
-  it("draws the top tracks shelf and skips empty shelves", () => {
+  it("draws Made For You from every Discover shelf and skips empty shelves", () => {
     const html = render(null, null, discover);
-    expect(html).toContain('aria-label="Your top tracks"');
-    expect(html).toContain("Firestone");
-    expect(html).not.toContain('aria-label="Artists mix"');
+    expect(html).toContain('aria-label="Made For You"');
+    expect(html).toContain("Play daylist");
+    expect(html).toContain("Your day in a playlist.");
     expect(html).not.toContain('aria-label="Saved albums"');
     expect(html).not.toContain('aria-label="Recently played"');
   });

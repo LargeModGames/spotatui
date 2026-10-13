@@ -15,10 +15,8 @@ impl Default for App {
         ..ViewState::default()
       },
       album_table_context: AlbumTableContext::Full,
-      discover_top_tracks: vec![],
-      discover_artists_mix: vec![],
+      discover_shelves: None,
       discover_loading: false,
-      discover_top_tracks_range: None,
       discover_view: DiscoverView::default(),
       search_liked_view: Vec::new(),
       liked_marks_view: Vec::new(),

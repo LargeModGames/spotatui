@@ -1,27 +1,22 @@
 use super::requests::is_rate_limited_error;
 use super::{ids, IoEvent, Network};
-use crate::core::app::{ActiveBlock, DiscoverTimeRange, RouteId, UserInfo};
+use crate::core::app::{ActiveBlock, DiscoverShelf, RouteId, UserInfo};
 use crate::core::plugin_api::TrackInfo;
 use anyhow::anyhow;
 
 use crate::infra::network::mapping::map_cursor_page;
-use rand::seq::SliceRandom;
 use rspotify::model::{
-  artist::FullArtist,
-  device::DevicePayload,
-  page::{CursorBasedPage, Page},
-  playing::PlayHistory,
-  track::FullTrack,
-  user::PrivateUser,
+  device::DevicePayload, page::CursorBasedPage, playing::PlayHistory, user::PrivateUser,
 };
 #[cfg(feature = "streaming")]
 use rspotify::model::{enums::DeviceType, Device};
 use rspotify::prelude::*;
 use serde::Deserialize;
 
+/// The router's `views/made-for-x` answer.
 #[derive(Deserialize)]
-struct ArtistTopTracksResponse {
-  tracks: Vec<FullTrack>,
+struct MadeForYou {
+  sections: Vec<DiscoverShelf>,
 }
 
 #[cfg(feature = "streaming")]
@@ -88,8 +83,7 @@ pub trait UserNetwork {
   /// `navigate: false` refreshes the device list without opening the device
   /// picker (used by plugin data reads).
   async fn get_devices(&mut self, navigate: bool);
-  async fn get_user_top_tracks(&mut self, time_range: DiscoverTimeRange);
-  async fn get_top_artists_mix(&mut self);
+  async fn get_made_for_you(&mut self);
   /// `navigate: false` refreshes the data without opening the screen (used by
   /// plugin data reads).
   #[allow(dead_code)]
@@ -170,108 +164,21 @@ impl UserNetwork for Network {
     }
   }
 
-  async fn get_user_top_tracks(&mut self, time_range: DiscoverTimeRange) {
-    let range_str = match time_range {
-      DiscoverTimeRange::Short => "short_term",
-      DiscoverTimeRange::Medium => "medium_term",
-      DiscoverTimeRange::Long => "long_term",
-    };
-
-    // Set loading state
-    {
-      let mut app = self.app.lock().await;
-      app.discover_loading = true;
-    }
-
-    match self
-      .spotify_get_typed::<Page<FullTrack>>(
-        "me/top/tracks",
-        &[
-          ("time_range", range_str.to_string()),
-          ("limit", "50".to_string()),
-        ],
-      )
-      .await
-    {
-      Ok(page) => {
-        let mut app = self.app.lock().await;
-        // Check if these tracks are liked.
-        let track_check = ids::track_check_ids(page.items.iter().map(|t| t.id.as_ref()));
-        if !track_check.is_empty() {
-          app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));
-        }
-        app.set_discover_top_tracks(time_range, page.items.iter().map(TrackInfo::from).collect());
-        app.discover_loading = false;
-      }
-      Err(e) => {
-        let mut app = self.app.lock().await;
-        app.discover_loading = false;
-        app.handle_error(anyhow!(e));
-      }
-    }
-  }
-
-  async fn get_top_artists_mix(&mut self) {
-    // Set loading state
-    {
-      let mut app = self.app.lock().await;
-      app.discover_loading = true;
-    }
-
-    // 1. Get top artists
-    let artists_res = self
-      .spotify_get_typed::<Page<FullArtist>>(
-        "me/top/artists",
-        &[("limit", "5".to_string())], // Get top 5 artists
-      )
+  async fn get_made_for_you(&mut self) {
+    let result = self
+      .spotify_get_typed::<MadeForYou>("views/made-for-x", &[])
       .await;
-
-    let artists = match artists_res {
-      Ok(page) => page.items,
+    match result {
+      Ok(page) => self
+        .app
+        .lock()
+        .await
+        .end_discover_fetch(Some(page.sections)),
       Err(e) => {
-        let mut app = self.app.lock().await;
-        app.discover_loading = false;
-        app.handle_error(anyhow!(e));
-        return;
-      }
-    };
-
-    // 2. Get top tracks for each artist, concurrently — the pacing limiter
-    // allows a burst of 5, sized to exactly this fan-out shape.
-    let this: &Self = self;
-    let track_fetches = artists.iter().map(|artist| {
-      let path = format!("artists/{}/top-tracks", artist.id.id());
-      async move {
-        this
-          .spotify_get_typed::<ArtistTopTracksResponse>(&path, &[])
-          .await
-      }
-    });
-    let mut all_tracks = Vec::new();
-    for res in futures::future::join_all(track_fetches).await.into_iter() {
-      match res {
-        Ok(res) => all_tracks.extend(res.tracks),
-        Err(e) => {
-          log::warn!("top-tracks fetch failed for one mix artist: {e}");
-        }
+        self.app.lock().await.end_discover_fetch(None);
+        self.handle_error(anyhow!(e)).await;
       }
     }
-
-    // 3. Shuffle
-    {
-      let mut rng = rand::rng();
-      all_tracks.shuffle(&mut rng);
-    }
-
-    // 4. Update state
-    let mut app = self.app.lock().await;
-    // Check if these tracks are liked.
-    let track_check = ids::track_check_ids(all_tracks.iter().map(|t| t.id.as_ref()));
-    if !track_check.is_empty() {
-      app.dispatch(IoEvent::CurrentUserSavedTracksContains(track_check));
-    }
-    app.discover_artists_mix = all_tracks.iter().map(TrackInfo::from).collect();
-    app.discover_loading = false;
   }
 
   async fn get_recently_played(&mut self, navigate: bool) {

@@ -222,7 +222,6 @@ impl App {
         self.dispatch(IoEvent::GetShowEpisodes(Box::new(show)));
       }
       Action::OpenLibrary(target) => self.open_library_section(target),
-      Action::OpenDiscover(target) => self.open_discover_mix(target),
       Action::SelectSource(source) => {
         self.set_active_source(source);
         self.load_source_sidebar(source);

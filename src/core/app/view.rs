@@ -128,8 +128,6 @@ pub struct ViewState {
   // Discover and Stats screens
   /// Selected index in the Discover view
   pub discover_selected_index: usize,
-  /// Time range for Top Tracks
-  pub discover_time_range: DiscoverTimeRange,
   /// Selected index in the Stats screen's Top Tracks list
   pub stats_selected_track: usize,
 

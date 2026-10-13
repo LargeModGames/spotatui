@@ -5,12 +5,13 @@ import type { PlaylistInfo } from "./bindings/PlaylistInfo";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import { Glyph } from "./Icon";
-import { playRequest } from "./libraryModel";
 import type { OpenView, View } from "./nav";
 import "./Pages.css";
 import {
+  asksDiscover,
+  discoverView,
   greeting,
-  homeFetch,
+  madeForYou,
   QUICK_PLAYLISTS,
   recentAlbums,
   SHELF_MAX,
@@ -24,7 +25,7 @@ const playlistView = (playlist: PlaylistInfo): View => ({
   source: "Spotify",
 });
 
-/** Home: shelves of recently played, the user's playlists, top tracks and the artists mix. */
+/** Home: shelves of recently played, the user's playlists, saved albums and Made For You. */
 export function Home({
   recent,
   playlists,
@@ -42,16 +43,12 @@ export function Home({
   open: OpenView;
   send: (action: Action) => void;
 }) {
-  const asked = useRef({ top: false, mix: false });
+  const asked = useRef(false);
   useEffect(() => {
     // Before the resync the connection drops every action, so nothing counts as asked yet.
-    if (!active || !discover) return;
-    const list = homeFetch(discover, asked.current);
-    if (!list) return;
-    asked.current = { ...asked.current, [list]: true };
-    send({
-      OpenDiscover: list === "top" ? { TopTracks: "Medium" } : "ArtistsMix",
-    });
+    if (!active || asked.current || !asksDiscover(discover)) return;
+    asked.current = true;
+    send({ OpenLibrary: "Discover" });
   }, [active, discover, send]);
 
   const spotify = playlists?.spotify ?? [];
@@ -63,29 +60,7 @@ export function Home({
   const playContext = (uri: string | null) => {
     if (uri) send({ PlayContext: { uri, offset: null } });
   };
-  const playFrom = (tracks: TrackInfo[], index: number) => {
-    const action = playRequest(tracks, index);
-    if (action) send(action);
-  };
-  const trackShelf = (title: string, tracks: TrackInfo[]) =>
-    tracks.length > 0 && (
-      <Shelf oneRow title={title}>
-        {tracks.slice(0, SHELF_MAX).map((track, index) => (
-          <Card
-            key={`${index}-${track.uri ?? track.name}`}
-            image={track.image_url}
-            title={track.name}
-            subtitle={track.artists.join(", ")}
-            onOpen={() =>
-              track.album_id
-                ? openAlbum(track.album_id)
-                : playFrom(tracks, index)
-            }
-            onPlay={() => playFrom(tracks, index)}
-          />
-        ))}
-      </Shelf>
-    );
+  const forYou = madeForYou(discover);
 
   return (
     <section className="home">
@@ -176,8 +151,24 @@ export function Home({
           ))}
         </Shelf>
       )}
-      {trackShelf("Your top tracks", discover?.top_tracks ?? [])}
-      {trackShelf("Artists mix", discover?.artists_mix ?? [])}
+      {forYou.length > 0 && (
+        <Shelf
+          oneRow
+          title="Made For You"
+          onMore={() => open({ page: "discover" })}
+        >
+          {forYou.slice(0, SHELF_MAX).map((playlist) => (
+            <Card
+              key={playlist.uri}
+              image={playlist.image_url}
+              title={playlist.name}
+              subtitle={playlist.description ?? "By Spotify"}
+              onOpen={() => open(discoverView(playlist))}
+              onPlay={() => playContext(playlist.uri)}
+            />
+          ))}
+        </Shelf>
+      )}
     </section>
   );
 }

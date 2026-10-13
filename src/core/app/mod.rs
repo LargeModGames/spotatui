@@ -415,14 +415,9 @@ pub struct App {
   /// A bare resume already tried to pull the handed-off playback back
   #[cfg(feature = "streaming")]
   native_handoff_resume_tried: bool,
-  /// Top tracks from the user for Discover feature
-  pub discover_top_tracks: Vec<TrackInfo>,
-  /// Top Artists Mix tracks for Discover feature
-  pub discover_artists_mix: Vec<TrackInfo>,
-  /// Whether we're currently loading discover data
-  pub discover_loading: bool,
-  /// The range `discover_top_tracks` belongs to; `None` before a landing or after a terminal clear.
-  discover_top_tracks_range: Option<DiscoverTimeRange>,
+  /// Spotify's Made For You page; `None` until the first fetch lands.
+  discover_shelves: Option<Vec<DiscoverShelf>>,
+  discover_loading: bool,
   discover_view: DiscoverView,
   /// The liked marks the Search revision last counted.
   search_liked_view: Vec<String>,

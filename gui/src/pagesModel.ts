@@ -1,9 +1,11 @@
 import type { Action } from "./bindings/Action";
 import type { AlbumInfo } from "./bindings/AlbumInfo";
 import type { DiscoverPayload } from "./bindings/DiscoverPayload";
+import type { DiscoverPlaylist } from "./bindings/DiscoverPlaylist";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { TrackTablePayload } from "./bindings/TrackTablePayload";
 import { playRequest, step } from "./libraryModel";
+import type { View } from "./nav";
 
 /** One row of cards, as Spotify's Home shows it. */
 export const SHELF_MAX = 8;
@@ -27,15 +29,35 @@ export function recentAlbums(recent: TrackInfo[]): TrackInfo[] {
   });
 }
 
-/** Which Discover list Home still has to ask for; each is asked for once. */
-export function homeFetch(
+/** Whether a page still has to ask for the Made For You shelves. */
+export function asksDiscover(discover: DiscoverPayload | null): boolean {
+  return (
+    discover !== null &&
+    discover.available &&
+    !discover.loading &&
+    discover.shelves === null
+  );
+}
+
+/** Every Made For You playlist once, in page order: a playlist can sit on two shelves. */
+export function madeForYou(
   discover: DiscoverPayload | null,
-  asked: { top: boolean; mix: boolean },
-): "top" | "mix" | null {
-  if (discover && (!discover.available || discover.loading)) return null;
-  if (!asked.top && (discover?.top_tracks.length ?? 0) === 0) return "top";
-  if (!asked.mix && discover && discover.artists_mix.length === 0) return "mix";
-  return null;
+): DiscoverPlaylist[] {
+  const seen = new Set<string>();
+  return (discover?.shelves ?? [])
+    .flatMap((shelf) => shelf.playlists)
+    .filter((playlist) => !seen.has(playlist.uri) && seen.add(playlist.uri));
+}
+
+/** The playlist page a Made For You card opens. */
+export function discoverView(playlist: DiscoverPlaylist): View {
+  return {
+    page: "playlist",
+    uri: playlist.uri,
+    name: playlist.name,
+    source: "Spotify",
+    image: playlist.image_url,
+  };
 }
 
 /** "Album", "Single" or "Compilation" from the lowercased album type. */

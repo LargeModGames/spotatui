@@ -2,7 +2,7 @@
 //! so the handlers above the request funnel do not change.
 
 use super::session::{self, SpotifySession};
-use super::{catalog, library, listening, lyrics, player, playlists, search};
+use super::{browse, catalog, library, listening, lyrics, player, playlists, search};
 use crate::infra::network::requests::SpotifyApiError;
 use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
@@ -24,8 +24,7 @@ enum Route {
   Show(String),
   ShowEpisodes(String),
   Recommendations,
-  TopTracks,
-  TopArtists,
+  MadeForYou,
   RecentlyPlayed,
   SavedTracks,
   SavedAlbums,
@@ -90,8 +89,7 @@ impl Route {
       ("GET", ["shows", show, "episodes"]) => Self::ShowEpisodes(id(show)),
       ("GET", ["recommendations"]) => Self::Recommendations,
       ("GET", ["audio-analysis", track]) => Self::AudioAnalysis(id(track)),
-      ("GET", ["me", "top", "tracks"]) => Self::TopTracks,
-      ("GET", ["me", "top", "artists"]) => Self::TopArtists,
+      ("GET", ["views", "made-for-x"]) => Self::MadeForYou,
       ("GET", ["me", "player", "recently-played"]) => Self::RecentlyPlayed,
       ("GET", ["me", "tracks"]) => Self::SavedTracks,
       ("GET", ["me", "albums"]) => Self::SavedAlbums,
@@ -195,10 +193,7 @@ async fn run(
     Route::ShowEpisodes(id) => catalog::show_episodes(session, &id, paging(20)).await,
     Route::Recommendations => catalog::recommendations(session, query).await,
     Route::AudioAnalysis(id) => catalog::audio_analysis(session, &id).await,
-    Route::TopTracks => listening::top_tracks(session, value("time_range"), paging(20).limit).await,
-    Route::TopArtists => {
-      listening::top_artists(session, value("time_range"), paging(20).limit).await
-    }
+    Route::MadeForYou => browse::made_for_you(session).await,
     Route::RecentlyPlayed => listening::recently_played(session, paging(20).limit).await,
     Route::SavedTracks => library::saved_tracks(session, paging(20)).await,
     Route::SavedAlbums => library::saved_albums(session, paging(20)).await,

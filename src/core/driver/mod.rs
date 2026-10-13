@@ -199,6 +199,7 @@ fn fetch_startup_route(app: &mut App) {
     RouteId::Artists => app.dispatch(IoEvent::GetFollowedArtists(None)),
     RouteId::Podcasts => app.dispatch(IoEvent::GetCurrentUserSavedShows(None)),
     RouteId::Stats => app.reload_stats(),
+    RouteId::Discover => app.fetch_discover(),
     _ => {}
   }
 }
@@ -901,7 +902,7 @@ impl Driver {
     // startup_route seeds the nav stack directly (App::new), bypassing the
     // handlers that normally fetch a screen's data on navigation — kick
     // off that fetch here or the screen renders empty until re-entered.
-    // (Home needs nothing extra; Discover fetches from within its menu.)
+    // (Home needs nothing extra.)
     fetch_startup_route(app);
     // A persisted non-Spotify active source needs its sidebar data loaded
     // too (all of these are inert no-ops when the feature is off).
@@ -1061,5 +1062,16 @@ mod tests {
     assert!(rx
       .try_iter()
       .any(|event| matches!(event, IoEvent::LoadListeningStats(_))));
+  }
+
+  #[test]
+  fn the_discover_startup_route_fetches_made_for_you_with_a_session() {
+    let (mut app, rx) = app_on(RouteId::Discover, ActiveBlock::Discover, true);
+
+    fetch_startup_route(&mut app);
+
+    assert!(rx
+      .try_iter()
+      .any(|event| matches!(event, IoEvent::GetMadeForYou)));
   }
 }

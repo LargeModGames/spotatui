@@ -1,33 +1,35 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { DiscoverPayload } from "./bindings/DiscoverPayload";
-import type { TrackInfo } from "./bindings/TrackInfo";
 import { Discover } from "./Discover";
-
-const track = (name: string, id: string): TrackInfo => ({
-  uri: `spotify:track:${id}`,
-  name,
-  artists: ["Kygo"],
-  album: "Cloud Nine",
-  duration_ms: 240_000,
-  id,
-  album_id: null,
-  artist_refs: [],
-  is_playable: true,
-  is_local: false,
-  track_number: 0,
-  explicit: false,
-  image_url: null,
-  release_date: null,
-});
 
 const payload: DiscoverPayload = {
   available: true,
   loading: false,
-  top_tracks_range: "Medium",
-  top_tracks: [track("Firestone", "1"), track("Stay", "2")],
-  artists_mix: [],
-  liked_ids: ["1"],
+  shelves: [
+    {
+      title: "Your Daily Mixes",
+      playlists: [
+        {
+          uri: "spotify:playlist:1",
+          name: "Daily Mix 1",
+          description: "Kygo, Avicii and more",
+          image_url: null,
+        },
+      ],
+    },
+    {
+      title: "Discover New Music",
+      playlists: [
+        {
+          uri: "spotify:playlist:2",
+          name: "Release Radar",
+          description: null,
+          image_url: null,
+        },
+      ],
+    },
+  ],
 };
 
 const render = (discover: DiscoverPayload | null) =>
@@ -35,26 +37,26 @@ const render = (discover: DiscoverPayload | null) =>
     <Discover
       discover={discover}
       active={false}
-      playingUri={null}
+      open={() => {}}
       send={() => {}}
     />,
   );
 
 describe("Discover", () => {
-  it("lists the top tracks of the range and marks only the liked one", () => {
+  it("draws one shelf per Made For You section with its playlists", () => {
     const html = render(payload);
-    expect(html).toContain("Your top tracks, 6 months");
-    expect(html).toMatch(/id="discover-0"[^]*?>Liked</);
-    expect(html.match(/>Liked</g)).toHaveLength(1);
-    expect(html).toContain("Add 2 to queue");
+    expect(html).toContain('aria-label="Your Daily Mixes"');
+    expect(html).toContain('aria-label="Discover New Music"');
+    expect(html).toContain("Play Daily Mix 1");
+    expect(html).toContain("Kygo, Avicii and more");
+    expect(html).toContain("By Spotify");
   });
 
-  it("keeps the status outside the list, which holds only options", () => {
-    const html = render({ ...payload, top_tracks: [] });
-    expect(html).toContain(
-      '<p class="empty" role="status">Nothing here yet.</p>',
+  it("says it loads before the first shelves land", () => {
+    expect(render({ ...payload, loading: true, shelves: null })).toContain(
+      '<p class="empty" role="status">Loading…</p>',
     );
-    expect(html).toMatch(/role="listbox"[^>]*><\/div>/);
+    expect(render({ ...payload, shelves: [] })).toContain("Nothing here yet.");
   });
 
   it("asks for a Spotify session without one", () => {

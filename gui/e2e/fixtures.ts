@@ -638,7 +638,7 @@ export const session: ServerMessage[] = [
   },
 ];
 
-/** Six months of top tracks, two of them liked. */
+/** Spotify's Made For You page: three shelves. */
 export const discover: ServerMessage[] = [
   {
     kind: "discover",
@@ -646,31 +646,47 @@ export const discover: ServerMessage[] = [
     payload: {
       available: true,
       loading: false,
-      top_tracks_range: "Medium",
-      top_tracks: (
+      shelves: (
         [
-          ["Freeze", "Kygo", "Freeze", 487],
-          ["My Heart Will Go On", "Céline Dion", "Let's Talk About Love", 280],
-          ["Life is a Highway", "Rascal Flatts", "Cars", 276],
-          ["Firestone", "Kygo, Conrad Sewell", "Cloud Nine", 272],
           [
-            "Rewrite The Stars",
-            "Zac Efron, Zendaya",
-            "The Greatest Showman",
-            217,
+            "Uniquely yours",
+            [
+              ["daylist", "Your day in a playlist."],
+              ["On Repeat", "Songs you love right now"],
+              ["Repeat Rewind", "Your past favorites"],
+            ],
           ],
-          ["Einaudi: Experience", "Daniel Hope", "Recomposed", 318],
-          ["Superheroes", "The Script", "No Sound Without Silence", 245],
-          ["Lose Somebody", "Kygo, OneRepublic", "Golden Hour", 199],
+          [
+            "Your Daily Mixes",
+            [
+              ["Daily Mix 1", "Martin Garrix, Alan Walker, Avicii and more"],
+              ["Daily Mix 2", "SHAUN, Kygo, Jonas Blue and more"],
+              [
+                "Daily Mix 3",
+                "James Horner, John Powell, Hans Zimmer and more",
+              ],
+            ],
+          ],
+          [
+            "Discover New Music",
+            [
+              [
+                "Release Radar",
+                "Catch all the latest music from artists you follow.",
+              ],
+              ["Discover Weekly", "Your weekly mixtape of fresh music."],
+            ],
+          ],
         ] as const
-      ).map(([name, artist, album, seconds], index) => ({
-        ...track(name, seconds, `spotify:track:d${index}`, artist),
-        id: `d${index}`,
-        album,
-        is_local: false,
+      ).map(([title, playlists], shelf) => ({
+        title,
+        playlists: playlists.map(([name, description], index) => ({
+          uri: `spotify:playlist:mfy${shelf}${index}`,
+          name,
+          description,
+          image_url: null,
+        })),
       })),
-      artists_mix: [],
-      liked_ids: ["d0", "d3"],
     },
   },
 ];

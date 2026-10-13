@@ -37,7 +37,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::app::DiscoverTimeRange;
 use crate::core::plugin_api::{PluginPopup, PluginScreenContent, ShowInfo, TrackInfo};
 use crate::core::sort::{SortContext, SortField};
 use crate::core::source::Source;
@@ -258,8 +257,6 @@ pub enum Action {
   /// Open a library sidebar section and fetch its data, mirroring the
   /// library row's Enter consequence exactly.
   OpenLibrary(LibraryTarget),
-  /// Show a Discover row's cached mix, or fetch it.
-  OpenDiscover(DiscoverTarget),
   /// Switch the active browse source (and persist the choice), then fetch
   /// the sidebar data that source needs. Browse scope only: never
   /// interrupts playback.
@@ -589,14 +586,6 @@ impl LibraryTarget {
       LibraryTarget::AiDj => "AI DJ",
     }
   }
-}
-
-/// Which Discover row [`Action::OpenDiscover`] activates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
-pub enum DiscoverTarget {
-  ArtistsMix,
-  TopTracks(DiscoverTimeRange),
 }
 
 /// What [`Action::CopyUrl`] copies; both address the item playing now (an

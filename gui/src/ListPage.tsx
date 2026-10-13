@@ -209,7 +209,10 @@ export function ListPage({
       <PageHeader
         kind="Playlist"
         title={title}
-        image={playlist && playlistImage(playlists, playlist.uri)}
+        image={
+          playlist &&
+          (playlistImage(playlists, playlist.uri) ?? playlist.image ?? null)
+        }
         tone={playlist ? "playlist" : "liked"}
         meta={meta}
       />

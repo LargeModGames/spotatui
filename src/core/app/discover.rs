@@ -1,55 +1,30 @@
 use super::*;
 
-/// Time range for Top Tracks/Artists in Discover feature
-#[derive(Clone, PartialEq, Eq, Debug, Copy, Default, serde::Serialize, serde::Deserialize)]
+/// One shelf of Spotify's Made For You page, such as "Your Daily Mixes".
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
-pub enum DiscoverTimeRange {
-  /// Last 4 weeks
-  Short,
-  /// Last 6 months (default)
-  #[default]
-  Medium,
-  /// All time
-  Long,
+pub struct DiscoverShelf {
+  pub title: String,
+  pub playlists: Vec<DiscoverPlaylist>,
 }
 
-impl DiscoverTimeRange {
-  pub fn label(&self) -> &'static str {
-    match self {
-      DiscoverTimeRange::Short => "4 weeks",
-      DiscoverTimeRange::Medium => "6 months",
-      DiscoverTimeRange::Long => "All time",
-    }
-  }
-
-  pub fn next(&self) -> Self {
-    match self {
-      DiscoverTimeRange::Short => DiscoverTimeRange::Medium,
-      DiscoverTimeRange::Medium => DiscoverTimeRange::Long,
-      DiscoverTimeRange::Long => DiscoverTimeRange::Short,
-    }
-  }
-
-  pub fn prev(&self) -> Self {
-    match self {
-      DiscoverTimeRange::Short => DiscoverTimeRange::Long,
-      DiscoverTimeRange::Medium => DiscoverTimeRange::Short,
-      DiscoverTimeRange::Long => DiscoverTimeRange::Medium,
-    }
-  }
+/// A playlist Spotify made for the user; most are not in the library.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub struct DiscoverPlaylist {
+  pub uri: String,
+  pub name: String,
+  pub description: Option<String>,
+  pub image_url: Option<String>,
 }
 
 /// What a frontend shows for Discover; compared on every display pass, so every writer is caught.
 #[derive(Clone, Default, PartialEq)]
 pub struct DiscoverView {
-  /// The range the cached top tracks belong to.
-  pub range: Option<DiscoverTimeRange>,
   pub loading: bool,
   pub available: bool,
-  pub top_tracks: Vec<TrackInfo>,
-  pub artists_mix: Vec<TrackInfo>,
-  /// The ids among both lists that are in Liked Songs.
-  pub liked_ids: Vec<String>,
+  /// `None` until the first fetch lands.
+  pub shelves: Option<Vec<DiscoverShelf>>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -112,66 +87,60 @@ impl App {
     self.get_recommendations_for_track_id(id);
   }
 
-  /// Show the cached mix, or fetch it; a no-op while a fetch is in flight.
-  pub(crate) fn open_discover_mix(&mut self, target: crate::core::action::DiscoverTarget) {
-    use crate::core::action::DiscoverTarget;
-    if self.discover_loading {
-      return;
-    }
-    let (cached, event, hit) = match target {
-      DiscoverTarget::ArtistsMix => (&self.discover_artists_mix, IoEvent::GetTopArtistsMix, true),
-      DiscoverTarget::TopTracks(range) => (
-        &self.discover_top_tracks,
-        IoEvent::GetUserTopTracks(range),
-        // The terminal empties the cache when its range changes; another frontend asks by range.
-        self
-          .discover_top_tracks_range
-          .is_none_or(|cached| cached == range),
-      ),
-    };
-    if cached.is_empty() || !hit {
-      self.dispatch(event);
-    } else {
-      let tracks = cached.clone();
-      self.show_tracks_in_table(tracks, TrackTableContext::DiscoverPlaylist);
+  /// Fetch the Made For You page; the shelves already shown stay until it lands.
+  pub(crate) fn fetch_discover(&mut self) {
+    if !self.discover_loading {
+      self.discover_loading = true;
+      self.dispatch(IoEvent::GetMadeForYou);
     }
   }
 
-  pub(crate) fn set_discover_top_tracks(
-    &mut self,
-    range: DiscoverTimeRange,
-    tracks: Vec<TrackInfo>,
-  ) {
-    self.discover_top_tracks = tracks;
-    self.discover_top_tracks_range = Some(range);
+  /// End a fetch, or a dropped one; `None` keeps the shelves of the last one.
+  pub(crate) fn end_discover_fetch(&mut self, shelves: Option<Vec<DiscoverShelf>>) {
+    self.discover_loading = false;
+    if let Some(shelves) = shelves {
+      let count = shelves
+        .iter()
+        .map(|shelf| shelf.playlists.len())
+        .sum::<usize>();
+      self.view.discover_selected_index = self
+        .view
+        .discover_selected_index
+        .min(count.saturating_sub(1));
+      self.discover_shelves = Some(shelves);
+    }
+  }
+
+  pub fn discover_loading(&self) -> bool {
+    self.discover_loading
+  }
+
+  pub fn discover_shelves(&self) -> &[DiscoverShelf] {
+    self.discover_shelves.as_deref().unwrap_or_default()
+  }
+
+  /// The playlist at `index` when the shelves are read as one list.
+  pub fn discover_playlist(&self, index: usize) -> Option<&DiscoverPlaylist> {
+    self
+      .discover_shelves()
+      .iter()
+      .flat_map(|shelf| &shelf.playlists)
+      .nth(index)
   }
 
   /// Bump Discover when anything its view reads changed.
   pub(super) fn note_discover_changes(&mut self) {
-    let liked_ids: Vec<String> = self
-      .discover_top_tracks
-      .iter()
-      .chain(&self.discover_artists_mix)
-      .filter_map(|track| track.id.clone())
-      .filter(|id| self.liked_song_ids_set.contains(id))
-      .collect();
     let view = &self.discover_view;
-    if view.range == self.discover_top_tracks_range
-      && view.loading == self.discover_loading
+    if view.loading == self.discover_loading
       && view.available == self.spotify_connected
-      && view.liked_ids == liked_ids
-      && view.top_tracks == self.discover_top_tracks
-      && view.artists_mix == self.discover_artists_mix
+      && view.shelves == self.discover_shelves
     {
       return;
     }
     self.discover_view = DiscoverView {
-      range: self.discover_top_tracks_range,
       loading: self.discover_loading,
       available: self.spotify_connected,
-      top_tracks: self.discover_top_tracks.clone(),
-      artists_mix: self.discover_artists_mix.clone(),
-      liked_ids,
+      shelves: self.discover_shelves.clone(),
     };
     self.display_revisions.bump(DisplayDomain::Discover);
   }
@@ -190,5 +159,27 @@ impl App {
   ) {
     self.set_track_table(tracks, context);
     self.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::test_helpers::discover_shelves;
+
+  #[test]
+  fn a_landed_page_clamps_the_cursor_to_its_playlists() {
+    let mut app = App::default();
+    app.view.discover_selected_index = 9;
+
+    app.end_discover_fetch(Some(discover_shelves()));
+
+    assert_eq!(app.view.discover_selected_index, 2);
+    assert_eq!(
+      app
+        .discover_playlist(2)
+        .map(|playlist| playlist.name.as_str()),
+      Some("Release Radar")
+    );
   }
 }
