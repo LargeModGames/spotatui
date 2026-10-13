@@ -16,3 +16,7 @@ android {
     abortOnError false
   }
 }
+
+dependencies {
+  implementation "androidx.media3:media3-session:1.11.1"
+}

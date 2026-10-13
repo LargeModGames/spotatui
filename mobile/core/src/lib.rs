@@ -5,9 +5,10 @@
 mod android;
 
 use anyhow::{Context, Result, anyhow};
+use spotatui::{MediaCommand, MediaLink, MediaState};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{mpsc::UnboundedSender, watch};
 
 /// How long a start waits for the core to serve its page.
 const START_LIMIT: Duration = Duration::from_secs(30);
@@ -21,6 +22,8 @@ pub struct Dirs {
 /// The running core: its launch URL, and the sender of its `closed` signal,
 /// kept because a dropped sender reads as a closed window and stops the core.
 static STARTED: Mutex<Option<(String, watch::Sender<bool>)>> = Mutex::new(None);
+/// Where the platform's media buttons go: the running core.
+static MEDIA_COMMANDS: Mutex<Option<UnboundedSender<MediaCommand>>> = Mutex::new(None);
 
 /// Starts the core once and returns its launch URL; a later call returns the first URL.
 pub fn start(dirs: &Dirs) -> Result<String> {
@@ -34,6 +37,15 @@ pub fn start(dirs: &Dirs) -> Result<String> {
   let (close, closed) = watch::channel(false);
   let (url_tx, url_rx) = mpsc::channel::<Result<String, String>>();
   let error_tx = url_tx.clone();
+  let (media_state, media_states) = watch::channel(None);
+  let (media_commands, commands) = tokio::sync::mpsc::unbounded_channel();
+  *MEDIA_COMMANDS
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(media_commands);
+  std::thread::Builder::new()
+    .name("spotatui-media".into())
+    .spawn(move || forward_media(media_states))
+    .context("could not start the media thread")?;
   std::thread::Builder::new()
     .name("spotatui".into())
     .stack_size(16 << 20)
@@ -47,6 +59,10 @@ pub fn start(dirs: &Dirs) -> Result<String> {
         closed,
         updates: None,
         window: None,
+        media: Some(MediaLink {
+          state: media_state,
+          commands,
+        }),
       };
       let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -64,6 +80,33 @@ pub fn start(dirs: &Dirs) -> Result<String> {
     .map_err(|e| anyhow!(e))?;
   *started = Some((url.clone(), close));
   Ok(url)
+}
+
+/// Passes a press on the platform's media controls to the core.
+pub fn send_media_command(command: MediaCommand) {
+  let commands = MEDIA_COMMANDS
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  if let Some(commands) = commands.as_ref() {
+    let _ = commands.send(command);
+  }
+}
+
+/// Hands each change of the core's media state to the platform's media controls.
+fn forward_media(mut states: watch::Receiver<Option<MediaState>>) {
+  let runtime = match tokio::runtime::Builder::new_current_thread().build() {
+    Ok(runtime) => runtime,
+    Err(e) => return log::warn!("media controls unavailable: {e}"),
+  };
+  runtime.block_on(async {
+    while states.changed().await.is_ok() {
+      let state = states.borrow_and_update().clone();
+      #[cfg(target_os = "android")]
+      android::show_media(state.as_ref());
+      #[cfg(not(target_os = "android"))]
+      let _ = state;
+    }
+  });
 }
 
 /// Points the core's config, state, cache and log paths into the app's own directories.

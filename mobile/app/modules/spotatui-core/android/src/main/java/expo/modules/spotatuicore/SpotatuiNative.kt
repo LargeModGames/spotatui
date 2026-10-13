@@ -11,4 +11,7 @@ object SpotatuiNative {
   @JvmStatic external fun setContext(context: Context)
 
   @JvmStatic external fun start(files: String, cache: String): String
+
+  /** A press on the system media controls; the codes are in [CorePlayer]. */
+  @JvmStatic external fun command(code: Int, positionMs: Long)
 }

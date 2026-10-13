@@ -20,6 +20,7 @@ class SpotatuiCoreModule : Module() {
     // The start blocks until the core serves, so it leaves the queue all modules share.
     AsyncFunction("start") Coroutine { ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SpotatuiMedia.context = context.applicationContext
       withContext(Dispatchers.IO) {
         SpotatuiNative.setContext(context)
         SpotatuiNative.start(context.filesDir.absolutePath, context.cacheDir.absolutePath)

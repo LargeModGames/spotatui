@@ -1,2 +1,14 @@
-<manifest>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+  <application>
+    <service
+      android:name="expo.modules.spotatuicore.PlaybackService"
+      android:foregroundServiceType="mediaPlayback"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="androidx.media3.session.MediaSessionService" />
+      </intent-filter>
+    </service>
+  </application>
 </manifest>
