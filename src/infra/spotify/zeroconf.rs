@@ -14,7 +14,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const VERSION: &str = "2.10.0";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 /// The `getInfo` token types that [`log_in`] can answer.
-pub const SUPPORTED_TOKEN_TYPES: &[&str] = &["accesstoken"];
+pub const SUPPORTED_TOKEN_TYPES: &[&str] = &["accesstoken", "authorization_code"];
 
 fn client() -> anyhow::Result<reqwest::Client> {
   Ok(reqwest::Client::builder().timeout(TIMEOUT).build()?)
@@ -34,8 +34,20 @@ async fn get_info(url: &str) -> anyhow::Result<Value> {
   )
 }
 
-/// An access token for the speaker's client id, from the token exchange of the official client.
-async fn connect_token(session: &SpotifySession, audience: &str) -> anyhow::Result<String> {
+/// The token-exchange type for a `getInfo` token type: Sonos asks for an auth code.
+fn requested_token_type(token_type: &str) -> &'static str {
+  match token_type {
+    "authorization_code" => "urn:spotify:params:oauth:authorization_code",
+    _ => "urn:ietf:params:oauth:token-type:access_token",
+  }
+}
+
+/// A token for the speaker's client id, from the token exchange of the official client.
+async fn connect_token(
+  session: &SpotifySession,
+  audience: &str,
+  token_type: &str,
+) -> anyhow::Result<String> {
   let core = session.session();
   let subject = core.login5().auth_token().await?.access_token;
   let own_client = core.client_id();
@@ -49,10 +61,7 @@ async fn connect_token(session: &SpotifySession, audience: &str) -> anyhow::Resu
       "subject_token_type",
       "urn:ietf:params:oauth:token-type:access_token",
     ),
-    (
-      "requested_token_type",
-      "urn:ietf:params:oauth:token-type:access_token",
-    ),
+    ("requested_token_type", requested_token_type(token_type)),
     ("resource", "urn:spotify:resources:connect"),
     ("client_id", own_client.as_str()),
     ("audience", audience),
@@ -77,9 +86,9 @@ pub async fn log_in(session: &SpotifySession, url: &str) -> anyhow::Result<()> {
   let client_id = info["clientID"]
     .as_str()
     .ok_or_else(|| anyhow!("no clientID in getInfo"))?;
-  let token = connect_token(session, client_id).await?;
+  let token = connect_token(session, client_id, token_type).await?;
 
-  // An access-token login skips the key exchange, but the field must be present.
+  // A token login skips the key exchange, but the field must be present.
   let mut client_key = [0u8; 96];
   rand::rng().fill_bytes(&mut client_key);
   let mut login_id = [0u8; 16];
@@ -91,7 +100,7 @@ pub async fn log_in(session: &SpotifySession, url: &str) -> anyhow::Result<()> {
     ("userName", &session.username()),
     ("blob", &token),
     ("clientKey", &BASE64.encode(client_key)),
-    ("tokenType", "accesstoken"),
+    ("tokenType", token_type),
     ("loginId", &login_id),
     ("deviceName", "spotatui"),
     ("deviceId", &own_id),
@@ -113,4 +122,21 @@ pub async fn log_in(session: &SpotifySession, url: &str) -> anyhow::Result<()> {
     );
   }
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn each_supported_token_type_maps_to_its_exchange_type() {
+    assert_eq!(
+      requested_token_type("authorization_code"),
+      "urn:spotify:params:oauth:authorization_code"
+    );
+    assert_eq!(
+      requested_token_type("accesstoken"),
+      "urn:ietf:params:oauth:token-type:access_token"
+    );
+  }
 }

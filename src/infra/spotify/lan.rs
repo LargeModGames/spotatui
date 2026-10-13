@@ -12,6 +12,10 @@ use std::time::Duration;
 
 const CAST_SERVICE: &str = "_googlecast._tcp.local.";
 const CONNECT_SERVICE: &str = "_spotify-connect._tcp.local.";
+/// Sonos rooms; across some networks only this record arrives, not the Connect one.
+const SONOS_SERVICE: &str = "_sonos._tcp.local.";
+const SONOS_ZEROCONF_PORT: u16 = 1400;
+const SONOS_ZEROCONF_PATH: &str = "/spotifyzc";
 /// Bit 0 of the `ca` capability mask: the device has a video output.
 const VIDEO_OUT: u32 = 1;
 const INFO_TIMEOUT: Duration = Duration::from_secs(3);
@@ -98,23 +102,33 @@ fn resolve_cast(service: &ResolvedService) -> Option<Entry> {
 }
 
 fn resolve_speaker(service: &ResolvedService) -> Option<Entry> {
-  let url = format!(
+  speaker_at(&format!(
     "http://{}:{}{}",
     first_ipv4(service)?,
     service.get_port(),
     service.get_property_val_str("CPath").unwrap_or("/")
-  );
+  ))
+}
+
+fn resolve_sonos(service: &ResolvedService) -> Option<Entry> {
+  speaker_at(&format!(
+    "http://{}:{SONOS_ZEROCONF_PORT}{SONOS_ZEROCONF_PATH}",
+    first_ipv4(service)?
+  ))
+}
+
+fn speaker_at(url: &str) -> Option<Entry> {
   let info: Value = reqwest::blocking::Client::builder()
     .timeout(INFO_TIMEOUT)
     .build()
     .ok()?
-    .get(&url)
+    .get(url)
     .query(&[("action", "getInfo")])
     .send()
     .ok()?
     .json()
     .ok()?;
-  connect_speaker(&url, &info).map(Entry::Speaker)
+  connect_speaker(url, &info).map(Entry::Speaker)
 }
 
 fn found() -> MutexGuard<'static, HashMap<String, Entry>> {
@@ -141,6 +155,7 @@ fn browse() -> anyhow::Result<ServiceDaemon> {
   let daemon = ServiceDaemon::new()?;
   watch(&daemon, CAST_SERVICE, resolve_cast)?;
   watch(&daemon, CONNECT_SERVICE, resolve_speaker)?;
+  watch(&daemon, SONOS_SERVICE, resolve_sonos)?;
   Ok(daemon)
 }
 
@@ -188,14 +203,21 @@ pub fn cast_devices() -> Vec<CastDevice> {
 
 /// The Spotify Connect speakers seen so far, by name.
 pub fn connect_speakers() -> Vec<ConnectSpeaker> {
-  let mut speakers: Vec<ConnectSpeaker> = found()
+  let speakers = found()
     .values()
     .filter_map(|entry| match entry {
       Entry::Speaker(speaker) => Some(speaker.clone()),
       Entry::Cast(_) => None,
     })
     .collect();
-  speakers.sort_by(|a, b| a.name.cmp(&b.name));
+  one_per_device(speakers)
+}
+
+/// A speaker that two services announce, such as a Sonos room, is listed once.
+fn one_per_device(mut speakers: Vec<ConnectSpeaker>) -> Vec<ConnectSpeaker> {
+  speakers.sort_by(|a, b| (&a.name, &a.url).cmp(&(&b.name, &b.url)));
+  let mut seen = std::collections::HashSet::new();
+  speakers.retain(|speaker| seen.insert(speaker.device_id.clone()));
   speakers
 }
 
@@ -250,12 +272,29 @@ mod tests {
   }
 
   #[test]
+  fn a_room_that_two_services_announce_is_listed_once() {
+    let speaker = |name: &str, id: &str| ConnectSpeaker {
+      name: name.into(),
+      url: format!("http://192.168.1.40:1400/spotifyzc#{name}"),
+      device_id: id.into(),
+      device_type: "SPEAKER".into(),
+    };
+    let listed = one_per_device(vec![
+      speaker("Office", "b"),
+      speaker("Kitchen", "a"),
+      speaker("Kitchen", "a"),
+    ]);
+    let names: Vec<&str> = listed.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["Kitchen", "Office"]);
+  }
+
+  #[test]
   fn a_speaker_with_an_unsupported_token_type_is_not_listed() {
     let info =
       |token_type: &str| json!({ "remoteName": "Room", "deviceID": "id", "tokenType": token_type });
-    assert_eq!(connect_speaker("u", &info("authorization_code")), None);
     assert_eq!(connect_speaker("u", &info("default")), None);
     assert!(connect_speaker("u", &info("accesstoken")).is_some());
+    assert!(connect_speaker("u", &info("authorization_code")).is_some());
     assert_eq!(
       connect_speaker(
         "u",
