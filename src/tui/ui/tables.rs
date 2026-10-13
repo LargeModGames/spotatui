@@ -317,43 +317,31 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     current_route.hovered_block == ActiveBlock::Artists,
   );
 
-  if let Some(saved_artists) = app.library().saved_artists.get_results(None) {
-    let (offset, visible) = visible_window(
-      app,
-      layout_chunk,
-      app.view.artists_list_index,
-      &saved_artists.items,
-    );
-    let items = visible
-      .iter()
-      .map(|item| TableItem {
-        id: item.id.clone().unwrap_or_default(),
-        format: vec![item.name.to_owned()],
-      })
-      .collect::<Vec<TableItem>>();
+  // Directly calculate window over all continuous artists:
+  let (offset, visible) = visible_window(
+    app,
+    layout_chunk,
+    app.view.artists_list_index,
+    &app.artists,
+  );
+  let items = visible
+    .iter()
+    .map(|item| TableItem {
+      id: item.id.clone().unwrap_or_default(),
+      format: vec![item.name.to_owned()],
+    })
+    .collect::<Vec<TableItem>>();
 
-    draw_table(
-      f,
-      app,
-      layout_chunk,
-      ("Artists", &header),
-      &items,
-      app.view.artists_list_index,
-      offset,
-      highlight_state,
-    )
-  } else {
-    draw_table(
-      f,
-      app,
-      layout_chunk,
-      ("Artists", &header),
-      &[],
-      app.view.artists_list_index,
-      0,
-      highlight_state,
-    )
-  }
+  draw_table(
+    f,
+    app,
+    layout_chunk,
+    ("Artists", &header),
+    &items,
+    app.view.artists_list_index,
+    offset,
+    highlight_state,
+  );
 }
 
 pub fn draw_podcast_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
