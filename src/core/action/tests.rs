@@ -3444,6 +3444,7 @@ fn set_setting_saves_the_subsonic_password_and_shows_it_masked() {
     .unwrap();
   assert!(matches!(row.value, SettingValue::Secret(_)));
   assert_eq!(row.value.display(), "••••••••");
+  assert!(!format!("{row:?}").contains("hunter2"));
 }
 
 #[cfg(feature = "subsonic")]

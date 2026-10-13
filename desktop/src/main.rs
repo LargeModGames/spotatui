@@ -72,6 +72,7 @@ fn main() -> anyhow::Result<()> {
   if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
   }
+  // Before the runtime below starts any thread: `set_var` is only sound while one thread runs.
   #[cfg(target_os = "macos")]
   std::env::set_var(
     "PATH",

@@ -592,6 +592,10 @@ impl App {
   fn qobuz_quality_label(&self) -> Option<String> {
     #[cfg(feature = "qobuz")]
     {
+      // A queue slot plays its own stream; `qobuz_playback` is then the suspended context.
+      if self.queue_owns_playback() {
+        return None;
+      }
       self
         .qobuz_playback
         .as_ref()

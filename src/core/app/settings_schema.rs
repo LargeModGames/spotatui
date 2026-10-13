@@ -50,7 +50,7 @@ impl SettingsCategory {
 }
 
 /// Represents a setting's value type
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq)]
 pub enum SettingValue {
   Bool(bool),
   Number(i64),
@@ -63,6 +63,22 @@ pub enum SettingValue {
   /// A password: shown masked, edited from empty.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
   Secret(String),
+}
+
+/// Derived except for `Secret`, so a debug print never shows a password.
+impl std::fmt::Debug for SettingValue {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      SettingValue::Bool(v) => f.debug_tuple("Bool").field(v).finish(),
+      SettingValue::Number(v) => f.debug_tuple("Number").field(v).finish(),
+      SettingValue::String(v) => f.debug_tuple("String").field(v).finish(),
+      SettingValue::Color(v) => f.debug_tuple("Color").field(v).finish(),
+      SettingValue::Key(v) => f.debug_tuple("Key").field(v).finish(),
+      SettingValue::Preset(v) => f.debug_tuple("Preset").field(v).finish(),
+      SettingValue::Cycle(v, options) => f.debug_tuple("Cycle").field(v).field(options).finish(),
+      SettingValue::Secret(_) => f.write_str("Secret(<hidden>)"),
+    }
+  }
 }
 
 const STARTUP_ROUTE_SETTING_OPTIONS: &[&str] = &[
