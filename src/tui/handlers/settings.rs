@@ -168,7 +168,9 @@ fn handle_edit_mode(key: Key, app: &mut App) {
       SettingValue::Preset(_) => handle_preset_edit(key, app),
       SettingValue::Cycle(_, _) => {} // enter_edit_mode handles Cycle without entering edit mode
       SettingValue::Key(_) => handle_key_edit(key, app),
-      SettingValue::String(_) | SettingValue::Color(_) => handle_string_edit(key, app),
+      SettingValue::String(_) | SettingValue::Color(_) | SettingValue::Secret(_) => {
+        handle_string_edit(key, app)
+      }
     }
   }
 }
@@ -287,6 +289,10 @@ fn handle_string_edit(key: Key, app: &mut App) {
           }
           SettingValue::Color(_) => {
             setting.value = SettingValue::Color(new_value);
+          }
+          // The field opens empty, so Enter without typing keeps the saved password.
+          SettingValue::Secret(_) if !new_value.is_empty() => {
+            setting.value = SettingValue::Secret(new_value);
           }
           _ => {}
         }

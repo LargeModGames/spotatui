@@ -73,9 +73,10 @@ jobs:
           # The browser frontend without `tui`: the Linux feature set a
           # spotatui-gui build carries (cover-art needs `tui`, ai-dj is the
           # terminal DJ screen). The first leg that builds scripting, Discord,
-          # MPRIS, self-update and MCP without the terminal frontend.
+          # MPRIS, self-update, MCP and the five sources without the terminal
+          # frontend.
           - name: gui
-            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris"
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -119,7 +120,7 @@ jobs:
             args: "--locked --no-default-features --features telemetry"
           # See the check job for why the gui leg exists.
           - name: gui
-            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris"
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -224,7 +225,7 @@ jobs:
             args: "--locked --no-default-features --features telemetry,streaming"
           # See the check job for why the gui leg exists.
           - name: gui
-            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris"
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:

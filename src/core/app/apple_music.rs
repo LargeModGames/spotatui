@@ -715,6 +715,10 @@ impl App {
       self.view.search_hovered_block = SearchResultBlock::SongSearch;
     } else {
       self.replace_track_table_tracks(tracks);
+      // Set when rows land, not on open, so a frontend waits for the first page.
+      if let Some(crate::infra::apple_music::Browse::Tracks(uri)) = &self.apple_music.browse {
+        self.source_table_uri = Some(uri.clone());
+      }
     }
   }
 
@@ -1581,6 +1585,28 @@ mod tests {
     assert_eq!(list.index, 0);
     // The track that never played is not in what previous retraces.
     assert!(list.history.is_empty());
+  }
+
+  #[cfg(feature = "gui")]
+  #[test]
+  fn an_apple_music_list_names_its_uri_once_its_first_page_lands() {
+    use crate::infra::apple_music::{Browse, LIBRARY_URI};
+    let mut app = App::default();
+    app.source_table_uri = Some("qobuz:playlist:1".into());
+    app.open_source_playlist_tracks(LIBRARY_URI.into());
+    app.apple_music.browse = Some(Browse::Tracks(LIBRARY_URI.into()));
+    app.note_track_table_changes();
+    assert_eq!(app.track_table_view().uri, None);
+
+    app.append_apple_music_tracks(
+      vec![crate::core::app::test_support::queue_track(
+        Some("applemusic:FEDCBA9876543210"),
+        "Song",
+      )],
+      false,
+    );
+    app.note_track_table_changes();
+    assert_eq!(app.track_table_view().uri.as_deref(), Some(LIBRARY_URI));
   }
 
   #[cfg(all(feature = "apple-music", target_os = "macos"))]

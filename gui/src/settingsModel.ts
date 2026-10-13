@@ -10,6 +10,7 @@ import { SORT_OPTIONS } from "./sortModel";
 export const GROUPS = [
   { group: "playback", heading: "Playback" },
   { group: "library", heading: "Library" },
+  { group: "sources", heading: "Sources" },
   { group: "streaming", heading: "Streaming" },
   { group: "integrations", heading: "Integrations" },
   { group: "updates", heading: "Updates" },
@@ -49,7 +50,7 @@ export function setSetting(id: string, value: SettingInput): Action {
   return { SetSetting: { id, value } };
 }
 
-/** The value a text or number field commits; null when it is unchanged or not a whole number. */
+/** The value a field commits; null when it is unchanged, not a whole number, or an empty password. */
 export function commitValue(
   row: SettingRow,
   draft: string,
@@ -62,6 +63,8 @@ export function commitValue(
   }
   if (row.value.kind === "text")
     return draft === row.value.value ? null : { Text: draft };
+  // An empty Text clears a saved password, so a blank field sends nothing.
+  if (row.value.kind === "secret") return draft === "" ? null : { Text: draft };
   return null;
 }
 

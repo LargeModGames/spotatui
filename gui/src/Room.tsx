@@ -18,7 +18,7 @@ import {
   sides,
   spotifyTrackId,
 } from "./roomModel";
-import { Swatch } from "./SourceBadge";
+import { SourceIcon } from "./SourceBadge";
 import { year } from "./searchModel";
 import { usePosition } from "./usePosition";
 
@@ -233,7 +233,7 @@ export function Room({
                     <span>{entry.artist}</span>
                     {from && (
                       <span className="from">
-                        <Swatch source={from} /> {from.toUpperCase()}
+                        <SourceIcon source={from} /> {from.toUpperCase()}
                       </span>
                     )}
                   </span>

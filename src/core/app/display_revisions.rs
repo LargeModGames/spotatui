@@ -185,6 +185,7 @@ impl App {
     u32,
     Option<String>,
     bool,
+    Option<String>,
   ) {
     &self.playback_view
   }

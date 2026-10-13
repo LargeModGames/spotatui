@@ -17,6 +17,7 @@ const song: NowPlaying = {
   shuffle: false,
   repeat: "off",
   context_uri: null,
+  quality: null,
 };
 
 /** The opening tag of the element with this aria-label. */

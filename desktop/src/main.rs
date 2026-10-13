@@ -47,12 +47,36 @@ impl Life {
   }
 }
 
+/// Where Homebrew puts yt-dlp and ffmpeg; an app opened from Finder gets a PATH without them.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const MACOS_INSTALL_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/// `path` with each of `dirs` it lacks added at the end.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn with_dirs(path: Option<std::ffi::OsString>, dirs: &[&str]) -> std::ffi::OsString {
+  let mut paths: Vec<std::path::PathBuf> = path
+    .as_deref()
+    .map(|path| std::env::split_paths(path).collect())
+    .unwrap_or_default();
+  for dir in dirs {
+    if !paths.iter().any(|known| known == std::path::Path::new(dir)) {
+      paths.push(dir.into());
+    }
+  }
+  std::env::join_paths(paths).unwrap_or_else(|_| path.unwrap_or_default())
+}
+
 fn main() -> anyhow::Result<()> {
   // WebKitGTK's DMA-BUF renderer draws a blank window on some GPU drivers.
   #[cfg(target_os = "linux")]
   if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
   }
+  #[cfg(target_os = "macos")]
+  std::env::set_var(
+    "PATH",
+    with_dirs(std::env::var_os("PATH"), &MACOS_INSTALL_DIRS),
+  );
   let runtime = tokio::runtime::Builder::new_multi_thread()
     .enable_all()
     .build()?;
@@ -245,6 +269,19 @@ impl Drop for ExitOnPanic {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn the_install_dirs_join_the_path_once_and_last() {
+    let path = std::env::join_paths(["/usr/bin", "/usr/local/bin"]).unwrap();
+    let joined = with_dirs(Some(path), &MACOS_INSTALL_DIRS);
+    let dirs: Vec<_> = std::env::split_paths(&joined).collect();
+    assert_eq!(
+      dirs,
+      ["/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"].map(std::path::PathBuf::from)
+    );
+    let alone: Vec<_> = std::env::split_paths(&with_dirs(None, &MACOS_INSTALL_DIRS)).collect();
+    assert_eq!(alone, MACOS_INSTALL_DIRS.map(std::path::PathBuf::from));
+  }
 
   #[test]
   fn a_quit_waits_only_for_an_app_that_serves_and_has_not_shut_down() {

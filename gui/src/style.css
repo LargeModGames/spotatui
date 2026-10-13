@@ -352,47 +352,10 @@ button:disabled {
   white-space: nowrap;
 }
 
-.swatch {
+.source-icon {
   width: 9px;
   height: 9px;
   flex-shrink: 0;
-}
-
-.swatch.spotify {
-  background: var(--text);
-}
-
-.swatch.local {
-  background: repeating-linear-gradient(
-    45deg,
-    var(--text) 0 1.5px,
-    transparent 1.5px 4px
-  );
-}
-
-.swatch.qobuz {
-  background: repeating-linear-gradient(
-    180deg,
-    var(--text) 0 1.5px,
-    transparent 1.5px 3.5px
-  );
-}
-
-.swatch.subsonic {
-  background: repeating-conic-gradient(var(--text) 0 25%, transparent 0 50%) 0
-    0 / 5px 5px;
-}
-
-.swatch.youtube {
-  background: radial-gradient(var(--text) 1px, transparent 1.4px) 0 0 / 4px 4px;
-}
-
-.swatch.radio {
-  background: repeating-linear-gradient(
-    90deg,
-    var(--text) 0 1px,
-    transparent 1px 3px
-  );
 }
 
 .eyebrow {

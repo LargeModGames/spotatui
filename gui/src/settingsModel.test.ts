@@ -57,6 +57,21 @@ describe("sections", () => {
     expect(shown[1].rows).toEqual(sorts);
   });
 
+  it("puts the source rows under Sources, after Library and before Updates", () => {
+    const library = row("behavior.default_sort_saved_albums", "library", {
+      kind: "choice",
+      value: "default",
+      options: ["default"],
+    });
+    const music = row("behavior.local_music_path", "sources", {
+      kind: "text",
+      value: "",
+    });
+    expect(
+      sections([music, library, seek], true).map((section) => section.heading),
+    ).toEqual(["Playback", "Library", "Sources", "Updates"]);
+  });
+
   it("shows Updates whenever there is an updater, and only then", () => {
     expect(sections([seek], true).map((section) => section.group)).toEqual([
       "playback",
@@ -81,6 +96,15 @@ describe("commitValue", () => {
   it("a text field commits any changed text", () => {
     expect(commitValue(name, "Desk")).toEqual({ Text: "Desk" });
     expect(commitValue(name, "spotatui")).toBeNull();
+  });
+
+  it("a password field commits typed text and never an empty one", () => {
+    const password = row("behavior.subsonic_password", "sources", {
+      kind: "secret",
+      set: true,
+    });
+    expect(commitValue(password, "hunter2")).toEqual({ Text: "hunter2" });
+    expect(commitValue(password, "")).toBeNull();
   });
 
   it("wraps the value in a SetSetting action", () => {

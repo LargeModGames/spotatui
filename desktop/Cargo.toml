@@ -18,7 +18,8 @@ tokio = { version = "1.52", features = ["rt-multi-thread"] }
 anyhow = "1"
 log = "0.4"
 serde_json = "1"
-# Spotify only: the desktop app ships no other source yet.
+# Every source ships. apple-music compiles only on macOS; YouTube needs a
+# user-installed yt-dlp and ffmpeg.
 spotatui = { path = "..", default-features = false, features = [
   "telemetry",
   "gui",
@@ -30,6 +31,12 @@ spotatui = { path = "..", default-features = false, features = [
   "mpris",
   "macos-media",
   "windows-media",
+  "local-files",
+  "subsonic",
+  "internet-radio",
+  "youtube",
+  "qobuz",
+  "apple-music",
 ] }
 
 # Profiles do not inherit from the root package.

@@ -296,7 +296,13 @@ fn configure_youtube(user_config: &UserConfig, onboarding: &dyn Onboarding) {
     .unwrap_or_else(|| "yt-dlp".to_string());
 
   onboarding.progress("\nChecking for yt-dlp... ");
-  match std::process::Command::new(&ytdlp).arg("--version").output() {
+  let mut command = std::process::Command::new(&ytdlp);
+  #[cfg(windows)]
+  {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(crate::infra::youtube::CREATE_NO_WINDOW);
+  }
+  match command.arg("--version").output() {
     Ok(output) if output.status.success() => {
       let version = String::from_utf8_lossy(&output.stdout);
       onboarding.info(&format!("found ({})", version.trim()));

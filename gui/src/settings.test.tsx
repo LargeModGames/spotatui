@@ -118,6 +118,73 @@ describe("Settings", () => {
     expect(html).toContain('<option value="default">Custom order</option>');
   });
 
+  it("shows the source rows under a Sources heading, with a password field that only says whether it is set", () => {
+    const source = (
+      id: string,
+      name: string,
+      value: SettingRow["value"],
+    ): SettingRow => ({ id, group: "sources", name, description: "", value });
+    const shown = [
+      rows[0],
+      source("behavior.subsonic_url", "Subsonic Server URL", {
+        kind: "text",
+        value: "https://music.example",
+      }),
+      source("behavior.subsonic_password", "Subsonic Password", {
+        kind: "secret",
+        set: true,
+      }),
+      rows[3],
+    ];
+    const html = page({ state: "idle" }, shown);
+    const order = [
+      ">Playback</h2>",
+      ">Sources</h2>",
+      "Subsonic Server URL",
+      "Subsonic Password",
+      ">Updates</h2>",
+    ].map((text) => html.indexOf(text));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html).toContain('aria-labelledby="settings-sources"');
+    expect(html).toMatch(
+      /<input[^>]*type="password"[^>]*autoComplete="new-password"[^>]*placeholder="Saved"[^>]*aria-labelledby="behavior.subsonic_password-name"/,
+    );
+    expect(html).not.toMatch(/type="password"[^>]*value=/);
+    const unset = renderToStaticMarkup(
+      <SettingControl
+        row={source("behavior.subsonic_password", "", {
+          kind: "secret",
+          set: false,
+        })}
+        send={() => {}}
+      />,
+    );
+    expect(unset).toContain('placeholder="Not set"');
+  });
+
+  it("a password commit sends the typed text, and an empty one sends nothing", () => {
+    const password: SettingRow = {
+      id: "behavior.subsonic_password",
+      group: "sources",
+      name: "Subsonic Password",
+      description: "",
+      value: { kind: "secret", set: false },
+    };
+    const actions = sent(password, (control) => {
+      control.onCommit?.("hunter2");
+      control.onCommit?.("");
+    });
+    expect(actions).toEqual([
+      {
+        SetSetting: {
+          id: "behavior.subsonic_password",
+          value: { Text: "hunter2" },
+        },
+      },
+    ]);
+  });
+
   it("has no Updates section without an updater", () => {
     const html = page(null, rows.slice(0, 3));
     expect(html).not.toContain(">Updates</h2>");

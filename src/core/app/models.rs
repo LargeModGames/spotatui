@@ -208,7 +208,8 @@ impl App {
         TrackTableContext::LocalPlaylist
         | TrackTableContext::SubsonicPlaylist
         | TrackTableContext::YouTubePlaylist
-        | TrackTableContext::QobuzPlaylist,
+        | TrackTableContext::QobuzPlaylist
+        | TrackTableContext::AppleMusicPlaylist,
       ) => self.source_table_uri.clone(),
       _ => None,
     }

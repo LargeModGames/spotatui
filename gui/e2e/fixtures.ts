@@ -104,6 +104,7 @@ const nowPlaying: NowPlaying = {
   shuffle: false,
   repeat: "off",
   context_uri: null,
+  quality: null,
 };
 
 /** Adele's 21 from song 5, paused at 1:40, so the frame does not move between runs; one queued song per other source. */
@@ -220,6 +221,7 @@ export const library: ServerMessage[] = [
       subsonic: [],
       qobuz: [],
       youtube: [],
+      apple_music: [],
       radio: [],
       saved_albums: [],
       saved_albums_has_more: false,
@@ -268,6 +270,7 @@ export const libraryUnavailable: ServerMessage[] = [
       subsonic: [],
       qobuz: [],
       youtube: [],
+      apple_music: [],
       radio: [],
       saved_albums: [],
       saved_albums_has_more: false,
@@ -292,7 +295,7 @@ export const libraryUnavailable: ServerMessage[] = [
   },
 ];
 
-/** The Spotify-only desktop app after a failed first login. */
+/** A Spotify-only build after a failed first login. */
 export const spotifyLoggedOut: ServerMessage[] = [
   {
     kind: "source",
@@ -902,6 +905,27 @@ export const settings: ServerMessage[] = [
         "Discord Rich Presence",
         "Show your current track in Discord",
         { kind: "bool", value: true },
+      ),
+      setting(
+        "subsonic_url",
+        "sources",
+        "Subsonic Server",
+        "Address of your Subsonic or Navidrome server",
+        { kind: "text", value: "https://music.example.net" },
+      ),
+      setting(
+        "subsonic_password",
+        "sources",
+        "Subsonic Password",
+        "Saved in config.yml; SPOTATUI_SUBSONIC_PASSWORD overrides it",
+        { kind: "secret", set: true },
+      ),
+      setting(
+        "local_music_path",
+        "sources",
+        "Music Folder",
+        "The folder Local Files reads",
+        { kind: "text", value: "" },
       ),
       setting(
         "disable_auto_update",

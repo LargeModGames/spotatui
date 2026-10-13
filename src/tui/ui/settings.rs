@@ -170,6 +170,10 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
             }
             .to_string()
           }
+          SettingValue::Secret(_) => format!(
+            "{}▏",
+            "•".repeat(app.view.settings_edit_buffer.chars().count())
+          ),
           _ => {
             // Show edit buffer with cursor
             format!("{}▏", app.view.settings_edit_buffer)
@@ -199,6 +203,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
           SettingValue::Color(v) => format!("■ {}", v),
           SettingValue::Preset(v) => format!("◆ {} ◆", v), // Show preset name with arrows hint
           SettingValue::Cycle(v, _) => format!("◆ {} ◆", v),
+          SettingValue::Secret(_) => setting.value.display(),
         }
       };
 

@@ -260,6 +260,24 @@
   color: var(--sub);
 }
 
+.artist-line {
+  display: flex;
+}
+
+.artist-line > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The artists give way first; pre keeps the separator's leading space. */
+.titles .quality,
+.now-text .quality {
+  flex-shrink: 0;
+  white-space: pre;
+  color: var(--quiet);
+}
+
 .like {
   flex-shrink: 0;
   width: 32px;
@@ -288,7 +306,7 @@
   border-radius: 4px;
 }
 
-/* A narrow player bar keeps the title room: the badge shows its swatch, and screen readers still get the name. */
+/* A narrow player bar keeps the title room: the badge shows its icon, and screen readers still get the name. */
 @media (max-width: 1000px) {
   .playerbar .badge .name {
     position: absolute;

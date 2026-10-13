@@ -8,6 +8,10 @@
 
 - **The desktop app catches up with the terminal app**: in Your Library you can create a playlist, delete one of yours or remove another from your library (right-click a playlist), open your playlist folders as a tree, sort your saved albums and artists, and open your podcasts and the full Recently played list. A playlist or Liked Songs has a filter field and a Sort by choice, and a song row in a playlist you own has Remove from this playlist. Podcasts have their own search tab and a show page with the episodes, a Follow button and copy links; the queue shows episodes too. An album page can remove the album from your library and copy its link, a song row's menu has Go to song radio and Copy album link, and the Settings page has the three default sorts. `T` or the new player bar button opens a mini player: in the desktop app the window shrinks and stays on top until you go back.
 
+- **The desktop app and the browser GUI play the other sources**: local files, Subsonic, internet radio, YouTube and Qobuz, plus Apple Music on macOS, as in the terminal app. YouTube needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
+
+- **Set up a source after the first launch**: Settings, in the terminal and the desktop app, has rows for the Subsonic server, user name and password, the Local Files music folder and the yt-dlp path, so you can set up or change a source at any time. The password shows masked and is saved in `config.yml` as before; `SPOTATUI_SUBSONIC_PASSWORD` still overrides it.
+
 ### Changed
 
 - **Discover shows Spotify's Made For You playlists**: the Discover page in the terminal and the desktop app now lists the shelves of Spotify's own Made For You page, such as daylist, On Repeat, your Daily Mixes, Release Radar, Discover Weekly and your genre and mood mixes, also the ones you do not follow. In the terminal, Enter opens a playlist, `e` plays it and `w` saves it to your library. The desktop Home page has a Made For You shelf in place of Your top tracks and Artists mix. Top Tracks, its time range and the Top Artists Mix are gone; the Stats screen still ranks your top tracks and artists from your listening history.

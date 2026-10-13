@@ -11,7 +11,7 @@ import {
 import { Glyph } from "./Icon";
 import { KeyHints } from "./KeyHints";
 import "./LibraryHealth.css";
-import { Swatch } from "./SourceBadge";
+import { SourceIcon } from "./SourceBadge";
 
 const CELL_TEXT = {
   master: "MASTER",
@@ -135,7 +135,7 @@ export function LibraryHealth({
                 >
                   <span className="n">{row + 1}</span>
                   <span className="name">
-                    <Swatch source={entry.source} /> <b>{entry.name}</b>
+                    <SourceIcon source={entry.source} /> <b>{entry.name}</b>
                   </span>
                   {SYNC_SOURCES.map((source) => {
                     const cell = cellFor(entry, source);
@@ -177,7 +177,7 @@ export function LibraryHealth({
               >
                 <div>
                   <span className="label">
-                    <Swatch source={mirror.source} />
+                    <SourceIcon source={mirror.source} />
                     {mirror.source.toUpperCase()}
                   </span>
                   <span className="tag">

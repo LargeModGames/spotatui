@@ -203,7 +203,7 @@ jobs:
 
             ## Desktop app (preview, unsigned)
 
-            spotatui in its own window, with the same player, login and settings as the terminal app. The preview plays Spotify (Premium) only. Its installers are added to this release a few minutes after it is published. The Windows installer, the macOS app and the AppImage update themselves from then on; a `.deb` or `.rpm` install updates with a new download from this page.
+            spotatui in its own window, with the same player, login and settings as the terminal app. The preview plays Spotify (Premium) and the same extra music sources as the builds above, plus Apple Music on macOS; YouTube needs yt-dlp installed here too. Its installers are added to this release a few minutes after it is published. The Windows installer, the macOS app and the AppImage update themselves from then on; a `.deb` or `.rpm` install updates with a new download from this page.
 
             - **Windows 10/11 (64-bit)** → `spotatui-desktop_*_x64-setup.exe`. The installer is not signed, so SmartScreen warns: click **More info**, then **Run anyway**.
             - **macOS** → `spotatui_*_aarch64.dmg` (Apple Silicon) or `spotatui_*_x64.dmg` (Intel). Drag spotatui to Applications and open it. The app is not notarized, so macOS refuses the first launch: close that dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm.

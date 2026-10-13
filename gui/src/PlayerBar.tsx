@@ -69,7 +69,14 @@ export function PlayerBar({
           <strong title={item?.title}>
             {item?.title ?? "Nothing playing"}
           </strong>
-          {item && <span>{item.artists.join(", ")}</span>}
+          {item && (
+            <span className="artist-line">
+              <span>{item.artists.join(", ")}</span>
+              {item.quality && (
+                <span className="quality">{` • ${item.quality}`}</span>
+              )}
+            </span>
+          )}
         </div>
         {source === "Spotify" && (
           <button

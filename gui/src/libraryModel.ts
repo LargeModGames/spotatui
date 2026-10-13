@@ -19,14 +19,15 @@ export interface SidebarRow {
 }
 
 const PLAYLIST_KEYS: Record<
-  Exclude<Source, "Radio" | "AppleMusic">,
-  "spotify" | "local" | "subsonic" | "qobuz" | "youtube"
+  Exclude<Source, "Radio">,
+  "spotify" | "local" | "subsonic" | "qobuz" | "youtube" | "apple_music"
 > = {
   Spotify: "spotify",
   Local: "local",
   Subsonic: "subsonic",
   Qobuz: "qobuz",
   YouTube: "youtube",
+  AppleMusic: "apple_music",
 };
 
 /** The queue after the playing track: the native queue first, then Spotify's while Spotify plays. */
@@ -47,8 +48,6 @@ export function playlistsFor(
   playlists: SourcePlaylists,
   source: Source,
 ): SidebarRow[] {
-  // Apple Music has no browse screens yet, so no sidebar rows.
-  if (source === "AppleMusic") return [];
   if (source === "Radio")
     return playlists.radio.map((station) => ({
       uri: station.uri ?? station.name,

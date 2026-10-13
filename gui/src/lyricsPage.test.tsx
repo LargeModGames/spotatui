@@ -16,6 +16,7 @@ const item: NowPlaying = {
   shuffle: false,
   repeat: "off",
   context_uri: null,
+  quality: null,
 };
 
 const lines = [

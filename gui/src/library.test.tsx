@@ -64,6 +64,7 @@ const playlists: SourcePlaylists = {
   subsonic: [],
   qobuz: [],
   youtube: [],
+  apple_music: [],
   radio: [track("Score radio", "radio:https://radio.example")],
   saved_albums: [],
   saved_albums_has_more: false,
@@ -258,7 +259,7 @@ describe("ListPage", () => {
     expect(html).toContain('aria-activedescendant="liked-0"');
     expect(html).toMatch(/id="liked-0"[^>]*aria-selected="true"/);
     expect(html).toMatch(/id="liked-1"[^>]*class="track-row now"/);
-    expect(html).toContain('class="swatch local"');
+    expect(html).toContain('class="source-icon local"');
     expect(html).toContain(">4:03<");
   });
 

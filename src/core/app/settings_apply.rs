@@ -53,6 +53,7 @@ impl App {
       (SettingValue::Cycle(_, options), SettingInput::Text(v)) if options.contains(&v.as_str()) => {
         SettingValue::Cycle(v, options)
       }
+      (SettingValue::Secret(_), SettingInput::Text(v)) => SettingValue::Secret(v),
       _ => return false,
     };
     let staged = std::mem::replace(&mut self.settings_items, vec![item]);
@@ -105,6 +106,7 @@ impl App {
     use crate::core::user_config::{parse_theme_item, ThemePreset};
 
     let mut settings_error: Option<String> = None;
+    let sources_before = self.source_settings();
     // What is actually on screen right now, put back by the reconciliation at
     // the end so an adaptive-theme fade continues from it.
     let theme_before = self.user_config.theme;
@@ -344,6 +346,36 @@ impl App {
         "behavior.auto_update_delay" => {
           if let SettingValue::String(v) = &setting.value {
             self.user_config.behavior.auto_update_delay = v.clone();
+          }
+        }
+        #[cfg(feature = "subsonic")]
+        "behavior.subsonic_url" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.subsonic_url = trimmed(v);
+          }
+        }
+        #[cfg(feature = "subsonic")]
+        "behavior.subsonic_username" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.subsonic_username = trimmed(v);
+          }
+        }
+        #[cfg(feature = "subsonic")]
+        "behavior.subsonic_password" => {
+          if let SettingValue::Secret(v) = &setting.value {
+            self.user_config.behavior.subsonic_password = trimmed(v);
+          }
+        }
+        #[cfg(feature = "local-files")]
+        "behavior.local_music_path" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.local_music_path = trimmed(v);
+          }
+        }
+        #[cfg(feature = "youtube")]
+        "behavior.ytdlp_path" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.ytdlp_path = trimmed(v);
           }
         }
         "behavior.announcement_feed_url" => {
@@ -898,6 +930,30 @@ impl App {
     if let Some(message) = settings_error {
       self.set_status_message(message, 4);
     }
+    // The active source's sidebar was loaded with the old server or folder.
+    let sources_after = self.source_settings();
+    let reload = match self.active_source {
+      Source::Subsonic => sources_after.0 != sources_before.0,
+      Source::Local => sources_after.1 != sources_before.1,
+      _ => false,
+    };
+    if reload {
+      self.load_source_sidebar(self.active_source);
+    }
+  }
+
+  /// The Subsonic login and the music folder, to tell when a save changed them.
+  #[allow(clippy::type_complexity)]
+  fn source_settings(&self) -> ([Option<String>; 3], Option<String>) {
+    let behavior = &self.user_config.behavior;
+    (
+      [
+        behavior.subsonic_url.clone(),
+        behavior.subsonic_username.clone(),
+        behavior.subsonic_password.clone(),
+      ],
+      behavior.local_music_path.clone(),
+    )
   }
 
   /// Updates the colour RGB entries when switching through the presets in themes
@@ -942,6 +998,12 @@ impl App {
       setting.value = SettingValue::Bool(preset.default_banner_gradient());
     }
   }
+}
+
+/// A text setting without its padding; empty means unset.
+#[cfg(any(feature = "subsonic", feature = "local-files", feature = "youtube"))]
+fn trimmed(value: &str) -> Option<String> {
+  Some(value.trim().to_string()).filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

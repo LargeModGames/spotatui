@@ -4,4 +4,8 @@ export type NowPlaying = { title: string, artists: Array<string>, album: string,
 /**
  * The Spotify play context (album, playlist or artist); `null` for a raw list, a queue slot or another source.
  */
-context_uri: string | null, };
+context_uri: string | null, 
+/**
+ * The delivered Qobuz stream quality, such as `FLAC 24/96`; `null` for every other source.
+ */
+quality: string | null, };

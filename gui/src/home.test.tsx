@@ -41,6 +41,7 @@ const library = (count: number): SourcePlaylists => ({
   subsonic: [],
   qobuz: [],
   youtube: [],
+  apple_music: [],
   radio: [],
   saved_albums: [],
   saved_albums_has_more: false,

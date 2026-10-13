@@ -11,6 +11,10 @@ import type { TrackInfo } from "./TrackInfo";
  */
 export type SourcePlaylists = { spotify: Array<PlaylistInfo>, local: Array<PlaylistInfo>, subsonic: Array<PlaylistInfo>, qobuz: Array<PlaylistInfo>, youtube: Array<PlaylistInfo>, 
 /**
+ * The Music app's playlists, led by an "All songs" row; empty off macOS.
+ */
+apple_music: Array<PlaylistInfo>, 
+/**
  * Stations are playable rows (`radio:<url>`), not playlists.
  */
 radio: Array<TrackInfo>, 

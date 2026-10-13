@@ -80,6 +80,10 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(45);
 /// Cap on a download invocation (a ~4 MiB audio file, but allow slow links).
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Keeps a windowed build (the GUI, the desktop app) from opening a console for yt-dlp.
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 // ---------------------------------------------------------------------------
 // YouTubePlaybackState
 // ---------------------------------------------------------------------------
@@ -260,7 +264,10 @@ impl YouTubeSource {
   /// stderr on a non-zero exit, a clear hint when the binary is missing, and
   /// kills the process on timeout (so a wedged extractor can't leak).
   async fn run(&self, args: &[&str], timeout: Duration) -> Result<String> {
-    let mut child = Command::new(&self.ytdlp)
+    let mut command = Command::new(&self.ytdlp);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = command
       .args(args)
       .stdin(Stdio::null())
       .stdout(Stdio::piped())

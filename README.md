@@ -157,7 +157,7 @@ The flake provides `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. nixpkg
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
-> **Which build has which sources?** The prebuilt Linux, macOS, and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) include the extra music sources — Local Files, Subsonic, Internet Radio, YouTube, and Qobuz, and the macOS ones also Apple Music. A plain `cargo install --locked spotatui` does not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz` (on macOS, add `apple-music`).
+> **Which build has which sources?** The prebuilt Linux, macOS, and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) and the [desktop app](#desktop-app-preview) include the extra music sources: Local Files, Subsonic, Internet Radio, YouTube, and Qobuz, and the macOS ones also Apple Music. YouTube needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended). A plain `cargo install --locked spotatui` does not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz` (on macOS, add `apple-music`).
 
 See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
 
@@ -165,7 +165,7 @@ See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Insta
 
 spotatui also comes as a desktop app: the same player in its own window, with a Spotify-style layout (Home, album and artist pages, Your Library, lyrics). It uses the same login, settings and history as the terminal app, and only one of the two runs at a time. Closing the window quits it.
 
-The preview plays **Spotify only** (Premium required). Installed from the Windows installer, the macOS app or the AppImage, it updates itself; a `.deb` or `.rpm` install updates with a new download from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest). The `behavior.disable_auto_update` and `behavior.auto_update_delay` settings, also on the app's Settings page, control the updates.
+The preview plays Spotify (Premium required), Local Files, Subsonic, Internet Radio, YouTube and Qobuz, and on macOS also Apple Music. As in the terminal app, YouTube needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended). Installed from the Windows installer, the macOS app or the AppImage, it updates itself; a `.deb` or `.rpm` install updates with a new download from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest). The `behavior.disable_auto_update` and `behavior.auto_update_delay` settings, also on the app's Settings page, control the updates.
 
 | System | File |
 |---|---|

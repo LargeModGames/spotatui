@@ -55,6 +55,7 @@ const empty: SourcePlaylists = {
   subsonic: [],
   qobuz: [],
   youtube: [],
+  apple_music: [],
   radio: [],
   saved_albums: [],
   saved_albums_has_more: false,
@@ -109,6 +110,19 @@ describe("playlistsFor", () => {
           image_url: null,
         },
       ],
+      apple_music: [
+        {
+          uri: "applemusic:library",
+          name: "All songs",
+          owner: "Music",
+          track_count: 0,
+          id: null,
+          owner_id: null,
+          collaborative: false,
+          public: null,
+          image_url: null,
+        },
+      ],
       radio: [track("Score radio", "radio:https://radio.example")],
     };
     expect(playlistsFor(playlists, "Local")).toEqual([
@@ -123,7 +137,9 @@ describe("playlistsFor", () => {
       },
     ]);
     expect(playlistsFor(playlists, "Qobuz")).toEqual([]);
-    expect(playlistsFor(playlists, "AppleMusic")).toEqual([]);
+    expect(playlistsFor(playlists, "AppleMusic")).toEqual([
+      { uri: "applemusic:library", name: "All songs", count: 0, image: null },
+    ]);
   });
 });
 

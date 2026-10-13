@@ -55,6 +55,7 @@ const item = (patch: Partial<NowPlaying> = {}): NowPlaying => ({
   shuffle: false,
   repeat: "off",
   context_uri: "spotify:album:21",
+  quality: null,
   ...patch,
 });
 

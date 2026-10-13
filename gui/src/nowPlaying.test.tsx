@@ -16,6 +16,7 @@ const song: NowPlaying = {
   shuffle: false,
   repeat: "off",
   context_uri: null,
+  quality: null,
 };
 
 const next: TrackInfo = {
@@ -61,6 +62,12 @@ describe("NowPlayingPanel", () => {
     expect(html).toContain('src="https://img/21.jpg"');
     expect(html).toContain(">Set Fire to the Rain<");
     expect(html).toContain(">Adele<");
+  });
+
+  it("shows the stream quality after the artists only when there is one", () => {
+    const html = panel({ ...song, quality: "FLAC 16/44.1" });
+    expect(html).toContain('<span class="quality"> • FLAC 16/44.1</span>');
+    expect(panel(song)).not.toContain('class="quality"');
   });
 
   it("names the album when the album is the play context", () => {

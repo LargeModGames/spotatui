@@ -3414,6 +3414,71 @@ fn set_setting_takes_a_choice_only_from_its_options() {
   assert_eq!(app.user_config.behavior.streaming_bitrate, 160);
 }
 
+#[cfg(feature = "subsonic")]
+#[test]
+fn set_setting_saves_the_subsonic_password_and_shows_it_masked() {
+  use crate::core::action::SettingInput;
+  use crate::core::app::SettingValue;
+  use crate::core::user_config::UserConfigPaths;
+
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.user_config.path_to_config = Some(UserConfigPaths {
+    config_file_path: dir.path().join("config.yml"),
+  });
+
+  let outcome = app.apply(Action::SetSetting {
+    id: "behavior.subsonic_password".to_string(),
+    value: SettingInput::Text(" hunter2 ".to_string()),
+  });
+
+  assert_eq!(outcome, ActionOutcome::SettingsSaved { saved: true });
+  assert_eq!(
+    app.user_config.behavior.subsonic_password.as_deref(),
+    Some("hunter2")
+  );
+  let row = app
+    .behavior_setting_items()
+    .into_iter()
+    .find(|item| item.id == "behavior.subsonic_password")
+    .unwrap();
+  assert!(matches!(row.value, SettingValue::Secret(_)));
+  assert_eq!(row.value.display(), "••••••••");
+}
+
+#[cfg(feature = "subsonic")]
+#[test]
+fn a_new_subsonic_server_reloads_the_subsonic_sidebar_only_while_it_is_shown() {
+  use crate::core::action::SettingInput;
+  use crate::core::source::Source;
+  use crate::core::user_config::UserConfigPaths;
+
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, rx) = app_with_channel();
+  app.user_config.path_to_config = Some(UserConfigPaths {
+    config_file_path: dir.path().join("config.yml"),
+  });
+  let server = |url: &str| Action::SetSetting {
+    id: "behavior.subsonic_url".to_string(),
+    value: SettingInput::Text(url.to_string()),
+  };
+  let reloads = |rx: &std::sync::mpsc::Receiver<IoEvent>| {
+    rx.try_iter()
+      .filter(|event| matches!(event, IoEvent::GetSubsonicPlaylists))
+      .count()
+  };
+
+  app.apply(server("http://one"));
+  assert_eq!(reloads(&rx), 0);
+
+  app.set_active_source(Source::Subsonic);
+  while rx.try_recv().is_ok() {}
+  app.apply(server("http://two"));
+  assert_eq!(reloads(&rx), 1);
+  app.apply(server("http://two"));
+  assert_eq!(reloads(&rx), 0);
+}
+
 #[test]
 fn cycle_visualizer_style_steps_the_configured_style() {
   let (mut app, _rx) = app_with_channel();

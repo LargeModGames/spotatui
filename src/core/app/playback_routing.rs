@@ -588,6 +588,22 @@ impl App {
     None
   }
 
+  /// The delivered Qobuz stream quality, worded like the TUI playbar: `FLAC 24/96`.
+  fn qobuz_quality_label(&self) -> Option<String> {
+    #[cfg(feature = "qobuz")]
+    {
+      self
+        .qobuz_playback
+        .as_ref()
+        .and_then(|qobuz| qobuz.quality)
+        .map(|quality| quality.label())
+    }
+    #[cfg(not(feature = "qobuz"))]
+    {
+      None
+    }
+  }
+
   /// Bump the Playback and Queue revisions when what a frontend shows of them
   /// changed; the playback position is not part of it.
   pub(crate) fn note_display_changes(&mut self) {
@@ -604,7 +620,12 @@ impl App {
       .current_playback_context
       .as_ref()
       .map(|ctx| ctx.device.name.clone());
-    let view = (snapshot, self.desired_volume(), device, liked);
+    let quality = snapshot
+      .as_ref()
+      .and_then(|snapshot| snapshot.item_uri.as_deref())
+      .filter(|uri| uri.starts_with("qobuz:"))
+      .and_then(|_| self.qobuz_quality_label());
+    let view = (snapshot, self.desired_volume(), device, liked, quality);
     if view != self.playback_view {
       self.playback_view = view;
       self.display_revisions.bump(DisplayDomain::Playback);

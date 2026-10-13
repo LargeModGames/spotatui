@@ -47,7 +47,12 @@ export function NowPlayingPanel({
           <div className="now-title">
             <div className="now-text">
               <h3 title={item.title}>{item.title}</h3>
-              <p>{item.artists.join(", ")}</p>
+              <p className="artist-line">
+                <span>{item.artists.join(", ")}</span>
+                {item.quality && (
+                  <span className="quality">{` • ${item.quality}`}</span>
+                )}
+              </p>
             </div>
             {sourceOf(item.uri) === "Spotify" && (
               <button

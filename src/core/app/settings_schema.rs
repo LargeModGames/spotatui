@@ -60,6 +60,9 @@ pub enum SettingValue {
   Preset(String), // Theme preset name - cycles through available presets
   /// A value cycling through a fixed list of options: (current, all options).
   Cycle(String, &'static [&'static str]),
+  /// A password: shown masked, edited from empty.
+  #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
+  Secret(String),
 }
 
 const STARTUP_ROUTE_SETTING_OPTIONS: &[&str] = &[
@@ -158,6 +161,8 @@ impl SettingValue {
       SettingValue::Key(v) => v.clone(),
       SettingValue::Preset(v) => v.clone(),
       SettingValue::Cycle(v, _) => v.clone(),
+      SettingValue::Secret(v) if v.is_empty() => String::new(),
+      SettingValue::Secret(_) => "••••••••".to_string(),
     }
   }
 }
@@ -217,6 +222,76 @@ impl App {
             crate::core::user_config::qobuz_quality_label(self.user_config.behavior.qobuz_quality)
               .to_string(),
             crate::core::user_config::QOBUZ_QUALITY_LABELS,
+          ),
+        },
+        #[cfg(feature = "subsonic")]
+        SettingItem {
+          id: "behavior.subsonic_url".to_string(),
+          name: "Subsonic Server".to_string(),
+          description: "Address of your Subsonic or Navidrome server".to_string(),
+          value: SettingValue::String(
+            self
+              .user_config
+              .behavior
+              .subsonic_url
+              .clone()
+              .unwrap_or_default(),
+          ),
+        },
+        #[cfg(feature = "subsonic")]
+        SettingItem {
+          id: "behavior.subsonic_username".to_string(),
+          name: "Subsonic Username".to_string(),
+          description: "Your user name on the Subsonic server".to_string(),
+          value: SettingValue::String(
+            self
+              .user_config
+              .behavior
+              .subsonic_username
+              .clone()
+              .unwrap_or_default(),
+          ),
+        },
+        #[cfg(feature = "subsonic")]
+        SettingItem {
+          id: "behavior.subsonic_password".to_string(),
+          name: "Subsonic Password".to_string(),
+          description: "Saved in config.yml; SPOTATUI_SUBSONIC_PASSWORD overrides it".to_string(),
+          value: SettingValue::Secret(
+            self
+              .user_config
+              .behavior
+              .subsonic_password
+              .clone()
+              .unwrap_or_default(),
+          ),
+        },
+        #[cfg(feature = "local-files")]
+        SettingItem {
+          id: "behavior.local_music_path".to_string(),
+          name: "Music Folder".to_string(),
+          description: "The folder Local Files reads".to_string(),
+          value: SettingValue::String(
+            self
+              .user_config
+              .behavior
+              .local_music_path
+              .clone()
+              .unwrap_or_default(),
+          ),
+        },
+        #[cfg(feature = "youtube")]
+        SettingItem {
+          id: "behavior.ytdlp_path".to_string(),
+          name: "yt-dlp Path".to_string(),
+          description: "The yt-dlp program YouTube runs; empty looks it up on PATH".to_string(),
+          value: SettingValue::String(
+            self
+              .user_config
+              .behavior
+              .ytdlp_path
+              .clone()
+              .unwrap_or_default(),
           ),
         },
         SettingItem {

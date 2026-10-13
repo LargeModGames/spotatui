@@ -42,6 +42,7 @@ const payload: SourcePlaylists = {
   subsonic: [],
   qobuz: [],
   youtube: [playlist("youtube:playlist:yt", "Watch later")],
+  apple_music: [],
   radio: [],
   saved_albums: [],
   saved_albums_has_more: false,

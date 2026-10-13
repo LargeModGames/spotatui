@@ -240,7 +240,7 @@ impl Default for App {
       pending_plugin_commands: Vec::new(),
       plugin_data_generations: PluginDataGenerations::default(),
       display_revisions: DisplayRevisions::default(),
-      playback_view: (None, 0, None, false),
+      playback_view: (None, 0, None, false, None),
       queue_view: Default::default(),
       plugin_screens: std::collections::BTreeMap::new(),
       pending_plugin_screen_keys: Vec::new(),

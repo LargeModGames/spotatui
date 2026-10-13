@@ -37,7 +37,7 @@ describe("Session", () => {
     expect(html.indexOf("Rolling in the Deep")).toBeLessThan(
       html.lastIndexOf("Firework"),
     );
-    expect(html).toContain('class="swatch local"');
+    expect(html).toContain('class="source-icon local"');
     expect(html).toContain("SPOTIFY → LOCAL");
     expect(html).toContain("2 songs · 2 sources");
   });

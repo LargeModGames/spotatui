@@ -20,6 +20,7 @@ const song: NowPlaying = {
   shuffle: false,
   repeat: "off",
   context_uri: null,
+  quality: null,
 };
 
 /** The opening tag of the element with this aria-label. */
@@ -93,6 +94,19 @@ describe("PlayerBar", () => {
     const html = player({ ...song, is_live: true, duration_ms: 0 });
     expect(html).toContain(">1:40<");
     expect(html).toContain(">live<");
+  });
+
+  it("shows the stream quality after the artists only when there is one", () => {
+    const qobuz = player({
+      ...song,
+      uri: "qobuz:track:1",
+      quality: "FLAC 24/96",
+    });
+    expect(qobuz).toContain(
+      '<span>Adele</span><span class="quality"> • FLAC 24/96</span>',
+    );
+    expect(player(song)).not.toContain(" • ");
+    expect(player(song)).not.toContain('class="quality"');
   });
 
   it("shows nothing playing without an item", () => {

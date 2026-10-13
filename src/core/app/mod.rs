@@ -630,12 +630,13 @@ pub struct App {
   /// only the scripting engine reads them.
   pub plugin_data_generations: PluginDataGenerations,
   display_revisions: DisplayRevisions,
-  /// The playback view the Playback revision last counted: snapshot without position, volume, device, liked.
+  /// The playback view the Playback revision last counted: snapshot without position, volume, device, liked, Qobuz quality.
   playback_view: (
     Option<crate::infra::media_metadata::PlaybackSnapshot>,
     u32,
     Option<String>,
     bool,
+    Option<String>,
   ),
   /// The queue view the Queue revision last counted: the Spotify mirror, the native queue, the playing slot.
   queue_view: (Option<QueueState>, Vec<TrackInfo>, Option<TrackInfo>),

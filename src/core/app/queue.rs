@@ -59,6 +59,10 @@ impl App {
     }
     let name = track.name.clone();
     self.native_queue.push(track);
+    info!(
+      "queued {uri} at position {} of the native queue",
+      self.native_queue.len()
+    );
     self.set_status_message(format!("Queued: {name}"), 3);
     // Keep the Spotify mirror queue ([`Self::queue`]) current while a native
     // Spotify context is playing: it is the snapshot source for the resume

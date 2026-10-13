@@ -154,7 +154,7 @@ pub(crate) enum ServerMessage {
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct SettingRow {
   id: String,
-  /// `playback`, `streaming`, `integrations`, `library` or `updates`.
+  /// `playback`, `streaming`, `integrations`, `library`, `sources` or `updates`.
   group: &'static str,
   name: String,
   description: String,
@@ -179,6 +179,10 @@ pub(crate) enum SettingRowValue {
     value: String,
     options: Vec<String>,
   },
+  /// A password, set with a `Text` input; the page never gets it back.
+  Secret {
+    set: bool,
+  },
 }
 
 /// The Behavior rows the page offers: (id, group, a description for the desktop app).
@@ -200,6 +204,12 @@ const GUI_SETTINGS: &[(&str, &str, Option<&str>)] = &[
   ("behavior.default_sort_playlist_tracks", "library", None),
   ("behavior.default_sort_saved_albums", "library", None),
   ("behavior.default_sort_saved_artists", "library", None),
+  ("behavior.subsonic_url", "sources", None),
+  ("behavior.subsonic_username", "sources", None),
+  ("behavior.subsonic_password", "sources", None),
+  ("behavior.local_music_path", "sources", None),
+  ("behavior.ytdlp_path", "sources", None),
+  ("behavior.qobuz_quality", "sources", None),
   (
     "behavior.disable_auto_update",
     "updates",
@@ -247,6 +257,8 @@ pub(crate) struct NowPlaying {
   repeat: String,
   /// The Spotify play context (album, playlist or artist); `null` for a raw list, a queue slot or another source.
   context_uri: Option<String>,
+  /// The delivered Qobuz stream quality, such as `FLAC 24/96`; `null` for every other source.
+  quality: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -325,6 +337,8 @@ pub(crate) struct SourcePlaylists {
   subsonic: Vec<PlaylistInfo>,
   qobuz: Vec<PlaylistInfo>,
   youtube: Vec<PlaylistInfo>,
+  /// The Music app's playlists, led by an "All songs" row; empty off macOS.
+  apple_music: Vec<PlaylistInfo>,
   /// Stations are playable rows (`radio:<url>`), not playlists.
   radio: Vec<TrackInfo>,
   /// Spotify's saved albums cached so far; `OpenLibrary(Albums)` fetches them.
@@ -835,6 +849,9 @@ fn settings(app: &App) -> Vec<SettingRow> {
           value: value.clone(),
           options: options.iter().map(|option| option.to_string()).collect(),
         },
+        SettingValue::Secret(value) => SettingRowValue::Secret {
+          set: !value.is_empty(),
+        },
         SettingValue::Color(_) | SettingValue::Key(_) | SettingValue::Preset(_) => return None,
       };
       Some(SettingRow {
@@ -1072,6 +1089,7 @@ fn playlists(app: &App) -> SourcePlaylists {
     subsonic: app.subsonic_playlists().clone(),
     qobuz: app.qobuz_playlists().clone(),
     youtube: app.youtube_playlists().clone(),
+    apple_music: app.apple_music_playlists().to_vec(),
     radio: app.radio_stations().clone(),
     saved_albums: saved_albums(app),
     saved_albums_has_more: last_page_has_next(&app.library().saved_albums.pages),
@@ -1138,7 +1156,7 @@ fn saved_albums(app: &App) -> Vec<AlbumInfo> {
 }
 
 fn playback(app: &App) -> PlaybackPayload {
-  let (snapshot, volume, device, liked) = app.playback_view();
+  let (snapshot, volume, device, liked, quality) = app.playback_view();
   PlaybackPayload {
     item: snapshot.as_ref().map(|snapshot| NowPlaying {
       title: snapshot.metadata.title.clone(),
@@ -1160,6 +1178,7 @@ fn playback(app: &App) -> PlaybackPayload {
       } else {
         snapshot.context_uri.clone()
       },
+      quality: quality.clone(),
     }),
     volume: *volume,
     device: device.clone(),

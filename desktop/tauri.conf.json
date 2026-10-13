@@ -29,8 +29,8 @@
     "active": true,
     "targets": ["nsis", "app", "dmg", "deb", "rpm", "appimage"],
     "category": "Music",
-    "shortDescription": "Spotify client",
-    "longDescription": "spotatui desktop: a Spotify client with native streaming.",
+    "shortDescription": "Music player for Spotify and more",
+    "longDescription": "spotatui desktop: a music player for Spotify with native streaming, plus local files, Subsonic, internet radio, YouTube and Qobuz.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

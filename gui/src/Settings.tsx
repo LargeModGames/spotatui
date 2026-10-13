@@ -137,6 +137,17 @@ export function SettingControl({
           ))}
         </select>
       );
+    case "secret":
+      return (
+        <SecretField
+          set={value.set}
+          labels={labels}
+          onCommit={(draft) => {
+            const input = commitValue(row, draft);
+            if (input) send(setSetting(row.id, input));
+          }}
+        />
+      );
     default:
       return (
         <Field
@@ -188,6 +199,43 @@ function Field({
           // A second Escape leaves the field.
           event.preventDefault();
           setDraft(null);
+        }
+      }}
+    />
+  );
+}
+
+/** A password field: it shows only whether a password is saved and empties after each commit. */
+function SecretField({
+  set,
+  labels,
+  onCommit,
+}: {
+  set: boolean;
+  labels: Record<string, string>;
+  onCommit: (draft: string) => void;
+}) {
+  // Uncontrolled, so the typed password never lands in a value attribute.
+  const commit = (input: HTMLInputElement) => {
+    onCommit(input.value);
+    input.value = "";
+  };
+  return (
+    <input
+      className="setting-field text"
+      type="password"
+      autoComplete="new-password"
+      spellCheck={false}
+      placeholder={set ? "Saved" : "Not set"}
+      {...labels}
+      onBlur={(event) => commit(event.currentTarget)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit(event.currentTarget);
+        } else if (event.key === "Escape" && event.currentTarget.value !== "") {
+          event.preventDefault();
+          event.currentTarget.value = "";
         }
       }}
     />
