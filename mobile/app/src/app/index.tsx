@@ -1,11 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { Button, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Button, FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Connection } from '@gui/connection';
 import { showsOnboarding } from '@gui/connection';
 import type { OnboardingQuestion } from '@gui/bindings/OnboardingQuestion';
 import type { OnboardingReply } from '@gui/bindings/OnboardingReply';
+import { playRequest } from '@gui/libraryModel';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -51,8 +52,13 @@ function Session({ connection }: { connection: Connection }) {
   }
   const playing = state.channels.playback?.payload.item;
   const status = state.channels.status?.payload.message;
+  const tracks = state.channels.search?.payload.tracks ?? [];
+  const play = (index: number) => {
+    const action = playRequest(tracks, index);
+    if (action) connection.send({ type: 'action', action });
+  };
   return (
-    <View style={styles.column}>
+    <View style={[styles.column, styles.fill]}>
       <ThemedText type="small">spotatui {state.version}</ThemedText>
       <ThemedText type="subtitle">{playing?.title ?? 'Nothing is playing'}</ThemedText>
       {playing && <ThemedText>{playing.artists.join(', ')}</ThemedText>}
@@ -61,6 +67,27 @@ function Session({ connection }: { connection: Connection }) {
         onPress={() => connection.send({ type: 'action', action: 'TogglePlayback' })}
       />
       {status && <ThemedText type="small">{status}</ThemedText>}
+      <TextInput
+        placeholder="Search songs"
+        placeholderTextColor="#888"
+        returnKeyType="search"
+        onSubmitEditing={(event) =>
+          connection.send({ type: 'action', action: { SearchActiveSource: event.nativeEvent.text } })
+        }
+        style={styles.input}
+      />
+      <FlatList
+        data={tracks}
+        keyExtractor={(track, index) => `${index}-${track.uri ?? track.name}`}
+        renderItem={({ item, index }) => (
+          <Pressable onPress={() => play(index)} style={styles.row}>
+            <ThemedText numberOfLines={1}>{item.name}</ThemedText>
+            <ThemedText type="small" numberOfLines={1}>
+              {item.artists.join(', ')}
+            </ThemedText>
+          </Pressable>
+        )}
+      />
     </View>
   );
 }
@@ -101,5 +128,7 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   safeArea: { flex: 1, padding: Spacing.four },
   column: { gap: Spacing.three },
+  fill: { flex: 1 },
+  row: { paddingVertical: Spacing.two },
   input: { borderWidth: 1, borderColor: '#888', padding: Spacing.two, color: '#888' },
 });
