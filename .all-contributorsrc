@@ -544,6 +544,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "Battlelamb",
+      "name": "Battlelamb",
+      "avatar_url": "https://avatars.githubusercontent.com/u/12995996?v=4",
+      "profile": "https://github.com/Battlelamb",
+      "contributions": [
+        "doc"
+      ]
     }
   ],
   "contributorsPerLine": 7,
