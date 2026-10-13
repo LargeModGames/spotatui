@@ -53,6 +53,11 @@ fn main() -> anyhow::Result<()> {
   if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
   }
+  // GTK takes the Wayland app ID from the program name: in a Flatpak it must match the .desktop file.
+  #[cfg(target_os = "linux")]
+  if let Ok(id) = std::env::var("FLATPAK_ID") {
+    glib::set_prgname(Some(id.as_str()));
+  }
   let runtime = tokio::runtime::Builder::new_multi_thread()
     .enable_all()
     .build()?;
@@ -65,10 +70,12 @@ fn main() -> anyhow::Result<()> {
   let (status, status_rx) = tokio::sync::watch::channel(UpdateStatus::Idle);
   let (requests, request_rx) = tokio::sync::mpsc::unbounded_channel();
   let pending = Arc::new(Pending::default());
-  let updates = UpdateLink {
+  // Flathub updates a Flatpak: the app must not update itself there.
+  let self_updates = std::env::var_os("FLATPAK_ID").is_none();
+  let updates = self_updates.then(|| UpdateLink {
     status: status_rx,
     requests,
-  };
+  });
   let worker_pending = Arc::clone(&pending);
   let app = tauri::Builder::default()
     // First plugin: a second launch focuses this window and exits before it boots.
@@ -82,7 +89,9 @@ fn main() -> anyhow::Result<()> {
     .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(move |app| {
       let app = app.handle().clone();
-      tauri::async_runtime::spawn(updater::serve(app.clone(), status, request_rx, pending));
+      if self_updates {
+        tauri::async_runtime::spawn(updater::serve(app.clone(), status, request_rx, pending));
+      }
       // `ask_page` blocks its thread, so the app runs on a thread of its own, not a runtime worker.
       std::thread::Builder::new()
         .name("spotatui".into())
@@ -126,7 +135,7 @@ fn worker(
   life: Arc<Life>,
   closed: tokio::sync::watch::Receiver<bool>,
   done: mpsc::Sender<()>,
-  updates: UpdateLink,
+  updates: Option<UpdateLink>,
   pending: Arc<Pending>,
 ) {
   let _guard = ExitOnPanic(app.clone());
@@ -138,7 +147,7 @@ fn worker(
     show: Box::new(move |url| show_main(&show_app, url)),
     serving: Box::new(move || serving_life.serving.store(true, SeqCst)),
     closed,
-    updates: Some(updates),
+    updates,
     window: Some(Box::new(move |mode| set_window(&window_app, mode, &restore))),
   };
   let result = runtime.block_on(spotatui::run_gui_hosted(host));

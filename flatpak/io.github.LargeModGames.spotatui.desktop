@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=spotatui
+Comment=Spotify client with native streaming
+Exec=spotatui-desktop
+Icon=io.github.LargeModGames.spotatui
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;spotify;player;streaming;
+StartupNotify=true

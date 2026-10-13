@@ -8,6 +8,8 @@
 
 - **The desktop app catches up with the terminal app**: in Your Library you can create a playlist, delete one of yours or remove another from your library (right-click a playlist), open your playlist folders as a tree, sort your saved albums and artists, and open your podcasts and the full Recently played list. A playlist or Liked Songs has a filter field and a Sort by choice, and a song row in a playlist you own has Remove from this playlist. Podcasts have their own search tab and a show page with the episodes, a Follow button and copy links; the queue shows episodes too. An album page can remove the album from your library and copy its link, a song row's menu has Go to song radio and Copy album link, and the Settings page has the three default sorts. `T` or the new player bar button opens a mini player: in the desktop app the window shrinks and stays on top until you go back.
 
+- **Flatpak files for the desktop app**: `flatpak/` holds the desktop entry, the AppStream metainfo and a screenshot for a Flathub listing. In a Flatpak the desktop app does not update itself, because Flathub updates it.
+
 ### Changed
 
 - **`behavior.disable_auto_update` stops the desktop app's update check too**: before, the desktop app still asked GitHub for a new release at launch and every 6 hours and only skipped the download. Now those timed checks stop and Check for updates on the Settings page looks on demand, as the terminal app already skipped its check at start. Turning auto-update back on checks at once.

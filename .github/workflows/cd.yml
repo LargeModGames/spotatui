@@ -776,3 +776,64 @@ jobs:
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Update spotatui to ${{ steps.version.outputs.version }}"
           GIT_SSH_COMMAND='ssh -i ~/.ssh/homebrew_tap -o IdentitiesOnly=yes' git push
+
+  # Opens the update PR in the Flathub repo; Flathub test-builds it and publishes on merge.
+  publish-flathub:
+    name: Publish to Flathub
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-') }}
+    env:
+      APP_ID: io.github.LargeModGames.spotatui
+      FLATHUB_REPO: flathub/io.github.LargeModGames.spotatui
+      GH_TOKEN: ${{ secrets.FLATHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+        with:
+          path: spotatui
+
+      - name: Clone the Flathub repo
+        id: clone
+        run: |
+          if ! gh repo clone "$FLATHUB_REPO" flathub; then
+            echo "::notice::No access to $FLATHUB_REPO (not on Flathub yet, or FLATHUB_TOKEN unset): skipped."
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install the source generators
+        if: steps.clone.outputs.ready == 'true'
+        run: |
+          git clone -q https://github.com/flatpak/flatpak-builder-tools.git tools
+          git -C tools checkout -q 74697c75b630d7330e77250fc13cb5ea688d9479
+          python3 -m venv venv
+          venv/bin/pip install -q aiohttp tomlkit ./tools/node
+
+      - name: Update the manifest and the vendored sources
+        if: steps.clone.outputs.ready == 'true'
+        working-directory: flathub
+        run: |
+          ../venv/bin/python ../tools/cargo/flatpak-cargo-generator.py ../spotatui/desktop/Cargo.lock -o cargo-sources.json
+          ../venv/bin/flatpak-node-generator npm ../spotatui/gui/package-lock.json -o node-sources.json
+          # Playwright's browsers come with the @playwright/test dev dependency; the build runs only `vite build`.
+          jq '[.[] | select(((.dest // "") | test("ms-playwright")) | not)]' node-sources.json > node-sources.tmp
+          mv node-sources.tmp node-sources.json
+          export COMMIT=$(git -C ../spotatui rev-parse HEAD)
+          yq -i '(.modules[].sources[]? | select(.type == "git" and .url == "https://github.com/LargeModGames/spotatui.git")) |= (.tag = strenv(TAG) | .commit = strenv(COMMIT))' "$APP_ID.yml"
+          yq -e '[.modules[].sources[]? | select(.type == "git" and .tag == strenv(TAG))] | length == 1' "$APP_ID.yml" > /dev/null
+
+      - name: Open the update PR
+        if: steps.clone.outputs.ready == 'true'
+        working-directory: flathub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "update-$TAG"
+          git add -A
+          git commit -q -m "Update to $TAG"
+          git push -q origin "update-$TAG"
+          gh pr create --repo "$FLATHUB_REPO" --head "update-$TAG" \
+            --title "Update to $TAG" \
+            --body "Release notes: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG"

@@ -10,6 +10,7 @@ The workflow runs when you push a tag.
    - Set the same version in `desktop/Cargo.toml` (the desktop test `version_matches_root` fails otherwise).
    - Refresh the desktop lock: `cargo metadata --manifest-path desktop/Cargo.toml --format-version 1 > $null` (in bash, `> /dev/null`). Commit `Cargo.lock` and `desktop/Cargo.lock` together.
 2. Update the "Unreleased" header for the new version in `CHANGELOG.md` (`### Added/Fixed/Changed` as appropriate).
+   - Add a `<release version="..." date="..."/>` line at the top of `<releases>` in `flatpak/io.github.LargeModGames.spotatui.metainfo.xml`.
 3. Commit and push your changes.
 4. Create an annotated tag with a message (the tag message is shown on the GitHub release page):
    - `git tag -a v0.7.0 -m "Release v0.7.0"`
@@ -26,6 +27,16 @@ The workflow runs when you push a tag.
 - The installers are unsigned: the release body carries the SmartScreen and Gatekeeper steps.
 - A `desktop/Cargo.lock is stale` warning on a run means step 1's refresh was skipped; the build still used a lock cargo updated on the runner.
 - The updater bundles are built in the `desktop` job only (`--config '{"bundle":{"createUpdaterArtifacts":true}}'`), so local and PR builds need no signing key.
+
+### Flathub
+
+The Flatpak manifest lives in [flathub/io.github.LargeModGames.spotatui](https://github.com/flathub/io.github.LargeModGames.spotatui), not here. Flathub builds offline, so each stable release needs a PR there. The `publish-flathub` job in `cd.yml` opens it with the `FLATHUB_TOKEN` secret (a token with write access to that repo); Flathub test-builds the PR, and you merge it once the build passes. Without access the job skips with a notice. It expects `io.github.LargeModGames.spotatui.yml` with one `git` source for this repo, and `cargo-sources.json` and `node-sources.json`, at the root of that repo. By hand, the job's steps are:
+
+1. Set `tag` and `commit` of the `git` source in the manifest to the new tag.
+2. Regenerate the vendored sources from that tag with [flatpak-builder-tools](https://github.com/flatpak/flatpak-builder-tools): `flatpak-cargo-generator desktop/Cargo.lock -o cargo-sources.json` and `flatpak-node-generator npm gui/package-lock.json -o node-sources.json`. Then drop the Playwright browsers that the node generator adds for the `@playwright/test` dev dependency (several hundred MB; the build runs only `vite build`): `jq '[.[] | select(((.dest // "") | test("ms-playwright")) | not)]' node-sources.json > tmp.json && mv tmp.json node-sources.json`.
+3. Open the PR. Flathub's bot builds it; merge once the build passes.
+
+A Flatpak app does not update itself: the desktop app skips its updater when `FLATPAK_ID` is set.
 
 ### Updater signing key (one-time setup)
 

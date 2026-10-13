@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.LargeModGames.spotatui</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>spotatui</name>
+  <summary>Spotify client with native streaming</summary>
+  <developer id="io.github.LargeModGames">
+    <name>LargeModGames</name>
+  </developer>
+  <description>
+    <p>
+      spotatui plays Spotify in its own window. It streams the audio itself, so the official
+      Spotify app is not necessary.
+    </p>
+    <ul>
+      <li>Browse your library, playlists, albums and artists, and search the catalog</li>
+      <li>Control the queue, shuffle, repeat and volume</li>
+      <li>Read the lyrics of the current song</li>
+      <li>Shrink the window to a mini player that stays on top</li>
+      <li>Control playback from your desktop through MPRIS</li>
+    </ul>
+    <p>A Spotify Premium account is necessary.</p>
+  </description>
+  <launchable type="desktop-id">io.github.LargeModGames.spotatui.desktop</launchable>
+  <url type="homepage">https://github.com/LargeModGames/spotatui</url>
+  <url type="bugtracker">https://github.com/LargeModGames/spotatui/issues</url>
+  <url type="vcs-browser">https://github.com/LargeModGames/spotatui</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/LargeModGames/spotatui/v0.46.0/flatpak/screenshots/main.png</image>
+      <caption>The main window</caption>
+    </screenshot>
+  </screenshots>
+  <branding>
+    <color type="primary" scheme_preference="light">#1db954</color>
+    <color type="primary" scheme_preference="dark">#121212</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.45.0" date="2026-10-12"/>
+  </releases>
+</component>

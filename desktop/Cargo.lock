@@ -5652,6 +5652,7 @@ name = "spotatui-desktop"
 version = "0.45.0"
 dependencies = [
  "anyhow",
+ "glib",
  "log",
  "serde_json",
  "spotatui",

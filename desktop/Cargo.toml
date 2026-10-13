@@ -32,6 +32,9 @@ spotatui = { path = "..", default-features = false, features = [
   "windows-media",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = "0.18"
+
 # Profiles do not inherit from the root package.
 [profile.release]
 codegen-units = 1
