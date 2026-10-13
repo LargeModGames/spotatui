@@ -1681,13 +1681,14 @@ impl LibraryNetwork for Network {
 
     match spotify_get_typed_for::<Page<rspotify::model::SavedAlbum>>("me/albums", &query).await {
       Ok(saved_albums) => {
+        let first = offset.unwrap_or(0) == 0;
         let mut app = self.app.lock().await;
-        if !saved_albums.items.is_empty() {
+        if first || !saved_albums.items.is_empty() {
           let domain_page = crate::infra::network::mapping::map_page(
             &saved_albums,
             crate::infra::network::mapping::saved_album_info,
           );
-          app.store_saved_albums_page(domain_page);
+          app.store_saved_albums_page(domain_page, first);
         }
         // Bump even on an empty page: completion is the signal plugin data
         // requests wait on, and an empty library never writes a page.
@@ -1810,11 +1811,12 @@ impl LibraryNetwork for Network {
 
     match spotify_get_typed_for::<Page<rspotify::model::show::Show>>("me/shows", &query).await {
       Ok(saved_shows) => {
+        let first = offset.unwrap_or(0) == 0;
         let mut app = self.app.lock().await;
-        if !saved_shows.items.is_empty() {
+        if first || !saved_shows.items.is_empty() {
           let domain_page =
             crate::infra::network::mapping::map_page(&saved_shows, |s| ShowInfo::from(&s.show));
-          app.store_saved_shows_page(domain_page);
+          app.store_saved_shows_page(domain_page, first);
         }
         // Bump even on an empty page (see saved-albums note above).
         app

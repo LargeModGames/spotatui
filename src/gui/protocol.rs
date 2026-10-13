@@ -1829,8 +1829,8 @@ mod tests {
       ..Paged::default()
     };
 
-    app.store_saved_albums_page(page(1, "Second"));
-    app.store_saved_albums_page(page(0, "First"));
+    app.store_saved_albums_page(page(1, "Second"), false);
+    app.store_saved_albums_page(page(0, "First"), false);
 
     let albums = &pushed(&diff(&before, &app), "library")["payload"]["saved_albums"];
     assert_eq!(albums[0]["name"], "First");
@@ -1844,22 +1844,25 @@ mod tests {
     let before = app.display_revisions();
 
     // A complete saved-albums page for a one-track album.
-    app.store_saved_albums_page(Paged {
-      items: vec![SavedAlbumInfo {
-        album: AlbumInfo {
-          id: Some("21".to_string()),
-          name: "21".to_string(),
-          tracks: liked_page(0, 1, 1, false).items,
-          total_tracks: Some(1),
-          ..AlbumInfo::default()
-        },
-        added_at: String::new(),
-      }],
-      offset: 0,
-      limit: 1,
-      total: 1,
-      ..Paged::default()
-    });
+    app.store_saved_albums_page(
+      Paged {
+        items: vec![SavedAlbumInfo {
+          album: AlbumInfo {
+            id: Some("21".to_string()),
+            name: "21".to_string(),
+            tracks: liked_page(0, 1, 1, false).items,
+            total_tracks: Some(1),
+            ..AlbumInfo::default()
+          },
+          added_at: String::new(),
+        }],
+        offset: 0,
+        limit: 1,
+        total: 1,
+        ..Paged::default()
+      },
+      true,
+    );
 
     // Opening the cached album dispatches no save check.
     app.open_saved_album("21".to_string());
@@ -1975,10 +1978,13 @@ mod tests {
       name: id.to_string(),
       ..ShowInfo::default()
     };
-    app.store_saved_shows_page(Paged {
-      items: vec![show("a"), show("b")],
-      ..Paged::default()
-    });
+    app.store_saved_shows_page(
+      Paged {
+        items: vec![show("a"), show("b")],
+        ..Paged::default()
+      },
+      true,
+    );
     let library = &pushed(&resync(&app), "library")["payload"];
     assert_eq!(library["saved_shows"].as_array().unwrap().len(), 2);
     assert!(app.saved_show_ids_set().contains("a"));
