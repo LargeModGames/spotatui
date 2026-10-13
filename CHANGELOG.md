@@ -14,7 +14,7 @@
 
 - **Playbar navigation follows its configured position**: when the playbar was set to `top`, you still had to press Down to access it, even though the layout placed it at the top. Navigating to and from the playbar now follows its actual position.
 
-- **Clearing a playlist search keeps your edits**: a remove marked the playlist's loaded pages out of date but never refreshed the visible table, so clearing a search rebuilt it from those pages and the removed track came back with the rows from before the search. When the loaded pages are out of date, clearing the filter now reloads the playlist from its first page instead ([#751](https://github.com/LargeModGames/spotatui/pull/751)).
+- **Clearing a playlist search keeps your edits**: a remove marked the playlist's loaded pages out of date but never refreshed the visible table, so clearing a search rebuilt it from those pages and the removed track came back with the rows from before the search. When the loaded pages are out of date, clearing the filter now reloads the playlist from its first page instead ([#785](https://github.com/LargeModGames/spotatui/issues/785)).
 
 ## [v0.45.0] 2026-10-12
 
