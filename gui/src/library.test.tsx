@@ -1,14 +1,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import type { Action } from "./bindings/Action";
 import type { LikedSongs } from "./bindings/LikedSongs";
 import type { PlaylistSyncPayload } from "./bindings/PlaylistSyncPayload";
 import type { SourcePayload } from "./bindings/SourcePayload";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { TrackTablePayload } from "./bindings/TrackTablePayload";
-import { LibraryPanel } from "./LibraryPanel";
+import { LibraryPanel, SpotifyLogin } from "./LibraryPanel";
 import { ListPage } from "./ListPage";
 import type { View } from "./nav";
+import { byName } from "./testTree";
 import { TrackTable } from "./TrackTable";
 
 const track = (name: string, uri: string): TrackInfo => ({
@@ -107,6 +109,7 @@ const panel = (
   source: SourcePayload | null,
   view: View = { page: "home" },
   payload: PlaylistSyncPayload | null = null,
+  loggedOut = false,
 ) =>
   renderToStaticMarkup(
     <LibraryPanel
@@ -114,6 +117,7 @@ const panel = (
       artists={null}
       source={source}
       sync={payload}
+      loggedOut={loggedOut}
       view={view}
       open={() => {}}
       send={() => {}}
@@ -154,6 +158,29 @@ describe("LibraryPanel", () => {
     expect(other).toContain(">Playlists<");
     expect(other).not.toContain(">Albums<");
     expect(other).not.toContain(">Artists<");
+  });
+
+  it("offers the Spotify login only while Spotify is active and logged out", () => {
+    const spotifyOnly: SourcePayload = {
+      active: "Spotify",
+      compiled: ["Spotify"],
+    };
+    const home: View = { page: "home" };
+    expect(panel(spotifyOnly, home, null, true)).toContain("Log in to Spotify");
+    expect(panel(spotifyOnly, home, null, false)).not.toContain(
+      "Log in to Spotify",
+    );
+    expect(panel(local, home, null, true)).not.toContain("Log in to Spotify");
+  });
+
+  it("the login button asks the server to select Spotify", () => {
+    const actions: Action[] = [];
+    const login = byName(
+      <SpotifyLogin send={(action) => actions.push(action)} />,
+      "Log in to Spotify",
+    );
+    (login.props.onClick as () => void)();
+    expect(actions).toEqual([{ SelectSource: "Spotify" }]);
   });
 
   it("selects the active source when several sources are compiled", () => {

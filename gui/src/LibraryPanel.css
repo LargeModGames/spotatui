@@ -65,6 +65,33 @@
   background: var(--hover);
 }
 
+.library-login {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.library-login p {
+  margin: 0;
+  color: var(--sub);
+}
+
+.library-login button {
+  height: 32px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 16px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.library-login button:hover {
+  filter: brightness(1.08);
+}
+
 .library-filters {
   display: flex;
   flex-wrap: wrap;

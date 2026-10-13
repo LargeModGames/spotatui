@@ -18,6 +18,7 @@ import {
   partyNone,
   recentlyPlayed,
   playlistSync,
+  spotifyLoggedOut,
   room,
   search,
   session,
@@ -111,6 +112,15 @@ test("library without a Spotify session", async ({ page }) => {
     .click();
   await page.getByText("needs a Spotify session").waitFor();
   await shot(page, "library-unavailable");
+});
+
+test("Spotify login after a failed first login", async ({ page }) => {
+  await openWith(page, [...idle, ...spotifyLoggedOut]);
+  await page
+    .getByRole("navigation", { name: "Your Library" })
+    .getByRole("button", { name: "Log in to Spotify" })
+    .waitFor();
+  await shot(page, "library-spotify-login");
 });
 
 test("status error", async ({ page }) => {

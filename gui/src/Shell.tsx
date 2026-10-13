@@ -513,6 +513,7 @@ export function Shell({
           artistSort={choice("behavior.default_sort_saved_artists")}
           source={channels.source?.payload ?? null}
           sync={channels.playlist_sync?.payload ?? null}
+          loggedOut={channels.liked?.payload.available === false}
           view={view}
           open={open}
           send={send}

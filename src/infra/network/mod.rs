@@ -27,7 +27,6 @@ use rspotify::prelude::Id;
 use std::sync::Arc;
 
 /// How long the in-app login waits for the approval in the browser.
-#[cfg(feature = "spotify-session")]
 const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 use tokio::sync::Mutex;
 // Re-export traits
@@ -413,8 +412,8 @@ pub struct Network {
   native_idle_recovery: playback::NativeIdleRecoveryState,
   pub party_connection: Option<sync::PartyConnection>,
   pub party_incoming_rx: Option<tokio::sync::mpsc::UnboundedReceiver<sync::SyncMessage>>,
-  /// An in-app login waits for the approval in the browser.
-  login_in_flight: bool,
+  /// The pairing prompt of an in-app login that waits for the approval in the browser.
+  login_prompt: Option<String>,
   /// How many playback polls in a row came back 401. A lone 401 is noise; only
   /// a sustained run means the session is broken and deserves the error route.
   /// Reset by every poll the API answers.
@@ -466,7 +465,7 @@ impl Network {
       native_idle_recovery: playback::NativeIdleRecoveryState::default(),
       party_connection: None,
       party_incoming_rx: None,
-      login_in_flight: false,
+      login_prompt: None,
       consecutive_playback_auth_failures: 0,
       artist_cache: Default::default(),
       album_cache: Default::default(),
@@ -1298,9 +1297,10 @@ impl Network {
     if self.spotify.is_some() {
       return;
     }
-    if self.login_in_flight {
+    // A repeat ask shows the waiting login's code again instead of replacing it.
+    if let Some(prompt) = self.login_prompt.clone() {
       self
-        .show_status_message("Spotify login already in progress...".to_string(), 4)
+        .show_status_message(prompt, LOGIN_TIMEOUT.as_secs())
         .await;
       return;
     }
@@ -1323,17 +1323,15 @@ impl Network {
       if let Err(e) = open::that_detached(pending.url()) {
         log::warn!("[login] failed to open browser automatically: {e}");
       }
+      let prompt = format!(
+        "Log in to Spotify: open {} and confirm the code {}",
+        pending.url(),
+        pending.code()
+      );
       self
-        .show_status_message(
-          format!(
-            "Log in to Spotify: open {} and confirm the code {}",
-            pending.url(),
-            pending.code()
-          ),
-          LOGIN_TIMEOUT.as_secs(),
-        )
+        .show_status_message(prompt.clone(), LOGIN_TIMEOUT.as_secs())
         .await;
-      self.login_in_flight = true;
+      self.login_prompt = Some(prompt);
       tokio::spawn(async move {
         let finished = async {
           let credentials = pending.finish().await?;
@@ -1362,7 +1360,7 @@ impl Network {
 
   /// Finishes the in-app login: the session is live, so Spotify data loads now.
   async fn complete_spotify_login(&mut self) {
-    self.login_in_flight = false;
+    self.login_prompt = None;
     #[cfg(any(test, feature = "spotify-session"))]
     {
       self.spotify = Some(SpotifyLogin::new());
@@ -1392,7 +1390,7 @@ impl Network {
 
   /// Clears a failed in-app login so the user can try again.
   async fn cancel_spotify_login(&mut self, reason: String) {
-    if std::mem::take(&mut self.login_in_flight) {
+    if self.login_prompt.take().is_some() {
       self.show_status_message(reason, 8).await;
     }
   }
@@ -1995,14 +1993,14 @@ mod tests {
     let (app, io_rx) = app_with_a_session_and_channel();
     app.lock().await.spotify_connected = false;
     let mut network = Network::new(None, &app);
-    network.login_in_flight = true;
+    network.login_prompt = Some("pair".to_string());
 
     network
       .handle_network_event(IoEvent::CompleteSpotifyLogin)
       .await;
 
     assert!(network.spotify.is_some());
-    assert!(!network.login_in_flight);
+    assert!(network.login_prompt.is_none());
     assert!(app.lock().await.spotify_connected);
     let loaded: Vec<IoEvent> = io_rx.try_iter().collect();
     assert!(loaded.iter().any(|event| matches!(event, IoEvent::GetUser)));
@@ -2015,14 +2013,14 @@ mod tests {
   async fn a_failed_login_shows_its_reason_once() {
     let app = app_without_a_session();
     let mut network = Network::new(None, &app);
-    network.login_in_flight = true;
+    network.login_prompt = Some("pair".to_string());
 
     network
       .handle_network_event(IoEvent::CancelSpotifyLogin(
         "Spotify login timed out".to_string(),
       ))
       .await;
-    assert!(!network.login_in_flight);
+    assert!(network.login_prompt.is_none());
     assert_eq!(
       app.lock().await.status_message(),
       Some("Spotify login timed out")
@@ -2037,19 +2035,19 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_second_login_while_one_waits_is_refused() {
+  async fn a_second_login_while_one_waits_shows_its_code_again() {
     let app = app_without_a_session();
     let mut network = Network::new(None, &app);
-    network.login_in_flight = true;
+    let prompt = "Log in to Spotify: open https://spotify.com/pair and confirm the code ABCD";
+    network.login_prompt = Some(prompt.to_string());
+    app.lock().await.set_status_message("other", 5);
 
     network
       .handle_network_event(IoEvent::BeginSpotifyLogin)
       .await;
 
-    assert_eq!(
-      app.lock().await.status_message(),
-      Some("Spotify login already in progress...")
-    );
+    assert_eq!(app.lock().await.status_message(), Some(prompt));
+    assert!(network.spotify.is_none());
   }
   #[tokio::test]
   async fn auth_gate_clears_pending_playlist_open() {

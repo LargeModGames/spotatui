@@ -72,6 +72,7 @@ export const LibraryPanel = memo(function LibraryPanel({
   send,
   albumSort,
   artistSort,
+  loggedOut = false,
 }: {
   playlists: SourcePlaylists | null;
   /** The followed artists; null before the library channel arrived. */
@@ -86,6 +87,8 @@ export const LibraryPanel = memo(function LibraryPanel({
   albumSort?: string | null;
   /** The followed artists' sort until the user picks one here. */
   artistSort?: string | null;
+  /** True when the server says there is no Spotify session. */
+  loggedOut?: boolean;
 }) {
   const active = source?.active ?? null;
   const spotify = active === "Spotify";
@@ -227,6 +230,7 @@ export const LibraryPanel = memo(function LibraryPanel({
           )}
         </div>
       </header>
+      {spotify && loggedOut && <SpotifyLogin send={send} />}
       <div className="library-filters" role="group" aria-label="Show">
         {filters.map((name) => (
           <button
@@ -395,6 +399,18 @@ export const LibraryPanel = memo(function LibraryPanel({
     </nav>
   );
 });
+
+/** Starts the device login; the server answers with the pairing code in the status line. */
+export function SpotifyLogin({ send }: { send: (action: Action) => void }) {
+  return (
+    <div className="library-login">
+      <p>Spotify is not connected.</p>
+      <button type="button" onClick={() => send({ SelectSource: "Spotify" })}>
+        Log in to Spotify
+      </button>
+    </div>
+  );
+}
 
 /** The sort picker above the Albums or Artists rows. */
 export function SortSelect({

@@ -292,6 +292,16 @@ export const libraryUnavailable: ServerMessage[] = [
   },
 ];
 
+/** The Spotify-only desktop app after a failed first login. */
+export const spotifyLoggedOut: ServerMessage[] = [
+  {
+    kind: "source",
+    rev: 1,
+    payload: { active: "Spotify", compiled: ["Spotify"] },
+  },
+  ...libraryUnavailable.filter((message) => message.kind !== "source"),
+];
+
 /** A booted app with nothing playing, no device and an empty queue. */
 export const idle: ServerMessage[] = [
   hello,

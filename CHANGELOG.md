@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- **The desktop app can log in to Spotify again after a failed first login**: when the first login failed or timed out, the next launch opened with an empty library and no way to log in, because the source picker shows only when a build has more than one source and the hint named the terminal app's `d` key. Your Library now shows a Log in to Spotify button while Spotify has no session. A second click during a login shows the pairing code again instead of replacing it ([#787](https://github.com/LargeModGames/spotatui/issues/787)).
+
 - **Playlist edits show at once**: a playlist you remove from your library leaves the playlist list right away instead of at the next refresh, and a song you remove from the open playlist leaves the list, which loads again with the right positions, so a second remove in a row takes the right song.
 
 - **A podcast opened from a link shows its own episodes**: opening a show by its link or id showed the episodes of the show opened before it. It now loads its own episodes, and a show page and an album page say whether the show or album is in your library.
