@@ -29,18 +29,14 @@ pub fn handler(key: Key, app: &mut App) {
         return;
       }
 
-      let next_index = common_key_events::on_down_press_handler(
-        &app.artists,
-        Some(app.view.artists_list_index),
-      );
+      let next_index =
+        common_key_events::on_down_press_handler(&app.artists, Some(app.view.artists_list_index));
       app.view.artists_list_index = next_index;
     }
     k if common_key_events::up_event(k, &app.user_config.keys) => {
       if !app.artists.is_empty() {
-        let next_index = common_key_events::on_up_press_handler(
-          &app.artists,
-          Some(app.view.artists_list_index),
-        );
+        let next_index =
+          common_key_events::on_up_press_handler(&app.artists, Some(app.view.artists_list_index));
         app.view.artists_list_index = next_index;
       }
     }
@@ -88,21 +84,16 @@ pub fn handler(key: Key, app: &mut App) {
         return;
       }
       let target = app.view.artists_list_index.saturating_add(page_step(app));
-      if target >= len {
-        if app.current_saved_artists_has_more() {
-          app.view.artists_list_index = len - 1;
-          app.select_artist_when_next_page_lands(target);
-          app.get_current_user_saved_artists_next();
-          return;
-        }
+      if target >= len && app.current_saved_artists_has_more() {
+        app.view.artists_list_index = len - 1;
+        app.select_artist_when_next_page_lands(target);
+        app.get_current_user_saved_artists_next();
+        return;
       }
       app.view.artists_list_index = target.min(len - 1);
     }
     k if k == app.user_config.keys.previous_page => {
-      app.view.artists_list_index = app
-        .view
-        .artists_list_index
-        .saturating_sub(page_step(app));
+      app.view.artists_list_index = app.view.artists_list_index.saturating_sub(page_step(app));
     }
     // Open sort menu
     Key::Char(',') => {

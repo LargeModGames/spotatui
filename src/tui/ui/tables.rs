@@ -318,12 +318,8 @@ pub fn draw_artist_table(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   );
 
   // Directly calculate window over all continuous artists:
-  let (offset, visible) = visible_window(
-    app,
-    layout_chunk,
-    app.view.artists_list_index,
-    &app.artists,
-  );
+  let (offset, visible) =
+    visible_window(app, layout_chunk, app.view.artists_list_index, &app.artists);
   let items = visible
     .iter()
     .map(|item| TableItem {
