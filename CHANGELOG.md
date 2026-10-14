@@ -32,6 +32,8 @@
 
 - **rustls 0.23.46 and rand 0.9.5**: both updates close open advisories ([GHSA-2mjx-qc3c-rqvc](https://github.com/advisories/GHSA-2mjx-qc3c-rqvc), [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc)), in the terminal app and the desktop app.
 
+- **No more rustls 0.22 in native streaming**: the librespot fork 0.8.6 does the TLS of a proxied connection with its own connector, so the old rustls 0.22 and rustls-webpki 0.102 that the proxy crate brought in, with four open advisories, are gone. A proxy set through `SPOTATUI_STREAMING_PROXY` or `http_proxy` works as before.
+
 ### Fixed
 
 - **Media keys pause the device that plays**: while another Spotify device played (your phone or a speaker), play, pause and stop from MPRIS clients (`playerctl`, a panel widget, a headset) and from the macOS media keys went to spotatui's own idle player and did nothing. They now reach the device that plays, and so do MPRIS seek, shuffle and repeat ([#797](https://github.com/LargeModGames/spotatui/issues/797)).

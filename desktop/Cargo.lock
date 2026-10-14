@@ -1014,7 +1014,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -2597,37 +2597,10 @@ dependencies = [
  "headers",
  "http",
  "hyper",
- "hyper-rustls 0.26.0",
- "hyper-tls",
  "hyper-util",
- "native-tls",
  "pin-project-lite",
  "tokio",
- "tokio-native-tls",
- "tokio-rustls 0.25.0",
  "tower-service",
- "webpki",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "hyper-rustls"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0bea761b46ae2b24eb4aef630d8d1c398157b6fc29e6350ecf090a0b70c952c"
-dependencies = [
- "futures-util",
- "http",
- "hyper",
- "hyper-util",
- "log",
- "rustls 0.22.4",
- "rustls-native-certs 0.7.3",
- "rustls-pki-types",
- "tokio",
- "tokio-rustls 0.25.0",
- "tower-service",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -2639,10 +2612,10 @@ dependencies = [
  "http",
  "hyper",
  "hyper-util",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.4",
+ "tokio-rustls",
  "tower-service",
  "webpki-roots 1.0.5",
 ]
@@ -3693,7 +3666,7 @@ version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff32365de1b6743cb203b710788263c44a03de03802daf96092f2da4fe6ba4d7"
 dependencies = [
- "proc-macro-crate 3.4.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -3714,7 +3687,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http",
@@ -4694,7 +4667,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.23.46",
+ "rustls",
  "socket2",
  "thiserror 2.0.18",
  "tokio",
@@ -4716,7 +4689,7 @@ dependencies = [
  "rand_pcg",
  "ring",
  "rustc-hash",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.18",
@@ -4976,7 +4949,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
- "hyper-rustls 0.27.7",
+ "hyper-rustls",
  "hyper-tls",
  "hyper-util",
  "js-sys",
@@ -4985,7 +4958,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -4993,7 +4966,7 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-native-tls",
- "tokio-rustls 0.26.4",
+ "tokio-rustls",
  "tokio-util",
  "tower",
  "tower-http",
@@ -5022,7 +4995,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
- "hyper-rustls 0.27.7",
+ "hyper-rustls",
  "hyper-tls",
  "hyper-util",
  "js-sys",
@@ -5031,7 +5004,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "serde",
@@ -5039,7 +5012,7 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-native-tls",
- "tokio-rustls 0.26.4",
+ "tokio-rustls",
  "tokio-util",
  "tower",
  "tower-http",
@@ -5228,20 +5201,6 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf4ef73721ac7bcd79b2b315da7779d8fc09718c6b3d2d1b2d94850eb8c18432"
-dependencies = [
- "log",
- "ring",
- "rustls-pki-types",
- "rustls-webpki 0.102.8",
- "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "rustls"
 version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
@@ -5250,22 +5209,9 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.15",
+ "rustls-webpki",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rustls-native-certs"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5bfb394eeed242e909609f56089eecfe5fda225042e8b171791b9c95f5931e5"
-dependencies = [
- "openssl-probe 0.1.6",
- "rustls-pemfile",
- "rustls-pki-types",
- "schannel",
- "security-framework 2.11.1",
 ]
 
 [[package]]
@@ -5278,15 +5224,6 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework 3.5.1",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]
@@ -5310,10 +5247,10 @@ dependencies = [
  "jni",
  "log",
  "once_cell",
- "rustls 0.23.46",
- "rustls-native-certs 0.8.4",
+ "rustls",
+ "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.15",
+ "rustls-webpki",
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs",
@@ -5325,17 +5262,6 @@ name = "rustls-platform-verifier-android"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
-
-[[package]]
-name = "rustls-webpki"
-version = "0.102.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "ring",
- "rustls-pki-types",
- "untrusted",
-]
 
 [[package]]
 name = "rustls-webpki"
@@ -6015,7 +5941,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rodio 0.22.2",
  "rspotify",
- "rustls 0.23.46",
+ "rustls",
  "self_update",
  "serde",
  "serde_json",
@@ -6032,7 +5958,7 @@ dependencies = [
  "symphonia 0.6.1",
  "tempfile",
  "tokio",
- "tokio-rustls 0.26.4",
+ "tokio-rustls",
  "tokio-tungstenite 0.30.0",
  "unicode-width",
  "url",
@@ -6056,9 +5982,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-audio"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5881b83fb4523dba41b6b2d1366c3c8fdff74717794cc6ec7099d5b6f826c81"
+checksum = "207edb6de6ce5a6c89dc970abead84a2ea49bbdc4901d35a201a3cb97aece264"
 dependencies = [
  "aes",
  "bytes",
@@ -6076,9 +6002,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-connect"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6f05de935a27f5408bc94a73324dadb455eee93a706f39a98f1bc4b63102c7d"
+checksum = "db9e4a8941c0a428751e586dd770adbf0a9201fb1438cc2f3163efa87279c061"
 dependencies = [
  "futures-util",
  "log",
@@ -6096,9 +6022,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-core"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fbd9a43cd568246450de9681c55dcf98ac75ea3dfc3ab0e0eab2fa8dc2ad74a"
+checksum = "70bede685fabe91c30ae9b354fe6bbb83002ae5ce90ea5b28bd533c259a28308"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -6116,7 +6042,7 @@ dependencies = [
  "httparse",
  "hyper",
  "hyper-proxy2",
- "hyper-rustls 0.27.7",
+ "hyper-rustls",
  "hyper-tls",
  "hyper-util",
  "log",
@@ -6155,9 +6081,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-metadata"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf05b9c97d7fa0f125fad362f160d48632073c5e0c6dac35007342982bf6e90"
+checksum = "3a8b84fd071bdc0a0cb974bc64fe54b5229d15f6d6e41510cdc5928b306ec9f5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6173,9 +6099,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-oauth"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd395a1d3a48a3d40e9035bf64ed07a48b7614212451ed6f4eeb485d33a7954"
+checksum = "351dfcababf118dcbbfe6de4a5f0091c54a9f61a4f380482efca8d4c90f0eba5"
 dependencies = [
  "log",
  "oauth2",
@@ -6188,9 +6114,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-playback"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4243b4ec2711b91f5eb7758a58440639ec964db3d1b5bd717672b8bc3b3ab7cf"
+checksum = "2667b17b41f590c553f9eb98f7bf9c150758cff2e578310eb1bb8108e39f6dc0"
 dependencies = [
  "alsa 0.10.0",
  "cpal 0.16.0",
@@ -6214,9 +6140,9 @@ dependencies = [
 
 [[package]]
 name = "spotatui-librespot-protocol"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef300e30ded94b9822189e01c8088db5fe82b13b3714e6de10544cf58be5727"
+checksum = "3ada3e2e81c648817db2a74a292d4db9ead9b382def85f143dfbe4e9323aef55"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
@@ -6942,7 +6868,7 @@ dependencies = [
  "osakit",
  "percent-encoding",
  "reqwest 0.13.2",
- "rustls 0.23.46",
+ "rustls",
  "semver",
  "serde",
  "serde_json",
@@ -7065,7 +6991,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -7232,22 +7158,11 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "775e0c0f0adb3a2f22a00c4745d728b479985fc15ee7ca6a2608388c5569860f"
-dependencies = [
- "rustls 0.22.4",
- "rustls-pki-types",
- "tokio",
-]
-
-[[package]]
-name = "tokio-rustls"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
- "rustls 0.23.46",
+ "rustls",
  "tokio",
 ]
 
@@ -7271,11 +7186,11 @@ dependencies = [
  "futures-util",
  "log",
  "native-tls",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "tokio",
  "tokio-native-tls",
- "tokio-rustls 0.26.4",
+ "tokio-rustls",
  "tungstenite 0.28.0",
  "webpki-roots 0.26.11",
 ]
@@ -7288,10 +7203,10 @@ checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
 dependencies = [
  "futures-util",
  "log",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.4",
+ "tokio-rustls",
  "tungstenite 0.30.0",
  "webpki-roots 0.26.11",
 ]
@@ -7568,7 +7483,7 @@ dependencies = [
  "log",
  "native-tls",
  "rand 0.9.5",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "sha1 0.10.6",
  "thiserror 2.0.18",
@@ -7587,7 +7502,7 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.10.2",
- "rustls 0.23.46",
+ "rustls",
  "rustls-pki-types",
  "sha1 0.11.0",
  "thiserror 2.0.18",
@@ -8161,16 +8076,6 @@ dependencies = [
  "pkg-config",
  "soup3-sys",
  "system-deps",
-]
-
-[[package]]
-name = "webpki"
-version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed63aea5ce73d0ff405984102c42de94fc55a6b75765d621c65262469b3c9b53"
-dependencies = [
- "ring",
- "untrusted",
 ]
 
 [[package]]
