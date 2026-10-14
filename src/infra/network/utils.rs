@@ -504,50 +504,65 @@ fn pick_search_result(results: Vec<LrcResponse>, duration: f64) -> Option<LrcRes
 }
 
 /// Parse LRC-format synced lyrics (`[mm:ss.xx] text` lines) into `(ms, line)`
-/// pairs. Lines without a valid leading timestamp are dropped, so a body of
-/// plain (unsynced) lyrics parses to an empty vec.
+/// pairs. A line may carry several leading timestamps (`[00:12.00][00:45.30]x`);
+/// it is emitted once per timestamp. The result is sorted by time. Lines without
+/// a valid leading timestamp are dropped, so a body of plain (unsynced) lyrics
+/// parses to an empty vec.
 fn parse_synced_lyrics(text: &str) -> Vec<(u128, String)> {
-  text
-    .lines()
-    .filter_map(|line| {
-      let idx = line.find(']')?;
-      if idx <= 1 || !line.starts_with('[') {
-        return None;
-      }
-      let timestamp = &line[1..idx];
-      let content = line[idx + 1..].trim().to_string();
-
-      let parts: Vec<&str> = timestamp.split(':').collect();
-      if parts.len() != 2 {
-        return None;
-      }
-      let mins = parts[0].trim().parse::<u64>().ok()?;
-      let secs_parts: Vec<&str> = parts[1].split('.').collect();
-      let secs = secs_parts[0].trim().parse::<u64>().ok()?;
-      let ms = if secs_parts.len() > 1 {
-        let ms_str = secs_parts[1].trim();
-        if ms_str.is_empty() || !ms_str.bytes().all(|b| b.is_ascii_digit()) {
-          return None;
-        }
-        let digits = if ms_str.len() > 3 {
-          &ms_str[..3]
-        } else {
-          ms_str
-        };
-        let ms_val = digits.parse::<u64>().ok()?;
-        match digits.len() {
-          1 => ms_val * 100,
-          2 => ms_val * 10,
-          _ => ms_val,
-        }
-      } else {
-        0
+  let mut lines = Vec::new();
+  for line in text.lines() {
+    let mut rest = line;
+    let mut stamps = Vec::new();
+    while let Some(inner) = rest.strip_prefix('[') {
+      let Some(end) = inner.find(']') else { break };
+      let Some(ms) = parse_lrc_timestamp(&inner[..end]) else {
+        break;
       };
+      stamps.push(ms);
+      rest = &inner[end + 1..];
+    }
+    let content = rest.trim();
+    for ms in stamps {
+      lines.push((ms, content.to_string()));
+    }
+  }
+  // Stable, so lines that share a timestamp keep their file order.
+  lines.sort_by_key(|(ms, _)| *ms);
+  lines
+}
 
-      let total_ms = (mins * 60 * 1000) + (secs * 1000) + ms;
-      Some((total_ms as u128, content))
-    })
-    .collect()
+/// Turn the inside of an LRC time tag (`mm:ss` or `mm:ss.xx`) into milliseconds.
+/// Returns `None` for anything else, such as `ar:Queen` or `offset:+500`.
+fn parse_lrc_timestamp(tag: &str) -> Option<u128> {
+  let parts: Vec<&str> = tag.split(':').collect();
+  if parts.len() != 2 {
+    return None;
+  }
+  let mins = parts[0].trim().parse::<u64>().ok()?;
+  let secs_parts: Vec<&str> = parts[1].split('.').collect();
+  let secs = secs_parts[0].trim().parse::<u64>().ok()?;
+  let ms = if secs_parts.len() > 1 {
+    let ms_str = secs_parts[1].trim();
+    if ms_str.is_empty() || !ms_str.bytes().all(|b| b.is_ascii_digit()) {
+      return None;
+    }
+    let digits = if ms_str.len() > 3 {
+      &ms_str[..3]
+    } else {
+      ms_str
+    };
+    let ms_val = digits.parse::<u64>().ok()?;
+    match digits.len() {
+      1 => ms_val * 100,
+      2 => ms_val * 10,
+      _ => ms_val,
+    }
+  } else {
+    0
+  };
+
+  let total_ms = (mins * 60 * 1000) + (secs * 1000) + ms;
+  Some(total_ms as u128)
 }
 
 /// Turn plain (unsynced) lyrics into `(ms, line)` pairs with synthetic,
@@ -782,6 +797,95 @@ mod tests {
     assert_eq!(
       app.lyrics(),
       Some(&[(0u128, "plain words".to_string())][..])
+    );
+  }
+
+  #[test]
+  fn an_lrc_line_with_two_timestamps_appears_at_both() {
+    assert_eq!(
+      parse_synced_lyrics("[00:12.00][00:45.30]Chorus\n[00:20.00]Verse"),
+      vec![
+        (12_000u128, "Chorus".to_string()),
+        (20_000u128, "Verse".to_string()),
+        (45_300u128, "Chorus".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn an_lrc_line_with_three_timestamps_appears_at_each() {
+    assert_eq!(
+      parse_synced_lyrics("[00:03.00][00:02.00][00:01.50] Hey"),
+      vec![
+        (1_500u128, "Hey".to_string()),
+        (2_000u128, "Hey".to_string()),
+        (3_000u128, "Hey".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn out_of_order_lrc_lines_come_back_sorted() {
+    assert_eq!(
+      parse_synced_lyrics("[00:30.00]B\n[00:10.00]A"),
+      vec![(10_000u128, "A".to_string()), (30_000u128, "B".to_string())]
+    );
+  }
+
+  #[test]
+  fn lrc_lines_with_the_same_timestamp_keep_their_file_order() {
+    assert_eq!(
+      parse_synced_lyrics("[00:05.00]first\n[00:05.00]second\n[00:05.00]third"),
+      vec![
+        (5_000u128, "first".to_string()),
+        (5_000u128, "second".to_string()),
+        (5_000u128, "third".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn a_multi_timestamp_lrc_line_with_empty_text_keeps_every_timestamp() {
+    assert_eq!(
+      parse_synced_lyrics("[00:10.00][00:20.00]\n[00:15.00]Hi"),
+      vec![
+        (10_000u128, String::new()),
+        (15_000u128, "Hi".to_string()),
+        (20_000u128, String::new()),
+      ]
+    );
+  }
+
+  #[test]
+  fn an_lrc_tag_group_that_is_not_a_timestamp_stays_in_the_text() {
+    assert_eq!(
+      parse_synced_lyrics("[00:12.00][ar:x]text\n[00:13.00][00:xx]more"),
+      vec![
+        (12_000u128, "[ar:x]text".to_string()),
+        (13_000u128, "[00:xx]more".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn malformed_lrc_tags_are_dropped() {
+    let text = [
+      "[00:12.00 no close",
+      "[]empty",
+      "[1234]x",
+      "[00:01.]x",
+      "[offset:+500][00:02.00]x",
+      " [00:03.00]indented",
+    ]
+    .join("\n");
+    assert_eq!(parse_synced_lyrics(&text), Vec::<(u128, String)>::new());
+  }
+
+  #[test]
+  fn a_single_timestamp_lrc_line_is_unchanged() {
+    assert_eq!(
+      parse_synced_lyrics("[01:02.03] Hello [there]"),
+      vec![(62_030u128, "Hello [there]".to_string())]
     );
   }
 }

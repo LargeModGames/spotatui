@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- **Synced lyrics with several timestamps on one line**: an LRC line such as `[00:12.00][00:45.30]Chorus` showed once at the first time and printed `[00:45.30]` in the text. It now shows at each timestamp, and synced lyrics are sorted by time ([#826](https://github.com/LargeModGames/spotatui/issues/826)).
+
 - **Absolute seeking from MPRIS clients**: spotatui's MPRIS metadata had no `mpris:trackid`, so `playerctl position 60` and other clients that seek to an absolute position refused to send the call ("Could not get track id"); relative seeks worked. Each track now publishes an id, and a seek aimed at a track that has already changed is ignored instead of landing in the next song. Clients that send no id of their own keep working.
 
 - **The desktop app can log in to Spotify again after a failed first login**: when the first login failed or timed out, the next launch opened with an empty library and no way to log in, because the source picker shows only when a build has more than one source and the hint named the terminal app's `d` key. Your Library now shows a Log in to Spotify button while Spotify has no session. A second click during a login shows the pairing code again instead of replacing it ([#787](https://github.com/LargeModGames/spotatui/issues/787)).
