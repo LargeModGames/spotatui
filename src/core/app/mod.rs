@@ -490,6 +490,7 @@ pub struct App {
   pub playlist_tracks_prefetch_in_flight: HashSet<u32>,
   saved_artists_prefetch_in_flight: Option<String>,
   pending_artist_selection: Option<usize>,
+  saved_artists_prefetch_generation: usize,
   /// Playlist ids whose full track list is being fetched for sorting. Further
   /// sort changes reuse the active fetch and apply the newest sort at completion.
   pub playlist_sort_fetch_in_flight: HashSet<String>,

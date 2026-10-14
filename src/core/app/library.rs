@@ -419,6 +419,10 @@ impl App {
     (tracks, active_index, has_more)
   }
 
+  pub fn saved_artists_prefetch_generation(&self) -> usize {
+    self.saved_artists_prefetch_generation
+  }
+
   /// The Liked Songs page cache; a write bumps `LikedSongs`, not `Library`.
   pub(crate) fn saved_tracks_mut(&mut self) -> &mut ScrollableResultPages<Paged<TrackInfo>> {
     self.display_revisions.bump(DisplayDomain::LikedSongs);
@@ -502,6 +506,11 @@ impl App {
         self.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
       }
       LibraryTarget::Artists => {
+        // Bump generation to invalidate any in-flight requests from previous visits
+        self.saved_artists_prefetch_generation = self.saved_artists_prefetch_generation.wrapping_add(1);
+        self.saved_artists_prefetch_in_flight = None;
+        self.pending_artist_selection = None;
+        
         self.dispatch(IoEvent::GetFollowedArtists(None));
         self.push_navigation_stack(RouteId::Artists, ActiveBlock::Artists);
       }

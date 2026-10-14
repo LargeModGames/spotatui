@@ -515,6 +515,11 @@ impl MetadataNetwork for Network {
   }
 
   async fn get_followed_artists(&mut self, after: Option<ArtistId<'static>>) {
+    let generation = {
+      let app = self.app.lock().await;
+      app.saved_artists_prefetch_generation()
+    };
+
     let limit = self.large_search_limit;
     let mut query = vec![("type", "artist".to_string()), ("limit", limit.to_string())];
     if let Some(after) = after.as_ref() {
@@ -526,9 +531,14 @@ impl MetadataNetwork for Network {
       .await
     {
       Ok(res) => {
+        let mut app = self.app.lock().await;
+        // If user reloaded while in flight, discard
+        if app.saved_artists_prefetch_generation() != generation {
+          return;
+        }
+
         let domain_page =
           crate::infra::network::mapping::map_cursor_page(&res.artists, |a| ArtistInfo::from(a));
-        let mut app = self.app.lock().await;
         let artists = &mut app.library_mut().saved_artists;
         if after.is_none() {
           artists.clear();
@@ -538,7 +548,9 @@ impl MetadataNetwork for Network {
       }
       Err(e) => {
         let mut app = self.app.lock().await;
-        app.clear_saved_artists_in_flight();
+        if app.saved_artists_prefetch_generation() == generation {
+          app.clear_saved_artists_in_flight();
+        }
         drop(app);
         self.handle_error(anyhow!(e)).await;
       }
