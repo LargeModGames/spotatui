@@ -79,6 +79,7 @@ export function Shell({
 }) {
   const { channels } = state;
   const [history, setHistory] = useState<History>(HOME);
+  const navigationFocus = useRef<Element | null>(null);
   const view = history.now;
   const page = view.page;
   // A page mounts on its first visit and then stays mounted, so its cursor survives a switch.
@@ -95,6 +96,8 @@ export function Shell({
   const radioId = channels.track_table?.payload.radio ?? null;
   const show = useCallback(
     (next: History, fresh: boolean) => {
+      // A late target can take focus from the control that opened it.
+      navigationFocus.current = document.activeElement;
       const action = fetchFor(next.now, fresh, {
         spotify,
         liked: likedLoaded,
@@ -512,11 +515,15 @@ export function Shell({
     if (overlay || room || page === "search") return;
     const screen = document.querySelector(`[data-area="${page}"]`);
     if (!screen || screen.querySelector("[data-focus]")) return;
+    const before = navigationFocus.current;
     const seen = new MutationObserver(() => {
       const target = screen.querySelector<HTMLElement>("[data-focus]");
       if (!target) return;
       seen.disconnect();
-      if (document.activeElement === document.body) {
+      if (
+        document.activeElement === document.body ||
+        document.activeElement === before
+      ) {
         target.focus({ preventScroll: true });
         if (target.getAttribute("role") === "listbox")
           target
