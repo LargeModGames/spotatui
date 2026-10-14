@@ -5,6 +5,8 @@ use crate::core::plugin_api::ArtistInfo;
 use crate::tui::event::Key;
 
 pub fn handler(key: Key, app: &mut App) {
+  app.forget_pending_artist_selection();
+
   match key {
     k if common_key_events::toward_sidebar_event(k, &app.user_config) => {
       common_key_events::focus_sidebar(app)

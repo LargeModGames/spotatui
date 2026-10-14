@@ -651,7 +651,10 @@ fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app
       }
     },
     ActiveBlock::RecentlyPlayed => app.view.recently_played_index = index,
-    ActiveBlock::Artists => app.view.artists_list_index = index,
+    ActiveBlock::Artists => {
+      app.forget_pending_artist_selection();
+      app.view.artists_list_index = index;
+    }
     ActiveBlock::Podcasts => app.view.shows_list_index = index,
     ActiveBlock::EpisodeTable => app.view.episode_list_index = index,
     _ => {}
