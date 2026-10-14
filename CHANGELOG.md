@@ -1,8 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [v0.46.0] 2026-10-14
 
 ### Added
+
+- **Play on Cast and Spotify Connect speakers on your network**: the device list now shows Google Cast speakers, Spotify Connect speakers and Sonos rooms on your local network, also the ones the Spotify app has never used. Pick one and spotatui logs it in to your account and moves playback to it, as the Spotify app does; the audio goes from Spotify to the speaker directly. Cast groups, DIAL TVs and speakers that want an encrypted login are not supported yet ([#251](https://github.com/LargeModGames/spotatui/issues/251)).
+
+- **Search Liked Songs**: `Ctrl+F` in Liked Songs filters the songs spotatui has loaded, with no request to Spotify, as it already did in a playlist. An empty search, `q` or the back key brings back the full list. While Liked Songs is still loading, the search waits and says so.
 
 - **A setting to turn lyrics off**: `behavior.enable_lyrics` (Settings > Lyrics, in the terminal and the desktop app, on by default). Off, spotatui no longer sends the title, artist and length of each track to LRCLIB, or to Spotify for Spotify tracks, and the lyrics view says no lyrics were found.
 
@@ -20,7 +24,19 @@
 
 - **`behavior.disable_auto_update` stops the desktop app's update check too**: before, the desktop app still asked GitHub for a new release at launch and every 6 hours and only skipped the download. Now those timed checks stop and Check for updates on the Settings page looks on demand, as the terminal app already skipped its check at start. Turning auto-update back on checks at once.
 
+- **Your saved artists are one list**: the Artists screen in the terminal showed one page at a time and swapped pages. It now scrolls through every artist you follow and loads the next page when you reach the bottom, as Liked Songs does; the page keys move half a screen ([#802](https://github.com/LargeModGames/spotatui/issues/802)).
+
+- **Faster artist pages and search**: an artist page loads the discography in pages of 50, fetched at the same time, so a cold artist load takes a fraction of the time it did. A search asks Spotify for each result type on its own, which returns about a tenth of the data.
+
+### Security
+
+- **rustls 0.23.46 and rand 0.9.5**: both updates close open advisories ([GHSA-2mjx-qc3c-rqvc](https://github.com/advisories/GHSA-2mjx-qc3c-rqvc), [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc)), in the terminal app and the desktop app.
+
 ### Fixed
+
+- **Media keys pause the device that plays**: while another Spotify device played (your phone or a speaker), play, pause and stop from MPRIS clients (`playerctl`, a panel widget, a headset) and from the macOS media keys went to spotatui's own idle player and did nothing. They now reach the device that plays, and so do MPRIS seek, shuffle and repeat ([#797](https://github.com/LargeModGames/spotatui/issues/797)).
+
+- **Keyboard focus in the desktop app**: Down in the top search field moves into the results, Space after you go Home toggles playback instead of opening Liked Songs, and closing a song menu, the queue panel or the Room gives the keyboard back to the page. On a first visit to Liked Songs, a playlist, an album or an artist, `j` and `k` work as soon as the list loads. A saved album opened from the Albums page shows a filled heart and can be removed ([#764](https://github.com/LargeModGames/spotatui/issues/764)).
 
 - **Synced lyrics with several timestamps on one line**: an LRC line such as `[00:12.00][00:45.30]Chorus` showed once at the first time and printed `[00:45.30]` in the text. It now shows at each timestamp, and synced lyrics are sorted by time ([#826](https://github.com/LargeModGames/spotatui/issues/826)).
 
