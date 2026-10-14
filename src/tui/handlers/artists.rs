@@ -266,8 +266,13 @@ mod tests {
 
     handler(Key::Down, &mut app);
 
-    // Proves an event was dispatched into the channel (0 ratchet hits!):
-    assert!(rx.try_recv().is_ok());
+    // Check if correct GetFollowedArtists event was dispatched
+    match rx.try_recv() {
+      Ok(IoEvent::GetFollowedArtists(Some(cursor))) => {
+        assert_eq!(cursor, "artist2");
+      }
+      _ => panic!("expected GetFollowedArtists with cursor"),
+    }
 
     // Simulate the page landing: verify the cursor lands on the new item (index 2)!
     let page2 = CursorPaged {
