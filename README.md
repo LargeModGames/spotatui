@@ -647,6 +647,7 @@ Privacy: see the [privacy policy](https://spotatui.com/privacy) for the data spo
       <td align="center" valign="top" width="14.28%"><a href="https://zovo.one"><img src="https://avatars.githubusercontent.com/u/51033404?v=4?s=100" width="100px;" alt="Michael "/><br /><sub><b>Michael </b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=theluckystrike" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Battlelamb"><img src="https://avatars.githubusercontent.com/u/12995996?v=4?s=100" width="100px;" alt="Battlelamb"/><br /><sub><b>Battlelamb</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Battlelamb" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://markus.gustavsson.co.nz"><img src="https://avatars.githubusercontent.com/u/103984290?v=4?s=100" width="100px;" alt="markus"/><br /><sub><b>markus</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=markusgust" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dailyun"><img src="https://avatars.githubusercontent.com/u/144075925?v=4?s=100" width="100px;" alt="Drying"/><br /><sub><b>Drying</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=dailyun" title="Documentation">📖</a></td>
     </tr>
   </tbody>
 </table>
