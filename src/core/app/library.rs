@@ -661,6 +661,9 @@ impl App {
     self.pending_artist_selection = None;
 
     self.artists = self.saved_artists_flattened();
+
+    self.sort_saved_artists();
+
     self.display_revisions.bump(DisplayDomain::Artist);
 
     let max_idx = self.artists.len().saturating_sub(1);
