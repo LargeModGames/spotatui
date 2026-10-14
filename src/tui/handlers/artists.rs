@@ -213,4 +213,115 @@ mod tests {
       "the seeded fetch was dispatched"
     );
   }
+
+  #[test]
+  fn down_moves_to_next_artist() {
+    let (mut app, _rx) = app_with_saved_artists();
+    app.view.artists_list_index = 0;
+
+    handler(Key::Down, &mut app);
+
+    assert_eq!(app.view.artists_list_index, 1);
+  }
+
+  #[test]
+  fn down_at_end_wraps_to_top_when_no_more_pages() {
+    let (mut app, rx) = app_with_saved_artists();
+    app.view.artists_list_index = 1; // Last item in fixture
+
+    handler(Key::Down, &mut app);
+
+    assert_eq!(app.view.artists_list_index, 0);
+    // Ensure no network request was triggered
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn down_at_end_dispatches_next_page_when_more_exist() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+
+    let page = CursorPaged {
+      items: vec![
+        ArtistInfo {
+          id: Some("artist1".to_string()),
+          name: "First".to_string(),
+          ..Default::default()
+        },
+        ArtistInfo {
+          id: Some("artist2".to_string()),
+          name: "Second".to_string(),
+          ..Default::default()
+        },
+      ],
+      next: Some("https://api.spotify.com/v1/me/following?after=artist2".to_string()),
+      cursor_after: Some("artist2".to_string()),
+      ..CursorPaged::default()
+    };
+    app.library_mut().saved_artists.add_pages(page);
+    app.set_saved_artists_to_table_continuous();
+    app.view.artists_list_index = 1; // Last item
+
+    handler(Key::Down, &mut app);
+
+    // Proves an event was dispatched into the channel (0 ratchet hits!):
+    assert!(rx.try_recv().is_ok());
+
+    // Simulate the page landing: verify the cursor lands on the new item (index 2)!
+    let page2 = CursorPaged {
+      items: vec![ArtistInfo {
+        id: Some("artist3".to_string()),
+        name: "Third".to_string(),
+        ..Default::default()
+      }],
+      ..CursorPaged::default()
+    };
+    app.library_mut().saved_artists.add_pages(page2);
+    app.set_saved_artists_to_table_continuous();
+
+    assert_eq!(app.view.artists_list_index, 2);
+  }
+
+  #[test]
+  fn up_moves_to_previous_artist() {
+    let (mut app, _rx) = app_with_saved_artists();
+    app.view.artists_list_index = 1;
+
+    handler(Key::Up, &mut app);
+
+    assert_eq!(app.view.artists_list_index, 0);
+  }
+
+  #[test]
+  fn high_middle_low_jump_within_artists() {
+    let (mut app, _rx) = app_with_saved_artists();
+    app.view.artists_list_index = 1;
+
+    handler(Key::Char('H'), &mut app);
+    assert_eq!(app.view.artists_list_index, 0);
+
+    handler(Key::Char('L'), &mut app);
+    assert_eq!(app.view.artists_list_index, 1);
+
+    handler(Key::Char('M'), &mut app);
+    assert!(app.view.artists_list_index <= 1);
+  }
+
+  #[test]
+  fn next_and_previous_page_step_viewport() {
+    let (mut app, _rx) = app_with_saved_artists();
+    app.view.artists_list_index = 0;
+    app.view.size.height = 10; // page_step will be (10 / 2) = 5
+
+    let next_page_key = app.user_config.keys.next_page;
+    let prev_page_key = app.user_config.keys.previous_page;
+
+    // When no more pages exist, next_page clamps to len - 1
+    handler(next_page_key, &mut app);
+    assert_eq!(app.view.artists_list_index, 1);
+
+    // previous_page steps backward
+    handler(prev_page_key, &mut app);
+    assert_eq!(app.view.artists_list_index, 0);
+  }
 }
